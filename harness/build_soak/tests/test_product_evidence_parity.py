@@ -11,7 +11,11 @@ from harness.build_soak.product_evidence import _SLICE_FIELDS
 
 _TS = (
     Path(__file__).resolve().parents[3]
-    / "frontend" / "src" / "lib" / "harness" / "productEvidence.ts"
+    / "frontend"
+    / "src"
+    / "lib"
+    / "harness"
+    / "productEvidence.ts"
 )
 
 # Every field each browser oracle READS (audited from oracles/browser_evidence.py).
@@ -70,4 +74,6 @@ def test_bool_download_bytes_now_fails_validation() -> None:
 def test_ts_mirror_matches_python_slice_fields_exactly() -> None:
     ts = _parse_ts_slice_fields()
     py = {k: set(v) for k, v in _SLICE_FIELDS.items()}
-    assert ts == py, f"TS↔Python product_evidence drift — TS-only: {set(ts) ^ set(py)}; {ts} vs {py}"
+    assert ts == py, (
+        f"TS↔Python product_evidence drift — TS-only: {set(ts) ^ set(py)}; {ts} vs {py}"
+    )

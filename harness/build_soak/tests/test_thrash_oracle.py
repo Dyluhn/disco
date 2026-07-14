@@ -79,9 +79,7 @@ def test_repeated_hidden_provider_repair_fails_from_inspect_trace() -> None:
             for attempt in (1, 2)
         ]
     }
-    result = ThrashOracle().check(
-        [], scenario=_scenario(), inspect_trace=trace
-    )[0]
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
     assert result.code == fc.MODEL_REPAIR_THRASH
     assert result.facts["repair_kind"] == "provider_rejected_request"
     assert result.facts["count"] == 2
@@ -104,9 +102,7 @@ def test_excessive_mixed_hidden_repairs_fail() -> None:
             )
         ]
     }
-    result = ThrashOracle().check(
-        [], scenario=_scenario(), inspect_trace=trace
-    )[0]
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
     assert result.code == fc.MODEL_REPAIR_THRASH
     assert result.facts["count"] == 4
 
@@ -123,9 +119,7 @@ def test_one_hidden_repair_is_reported_but_allowed() -> None:
             }
         ]
     }
-    result = ThrashOracle().check(
-        [], scenario=_scenario(), inspect_trace=trace
-    )[0]
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
     assert result.passed
     assert result.facts["model_repair_count"] == 1
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib
 import json
 import os
 import re
@@ -31,23 +32,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from harness.build_soak.resources import GIB, read_host_resources  # noqa: E402
-from harness.reliability.matrix import (  # noqa: E402
-    PROOFS,
-    ReliabilityMatrix,
-    Suite,
-    load_matrix,
-)
-from harness.reliability.state import (  # noqa: E402
-    FAIL,
-    INFRA,
-    INVALID,
-    PASS,
-    promotion_report,
-    record_campaign,
-    source_revision,
-    state_transaction,
-)
+# Load campaign modules only after the direct-script path is made importable.
+# Dynamic imports keep the bootstrap ordering explicit without suppressing E402.
+_resources = importlib.import_module("harness.build_soak.resources")
+GIB = _resources.GIB
+read_host_resources = _resources.read_host_resources
+
+_matrix = importlib.import_module("harness.reliability.matrix")
+PROOFS = _matrix.PROOFS
+ReliabilityMatrix = _matrix.ReliabilityMatrix
+Suite = _matrix.Suite
+load_matrix = _matrix.load_matrix
+
+_state = importlib.import_module("harness.reliability.state")
+FAIL = _state.FAIL
+INFRA = _state.INFRA
+INVALID = _state.INVALID
+PASS = _state.PASS
+promotion_report = _state.promotion_report
+record_campaign = _state.record_campaign
+source_revision = _state.source_revision
+state_transaction = _state.state_transaction
 
 DEFAULT_MATRIX = Path(__file__).with_name("matrix.yaml")
 _EXPECTED_PROVIDER_HOST_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST"

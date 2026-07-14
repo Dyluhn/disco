@@ -165,9 +165,7 @@ else:
 
 
 def port_pids(container: str, port: int) -> list[int]:
-    out = ssh_sandbox(
-        f"docker exec {container} python3 -c '{_PORT_PY}' {port} probe 2>/dev/null"
-    )
+    out = ssh_sandbox(f"docker exec {container} python3 -c '{_PORT_PY}' {port} probe 2>/dev/null")
     return [int(x) for x in out.split(",") if x.strip().isdigit()]
 
 
@@ -176,9 +174,7 @@ def port_owners(container: str, port: int) -> dict[int, str]:
     platform preview server (`python3 -m http.server <port> -d /workspace`)
     owns :8000 from container start — the fault must SEE what it is about to
     kill and refuse anything the agent didn't launch."""
-    out = ssh_sandbox(
-        f"docker exec {container} python3 -c '{_PORT_PY}' {port} list 2>/dev/null"
-    )
+    out = ssh_sandbox(f"docker exec {container} python3 -c '{_PORT_PY}' {port} list 2>/dev/null")
     owners: dict[int, str] = {}
     for ln in out.splitlines():
         pid, _, cmd = ln.partition("\t")
@@ -190,9 +186,7 @@ def port_owners(container: str, port: int) -> dict[int, str]:
 def kill_port_process(container: str, port: int) -> str:
     """The Phase-A fault: SIGKILL the process owning <port>, from OUTSIDE the
     agent (docker exec) — the tmux session survives and shows the death."""
-    return ssh_sandbox(
-        f"docker exec {container} python3 -c '{_PORT_PY}' {port} kill 2>&1"
-    )
+    return ssh_sandbox(f"docker exec {container} python3 -c '{_PORT_PY}' {port} kill 2>&1")
 
 
 # ── event-log analysis ────────────────────────────────────────────────────────

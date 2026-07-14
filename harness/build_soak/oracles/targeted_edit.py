@@ -32,10 +32,20 @@ class TargetedEditOracle:
         if not is_str_list(edited) or not is_str_list(expected):
             return [malformed(self._NAME, "edited_files/expected_files must be lists of strings")]
         unexpected = sorted(set(edited) - set(expected))
-        facts = {"edited_files": sorted(edited), "expected_files": sorted(expected), "unexpected": unexpected}
+        facts = {
+            "edited_files": sorted(edited),
+            "expected_files": sorted(expected),
+            "unexpected": unexpected,
+        }
         if unexpected:
-            return [failing(self._NAME, fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES,
-                            first_broken_link="edit -> files", facts=facts)]
+            return [
+                failing(
+                    self._NAME,
+                    fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES,
+                    first_broken_link="edit -> files",
+                    facts=facts,
+                )
+            ]
         return [passing(self._NAME, facts=facts)]
 
 
@@ -56,16 +66,38 @@ class RewriteAvoidanceOracle:
         if not isinstance(scope, str):
             return [malformed(self._NAME, "edit_scope must be a string")]
         if scope != "small":
-            return [skipping(self._NAME, reason=f"edit_scope={scope!r} not adjudicated (small-only)")]
-        changed, total, bound = ev.get("changed_lines"), ev.get("total_lines"), ev.get("max_churn_ratio")
+            return [
+                skipping(self._NAME, reason=f"edit_scope={scope!r} not adjudicated (small-only)")
+            ]
+        changed, total, bound = (
+            ev.get("changed_lines"),
+            ev.get("total_lines"),
+            ev.get("max_churn_ratio"),
+        )
         if not is_int(changed) or not is_int(total) or not is_num(bound):
-            return [malformed(self._NAME, "changed_lines/total_lines int (not bool) + max_churn_ratio number required")]
+            return [
+                malformed(
+                    self._NAME,
+                    "changed_lines/total_lines int (not bool) + max_churn_ratio number required",
+                )
+            ]
         if total <= 0:
             return [malformed(self._NAME, "total_lines must be > 0", {"total_lines": total})]
         ratio = changed / total
-        facts = {"edit_scope": scope, "changed_lines": changed, "total_lines": total,
-                 "churn_ratio": ratio, "max_churn_ratio": float(bound)}
+        facts = {
+            "edit_scope": scope,
+            "changed_lines": changed,
+            "total_lines": total,
+            "churn_ratio": ratio,
+            "max_churn_ratio": float(bound),
+        }
         if ratio > bound:
-            return [failing(self._NAME, fc.SMALL_EDIT_FULL_REWRITE,
-                            first_broken_link="small_edit -> churn", facts=facts)]
+            return [
+                failing(
+                    self._NAME,
+                    fc.SMALL_EDIT_FULL_REWRITE,
+                    first_broken_link="small_edit -> churn",
+                    facts=facts,
+                )
+            ]
         return [passing(self._NAME, facts=facts)]

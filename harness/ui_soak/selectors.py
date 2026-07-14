@@ -28,13 +28,13 @@ PRIMARY_SEND = '[data-disco-control="send-message"]'
 # frontend/src/components/ResearchSurface.tsx: explicit harness phase/stream
 # attributes. "done" can include an error; "final" means an answer exists.
 RESEARCH_IDLE = '[data-research-phase="idle"]'
-RESEARCH_COMPOSER = f'{RESEARCH_IDLE} {COMPOSER}'
-RESEARCH_SEND = f'{RESEARCH_IDLE} {PRIMARY_SEND}'
+RESEARCH_COMPOSER = f"{RESEARCH_IDLE} {COMPOSER}"
+RESEARCH_SEND = f"{RESEARCH_IDLE} {PRIMARY_SEND}"
 RESEARCH_FINAL = '[data-research-phase="done"][data-stream-state="final"]'
 
 # frontend/src/components/AnswerDocument.tsx: the answer body is the semantic
 # article. Non-whitespace inner text prevents the question from false-passing.
-RESEARCH_ANSWER = f'{RESEARCH_FINAL} article'
+RESEARCH_ANSWER = f"{RESEARCH_FINAL} article"
 # frontend/src/components/ResearchSurface.tsx + states.tsx: ErrorState role.
 RESEARCH_ERROR = '[data-research-phase] [role="alert"]'
 
@@ -46,10 +46,7 @@ APPROVE_PLAN = '[data-disco-control="approve-plan"]'
 # frontend ConversationStatus union has no VERIFIED value.
 BUILD_STATUS = '[data-disco-control="build.status"]'
 BUILD_FINISHED = f'{BUILD_STATUS}[data-status="FINISHED"]'
-BUILD_FAILED = (
-    f'{BUILD_STATUS}[data-status="ERROR"], '
-    f'{BUILD_STATUS}[data-status="STUCK"]'
-)
+BUILD_FAILED = f'{BUILD_STATUS}[data-status="ERROR"], {BUILD_STATUS}[data-status="STUCK"]'
 
 # frontend/src/components/build/ExecutionCanvas.tsx: Tabs.Root exposes its
 # active tab. The Preview trigger's accessible name is the sole text fallback.
@@ -61,7 +58,5 @@ PREVIEW_PANEL = f'{PREVIEW_ACTIVE} [role="tabpanel"][data-state="active"]'
 # frontend/src/components/build/canvas/PreviewPane.tsx: legitimate preview
 # iframe variants use stable titles (plain HTML, live server, server artifact).
 PREVIEW_IFRAMES = (
-    'iframe[title="Static preview"], '
-    'iframe[title="Live preview"], '
-    'iframe[title="Artifact preview"]'
+    'iframe[title="Static preview"], iframe[title="Live preview"], iframe[title="Artifact preview"]'
 )

@@ -213,18 +213,16 @@ def test_phase_a(firefox):
     ]
     assert recovery, "no recovery action references the killed port after noticing"
     witness["recovery_seq"] = recovery[0]["seq"]
-    witness["recovery_excerpt"] = json.dumps(
-        (recovery[0].get("tool_call") or {}).get("arguments")
-    )[:400]
+    witness["recovery_excerpt"] = json.dumps((recovery[0].get("tool_call") or {}).get("arguments"))[
+        :400
+    ]
 
     # 3c. zero hard-denied actions in the ENTIRE run.
     denials = hard_denied(events)
     assert not denials, f"hard-denied actions present: {len(denials)}"
 
     # 3d. a BP-05-valid browser verification AFTER recovery.
-    verifs = [
-        v for v in browser_verifications(events, 8000) if v["seq"] > recovery[0]["seq"]
-    ]
+    verifs = [v for v in browser_verifications(events, 8000) if v["seq"] > recovery[0]["seq"]]
     assert verifs, "no console-clean :8000 browser verification after recovery"
     witness["verification_seq"] = verifs[0]["seq"]
 

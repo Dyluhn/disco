@@ -80,9 +80,7 @@ async def test_router_auth_error_retries_once_then_succeeds():
 
 async def test_router_repeated_auth_error_is_terminal_after_one_retry():
     """Persistent bad credentials stop after the one bounded auth retry."""
-    provider = FaultyProvider(
-        errors=[LLMAuthError("bad key"), LLMAuthError("bad key")]
-    )
+    provider = FaultyProvider(errors=[LLMAuthError("bad key"), LLMAuthError("bad key")])
     router, _sink = build_faulty_router(provider)
 
     with pytest.raises(LLMAuthError):

@@ -75,10 +75,12 @@ def _llm_input(arguments: dict[str, Any]) -> dict[str, Any]:
     norm_msgs: list[dict[str, Any]] = []
     for m in raw_msgs:
         if isinstance(m, dict):
-            norm_msgs.append({
-                "role": str(m.get("role", "")),
-                "content": str(m.get("content", "")),
-            })
+            norm_msgs.append(
+                {
+                    "role": str(m.get("role", "")),
+                    "content": str(m.get("content", "")),
+                }
+            )
     return {
         "role": str(arguments.get("role", "")),
         "messages": norm_msgs,
@@ -167,11 +169,13 @@ def project_cassette_rows(scrubbed_events: list[dict[str, Any]]) -> list[dict[st
             continue
         seen_keys.add((seam, key))
 
-        rows.append({
-            "seam": seam,
-            "key": key,
-            "input": input_payload,
-            "output": output,
-        })
+        rows.append(
+            {
+                "seam": seam,
+                "key": key,
+                "input": input_payload,
+                "output": output,
+            }
+        )
 
     return rows

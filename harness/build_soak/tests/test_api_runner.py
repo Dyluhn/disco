@@ -156,15 +156,28 @@ def _smoke_log_with_file_write(path, content):
         status(5, "RUNNING", "plan_approved"),
         status(6, "RUNNING"),
         {
-            "id": "act7", "seq": 7, "kind": "action", "source": "agent",
-            "tool_call": {"tool_name": "file_write",
-                          "arguments": {"path": path, "content": content}, "call_id": "cw7"},
+            "id": "act7",
+            "seq": 7,
+            "kind": "action",
+            "source": "agent",
+            "tool_call": {
+                "tool_name": "file_write",
+                "arguments": {"path": path, "content": content},
+                "call_id": "cw7",
+            },
         },
         {
-            "id": "evt_8", "seq": 8, "kind": "observation", "source": "environment",
+            "id": "evt_8",
+            "seq": 8,
+            "kind": "observation",
+            "source": "environment",
             "action_id": "act7",
-            "tool_result": {"call_id": "cw7", "tool_name": "file_write", "success": True,
-                            "content": "wrote"},
+            "tool_result": {
+                "call_id": "cw7",
+                "tool_name": "file_write",
+                "success": True,
+                "content": "wrote",
+            },
         },
         msg(9, "agent", "done", role="assistant"),
         status(10, "FINISHED"),
@@ -230,9 +243,7 @@ def test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_progress_poll_kills_conversation_on_confirmed_live_thrash(
-    monkeypatch, tmp_path
-):
+async def test_progress_poll_kills_conversation_on_confirmed_live_thrash(monkeypatch, tmp_path):
     client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
     client.enable_live_thrash_monitor(_smoke_scenario())
 
@@ -248,9 +259,7 @@ async def test_progress_poll_kills_conversation_on_confirmed_live_thrash(
     monkeypatch.setattr(client, "_sample_live_thrash", crossed)
     monkeypatch.setattr(client, "kill", kill)
 
-    result = await client.poll_until_terminal_or_gate(
-        _CID, inactivity_s=5, hard_cap_s=5
-    )
+    result = await client.poll_until_terminal_or_gate(_CID, inactivity_s=5, hard_cap_s=5)
 
     assert result == LIVE_THRASH_STOP
     assert killed == [_CID]
@@ -518,11 +527,17 @@ def _file_write_log(path, content, *, call="c1", first_seq=1):
     and observation share `call` so the readiness gate correlates the write as successful."""
     return [
         {
-            "id": "u1", "seq": first_seq, "kind": "message", "source": "user",
+            "id": "u1",
+            "seq": first_seq,
+            "kind": "message",
+            "source": "user",
             "message": {"role": "user", "content": "build it"},
         },
         {
-            "id": f"a{first_seq + 1}", "seq": first_seq + 1, "kind": "action", "source": "agent",
+            "id": f"a{first_seq + 1}",
+            "seq": first_seq + 1,
+            "kind": "action",
+            "source": "agent",
             "tool_call": {
                 "tool_name": "file_write",
                 "arguments": {"path": path, "content": content},
@@ -530,13 +545,22 @@ def _file_write_log(path, content, *, call="c1", first_seq=1):
             },
         },
         {
-            "id": f"o{first_seq + 2}", "seq": first_seq + 2, "kind": "observation",
+            "id": f"o{first_seq + 2}",
+            "seq": first_seq + 2,
+            "kind": "observation",
             "source": "environment",
-            "tool_result": {"call_id": call, "tool_name": "file_write", "success": True,
-                            "content": "wrote"},
+            "tool_result": {
+                "call_id": call,
+                "tool_name": "file_write",
+                "success": True,
+                "content": "wrote",
+            },
         },
         {
-            "id": f"s{first_seq + 3}", "seq": first_seq + 3, "kind": "status", "source": "system",
+            "id": f"s{first_seq + 3}",
+            "seq": first_seq + 3,
+            "kind": "status",
+            "source": "system",
             "status": "FINISHED",
         },
     ]
@@ -562,7 +586,10 @@ async def test_snapshot_waits_for_byte_change_rev1_to_rev2(tmp_path, monkeypatch
     _install_clock(monkeypatch, clock)
     transport = FakeTransport(db, states=["FINISHED"], workspace={})
     client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj),
+        transport,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
         snapshot_wait_s=50.0,
     )
 
@@ -591,7 +618,10 @@ async def test_snapshot_waits_for_added_file_between_polls(tmp_path, monkeypatch
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["app.js"])
@@ -613,12 +643,21 @@ async def test_snapshot_waits_for_removed_file_not_stale_present(tmp_path, monke
     # Append a SUCCESSFUL shell `rm old.html` AFTER the write → agent-final state is absent.
     log += [
         {
-            "id": "a9", "seq": 9, "kind": "action", "source": "agent",
-            "tool_call": {"tool_name": "shell", "arguments": {"command": "rm old.html"},
-                          "call_id": "r1"},
+            "id": "a9",
+            "seq": 9,
+            "kind": "action",
+            "source": "agent",
+            "tool_call": {
+                "tool_name": "shell",
+                "arguments": {"command": "rm old.html"},
+                "call_id": "r1",
+            },
         },
         {
-            "id": "o10", "seq": 10, "kind": "observation", "source": "environment",
+            "id": "o10",
+            "seq": 10,
+            "kind": "observation",
+            "source": "environment",
             "tool_result": {"call_id": "r1", "tool_name": "shell", "success": True, "content": ""},
         },
     ]
@@ -632,7 +671,10 @@ async def test_snapshot_waits_for_removed_file_not_stale_present(tmp_path, monke
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["old.html"])
@@ -659,7 +701,10 @@ async def test_snapshot_non_declared_churn_does_not_block_declared_set(tmp_path,
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -686,7 +731,10 @@ async def test_snapshot_timeout_fail_fast_when_never_ready(tmp_path, monkeypatch
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.5,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.5,
     )
 
     with pytest.raises(SnapshotNotReadyError) as ei:
@@ -710,7 +758,10 @@ async def test_snapshot_already_consistent_accepts_promptly(tmp_path, monkeypatc
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -748,31 +799,57 @@ def _edit_then_read_log(path, final_text, *, read_content=None, include_read=Tru
     readback carrying `final_text` unless `read_content` overrides it (paged/synthetic cases)."""
     log = [
         {
-            "id": "u1", "seq": 1, "kind": "message", "source": "user",
+            "id": "u1",
+            "seq": 1,
+            "kind": "message",
+            "source": "user",
             "message": {"role": "user", "content": "revise it"},
         },
         {
-            "id": "a2", "seq": 2, "kind": "action", "source": "agent",
+            "id": "a2",
+            "seq": 2,
+            "kind": "action",
+            "source": "agent",
             "tool_call": {"tool_name": "file_edit", "arguments": {"path": path}, "call_id": "m1"},
         },
         {
-            "id": "o3", "seq": 3, "kind": "observation", "source": "environment",
-            "tool_result": {"call_id": "m1", "tool_name": "file_edit", "success": True,
-                            "content": "edited"},
+            "id": "o3",
+            "seq": 3,
+            "kind": "observation",
+            "source": "environment",
+            "tool_result": {
+                "call_id": "m1",
+                "tool_name": "file_edit",
+                "success": True,
+                "content": "edited",
+            },
         },
     ]
     if include_read:
         rc = read_content if read_content is not None else _file_read_full_content(final_text)
         log += [
             {
-                "id": "a4", "seq": 4, "kind": "action", "source": "agent",
-                "tool_call": {"tool_name": "file_read", "arguments": {"path": path},
-                              "call_id": "r1"},
+                "id": "a4",
+                "seq": 4,
+                "kind": "action",
+                "source": "agent",
+                "tool_call": {
+                    "tool_name": "file_read",
+                    "arguments": {"path": path},
+                    "call_id": "r1",
+                },
             },
             {
-                "id": "o5", "seq": 5, "kind": "observation", "source": "environment",
-                "tool_result": {"call_id": "r1", "tool_name": "file_read", "success": True,
-                                "content": rc},
+                "id": "o5",
+                "seq": 5,
+                "kind": "observation",
+                "source": "environment",
+                "tool_result": {
+                    "call_id": "r1",
+                    "tool_name": "file_read",
+                    "success": True,
+                    "content": rc,
+                },
             },
         ]
     log.append({"id": "s9", "seq": 9, "kind": "status", "source": "system", "status": "FINISHED"})
@@ -799,7 +876,10 @@ async def test_snapshot_rendered_readback_waits_for_final_bytes(tmp_path, monkey
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -822,7 +902,10 @@ async def test_snapshot_rendered_readback_fail_fast_when_never_final(tmp_path, m
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.5,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.5,
     )
 
     with pytest.raises(SnapshotNotReadyError) as ei:
@@ -847,12 +930,21 @@ async def test_snapshot_stale_readback_before_later_edit_is_ignored(tmp_path, mo
     log = [e for e in log if e["seq"] != 9]  # drop FINISHED, re-add after the late edit
     log += [
         {
-            "id": "a6", "seq": 6, "kind": "action", "source": "agent",
-            "tool_call": {"tool_name": "file_edit", "arguments": {"path": "index.html"},
-                          "call_id": "m2"},
+            "id": "a6",
+            "seq": 6,
+            "kind": "action",
+            "source": "agent",
+            "tool_call": {
+                "tool_name": "file_edit",
+                "arguments": {"path": "index.html"},
+                "call_id": "m2",
+            },
         },
         {
-            "id": "o7", "seq": 7, "kind": "observation", "source": "environment",
+            "id": "o7",
+            "seq": 7,
+            "kind": "observation",
+            "source": "environment",
             "tool_result": {"call_id": "m2", "tool_name": "file_edit", "success": True},
         },
         {"id": "s9", "seq": 9, "kind": "status", "source": "system", "status": "FINISHED"},
@@ -863,7 +955,10 @@ async def test_snapshot_stale_readback_before_later_edit_is_ignored(tmp_path, mo
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=3.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise
@@ -894,7 +989,10 @@ async def test_snapshot_paged_readback_not_promoted(tmp_path, monkeypatch):
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=3.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise NOT_READY
@@ -911,9 +1009,10 @@ async def test_snapshot_synthetic_f9_readback_not_promoted(tmp_path, monkeypatch
     final = "<h1>real</h1>\n"
     _plant_snapshot(proj, _CID, {"index.html": final})
     log = _edit_then_read_log(
-        "index.html", final,
+        "index.html",
+        final,
         read_content="[F9 dedup: file_read(index.html) identical to a recent read this turn "
-                     "— see the earlier result; file_read again only if you suspect it changed]",
+        "— see the earlier result; file_read again only if you suspect it changed]",
     )
     _seed_db(db, _CID, log)
 
@@ -921,7 +1020,10 @@ async def test_snapshot_synthetic_f9_readback_not_promoted(tmp_path, monkeypatch
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=3.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=3.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])  # must NOT raise
@@ -949,7 +1051,10 @@ async def test_snapshot_present_unproven_extended_stability_not_bare_present(tmp
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=50.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -978,7 +1083,10 @@ async def test_snapshot_churning_unproven_stamps_content_stable_false(tmp_path, 
     _install_clock(monkeypatch, clock)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
-        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.0,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.0,
     )
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -1074,9 +1182,7 @@ async def test_collect_preview_no_verify_serves_and_probes_for_genuine_evidence(
     assert "Build Smoke OK" in preview["content"]
 
 
-def test_snapshot_probe_fallback_reads_jailed_index_when_loopback_is_blocked(
-    tmp_path, monkeypatch
-):
+def test_snapshot_probe_fallback_reads_jailed_index_when_loopback_is_blocked(tmp_path, monkeypatch):
     served = tmp_path / "served"
     served.mkdir()
     (served / "index.html").write_text("<h1>JAILED FALLBACK</h1>", encoding="utf-8")
@@ -1281,14 +1387,19 @@ async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
 async def test_latest_user_message_seq_tracks_user_turns(tmp_path):
     # The watermark used to attribute harness-sent turns: the highest USER message seq.
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, [
-        msg(1, "user", "build a page"),
-        status(2, "RUNNING"),
-        msg(3, "agent", "working", role="assistant"),  # NOT a user turn
-        msg(8, "user", "revise the heading"),
-    ])
-    client = DiscoApiClient(FakeTransport(db, states=["FINISHED"]), db_path=str(db),
-                            poll_interval_s=0.0)
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build a page"),
+            status(2, "RUNNING"),
+            msg(3, "agent", "working", role="assistant"),  # NOT a user turn
+            msg(8, "user", "revise the heading"),
+        ],
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"]), db_path=str(db), poll_interval_s=0.0
+    )
     assert client.latest_user_message_seq(_CID) == 8
     # a new user turn beyond the watermark is detected; one at/under it is not
     assert await client.wait_for_new_user_message_seq(_CID, after_seq=3, timeout_s=1) == 8
@@ -1299,8 +1410,9 @@ async def test_latest_user_message_seq_tracks_user_turns(tmp_path):
 async def test_latest_user_message_seq_no_user_turns(tmp_path):
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, [status(1, "RUNNING")])  # no user message at all
-    client = DiscoApiClient(FakeTransport(db, states=["FINISHED"]), db_path=str(db),
-                            poll_interval_s=0.0)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"]), db_path=str(db), poll_interval_s=0.0
+    )
     assert client.latest_user_message_seq(_CID) == -1
 
 
@@ -1330,18 +1442,33 @@ class _DecisionTransport(FakeTransport):
 def _alternatives_event(seq, alt_id, options):
     """An AlternativesEvent (the AWAITING_USER_DECISION gate) carrying choosable options."""
     return {
-        "id": alt_id, "seq": seq, "kind": "alternatives", "source": "agent",
-        "failed_action_id": "act_fail", "summary": "pick a recovery path", "options": options,
+        "id": alt_id,
+        "seq": seq,
+        "kind": "alternatives",
+        "source": "agent",
+        "failed_action_id": "act_fail",
+        "summary": "pick a recovery path",
+        "options": options,
     }
 
 
 @pytest.mark.asyncio
 async def test_resolve_decision_picks_recommended_and_sends_pick_alternative(tmp_path):
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
-        {"id": "opt_a", "title": "A"},
-        {"id": "opt_b", "title": "B", "recommended": True},
-    ])])
+    _seed_db(
+        db,
+        _CID,
+        [
+            _alternatives_event(
+                5,
+                "alt1",
+                [
+                    {"id": "opt_a", "title": "A"},
+                    {"id": "opt_b", "title": "B", "recommended": True},
+                ],
+            )
+        ],
+    )
     transport = _DecisionTransport(
         db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
     )
@@ -1356,9 +1483,20 @@ async def test_resolve_decision_picks_recommended_and_sends_pick_alternative(tmp
 @pytest.mark.asyncio
 async def test_resolve_decision_first_valid_when_no_recommendation(tmp_path):
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
-        {"id": "opt_a", "title": "A"}, {"id": "opt_b", "title": "B"},
-    ])])
+    _seed_db(
+        db,
+        _CID,
+        [
+            _alternatives_event(
+                5,
+                "alt1",
+                [
+                    {"id": "opt_a", "title": "A"},
+                    {"id": "opt_b", "title": "B"},
+                ],
+            )
+        ],
+    )
     transport = _DecisionTransport(
         db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
     )
@@ -1372,10 +1510,20 @@ async def test_resolve_decision_first_valid_when_no_recommendation(tmp_path):
 @pytest.mark.asyncio
 async def test_resolve_decision_scenario_override(tmp_path):
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, [_alternatives_event(5, "alt1", [
-        {"id": "opt_a", "title": "A"},
-        {"id": "opt_b", "title": "B", "recommended": True},
-    ])])
+    _seed_db(
+        db,
+        _CID,
+        [
+            _alternatives_event(
+                5,
+                "alt1",
+                [
+                    {"id": "opt_a", "title": "A"},
+                    {"id": "opt_b", "title": "B", "recommended": True},
+                ],
+            )
+        ],
+    )
     transport = _DecisionTransport(
         db, states=["AWAITING_USER_DECISION"], pending_alternatives_id="alt1"
     )
@@ -1428,17 +1576,31 @@ async def test_drive_auto_resolves_user_decision_and_records(tmp_path):
     # run record flags `auto_resolved_decisions: 1` + the picked option (distinguishable from a
     # clean PASS).
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, [
-        _alternatives_event(5, "alt1", [
-            {"id": "opt_a", "title": "A"},
-            {"id": "opt_b", "title": "B", "recommended": True},
-        ]),
-        status(10, "FINISHED"),
-    ])
+    _seed_db(
+        db,
+        _CID,
+        [
+            _alternatives_event(
+                5,
+                "alt1",
+                [
+                    {"id": "opt_a", "title": "A"},
+                    {"id": "opt_b", "title": "B", "recommended": True},
+                ],
+            ),
+            status(10, "FINISHED"),
+        ],
+    )
     transport = _DecisionTransport(
         db,
-        states=["RUNNING", "AWAITING_USER_DECISION", "AWAITING_USER_DECISION",
-                "FINISHED", "FINISHED", "FINISHED"],
+        states=[
+            "RUNNING",
+            "AWAITING_USER_DECISION",
+            "AWAITING_USER_DECISION",
+            "FINISHED",
+            "FINISHED",
+            "FINISHED",
+        ],
         pending_alternatives_id="alt1",
     )
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
@@ -1448,7 +1610,9 @@ async def test_drive_auto_resolves_user_decision_and_records(tmp_path):
 
     assert len(run.decision_resolutions) == 1
     assert run.decision_resolutions[0] == {
-        "alternatives_id": "alt1", "option_id": "opt_b", "attempt": 1,
+        "alternatives_id": "alt1",
+        "option_id": "opt_b",
+        "attempt": 1,
     }
     assert {"type": "pick_alternative", "option_id": "opt_b"} in transport.ws_frames
     assert any("auto-resolved user decision" in t for t in run.timeline)
@@ -1553,10 +1717,21 @@ async def test_post_create_error_status_is_product_not_infra(tmp_path):
     # codex #3: a StatusEvent(ERROR) AFTER create (driver preflight) is a PRODUCT
     # outcome, never infra. Health is fine pre-create; the run errors post-create.
     err_log = [
-        {"id": "e1", "seq": 1, "kind": "message", "source": "user",
-         "message": {"role": "user", "content": "build"}},
-        {"id": "e2", "seq": 2, "kind": "status", "source": "system",
-         "status": "ERROR", "detail": "Driver local-qwen unreachable"},
+        {
+            "id": "e1",
+            "seq": 1,
+            "kind": "message",
+            "source": "user",
+            "message": {"role": "user", "content": "build"},
+        },
+        {
+            "id": "e2",
+            "seq": 2,
+            "kind": "status",
+            "source": "system",
+            "status": "ERROR",
+            "detail": "Driver local-qwen unreachable",
+        },
     ]
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, err_log)
@@ -1776,11 +1951,7 @@ async def test_clarify_question_answered_then_build_proceeds(tmp_path):
     scenario = _smoke_scenario()
     run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
     # the runner sent the GENERIC clarification answer over the send_message path
-    answers = [
-        f["content"]
-        for f in transport.ws_frames
-        if f.get("type") == "send_message"
-    ]
+    answers = [f["content"] for f in transport.ws_frames if f.get("type") == "send_message"]
     assert len(answers) == 1
     assert "do not ask further" in answers[0].lower()
     # and the build proceeded to a clean terminal
@@ -1806,9 +1977,7 @@ async def test_clarify_uses_scenario_provided_answer(tmp_path):
     scenario = dict(_smoke_scenario())
     scenario["clarification_answer"] = "Make it a single dark-mode page titled Acme."
     await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
-    answers = [
-        f["content"] for f in transport.ws_frames if f.get("type") == "send_message"
-    ]
+    answers = [f["content"] for f in transport.ws_frames if f.get("type") == "send_message"]
     assert answers == ["Make it a single dark-mode page titled Acme."]
 
 
@@ -1878,8 +2047,15 @@ def _append_event(db_path, cid, seq, *, kind="action", source="agent"):
         conn.execute(
             "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
             "VALUES (?,?,?,?,?,?,?)",
-            (cid, seq, f"evt_{seq}", kind, source, "",
-             json.dumps({"seq": seq, "kind": kind, "source": source})),
+            (
+                cid,
+                seq,
+                f"evt_{seq}",
+                kind,
+                source,
+                "",
+                json.dumps({"seq": seq, "kind": kind, "source": source}),
+            ),
         )
         conn.commit()
     finally:
@@ -2277,9 +2453,7 @@ class _DeadWindowTransport(FakeTransport):
                 if r == self._stale_reads + 1:
                     # dead window over: append a RE-PLAN event (status STAYS FINISHED).
                     self._seq += 1
-                    _insert_event(
-                        self.db_path, self.cid, plan(self._seq, revision=1 + self._sends)
-                    )
+                    _insert_event(self.db_path, self.cid, plan(self._seq, revision=1 + self._sends))
                     self.pickup_log.append((self._sends, self._total_reads))
                 elif r == self._stale_reads + 1 + self._work_reads:
                     # the follow-up's OWN new terminal at a yet-higher seq.
@@ -2353,11 +2527,7 @@ class _CancelAtRecoveryTransport(FakeTransport):
         if path.endswith("/state"):
             self._state_reads += 1
 
-            if (
-                not self._file_write_inserted
-                and not self._killed
-                and self._state_reads >= 2
-            ):
+            if not self._file_write_inserted and not self._killed and self._state_reads >= 2:
                 seq = self._next_seq()
                 write = action(
                     seq,
@@ -2684,7 +2854,8 @@ async def test_followup_pickup_env_override_bounds_the_wait(tmp_path, monkeypatc
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
     baseline = await client.capture_followup_baseline(_CID)
     result = await asyncio.wait_for(
-        client.wait_for_followup_pickup(_CID, baseline), timeout=5.0  # default bound = env (0.03s)
+        client.wait_for_followup_pickup(_CID, baseline),
+        timeout=5.0,  # default bound = env (0.03s)
     )
     assert result == FOLLOWUP_PICKUP_TIMEOUT
 
@@ -2813,6 +2984,43 @@ async def test_cleanly_terminal_run_is_released(tmp_path):
     assert record["status"] == "PASS", record
     # Terminal state releases the orphaned runtime.
     assert any(p[0].endswith("/kill") for p in transport.posts)
+
+
+@pytest.mark.asyncio
+async def test_missing_live_cleanup_evidence_is_invalid_not_crash(tmp_path, monkeypatch):
+    """A configured live ledger with missing cleanup slices must emit INVALID_RUN."""
+
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<html><h1>Build Smoke OK</h1></html>",
+    )
+    client = _client(transport, tmp_path)
+
+    async def _missing_cleanup_evidence(*_args, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(_run_mod, "_collect_terminal_cleanup_evidence", _missing_cleanup_evidence)
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: tmp_path / "relay.jsonl")
+
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_missing_cleanup_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "RUN_INTERRUPTED"
+    assert record["facts"]["missing_slices"] == ["lifecycle", "sidecar", "cleanup"]
+    assert "terminal cleanup not adjudicable" in record["facts"]["reason"]
 
 
 @pytest.mark.asyncio
@@ -3008,9 +3216,7 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
     ev = await _run_mod._collect_terminal_cleanup_evidence(
         cast(
             DiscoApiClient,
-            _CleanupKillClient(
-                {"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}
-            ),
+            _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}),
         ),
         "conv_terminal",
         run,

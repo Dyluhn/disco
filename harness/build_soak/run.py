@@ -129,8 +129,7 @@ def _preview_required(scenario: dict[str, Any]) -> bool:
 
 def _is_cancel_after_first_write(cancel_at: dict[str, Any] | None) -> bool:
     return (
-        isinstance(cancel_at, dict)
-        and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+        isinstance(cancel_at, dict) and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
     )
 
 
@@ -163,8 +162,7 @@ async def _inject_when_writing(
     DB pollers against the same first-write boundary.
     """
     wants_cancel = (
-        isinstance(cancel_at, dict)
-        and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+        isinstance(cancel_at, dict) and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
     )
     if not mid_run and not wants_cancel:
         return
@@ -218,9 +216,7 @@ async def _wait_for_cancel_idle(
     last = previous_status
     if previous_status and previous_status != "IDLE":
         remaining = max(0.0, deadline - time.monotonic())
-        last = await client.wait_until_status_leaves(
-            cid, previous_status, timeout_s=remaining
-        )
+        last = await client.wait_until_status_leaves(cid, previous_status, timeout_s=remaining)
 
     stable_idle_reads = 1 if last == "IDLE" else 0
     while time.monotonic() < deadline:
@@ -251,14 +247,8 @@ async def _cancel_at_trigger(
     with contextlib.suppress(Exception):
         terminal_seq = client._latest_terminal_seq(cid)
     if trigger == _TRIGGER_AFTER_FIRST_FILE_WRITE and (
-        (
-            trigger_seq is not None
-            and terminal_seq > trigger_seq
-        )
-        or (
-            trigger_seq is None
-            and terminal_seq >= 0
-        )
+        (trigger_seq is not None and terminal_seq > trigger_seq)
+        or (trigger_seq is None and terminal_seq >= 0)
         or before_status in TERMINAL_STATES
     ):
         reason = (
@@ -442,9 +432,7 @@ async def _drive_to_terminal(
                     )
                     return status
                 before_user_seq = client.latest_user_message_seq(cid)
-                resolved = await client.resolve_decision(
-                    cid, preferred_option_id=decision_answer
-                )
+                resolved = await client.resolve_decision(cid, preferred_option_id=decision_answer)
                 if resolved is None:
                     timeline.append(
                         "AWAITING_USER_DECISION could NOT be auto-resolved (stale/invalid "
@@ -487,10 +475,7 @@ async def _drive_to_terminal(
                     cid, PAUSED_STATE, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
-            if (
-                injector is not None
-                and _is_cancel_after_first_write(cancel_at)
-            ):
+            if injector is not None and _is_cancel_after_first_write(cancel_at):
                 if injector.done():
                     injector.result()
                 else:
@@ -1044,7 +1029,10 @@ def _live_disco_container_names() -> list[str] | None:
     try:
         out = subprocess.run(
             ["podman", "ps", "--format", "{{.Names}}"],  # RUNNING only (no -a)
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except Exception:
         return None
@@ -1076,7 +1064,10 @@ def _podman_volume_names(args: list[str]) -> list[str] | None:
     try:
         out = subprocess.run(
             args,
-            capture_output=True, text=True, timeout=15, check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
     except Exception:
         return None
@@ -1106,9 +1097,7 @@ def _dangling_volume_names() -> set[str] | None:
     return None if names is None else set(names)
 
 
-def _scoped_disco_container_count(
-    names: list[str], sandbox_instance_ids: list[str]
-) -> int:
+def _scoped_disco_container_count(names: list[str], sandbox_instance_ids: list[str]) -> int:
     """Count live disco containers whose name embeds one of this conversation's sandbox ids."""
     ids = [sid for sid in sandbox_instance_ids if sid]
     return sum(1 for name in names if any(sid in name for sid in ids))
@@ -1373,9 +1362,7 @@ async def _collect_terminal_cleanup_evidence(
         ]
         volume_orphans = sum(volume_parts) if volume_parts else None
         total_orphans = (
-            container_orphans + volume_orphans
-            if volume_orphans is not None
-            else container_orphans
+            container_orphans + volume_orphans if volume_orphans is not None else container_orphans
         )
         ev["cleanup"] = {
             "orphans": total_orphans,
@@ -1392,9 +1379,7 @@ async def _collect_terminal_cleanup_evidence(
             baseline_dangling_volumes, after_dangling_volumes, exclude_disco_named=False
         )
         total_orphans = (
-            container_orphans + volume_orphans
-            if volume_orphans is not None
-            else container_orphans
+            container_orphans + volume_orphans if volume_orphans is not None else container_orphans
         )
         ev["cleanup"] = {
             "orphans": total_orphans,
@@ -1507,9 +1492,7 @@ async def run_once(
                 facts=exc.facts,
             )
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
-            return _invalid_run_record(
-                out_root, run_id, scenario, f"{type(exc).__name__}: {exc}"
-            )
+            return _invalid_run_record(out_root, run_id, scenario, f"{type(exc).__name__}: {exc}")
 
         if require_inspect_trace:
             trace = run.inspect_trace or {}
@@ -1549,7 +1532,9 @@ async def run_once(
         # drive_scenario, so releasing here never races it. Populates run.product_evidence.
         try:
             ev = await _collect_terminal_cleanup_evidence(
-                client, run.conversation_id, run,
+                client,
+                run.conversation_id,
+                run,
                 baseline_containers=baseline_containers,
                 relay_log=_relay_log_path(),
                 timeline=getattr(run, "timeline", []),
@@ -1573,7 +1558,6 @@ async def run_once(
         _missing = [k for k in _required if k not in ev]
         if _live_measure and _missing:
             return _invalid_run_record(
-                out_root, run_id, scenario,
                 out_root,
                 run_id,
                 scenario,
@@ -1587,8 +1571,14 @@ async def run_once(
             )
 
         base = assemble_dossier(
-            out_root, run_id, scenario, run,
-            model=model, autonomous=autonomous, commit=commit, kernel=kernel,
+            out_root,
+            run_id,
+            scenario,
+            run,
+            model=model,
+            autonomous=autonomous,
+            commit=commit,
+            kernel=kernel,
         )
         return classify_dossier(base, scenario, run, autonomous=autonomous, commit=commit)
     finally:

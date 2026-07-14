@@ -31,9 +31,7 @@ def _no_replan_failure():
 
 def test_replay_pass_becomes_intermittent_not_pass():
     original = _no_replan_failure()
-    updated = intermittent_classification(
-        original, replay_status="PASS", replay_run_id="replay1"
-    )
+    updated = intermittent_classification(original, replay_status="PASS", replay_run_id="replay1")
     assert updated["status"] == "FAIL"  # NEVER PASS
     assert updated["code"] == "INTERMITTENT_NO_REPLAN_AFTER_REVISION"
     assert updated["severity"] == "P0"  # same severity as the original code

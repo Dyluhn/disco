@@ -44,7 +44,11 @@ def test_no_mutation_and_passthrough() -> None:
     }
     out = transform_request(src)
     assert out["model"] == "MiniMax-M3" and out["max_tokens"] == MAX_TOKENS_CAP
-    assert out["messages"] == src["messages"] and out["tools"] == src["tools"] and out["stream"] is True
+    assert (
+        out["messages"] == src["messages"]
+        and out["tools"] == src["tools"]
+        and out["stream"] is True
+    )
     # the input dict is NOT mutated
     assert src["model"] == "minimax-m3" and src["max_tokens"] == 9_999_999
 
@@ -56,7 +60,11 @@ def test_non_dict_body_passes_through() -> None:
 def test_upstream_host_for_provider_ledger() -> None:
     assert upstream_host("https://api.minimaxi.chat/v1/chat/completions") == "api.minimaxi.chat"
     rec = relay_log_record("https://api.minimaxi.chat/v1/chat/completions", "MiniMax-M3")
-    assert rec["host"] == "api.minimaxi.chat" and rec["model"] == "MiniMax-M3" and "minimax" in rec["host"]
+    assert (
+        rec["host"] == "api.minimaxi.chat"
+        and rec["model"] == "MiniMax-M3"
+        and "minimax" in rec["host"]
+    )
     assert rec["conversation_id"] is None
 
 

@@ -29,7 +29,9 @@ def is_str_list(x: Any) -> bool:
 
 
 def is_str_dict(x: Any) -> bool:
-    return isinstance(x, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in x.items())
+    return isinstance(x, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in x.items()
+    )
 
 
 def is_int(x: Any) -> bool:

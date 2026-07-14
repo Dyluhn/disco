@@ -10,7 +10,7 @@ to the existing `classify_run_folder`.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -126,7 +126,9 @@ def classify_dossier(run_dir: str | Path, scenario: ProductScenario) -> dict[str
     base = Path(run_dir)
     pe_path = base / PRODUCT_EVIDENCE_NAME
     if not pe_path.is_file():
-        return _missing("no product-evidence.json", {"required_slices": list(scenario.required_slices)})
+        return _missing(
+            "no product-evidence.json", {"required_slices": list(scenario.required_slices)}
+        )
     try:
         ev = json.loads(pe_path.read_text(encoding="utf-8"))
     except (ValueError, OSError) as exc:

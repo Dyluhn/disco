@@ -143,9 +143,7 @@ class IntegrityResult:
         return self.intact
 
 
-def verify_evidence_unchanged(
-    folder: str | Path, manifest: EvidenceManifest
-) -> IntegrityResult:
+def verify_evidence_unchanged(folder: str | Path, manifest: EvidenceManifest) -> IntegrityResult:
     """Re-hash the manifest's evidence files and compare to the frozen hashes.
 
     Returns intact=False (with the per-file expected/actual) when ANY hashed file

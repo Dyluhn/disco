@@ -56,9 +56,7 @@ def test_passes_accumulate_only_on_same_untainted_revision() -> None:
     state = empty_state()
     _record(state, "c1", "r1", _result(PASS, 100))
     _record(state, "c2", "r1", _result(PASS, 200))
-    report = promotion_report(
-        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
-    )
+    report = promotion_report(state, matrix, revision="r1", claim_ids={"build.api_shapes_live"})
     assert report["eligible"] is True
     assert report["claims"][0]["observed"] == 300
 
@@ -69,9 +67,7 @@ def test_one_product_failure_taints_prior_and_later_passes_on_revision() -> None
     _record(state, "c1", "r1", _result(PASS, 299))
     _record(state, "c2", "r1", _result(FAIL, 0))
     _record(state, "c3", "r1", _result(PASS, 300))
-    report = promotion_report(
-        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
-    )
+    report = promotion_report(state, matrix, revision="r1", claim_ids={"build.api_shapes_live"})
     assert report["tainted"] is True
     assert report["eligible"] is False
     assert report["claims"][0]["observed"] == 0
@@ -82,9 +78,7 @@ def test_infrastructure_failure_does_not_taint_but_never_counts() -> None:
     state = empty_state()
     _record(state, "c1", "r1", _result(PASS, 100))
     _record(state, "c2", "r1", _result(INFRA, 0))
-    report = promotion_report(
-        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
-    )
+    report = promotion_report(state, matrix, revision="r1", claim_ids={"build.api_shapes_live"})
     assert report["tainted"] is False
     assert report["claims"][0]["observed"] == 100
 
@@ -94,9 +88,7 @@ def test_new_revision_starts_after_fix_streak_from_zero() -> None:
     state = empty_state()
     _record(state, "c1", "r1", _result(FAIL, 0))
     _record(state, "c2", "r2", _result(PASS, 100))
-    report = promotion_report(
-        state, matrix, revision="r2", claim_ids={"build.api_shapes_live"}
-    )
+    report = promotion_report(state, matrix, revision="r2", claim_ids={"build.api_shapes_live"})
     assert report["tainted"] is False
     assert report["claims"][0]["observed"] == 100
 

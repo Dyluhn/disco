@@ -67,9 +67,7 @@ async def run_research(query: str, search, extraction, encoders: dict, router, d
 def score_research(answer, task: dict) -> dict:
     m = grounding_metrics(answer)
     cited = {p.source_url for p in answer.passages}
-    domains_ok = all(
-        any(dom in url for url in cited) for dom in task.get("must_cite_domains", [])
-    )
+    domains_ok = all(any(dom in url for url in cited) for dom in task.get("must_cite_domains", []))
     min_f = float(task.get("min_faithfulness", 0.0))
     passed = m.faithfulness >= min_f and domains_ok and m.total_claims > 0
     return {

@@ -63,7 +63,9 @@ class ProviderLedgerOracle:
                         facts={"captured": False, "reason": "no provider-call ledger file"},
                     )
                 ]
-            return [skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")]
+            return [
+                skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")
+            ]
 
         provider_ledger = records_for_conversation(provider_ledger, conversation_id)
 
@@ -77,7 +79,11 @@ class ProviderLedgerOracle:
                         facts={"captured": True, "records": 0},
                     )
                 ]
-            return [skipping(_ORACLE, reason="provider-call ledger captured but empty (require_ledger=false)")]
+            return [
+                skipping(
+                    _ORACLE, reason="provider-call ledger captured but empty (require_ledger=false)"
+                )
+            ]
 
         # Validate record shape: a non-dict or hostless record means corrupt/under-captured
         # evidence — fail-closed rather than under-report a possibly-forbidden call.

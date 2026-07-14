@@ -5,6 +5,7 @@ downloadable file (serve(kind='files')) → a DeliverableEvent → and the harne
 bytes from GET /conversations/{cid}/artifacts/{path}. download_bytes is the length of the ACTUAL GET
 (NOT a fixture claim); fail-closed if no deliverable or 0 bytes. Sibling of targeted_edit_run.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,8 @@ import urllib.request
 AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
 RUN_DIR = os.environ.get(
-    "RUN_DIR", "/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b"
+    "RUN_DIR",
+    "/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b",
 )
 BUILD_TIMEOUT_S = int(os.environ.get("P10B_TIMEOUT_S", "480"))
 _TERMINAL = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "AWAITING_USER", "FAILED", "CANCELLED"}
@@ -31,8 +33,12 @@ PROMPT = (
 
 
 def _post_json(path: str, body: dict, timeout: int = 120) -> dict:
-    req = urllib.request.Request(AGENT + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        AGENT + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
 
@@ -112,8 +118,10 @@ def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger())
 
-    conv = _post_json("/conversations", {"owner_id": "local", "surface": "build", "autonomous": True,
-                                         "title": f"p10b {tag}"})
+    conv = _post_json(
+        "/conversations",
+        {"owner_id": "local", "surface": "build", "autonomous": True, "title": f"p10b {tag}"},
+    )
     cid = conv.get("conversation_id") or conv.get("id")
     assert cid, f"no conversation id in {conv}"
     _post_json(f"/conversations/{cid}/messages", {"content": PROMPT})
@@ -127,7 +135,7 @@ def main() -> int:
     events = _events(cid)
     deliverable = _find_deliverable(events)
 
-    # fetch REAL bytes — try the deliverable's path, then fall back to the pinned file (record which).
+    # Fetch REAL bytes from the deliverable path, then the pinned file; record which succeeded.
     fetched_from, status, body = None, None, b""
     candidates = []
     if deliverable:
@@ -146,15 +154,31 @@ def main() -> int:
     text = body.decode("utf-8", "replace")
     bytes_are_real = ("<html" in text.lower() or "<!doctype" in text.lower()) and (TOKEN in text)
     openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
-    all_minimax = bool(slice_) and openrouter == 0 and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    all_minimax = (
+        bool(slice_)
+        and openrouter == 0
+        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    )
 
-    export = {"requested": True, "download_present": download_present, "download_bytes": download_bytes}
+    export = {
+        "requested": True,
+        "download_present": download_present,
+        "download_bytes": download_bytes,
+    }
     verdict = {
-        "tag": tag, "cid": cid, "build_status": build_status,
-        "deliverable": deliverable, "fetched_from": fetched_from, "http_status": status,
+        "tag": tag,
+        "cid": cid,
+        "build_status": build_status,
+        "deliverable": deliverable,
+        "fetched_from": fetched_from,
+        "http_status": status,
         "PASS": bool(
-            deliverable is not None and download_present and download_bytes > 0 and bytes_are_real
-            and all_minimax and post_terminal == 0
+            deliverable is not None
+            and download_present
+            and download_bytes > 0
+            and bytes_are_real
+            and all_minimax
+            and post_terminal == 0
         ),
         "checks": {
             "deliverable_event_present": deliverable is not None,
@@ -171,8 +195,12 @@ def main() -> int:
         },
         "export": export,
     }
-    dossier = {"verdict": verdict, "deliverable": deliverable, "ledger_slice": slice_,
-               "downloaded_head": text[:2000]}
+    dossier = {
+        "verdict": verdict,
+        "deliverable": deliverable,
+        "ledger_slice": slice_,
+        "downloaded_head": text[:2000],
+    }
     with open(os.path.join(RUN_DIR, f"p10b_dossier_{tag}.json"), "w", encoding="utf-8") as f:
         json.dump(dossier, f, indent=2)
     print(json.dumps(verdict, indent=2))

@@ -65,7 +65,8 @@ exactly to this schema — no prose, no markdown, just the JSON object:
   "theme": "light" | "dark" | "neutral",
   "slides": [
     {
-      "type": "title" | "bullets" | "two_column" | "metrics" | "section_header" | "image" | "table" | "closing",
+      "type": "title" | "bullets" | "two_column" | "metrics" |
+              "section_header" | "image" | "table" | "closing",
       "title": string,       // slide title, max 60 chars STRICTLY
       "bullets": [string],   // list of bullet points, max 6 items, each max 80 chars STRICTLY
       "left_bullets": [string],  // for two_column only, max 4 items, each max 80 chars
@@ -175,6 +176,4 @@ LOOSE_HYBRID = Strategy(
     user_template=_LOOSE_USER,
 )
 
-ALL_STRATEGIES: dict[str, Strategy] = {
-    s.id: s for s in [FREE_FORM, RIGID_JSON, LOOSE_HYBRID]
-}
+ALL_STRATEGIES: dict[str, Strategy] = {s.id: s for s in [FREE_FORM, RIGID_JSON, LOOSE_HYBRID]}

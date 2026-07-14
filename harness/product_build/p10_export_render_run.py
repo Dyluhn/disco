@@ -19,6 +19,7 @@ generation time, so the negative path is fault-injected there — not here).
 NOTE: run against a FRESHLY RESTARTED agent-server so it carries THIS session's
 slides.py/finish.py changes (stale-server lesson from the P8 proof). Dossier → RUN_DIR.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,10 @@ import urllib.request
 
 AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
-RUN_DIR = os.environ.get("RUN_DIR", "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p10proof")
+RUN_DIR = os.environ.get(
+    "RUN_DIR",
+    "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p10proof",
+)
 BUILD_TIMEOUT_S = int(os.environ.get("P10_BUILD_TIMEOUT_S", "600"))
 _TERMINAL = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "AWAITING_USER", "FAILED", "CANCELLED"}
 _EXPORT_GATE_TOKEN = "EXPORT RENDER CHECK"
@@ -43,8 +47,12 @@ BUILD_PROMPT = (
 
 
 def _post(path: str, body: dict, timeout: int = 120) -> dict:
-    req = urllib.request.Request(AGENT + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        AGENT + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
 
@@ -104,8 +112,15 @@ def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger_rows())
 
-    conv = _post("/conversations", {"owner_id": "local", "surface": "build",
-                                    "autonomous": True, "title": "p10 export_render proof"})
+    conv = _post(
+        "/conversations",
+        {
+            "owner_id": "local",
+            "surface": "build",
+            "autonomous": True,
+            "title": "p10 export_render proof",
+        },
+    )
     cid = conv.get("conversation_id") or conv.get("id")
     assert cid, f"no conversation id in {conv}"
     print(f"cid={cid}")
@@ -133,7 +148,8 @@ def main() -> int:
 
     # Was the good deck ever refused by the export gate? (Should be NO.)
     gate_refusals = sum(
-        1 for e in events
+        1
+        for e in events
         if (e.get("message") or {}).get("content") and _EXPORT_GATE_TOKEN in e["message"]["content"]
     )
 
@@ -146,7 +162,6 @@ def main() -> int:
     facts_ok = bool(facts and facts.get("ok"))
     facts_non_blank = bool(facts and facts.get("non_blank"))
     facts_valid_header = bool(facts and facts.get("valid_header"))
-    unit_count = (facts or {}).get("unit_count")
     # the render is NOT truncated (rendered >= declared) — the gate's actual
     # anti-false-completeness semantics (it refuses only when units < declared).
     render_not_truncated = facts_present and not (facts or {}).get("truncated")
@@ -171,8 +186,13 @@ def main() -> int:
         "ledger_openrouter": openrouter,
     }
     passed = (
-        facts_present and facts_ok and facts_non_blank and facts_valid_header
-        and render_not_truncated and good_deck_finished and good_deck_not_refused
+        facts_present
+        and facts_ok
+        and facts_non_blank
+        and facts_valid_header
+        and render_not_truncated
+        and good_deck_finished
+        and good_deck_not_refused
         and openrouter == 0
     )
     verdict["PASS"] = passed

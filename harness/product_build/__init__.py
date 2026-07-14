@@ -32,7 +32,13 @@ __all__ = [
     "classify_dossier",
 ]
 
-_SCENARIO_NAMES = ("ProductScenario", "STATIC_SITE_SMOKE", "STATIC_SMOKE_STRICT", "EXPORT_SMOKE", "classify_dossier")
+_SCENARIO_NAMES = (
+    "ProductScenario",
+    "STATIC_SITE_SMOKE",
+    "STATIC_SMOKE_STRICT",
+    "EXPORT_SMOKE",
+    "classify_dossier",
+)
 
 
 def __getattr__(name: str) -> Any:

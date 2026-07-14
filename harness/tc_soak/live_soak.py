@@ -134,9 +134,7 @@ async def phase_a_verify_fuzz(
                 res = await verify_trusted_components(
                     lock2, reg, files2, run_probe=None, now_iso=NOW
                 )
-                deps = next(
-                    (c for c in res.checks if c.name == f"component_deps:{kit}"), None
-                )
+                deps = next((c for c in res.checks if c.name == f"component_deps:{kit}"), None)
                 if deps is None or deps.status != "fail":
                     raise SoakFailure(
                         f"[A/{i}] {kit} missing dep {missing} but deps check did not FAIL "
@@ -269,7 +267,10 @@ def _write_workspace(
 def _boot(ws: Path) -> tuple[subprocess.Popen, int]:
     proc = subprocess.Popen(
         [shutil.which("node") or "node", "server.js"],
-        cwd=str(ws), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=str(ws),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     deadline = time.monotonic() + _BOOT_TIMEOUT_S
     buf = ""
@@ -323,7 +324,9 @@ def _run_probe(
     p.write_bytes(src)
     out = subprocess.run(
         [sys.executable, str(p), "--base-url", base_url, "--workspace", str(ws)],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if out.returncode != 0:
         raise SoakFailure(f"{name} probe infra-failed rc={out.returncode} stderr={out.stderr!r}")
@@ -340,7 +343,7 @@ _BARRAGE = [
     ("POST", "/auth/login", b'{"email":"a@b.c","password":{"x":1}}'),
     ("POST", "/auth/login", b'{"email":"a@b.c","password":["x"]}'),
     ("POST", "/auth/login", b'{"__proto__":{"admin":true},"email":"a@b.c","password":"x"}'),
-    ("POST", "/auth/login", b'not json at all'),
+    ("POST", "/auth/login", b"not json at all"),
     ("POST", "/auth/login", b'{"email":"' + b"a" * 300_000 + b'","password":"x"}'),
 ]
 

@@ -75,11 +75,17 @@ PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
 # P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
 # evidence streams). These prove the REAL UI path — not just that the engine built files.
 BROWSER_WS_NOT_CONNECTED = "BROWSER_WS_NOT_CONNECTED"  # UI never opened the build WS
-LIFECYCLE_SEQUENCE_INVALID = "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
+LIFECYCLE_SEQUENCE_INVALID = (
+    "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
+)
 SIDECAR_NOT_STOPPED = "SIDECAR_NOT_STOPPED"  # sidecar/provider alive after terminal
-PREVIEW_OWNERSHIP_VIOLATION = "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+PREVIEW_OWNERSHIP_VIOLATION = (
+    "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+)
 ARTIFACT_NOT_SHOWN_TO_USER = "ARTIFACT_NOT_SHOWN_TO_USER"  # file exists but UI never showed it
-VERIFICATION_GATE_BYPASSED = "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
+VERIFICATION_GATE_BYPASSED = (
+    "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
+)
 EXPORT_DOWNLOAD_MISSING = "EXPORT_DOWNLOAD_MISSING"  # export claimed but no real download
 WORKSPACE_NOT_CLEANED = "WORKSPACE_NOT_CLEANED"  # orphan container/sandbox/preview after terminal
 NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
@@ -255,10 +261,10 @@ INTERMITTENT_PREFIX = "INTERMITTENT_"
 def severity_for(code: str) -> str:
     """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
     codes are treated as P0 (§13: an unclassified failure is a release blocker)."""
-    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    base = code[len(INTERMITTENT_PREFIX) :] if code.startswith(INTERMITTENT_PREFIX) else code
     return SEVERITY_BY_CODE.get(base, P0)
 
 
 def is_known_code(code: str) -> bool:
-    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    base = code[len(INTERMITTENT_PREFIX) :] if code.startswith(INTERMITTENT_PREFIX) else code
     return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES

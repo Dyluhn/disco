@@ -39,37 +39,43 @@ def test_green_evidence_validates_clean():
 
 
 def test_bool_where_int_is_a_problem():
-    ev = _green(); ev["browser_ws"]["connections"] = True
+    ev = _green()
+    ev["browser_ws"]["connections"] = True
     probs = validate_product_evidence(ev)
     assert any("browser_ws.connections" in p and "bool" in p for p in probs)
 
 
 def test_wrong_type_is_a_problem():
-    ev = _green(); ev["sidecar"]["provider_calls_after_terminal"] = "n/a"
+    ev = _green()
+    ev["sidecar"]["provider_calls_after_terminal"] = "n/a"
     probs = validate_product_evidence(ev)
     assert any("sidecar.provider_calls_after_terminal" in p for p in probs)
 
 
 def test_non_dict_slice_is_a_problem():
-    ev = _green(); ev["preview"] = ["not", "a", "dict"]
+    ev = _green()
+    ev["preview"] = ["not", "a", "dict"]
     assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
 
 
 def test_unknown_top_level_key_allowed():
-    ev = _green(); ev["future_slice"] = {"anything": 1}
+    ev = _green()
+    ev["future_slice"] = {"anything": 1}
     assert validate_product_evidence(ev) == []
 
 
 # --- strict write refuses malformed evidence ----------------------------------
 def test_strict_write_raises_on_malformed(tmp_path):
-    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    ev = _green()
+    ev["browser_ws"]["connections"] = "lots"
     with pytest.raises(ValueError):
         write_product_evidence(tmp_path, ev)
     assert not (tmp_path / "product-evidence.json").exists()  # nothing written
 
 
 def test_non_strict_write_persists_anyway(tmp_path):
-    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    ev = _green()
+    ev["browser_ws"]["connections"] = "lots"
     p = write_product_evidence(tmp_path, ev, strict=False)
     assert p.exists()
 
@@ -84,7 +90,8 @@ def test_written_green_evidence_classifies_pass(tmp_path):
 
 
 def test_written_violation_classifies_fail(tmp_path):
-    ev = _green(); ev["preview"]["owner"] = "model"
+    ev = _green()
+    ev["preview"]["owner"] = "model"
     (tmp_path / "events.jsonl").write_text(
         "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
     )
@@ -126,4 +133,6 @@ def test_all_int_fields_reject_bad_types():
         assert any(f"{slice_name}.{field}" in p for p in validate_product_evidence(ev))
         ev2 = _green()
         ev2[slice_name][field] = True  # bool where int
-        assert any(f"{slice_name}.{field}" in p and "bool" in p for p in validate_product_evidence(ev2))
+        assert any(
+            f"{slice_name}.{field}" in p and "bool" in p for p in validate_product_evidence(ev2)
+        )

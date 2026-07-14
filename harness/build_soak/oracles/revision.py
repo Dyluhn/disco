@@ -223,9 +223,7 @@ class RevisionOracle:
             # and the revised plan is a STALE approval — it cannot be approving the
             # revised plan (which does not exist yet). This is the out-of-order
             # revised-approval false-pass.
-            stale_approval = next(
-                (s for s in plan_approved_seqs(events) if fseq < s < p_seq), None
-            )
+            stale_approval = next((s for s in plan_approved_seqs(events) if fseq < s < p_seq), None)
             if stale_approval is not None:
                 return [
                     failing(

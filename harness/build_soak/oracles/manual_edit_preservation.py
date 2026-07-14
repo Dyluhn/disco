@@ -35,8 +35,14 @@ class ManualEditPreservationOracle:
         clobbered = sorted(p for p, snippet in overrides.items() if snippet not in final.get(p, ""))
         facts = {"override_paths": sorted(overrides), "clobbered": clobbered}
         if clobbered:
-            return [failing(self._NAME, fc.MANUAL_EDIT_CLOBBERED,
-                            first_broken_link="agent_edit -> manual_override", facts=facts)]
+            return [
+                failing(
+                    self._NAME,
+                    fc.MANUAL_EDIT_CLOBBERED,
+                    first_broken_link="agent_edit -> manual_override",
+                    facts=facts,
+                )
+            ]
         return [passing(self._NAME, facts=facts)]
 
 
@@ -58,8 +64,14 @@ class CommentAnchorOracle:
         lost = sorted(set(before) - set(after))
         facts = {"before": sorted(before), "after": sorted(after), "lost": lost}
         if lost:
-            return [failing(self._NAME, fc.COMMENT_ANCHOR_LOST,
-                            first_broken_link="edit -> comment_anchor", facts=facts)]
+            return [
+                failing(
+                    self._NAME,
+                    fc.COMMENT_ANCHOR_LOST,
+                    first_broken_link="edit -> comment_anchor",
+                    facts=facts,
+                )
+            ]
         return [passing(self._NAME, facts=facts)]
 
 
@@ -77,14 +89,25 @@ class ScreenLabelOracle:
             return [malformed(self._NAME, "screen_labels must be a dict")]
         edited, before, after = ev.get("edited_sections"), ev.get("before"), ev.get("after")
         if not is_str_list(edited) or not is_str_dict(before) or not is_str_dict(after):
-            return [malformed(self._NAME, "edited_sections list[str] + before/after dict[str,str] required")]
+            return [
+                malformed(
+                    self._NAME, "edited_sections list[str] + before/after dict[str,str] required"
+                )
+            ]
         edited_set = set(edited)
         unstable = sorted(
-            sec for sec, label in before.items()
+            sec
+            for sec, label in before.items()
             if sec not in edited_set and after.get(sec) != label  # unedited section's label changed
         )
         facts = {"edited_sections": sorted(edited_set), "unstable": unstable}
         if unstable:
-            return [failing(self._NAME, fc.SCREEN_LABEL_UNSTABLE,
-                            first_broken_link="edit -> unedited_section_label", facts=facts)]
+            return [
+                failing(
+                    self._NAME,
+                    fc.SCREEN_LABEL_UNSTABLE,
+                    first_broken_link="edit -> unedited_section_label",
+                    facts=facts,
+                )
+            ]
         return [passing(self._NAME, facts=facts)]

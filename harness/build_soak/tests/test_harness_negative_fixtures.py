@@ -16,12 +16,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from _eventlog import clean_smoke_log
 
 from harness.build_soak import failure_codes as fc
 from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
 from harness.product_build.classify_captured import classify_capture
-
-from _eventlog import clean_smoke_log
 
 _MINIMAX_LEDGER = [{"host": "api.minimaxi.chat", "model": "MiniMax-M3"}]
 
@@ -65,7 +64,10 @@ def test_missing_required_slice_is_invalid_run(tmp_path, slice_name) -> None:
     pe = _green_pe()
     del pe[slice_name]
     c = _classify(tmp_path, pe=pe)
-    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE, (slice_name, c)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE, (
+        slice_name,
+        c,
+    )
     assert slice_name in c["facts"].get("missing_slices", []), c
 
 

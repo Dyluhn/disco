@@ -120,7 +120,11 @@ class SidecarStopOracle:
             ]
         calls_after = _int(sc.get("provider_calls_after_terminal"))
         # require an EXPLICIT stop + a well-formed zero post-terminal call count.
-        if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
+        if (
+            sc.get("stopped_at_terminal", False) is not True
+            or calls_after is None
+            or calls_after > 0
+        ):
             return [
                 failing(
                     self._NAME,
@@ -174,7 +178,9 @@ class ShowToUserOracle:
                     self._NAME,
                     fc.ARTIFACT_NOT_SHOWN_TO_USER,
                     first_broken_link="finish -> shown_to_user",
-                    facts={k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")},
+                    facts={
+                        k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")
+                    },
                 )
             ]
         return [passing(self._NAME)]
@@ -191,14 +197,19 @@ class VerificationGateOracle:
         if vf is None:
             return [skipping(self._NAME, reason="no verification evidence (headless run)")]
         # fail-closed: require BOTH flags explicitly True.
-        if vf.get("ready_for_verification_called", False) is not True or vf.get("passed", False) is not True:
+        if (
+            vf.get("ready_for_verification_called", False) is not True
+            or vf.get("passed", False) is not True
+        ):
             return [
                 failing(
                     self._NAME,
                     fc.VERIFICATION_GATE_BYPASSED,
                     first_broken_link="finish -> verification_gate",
                     facts={
-                        "ready_for_verification_called": bool(vf.get("ready_for_verification_called", False)),
+                        "ready_for_verification_called": bool(
+                            vf.get("ready_for_verification_called", False)
+                        ),
                         "passed": bool(vf.get("passed", False)),
                     },
                 )

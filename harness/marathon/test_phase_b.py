@@ -135,8 +135,12 @@ def test_phase_b(firefox):
     while time.monotonic() < down_deadline and _health():
         time.sleep(1)
     assert not _health(), "agent-server still healthy after SIGTERM"
-    witness["killed"] = {"pid": pid, "install_seq": install_seq, "pre_seq": pre_seq,
-                         "pre_file_count": len(pre_files)}
+    witness["killed"] = {
+        "pid": pid,
+        "install_seq": install_seq,
+        "pre_seq": pre_seq,
+        "pre_file_count": len(pre_files),
+    }
     print(f"[phase-b] agent-server SIGTERM'd mid-install (seq {install_seq})")
 
     # ── restart + reconciliation ──────────────────────────────────────────────

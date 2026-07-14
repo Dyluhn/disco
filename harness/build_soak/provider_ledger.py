@@ -109,7 +109,9 @@ def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
                         model=str(obj.get("model") or ""),
                         ts=obj.get("ts") or obj.get("timestamp"),
                         after_terminal=bool(obj.get("after_terminal", False)),
-                        has_tools=bool(obj.get("has_tools", True)),  # [REL-5b] default True=fail-closed
+                        has_tools=bool(
+                            obj.get("has_tools", True)
+                        ),  # [REL-5b] default True=fail-closed
                         conversation_id=obj.get("conversation_id"),
                     )
                 )

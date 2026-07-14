@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib
 import importlib.util
 import os
 import sys
@@ -19,19 +20,21 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if __package__ in {None, ""}:
     sys.path = [entry for entry in sys.path if Path(entry or ".").resolve() != SCRIPT_DIR]
 
-import asyncio
-
-from playwright.async_api import (
-    BrowserContext,
-    Page,
-    TimeoutError as PlaywrightTimeoutError,
-    async_playwright,
-)
+# These imports intentionally happen only after the direct-script path is sanitized:
+# harness/ui_soak/selectors.py would otherwise shadow the stdlib selectors module.
+asyncio = importlib.import_module("asyncio")
+playwright_api = importlib.import_module("playwright.async_api")
+BrowserContext = playwright_api.BrowserContext
+Page = playwright_api.Page
+async_playwright = playwright_api.async_playwright
+PlaywrightTimeoutError = playwright_api.TimeoutError
 
 if __package__:
     from . import selectors as S
 else:  # The documented absolute-path invocation reaches this branch.
-    spec = importlib.util.spec_from_file_location("_disco_ui_soak_selectors", SCRIPT_DIR / "selectors.py")
+    spec = importlib.util.spec_from_file_location(
+        "_disco_ui_soak_selectors", SCRIPT_DIR / "selectors.py"
+    )
     if spec is None or spec.loader is None:  # pragma: no cover - filesystem corruption
         raise RuntimeError("could not load the UI soak selector map")
     S = importlib.util.module_from_spec(spec)
@@ -49,6 +52,7 @@ BUILD_TIMEOUT_S = 900
 PREVIEW_TIMEOUT_S = 30
 ACTION_TIMEOUT_MS = 15_000
 
+
 class PhaseFailure(RuntimeError):
     pass
 
@@ -56,6 +60,7 @@ class PhaseFailure(RuntimeError):
 def compact(value: object, limit: int = 900) -> str:
     text = " ".join(str(value).replace("\t", " ").splitlines()).strip()
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
 
 class Ledger:
     def __init__(self, path: Path) -> None:
@@ -70,6 +75,7 @@ class Ledger:
 
     def close(self) -> None:
         self._file.close()
+
 
 @dataclass
 class BrowserSignals:
@@ -100,12 +106,15 @@ class BrowserSignals:
         page.on("response", on_response)
 
     def result(self) -> tuple[bool, str]:
-        counts = (f"console.error={len(self.console_errors)}, "
-                  f"pageerror={len(self.page_errors)}, 5xx={len(self.server_errors)}")
+        counts = (
+            f"console.error={len(self.console_errors)}, "
+            f"pageerror={len(self.page_errors)}, 5xx={len(self.server_errors)}"
+        )
         blocking = self.page_errors + self.server_errors
         samples = blocking + self.console_errors
         detail = counts if not samples else f"{counts}; samples: {' | '.join(samples[:4])}"
         return not blocking, detail
+
 
 async def is_visible(page: Page, selector: str) -> bool:
     if page.is_closed():
@@ -114,6 +123,7 @@ async def is_visible(page: Page, selector: str) -> bool:
         return await page.locator(selector).first.is_visible()
     except Exception:
         return False
+
 
 async def wait_for_any(page: Page, choices: tuple[tuple[str, str], ...], timeout_s: float) -> str:
     deadline = time.monotonic() + timeout_s
@@ -125,6 +135,7 @@ async def wait_for_any(page: Page, choices: tuple[tuple[str, str], ...], timeout
     names = ", ".join(name for name, _ in choices)
     raise PhaseFailure(f"timed out after {timeout_s:.0f}s waiting for one of: {names}")
 
+
 async def load_and_pair(page: Page, base: str, token: str | None) -> str:
     await page.goto(base, wait_until="domcontentloaded", timeout=LOAD_TIMEOUT_MS)
     choices = (("app ready", S.APP_READY), ("pairing prompt", S.PAIRING_TOKEN))
@@ -132,8 +143,9 @@ async def load_and_pair(page: Page, base: str, token: str | None) -> str:
     if state == "app ready":
         return "app loaded; pairing prompt absent (existing or auto-paired session)"
     if not token:
-        raise PhaseFailure("pairing prompt appeared but no --pairing-token or "
-                           "DISCO_PAIRING_TOKEN was supplied")
+        raise PhaseFailure(
+            "pairing prompt appeared but no --pairing-token or DISCO_PAIRING_TOKEN was supplied"
+        )
 
     await page.locator(S.PAIRING_TOKEN).fill(token, timeout=ACTION_TIMEOUT_MS)
     await page.locator(S.PAIRING_SUBMIT).click(timeout=ACTION_TIMEOUT_MS)
@@ -147,12 +159,15 @@ async def load_and_pair(page: Page, base: str, token: str | None) -> str:
         await asyncio.sleep(0.25)
     raise PhaseFailure(f"pairing did not reach the app within {APP_READY_TIMEOUT_S}s")
 
+
 async def start_fresh(page: Page, mode_selector: str, target_selector: str) -> None:
     await page.locator(S.NEW_CONVERSATION).first.click(timeout=ACTION_TIMEOUT_MS)
     await page.locator(mode_selector).first.click(timeout=ACTION_TIMEOUT_MS)
     await page.locator(f'{mode_selector}[data-active="true"]').first.wait_for(
-        state="visible", timeout=ACTION_TIMEOUT_MS)
+        state="visible", timeout=ACTION_TIMEOUT_MS
+    )
     await page.locator(target_selector).first.wait_for(state="visible", timeout=ACTION_TIMEOUT_MS)
+
 
 async def run_research(page: Page, timeout_s: int, shot: Path) -> str:
     await start_fresh(page, S.MODE_SEARCH, S.RESEARCH_COMPOSER)
@@ -172,6 +187,7 @@ async def run_research(page: Page, timeout_s: int, shot: Path) -> str:
             raise PhaseFailure(f"research UI reported an error: {compact(detail, 350)}")
         await asyncio.sleep(0.5)
     raise PhaseFailure(f"research answer did not complete within {timeout_s}s")
+
 
 async def wait_for_build(page: Page, timeout_s: int) -> tuple[int, str, str]:
     deadline = time.monotonic() + timeout_s
@@ -199,8 +215,9 @@ async def wait_for_build(page: Page, timeout_s: int) -> tuple[int, str, str]:
             if last_status == "FINISHED":
                 return approvals, last_status, last_seq
             if last_status in {"ERROR", "STUCK"}:
-                raise PhaseFailure(f"build reached unsuccessful terminal status "
-                                   f"{last_status} (seq {last_seq})")
+                raise PhaseFailure(
+                    f"build reached unsuccessful terminal status {last_status} (seq {last_seq})"
+                )
         await asyncio.sleep(0.5)
 
     raise PhaseFailure(
@@ -223,7 +240,8 @@ async def capture_preview(page: Page, shot: Path) -> str:
             if await candidate.is_visible():
                 try:
                     heading = candidate.content_frame.get_by_role(
-                        "heading", name=EXPECTED_PREVIEW_HEADING, exact=True).first
+                        "heading", name=EXPECTED_PREVIEW_HEADING, exact=True
+                    ).first
                     if await heading.is_visible():
                         iframe_title = await candidate.get_attribute("title")
                         break
@@ -233,11 +251,15 @@ async def capture_preview(page: Page, shot: Path) -> str:
             break
         await asyncio.sleep(0.5)
     if not iframe_title:
-        raise PhaseFailure(f"preview did not render heading {EXPECTED_PREVIEW_HEADING!r} "
-                           f"within {PREVIEW_TIMEOUT_S}s")
+        raise PhaseFailure(
+            f"preview did not render heading {EXPECTED_PREVIEW_HEADING!r} "
+            f"within {PREVIEW_TIMEOUT_S}s"
+        )
 
     panel = page.locator(S.PREVIEW_PANEL).first
-    target = panel if await is_visible(page, S.PREVIEW_PANEL) else page.locator(S.PREVIEW_ACTIVE).first
+    target = (
+        panel if await is_visible(page, S.PREVIEW_PANEL) else page.locator(S.PREVIEW_ACTIVE).first
+    )
     await target.screenshot(path=str(shot), animations="disabled")
     return f"preview captured ({iframe_title}; expected heading rendered)"
 
@@ -261,8 +283,13 @@ async def failure_screenshot(page: Page, path: Path) -> None:
 
 
 async def one_iteration(
-    context: BrowserContext, iteration: int, base: str, token: str | None,
-    out: Path, smoke: bool, ledger: Ledger,
+    context: BrowserContext,
+    iteration: int,
+    base: str,
+    token: str | None,
+    out: Path,
+    smoke: bool,
+    ledger: Ledger,
 ) -> bool:
     page = await context.new_page()
     page.set_default_timeout(ACTION_TIMEOUT_MS)
@@ -318,7 +345,12 @@ async def one_iteration(
     ledger.row(iteration, "browser-signals", "PASS" if signals_ok else "FAIL", signals_detail)
 
     passed = app_ok and all(phase_results) and signals_ok
-    ledger.row(iteration, "iteration", "PASS" if passed else "FAIL", "all criteria met" if passed else "one or more criteria failed")
+    ledger.row(
+        iteration,
+        "iteration",
+        "PASS" if passed else "FAIL",
+        "all criteria met" if passed else "one or more criteria failed",
+    )
     return passed
 
 
@@ -362,11 +394,22 @@ async def async_main(args: argparse.Namespace, ledger: Ledger) -> int:
                 for iteration in range(1, iterations + 1):
                     try:
                         passed = await one_iteration(
-                            context, iteration, args.base, args.pairing_token,
-                            args.out, args.smoke, ledger)
+                            context,
+                            iteration,
+                            args.base,
+                            args.pairing_token,
+                            args.out,
+                            args.smoke,
+                            ledger,
+                        )
                     except Exception as exc:
                         passed = False
-                        ledger.row(iteration, "iteration", "FAIL", f"unhandled: {type(exc).__name__}: {exc}")
+                        ledger.row(
+                            iteration,
+                            "iteration",
+                            "FAIL",
+                            f"unhandled: {type(exc).__name__}: {exc}",
+                        )
                     all_passed = all_passed and passed
                     print(f"[{iteration}/{iterations}] {'PASS' if passed else 'FAIL'}")
             finally:
@@ -378,7 +421,10 @@ async def async_main(args: argparse.Namespace, ledger: Ledger) -> int:
         return 1
 
     print(f"ledger: {args.out / 'ledger.tsv'}")
-    print("selector sources: PairingGate, NavRail/ModeSlider, QueryInput/ResearchSurface, PlanPanel/AgentStatusBar, ExecutionCanvas/PreviewPane")
+    print(
+        "selector sources: PairingGate, NavRail/ModeSlider, QueryInput/ResearchSurface, "
+        "PlanPanel/AgentStatusBar, ExecutionCanvas/PreviewPane"
+    )
     return 0 if all_passed else 1
 
 

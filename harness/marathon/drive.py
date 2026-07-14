@@ -124,8 +124,7 @@ def create_submit_upload_approve(page, *, shot_prefix: str) -> str:
     composer.fill(TASK_PROMPT, timeout=30_000)
 
     with page.expect_response(
-        lambda r: r.url.rstrip("/").endswith("/conversations")
-        and r.request.method == "POST",
+        lambda r: r.url.rstrip("/").endswith("/conversations") and r.request.method == "POST",
         timeout=60_000,
     ) as resp_info:
         composer.press("Enter")
@@ -185,10 +184,7 @@ def _text_has_number(text: str, val: str, tol: float = 0.051) -> bool:
     formatting is the APP's prerogative, so cell assertions match numerically
     (tol covers 1-decimal rounding) instead of demanding verbatim CSV strings."""
     target = float(val)
-    return any(
-        abs(float(m.group()) - target) <= tol
-        for m in re.finditer(r"-?\d+(?:\.\d+)?", text)
-    )
+    return any(abs(float(m.group()) - target) <= tol for m in re.finditer(r"-?\d+(?:\.\d+)?", text))
 
 
 def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
@@ -204,9 +200,7 @@ def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
     def check(name: str, fn) -> bool:
         try:
             info = fn()
-            witness["checks"][name] = {"pass": True} | (
-                {"info": info} if info is not None else {}
-            )
+            witness["checks"][name] = {"pass": True} | ({"info": info} if info is not None else {})
             print(f"[battery] {name}: PASS")
             return True
         except Exception as exc:  # noqa: BLE001 — finding, not abort
@@ -273,15 +267,10 @@ def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
                 text = frame.locator("body").inner_text(timeout=10_000)
             except Exception:  # noqa: BLE001 — iframe mid-load
                 text = ""
-            if (
-                str(known["count"]) in text
-                and all(_text_has_number(text, v) for v in wanted)
-            ):
+            if str(known["count"]) in text and all(_text_has_number(text, v) for v in wanted):
                 return {"matched": wanted, "count": known["count"]}
             time.sleep(3)
-        raise AssertionError(
-            f"preview never showed the data (last text: {text[:200]!r})"
-        )
+        raise AssertionError(f"preview never showed the data (last text: {text[:200]!r})")
 
     check("preview_cells", preview_cells)
     page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-final-preview-table.png"))
@@ -312,12 +301,8 @@ def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
     def json_shot():
         json_page = page.context.new_page()
         try:
-            json_page.goto(
-                f"{API}/conversations/{cid}/port/3000/api/readings", timeout=60_000
-            )
-            json_page.screenshot(
-                path=str(SHOT_DIR / f"{shot_prefix}-port-3000-json.png")
-            )
+            json_page.goto(f"{API}/conversations/{cid}/port/3000/api/readings", timeout=60_000)
+            json_page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-port-3000-json.png"))
         finally:
             json_page.close()
 
@@ -335,9 +320,7 @@ def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
         answer_gates(page, cid)
         for name in pending:
             if check(name, retryable[name]) and name == "preview_cells":
-                page.screenshot(
-                    path=str(SHOT_DIR / f"{shot_prefix}-final-preview-table.png")
-                )
+                page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-final-preview-table.png"))
         time.sleep(10)
 
     witness["deliverables_pass"] = all(c["pass"] for c in witness["checks"].values())

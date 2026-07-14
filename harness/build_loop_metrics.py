@@ -75,9 +75,7 @@ def compute_build_metrics(trace_text: str) -> BuildMetrics:
     reads_by_path: dict[str, int] = {}
     for path in _FILE_READ_PATH_RE.findall(trace_text):
         reads_by_path[path] = reads_by_path.get(path, 0) + 1
-    file_read_count = sum(
-        1 for _, tool in _ACTION_RE.findall(trace_text) if tool == "file_read"
-    )
+    file_read_count = sum(1 for _, tool in _ACTION_RE.findall(trace_text) if tool == "file_read")
     reread_thoughts = 0
     for thought in _THOUGHT_RE.findall(trace_text):
         low = thought.lower()
@@ -148,8 +146,7 @@ def target_violations(m: BuildMetrics) -> list[str]:
         )
     if m.browser_30s_timeouts > TARGETS["browser_30s_timeouts_max"]:
         out.append(
-            f"browser_30s_timeouts {m.browser_30s_timeouts} > "
-            f"{TARGETS['browser_30s_timeouts_max']}"
+            f"browser_30s_timeouts {m.browser_30s_timeouts} > {TARGETS['browser_30s_timeouts_max']}"
         )
     return out
 

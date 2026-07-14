@@ -9,6 +9,7 @@ a targeted-edit tool was used + succeeded, fresh-read behavior held, there was N
 thrash, the edits actually applied (output-truth on the SERVED page), and the provider ledger is
 clean (0 OpenRouter, 0 post-terminal). NOT a cassette — every call hits MiniMax. Dossier → RUN_DIR.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,13 +21,20 @@ import urllib.request
 AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
 RUN_DIR = os.environ.get(
-    "RUN_DIR", "/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b"
+    "RUN_DIR",
+    "/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b",
 )
 BUILD_TIMEOUT_S = int(os.environ.get("CD9_BUILD_TIMEOUT_S", "420"))
 EDIT_TIMEOUT_S = int(os.environ.get("CD9_EDIT_TIMEOUT_S", "360"))
 _TERMINAL = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "AWAITING_USER", "FAILED", "CANCELLED"}
-_EDIT_TOOLS = {"exact_replace", "run_project_script", "safe_write_file", "file_edit",
-               "file_replace_lines", "file_str_replace"}
+_EDIT_TOOLS = {
+    "exact_replace",
+    "run_project_script",
+    "safe_write_file",
+    "file_edit",
+    "file_replace_lines",
+    "file_str_replace",
+}
 
 HERO_OLD, HERO_NEW = "OLD_HERO_HEADLINE_X1", "NEW_HERO_2099_HEADLINE"
 CTA_OLD, CTA_NEW = "OLD_CTA_BUTTON_TEXT", "Get Started Now Please"
@@ -50,8 +58,12 @@ EDIT_PROMPT = (
 
 
 def _post_json(path: str, body: dict, timeout: int = 120) -> dict:
-    req = urllib.request.Request(AGENT + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        AGENT + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
 
@@ -120,8 +132,10 @@ def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger())
 
-    _conv = _post_json("/conversations", {"owner_id": "local", "surface": "build", "autonomous": True,
-                                          "title": f"cd9 {tag}"})
+    _conv = _post_json(
+        "/conversations",
+        {"owner_id": "local", "surface": "build", "autonomous": True, "title": f"cd9 {tag}"},
+    )
     cid = _conv.get("conversation_id") or _conv.get("id")
     assert cid, f"no conversation id in {_conv}"
 
@@ -165,12 +179,16 @@ def main() -> int:
 
     # ORDERING (codex r3): a file_read of index.html must come BEFORE the first SUCCESSFUL targeted
     # edit — the actual fresh-read-BEFORE-edit guarantee, not just "a read happened somewhere".
-    ok_edit_call_ids = {tr.get("call_id") for n, tr in results(phase2) if n in _EDIT_TOOLS and tr.get("success")}
+    ok_edit_call_ids = {
+        tr.get("call_id") for n, tr in results(phase2) if n in _EDIT_TOOLS and tr.get("success")
+    }
 
     def _seq_first_read() -> int | None:
         for e in phase2:
             tc = e.get("tool_call") or {}
-            if tc.get("tool_name") == "file_read" and "index.html" in str((tc.get("arguments") or {}).get("path", "")):
+            if tc.get("tool_name") == "file_read" and "index.html" in str(
+                (tc.get("arguments") or {}).get("path", "")
+            ):
                 return int(e.get("seq") or 0)
         return None
 
@@ -187,16 +205,23 @@ def main() -> int:
     # the SUCCESSFUL targeted edit must be on index.html (not a misdirected edit on another file).
     def _targets_index(name: str, a: dict) -> bool:
         if name == "run_project_script":
-            return any("index.html" in str((o or {}).get("path", "")) for o in (a.get("operations") or []))
+            return any(
+                "index.html" in str((o or {}).get("path", "")) for o in (a.get("operations") or [])
+            )
         return "index.html" in str(a.get("path", ""))
 
     edit_on_index = any(
         (e.get("tool_call") or {}).get("call_id") in ok_edit_call_ids
         and (e.get("tool_call") or {}).get("tool_name") in _EDIT_TOOLS
-        and _targets_index((e.get("tool_call") or {}).get("tool_name") or "", (e.get("tool_call") or {}).get("arguments") or {})
+        and _targets_index(
+            (e.get("tool_call") or {}).get("tool_name") or "",
+            (e.get("tool_call") or {}).get("arguments") or {},
+        )
         for e in phase2
     )
-    old_not_found = sum(1 for _, tr in results(phase2) if "old_text_not_found" in str(tr.get("error") or ""))
+    old_not_found = sum(
+        1 for _, tr in results(phase2) if "old_text_not_found" in str(tr.get("error") or "")
+    )
     fresh_required = any(
         "FRESH_READ_REQUIRED" in str(tr.get("error") or "")
         or (tr.get("structured") or {}).get("kind") == "fresh_read_required"
@@ -208,24 +233,45 @@ def main() -> int:
         for _, tr in results(phase2)
     )
     served_after = _get_text(f"/conversations/{cid}/preview-app/")
-    new_present = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (f"© {YEAR_NEW}" in served_after)
+    new_present = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (
+        f"© {YEAR_NEW}" in served_after
+    )
     # OLD tokens must be GONE (codex r3): a real IN-PLACE replace, not an append that leaves the old
     # content alongside the new (which a partial/append edit would).
-    old_absent = (HERO_OLD not in served_after) and (CTA_OLD not in served_after) and (f"© {YEAR_OLD}" not in served_after)
+    old_absent = (
+        (HERO_OLD not in served_after)
+        and (CTA_OLD not in served_after)
+        and (f"© {YEAR_OLD}" not in served_after)
+    )
     edits_applied = new_present and old_absent
     openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
-    all_minimax = bool(slice_) and openrouter == 0 and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    all_minimax = (
+        bool(slice_)
+        and openrouter == 0
+        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    )
     # the BUILD must have produced ALL three old sentinels (else 'old absent' after is vacuous —
     # a build that never wrote them would trivially pass). Proven from the served page after build.
     old_present_before = all(t in served_before for t in (HERO_OLD, CTA_OLD, f"© {YEAR_OLD}"))
 
     verdict = {
-        "tag": tag, "cid": cid, "build_status": build_status, "edit_status": edit_status,
+        "tag": tag,
+        "cid": cid,
+        "build_status": build_status,
+        "edit_status": edit_status,
         "built_ok": built_ok,
         "PASS": bool(
-            built_ok and old_present_before and targeted_calls and targeted_success and edit_on_index
-            and fresh_read_before_edit and old_not_found < 3 and not elision_rej and edits_applied
-            and all_minimax and post_terminal == 0
+            built_ok
+            and old_present_before
+            and targeted_calls
+            and targeted_success
+            and edit_on_index
+            and fresh_read_before_edit
+            and old_not_found < 3
+            and not elision_rej
+            and edits_applied
+            and all_minimax
+            and post_terminal == 0
         ),
         "checks": {
             "build_produced_file": built_ok,
@@ -246,8 +292,13 @@ def main() -> int:
         },
         "served_after_len": len(served_after),
     }
-    dossier = {"verdict": verdict, "phase2_events": phase2, "ledger_slice": slice_,
-               "served_before": served_before[:20000], "served_after": served_after[:20000]}
+    dossier = {
+        "verdict": verdict,
+        "phase2_events": phase2,
+        "ledger_slice": slice_,
+        "served_before": served_before[:20000],
+        "served_after": served_after[:20000],
+    }
     with open(os.path.join(RUN_DIR, f"cd9_dossier_{tag}.json"), "w", encoding="utf-8") as f:
         json.dump(dossier, f, indent=2)
     print(json.dumps(verdict, indent=2))

@@ -41,10 +41,11 @@ _SCENARIOS = {s.id: s for s in (STATIC_SITE_SMOKE, STATIC_SMOKE_STRICT, EXPORT_S
 
 
 def classify_capture(capture_path: str | Path, dossier_dir: str | Path) -> dict[str, Any]:
-    """Read a capture file, assemble the dossier under ``dossier_dir``, and classify it against
-    the scenario it names. Raises KeyError/ValueError if the capture is missing a required field,
-    malformed, or names an unknown scenario (a capture bug must surface loudly, never silently
-    pass)."""
+    """Read a capture, assemble its dossier, and classify its named scenario.
+
+    Raises KeyError or ValueError if a required field is missing, malformed, or
+    names an unknown scenario. Capture bugs must surface loudly, never silently pass.
+    """
     cap = json.loads(Path(capture_path).read_text(encoding="utf-8"))
     # The capture MUST name its scenario explicitly. A MISSING (or unknown) scenario_id raises —
     # never default to the laxer static scenario, or an export capture that forgot the field would
@@ -52,8 +53,9 @@ def classify_capture(capture_path: str | Path, dossier_dir: str | Path) -> dict[
     scenario_id = cap.get("scenario_id")
     scenario = _SCENARIOS.get(scenario_id) if scenario_id else None
     if scenario is None:
+        known_scenarios = sorted(_SCENARIOS)
         raise ValueError(
-            f"capture must name a known scenario_id; got {scenario_id!r}; known: {sorted(_SCENARIOS)}"
+            f"capture must name a known scenario_id; got {scenario_id!r}; known: {known_scenarios}"
         )
     write_dossier(
         dossier_dir,

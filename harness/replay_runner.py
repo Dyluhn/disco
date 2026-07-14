@@ -42,8 +42,16 @@ from disco.core.events import (
 # (BaseEvent: id/timestamp/seq/meta; correlation ids: call_id/action_id/
 # llm_response_id/provider_call_id.) `schema_version` is stable, kept on purpose.
 _VOLATILE = frozenset(
-    {"id", "timestamp", "seq", "meta", "call_id", "action_id", "llm_response_id",
-     "provider_call_id"}
+    {
+        "id",
+        "timestamp",
+        "seq",
+        "meta",
+        "call_id",
+        "action_id",
+        "llm_response_id",
+        "provider_call_id",
+    }
 )
 
 # Volatile ids leak into general-purpose VALUE fields too — e.g. a StatusEvent's
@@ -93,9 +101,7 @@ def diff_sequences(recorded: list[BaseEvent], replayed: list[BaseEvent]) -> list
     rn = [normalize_event(e) for e in recorded]
     pn = [normalize_event(e) for e in replayed]
     if len(rn) != len(pn):
-        diffs.append(
-            f"length: recorded={len(rn)} events, replayed={len(pn)} events"
-        )
+        diffs.append(f"length: recorded={len(rn)} events, replayed={len(pn)} events")
     for i, (r, p) in enumerate(zip(rn, pn, strict=False)):
         if r != p:
             rk, pk = r.get("kind"), p.get("kind")

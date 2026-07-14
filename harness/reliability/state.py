@@ -54,9 +54,7 @@ def source_revision(repo: str | Path) -> tuple[str, str, bool]:
 
     digest = hashlib.sha256()
     digest.update(
-        subprocess.check_output(
-            ["git", "-C", str(root), "diff", "--binary", "HEAD", "--", "."]
-        )
+        subprocess.check_output(["git", "-C", str(root), "diff", "--binary", "HEAD", "--", "."])
     )
     entries = status.decode("utf-8", errors="surrogateescape").split("\0")
     for entry in entries:
@@ -206,9 +204,7 @@ def promotion_report(
     for claim_id in sorted(selected):
         claim = matrix.claims[claim_id]
         observed = (
-            len(fresh_devices[claim_id])
-            if claim.proof == "fresh_device"
-            else counts[claim_id]
+            len(fresh_devices[claim_id]) if claim.proof == "fresh_device" else counts[claim_id]
         )
         claims.append(
             {

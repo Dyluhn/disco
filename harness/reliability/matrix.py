@@ -154,8 +154,10 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             raise ValueError(f"{suite_id}.kind must be one of {sorted(KINDS)}")
 
         command_raw = item.get("command")
-        if not isinstance(command_raw, list) or not command_raw or not all(
-            isinstance(part, str) and part for part in command_raw
+        if (
+            not isinstance(command_raw, list)
+            or not command_raw
+            or not all(isinstance(part, str) and part for part in command_raw)
         ):
             raise ValueError(f"{suite_id}.command must be a nonempty string list")
         claim_ids = item.get("claims")
@@ -179,8 +181,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
         ):
             raise ValueError(f"{suite_id}.requires_env must be a string list")
         if not isinstance(environment, dict) or not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in environment.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
         ):
             raise ValueError(f"{suite_id}.environment must be a string mapping")
         if not isinstance(provider_evidence, bool):

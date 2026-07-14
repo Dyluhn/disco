@@ -14,6 +14,7 @@ from harness.build_soak.provider_ledger import (
     parse_relay_log_lines,
     record_applies_to_conversation,
 )
+from harness.product_build.minimax_relay import relay_log_record as _rel5b_relay_record
 
 _PROV = {
     "id": "minimax_soak",
@@ -48,7 +49,10 @@ def test_absent_ledger_fails_closed_by_default():
 
 
 def test_absent_ledger_skips_when_require_ledger_false():
-    scenario = {"id": "x", "assertions": {"provider": {"model": "MiniMax-M3", "require_ledger": False}}}
+    scenario = {
+        "id": "x",
+        "assertions": {"provider": {"model": "MiniMax-M3", "require_ledger": False}},
+    }
     r = _run(None, scenario=scenario)
     assert r[0].skipped
 
@@ -172,10 +176,15 @@ def test_default_forbid_is_openrouter_even_without_require_host():
 
 # --- relay-log parser ---------------------------------------------------------
 def test_parser_jsonl_records():
-    text = '\n'.join([
-        '{"ts": "t1", "host": "api.minimaxi.com", "model": "MiniMax-M3", "conversation_id": "conv_parse"}',
-        '{"url": "https://openrouter.ai/api/v1/chat", "model": "x"}',
-    ])
+    text = "\n".join(
+        [
+            (
+                '{"ts": "t1", "host": "api.minimaxi.com", '
+                '"model": "MiniMax-M3", "conversation_id": "conv_parse"}'
+            ),
+            '{"url": "https://openrouter.ai/api/v1/chat", "model": "x"}',
+        ]
+    )
     recs = parse_relay_log(text)
     assert len(recs) == 2
     assert recs[0]["host"] == "api.minimaxi.com"
@@ -186,8 +195,8 @@ def test_parser_jsonl_records():
 def test_parser_loose_lines():
     lines = [
         'POST https://api.minimaxi.com/v1/text/chatcompletion model="MiniMax-M3" 200',
-        'noise line with no url',
-        'GET https://openrouter.ai/api model=foo',
+        "noise line with no url",
+        "GET https://openrouter.ai/api model=foo",
     ]
     recs = parse_relay_log_lines(lines)
     assert [r["host"] for r in recs] == ["api.minimaxi.com", "openrouter.ai"]
@@ -307,7 +316,7 @@ def test_parser_empty_and_blank_input():
 
 def test_parser_invalid_json_with_url_falls_back_to_regex():
     # a non-JSON line that still carries a URL must yield a record (not be dropped)
-    recs = parse_relay_log_lines(['{bad json but https://openrouter.ai/x model=foo'])
+    recs = parse_relay_log_lines(["{bad json but https://openrouter.ai/x model=foo"])
     assert len(recs) == 1 and recs[0]["host"] == "openrouter.ai"
 
 
@@ -317,8 +326,7 @@ def test_parser_after_terminal_defaults_false():
     assert recs[0]["model"] == ""
 
 
-# --- [REL-5b] has_tools attribution: exclude benign post-terminal auto-title from the runaway oracle ---
-from harness.product_build.minimax_relay import relay_log_record as _rel5b_relay_record  # noqa: E402
+# --- [REL-5b] exclude benign post-terminal auto-title from the runaway oracle ---
 
 
 def test_rel5b_relay_record_marks_has_tools() -> None:
@@ -329,10 +337,13 @@ def test_rel5b_relay_record_marks_has_tools() -> None:
 
 def test_rel5b_parse_preserves_has_tools_default_true_failclosed() -> None:
     import json as _json
+
     lines = [
         _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 1.0, "has_tools": True}),
         _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 2.0, "has_tools": False}),
-        _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 3.0}),  # unmarked → fail-closed True
+        _json.dumps(
+            {"host": "api.minimaxi.chat", "model": "m", "ts": 3.0}
+        ),  # unmarked → fail-closed True
     ]
     recs = parse_relay_log("\n".join(lines))
     assert [r["has_tools"] for r in recs] == [True, False, True]
@@ -342,8 +353,8 @@ def test_rel5b_after_terminal_counts_only_build_driver_calls() -> None:
     term = 100.0
     recs = [
         {"ts": 101.0, "has_tools": False},  # SUMMARIZER auto-title after terminal — EXCLUDED
-        {"ts": 102.0, "has_tools": True},   # a real DRIVER runaway after terminal — FLAGGED
-        {"ts": 99.0, "has_tools": True},    # before terminal — not counted
+        {"ts": 102.0, "has_tools": True},  # a real DRIVER runaway after terminal — FLAGGED
+        {"ts": 99.0, "has_tools": True},  # before terminal — not counted
     ]
     ts_recs = [(float(r["ts"]), bool(r.get("has_tools", True))) for r in recs]
     assert sum(1 for t, ht in ts_recs if t > term and ht) == 1

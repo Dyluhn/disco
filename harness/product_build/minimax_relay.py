@@ -13,7 +13,8 @@ in isolation; the FastAPI proxy (and the env key read) are built lazily by creat
 import json
 import os
 import time
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 from urllib.parse import urlparse
 
 # NOTE: no `from __future__ import annotations` here — FastAPI introspects the proxy handler's
@@ -33,12 +34,14 @@ MODEL_MAP = {
 }
 
 
-def map_model(model: Any, *, default: str = DEFAULT_MODEL, model_map: dict[str, str] = MODEL_MAP) -> str:
+def map_model(
+    model: Any, *, default: str = DEFAULT_MODEL, model_map: dict[str, str] = MODEL_MAP
+) -> str:
     return model_map.get(model, default)
 
 
 def _clamp_max_tokens(mt: Any) -> int:
-    # keep ONLY a positive non-bool int within the cap; everything else (absent/bool/<=0/>cap) → cap.
+    # Keep only a positive non-bool int within the cap. Absent, bool, <=0, and >cap use the cap.
     return mt if (type(mt) is int and 0 < mt <= MAX_TOKENS_CAP) else MAX_TOKENS_CAP
 
 
@@ -77,8 +80,8 @@ def relay_log_record(
     # [REL-5b] `has_tools` distinguishes a BUILD-driver request (always carries the tool catalog)
     # from a tool-less SUMMARIZER request (the async auto-title fires off kick() with NO tools).
     # The provider-after-terminal oracle counts only build-driver (tool-bearing) calls, so a benign
-    # post-terminal auto-title call is not miscounted as a build runaway — while a REAL post-terminal
-    # driver runaway (which carries tools) is still flagged.
+    # post-terminal auto-title call is not miscounted as a build runaway. A real post-terminal
+    # driver runaway still carries tools and is still flagged.
     return {
         "host": upstream_host(url),
         "url": url,
@@ -94,10 +97,13 @@ def create_app() -> Any:
     HERE, not at import, so the pure transform stays importable + testable without the secret."""
     key = os.environ.get("MINIMAX_API_KEY")
     if not key:  # check the secret FIRST so fail-fast can't become a ModuleNotFoundError
-        raise RuntimeError("MINIMAX_API_KEY is required (env only — never hardcode the MiniMax token)")
+        raise RuntimeError(
+            "MINIMAX_API_KEY is required (env only — never hardcode the MiniMax token)"
+        )
     import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse, StreamingResponse
+
     log_path = os.environ.get("MINIMAX_RELAY_LOG")  # optional JSONL relay log (for the ledger)
 
     def _log(rec: dict[str, Any]) -> None:
@@ -108,7 +114,11 @@ def create_app() -> Any:
                 f.write(line + "\n")
 
     app = FastAPI()
-    auth = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "Accept-Encoding": "identity"}
+    auth = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+    }
 
     @app.get("/v1/models")
     async def models() -> Any:
@@ -139,9 +149,18 @@ def create_app() -> Any:
                 # Surface the upstream rejection REASON — a bare 400 in the agent
                 # log is undiagnosable (gauntlet s-web deck run died opaque).
                 err_body = (await r.aread())[:600]
-                await r.aclose(); await client.aclose()
+                await r.aclose()
+                await client.aclose()
                 print(f"RELAY-UPSTREAM-ERROR {r.status_code} {err_body!r}", flush=True)
-                return JSONResponse(status_code=r.status_code, content={"error": {"message": err_body.decode('utf-8', 'replace'), "type": "upstream_error"}})
+                return JSONResponse(
+                    status_code=r.status_code,
+                    content={
+                        "error": {
+                            "message": err_body.decode("utf-8", "replace"),
+                            "type": "upstream_error",
+                        }
+                    },
+                )
 
             async def gen() -> AsyncIterator[bytes]:
                 try:
@@ -168,4 +187,6 @@ def create_app() -> Any:
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
 
-    uvicorn.run(create_app(), host="127.0.0.1", port=int(os.environ.get("MINIMAX_RELAY_PORT", "8080")))
+    uvicorn.run(
+        create_app(), host="127.0.0.1", port=int(os.environ.get("MINIMAX_RELAY_PORT", "8080"))
+    )

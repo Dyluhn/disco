@@ -290,7 +290,7 @@ def _real_replan_then_injected_answer():
     approved, wrote, finished), then a HARNESS-INJECTED user answer (seq 16) after which the
     build kept mutating (seq 17) with NO new plan — the exact shape that mis-anchored live."""
     return _initial_build() + [
-        msg(8, "user", "revise the heading"),          # REAL declared follow-up
+        msg(8, "user", "revise the heading"),  # REAL declared follow-up
         status(9, "RUNNING", "planning"),
         plan(10, revision=2),
         awaiting(11, 10),
@@ -370,8 +370,8 @@ def test_metadata_flag_matched_to_seq_by_send_order():
     # Two declared follow-ups; the SECOND requires a revision but neither re-planned nor wrote.
     # The flag must map to the right seq (send order) so the no-write declared revision is caught.
     events = _initial_build() + [
-        msg(8, "user", "small note, no change needed"),   # declared, requires=False, no work
-        msg(9, "user", "now actually revise the hero"),    # declared, requires=True, no replan
+        msg(8, "user", "small note, no change needed"),  # declared, requires=False, no work
+        msg(9, "user", "now actually revise the hero"),  # declared, requires=True, no replan
     ]
     meta = {
         "declared_followup_seqs": [8, 9],

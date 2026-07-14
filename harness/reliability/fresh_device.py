@@ -262,9 +262,7 @@ class ApiSession:
         if not self.csrf or not any(cookie.name == "disco_session" for cookie in self.jar):
             raise ProductError("pairing returned no CSRF token/session cookie")
 
-    def json(
-        self, method: str, base: str, path: str, *, data: Any | None = None
-    ) -> Any:
+    def json(self, method: str, base: str, path: str, *, data: Any | None = None) -> Any:
         status, raw, _ = self._request(method, f"{base.rstrip('/')}{path}", data=data)
         if not 200 <= status < 300:
             raise ProductError(f"{method} {path} returned HTTP {status}: {raw[:800]!r}")
@@ -317,9 +315,7 @@ def _configure_driver(session: ApiSession, *, base_url: str, model: str, api_key
         "price_out_per_m": 0,
         "pricing_mode": "unknown",
     }
-    status, raw, _ = session._request(
-        "POST", f"{session.app_base}/api/models", data=payload
-    )
+    status, raw, _ = session._request("POST", f"{session.app_base}/api/models", data=payload)
     if status == 400:
         status, raw, _ = session._request(
             "PUT", f"{session.app_base}/api/models/{model_id}", data=payload
@@ -411,9 +407,7 @@ def main(argv: list[str] | None = None) -> int:
     reason = "fresh-device run did not start"
 
     def passed(check_id: str, detail: str, **evidence: Any) -> None:
-        checks.append(
-            {"id": check_id, "status": PASS, "detail": detail, "evidence": evidence}
-        )
+        checks.append({"id": check_id, "status": PASS, "detail": detail, "evidence": evidence})
 
     try:
         required = {
@@ -434,9 +428,7 @@ def main(argv: list[str] | None = None) -> int:
         ui_port = int(os.environ.get("DISCO_FRESH_UI_PORT", "8088"))
         app_port = int(os.environ.get("DISCO_FRESH_APP_PORT", "8800"))
         agent_port = int(os.environ.get("DISCO_FRESH_AGENT_PORT", "8000"))
-        pristine = _assert_pristine(
-            runner, engine, ports=(ui_port, app_port, agent_port)
-        )
+        pristine = _assert_pristine(runner, engine, ports=(ui_port, app_port, agent_port))
         passed(
             "pristine-device",
             "no prior Disco containers, images, volumes, data paths, or bound ports",
@@ -515,9 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         _wait_url(f"{app}/api/health", timeout=600)
         _wait_url(f"{agent}/health", timeout=600)
         index = _wait_url(front, timeout=60).decode("utf-8", errors="replace")
-        env_js = _wait_url(f"{front}/env.js", timeout=60).decode(
-            "utf-8", errors="replace"
-        )
+        env_js = _wait_url(f"{front}/env.js", timeout=60).decode("utf-8", errors="replace")
         if "root" not in index or "/svc/app" not in env_js or "/svc/agent" not in env_js:
             raise ProductError("packaged frontend or runtime API routing is incomplete")
         boot_logs = runner.run(
@@ -568,9 +558,7 @@ def main(argv: list[str] | None = None) -> int:
         _assert_verify_output(quick.stdout, grounding=False)
         grounded = runner.run(
             "initial-grounding-verify",
-            _compose_command(
-                engine, project, "exec", "-T", "agent-server", "disco-verify"
-            ),
+            _compose_command(engine, project, "exec", "-T", "agent-server", "disco-verify"),
             cwd=checkout,
             env=compose_env,
             timeout=1_800,
@@ -770,9 +758,7 @@ def main(argv: list[str] | None = None) -> int:
             ],
         )
         if remaining or remaining_volumes:
-            raise ProductError(
-                f"uninstall left containers={remaining} volumes={remaining_volumes}"
-            )
+            raise ProductError(f"uninstall left containers={remaining} volumes={remaining_volumes}")
         shutil.rmtree(checkout)
         if checkout.exists():
             raise ProductError("uninstall left the cloned application directory")

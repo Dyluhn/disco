@@ -49,9 +49,12 @@ tree = prim.generate(app, design)
 
 lead = resolve_lead_entity(app)
 print(f"resolved lead entity: id={lead.id!r} fields={[f.name for f in lead.fields]}")
-print(f"schema.sql tables: {[l for l in tree['schema.sql'].splitlines() if 'CREATE TABLE' in l]}")
-print(f"worker routes mentioning /api: "
-      f"{sorted(set(w.strip()[:60] for w in tree['worker/index.ts'].splitlines() if '/api/' in w))[:6]}")
+schema_tables = [line for line in tree["schema.sql"].splitlines() if "CREATE TABLE" in line]
+print(f"schema.sql tables: {schema_tables}")
+worker_routes = sorted(
+    {line.strip()[:60] for line in tree["worker/index.ts"].splitlines() if "/api/" in line}
+)
+print(f"worker routes mentioning /api: {worker_routes[:6]}")
 print()
 
 result = lead_gen_verify(app, design, tree)

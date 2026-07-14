@@ -106,9 +106,7 @@ class Cassette:
         try:
             return self._entries[(seam, key)]
         except KeyError as e:
-            raise CassetteMiss(
-                f"cassette miss: {seam} key={key} input={payload!r:.200}"
-            ) from e
+            raise CassetteMiss(f"cassette miss: {seam} key={key} input={payload!r:.200}") from e
 
     def __len__(self) -> int:
         return len(self._log)

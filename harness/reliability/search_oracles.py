@@ -542,11 +542,7 @@ def _validate_connectivity(
         for item in connectivity
         if isinstance(item, dict) and isinstance(item.get("url"), str)
     }
-    urls = {
-        by_id[passage_id].get("source_url")
-        for passage_id in cited_ids
-        if passage_id in by_id
-    }
+    urls = {by_id[passage_id].get("source_url") for passage_id in cited_ids if passage_id in by_id}
     successful = 0
     for url in sorted(url for url in urls if isinstance(url, str)):
         probe = by_url.get(url)

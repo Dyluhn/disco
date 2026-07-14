@@ -77,7 +77,7 @@ def evaluate_product_promotion(
                 "clean"
                 if not provider_bad
                 else f"{len(provider_bad)} provider violation(s): "
-                + ", ".join(sorted({str(c.get('code')) for c in provider_bad}))
+                + ", ".join(sorted({str(c.get("code")) for c in provider_bad}))
             ),
         )
 

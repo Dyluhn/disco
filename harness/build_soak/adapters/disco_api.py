@@ -163,6 +163,7 @@ def _followup_pickup_timeout_s() -> float:
         return _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
     return val if val > 0 else _FOLLOWUP_PICKUP_TIMEOUT_DEFAULT_S
 
+
 # Workspace-snapshot manifest bounds (Bug 9 fix): cap per-file captured content and the
 # number of files walked so a pathological workspace can't blow up the dossier.
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
@@ -477,9 +478,7 @@ class DiscoApiClient:
         )
         return True
 
-    async def _sample_live_thrash(
-        self, conversation_id: str, *, terminal_status: str = ""
-    ) -> bool:
+    async def _sample_live_thrash(self, conversation_id: str, *, terminal_status: str = "") -> bool:
         if self._live_thrash_scenario is None:
             return False
         now = time.monotonic()
@@ -619,9 +618,7 @@ class DiscoApiClient:
         chosen = _choose_alternative(options, preferred_option_id)
         if chosen is None:
             return None
-        await self._t.ws_control(
-            conversation_id, {"type": "pick_alternative", "option_id": chosen}
-        )
+        await self._t.ws_control(conversation_id, {"type": "pick_alternative", "option_id": chosen})
         return {"alternatives_id": str(alt_id), "option_id": chosen}
 
     def _alternatives_options(
@@ -655,9 +652,7 @@ class DiscoApiClient:
         merging it under the same key would clobber the HTTP int with the body's STATE
         STRING — the caller's ``int(resp["status"])`` then crashed the whole drive with
         ``ValueError: invalid literal for int() ... 'RUNNING'`` the moment a build paused."""
-        status, data = await self._t.post_json(
-            f"/conversations/{conversation_id}/resume", {}
-        )
+        status, data = await self._t.post_json(f"/conversations/{conversation_id}/resume", {})
         return {"http_status": status, **(data if isinstance(data, dict) else {})}
 
     async def kill(self, conversation_id: str) -> dict[str, Any]:
@@ -670,20 +665,18 @@ class DiscoApiClient:
 
         The HTTP code is returned under `http_status` (mirrors :meth:`resume`); the route
         body is ``{"killed": true, "state": {...}}``. Returns ``{"http_status": int, ...}``."""
-        status, data = await self._t.post_json(
-            f"/conversations/{conversation_id}/kill", {}
-        )
+        status, data = await self._t.post_json(f"/conversations/{conversation_id}/kill", {})
         return {"http_status": status, **(data if isinstance(data, dict) else {})}
 
     async def send_followup(
         self, conversation_id: str, text: str, *, kind: str = "message"
     ) -> None:
         """Send a follow-up over the REAL WS path. `kind`:
-          * "message"      -> {"type":"send_message"}  (after-terminal user follow-up:
-                              appended + kick; the PRODUCT decides to re-plan)
-          * "steer"        -> {"type":"steer"}         (mid-run redirect of a RUNNING
-                              agent — the §15.4 after-first-file-write injection)
-          * "request_plan" -> {"type":"request_plan"}  (explicit re-plan gate)
+        * "message"      -> {"type":"send_message"}  (after-terminal user follow-up:
+                            appended + kick; the PRODUCT decides to re-plan)
+        * "steer"        -> {"type":"steer"}         (mid-run redirect of a RUNNING
+                            agent — the §15.4 after-first-file-write injection)
+        * "request_plan" -> {"type":"request_plan"}  (explicit re-plan gate)
         """
         if kind == "steer":
             frame = {"type": "steer", "steer_text": text}
@@ -759,9 +752,7 @@ class DiscoApiClient:
         seen_active = False
         while True:
             last = self._status_of(await self.get_state(conversation_id))
-            thrash_crossed = await self._sample_live_thrash(
-                conversation_id, terminal_status=last
-            )
+            thrash_crossed = await self._sample_live_thrash(conversation_id, terminal_status=last)
             if thrash_crossed and last not in TERMINAL_STATES:
                 # A confirmed oracle failure is a spend/reliability stop, not a
                 # log message. Kill the campaign-owned conversation immediately;
@@ -787,9 +778,7 @@ class DiscoApiClient:
             # seq <= the baseline is the STALE pre-follow-up terminal — do NOT return on it,
             # keep waiting for the follow-up's own new terminal (seq > baseline). min=None
             # (the default, non-follow-up drive) ⇒ any terminal counts, unchanged behavior.
-            if last in _WORK_TERMINALS and self._terminal_is_new(
-                conversation_id, min_terminal_seq
-            ):
+            if last in _WORK_TERMINALS and self._terminal_is_new(conversation_id, min_terminal_seq):
                 return last
             if last == PAUSED_STATE:
                 # a cooperative / actionless PAUSE — the driver decides (resume or stop).
@@ -813,9 +802,7 @@ class DiscoApiClient:
             if now - start >= hard_cap_s:
                 # Safety ceiling. Was it still progressing recently? Then this is an
                 # inconclusive model-speed cutoff, NOT a wedge → PROGRESSING_TIMEOUT.
-                return (
-                    PROGRESSING_TIMEOUT if inactive_for < inactivity_s else INACTIVE_TIMEOUT
-                )
+                return PROGRESSING_TIMEOUT if inactive_for < inactivity_s else INACTIVE_TIMEOUT
             if inactive_for >= inactivity_s:
                 return INACTIVE_TIMEOUT
             await asyncio.sleep(self._poll)
@@ -1059,9 +1046,7 @@ class DiscoApiClient:
                     continue
                 call_id = tc.get("call_id")
                 action_id = e.get("id") or _payload(e).get("id")
-                if (
-                    call_id is not None and str(call_id) in success_call_ids
-                ) or (
+                if (call_id is not None and str(call_id) in success_call_ids) or (
                     action_id is not None and str(action_id) in success_action_ids
                 ):
                     return int(e.get("seq", -1))
@@ -1273,7 +1258,9 @@ class DiscoApiClient:
                     _LOG.warning(
                         "snapshot %s: declared file %r accepted on EXTENDED content-stability "
                         "(%s) — no sha/readback proof of the agent's final bytes (expected=%s)",
-                        conversation_id, p, expected.get(p, ("unknown",))[0],
+                        conversation_id,
+                        p,
+                        expected.get(p, ("unknown",))[0],
                         list(expected.get(p, ("unknown",))),
                     )
                 break
@@ -1312,9 +1299,7 @@ class DiscoApiClient:
             entry = _manifest_lookup(manifest, p)
             if entry is not None:
                 entry["proof"] = _proof_level(expected.get(p))
-                entry["content_stable"] = (
-                    stable_n.get(p, 0) >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
-                )
+                entry["content_stable"] = stable_n.get(p, 0) >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
         return manifest, snapshot_dir
 
     def _read_snapshot_manifest(
@@ -1398,9 +1383,7 @@ class DiscoApiClient:
              (FALSE_FINISH_PREVIEW_BROKEN). Live dynamic-app preview verification is the
              documented follow-up — never a forged pass.
         """
-        avail_status, avail = await self._t.get_json(
-            f"/conversations/{conversation_id}/preview"
-        )
+        avail_status, avail = await self._t.get_json(f"/conversations/{conversation_id}/preview")
         status, text, _hdrs = await self._t.get_text(
             f"/conversations/{conversation_id}/preview-app/"
         )
@@ -1763,8 +1746,7 @@ def _shell_tokens(command: str) -> list[str]:
 
 def _has_shell_meta(tokens: list[str]) -> bool:
     return any(
-        tok in _SHELL_META_TOKENS
-        or any(marker in tok for marker in _SHELL_META_SUBSTRINGS)
+        tok in _SHELL_META_TOKENS or any(marker in tok for marker in _SHELL_META_SUBSTRINGS)
         for tok in tokens
     )
 

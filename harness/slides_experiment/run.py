@@ -28,9 +28,6 @@ import httpx
 
 from .scorers import (
     CellScore,
-    ContentResult,
-    OverflowResult,
-    ParseResult,
     aggregate_score,
     score_content,
     score_overflow,
@@ -51,9 +48,7 @@ _WEAK_MODEL = "openai/gpt-oss-20b:free"
 
 
 def _get_api_key() -> str:
-    key = os.environ.get("DISCO_OPENROUTER_API_KEY") or os.environ.get(
-        "PMX_OPENROUTER_API_KEY"
-    )
+    key = os.environ.get("DISCO_OPENROUTER_API_KEY") or os.environ.get("PMX_OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError(
             "DISCO_OPENROUTER_API_KEY not set — run: source ~/.config/disco/agent.env"
@@ -99,7 +94,7 @@ async def _call_model(
                     return f"<API_ERROR:{r.status_code}>"
                 await asyncio.sleep(2)
         except httpx.TimeoutException:
-            print(f"  [TIMEOUT attempt {attempt+1}]", flush=True)
+            print(f"  [TIMEOUT attempt {attempt + 1}]", flush=True)
             if attempt == retries:
                 return "<TIMEOUT>"
             await asyncio.sleep(3)
@@ -160,7 +155,8 @@ async def _judge_output(
     try:
         # Extract JSON from response
         import re
-        m = re.search(r'\{[^{}]+\}', response, re.DOTALL)
+
+        m = re.search(r"\{[^{}]+\}", response, re.DOTALL)
         if m:
             data = json.loads(m.group())
             score = float(data.get("score", 0.5))
@@ -176,46 +172,69 @@ async def _judge_output(
 # ---------------------------------------------------------------------------
 
 _DRY_RUN_OUTPUTS: dict[str, str] = {
-    "free_form": json.dumps({
-        "title": "DRY RUN DECK (free_form)",
-        "slides": [
-            {"type": "title", "title": "Title Slide", "body": ["Subtitle"]},
-            {"type": "bullets", "title": "Key Points",
-             "body": ["Point one", "Point two", "Point three"]},
-            {"type": "closing", "title": "Thank You", "body": []},
-        ],
-    }),
-    "rigid_json": json.dumps({
-        "title": "DRY RUN DECK (rigid)",
-        "theme": "light",
-        "slides": [
-            {"type": "title", "title": "Title Slide", "bullets": []},
-            {"type": "bullets", "title": "Key Points",
-             "bullets": ["Point one", "Point two", "Point three"]},
-            {"type": "closing", "title": "The End", "bullets": []},
-        ],
-    }),
-    "loose_hybrid": json.dumps({
-        "title": "DRY RUN DECK (loose_hybrid)",
-        "theme": "disco-light",
-        "slides": [
-            {"type": "title", "title": "Title Slide",
-             "body": ["Subtitle"], "layout_hint": None},
-            {"type": "bullets", "title": "Key Points",
-             "body": ["Point one", "Point two"], "layout_hint": None},
-            {"type": "two_column", "title": "Comparison",
-             "body": ["Left content", "Right content"],
-             "layout_hint": "two_column"},
-            {"type": "closing", "title": "Thank You",
-             "body": [], "layout_hint": None},
-        ],
-    }),
+    "free_form": json.dumps(
+        {
+            "title": "DRY RUN DECK (free_form)",
+            "slides": [
+                {"type": "title", "title": "Title Slide", "body": ["Subtitle"]},
+                {
+                    "type": "bullets",
+                    "title": "Key Points",
+                    "body": ["Point one", "Point two", "Point three"],
+                },
+                {"type": "closing", "title": "Thank You", "body": []},
+            ],
+        }
+    ),
+    "rigid_json": json.dumps(
+        {
+            "title": "DRY RUN DECK (rigid)",
+            "theme": "light",
+            "slides": [
+                {"type": "title", "title": "Title Slide", "bullets": []},
+                {
+                    "type": "bullets",
+                    "title": "Key Points",
+                    "bullets": ["Point one", "Point two", "Point three"],
+                },
+                {"type": "closing", "title": "The End", "bullets": []},
+            ],
+        }
+    ),
+    "loose_hybrid": json.dumps(
+        {
+            "title": "DRY RUN DECK (loose_hybrid)",
+            "theme": "disco-light",
+            "slides": [
+                {
+                    "type": "title",
+                    "title": "Title Slide",
+                    "body": ["Subtitle"],
+                    "layout_hint": None,
+                },
+                {
+                    "type": "bullets",
+                    "title": "Key Points",
+                    "body": ["Point one", "Point two"],
+                    "layout_hint": None,
+                },
+                {
+                    "type": "two_column",
+                    "title": "Comparison",
+                    "body": ["Left content", "Right content"],
+                    "layout_hint": "two_column",
+                },
+                {"type": "closing", "title": "Thank You", "body": [], "layout_hint": None},
+            ],
+        }
+    ),
 }
 
 
 # ---------------------------------------------------------------------------
 # Main experiment runner
 # ---------------------------------------------------------------------------
+
 
 async def run_experiment(
     prompt_ids: list[str] | None = None,
@@ -239,9 +258,7 @@ async def run_experiment(
         return []
 
     strategies = [
-        ALL_STRATEGIES[sid]
-        for sid in (strategy_ids or STRATEGY_IDS)
-        if sid in ALL_STRATEGIES
+        ALL_STRATEGIES[sid] for sid in (strategy_ids or STRATEGY_IDS) if sid in ALL_STRATEGIES
     ]
 
     print(f"\n=== C4 Experiment: {len(prompts)} prompts × {len(strategies)} strategies ===")
@@ -258,9 +275,13 @@ async def run_experiment(
                 overflow = score_overflow(parse)
                 content = score_content(parse, p["goal"])
                 cell = CellScore(
-                    prompt_id=p["id"], strategy=s.id,
-                    parse=parse, overflow=overflow, content=content,
-                    llm_judge=0.75, llm_judge_detail="dry run stub",
+                    prompt_id=p["id"],
+                    strategy=s.id,
+                    parse=parse,
+                    overflow=overflow,
+                    content=content,
+                    llm_judge=0.75,
+                    llm_judge_detail="dry run stub",
                 )
                 cells.append(cell)
         _print_table(cells, prompts, strategies)
@@ -283,10 +304,7 @@ async def run_experiment(
         for p in prompts:
             for s in strategies:
                 idx += 1
-                print(
-                    f"[{idx:3d}/{total}] {p['id']} × {s.id:12s} ...",
-                    end=" ", flush=True
-                )
+                print(f"[{idx:3d}/{total}] {p['id']} × {s.id:12s} ...", end=" ", flush=True)
                 t0 = time.monotonic()
 
                 user_msg = s.user_template.format(goal=p["goal"])
@@ -302,10 +320,10 @@ async def run_experiment(
                 judge_score = None
                 judge_detail = ""
                 if not skip_judge and parse.ok:
-                    print(f"            [judge] ...", end=" ", flush=True)
+                    print("            [judge] ...", end=" ", flush=True)
                     t1 = time.monotonic()
                     judge_score, judge_detail = await _judge_output(client, p["goal"], raw)
-                    print(f"{time.monotonic()-t1:.1f}s → {judge_score:.2f}", flush=True)
+                    print(f"{time.monotonic() - t1:.1f}s → {judge_score:.2f}", flush=True)
 
                 cell = CellScore(
                     prompt_id=p["id"],
@@ -332,6 +350,7 @@ async def run_experiment(
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
+
 
 def _print_table(cells: list[CellScore], prompts: list[dict], strategies: list) -> None:
     """Print a summary table to stdout."""
@@ -362,12 +381,12 @@ def _print_table(cells: list[CellScore], prompts: list[dict], strategies: list) 
         if strat_cells:
             avg = sum(aggregate_score(c) for c in strat_cells) / len(strat_cells)
             parse_rate = sum(1 for c in strat_cells if c.parse.ok) / len(strat_cells)
-            avg_overflow = sum(
-                c.overflow.score for c in strat_cells if c.overflow
-            ) / max(1, sum(1 for c in strat_cells if c.overflow))
-            avg_content = sum(
-                c.content.fidelity_score for c in strat_cells if c.content
-            ) / max(1, sum(1 for c in strat_cells if c.content))
+            avg_overflow = sum(c.overflow.score for c in strat_cells if c.overflow) / max(
+                1, sum(1 for c in strat_cells if c.overflow)
+            )
+            avg_content = sum(c.content.fidelity_score for c in strat_cells if c.content) / max(
+                1, sum(1 for c in strat_cells if c.content)
+            )
 
             print(
                 f"  {sid:<14}: avg={avg:.3f}  parse={parse_rate:.0%}"
@@ -375,13 +394,14 @@ def _print_table(cells: list[CellScore], prompts: list[dict], strategies: list) 
             )
             if any(c.llm_judge is not None for c in strat_cells):
                 judged = [c.llm_judge for c in strat_cells if c.llm_judge is not None]
-                print(f"               llm_judge={sum(judged)/len(judged):.2f}")
+                print(f"               llm_judge={sum(judged) / len(judged):.2f}")
 
     print("=" * 80)
 
 
 def _save_results(cells: list[CellScore], prompts: list[dict], out_path: Path) -> None:
     """Save full results to JSON."""
+
     # Convert dataclasses to dicts
     def _asdict_safe(obj):
         if hasattr(obj, "__dataclass_fields__"):
@@ -400,16 +420,18 @@ def _save_results(cells: list[CellScore], prompts: list[dict], out_path: Path) -
             data["summary"][sid] = {
                 "avg_aggregate": sum(aggregate_score(c) for c in strat_cells) / len(strat_cells),
                 "parse_rate": sum(1 for c in strat_cells if c.parse.ok) / len(strat_cells),
-                "avg_overflow_risk": sum(
-                    c.overflow.score for c in strat_cells if c.overflow
-                ) / max(1, sum(1 for c in strat_cells if c.overflow)),
+                "avg_overflow_risk": sum(c.overflow.score for c in strat_cells if c.overflow)
+                / max(1, sum(1 for c in strat_cells if c.overflow)),
                 "avg_content_fidelity": sum(
                     c.content.fidelity_score for c in strat_cells if c.content
-                ) / max(1, sum(1 for c in strat_cells if c.content)),
+                )
+                / max(1, sum(1 for c in strat_cells if c.content)),
                 "avg_llm_judge": (
-                    sum(c.llm_judge for c in strat_cells if c.llm_judge is not None) /
-                    max(1, sum(1 for c in strat_cells if c.llm_judge is not None))
-                ) if any(c.llm_judge is not None for c in strat_cells) else None,
+                    sum(c.llm_judge for c in strat_cells if c.llm_judge is not None)
+                    / max(1, sum(1 for c in strat_cells if c.llm_judge is not None))
+                )
+                if any(c.llm_judge is not None for c in strat_cells)
+                else None,
             }
 
     out_path.write_text(json.dumps(data, indent=2))
@@ -420,41 +442,39 @@ def _save_results(cells: list[CellScore], prompts: list[dict], out_path: Path) -
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="C4 slides schema experiment")
     parser.add_argument(
-        "--out", default="/tmp/c4exp-results.json",
-        help="Output JSON path for full results"
+        "--out", default="/tmp/c4exp-results.json", help="Output JSON path for full results"
     )
     parser.add_argument(
-        "--prompts", default=None,
-        help="Comma-separated prompt IDs to run (e.g. p01,p02); default=all"
+        "--prompts",
+        default=None,
+        help="Comma-separated prompt IDs to run (e.g. p01,p02); default=all",
     )
     parser.add_argument(
-        "--strategies", default=None,
-        help="Comma-separated strategy IDs (free_form,rigid_json,loose_hybrid); default=all"
+        "--strategies",
+        default=None,
+        help="Comma-separated strategy IDs (free_form,rigid_json,loose_hybrid); default=all",
     )
     parser.add_argument(
-        "--model", default=_STRONG_MODEL,
-        help=f"OpenRouter model ID (default: {_STRONG_MODEL})"
+        "--model", default=_STRONG_MODEL, help=f"OpenRouter model ID (default: {_STRONG_MODEL})"
     )
     parser.add_argument(
-        "--skip-judge", action="store_true",
-        help="Skip the LLM judge step (faster, less complete scoring)"
+        "--skip-judge",
+        action="store_true",
+        help="Skip the LLM judge step (faster, less complete scoring)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Use stub outputs (no LLM calls; for CI/testing)"
+        "--dry-run", action="store_true", help="Use stub outputs (no LLM calls; for CI/testing)"
     )
     args = parser.parse_args()
 
     dry_run = args.dry_run or os.environ.get("C4_DRY_RUN") == "1"
 
     prompt_ids = [p.strip() for p in args.prompts.split(",")] if args.prompts else None
-    strategy_ids = (
-        [s.strip() for s in args.strategies.split(",")]
-        if args.strategies else None
-    )
+    strategy_ids = [s.strip() for s in args.strategies.split(",")] if args.strategies else None
 
     cells = asyncio.run(
         run_experiment(

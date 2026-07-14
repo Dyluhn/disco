@@ -13,6 +13,7 @@ Proves the wire built in this session actually works with a LIVE model (no casse
 
 Not a test double — every call hits MiniMax via the relay. Dossier + before/after HTML → RUN_DIR.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -28,12 +29,22 @@ import websockets
 AGENT = os.environ.get("DISCO_AGENT_URL", "http://localhost:8000")
 WS = AGENT.replace("http", "ws", 1)
 LEDGER = os.environ.get("MINIMAX_RELAY_LOG", "")
-RUN_DIR = os.environ.get("RUN_DIR", "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p8proof")
+RUN_DIR = os.environ.get(
+    "RUN_DIR",
+    "/tmp/claude-1000/-var-home-dylan/aa3c8df1-d803-40e0-89de-d73ae8f27f0e/scratchpad/p8proof",
+)
 BUILD_TIMEOUT_S = int(os.environ.get("P8_BUILD_TIMEOUT_S", "480"))
 EDIT_TIMEOUT_S = int(os.environ.get("P8_EDIT_TIMEOUT_S", "420"))
 _TERMINAL = {"FINISHED", "VERIFIED", "STUCK", "ERROR", "AWAITING_USER", "FAILED", "CANCELLED"}
-_EDIT_TOOLS = {"exact_replace", "run_project_script", "safe_write_file", "file_edit",
-               "file_replace_lines", "file_str_replace", "file_insert_lines"}
+_EDIT_TOOLS = {
+    "exact_replace",
+    "run_project_script",
+    "safe_write_file",
+    "file_edit",
+    "file_replace_lines",
+    "file_str_replace",
+    "file_insert_lines",
+}
 
 HERO_NEW = "NIGHTOWL_HERO_EDITED"
 
@@ -51,8 +62,12 @@ BUILD_PROMPT = (
 
 
 def _post(path: str, body: dict, timeout: int = 120) -> dict:
-    req = urllib.request.Request(AGENT + path, data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        AGENT + path,
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
 
@@ -137,8 +152,12 @@ def _h1_oid(cid: str) -> dict:
         if oid_m:
             oid = oid_m.group(1)
             parts = oid.split(":")
-            return {"kind": "source", "oid": oid, "file": parts[0] or "index.html",
-                    "line": int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0}
+            return {
+                "kind": "source",
+                "oid": oid,
+                "file": parts[0] or "index.html",
+                "line": int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0,
+            }
     # fallback: locate the <h1> line in the raw file
     raw = _get_text(f"/conversations/{cid}/artifacts/index.html?inline=true") or ""
     line = next((i for i, ln in enumerate(raw.splitlines(), 1) if "<h1" in ln.lower()), 0)
@@ -148,12 +167,16 @@ def _h1_oid(cid: str) -> dict:
 async def _send_selection_edit(cid: str, ref: dict, human_label: str) -> None:
     """Send exactly the frame the UI's Change-this-element affordance sends."""
     async with websockets.connect(f"{WS}/ws/conversations/{cid}", max_size=None) as ws:
-        await ws.send(json.dumps({
-            "type": "selection_edit",
-            "selection_ref": ref,
-            "edit_instruction": f"Change the headline text to exactly: {HERO_NEW}",
-            "human_label": human_label,
-        }))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "selection_edit",
+                    "selection_ref": ref,
+                    "edit_instruction": f"Change the headline text to exactly: {HERO_NEW}",
+                    "human_label": human_label,
+                }
+            )
+        )
         # give the server a moment to append + kick before we close and poll REST
         await asyncio.sleep(3)
 
@@ -162,8 +185,15 @@ def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger_rows())
 
-    conv = _post("/conversations", {"owner_id": "local", "surface": "build",
-                                    "autonomous": True, "title": "p8 selection_edit proof"})
+    conv = _post(
+        "/conversations",
+        {
+            "owner_id": "local",
+            "surface": "build",
+            "autonomous": True,
+            "title": "p8 selection_edit proof",
+        },
+    )
     cid = conv.get("conversation_id") or conv.get("id")
     assert cid, f"no conversation id in {conv}"
     print(f"cid={cid}")
@@ -251,8 +281,12 @@ def main() -> int:
     # informational: it only registers if the driver routes through the relay ledger
     # (a direct-MiniMax driver wouldn't write here), so it must not fail the proof.
     passed = (
-        built_ok and headline_changed and footer_intact and para_intact
-        and scoped_not_rewrite and openrouter == 0
+        built_ok
+        and headline_changed
+        and footer_intact
+        and para_intact
+        and scoped_not_rewrite
+        and openrouter == 0
     )
     verdict["PASS"] = passed
     with open(f"{RUN_DIR}/verdict.json", "w") as f:

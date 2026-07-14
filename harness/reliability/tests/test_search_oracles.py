@@ -53,8 +53,7 @@ def _report() -> dict:
     return {
         "query": "Investigate the event",
         "summary": (
-            "This executive summary is long enough to communicate the principal "
-            "research result."
+            "This executive summary is long enough to communicate the principal research result."
         ),
         "sections": [
             {

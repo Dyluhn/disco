@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from _eventlog import action, clean_smoke_log, msg, observation, plan, status
 
 from harness.build_soak import failure_codes as fc
 from harness.product_build import (
@@ -16,8 +17,6 @@ from harness.product_build import (
     classify_dossier,
     write_dossier,
 )
-
-from _eventlog import action, clean_smoke_log, msg, observation, plan, status
 
 
 def _autonomous_log() -> list[dict]:
@@ -34,6 +33,7 @@ def _autonomous_log() -> list[dict]:
         observation(6, "a5", tool="file_write", success=True),
         status(7, "FINISHED"),
     ]
+
 
 # --- TEST-ONLY green fixtures (never a production passing default) -------------
 _MINIMAX_LEDGER = [{"host": "api.minimaxi.com", "model": "MiniMax-M3", "tokens": 128}]
@@ -73,9 +73,16 @@ def test_green_dossier_classifies_pass(tmp_path) -> None:
 
 def test_dossier_has_locked_evidence_files(tmp_path) -> None:
     _write(tmp_path, artifacts={"timeline.md": "# run\nopened build\n"})
-    for f in ("events.jsonl", "product-evidence.json", "provider-call-ledger.jsonl", "manifest.json"):
+    for f in (
+        "events.jsonl",
+        "product-evidence.json",
+        "provider-call-ledger.jsonl",
+        "manifest.json",
+    ):
         assert (tmp_path / f).is_file(), f
-    assert (tmp_path / "artifacts" / "timeline.md").is_file()  # artifacts namespaced under artifacts/
+    assert (
+        tmp_path / "artifacts" / "timeline.md"
+    ).is_file()  # artifacts namespaced under artifacts/
 
 
 def test_artifact_cannot_clobber_a_core_dossier_file(tmp_path) -> None:
@@ -233,7 +240,11 @@ def test_no_product_evidence_is_invalid_run(tmp_path) -> None:
 # --- write_dossier guards -----------------------------------------------------
 def test_malformed_capture_raises_before_writing(tmp_path) -> None:
     pe = _green_pe()
-    pe["export"] = {"requested": True, "download_present": True, "download_bytes": True}  # bool, not int
+    pe["export"] = {
+        "requested": True,
+        "download_present": True,
+        "download_bytes": True,
+    }  # bool, not int
     with pytest.raises(ValueError):
         _write(tmp_path, pe=pe)
     assert not (tmp_path / "product-evidence.json").exists()  # nothing written on preflight failure

@@ -35,7 +35,9 @@ def test_a_failing_run_blocks():
 
 
 def test_invalid_run_blocks():
-    r = evaluate_product_promotion([{"status": "INVALID_RUN", "code": "WORKSPACE_SNAPSHOT_NOT_READY"}])
+    r = evaluate_product_promotion(
+        [{"status": "INVALID_RUN", "code": "WORKSPACE_SNAPSHOT_NOT_READY"}]
+    )
     assert r["eligible"] is False
     assert _check(r, "no INVALID_RUN")["ok"] is False
 

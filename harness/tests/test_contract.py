@@ -22,10 +22,8 @@ _TS = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "age
 
 # Deliberate one-sided cases (documented, not bugs):
 _SERVER_PY_ONLY = {"token"}  # research-answer token stream uses a separate FE path
-_SERVER_TS_ONLY = {
-    "connection"
-}  # synthetic browser reconnect state; never arrives from Python
-_CLIENT_PY_ONLY = {"pause"}  # accepted by the wire but not yet implemented/sent by the UI
+_SERVER_TS_ONLY = {"connection"}  # synthetic browser reconnect state; never arrives from Python
+_CLIENT_PY_ONLY: set[str] = set()  # Python and TypeScript client-frame types are in parity.
 _EVENT_PY_ONLY = {"knowledge", "datasource"}  # internal events; not rendered in the UI
 
 

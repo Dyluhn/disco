@@ -43,7 +43,7 @@ _THRASH_STUCK_DETAILS = {
 
 
 def _limits(scenario: dict[str, Any] | None) -> dict[str, int] | None:
-    block = (((scenario or {}).get("assertions") or {}).get("thrash"))
+    block = ((scenario or {}).get("assertions") or {}).get("thrash")
     if not isinstance(block, dict):
         return None
     defaults = {
@@ -173,14 +173,18 @@ class ThrashOracle:
         # redacted `agent.repair` point span for unknown-tool guesses, degenerate
         # turns, tool-history repairs, and provider request rejections.
         spans = (inspect_trace or {}).get("spans")
-        repairs = [
-            span
-            for span in spans or []
-            if isinstance(span, dict)
-            and span.get("span") == "agent.repair"
-            and span.get("event") == "point"
-            and str(span.get("repair_kind") or "")
-        ] if isinstance(spans, list) else []
+        repairs = (
+            [
+                span
+                for span in spans or []
+                if isinstance(span, dict)
+                and span.get("span") == "agent.repair"
+                and span.get("event") == "point"
+                and str(span.get("repair_kind") or "")
+            ]
+            if isinstance(spans, list)
+            else []
+        )
         repair_counts = Counter(str(span["repair_kind"]) for span in repairs)
         if repair_counts:
             repair_kind, repair_count = repair_counts.most_common(1)[0]

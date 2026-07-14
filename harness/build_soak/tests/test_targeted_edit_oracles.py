@@ -3,6 +3,8 @@ present-but-malformed→FAIL(EDIT_ORACLE_EVIDENCE_MALFORMED), and the SKIP-safe 
 
 from __future__ import annotations
 
+from _eventlog import clean_smoke_log
+
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles import (
@@ -13,8 +15,6 @@ from harness.build_soak.oracles import (
     ScreenLabelOracle,
     TargetedEditOracle,
 )
-
-from _eventlog import clean_smoke_log
 
 
 def _scn():
@@ -27,12 +27,28 @@ def _one(oracle, ev):
 
 # --- TargetedEditOracle -------------------------------------------------------
 def test_targeted_edit_subset_passes() -> None:
-    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html"], "expected_files": ["index.html", "style.css"]}})
+    r = _one(
+        TargetedEditOracle,
+        {
+            "targeted_edit": {
+                "edited_files": ["index.html"],
+                "expected_files": ["index.html", "style.css"],
+            }
+        },
+    )
     assert r.passed
 
 
 def test_targeted_edit_unexpected_file_fails() -> None:
-    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html", "secrets.env"], "expected_files": ["index.html"]}})
+    r = _one(
+        TargetedEditOracle,
+        {
+            "targeted_edit": {
+                "edited_files": ["index.html", "secrets.env"],
+                "expected_files": ["index.html"],
+            }
+        },
+    )
     assert r.failed and r.code == fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES
     assert r.facts["unexpected"] == ["secrets.env"]
 
@@ -42,23 +58,55 @@ def test_targeted_edit_absent_skips() -> None:
 
 
 def test_targeted_edit_malformed_fails_closed() -> None:
-    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": "index.html", "expected_files": []}})
+    r = _one(
+        TargetedEditOracle, {"targeted_edit": {"edited_files": "index.html", "expected_files": []}}
+    )
     assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
 
 
 # --- RewriteAvoidanceOracle ---------------------------------------------------
 def test_small_edit_within_bound_passes() -> None:
-    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 3, "total_lines": 100, "max_churn_ratio": 0.20}})
+    r = _one(
+        RewriteAvoidanceOracle,
+        {
+            "rewrite_avoidance": {
+                "edit_scope": "small",
+                "changed_lines": 3,
+                "total_lines": 100,
+                "max_churn_ratio": 0.20,
+            }
+        },
+    )
     assert r.passed and r.facts["churn_ratio"] == 0.03
 
 
 def test_small_cta_edit_full_rewrite_fails() -> None:
-    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.20}})
+    r = _one(
+        RewriteAvoidanceOracle,
+        {
+            "rewrite_avoidance": {
+                "edit_scope": "small",
+                "changed_lines": 90,
+                "total_lines": 100,
+                "max_churn_ratio": 0.20,
+            }
+        },
+    )
     assert r.failed and r.code == fc.SMALL_EDIT_FULL_REWRITE
 
 
 def test_non_small_scope_skips() -> None:
-    assert _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "rebuild", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.2}}).skipped
+    assert _one(
+        RewriteAvoidanceOracle,
+        {
+            "rewrite_avoidance": {
+                "edit_scope": "rebuild",
+                "changed_lines": 90,
+                "total_lines": 100,
+                "max_churn_ratio": 0.2,
+            }
+        },
+    ).skipped
 
 
 def test_rewrite_absent_skips() -> None:
@@ -66,21 +114,52 @@ def test_rewrite_absent_skips() -> None:
 
 
 def test_rewrite_zero_total_and_missing_bound_fail_closed() -> None:
-    z = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 0, "total_lines": 0, "max_churn_ratio": 0.2}})
+    z = _one(
+        RewriteAvoidanceOracle,
+        {
+            "rewrite_avoidance": {
+                "edit_scope": "small",
+                "changed_lines": 0,
+                "total_lines": 0,
+                "max_churn_ratio": 0.2,
+            }
+        },
+    )
     assert z.failed and z.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
-    m = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 1, "total_lines": 10}})
+    m = _one(
+        RewriteAvoidanceOracle,
+        {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 1, "total_lines": 10}},
+    )
     assert m.failed and m.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
 
 
 # --- ManualEditPreservationOracle ---------------------------------------------
 def test_manual_override_preserved_passes() -> None:
-    r = _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"index.html": "MY HERO"}, "final_files": {"index.html": "<h1>MY HERO</h1>"}}})
+    r = _one(
+        ManualEditPreservationOracle,
+        {
+            "manual_edit": {
+                "overrides": {"index.html": "MY HERO"},
+                "final_files": {"index.html": "<h1>MY HERO</h1>"},
+            }
+        },
+    )
     assert r.passed
 
 
 def test_manual_override_clobbered_fails() -> None:
-    r = _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"index.html": "MY HERO"}, "final_files": {"index.html": "<h1>generic</h1>"}}})
-    assert r.failed and r.code == fc.MANUAL_EDIT_CLOBBERED and r.facts["clobbered"] == ["index.html"]
+    r = _one(
+        ManualEditPreservationOracle,
+        {
+            "manual_edit": {
+                "overrides": {"index.html": "MY HERO"},
+                "final_files": {"index.html": "<h1>generic</h1>"},
+            }
+        },
+    )
+    assert (
+        r.failed and r.code == fc.MANUAL_EDIT_CLOBBERED and r.facts["clobbered"] == ["index.html"]
+    )
 
 
 def test_manual_absent_skips_and_malformed_fails() -> None:
@@ -91,32 +170,61 @@ def test_manual_absent_skips_and_malformed_fails() -> None:
 
 # --- CommentAnchorOracle ------------------------------------------------------
 def test_anchor_preserved_through_text_edit_passes() -> None:
-    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero", "lead"]}}).passed
+    assert _one(
+        CommentAnchorOracle,
+        {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero", "lead"]}},
+    ).passed
 
 
 def test_anchor_survives_section_reorder_passes() -> None:
     # reorder changes order, not membership → still PASS (set, not position)
-    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["lead", "hero"]}}).passed
+    assert _one(
+        CommentAnchorOracle,
+        {"comment_anchors": {"before": ["hero", "lead"], "after": ["lead", "hero"]}},
+    ).passed
 
 
 def test_anchor_lost_fails() -> None:
-    r = _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero"]}})
+    r = _one(
+        CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero"]}}
+    )
     assert r.failed and r.code == fc.COMMENT_ANCHOR_LOST and r.facts["lost"] == ["lead"]
 
 
 def test_anchor_absent_skips_and_malformed_fails() -> None:
     assert _one(CommentAnchorOracle, None).skipped
-    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": "hero", "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    assert (
+        _one(CommentAnchorOracle, {"comment_anchors": {"before": "hero", "after": []}}).code
+        == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    )
 
 
 # --- ScreenLabelOracle --------------------------------------------------------
 def test_unedited_section_label_stable_passes() -> None:
-    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"hero": "hero", "about": "about"}, "after": {"hero": "hero-new", "about": "about"}}})
+    r = _one(
+        ScreenLabelOracle,
+        {
+            "screen_labels": {
+                "edited_sections": ["hero"],
+                "before": {"hero": "hero", "about": "about"},
+                "after": {"hero": "hero-new", "about": "about"},
+            }
+        },
+    )
     assert r.passed  # 'about' (unedited) stable; 'hero' (edited) may change
 
 
 def test_unedited_section_label_changed_fails() -> None:
-    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"about": "about"}, "after": {"about": "about-2"}}})
+    r = _one(
+        ScreenLabelOracle,
+        {
+            "screen_labels": {
+                "edited_sections": ["hero"],
+                "before": {"about": "about"},
+                "after": {"about": "about-2"},
+            }
+        },
+    )
     assert r.failed and r.code == fc.SCREEN_LABEL_UNSTABLE and r.facts["unstable"] == ["about"]
 
 
@@ -131,7 +239,12 @@ def test_classify_unaffected_without_edit_evidence() -> None:
 
 
 def test_classify_fails_on_unexpected_edit_file() -> None:
-    ev = {"targeted_edit": {"edited_files": ["index.html", "id_rsa"], "expected_files": ["index.html"]}}
+    ev = {
+        "targeted_edit": {
+            "edited_files": ["index.html", "id_rsa"],
+            "expected_files": ["index.html"],
+        }
+    }
     c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
     assert c["status"] == "FAIL" and c["code"] == fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES
 
@@ -165,18 +278,45 @@ def test_present_non_dict_slice_is_malformed_for_every_oracle() -> None:
 
 
 def test_bool_is_not_accepted_as_int_for_churn() -> None:
-    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": True, "total_lines": 100, "max_churn_ratio": 0.2}})
+    r = _one(
+        RewriteAvoidanceOracle,
+        {
+            "rewrite_avoidance": {
+                "edit_scope": "small",
+                "changed_lines": True,
+                "total_lines": 100,
+                "max_churn_ratio": 0.2,
+            }
+        },
+    )
     assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
 
 
 def test_non_string_list_and_dict_payloads_are_malformed() -> None:
-    assert _one(TargetedEditOracle, {"targeted_edit": {"edited_files": [123], "expected_files": ["123"]}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
-    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": [1, 2], "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
-    assert _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"a": 1}, "final_files": {}}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    assert (
+        _one(
+            TargetedEditOracle,
+            {"targeted_edit": {"edited_files": [123], "expected_files": ["123"]}},
+        ).code
+        == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    )
+    assert (
+        _one(CommentAnchorOracle, {"comment_anchors": {"before": [1, 2], "after": []}}).code
+        == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    )
+    assert (
+        _one(
+            ManualEditPreservationOracle,
+            {"manual_edit": {"overrides": {"a": 1}, "final_files": {}}},
+        ).code
+        == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    )
 
 
 def test_screen_label_malformed_fails_closed() -> None:
-    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": "hero", "before": {}, "after": {}}})
+    r = _one(
+        ScreenLabelOracle, {"screen_labels": {"edited_sections": "hero", "before": {}, "after": {}}}
+    )
     assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
 
 

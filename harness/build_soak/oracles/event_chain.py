@@ -254,8 +254,10 @@ class EventChainOracle:
                 continue
             if k == KIND_OBSERVATION and str(e.get("action_id")) == action_id:
                 return True
-            if k == KIND_AGENT_ERROR and e.get("action_id") is not None and (
-                str(e.get("action_id")) == action_id
+            if (
+                k == KIND_AGENT_ERROR
+                and e.get("action_id") is not None
+                and (str(e.get("action_id")) == action_id)
             ):
                 return True
         return False

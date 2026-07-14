@@ -65,7 +65,9 @@ def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
             if typ is int and isinstance(val, bool):
                 problems.append(f"{slice_name}.{field}: bool where int expected")
             elif not isinstance(val, typ):
-                problems.append(f"{slice_name}.{field}: {type(val).__name__} where {typ.__name__} expected")
+                problems.append(
+                    f"{slice_name}.{field}: {type(val).__name__} where {typ.__name__} expected"
+                )
     return problems
 
 

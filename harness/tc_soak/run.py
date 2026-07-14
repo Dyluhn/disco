@@ -99,7 +99,7 @@ class SoakCtx:
 def build_registry(root: Path, rng: random.Random, n_components: int) -> list[str]:
     names = [f"kit-{c}" for c in string.ascii_lowercase[:n_components]]
     for i, name in enumerate(names):
-        for version in (["1.0.0", "1.1.0"] if rng.random() < 0.4 else ["1.0.0"]):
+        for version in ["1.0.0", "1.1.0"] if rng.random() < 0.4 else ["1.0.0"]:
             comp = root / name / version
             (comp / "core").mkdir(parents=True, exist_ok=True)
             (comp / "config").mkdir(exist_ok=True)
@@ -219,9 +219,7 @@ async def cycle(state: SoakState, i: int) -> None:
 
     if op == "install":
         version = rng.choice([None, "1.0.0"])
-        out = await add_tool.run(
-            AddTrustedComponentArgs(name=name, version=version), state.ctx
-        )
+        out = await add_tool.run(AddTrustedComponentArgs(name=name, version=version), state.ctx)
         state.last_tool_refused = not out.success
         if not out.success and out.error not in (
             "missing_dependency",
@@ -301,9 +299,11 @@ async def cycle(state: SoakState, i: int) -> None:
         # I7: mutating tools must have refused + left the corrupt bytes alone
         if not state.last_tool_refused:
             _fail(state, "I7", "tool succeeded on a corrupt lockfile", i, op)
-        if state.sandbox.fs.get(LOCKFILE_RELPATH) != (
-            pre_lock_raw if op != "corrupt_lock" else state.sandbox.fs.get(LOCKFILE_RELPATH)
-        ) and pre_lock_raw is not None:
+        if (
+            state.sandbox.fs.get(LOCKFILE_RELPATH)
+            != (pre_lock_raw if op != "corrupt_lock" else state.sandbox.fs.get(LOCKFILE_RELPATH))
+            and pre_lock_raw is not None
+        ):
             _fail(state, "I7", "corrupt lockfile bytes were rewritten", i, op)
 
     if lock is not None:
@@ -356,9 +356,9 @@ async def cycle(state: SoakState, i: int) -> None:
 
     # I5: idempotence
     result2 = await _verify(state)
-    if result2 != "corrupt" and [
-        (c.name, c.status, c.evidence) for c in result.checks
-    ] != [(c.name, c.status, c.evidence) for c in result2.checks]:
+    if result2 != "corrupt" and [(c.name, c.status, c.evidence) for c in result.checks] != [
+        (c.name, c.status, c.evidence) for c in result2.checks
+    ]:
         # allow the pass where result had newly_ejected (second run sees the
         # persisted eject — statuses legitimately change exactly once)
         if not result.newly_ejected:

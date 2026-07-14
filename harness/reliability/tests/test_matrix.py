@@ -15,8 +15,7 @@ def test_repository_matrix_is_complete_and_selectable() -> None:
     assert matrix.suites
     assert matrix.select_suites(proofs={"live"}, surfaces={"build"})
     assert all(
-        suite.proof == "live"
-        for suite in matrix.select_suites(proofs={"live"}, surfaces={"build"})
+        suite.proof == "live" for suite in matrix.select_suites(proofs={"live"}, surfaces={"build"})
     )
 
 

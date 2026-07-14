@@ -537,9 +537,7 @@ class DockerCLI:
         if not volume_names:
             return None
         if self.cli_path:
-            return await self.run(
-                "volume", "rm", "--force", *volume_names, timeout_s=timeout_s
-            )
+            return await self.run("volume", "rm", "--force", *volume_names, timeout_s=timeout_s)
         return await self._engine_run(
             "rm_volumes", {"volume_names": volume_names}, timeout_s=timeout_s
         )

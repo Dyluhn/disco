@@ -138,9 +138,7 @@ def classify(
     if first_fail is None:
         # 5. model/tool thrash. Cost valves may eventually stop or recover a
         # repeated bad call; the soak still treats that interaction as broken.
-        results += ThrashOracle().check(
-            events, scenario=scenario, inspect_trace=inspect_trace
-        )
+        results += ThrashOracle().check(events, scenario=scenario, inspect_trace=inspect_trace)
         first_fail = _first_fail(results)
     if first_fail is None:
         # 6. revision.

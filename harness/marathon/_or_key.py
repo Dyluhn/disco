@@ -6,6 +6,7 @@ fallback is the live auth path. Source of truth: Pi's auth.json (free-models
 key — dev traffic only). Stdout is consumed by _SERVER_SH's $(...); never log
 or echo the key anywhere else.
 """
+
 import json
 
 
@@ -24,5 +25,6 @@ def _find(o):
             if r:
                 return r
     return None
+
 
 print(_find(json.load(open("/home/dylan/.pi/agent/auth.json"))) or "")

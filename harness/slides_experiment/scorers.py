@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ParseResult:
@@ -55,13 +55,14 @@ class CellScore:
     parse: ParseResult
     overflow: OverflowResult | None = None
     content: ContentResult | None = None
-    llm_judge: float | None = None   # 0.0 to 1.0 from LLM judge
+    llm_judge: float | None = None  # 0.0 to 1.0 from LLM judge
     llm_judge_detail: str = ""
 
 
 # ---------------------------------------------------------------------------
 # 1. Parse scorer
 # ---------------------------------------------------------------------------
+
 
 def _extract_json(text: str) -> str:
     """Extract JSON from a response that might have markdown fences."""
@@ -93,7 +94,7 @@ def _try_parse_free_form(raw: str) -> tuple[bool, Any, str]:
     except json.JSONDecodeError:
         pass
     # Try to find any JSON object in the text
-    matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw, re.DOTALL)
+    matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.DOTALL)
     for m in matches:
         try:
             parsed = json.loads(m)
@@ -111,8 +112,11 @@ def score_parse(strategy_id: str, prompt_id: str, raw: str) -> ParseResult:
     """Attempt to parse the model output; return ParseResult."""
     if not raw or len(raw.strip()) < 20:
         return ParseResult(
-            ok=False, strategy=strategy_id, prompt_id=prompt_id,
-            raw=raw, error="output too short or empty"
+            ok=False,
+            strategy=strategy_id,
+            prompt_id=prompt_id,
+            raw=raw,
+            error="output too short or empty",
         )
 
     if strategy_id == "free_form":
@@ -126,7 +130,7 @@ def score_parse(strategy_id: str, prompt_id: str, raw: str) -> ParseResult:
             err = ""
         except json.JSONDecodeError as e:
             # One more attempt: find the first { ... } span
-            m = re.search(r'\{.*\}', cleaned, re.DOTALL)
+            m = re.search(r"\{.*\}", cleaned, re.DOTALL)
             if m:
                 try:
                     parsed = json.loads(m.group())
@@ -148,8 +152,13 @@ def score_parse(strategy_id: str, prompt_id: str, raw: str) -> ParseResult:
             slide_count = len(slides)
 
     return ParseResult(
-        ok=ok, strategy=strategy_id, prompt_id=prompt_id,
-        raw=raw, parsed=parsed, error=err, slide_count=slide_count
+        ok=ok,
+        strategy=strategy_id,
+        prompt_id=prompt_id,
+        raw=raw,
+        parsed=parsed,
+        error=err,
+        slide_count=slide_count,
     )
 
 
@@ -158,12 +167,13 @@ def score_parse(strategy_id: str, prompt_id: str, raw: str) -> ParseResult:
 # ---------------------------------------------------------------------------
 
 # Approximate limits for a 16:9 slide at ~28pt body font, 5pt line spacing
-_TITLE_CHAR_SOFT = 60     # comfortable title
-_TITLE_CHAR_HARD = 90     # definitely overflows
-_BULLET_CHAR_SOFT = 80    # comfortable bullet
-_BULLET_CHAR_HARD = 120   # definitely overflows
-_MAX_BULLETS_SOFT = 6     # comfortable bullet count
-_MAX_BULLETS_HARD = 10    # definitely overflows
+_TITLE_CHAR_SOFT = 60  # comfortable title
+_TITLE_CHAR_HARD = 90  # definitely overflows
+_BULLET_CHAR_SOFT = 80  # comfortable bullet
+_BULLET_CHAR_HARD = 120  # definitely overflows
+_MAX_BULLETS_SOFT = 6  # comfortable bullet count
+_MAX_BULLETS_HARD = 10  # definitely overflows
+
 
 def _overflow_score_for_slide(slide: dict) -> float:
     """Return overflow risk score for a single slide (0=fine, 1=definitely overflows)."""
@@ -208,28 +218,30 @@ def score_overflow(parse_result: ParseResult) -> OverflowResult:
     """Score overflow risk across all slides."""
     if not parse_result.ok or not isinstance(parse_result.parsed, dict):
         return OverflowResult(
-            overflow_risk="unknown", score=0.5,
-            detail="cannot score: parse failed"
+            overflow_risk="unknown", score=0.5, detail="cannot score: parse failed"
         )
 
     parsed = parse_result.parsed
     if "_raw_text" in parsed:
         # Free-form text — estimate from line lengths
         lines = parsed["_raw_text"].split("\n")
-        long_lines = [l for l in lines if len(l) > 100]
+        long_lines = [line for line in lines if len(line) > 100]
         ratio = len(long_lines) / max(len(lines), 1)
         score = min(ratio * 2, 1.0)
         risk = "high" if score > 0.6 else "medium" if score > 0.3 else "low"
-        return OverflowResult(overflow_risk=risk, score=score,
-                               detail=f"{len(long_lines)}/{len(lines)} lines >100 chars")
+        return OverflowResult(
+            overflow_risk=risk,
+            score=score,
+            detail=f"{len(long_lines)}/{len(lines)} lines >100 chars",
+        )
 
     slides = parsed.get("slides", [])
     if not slides:
-        return OverflowResult(overflow_risk="unknown", score=0.5,
-                               detail="no slides found in parsed output")
+        return OverflowResult(
+            overflow_risk="unknown", score=0.5, detail="no slides found in parsed output"
+        )
 
-    slide_scores = [_overflow_score_for_slide(s) for s in slides
-                    if isinstance(s, dict)]
+    slide_scores = [_overflow_score_for_slide(s) for s in slides if isinstance(s, dict)]
     if not slide_scores:
         return OverflowResult(overflow_risk="unknown", score=0.5, detail="no scorable slides")
 
@@ -254,11 +266,23 @@ def score_overflow(parse_result: ParseResult) -> OverflowResult:
 
 _LAYOUT_TYPES = {
     # rigid_json types
-    "title", "bullets", "two_column", "metrics", "section_header",
-    "image", "table", "closing",
+    "title",
+    "bullets",
+    "two_column",
+    "metrics",
+    "section_header",
+    "image",
+    "table",
+    "closing",
     # loose_hybrid additions
-    "image_right", "image_left", "comparison", "metrics_grid",
-    "announcements", "resources", "checklist", "diagram",
+    "image_right",
+    "image_left",
+    "comparison",
+    "metrics_grid",
+    "announcements",
+    "resources",
+    "checklist",
+    "diagram",
 }
 
 
@@ -306,8 +330,8 @@ def _content_fidelity(goal: str, parsed: dict) -> float:
     # Extract key terms from goal (nouns, numbers, proper nouns)
     # Simple heuristic: words > 4 chars, numbers, capitalized words
     goal_lower = goal.lower()
-    goal_tokens = set(re.findall(r'\b[a-z]{4,}\b', goal_lower))
-    goal_numbers = set(re.findall(r'\$[\d,.]+|\d+[%xM Bm]+|\d{4}', goal))
+    goal_tokens = set(re.findall(r"\b[a-z]{4,}\b", goal_lower))
+    goal_numbers = set(re.findall(r"\$[\d,.]+|\d+[%xM Bm]+|\d{4}", goal))
 
     if not goal_tokens:
         return 0.5
@@ -327,9 +351,12 @@ def score_content(parse_result: ParseResult, goal: str) -> ContentResult:
     """Score content fidelity and structural richness."""
     if not parse_result.ok or not isinstance(parse_result.parsed, dict):
         return ContentResult(
-            fidelity_score=0.0, layout_variety=0,
-            has_image_prompts=False, has_charts_or_tables=False,
-            slide_count=0, detail="parse failed"
+            fidelity_score=0.0,
+            layout_variety=0,
+            has_image_prompts=False,
+            has_charts_or_tables=False,
+            slide_count=0,
+            detail="parse failed",
         )
 
     parsed = parse_result.parsed
@@ -364,6 +391,7 @@ def score_content(parse_result: ParseResult, goal: str) -> ContentResult:
 # Aggregate score
 # ---------------------------------------------------------------------------
 
+
 def aggregate_score(cell: CellScore) -> float:
     """Compute an overall 0-1 score for a cell.
 
@@ -384,16 +412,7 @@ def aggregate_score(cell: CellScore) -> float:
         content_score = cell.content.fidelity_score
 
     if cell.llm_judge is not None:
-        return (
-            0.3 * parse_score +
-            0.2 * overflow_score +
-            0.3 * content_score +
-            0.2 * cell.llm_judge
-        )
+        return 0.3 * parse_score + 0.2 * overflow_score + 0.3 * content_score + 0.2 * cell.llm_judge
     else:
         # Without LLM judge, redistribute weights
-        return (
-            0.35 * parse_score +
-            0.25 * overflow_score +
-            0.40 * content_score
-        )
+        return 0.35 * parse_score + 0.25 * overflow_score + 0.40 * content_score

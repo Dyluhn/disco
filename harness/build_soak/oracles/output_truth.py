@@ -203,24 +203,36 @@ class OutputTruthOracle:
             # the 2026-07-09 overnight soak (ARTIFACT_TRUTH_MISMATCH on 'bakery').
             for needle in spec.get("must_contain") or []:
                 if needle.lower() not in content.lower():
-                    content_mismatches.append({
-                        "path": path, "check": "must_contain",
-                        "missing_substring": needle, "proof": proof,
-                        "content_stable": content_stable,
-                    })
+                    content_mismatches.append(
+                        {
+                            "path": path,
+                            "check": "must_contain",
+                            "missing_substring": needle,
+                            "proof": proof,
+                            "content_stable": content_stable,
+                        }
+                    )
             for needle in spec.get("must_not_contain") or []:
                 if needle.lower() in content.lower():
-                    content_mismatches.append({
-                        "path": path, "check": "must_not_contain",
-                        "forbidden_substring": needle, "proof": proof,
-                        "content_stable": content_stable,
-                    })
+                    content_mismatches.append(
+                        {
+                            "path": path,
+                            "check": "must_not_contain",
+                            "forbidden_substring": needle,
+                            "proof": proof,
+                            "content_stable": content_stable,
+                        }
+                    )
             exact = spec.get("equals")
             if exact is not None and content != str(exact):
-                content_mismatches.append({
-                    "path": path, "check": "equals", "proof": proof,
-                    "content_stable": content_stable,
-                })
+                content_mismatches.append(
+                    {
+                        "path": path,
+                        "check": "equals",
+                        "proof": proof,
+                        "content_stable": content_stable,
+                    }
+                )
         if content_mismatches:
             return [_fold_content_mismatches(content_mismatches)]
 

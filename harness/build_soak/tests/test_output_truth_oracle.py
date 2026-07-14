@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from _eventlog import clean_smoke_log
 
 from harness.build_soak.events import normalize_events
@@ -303,7 +302,9 @@ def test_recoverable_marker_in_deliverable_passes():
     # a destructive phrase paired with a recover cue on the same line is fine
     results = _run(
         scenario=_SCN_ELISION,
-        workspace={"index.html": "<h1>Build Smoke OK</h1>\n<!-- content omitted — file_read app.js -->"},
+        workspace={
+            "index.html": "<h1>Build Smoke OK</h1>\n<!-- content omitted — file_read app.js -->"
+        },
     )
     assert results[0].passed, results[0].to_dict()
 

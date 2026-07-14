@@ -52,12 +52,12 @@ SRC_SYSTEM = "system"
 # STUCK/approve_plan_no_execution after the execution-nudge cap). The loop has
 # EXITED — there is no further work without a fresh user turn — so it is terminal
 # for adjudication. Omitting it let a STUCK approve-no-exec run read as "still
-    # running / incomplete" and slip past the approval chain as a false PASS; recognizing
-    # it as terminal makes the EventChainOracle classify it as the FAIL it is
-    # (APPROVE_PLAN_NO_EXECUTION). VERIFIED is a clean work terminal, same as FINISHED
-    # for adjudication. PAUSED is deliberately NOT terminal: a cooperative
-    # pause is resumable (the user re-kicks), so a paused run is legitimately incomplete,
-    # never a failure.
+# running / incomplete" and slip past the approval chain as a false PASS; recognizing
+# it as terminal makes the EventChainOracle classify it as the FAIL it is
+# (APPROVE_PLAN_NO_EXECUTION). VERIFIED is a clean work terminal, same as FINISHED
+# for adjudication. PAUSED is deliberately NOT terminal: a cooperative
+# pause is resumable (the user re-kicks), so a paused run is legitimately incomplete,
+# never a failure.
 TERMINAL_STATUSES = frozenset({"FINISHED", "VERIFIED", "ERROR", "IDLE", "STUCK"})
 
 # The subset of terminal states in which the post-approval EXECUTION chain is
@@ -212,9 +212,7 @@ def has_user_message(events: list[dict[str, Any]], *, after_seq: int = 0) -> boo
     own role is also "user", but the event source is the durable provenance signal
     the security/UI layers use, so we key on it — §1.6.)"""
     return any(
-        kind_of(e) == KIND_MESSAGE
-        and source_of(e) == SRC_USER
-        and seq_of(e) > after_seq
+        kind_of(e) == KIND_MESSAGE and source_of(e) == SRC_USER and seq_of(e) > after_seq
         for e in events
     )
 
@@ -374,8 +372,10 @@ def has_observation_for_action(events: list[dict[str, Any]], action_id: str) -> 
         k = kind_of(e)
         if k == KIND_OBSERVATION and str(e.get("action_id")) == action_id:
             return True
-        if k == KIND_AGENT_ERROR and e.get("action_id") is not None and (
-            str(e.get("action_id")) == action_id
+        if (
+            k == KIND_AGENT_ERROR
+            and e.get("action_id") is not None
+            and (str(e.get("action_id")) == action_id)
         ):
             return True
     return False
@@ -427,9 +427,7 @@ def latest_plan_revision(events: list[dict[str, Any]], *, after_seq: int = 0) ->
 
 
 def plan_event_count(events: list[dict[str, Any]], *, after_seq: int = 0) -> int:
-    return sum(
-        1 for e in events if kind_of(e) == KIND_PLAN and seq_of(e) > after_seq
-    )
+    return sum(1 for e in events if kind_of(e) == KIND_PLAN and seq_of(e) > after_seq)
 
 
 def first_user_message_seq(events: list[dict[str, Any]]) -> int | None:
@@ -454,8 +452,7 @@ def awaiting_approval_seqs(events: list[dict[str, Any]]) -> list[int]:
     return [
         seq_of(e)
         for e in events
-        if kind_of(e) == KIND_STATUS
-        and str(e.get("status")) == AWAITING_PLAN_APPROVAL_STATUS
+        if kind_of(e) == KIND_STATUS and str(e.get("status")) == AWAITING_PLAN_APPROVAL_STATUS
     ]
 
 
