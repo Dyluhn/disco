@@ -9,6 +9,7 @@ Anti-gaming bar (from master brief):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,7 @@ from disco.tools.mcp.http import McpHttpClient
 # Fake HTTP MCP server (speaks the streamable-HTTP JSON-RPC protocol)
 # ---------------------------------------------------------------------------
 
+
 class _FakeHttpMCPHandler:
     """A simple HTTP handler that responds to MCP JSON-RPC requests.
 
@@ -38,9 +40,7 @@ class _FakeHttpMCPHandler:
         self.requests.append(request)
 
         # Check for proxy headers
-        proxy_seen = any(
-            h in request.headers for h in ("Via", "X-Forwarded-For")
-        )
+        proxy_seen = any(h in request.headers for h in ("Via", "X-Forwarded-For"))
 
         try:
             body = json.loads(request.content) if request.content else {}
@@ -100,11 +100,17 @@ class _FakeHttpMCPHandler:
                 content = [
                     {
                         "type": "text",
-                        "text": json.dumps({
-                            "results": [
-                                {"id": "1", "title": "Result 1", "url": "https://example.com/1"},
-                            ]
-                        }),
+                        "text": json.dumps(
+                            {
+                                "results": [
+                                    {
+                                        "id": "1",
+                                        "title": "Result 1",
+                                        "url": "https://example.com/1",
+                                    },
+                                ]
+                            }
+                        ),
                     }
                 ]
             else:
@@ -147,6 +153,7 @@ def _fake_http_server_config(
 # Fake secrets store (closure-only resolution test)
 # ---------------------------------------------------------------------------
 
+
 class _FakeSecretsStore:
     """Minimal secrets store for closure-only resolution tests."""
 
@@ -163,6 +170,7 @@ class _FakeSecretsStore:
 # ---------------------------------------------------------------------------
 # Real forward HTTP proxy (egress-routing proof — NOT a config-shape stub)
 # ---------------------------------------------------------------------------
+
 
 class _StubAllowlistingProxy:
     """A REAL forward HTTP proxy, run on a background thread, used to prove the
@@ -212,9 +220,7 @@ class _StubAllowlistingProxy:
             do_POST = _handle
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-        self._thread = threading.Thread(
-            target=self._server.serve_forever, daemon=True
-        )
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -230,6 +236,7 @@ class _StubAllowlistingProxy:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_http_client_connect_and_list_tools():
@@ -260,6 +267,37 @@ async def test_http_client_connect_and_list_tools():
         assert "search" in tool_names
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_http_client_lifecycle_is_owned_across_start_and_reload_tasks():
+    """Startup may connect in one task while Settings reload closes in another.
+
+    The SDK transport owns an AnyIO cancel scope, so its context must be entered
+    and exited by one durable owner task even though the public calls originate
+    from different tasks.
+    """
+    import httpx
+
+    handler = _FakeHttpMCPHandler()
+    transport = httpx.MockTransport(handler)
+    client = McpHttpClient(
+        server=_fake_http_server_config(url="http://fake/mcp"),
+        call_timeout_s=5.0,
+    )
+    client._build_http_client = lambda proxy_env=None: httpx.AsyncClient(
+        transport=transport, timeout=httpx.Timeout(5.0)
+    )
+
+    async def startup_task() -> None:
+        await client.connect()
+
+    await asyncio.create_task(startup_task())
+    assert {tool.name for tool in await client.list_tools()} >= {"echo", "search"}
+    await client.close()
+
+    assert client._owner_task is None
+    assert client._session is None
 
 
 @pytest.mark.asyncio
@@ -375,9 +413,7 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     runtime._mcp_http_clients["sec_srv"] = client
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._build_sandbox_spec(
-        mcp_egress_hosts=runtime._mcp_egress_hosts()
-    )
+    spec = runtime._build_sandbox_spec(mcp_egress_hosts=runtime._mcp_egress_hosts())
 
     blob = spec.model_dump_json()
     assert SECRET not in blob  # the secret never crosses into the sandbox spec
@@ -426,7 +462,6 @@ async def test_http_client_init_failure_surfaces_error():
     connection, avoiding anyio-internal race conditions with MockTransport.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
-
 
     config = _fake_http_server_config(url="http://fail/mcp")
 

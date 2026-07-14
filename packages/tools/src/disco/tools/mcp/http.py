@@ -44,9 +44,7 @@ class McpHttpClient:
         call_timeout_s: float = 10.0,
     ) -> None:
         if not server.url:
-            raise ValueError(
-                f"MCP server {server.name!r}: streamable_http requires a url"
-            )
+            raise ValueError(f"MCP server {server.name!r}: streamable_http requires a url")
 
         self._name = server.name
         self._url = server.url
@@ -57,8 +55,14 @@ class McpHttpClient:
         self._call_timeout_s = call_timeout_s
 
         self._session: ClientSession | None = None
-        self._http_client: httpx.AsyncClient | None = None
-        self._transport_ctx = None
+        # The MCP SDK's streamable-HTTP context owns an AnyIO cancel scope.
+        # Entering it in an app-startup/request task and exiting it later from a
+        # reload/shutdown task raises "Attempted to exit cancel scope in a
+        # different task". A single owner task therefore enters *and* exits the
+        # HTTP client, transport, and ClientSession contexts. Public callers only
+        # signal that owner and may safely connect/close from different tasks.
+        self._owner_task: asyncio.Task[None] | None = None
+        self._stop_event: asyncio.Event | None = None
 
     # --- helpers ------------------------------------------------------------
 
@@ -80,13 +84,9 @@ class McpHttpClient:
                 if val is not None:
                     resolved[key] = val
                 else:
-                    _LOG.debug(
-                        "McpHttpClient: secret %r for header %r not found", ref, key
-                    )
+                    _LOG.debug("McpHttpClient: secret %r for header %r not found", ref, key)
             else:
-                _LOG.debug(
-                    "McpHttpClient: no secrets store; skipping header %r", key
-                )
+                _LOG.debug("McpHttpClient: no secrets store; skipping header %r", key)
         return resolved
 
     def _build_http_client(
@@ -130,54 +130,69 @@ class McpHttpClient:
         Args:
             proxy_env: Optional proxy env dict from sandbox._container.proxy_env()
         """
-        self._http_client = self._build_http_client(proxy_env)
+        if self._session is not None:
+            return self._session
+        if self._owner_task is not None and not self._owner_task.done():
+            raise RuntimeError(f"MCP server {self._name!r} connection is already starting")
 
-        # The modern streamable_http_client API takes an http_client parameter.
-        # We pass our pre-configured client so proxy + headers are honored.
-        self._transport_ctx = streamable_http_client(
-            self._url,
-            http_client=self._http_client,
-            terminate_on_close=True,
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[ClientSession] = loop.create_future()
+        self._stop_event = asyncio.Event()
+        self._owner_task = asyncio.create_task(
+            self._run_connection(proxy_env, ready, self._stop_event),
+            name=f"mcp-http:{self._name}",
         )
-
         try:
-            read, write, _get_session_id = await self._transport_ctx.__aenter__()
-
-            session = ClientSession(read, write)
-            self._session = session
-            await session.__aenter__()
-
-            try:
-                await asyncio.wait_for(
-                    session.initialize(), timeout=self._init_timeout_s
-                )
-            except TimeoutError as err:
-                raise TimeoutError(
-                    f"MCP server {self._name!r} at {self._url} did not respond "
-                    f"to initialize() within {self._init_timeout_s}s"
-                ) from err
-
-            return session
-        except Exception:
-            # Any failure during connect (HTTP error, anyio task group error,
-            # transport error, JSON parse error) — clean up and re-raise.
-            # The caller (runtime) catches this and surfaces status="error".
-            await self._cleanup_after_failure()
+            return await ready
+        except BaseException:
+            # _run_connection owns every context and performs the teardown.
+            # Await it so a failed initialize cannot leave a dangling task.
+            owner = self._owner_task
+            if owner is not None:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await owner
             raise
 
-    async def _cleanup_after_failure(self) -> None:
-        """Clean up partial state after a connect failure.
+    async def _run_connection(
+        self,
+        proxy_env: dict[str, str] | None,
+        ready: asyncio.Future[ClientSession],
+        stop: asyncio.Event,
+    ) -> None:
+        """Own the complete SDK lifecycle in one asyncio task."""
 
-        The streaming client may leave dangling anyio task groups; we
-        close what we can and suppress secondary errors."""
-        if self._session is not None:
-            with contextlib.suppress(Exception):
-                await self._session.__aexit__(None, None, None)
+        try:
+            async with self._build_http_client(proxy_env) as http_client:
+                async with streamable_http_client(
+                    self._url,
+                    http_client=http_client,
+                    terminate_on_close=True,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        try:
+                            await asyncio.wait_for(
+                                session.initialize(), timeout=self._init_timeout_s
+                            )
+                        except TimeoutError as err:
+                            raise TimeoutError(
+                                f"MCP server {self._name!r} did not respond to "
+                                f"initialize() within {self._init_timeout_s}s"
+                            ) from err
+                        self._session = session
+                        if not ready.done():
+                            ready.set_result(session)
+                        await stop.wait()
+        except BaseException as exc:
+            if not ready.done():
+                ready.set_exception(exc)
+            elif not isinstance(exc, asyncio.CancelledError):
+                _LOG.warning(
+                    "McpHttpClient: connection owner for %r stopped: %s",
+                    self._name,
+                    type(exc).__name__,
+                )
+        finally:
             self._session = None
-        if self._transport_ctx is not None:
-            with contextlib.suppress(Exception):
-                await self._transport_ctx.__aexit__(None, None, None)
-            self._transport_ctx = None
 
     @property
     def session(self) -> ClientSession:
@@ -192,40 +207,31 @@ class McpHttpClient:
         return list(self._allowed_hosts)
 
     async def close(self) -> None:
-        """Drain the session + transport, close the HTTP client."""
-        if self._session is not None:
-            try:
-                await asyncio.wait_for(
-                    self._session.__aexit__(None, None, None), timeout=2.0
-                )
-            except Exception:
-                pass
+        """Ask the lifecycle owner to drain all contexts, from any caller task."""
+        owner = self._owner_task
+        stop = self._stop_event
+        if owner is None:
             self._session = None
-
-        if self._transport_ctx is not None:
-            try:
-                await asyncio.wait_for(
-                    self._transport_ctx.__aexit__(None, None, None), timeout=2.0
-                )
-            except Exception:
-                pass
-            self._transport_ctx = None
-
-        if self._http_client is not None:
-            try:
-                await self._http_client.aclose()
-            except Exception:
-                pass
-            self._http_client = None
+            return
+        if stop is not None:
+            stop.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(owner), timeout=3.0)
+        except TimeoutError:
+            owner.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await owner
+        finally:
+            self._session = None
+            self._owner_task = None
+            self._stop_event = None
 
     async def list_tools(self) -> list:
         """Fetch the server's tool list via the MCP session."""
         result = await self.session.list_tools()
         return list(result.tools)
 
-    async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Call a tool on the MCP server and return the raw result dict."""
         result = await self.session.call_tool(tool_name, arguments)
         return {
