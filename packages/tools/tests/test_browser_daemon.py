@@ -9,6 +9,7 @@ from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.browser import BrowserArgs, BrowserTool
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import ProcessSandboxService
+from disco.tools.sandbox.session import SandboxSession
 from disco.tools.sandbox.shell_sessions import ExecOutcome, SessionView, ShellSessionManager
 
 
@@ -524,8 +525,8 @@ async def test_browser_ensure_daemon_restart_on_failure():
 @pytest.mark.asyncio
 async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     """ROOT-3 (slides spiral): when the daemon never comes up, run() must return a
-    clear, terminal 'skip browser verification' ToolOutcome (success=False +
-    structured browser_unavailable flag) — NOT a raw exception or a generic error
+    clear, terminal unverified-browser ToolOutcome (success=False + structured
+    browser_unavailable flag) — NOT a raw exception, false waiver, or generic error
     the agent retries in a loop."""
     from disco.tools.builtin.browser import (
         BROWSER_UNAVAILABLE_MSG,
@@ -563,6 +564,9 @@ async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     )
     assert out.error == BROWSER_UNAVAILABLE_MSG
     assert "do not retry" in out.error
+    assert "Browser rendering remains unverified" in out.error
+    assert "report the missing browser proof explicitly" in out.error
+    assert "does not require a browser" not in out.error
 
 
 @pytest.mark.asyncio
@@ -889,3 +893,73 @@ async def test_process_browser_uses_workspace_owned_ephemeral_port():
         assert (pathlib.Path(inst.workspace_path) / screenshot).is_file()
     finally:
         await inst.destroy()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_process_browser_uses_runtime_through_production_session_wrapper():
+    """The production wrapper must preserve process-backend runtime selection."""
+    import socket
+    import uuid
+
+    conversation_id = "brws" + uuid.uuid4().hex
+    session = SandboxSession(
+        ProcessSandboxService(),
+        owner_id="browser-integration",
+        conversation_id=conversation_id,
+    )
+    try:
+        await session.write_file(
+            "/workspace/index.html",
+            b"<html><body><h1>wrapped browser runtime</h1></body></html>",
+        )
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            fixture_port = int(probe.getsockname()[1])
+        started = await session.sessions.exec(
+            "fixture",
+            f"python3 -m http.server {fixture_port}",
+            None,
+        )
+        assert started.running
+        for _ in range(20):
+            health = await session.exec_shell(
+                f"curl -sf http://127.0.0.1:{fixture_port}/", timeout_s=2
+            )
+            if health.exit_code == 0:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("fixture server did not become healthy")
+
+        ctx = ToolContext(
+            sandbox=session,
+            sessions=session.sessions,
+            workspace_path=session.workspace_path or "",
+            timeout_s=30,
+            capabilities={
+                Capability.NETWORK,
+                Capability.DISPLAY,
+                Capability.FILESYSTEM,
+                Capability.SHELL,
+            },
+            owner_id="browser-integration",
+            conversation_id=conversation_id,
+        )
+        outcome = await BrowserTool().run(
+            BrowserArgs(
+                action="navigate",
+                url=f"http://127.0.0.1:{fixture_port}/",
+            ),
+            ctx,
+        )
+        if not outcome.success:
+            daemon_view = await session.sessions.view("__browser")
+            pytest.fail(
+                f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}"
+            )
+        assert outcome.structured is not None
+        assert "wrapped browser runtime" in str(outcome.structured.get("text"))
+        assert session.shares_host_network is True
+    finally:
+        await session.destroy()

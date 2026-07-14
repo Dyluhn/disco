@@ -430,7 +430,9 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
         "exit=1; chromium launch failed"
     )
     assert out.content.startswith("VERIFY_WEB_APP: UNVERIFIABLE")
-    assert "skip browser-based verification" in out.content
+    assert "Browser rendering remains unverified" in out.content
+    assert "report the missing browser proof explicitly" in out.content
+    assert "does not require a browser" not in out.content
 
 
 @pytest.mark.asyncio

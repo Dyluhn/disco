@@ -494,6 +494,21 @@ class SandboxSession:
             return getattr(self._instance, "workspace_path", None)
         return None
 
+    @property
+    def shares_host_network(self) -> bool:
+        """Preserve the backend's explicit network-namespace capability.
+
+        Tools receive this resilient wrapper in production, not the raw instance.
+        Capability consumers must therefore see the same answer before and after
+        lazy creation. Delegate an explicit live-instance flag when present; the
+        process service is the sole host-shared built-in backend.
+        """
+        if self._instance is not None:
+            flag = getattr(self._instance, "shares_host_network", None)
+            if isinstance(flag, bool):
+                return flag
+        return self._service.name == "process"
+
     def display_url(self) -> str | None:
         return self._instance.display_url() if self._instance is not None else None
 

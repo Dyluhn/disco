@@ -55,22 +55,23 @@ _STARTUP_SECRET_RE = re.compile(
 )
 
 # ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
-# backend has no usable browser" (e.g. the process/dev backend ships no Playwright/
-# Chromium daemon). Worded so the agent treats it as done-with-that-step instead of
-# retrying the browser/verify in a loop. Exported so verify_web_app reuses the exact
-# phrasing and a test can assert on it.
+# backend has no usable browser" (for example, a missing Playwright/Chromium
+# runtime). Worded to stop retries of the same unavailable path without falsely
+# waiving browser proof for a web deliverable. Exported so verify_web_app reuses
+# the exact phrasing and a test can assert on it.
 BROWSER_UNAVAILABLE_MSG = (
     "browser verification is unavailable on this sandbox backend "
-    "(no browser daemon could be started); skip browser-based verification — do not "
-    "retry. This deliverable does not require a browser on this backend."
+    "(no browser daemon could be started); do not retry this browser call. "
+    "Browser rendering remains unverified; continue only with independent "
+    "non-browser checks and report the missing browser proof explicitly."
 )
 
 
 class BrowserUnavailableError(RuntimeError):
     """ROOT-3 (slides spiral): the headless browser daemon could not be started on
     this sandbox backend. Typed + terminal so the browser and verify tools surface a
-    clear 'skip browser verification' outcome rather than a generic error the agent
-    retries forever."""
+    clear unverified-browser outcome rather than a generic error the agent retries
+    forever."""
 
     def __init__(self, message: str, *, startup_diagnostic: str = "") -> None:
         super().__init__(message)
