@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentLive } from "@/api/client";
+import { agentLive, ApiError } from "@/api/client";
 import { testMcpConnection } from "@/api/config";
 import {
   useApproveMcpServer,
@@ -78,6 +78,16 @@ const EMPTY_DRAFT: DraftState = {
   transport: "streamable_http",
   risk_tier: "medium",
 };
+
+function mcpErrorText(error: unknown): string {
+  if (!(error instanceof ApiError)) return "Request failed.";
+  try {
+    const parsed = JSON.parse(error.message) as { detail?: unknown };
+    return typeof parsed.detail === "string" ? parsed.detail : error.message;
+  } catch {
+    return error.message;
+  }
+}
 
 function ConnectionForm({
   initial,
@@ -230,6 +240,8 @@ export function McpSection() {
 
   const [creating, setCreating] = useState(false);
   const [approvingServer, setApprovingServer] = useState<string | null>(null);
+  const mutationError =
+    create.error ?? update.error ?? remove.error ?? approve.error ?? revoke.error;
 
   const closeForm = () => setCreating(false);
   const closeApproval = () => setApprovingServer(null);
@@ -292,10 +304,9 @@ export function McpSection() {
         tool descriptions change.
       </p>
 
-      {(create.error || update.error || remove.error || approve.error || revoke.error) && (
+      {mutationError && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          Couldn't apply this change to every service. Check the App and Agent
-          servers, then retry; the saved configuration may already have changed.
+          Couldn't apply this change: {mcpErrorText(mutationError)}
         </p>
       )}
 

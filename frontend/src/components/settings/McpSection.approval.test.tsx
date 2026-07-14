@@ -64,6 +64,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 let serverState: McpConnection[];
+let rejectApproval: boolean;
 
 function installFetch() {
   const stub = vi.fn(async (url: string, init?: RequestInit) => {
@@ -75,6 +76,12 @@ function installFetch() {
     }
     const approveMatch = url.match(/^\/api\/mcp\/servers\/([^/]+)\/approve$/);
     if (method === "POST" && approveMatch) {
+      if (rejectApproval) {
+        return jsonResponse(
+          { detail: "server is disabled; enable it before approving" },
+          409,
+        );
+      }
       const name = decodeURIComponent(approveMatch[1]);
       const idx = serverState.findIndex((c) => c.id === name);
       if (idx === -1) return jsonResponse({ detail: "not found" }, 404);
@@ -130,6 +137,7 @@ let fetchStub: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   serverState = seedConnections();
+  rejectApproval = false;
   vi.spyOn(clientModule, "isLive").mockReturnValue(true);
   fetchStub = installFetch();
 });
@@ -264,5 +272,32 @@ describe("McpSection — approval diff over the real fetch path", () => {
         config_hash: NEW_HASH,
       });
     });
+  });
+
+  it("surfaces the actionable backend reason when disabled approval is blocked", async () => {
+    serverState = [
+      {
+        id: "disabled-config",
+        name: "DisabledConfig",
+        url: "https://mcp.example/tools",
+        status: "disabled",
+        transport: "streamable_http",
+        risk_tier: "medium",
+        new_config_hash: NEW_HASH,
+        enabled: false,
+      },
+    ];
+    rejectApproval = true;
+    const user = userEvent.setup();
+    renderMcp();
+
+    await waitFor(() => expect(screen.getByText("DisabledConfig")).toBeInTheDocument());
+    await user.click(screen.getByText("Review"));
+    await user.click(screen.getByRole("button", { name: /^Approve$/ }));
+
+    expect(
+      await screen.findByText(/enable it before approving/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Check the App and Agent servers/)).not.toBeInTheDocument();
   });
 });
