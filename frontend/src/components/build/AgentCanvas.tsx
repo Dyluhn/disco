@@ -26,7 +26,7 @@ import {
   agentSend,
   agentHttpBase,
   previewBootstrapUrl,
-  staticPreviewBootstrapUrl,
+  pathPreviewBootstrapUrl,
 } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
@@ -546,7 +546,7 @@ function ArtifactsPane({
       setStaticPreviewSrc(null);
       return;
     }
-    void staticPreviewBootstrapUrl(cid, "/")
+    void pathPreviewBootstrapUrl(cid, "/")
       .then((url) => {
         if (!cancelled) setStaticPreviewSrc(url);
       })

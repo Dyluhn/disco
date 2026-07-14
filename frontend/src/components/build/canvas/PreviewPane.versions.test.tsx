@@ -12,12 +12,18 @@ const {
   refetchVersionsMock,
   restoreWorkspaceVersionMock,
   showToastMock,
+  pathPreviewBootstrapUrlMock,
   useBuildPreviewMock,
   useWorkspaceVersionsMock,
 } = vi.hoisted(() => ({
   refetchVersionsMock: vi.fn(),
   restoreWorkspaceVersionMock: vi.fn(),
   showToastMock: vi.fn(),
+  pathPreviewBootstrapUrlMock: vi.fn((cid: string, targetPath: string) =>
+    Promise.resolve(
+      `http://localhost:8000/__disco/path-preview-auth/${cid}?target=${encodeURIComponent(targetPath)}`,
+    ),
+  ),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   useWorkspaceVersionsMock: vi.fn(),
 }));
@@ -40,6 +46,7 @@ vi.mock("@/api/client", async () => {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
     previewHostUrl: () => "http://preview.test",
+    pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
   };
 });
 
@@ -128,6 +135,11 @@ beforeEach(() => {
     loading: false,
     refetch: refetchVersionsMock,
   });
+  pathPreviewBootstrapUrlMock.mockImplementation((cid: string, targetPath: string) =>
+    Promise.resolve(
+      `http://localhost:8000/__disco/path-preview-auth/${cid}?target=${encodeURIComponent(targetPath)}`,
+    ),
+  );
 });
 
 afterEach(() => {
@@ -170,9 +182,32 @@ describe("PreviewPane version history picker", () => {
     expect(screen.getByText("viewing v2 (read-only)")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /back to live/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /roll back to this version/i })).toBeInTheDocument();
-    expect(screen.getByTitle("Historical preview")).toHaveAttribute(
+    const frame = await screen.findByTitle("Historical preview");
+    expect(frame).toHaveAttribute(
       "src",
-      expect.stringContaining("/conversations/conv_versions/preview-app/?version=2"),
+      "http://localhost:8000/__disco/path-preview-auth/conv_versions?target=%2F%3Fversion%3D2%26r%3D0",
+    );
+    expect(frame.getAttribute("src")).not.toContain("agent.test");
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+      "conv_versions",
+      "/?version=2&r=0",
+    );
+  });
+
+  it("fails closed instead of loading a historical version on the authenticated origin", async () => {
+    const user = userEvent.setup();
+    pathPreviewBootstrapUrlMock.mockRejectedValue(new Error("capability unavailable"));
+    renderPane();
+
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(getVersionLabel(2, "finished app"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Historical preview unavailable: isolated preview access could not be established.",
+    );
+    expect(screen.queryByTitle("Historical preview")).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(
+      "/conversations/conv_versions/preview-app/?version=2",
     );
   });
 

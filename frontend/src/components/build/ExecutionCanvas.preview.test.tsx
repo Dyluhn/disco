@@ -10,7 +10,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
@@ -25,9 +25,9 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 // never produces in fixture mode (no AGENT_BASE → getPreview returns
 // available:false). vi.hoisted runs before any imports, so the mock reference
 // is safe inside the vi.mock factory below.
-const { useBuildPreviewMock, staticPreviewBootstrapUrlMock } = vi.hoisted(() => ({
+const { useBuildPreviewMock, pathPreviewBootstrapUrlMock } = vi.hoisted(() => ({
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
-  staticPreviewBootstrapUrlMock: vi.fn((cid: string) =>
+  pathPreviewBootstrapUrlMock: vi.fn((cid: string) =>
     Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
   ),
 }));
@@ -45,7 +45,7 @@ vi.mock("@/api/client", async () => {
   return {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
-    staticPreviewBootstrapUrl: staticPreviewBootstrapUrlMock,
+    pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
   };
 });
 
@@ -223,14 +223,14 @@ describe("PreviewPane — selected handoff entry", () => {
       expect(frame).not.toHaveAttribute("srcdoc");
       expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
     });
-    expect(staticPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
       "conv_a1b2c3d4selected",
       "/",
     );
   });
 
   it("never gives an untrusted imported site the isolated executable origin", () => {
-    staticPreviewBootstrapUrlMock.mockClear();
+    pathPreviewBootstrapUrlMock.mockClear();
     render(
       withClient(
         <PreviewPane
@@ -248,7 +248,7 @@ describe("PreviewPane — selected handoff entry", () => {
     const frame = screen.getByTitle("Static preview");
     expect(frame).toHaveAttribute("srcdoc");
     expect(frame).toHaveAttribute("sandbox", "");
-    expect(staticPreviewBootstrapUrlMock).not.toHaveBeenCalled();
+    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
   });
 });
 
@@ -260,7 +260,7 @@ describe("PreviewPane — selected handoff entry", () => {
 // it's actually fine. Default to the live server for bundler entries.
 
 describe("PreviewPane — E2: bundler entry defaults to live server when proxy is available", () => {
-  it("shows the live iframe (not the broken srcdoc) by default for a Vite entry", () => {
+  it("shows the live iframe (not the broken srcdoc) by default for a Vite entry", async () => {
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -280,9 +280,10 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     expect(screen.queryByTitle("Static preview")).not.toBeInTheDocument();
     // The header is the live-server header, not the preview header.
     expect(screen.getByText("live server")).toBeInTheDocument();
+    await screen.findByRole("link", { name: /open in new tab/i });
   });
 
-  it("defaults to RENDERED for plain static HTML even when a proxy is available (2026-07-07 walkthrough)", () => {
+  it("defaults to RENDERED for plain static HTML even when a proxy is available (2026-07-07 walkthrough)", async () => {
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -302,21 +303,24 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     expect(screen.getByTitle("Static preview")).toBeInTheDocument();
     expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
     // The live proxy is available, so the "Live" toggle is offered.
-    expect(screen.getByRole("button", { name: /live/i })).toBeInTheDocument();
+    const liveButton = screen.getByRole("button", { name: /live/i });
+    expect(liveButton).toBeInTheDocument();
+    fireEvent.click(liveButton);
+    await screen.findByRole("link", { name: /open in new tab/i });
   });
 });
 
-// ---- E3 — Firefox-safe Open-in-new-tab link to the agent-server path route -
+// ---- E3 — Firefox-safe Open-in-new-tab link via isolated path capability ----
 //
 // The origin-true `{cid8}-{port}.localhost` URL is the most correct, but
 // Firefox won't resolve `.localhost` subdomains out of the box. The
-// agent-server also exposes a same-origin `/conversations/{cid}/preview-app/`
-// path route that proxies the same content. Surface it as a link so Firefox
-// / Safari / non-magic-DNS users have an escape hatch (do not remove the
-// iframe — Chrome users get the correct asset origins there).
+// agent-server can bootstrap its path route on an alternate isolated origin.
+// Surface that capability URL so Firefox / Safari / non-magic-DNS users have
+// an escape hatch without executing generated code on the authenticated app
+// origin (do not remove the iframe — Chrome users get the correct asset origin).
 
-describe("PreviewPane — E3: Open-in-new-tab link to the /preview-app/ path route", () => {
-  it("renders a link pointing at the /preview-app/ path route when the proxy is up", () => {
+describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
+  it("mints a path capability instead of opening generated code on the authenticated agent origin", async () => {
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -331,15 +335,43 @@ describe("PreviewPane — E3: Open-in-new-tab link to the /preview-app/ path rou
         <ExecutionCanvas events={[BUNDLER_HTML]} status="RUNNING" cid="conv_e2e3firefox" />,
       ),
     );
-    // Find the link by its visible text. The exact URL is built from
-    // `${agentHttpBase()}/conversations/${cid}/preview-app/` (cid URL-encoded).
-    // We assert on the path route (not the base) so the test is robust to the
-    // agent_http_base() pin above.
-    const link = screen.getByRole("link", { name: /open in new tab/i });
+    // The visible escape hatch is the isolated bootstrap URL, never the
+    // authenticated agent-server path that ultimately serves the content.
+    const link = await screen.findByRole("link", { name: /open in new tab/i });
     expect(link).toBeInTheDocument();
     expect(link).toHaveAttribute("target", "_blank");
-    expect(link.getAttribute("href")).toMatch(
-      /\/conversations\/conv_e2e3firefox\/preview-app\/$/,
+    expect(link).toHaveAttribute(
+      "href",
+      "http://localhost:8000/__disco/path-preview-auth/conv_e2e3firefox",
+    );
+    expect(link.getAttribute("href")).not.toContain("agent.test");
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+      "conv_e2e3firefox",
+      expect.stringMatching(/^\/\?r=\d+$/),
+    );
+  });
+
+  it("fails closed when the isolated path capability cannot be created", async () => {
+    pathPreviewBootstrapUrlMock.mockRejectedValueOnce(new Error("capability unavailable"));
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 4242, cmdline: "vite --port 8000", session: "dev" },
+        ports: [
+          { port: 8000, owner: { pid: 4242, cmdline: "vite --port 8000", session: "dev" } },
+        ],
+      } as PreviewInfo,
+    });
+    render(
+      withClient(
+        <ExecutionCanvas events={[BUNDLER_HTML]} status="RUNNING" cid="conv_e2e3failclosed" />,
+      ),
+    );
+
+    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalled());
+    expect(screen.queryByRole("link", { name: /open in new tab/i })).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain(
+      "/conversations/conv_e2e3failclosed/preview-app/",
     );
   });
 });

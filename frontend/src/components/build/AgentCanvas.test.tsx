@@ -18,7 +18,7 @@ vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
   return {
     ...actual,
-    staticPreviewBootstrapUrl: vi.fn((cid: string) =>
+    pathPreviewBootstrapUrl: vi.fn((cid: string) =>
       Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
     ),
   };

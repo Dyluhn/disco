@@ -7,9 +7,9 @@ import { deriveDeliverable, deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import {
   agentHttpBase,
   ApiError,
+  pathPreviewBootstrapUrl,
   previewBootstrapUrl,
   previewHostUrl,
-  staticPreviewBootstrapUrl,
 } from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
@@ -401,7 +401,7 @@ export function PreviewPane({
       setStaticPreviewSrc(null);
       return;
     }
-    void staticPreviewBootstrapUrl(cid, "/")
+    void pathPreviewBootstrapUrl(cid, "/")
       .then((url) => {
         if (!cancelled) setStaticPreviewSrc(url);
       })
@@ -512,20 +512,73 @@ export function PreviewPane({
     };
   }, [cid, previewPort, rawProxySrc, reloadKey]);
   const liveIframeRef = useRef<HTMLIFrameElement | null>(null);
-  // E3 — Firefox-safe path-based route. The origin-true `{cid8}-{port}.localhost`
-  // URL above is the most correct (separate origin, dev-server assets resolve
-  // relative to the same host) but Firefox won't resolve `.localhost` subdomains
-  // out of the box. The agent-server ALSO serves a same-origin
-  // `/conversations/{cid}/preview-app/{path}` route that proxies the same content
-  // — works in every browser, no DNS setup. Expose it as an "Open in new tab"
-  // link so Firefox / Safari / non-magic-DNS users have an escape hatch. The
-  // subdomain iframe stays — Chrome users get the correct asset origins.
-  const openInNewTabUrl = cid
-    ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
-    : null;
+  // H082 — Firefox-safe path previews must be capability bootstraps, never the
+  // authenticated agent-server URL itself. Generated JavaScript opened on that
+  // origin would inherit the application session. The bootstrap moves the tab
+  // to an alternate isolated origin and installs only a cid/path-scoped cookie.
+  type IsolatedPathPreview = { cid: string; targetPath: string; url: string };
+  const livePathTarget = `/?r=${reloadKey}`;
+  const [livePathPreview, setLivePathPreview] = useState<IsolatedPathPreview | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!cid || !proxyAvailable) {
+      setLivePathPreview(null);
+      return;
+    }
+    void pathPreviewBootstrapUrl(cid, livePathTarget)
+      .then((url) => {
+        if (!cancelled) {
+          setLivePathPreview(url ? { cid, targetPath: livePathTarget, url } : null);
+        }
+      })
+      .catch(() => {
+        // Fail closed: the already-isolated proxy link remains available, but
+        // never replace this with the authenticated /preview-app/ route.
+        if (!cancelled) setLivePathPreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, livePathTarget, proxyAvailable]);
+  const openInNewTabUrl =
+    cid && livePathPreview?.cid === cid && livePathPreview.targetPath === livePathTarget
+      ? livePathPreview.url
+      : null;
+
+  const historicalTarget =
+    selectedVersionSeq === null ? null : `/?version=${selectedVersionSeq}&r=${reloadKey}`;
+  const [historicalPathPreview, setHistoricalPathPreview] =
+    useState<IsolatedPathPreview | null>(null);
+  const [historicalPreviewFailure, setHistoricalPreviewFailure] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHistoricalPathPreview(null);
+    setHistoricalPreviewFailure(null);
+    if (!cid || historicalTarget === null) return;
+    void pathPreviewBootstrapUrl(cid, historicalTarget)
+      .then((url) => {
+        if (cancelled) return;
+        if (url) {
+          setHistoricalPathPreview({ cid, targetPath: historicalTarget, url });
+        } else {
+          setHistoricalPreviewFailure(historicalTarget);
+        }
+      })
+      .catch(() => {
+        // Historical generated code is executable. If isolation cannot be
+        // established, show an honest error instead of a same-origin fallback.
+        if (!cancelled) setHistoricalPreviewFailure(historicalTarget);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, historicalTarget]);
   const historicalPreviewSrc =
-    cid && selectedVersionSeq !== null
-      ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/?version=${selectedVersionSeq}&r=${reloadKey}`
+    cid &&
+    historicalTarget !== null &&
+    historicalPathPreview?.cid === cid &&
+    historicalPathPreview.targetPath === historicalTarget
+      ? historicalPathPreview.url
       : null;
   const mentionable = Boolean(onElementMention && !untrusted);
   const handleElementMention = useCallback(
@@ -569,7 +622,7 @@ export function PreviewPane({
       ? data?.owner
       : (data?.ports ?? []).find((p) => p.port === previewPort)?.owner;
 
-  if (selectedVersionSeq !== null && historicalPreviewSrc) {
+  if (selectedVersionSeq !== null && cid) {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
@@ -617,13 +670,24 @@ export function PreviewPane({
               />
             </div>
           </div>
-          <iframe
-            key={`${reloadKey}-version-${selectedVersionSeq}`}
-            title="Historical preview"
-            src={historicalPreviewSrc}
-            sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
-            className="h-full w-full border-0 bg-white"
-          />
+          {historicalPreviewSrc ? (
+            <iframe
+              key={`${reloadKey}-version-${selectedVersionSeq}`}
+              title="Historical preview"
+              src={historicalPreviewSrc}
+              sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+              className="h-full w-full border-0 bg-white"
+            />
+          ) : (
+            <div
+              role={historicalPreviewFailure === historicalTarget ? "alert" : "status"}
+              className="flex h-full items-center justify-center px-body font-ui text-sm text-text-muted"
+            >
+              {historicalPreviewFailure === historicalTarget
+                ? "Historical preview unavailable: isolated preview access could not be established."
+                : "Preparing isolated historical preview…"}
+            </div>
+          )}
         </div>
       </div>
     );

@@ -152,10 +152,10 @@ export async function previewBootstrapUrl(
   return result.bootstrap_url;
 }
 
-/** Capability-gated selected-snapshot URL on an origin isolated from the app session.
- * Used for trusted, committed static sites so relative CSS/JS/media requests carry
- * only a preview cookie and can never inherit the owner's application session. */
-export async function staticPreviewBootstrapUrl(
+/** Capability-gated preview-app URL on an origin isolated from the app session.
+ * The path route may serve a live app or a selected workspace snapshot; relative
+ * CSS/JS/media requests carry only a preview cookie and never the app session. */
+export async function pathPreviewBootstrapUrl(
   cid: string,
   targetPath = "/",
 ): Promise<string | null> {
