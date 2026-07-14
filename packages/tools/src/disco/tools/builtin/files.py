@@ -193,6 +193,10 @@ def _clear_grounding(conv_id: str, path: str) -> None:
 # markers the model must never echo back into source.
 _EDIT_ELISION_RE = re.compile(
     r"(?:"
+    # F01: reserved canonical prefix, including a one-bracket/truncated form and
+    # the historical non-count-first variant observed in the poisoned CSS.
+    r"\[{1,2}\s*DISCO-ELIDED\s*:"
+    r"|"
     r"\[\[\s*DISCO-ELIDED:\s*\d[\d,]*\s*chars\b[^\]]*?\]\]"
     r"|"
     r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>"
@@ -200,6 +204,10 @@ _EDIT_ELISION_RE = re.compile(
     r"<(?=[^>]*\b(?:elided|full\s+content|placeholder)\b)[^>]*"
     r"(?:re-issue the call or file_read the path|do not copy this placeholder"
     r"|do not copy or re-send|already applied to the workspace)[^>]*>"
+    r"|"
+    # Historical angle marker with a truncated/missing closing bracket.
+    r"<\s*(?:\d[\d,]*\s*chars?|content)\b[^\r\n>]{0,500}"
+    r"\b(?:elided|placeholder|full\s+content)\b"
     r")",
     re.IGNORECASE,
 )
@@ -279,9 +287,7 @@ def _line_span(total: int, attempted: tuple[int, int] | None, radius: int) -> tu
     return (max(1, lo - radius), min(total, hi + radius))
 
 
-def _numbered_line_window(
-    text: str, *, start_line: int, end_line: int, total_lines: int
-) -> str:
+def _numbered_line_window(text: str, *, start_line: int, end_line: int, total_lines: int) -> str:
     lines = text.splitlines()
     if total_lines <= 0:
         return ""
@@ -646,9 +652,7 @@ def _post_change_line_span(before: str, after: str) -> tuple[int, int]:
     before_lines = before.splitlines()
     after_lines = after.splitlines()
     spans: list[tuple[int, int]] = []
-    for tag, _i1, _i2, j1, j2 in SequenceMatcher(
-        None, before_lines, after_lines
-    ).get_opcodes():
+    for tag, _i1, _i2, j1, j2 in SequenceMatcher(None, before_lines, after_lines).get_opcodes():
         if tag == "equal":
             continue
         spans.append((j1 + 1, max(j2, j1 + 1)))
@@ -699,9 +703,7 @@ def _updated_region_success_content(
     elif file_write_head:
         start, end = (1, min(total, _FILE_WRITE_SUCCESS_HEAD_LINES))
     else:
-        start, end = _line_span(
-            total, changed_lines or (1, 1), _UPDATED_REGION_WINDOW_RADIUS
-        )
+        start, end = _line_span(total, changed_lines or (1, 1), _UPDATED_REGION_WINDOW_RADIUS)
     numbered = (
         _numbered_line_window(text, start_line=start, end_line=end, total_lines=total)
         if total > 0 and end >= start
@@ -716,9 +718,7 @@ def _updated_region_success_content(
     view = _bounded_updated_region_view(raw_view)
     delivered_end = end
     if view != raw_view:
-        delivered_numbers = [
-            int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\t", view)
-        ]
+        delivered_numbers = [int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\t", view)]
         delivered_end = max(delivered_numbers) if delivered_numbers else start - 1
     full = total <= 0 or (start == 1 and delivered_end >= total)
     _record_success_grounding(
@@ -1018,7 +1018,8 @@ class FileReadTool:
         description=(
             "Read a UTF-8 text file from the workspace, with 1-based LINE NUMBERS. "
             "Files under the source-size cap fit in ONE whole read — omit "
-            "offset/limit by default; slice only genuinely large files. Prefer `file_edit` (pass the exact text you see "
+            "offset/limit by default; slice only genuinely large files. Prefer "
+            "`file_edit` (pass the exact text you see "
             "as `old`) for targeted changes; the line numbers also let you target "
             "`file_replace_lines`, but re-read the RANGE you are about to edit right "
             "before a line edit (numbers shift after every change)."
@@ -1088,8 +1089,12 @@ class FileReadTool:
                 used += len(line) + 1
             head_to = len(head)
             record_read(
-                ctx.conversation_id, args.path, sha=_disk_sha, start_line=1,
-                end_line=max(head_to, 1), full=(head_to >= total),
+                ctx.conversation_id,
+                args.path,
+                sha=_disk_sha,
+                start_line=1,
+                end_line=max(head_to, 1),
+                full=(head_to >= total),
             )
             header = (
                 f"[lines 1-{head_to} of {total} (file: {len(text)} chars) — "
@@ -1140,8 +1145,12 @@ class FileReadTool:
         # CD-TOOLS-1: record the lines the model saw un-elided. full iff this single page
         # covered the WHOLE file (from line 1 to the last line).
         record_read(
-            ctx.conversation_id, args.path, sha=_disk_sha, start_line=start + 1,
-            end_line=max(shown_to, start + 1), full=(start == 0 and shown_to >= total),
+            ctx.conversation_id,
+            args.path,
+            sha=_disk_sha,
+            start_line=start + 1,
+            end_line=max(shown_to, start + 1),
+            full=(start == 0 and shown_to >= total),
         )
         # there's more file to read below if we didn't reach the end (whether we
         # stopped on the char budget or the caller's limit)
@@ -1191,22 +1200,26 @@ _MONOLITH_RECIPES: dict[str, str] = {
         '<script type="module" src="app.js"></script>.'
     ),
 }
-for _alias, _canon in (("htm", "html"), ("mjs", "js"), ("cjs", "js"), ("jsx", "js"),
-                       ("ts", "js"), ("tsx", "js"), ("vue", "js"), ("svelte", "js")):
+for _alias, _canon in (
+    ("htm", "html"),
+    ("mjs", "js"),
+    ("cjs", "js"),
+    ("jsx", "js"),
+    ("ts", "js"),
+    ("tsx", "js"),
+    ("vue", "js"),
+    ("svelte", "js"),
+):
     _MONOLITH_RECIPES[_alias] = _MONOLITH_RECIPES[_canon]
 
 
-def _monolith_refusal(
-    path: str, *, tool_name: str, n_lines: int, n_bytes: int
-) -> ToolOutcome:
+def _monolith_refusal(path: str, *, tool_name: str, n_lines: int, n_bytes: int) -> ToolOutcome:
     # Name the exact tripwire — the agent must know precisely what flagged it.
     tripped = []
     if n_lines > _MONOLITH_MAX_LINES:
         tripped.append(f"{n_lines} lines > the {_MONOLITH_MAX_LINES}-line cap")
     if n_bytes > _MONOLITH_MAX_BYTES:
-        tripped.append(
-            f"{n_bytes / 1024:.1f}KB > the {_MONOLITH_MAX_BYTES // 1024}KB cap"
-        )
+        tripped.append(f"{n_bytes / 1024:.1f}KB > the {_MONOLITH_MAX_BYTES // 1024}KB cap")
     ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
     recipe = _MONOLITH_RECIPES.get(ext, _MONOLITH_RECIPES["html"])
     return ToolOutcome(
@@ -1235,9 +1248,7 @@ def _monolith_gate(
     n_lines = new_bytes.count(b"\n") + (0 if new_bytes.endswith(b"\n") else 1)
     if len(new_bytes) <= _MONOLITH_MAX_BYTES and n_lines <= _MONOLITH_MAX_LINES:
         return None
-    return _monolith_refusal(
-        path, tool_name=tool_name, n_lines=n_lines, n_bytes=len(new_bytes)
-    )
+    return _monolith_refusal(path, tool_name=tool_name, n_lines=n_lines, n_bytes=len(new_bytes))
 
 
 class FileWriteArgs(BaseModel):
@@ -1245,7 +1256,9 @@ class FileWriteArgs(BaseModel):
     content: str = Field(description="Full UTF-8 content to write.")
     allow_shrink: bool = Field(
         default=False,
-        description="Set true to permit a write that shrinks an existing file by >50% (otherwise refused).",
+        description=(
+            "Set true to permit a write that shrinks an existing file by >50% (otherwise refused)."
+        ),
     )
 
 
@@ -1260,7 +1273,8 @@ class FileWriteTool:
             "the change. Whole-file rewrites are guarded: read the file first, do not "
             "copy elision placeholders, and pass allow_shrink=true only when a >50% "
             "shrink is intentional. Writes to host-managed .disco/ artifacts are "
-            "refused, and successful writes commit atomically. Source files (.html/.css/.js/…) are capped at "
+            "refused, and successful writes commit atomically. Source files "
+            "(.html/.css/.js/…) are capped at "
             f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB each — "
             "structure sites as separate files (index.html + styles.css + app.js; "
             "one HTML file per page), never one monolith."
@@ -1463,17 +1477,20 @@ class FileAppendTool:
         # of an existing monolith are never obstructed — the gate's job is to stop
         # new monoliths forming, not to wall off old ones mid-fix.
         already_over = old_text is not None and (
-            len(existing) > _MONOLITH_MAX_BYTES
-            or existing.count(b"\n") + 1 > _MONOLITH_MAX_LINES
+            len(existing) > _MONOLITH_MAX_BYTES or existing.count(b"\n") + 1 > _MONOLITH_MAX_LINES
         )
-        if not already_over and (
-            m := _monolith_gate(
-                args.path,
-                tool_name="file_append",
-                new_bytes=combined,
-                old_len=None,  # judge the resulting size outright (no shrink case here)
+        if (
+            not already_over
+            and (
+                m := _monolith_gate(
+                    args.path,
+                    tool_name="file_append",
+                    new_bytes=combined,
+                    old_len=None,  # judge the resulting size outright (no shrink case here)
+                )
             )
-        ) is not None:
+            is not None
+        ):
             return m
         # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
         gated = await _gated_write(ctx, args.path, combined, old_text)
@@ -1501,7 +1518,10 @@ class FileListArgs(BaseModel):
 class FileListTool:
     definition = ToolDef(
         name="file_list",
-        description="List the entries of ONE directory level in the workspace (not recursive) — names + kind; descend by listing subdirectories.",
+        description=(
+            "List the entries of ONE directory level in the workspace (not recursive) — "
+            "names + kind; descend by listing subdirectories."
+        ),
         args_model=FileListArgs,
         needs=_FS,
         runs_in="sandbox",
@@ -1544,8 +1564,11 @@ def _forgiving_replace(text: str, old: str, new: str) -> tuple[str | None, str]:
         tgt = target.split("\n")
         for i in range(0, len(norm) - len(tgt) + 1):
             if norm[i : i + len(tgt)] == tgt:
-                updated = "".join(doc[:i]) + new + ("" if new.endswith("\n") else "\n") + "".join(
-                    doc[i + len(tgt) :]
+                updated = (
+                    "".join(doc[:i])
+                    + new
+                    + ("" if new.endswith("\n") else "\n")
+                    + "".join(doc[i + len(tgt) :])
                 )
                 return updated, "whitespace-normalized"
     return None, "not found"
@@ -1741,9 +1764,13 @@ class FileReplaceLinesTool:
         # CD-TOOLS-1 fresh-edit guard: line numbers shift after any edit, so a stale/elided
         # range silently overwrites the wrong lines — require fresh, covering grounding first.
         _blocked = guard_fresh_edit(
-            ctx.conversation_id, args.path, current_bytes=_raw, new=args.new_text,
+            ctx.conversation_id,
+            args.path,
+            current_bytes=_raw,
+            new=args.new_text,
             edit_lines=(args.start_line, min(args.end_line, max(n, 1))),
-            anchored=False,  # [REL-RC-D] line-based: a prior edit's line-shift can stale these numbers
+            # [REL-RC-D] line-based: a prior edit's line shift can stale these numbers.
+            anchored=False,
             attempted_lines=(args.start_line, min(args.end_line, max(n, 1))),
             line_refusal_read=True,
         )
@@ -1834,12 +1861,16 @@ class FileInsertLinesTool:
         # CD-TOOLS-1 guard: the insert point relies on current line numbers — require fresh
         # grounding + reject an elision marker in the inserted text (no region coverage needed).
         _blocked = guard_fresh_edit(
-            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text,
+            ctx.conversation_id,
+            args.path,
+            current_bytes=_raw,
+            new=args.text,
             edit_lines=(
                 max(args.after_line, 1),
                 max(1, min(args.after_line + 1, n)),
             ),
-            anchored=False,  # [REL-RC-D] line-based: a prior edit's line-shift can stale this insert point
+            # [REL-RC-D] line-based: a prior edit can stale this insert point.
+            anchored=False,
             attempted_lines=(max(args.after_line, 1), max(args.after_line, 1)),
             line_refusal_read=True,
         )
@@ -1897,9 +1928,7 @@ def _occurrence_lines(text: str, needle: str) -> list[int]:
 
 class FileStrReplaceArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to edit.")
-    old_str: str = Field(
-        description="Exact text to find (must appear EXACTLY ONCE in the file)."
-    )
+    old_str: str = Field(description="Exact text to find (must appear EXACTLY ONCE in the file).")
     new_str: str = Field(description="Replacement text.")
 
 
@@ -1942,13 +1971,20 @@ class FileStrReplaceTool:
         # CD-TOOLS-1 fresh-edit guard (anchored exact replace) — region from old_str's location.
         _idx = text.find(args.old_str)
         _elines = (
-            (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old_str.count("\n"))
+            (
+                text.count("\n", 0, _idx) + 1,
+                text.count("\n", 0, _idx) + 1 + args.old_str.count("\n"),
+            )
             if _idx >= 0
             else _best_fuzzy_old_match_lines(text, args.old_str)
         )
         _blocked = guard_fresh_edit(
-            ctx.conversation_id, args.path, current_bytes=_raw,
-            old=args.old_str, new=args.new_str, edit_lines=_elines,
+            ctx.conversation_id,
+            args.path,
+            current_bytes=_raw,
+            old=args.old_str,
+            new=args.new_str,
+            edit_lines=_elines,
             line_refusal_read=True,
         )
         if _blocked is not None:
@@ -1987,9 +2023,7 @@ class FileStrReplaceTool:
                             changed_lines=_post_change_line_span(text, new_text),
                         ),
                         artifacts=[args.path],
-                        structured=_write_artifact_structured(
-                            args.path, new_bytes
-                        ),
+                        structured=_write_artifact_structured(args.path, new_bytes),
                     )
             return _old_text_not_found_refusal(
                 ctx.conversation_id,
@@ -2169,7 +2203,9 @@ class ExactReplaceArgs(BaseModel):
     # Codex CD-TOOLS-2 round-1). It is size-gated, so small files never need a separate read.
     expected_sha256: str | None = Field(
         default=None,
-        description="If set, refuse unless the file's CURRENT sha256 equals this (optimistic concurrency).",
+        description=(
+            "If set, refuse unless the file's CURRENT sha256 equals this (optimistic concurrency)."
+        ),
     )
     multi: bool = Field(
         default=False,
@@ -2190,7 +2226,8 @@ class ExactReplaceTool:
         description=(
             "Apply one or more EXACT string replacements to a file, atomically. Each `old_string` "
             "must occur exactly once (set multi=true to replace all occurrences); `new_string` is "
-            "written literally (no regex/backref expansion). The whole batch applies all-or-nothing "
+            "written literally (no regex/backref expansion). The whole batch applies "
+            "all-or-nothing "
             "— if ANY edit fails (no match, duplicate, overlap, or it would introduce a syntax "
             "error) NOTHING is written. Read the file first (the exact text you see is what to "
             "match). Pass expected_sha256 to refuse if the file changed under you."
@@ -2212,7 +2249,9 @@ class ExactReplaceTool:
             return g
         if not args.edits:
             return ToolOutcome(
-                success=False, error="EXACT_REPLACE_BATCH_FAILED", content="exact_replace: no edits supplied."
+                success=False,
+                error="EXACT_REPLACE_BATCH_FAILED",
+                content="exact_replace: no edits supplied.",
             )
         raw = await ctx.sandbox.read_file(args.path)
         text = raw.decode("utf-8", errors="replace")
@@ -2224,8 +2263,9 @@ class ExactReplaceTool:
                     success=False,
                     error="ELISION_MARKER_REJECTED",
                     content=(
-                        f"exact_replace refused — an edit for {args.path} contains an internal elision "
-                        "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and use the real text."
+                        f"exact_replace refused — an edit for {args.path} contains an "
+                        "internal elision placeholder (e.g. '[[DISCO-ELIDED: ...]]'); "
+                        "read the file and use the real text."
                     ),
                     structured={
                         "kind": "elision_marker_rejected",
@@ -2235,15 +2275,17 @@ class ExactReplaceTool:
                     },
                 )
 
-        # (2) optimistic concurrency: caller-supplied expected sha must match the current disk bytes.
+        # (2) optimistic concurrency: caller-supplied expected sha must match the
+        # current disk bytes.
         cur_sha = hashlib.sha256(raw).hexdigest()
         if args.expected_sha256 is not None and args.expected_sha256 != cur_sha:
             return ToolOutcome(
                 success=False,
                 error="STALE_FILE_CONTEXT",
                 content=(
-                    f"exact_replace refused — {args.path} now hashes to {cur_sha[:12]}…, not the expected "
-                    f"{args.expected_sha256[:12]}…; it changed since you read it. Read it again, then edit."
+                    f"exact_replace refused — {args.path} now hashes to {cur_sha[:12]}…, "
+                    f"not the expected {args.expected_sha256[:12]}…; it changed since "
+                    "you read it. Read it again, then edit."
                 ),
                 structured={
                     "kind": "stale_file_context",
@@ -2277,7 +2319,8 @@ class ExactReplaceTool:
                     success=False,
                     error="EXACT_REPLACE_DUPLICATE_MATCH",
                     content=(
-                        f"exact_replace: old_string occurs {len(occ)}× in {args.path} — make it unique or "
+                        f"exact_replace: old_string occurs {len(occ)}× in {args.path} — "
+                        "make it unique or "
                         f"set multi=true to replace all: {e.old_string[:60]!r}."
                     ),
                 )
@@ -2296,7 +2339,8 @@ class ExactReplaceTool:
                     success=False,
                     error="EXACT_REPLACE_BATCH_FAILED",
                     content=(
-                        f"exact_replace: edits overlap in {args.path} (matched regions intersect) — "
+                        f"exact_replace: edits overlap in {args.path} "
+                        "(matched regions intersect) — "
                         "split or de-duplicate them."
                     ),
                 )
@@ -2307,13 +2351,17 @@ class ExactReplaceTool:
             lo_line = text.count("\n", 0, s) + 1
             hi_line = text.count("\n", 0, end) + 1
             blocked = guard_fresh_edit(
-                ctx.conversation_id, args.path, current_bytes=raw, edit_lines=(lo_line, hi_line),
+                ctx.conversation_id,
+                args.path,
+                current_bytes=raw,
+                edit_lines=(lo_line, hi_line),
                 line_refusal_read=True,
             )
             if blocked is not None:
                 return blocked
 
-        # (6) splice by position (descending so earlier indices stay valid) — str slicing, NOT re.sub,
+        # (6) splice by position (descending so earlier indices stay valid) —
+        # str slicing, NOT re.sub,
         #     so '$', '${x}', backrefs in new_string are literal.
         new_text = text
         for s, end, repl in sorted(spans, key=lambda t: t[0], reverse=True):
@@ -2358,11 +2406,15 @@ class SafeWriteFileArgs(BaseModel):
     content: str = Field(description="Full UTF-8 content to write.")
     allow_shrink: bool = Field(
         default=False,
-        description="Set true to permit a write that shrinks an existing file by >50% (otherwise refused).",
+        description=(
+            "Set true to permit a write that shrinks an existing file by >50% (otherwise refused)."
+        ),
     )
     expected_sha256: str | None = Field(
         default=None,
-        description="If set, refuse unless the file's CURRENT sha256 equals this (also grounds the write).",
+        description=(
+            "If set, refuse unless the file's CURRENT sha256 equals this (also grounds the write)."
+        ),
     )
 
 
@@ -2396,8 +2448,9 @@ class SafeWriteFileTool:
                 success=False,
                 error="ELISION_MARKER_REJECTED",
                 content=(
-                    f"safe_write_file refused — content for {args.path} contains an internal elision "
-                    "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and write the real text."
+                    f"safe_write_file refused — content for {args.path} contains an "
+                    "internal elision placeholder (e.g. '[[DISCO-ELIDED: ...]]'); "
+                    "read the file and write the real text."
                 ),
                 structured={
                     "kind": "elision_marker_rejected",
@@ -2433,8 +2486,9 @@ class SafeWriteFileTool:
                         success=False,
                         error="STALE_FILE_CONTEXT",
                         content=(
-                            f"safe_write_file refused — {args.path} now hashes to {cur_sha[:12]}…, not "
-                            f"the expected {args.expected_sha256[:12]}…; it changed since you read it."
+                            f"safe_write_file refused — {args.path} now hashes to "
+                            f"{cur_sha[:12]}…, not the expected "
+                            f"{args.expected_sha256[:12]}…; it changed since you read it."
                         ),
                         structured={
                             "kind": "stale_file_context",
@@ -2450,7 +2504,8 @@ class SafeWriteFileTool:
                     success=False,
                     error="binary_deliverable_clobber",
                     content=(
-                        f"safe_write_file refused — {args.path} is an existing {ext} (a generated binary); "
+                        f"safe_write_file refused — {args.path} is an existing {ext} "
+                        "(a generated binary); "
                         "a text write would corrupt it. It is already delivered."
                     ),
                 )
@@ -2464,14 +2519,19 @@ class SafeWriteFileTool:
                     args.path, "you have not read this file's current content since it last changed"
                 )
             # SHRINK guard — a >50% char shrink truncates a built file (the weak-model clobber).
-            if len(args.content) < 0.5 * len(old_text) and not args.allow_shrink and not matching_sha:
+            if (
+                len(args.content) < 0.5 * len(old_text)
+                and not args.allow_shrink
+                and not matching_sha
+            ):
                 return ToolOutcome(
                     success=False,
                     error="SAFE_WRITE_SHRINK_REJECTED",
                     content=(
-                        f"safe_write_file refused — this would shrink {args.path} from {len(old_text)} to "
-                        f"{len(args.content)} chars (>50% smaller), which usually means an accidental "
-                        "truncation/clobber. Pass allow_shrink=true (or expected_sha256) if intended."
+                        f"safe_write_file refused — this would shrink {args.path} from "
+                        f"{len(old_text)} to {len(args.content)} chars (>50% smaller), "
+                        "which usually means an accidental truncation/clobber. Pass "
+                        "allow_shrink=true (or expected_sha256) if intended."
                     ),
                     structured={
                         "kind": "safe_write_shrink_rejected",
@@ -2480,7 +2540,8 @@ class SafeWriteFileTool:
                         "new_chars": len(args.content),
                     },
                 )
-        # (4) syntax pre-check IN MEMORY — never introduce a new syntax error (no write-then-revert).
+        # (4) syntax pre-check IN MEMORY — never introduce a new syntax error
+        # (no write-then-revert).
         pre = _syntax_errors(args.path, old_text or "")
         introduced = [e for e in _syntax_errors(args.path, args.content) if e not in pre]
         if introduced:
@@ -2488,7 +2549,8 @@ class SafeWriteFileTool:
                 success=False,
                 error="syntax_gate_rejected",
                 content=(
-                    f"safe_write_file refused — this content introduces syntax error(s) in {args.path}: "
+                    "safe_write_file refused — this content introduces syntax "
+                    f"error(s) in {args.path}: "
                     f"{'; '.join(introduced)} — NOT written. Fix it and retry."
                 ),
             )

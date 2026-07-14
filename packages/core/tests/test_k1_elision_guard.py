@@ -42,12 +42,12 @@ the marker can be reworded without the guard going blind.
 
 from __future__ import annotations
 
+import pytest
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
-    EventSource,
     Event,
-    LLMMessage,
+    EventSource,
     MessageEvent,
     ObservationEvent,
     SqliteEventStore,
@@ -65,6 +65,16 @@ from loop_fakes import (
 )
 
 CID = "conv"
+_OPEN_STORES: list[SqliteEventStore] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_test_stores():
+    """Every helper-created in-memory store is owned and closed by its test."""
+    yield
+    while _OPEN_STORES:
+        _OPEN_STORES.pop().close()
+
 
 # The legacy marker (pre-K1 wording) — a model that learned it from an older
 # trace can still emit it; the structural detector must catch it.
@@ -77,6 +87,10 @@ _LEGACY_MARKER = "<4,441 chars elided — already applied; use file_read for the
 _PARAPHRASE_MARKER = (
     "<content elided — re-issue the call or file_read the path for the full "
     "content; do not copy this placeholder into a tool argument>"
+)
+
+_HISTORICAL_EMBEDDED_MARKER = (
+    "[[DISCO-ELIDED: see above — 6837 char file content shown for context only…]]"
 )
 
 
@@ -94,9 +108,7 @@ def _make_loop(*, executor=None, assist=False):  # noqa: ANN202
 
     if executor is None:
         executor = FakeExecutor(
-            result=ToolResult(
-                call_id="ignored", tool_name="ignored", success=True, content="ok"
-            )
+            result=ToolResult(call_id="ignored", tool_name="ignored", success=True, content="ok")
         )
     # K1 is tier-INDEPENDENT — the guard FIRES for every tier. Only the recovery WORDING
     # is tier-gated (assist-ON keeps the pre-CW-3 directional block pointer; assist-OFF
@@ -106,9 +118,11 @@ def _make_loop(*, executor=None, assist=False):  # noqa: ANN202
         if assist
         else ModelExecutionPolicy.standard()
     )
+    store = SqliteEventStore(":memory:")
+    _OPEN_STORES.append(store)
     return AgentLoop(
         CID,
-        SqliteEventStore(":memory:"),
+        store,
         ScriptedAgent([]),  # never stepped
         executor,
         None,
@@ -196,9 +210,7 @@ async def test_rejection_wording_is_tier_gated():
     # assist-ON: the pre-CW-3 directional block pointer ("...block above (or call
     # file_read)..."), byte-identical to before CW-3.
     loop_on = _make_loop(assist=True)
-    events_on = await _drive_execute(
-        loop_on, _write_action("call_on", path="a.js", content=marker)
-    )
+    events_on = await _drive_execute(loop_on, _write_action("call_on", path="a.js", content=marker))
     msg_on = [e for e in events_on if isinstance(e, AgentErrorEvent)][0].error
     assert "current content from the CURRENT WORKSPACE block above (or call file_read)" in msg_on
     # assist-OFF: the neutral file_read pointer, NO workspace-block claim.
@@ -279,6 +291,50 @@ async def test_paraphrased_marker_without_count_is_rejected_and_not_executed():
     assert "content" in msg  # names the offending key
     assert "<N chars" not in msg  # the old copy claimed this form — wrong for a paraphrase
     assert "placeholder" in msg
+
+
+def test_detector_covers_embedded_positions_formats_nested_paths_and_malformed_variants():
+    """F01 public detector matrix: no marker-shaped bytes can hide inside real text."""
+    canonical = _snip_args({"content": "x" * 5000})["content"]
+    malformed = [
+        _HISTORICAL_EMBEDDED_MARKER,
+        "[[DISCO-ELIDED: 6,837 chars — history display only",
+        "[disco-elided: 6837 chars",
+        "<4,441 chars elided — already applied",
+        _PARAPHRASE_MARKER,
+    ]
+    wrappers = {
+        "styles.css": ("body { color: red; }\n", "\n.card { display: grid; }"),
+        "index.html": ("<main>", "</main>"),
+        "App.tsx": ("export const App = () => <div>", "</div>;"),
+        "data.json": ('{"before":"ok","value":"', '"}'),
+        "README.md": ("# Before\n", "\nAfter\n"),
+        "main.py": ("def before():\n    pass\n", "\nprint('after')\n"),
+    }
+    for path, (prefix, suffix) in wrappers.items():
+        for marker in [canonical, *malformed]:
+            for body in (marker + suffix, prefix + marker + suffix, prefix + marker):
+                assert find_elided_arg_markers({"content": body}) == ["content"], path
+
+    nested = {
+        "operations": [{"op": "save", "path": "styles.css", "content": "real\n" + canonical}],
+        "patch": [{"op": "replace", "path": "/slides/0/title", "value": canonical}],
+    }
+    assert find_elided_arg_markers(nested) == [
+        "operations[0].content",
+        "patch[0].value",
+    ]
+
+
+def test_detector_does_not_overblock_ordinary_text_or_html():
+    clean = {
+        "content": (
+            "The editor elided repetition. A <5 chars> validation hint and "
+            "<input placeholder='full content'> are legitimate markup. "
+            "DISCO-ELIDED is discussed without the reserved bracketed prefix."
+        )
+    }
+    assert find_elided_arg_markers(clean) == []
 
 
 # ---------------------------------------------------------------------------

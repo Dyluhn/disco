@@ -286,9 +286,7 @@ _OBS_SNIP_TAIL = 2_000
 # forever. ViewBuilder.build sets this from the derived ContextCaps for the duration
 # of a build; default None → the byte-identical assist-ON 8k snip. Task-local
 # (ContextVar) so concurrent conversations of different tiers never cross-contaminate.
-obs_snip_override: ContextVar[int | None] = ContextVar(
-    "disco_obs_snip_override", default=None
-)
+obs_snip_override: ContextVar[int | None] = ContextVar("disco_obs_snip_override", default=None)
 
 
 def snip_content(content: str, *, max_chars: int, head: int, tail: int) -> str:
@@ -336,11 +334,25 @@ _ELISION_MARKER_RE = re.compile(
     r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>"
     r")"
 )
+# F01 — fail closed on protocol fragments too.  The historical poisoned file
+# contained ``[[DISCO-ELIDED: see above — 6837 char file content ...]]``, which
+# is recognizably the reserved sentinel but is not the canonical count-first
+# rendering above.  Stream/provider truncation can also drop the final brackets.
+# Requiring the reserved bracketed prefix avoids matching ordinary prose that
+# merely uses the word "elided"; an optional single opening bracket covers a
+# partially emitted prefix.
+_ELISION_PARTIAL_RE = re.compile(r"\[{1,2}\s*DISCO-ELIDED\s*:", re.IGNORECASE)
+# Historical angle-bracket markers can likewise arrive without their closing
+# ``>``.  Require both the count/content anchor and an elision signature within
+# one bounded line, so benign HTML and phrases such as ``<5 chars>`` stay valid.
+_ELISION_ANGLE_PARTIAL_RE = re.compile(
+    r"<\s*(?:\d[\d,]*\s*chars?|content)\b[^\r\n>]{0,500}"
+    r"\b(?:elided|placeholder|full\s+content)\b",
+    re.IGNORECASE,
+)
 # CW P1-a — capture the char count from an existing marker so the assist-OFF retarget
 # pass can re-render it (pinned vs non-pinned) without re-deriving the original length.
-_ELISION_COUNT_RE = re.compile(
-    r"(?:<\s*|\[\[\s*DISCO-ELIDED:\s*)(\d[\d,]*)\s*chars\b"
-)
+_ELISION_COUNT_RE = re.compile(r"(?:<\s*|\[\[\s*DISCO-ELIDED:\s*)(\d[\d,]*)\s*chars\b")
 
 # BW-02 (trace conv_20fa8482) — a model can PARAPHRASE the neutral marker, dropping the
 # leading "<N chars …>" anchor while copying the marker's stable TAIL prose verbatim into
@@ -446,23 +458,45 @@ def retarget_elided_arg_markers(messages: list[LLMMessage]) -> list[LLMMessage]:
 
 
 def find_elided_arg_markers(arguments: dict[str, object]) -> list[str]:
-    """K1 execution guard: return the argument keys whose string value carries an
+    """K1 execution guard: return argument paths whose string value carries an
     elision placeholder (the `_snip_args` marker copied back by a weak model).
     Empty list ⇒ the arguments are clean and safe to execute. Pure + deterministic.
 
     Matches BOTH the canonical `[[DISCO-ELIDED: N chars ...]]` marker, historical
     structural `<N chars … {elided|full content} …>` markers, and a model-
     PARAPHRASED placeholder that dropped the count anchor but kept the marker's
-    signature tail prose (BW-02). Rejection-only — the retarget pass is unaffected."""
-    return [
-        k
-        for k, v in arguments.items()
-        if isinstance(v, str)
-        and (
-            _ELISION_MARKER_RE.search(v) is not None
-            or _ELISION_PARAPHRASE_RE.search(v) is not None
-        )
-    ]
+    signature tail prose (BW-02), and reserved/malformed protocol fragments (F01).
+    Recurses through JSON objects and arrays so nested edit batches, JSON Patch,
+    semantic app content, and future structured mutators cannot bypass the
+    universal executor boundary. Rejection-only — retargeting remains count-based."""
+
+    def _walk(value: object, path: str) -> list[str]:
+        if isinstance(value, str):
+            if any(
+                pattern.search(value) is not None
+                for pattern in (
+                    _ELISION_MARKER_RE,
+                    _ELISION_PARAPHRASE_RE,
+                    _ELISION_PARTIAL_RE,
+                    _ELISION_ANGLE_PARTIAL_RE,
+                )
+            ):
+                return [path]
+            return []
+        if isinstance(value, dict):
+            found: list[str] = []
+            for key, nested in value.items():
+                child = f"{path}.{key}" if path else str(key)
+                found.extend(_walk(nested, child))
+            return found
+        if isinstance(value, (list, tuple)):
+            found = []
+            for index, nested in enumerate(value):
+                found.extend(_walk(nested, f"{path}[{index}]"))
+            return found
+        return []
+
+    return _walk(arguments, "")
 
 
 def value_is_only_elision_marker(value: object) -> bool:
@@ -479,7 +513,12 @@ def value_is_only_elision_marker(value: object) -> bool:
     rejection-and-re-read path instead. Pure + deterministic."""
     if not isinstance(value, str):
         return False
-    stripped = _ELISION_PARAPHRASE_RE.sub("", _ELISION_MARKER_RE.sub("", value))
+    stripped = _ELISION_ANGLE_PARTIAL_RE.sub(
+        "",
+        _ELISION_PARTIAL_RE.sub(
+            "", _ELISION_PARAPHRASE_RE.sub("", _ELISION_MARKER_RE.sub("", value))
+        ),
+    )
     # Nothing matched ⇒ not a marker at all; or matched but real text remains.
     return value != stripped and stripped.strip() == ""
 
@@ -737,10 +776,7 @@ class AlternativesEvent(BaseEvent, LLMConvertible):
     options: list[AlternativeOption]
 
     def to_llm_message(self) -> LLMMessage:
-        lines = [
-            f"{i}. {o.title} — {o.description}"
-            for i, o in enumerate(self.options, start=1)
-        ]
+        lines = [f"{i}. {o.title} — {o.description}" for i, o in enumerate(self.options, start=1)]
         body = "\n".join(lines)
         return LLMMessage(
             role="assistant",
@@ -787,7 +823,7 @@ class DatasourceEvent(BaseEvent, LLMConvertible):
     def to_llm_message(self) -> LLMMessage:
         return LLMMessage(
             role="user",
-            content=f"<datasource name=\"{self.name}\">\n{self.docs}\n</datasource>",
+            content=f'<datasource name="{self.name}">\n{self.docs}\n</datasource>',
         )
 
 
@@ -821,7 +857,7 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
         return LLMMessage(
             role="user",
             content=(
-                f"<deliverable kind=\"{self.artifact_kind}\" path=\"{self.path}\">\n"
+                f'<deliverable kind="{self.artifact_kind}" path="{self.path}">\n'
                 f"{self.title}\n</deliverable>"
             ),
         )

@@ -27,9 +27,11 @@ so the placeholder can't mutate disk on ANY path, for ANY mutating tool.
 
 from __future__ import annotations
 
+import pytest
 from disco.core.events import _snip_args
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
+from disco.tools.registry import ToolScope
 from tool_fakes import FakeSandboxInstance, call
 
 _STANDARD = ModelExecutionPolicy.standard()
@@ -45,6 +47,15 @@ def _executor(sandbox):
     return DefaultToolExecutor(
         build_default_registry(),
         agent_scope(model_policy=_STANDARD),
+        sandbox=sandbox,
+    )
+
+
+def _all_tools_executor(sandbox):
+    registry = build_default_registry()
+    return DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=registry.names()),
         sandbox=sandbox,
     )
 
@@ -134,3 +145,112 @@ async def test_benign_marker_shaped_arg_not_rejected():
         assert "elision placeholder" not in res.content
     else:
         assert await sandbox.read_file("src/foo.js") == body.encode()
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "marker_path"),
+    [
+        ("file_write", {"path": "target.txt", "content": None}, "content"),
+        ("file_append", {"path": "target.txt", "content": None}, "content"),
+        ("file_edit", {"path": "target.txt", "old": "ORIGINAL", "new": None}, "new"),
+        (
+            "file_replace_lines",
+            {"path": "target.txt", "start_line": 1, "end_line": 1, "new_text": None},
+            "new_text",
+        ),
+        (
+            "file_insert_lines",
+            {"path": "target.txt", "after_line": 1, "text": None},
+            "text",
+        ),
+        (
+            "file_str_replace",
+            {"path": "target.txt", "old_str": "ORIGINAL", "new_str": None},
+            "new_str",
+        ),
+        (
+            "exact_replace",
+            {
+                "path": "target.txt",
+                "edits": [{"old_string": "ORIGINAL", "new_string": None}],
+            },
+            "edits[0].new_string",
+        ),
+        ("safe_write_file", {"path": "target.txt", "content": None}, "content"),
+        (
+            "run_project_script",
+            {"operations": [{"op": "save", "path": "target.txt", "content": None}]},
+            "operations[0].content",
+        ),
+        (
+            "find_and_edit",
+            {"pattern": "ORIGINAL", "instruction": None},
+            "instruction",
+        ),
+        (
+            "deck_patch",
+            {
+                "deck_file": "deck.authored.json",
+                "patch": [{"op": "replace", "path": "/slides/0/title", "value": None}],
+            },
+            "patch[0].value",
+        ),
+        (
+            "app_update_content",
+            {
+                "page_id": "home",
+                "section_id": "hero",
+                "updates": {"heading": None},
+            },
+            "updates.heading",
+        ),
+    ],
+)
+async def test_every_public_write_patch_replace_edit_route_rejects_before_disk(
+    tool_name, arguments, marker_path
+):
+    """F01: valid top-level and nested mutation shapes all hit one executor guard."""
+    marker = "real prefix\n[[DISCO-ELIDED: see above — 6837 char file content shown]]\nreal suffix"
+
+    # Keep the parametrization readable: replace the one None leaf identified by
+    # marker_path without changing any surrounding schema-valid structure.
+    current = arguments
+    parts = marker_path.replace("]", "").replace("[", ".").split(".")
+    for part in parts[:-1]:
+        current = current[int(part)] if isinstance(current, list) else current[part]
+    if isinstance(current, list):
+        current[int(parts[-1])] = marker
+    else:
+        current[parts[-1]] = marker
+
+    sandbox = FakeSandboxInstance()
+    await sandbox.write_file("target.txt", b"ORIGINAL\n")
+    ex = _all_tools_executor(sandbox)
+    res = await ex.execute(call(tool_name, **arguments))
+
+    assert res.success is False
+    assert res.structured["kind"] == "invalid_arguments"
+    assert marker_path in res.content
+    assert "NOT executed" in res.content and "FULL real content" in res.content
+    assert await sandbox.read_file("target.txt") == b"ORIGINAL\n"
+
+
+async def test_every_registered_public_mutator_is_covered_by_universal_guard():
+    """Future mutators inherit F01 protection without a name-specific branch."""
+    registry = build_default_registry()
+    ex = DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=registry.names()),
+        sandbox=FakeSandboxInstance(),
+    )
+    mutators = sorted(
+        tool.definition.name for tool in registry._tools.values() if not tool.definition.read_only
+    )
+    assert mutators
+    for name in mutators:
+        res = await ex.execute(
+            call(name, campaign_probe="prefix [[DISCO-ELIDED: 10 chars — truncated")
+        )
+        assert res.success is False, name
+        assert res.structured["kind"] == "invalid_arguments", name
+        assert "campaign_probe" in res.content and "NOT executed" in res.content, name
