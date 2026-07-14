@@ -50,4 +50,11 @@ def make_mcp_router(state: ConfigState) -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    @router.post("/api/mcp/servers/{name}/revoke")
+    async def revoke_mcp_server(name: str) -> McpConnectionDTO:
+        result = state.revoke_mcp_server(name)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
+        return result
+
     return router

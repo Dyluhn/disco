@@ -203,6 +203,29 @@ export async function approveMcpServer(
   return updated;
 }
 
+export async function revokeMcpServer(name: string): Promise<McpConnection> {
+  if (isLive()) {
+    const connection = await apiSend<McpConnection>(
+      "POST",
+      `/api/mcp/servers/${encodeURIComponent(name)}/revoke`,
+    );
+    if (agentLive()) await agentSend("POST", "/api/mcp/reload");
+    return connection;
+  }
+  await fixtureDelay();
+  const idx = fixtureMcp.findIndex((c) => c.id === name);
+  if (idx === -1) throw new Error(`unknown server ${name}`);
+  const updated: McpConnection = {
+    ...fixtureMcp[idx],
+    status: "approval_required",
+    config_hash: undefined,
+    description_hash: undefined,
+    approved_at: undefined,
+  };
+  fixtureMcp[idx] = updated;
+  return updated;
+}
+
 /** T4.5 — handshake a configured MCP server (initialize + tools/list) and report
  * the tool count or the real connection error. Runs against the agent-server,
  * which owns the MCP transport clients. */

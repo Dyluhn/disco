@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./client", () => mocks);
 
-import { listMcpConnections } from "./config";
+import { listMcpConnections, revokeMcpServer } from "./config";
 
 describe("MCP status projection", () => {
   beforeEach(() => {
@@ -64,5 +64,22 @@ describe("MCP status projection", () => {
     const connections = await listMcpConnections();
 
     expect(connections.every((connection) => connection.status === "disabled")).toBe(true);
+  });
+
+  it("revokes through the app boundary and hot-reloads the agent", async () => {
+    mocks.apiSend.mockResolvedValue({
+      id: "reachable",
+      name: "reachable",
+      status: "approval_required",
+    });
+
+    const connection = await revokeMcpServer("reachable");
+
+    expect(mocks.apiSend).toHaveBeenCalledWith(
+      "POST",
+      "/api/mcp/servers/reachable/revoke",
+    );
+    expect(mocks.agentSend).toHaveBeenCalledWith("POST", "/api/mcp/reload");
+    expect(connection.status).toBe("approval_required");
   });
 });

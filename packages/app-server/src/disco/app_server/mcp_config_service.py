@@ -203,17 +203,27 @@ class McpConfigService:
             updated["allowed_tools"] = patch.allowed_tools
         if patch.risk_tier:
             updated["risk_tier"] = patch.risk_tier
+        from disco.tools.mcp.approval import compute_config_hash
+
+        current_config_hash = compute_config_hash({"name": name, **updated})
+        cap = self._mcp_config_approvals().get(name)
+        if cap is not None and cap["config_hash"] != current_config_hash:
+            # A changed endpoint/toggle must immediately lose its former signed
+            # egress authorization. Keeping the old config approval would also
+            # let a later edit back to the old hash reconnect without fresh
+            # operator consent.
+            _origin_wiring.revoke_mcp_server_origin(self._store, self._secrets, name)
+            if self._db_conn is not None:
+                from disco.tools.mcp.migrations import delete_mcp_config_approval
+
+                delete_mcp_config_approval(self._db_conn, name)
+            cap = None
         servers = {**cfg.servers, name: updated}
         any_enabled = any(server.get("enabled", True) for server in servers.values())
         new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         approvals = self._mcp_approvals()
         ap = approvals.get(name)
-        config_approvals = self._mcp_config_approvals()
-        cap = config_approvals.get(name)
-        from disco.tools.mcp.approval import compute_config_hash
-
-        current_config_hash = compute_config_hash({"name": name, **updated})
         config_pending = cap is None or cap["config_hash"] != current_config_hash
         return McpConnectionDTO(
             id=name,
@@ -237,8 +247,18 @@ class McpConfigService:
         cfg = self._mcp_config()
         if name not in cfg.servers:
             return False
-        # Revoke durable approvals first. If revocation fails the configured
-        # server remains present and cannot be recreated under stale hashes.
+        # Revoke durable database and signed-egress approvals first. If
+        # revocation fails the configured server remains present and cannot be
+        # recreated under stale authorization.
+        self._revoke_mcp_server(name)
+        servers = {k: v for k, v in cfg.servers.items() if k != name}
+        any_enabled = any(server.get("enabled", True) for server in servers.values())
+        new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
+        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
+        return True
+
+    def _revoke_mcp_server(self, name: str) -> None:
+        _origin_wiring.revoke_mcp_server_origin(self._store, self._secrets, name)
         if self._db_conn is not None:
             from disco.tools.mcp.migrations import (
                 delete_mcp_approval,
@@ -247,11 +267,13 @@ class McpConfigService:
 
             delete_mcp_approval(self._db_conn, name)
             delete_mcp_config_approval(self._db_conn, name)
-        servers = {k: v for k, v in cfg.servers.items() if k != name}
-        any_enabled = any(server.get("enabled", True) for server in servers.values())
-        new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
-        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
-        return True
+
+    def revoke_mcp_server(self, name: str) -> McpConnectionDTO | None:
+        cfg = self._mcp_config()
+        if name not in cfg.servers:
+            return None
+        self._revoke_mcp_server(name)
+        return next(c for c in self.mcp_connections() if c.id == name)
 
     def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
         """Approve or re-approve — mutates the single row, never inserts a second."""

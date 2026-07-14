@@ -24,7 +24,11 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def store() -> SqliteEventStore:
-    return SqliteEventStore(":memory:")
+    event_store = SqliteEventStore(":memory:")
+    try:
+        yield event_store
+    finally:
+        event_store.close()
 
 
 @pytest.fixture
@@ -33,7 +37,7 @@ def config_store(tmp_path: Path) -> ConfigStore:
 
 
 @pytest.fixture
-def client(store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore) -> TestClient:
+def config_state(store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore) -> ConfigState:
     """Build the app with a shared DB connection so mcp_approvals table is
     reachable from ConfigState."""
     # Ensure mcp_approvals table exists in the in-memory DB.
@@ -47,13 +51,25 @@ def client(store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore) -
         ")"
     )
     store._conn.commit()
-    cfg_state = ConfigState(
+    return ConfigState(
         store=config_store,
-        secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("test-app-secret")),
+        secrets=SecretStore(
+            tmp_path / "secrets.json",
+            box=SecretBox("test-app-secret-with-at-least-thirty-two-bytes"),
+        ),
         skills=SkillStore(tmp_path / "skills"),
         db_conn=store._conn,
     )
-    return TestClient(create_app(store, cfg_state))
+
+
+@pytest.fixture
+def client(
+    store: SqliteEventStore,
+    config_state: ConfigState,
+    monkeypatch: pytest.MonkeyPatch,
+) -> TestClient:
+    monkeypatch.setenv("DISCO_AUTH_DEV_AUTO_PAIR", "1")
+    return TestClient(create_app(store, config_state))
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -183,6 +199,63 @@ def test_mcp_patch_toggle_enabled(client, config_store):
     assert config_store.load().mcp.enabled is True
 
 
+def test_mcp_config_edit_immediately_revokes_stale_signed_origin(client, store, config_state):
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "edit_srv",
+            "url": "https://old.example.com/mcp",
+            "transport": "streamable_http",
+        },
+    )
+    assert created.status_code == 201, created.text
+    _approve_config(client, "edit_srv")
+    _approve_tools(client, store, "edit_srv", _hash("echo"))
+    assert config_state._store.origin_approved(
+        "https://old.example.com/other",
+        "mcp:edit_srv",
+        "",
+        secret_store=config_state._secrets,
+    )
+
+    changed = client.patch(
+        "/api/mcp/servers/edit_srv",
+        json={"url": "https://new.example.com/mcp"},
+    )
+
+    assert changed.status_code == 200
+    assert changed.json()["status"] == "approval_required"
+    assert changed.json()["config_hash"] is None
+    assert changed.json()["new_config_hash"] is not None
+    assert not config_state._store.origin_approved(
+        "https://old.example.com/other",
+        "mcp:edit_srv",
+        "",
+        secret_store=config_state._secrets,
+    )
+    assert not config_state._store.origin_approved(
+        "https://new.example.com/other",
+        "mcp:edit_srv",
+        "",
+        secret_store=config_state._secrets,
+    )
+    assert (
+        store._conn.execute(
+            "SELECT COUNT(*) FROM mcp_config_approvals WHERE server = ?",
+            ("edit_srv",),
+        ).fetchone()[0]
+        == 0
+    )
+
+    _approve_config(client, "edit_srv")
+    assert config_state._store.origin_approved(
+        "https://new.example.com/other",
+        "mcp:edit_srv",
+        "",
+        secret_store=config_state._secrets,
+    )
+
+
 def test_mcp_approval_blocks_while_server_is_disabled(client):
     created = client.post(
         "/api/mcp/servers",
@@ -224,6 +297,47 @@ def test_mcp_delete_removes_server(client, config_store):
     assert client.delete("/api/mcp/servers/to_delete").status_code == 404
     assert client.get("/api/mcp").json() == []
     assert config_store.load().mcp.enabled is False
+
+
+def test_mcp_revoke_clears_database_and_signed_egress_approvals(client, store, config_state):
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "revoke_me",
+            "url": "https://tools.example.com/mcp",
+            "transport": "streamable_http",
+        },
+    )
+    assert created.status_code == 201, created.text
+    _approve_config(client, "revoke_me")
+    _approve_tools(client, store, "revoke_me", _hash("echo"))
+    assert config_state._store.origin_approved(
+        "https://tools.example.com/other",
+        "mcp:revoke_me",
+        "",
+        secret_store=config_state._secrets,
+    )
+
+    revoked = client.post("/api/mcp/servers/revoke_me/revoke")
+
+    assert revoked.status_code == 200
+    assert revoked.json()["status"] == "approval_required"
+    assert revoked.json()["config_hash"] is None
+    assert revoked.json()["description_hash"] is None
+    assert revoked.json()["new_config_hash"] is not None
+    for table in ("mcp_approvals", "mcp_config_approvals", "mcp_approval_pending"):
+        count = store._conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE server = ?",  # noqa: S608 - fixed table set
+            ("revoke_me",),
+        ).fetchone()[0]
+        assert count == 0
+    assert not config_state._store.origin_approved(
+        "https://tools.example.com/other",
+        "mcp:revoke_me",
+        "",
+        secret_store=config_state._secrets,
+    )
+    assert client.post("/api/mcp/servers/missing/revoke").status_code == 404
 
 
 # ---- approval ---------------------------------------------------------------

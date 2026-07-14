@@ -83,9 +83,7 @@ class ConfigStore:
         *,
         secret_store: SecretStore | None = None,
     ) -> bool:
-        return self.approval_store(secret_store=secret_store).is_approved(
-            url, purpose, secret_ref
-        )
+        return self.approval_store(secret_store=secret_store).is_approved(url, purpose, secret_ref)
 
     def approve_origin(
         self,
@@ -96,6 +94,24 @@ class ConfigStore:
         secret_store: SecretStore | None = None,
     ) -> None:
         self.approval_store(secret_store=secret_store).approve(url, purpose, secret_ref)
+
+    def replace_origin_purpose(
+        self,
+        url: str,
+        purpose: str,
+        secret_refs: tuple[str, ...] = ("",),
+        *,
+        secret_store: SecretStore | None = None,
+    ) -> None:
+        self.approval_store(secret_store=secret_store).replace_purpose(url, purpose, secret_refs)
+
+    def revoke_origin_purpose(
+        self,
+        purpose: str,
+        *,
+        secret_store: SecretStore | None = None,
+    ) -> int:
+        return self.approval_store(secret_store=secret_store).revoke_purpose(purpose)
 
     def apply_vision_probe(self, results: dict[str, bool | None]) -> None:
         """V2/V4 (§2): install the startup vision-probe results as a process-lifetime

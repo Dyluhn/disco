@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { agentLive } from "@/api/client";
 import { testMcpConnection } from "@/api/config";
@@ -8,6 +8,7 @@ import {
   useCreateMcpServer,
   useDeleteMcpServer,
   useMcpConnections,
+  useRevokeMcpServer,
   useUpdateMcpServer,
 } from "@/hooks/useConfig";
 import type { McpServerConfig, McpStatus } from "@/types/config";
@@ -225,6 +226,7 @@ export function McpSection() {
   const update = useUpdateMcpServer();
   const remove = useDeleteMcpServer();
   const approve = useApproveMcpServer();
+  const revoke = useRevokeMcpServer();
 
   const [creating, setCreating] = useState(false);
   const [approvingServer, setApprovingServer] = useState<string | null>(null);
@@ -290,7 +292,7 @@ export function McpSection() {
         tool descriptions change.
       </p>
 
-      {(create.error || update.error || remove.error || approve.error) && (
+      {(create.error || update.error || remove.error || approve.error || revoke.error) && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
           Couldn't apply this change to every service. Check the App and Agent
           servers, then retry; the saved configuration may already have changed.
@@ -384,6 +386,18 @@ export function McpSection() {
                     }
                     label={`Enable ${c.name}`}
                   />
+                  {(c.config_hash || c.description_hash) && (
+                    <button
+                      type="button"
+                      data-disco-control="settings.mcp-revoke"
+                      onClick={() => revoke.mutate(c.id)}
+                      aria-label={`Revoke approvals for ${c.name}`}
+                      title="Revoke configuration, tool, and egress approvals"
+                      className="text-text-faint transition-colors hover:text-unsupported"
+                    >
+                      <ShieldOff className="size-3.5" aria-hidden />
+                    </button>
+                  )}
                   <button
                     type="button"
                     data-disco-control="settings.mcp-remove"

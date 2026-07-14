@@ -1019,6 +1019,9 @@ class ConfigState:
     def delete_mcp_server(self, name: str) -> bool:
         return self._mcp_service.delete_mcp_server(name)
 
+    def revoke_mcp_server(self, name: str) -> McpConnectionDTO | None:
+        return self._mcp_service.revoke_mcp_server(name)
+
     def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
         return self._mcp_service.approve_mcp_server(name, body)
 

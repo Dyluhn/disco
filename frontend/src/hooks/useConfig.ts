@@ -7,6 +7,7 @@ import {
   deleteSkill,
   listMcpConnections,
   listSkills,
+  revokeMcpServer as apiRevokeMcp,
   updateMcpServer as apiUpdateMcp,
   updateSkill,
 } from "@/api/config";
@@ -90,6 +91,14 @@ export function useApproveMcpServer() {
   return useMutation({
     mutationFn: ({ name, body }: { name: string; body: McpServerApprove }) =>
       approveMcpServer(name, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
+}
+
+export function useRevokeMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => apiRevokeMcp(name),
     onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
   });
 }

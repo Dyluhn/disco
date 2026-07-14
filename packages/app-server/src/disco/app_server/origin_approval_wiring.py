@@ -168,8 +168,16 @@ def approve_mcp_server_origin(
     store: ConfigStore, secrets: SecretStore, name: str, srv: dict
 ) -> None:
     if srv.get("transport") == "streamable_http":
-        for ref in mcp_secret_refs(srv):
-            approve_origin(store, secrets, str(srv.get("url") or ""), f"mcp:{name}", ref)
+        store.replace_origin_purpose(
+            str(srv.get("url") or ""),
+            f"mcp:{name}",
+            mcp_secret_refs(srv),
+            secret_store=secrets,
+        )
+
+
+def revoke_mcp_server_origin(store: ConfigStore, secrets: SecretStore, name: str) -> int:
+    return store.revoke_origin_purpose(f"mcp:{name}", secret_store=secrets)
 
 
 def mcp_secret_refs(srv: dict) -> tuple[str, ...]:

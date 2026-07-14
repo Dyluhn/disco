@@ -108,6 +108,20 @@ function installFetch() {
       serverState = serverState.filter((c) => c.id !== name);
       return jsonResponse(undefined, 204);
     }
+    const revokeMatch = url.match(/^\/api\/mcp\/servers\/([^/]+)\/revoke$/);
+    if (method === "POST" && revokeMatch) {
+      const name = decodeURIComponent(revokeMatch[1]);
+      const idx = serverState.findIndex((c) => c.id === name);
+      if (idx === -1) return jsonResponse({ detail: "not found" }, 404);
+      serverState[idx] = {
+        ...serverState[idx],
+        status: "approval_required",
+        config_hash: undefined,
+        description_hash: undefined,
+        approved_at: undefined,
+      };
+      return jsonResponse(serverState[idx]);
+    }
     const approveMatch = url.match(/^\/api\/mcp\/servers\/([^/]+)\/approve$/);
     if (method === "POST" && approveMatch) {
       const name = decodeURIComponent(approveMatch[1]);
@@ -282,6 +296,33 @@ describe("McpSection — live CRUD over the real fetch path", () => {
       expect(screen.queryByText("Filesystem")).not.toBeInTheDocument();
     });
     expect(screen.getByText("GitHub")).toBeInTheDocument();
+  });
+
+  it("revokes approvals without removing the configured server", async () => {
+    const user = userEvent.setup();
+    renderMcp();
+    await waitFor(() => {
+      expect(screen.getByText("Filesystem")).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByLabelText("Revoke approvals for Filesystem"),
+    );
+
+    await waitFor(() => {
+      const revoke = fetchStub.mock.calls.find(
+        ([url, init]) =>
+          url === "/api/mcp/servers/fs/revoke" &&
+          init?.method?.toUpperCase() === "POST",
+      );
+      expect(revoke).toBeTruthy();
+    });
+    expect(screen.getByText("Filesystem")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        screen.queryByLabelText("Revoke approvals for Filesystem"),
+      ).not.toBeInTheDocument();
+    });
   });
 
   it("shows the Review control and SHA-256 fingerprint for pending approvals", async () => {

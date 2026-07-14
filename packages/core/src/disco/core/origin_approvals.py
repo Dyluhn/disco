@@ -98,9 +98,7 @@ class OriginApprovalStore:
             return frozenset()
         return frozenset(entries)
 
-    def _warn_unverifiable(
-        self, entries: frozenset[OriginApproval], reason: str
-    ) -> None:
+    def _warn_unverifiable(self, entries: frozenset[OriginApproval], reason: str) -> None:
         """Warn ONCE per (path) per process when a NON-EMPTY approval ledger is being
         dropped — so silent 'all my providers stopped working' breakage is visible."""
         if not entries:
@@ -149,6 +147,32 @@ class OriginApprovalStore:
                     )
                 )
         self._write(entries)
+
+    def replace_purpose(
+        self,
+        url: str,
+        purpose: str,
+        secret_refs: Iterable[str | None] = ("",),
+    ) -> None:
+        """Replace every approval for one purpose with an exact current binding."""
+        origin = origin_for_url(url)
+        if not origin:
+            raise ValueError(f"cannot approve malformed HTTP origin for {url!r}")
+        clean_purpose = _clean_purpose(purpose)
+        entries = {entry for entry in self.verified() if entry.purpose != clean_purpose}
+        for secret_ref in secret_refs:
+            entries.add(OriginApproval(origin, clean_purpose, _clean_ref(secret_ref)))
+        self._write(entries)
+
+    def revoke_purpose(self, purpose: str) -> int:
+        """Remove every signed approval for one purpose and return the count."""
+        clean_purpose = _clean_purpose(purpose)
+        entries = set(self.verified())
+        retained = {entry for entry in entries if entry.purpose != clean_purpose}
+        removed = len(entries) - len(retained)
+        if removed:
+            self._write(retained)
+        return removed
 
     def _signature(self, entries: Iterable[OriginApproval]) -> str | None:
         secret = _master_secret(self._secret_store)
