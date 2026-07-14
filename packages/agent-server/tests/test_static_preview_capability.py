@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router
@@ -140,22 +140,34 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     isolated = TestClient(app, base_url="http://localhost:18240")
     bootstrap = isolated.get(path_bootstrap_url, follow_redirects=False)
     target = f"/conversations/{cid}/preview-app/"
-    # H084: a 303 keeps the original 127.0.0.1 -> localhost cross-site
-    # navigation context, so Firefox withholds a newly set SameSite=Strict
-    # cookie on the redirect. Complete one locked-down document on the isolated
-    # origin first; its script starts a new same-site navigation.
+    # H084: neither a redirect nor a single 200 document can install a Strict
+    # cookie from the original 127.0.0.1 -> localhost cross-site iframe
+    # navigation. The first locked-down document must move to a second URL on
+    # localhost without setting any cookie. Only that same-site redemption
+    # response may install the capability and navigate to the target.
     assert bootstrap.status_code == 200
     assert "location" not in bootstrap.headers
-    assert f"window.location.replace({json.dumps(target)})" in bootstrap.text
+    assert "set-cookie" not in bootstrap.headers
+    redeem_match = re.search(r"window\.location\.replace\((\"[^\"]+\")\)", bootstrap.text)
+    assert redeem_match is not None
+    redeem_target = json.loads(redeem_match.group(1))
+    redeem_parts = urlsplit(redeem_target)
+    assert redeem_parts.path == f"/__disco/path-preview-auth/{cid.removeprefix('conv_')[:8]}"
+    assert parse_qs(redeem_parts.query).get("stage") == ["redeem"]
+
+    redeem = isolated.get(redeem_target, follow_redirects=False)
+    assert redeem.status_code == 200
+    assert "location" not in redeem.headers
+    assert f"window.location.replace({json.dumps(target)})" in redeem.text
     assert "default-src 'none'" in bootstrap.headers["content-security-policy"]
-    nonce_match = re.search(r'<script nonce="([A-Za-z0-9_-]+)">', bootstrap.text)
+    nonce_match = re.search(r'<script nonce="([A-Za-z0-9_-]+)">', redeem.text)
     assert nonce_match is not None
     assert (
         f"script-src 'nonce-{nonce_match.group(1)}'"
-        in bootstrap.headers["content-security-policy"]
+        in redeem.headers["content-security-policy"]
     )
-    assert bootstrap.headers["x-content-type-options"] == "nosniff"
-    set_cookie = bootstrap.headers["set-cookie"]
+    assert redeem.headers["x-content-type-options"] == "nosniff"
+    set_cookie = redeem.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
     assert "samesite=strict" in set_cookie.lower()
     assert f"Path=/conversations/{cid}/preview-app/" in set_cookie
@@ -181,8 +193,16 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
         hostile_capability.json()["path_bootstrap_url"], follow_redirects=False
     )
     assert hostile_bootstrap.status_code == 200
-    assert "</script><script>" not in hostile_bootstrap.text
-    assert "\\u003c/script\\u003e\\u003cscript\\u003e" in hostile_bootstrap.text
+    hostile_redeem_match = re.search(
+        r"window\.location\.replace\((\"[^\"]+\")\)", hostile_bootstrap.text
+    )
+    assert hostile_redeem_match is not None
+    hostile_redeem = isolated.get(
+        json.loads(hostile_redeem_match.group(1)), follow_redirects=False
+    )
+    assert hostile_redeem.status_code == 200
+    assert "</script><script>" not in hostile_redeem.text
+    assert "\\u003c/script\\u003e\\u003cscript\\u003e" in hostile_redeem.text
 
     # The preview capability is exact to this conversation and preview route.
     other = isolated.get(f"/conversations/{other_cid}/preview-app/")
@@ -212,8 +232,17 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     remote_bootstrap = remote_isolated.get(remote_url, follow_redirects=False)
     assert remote_bootstrap.status_code == 200
     assert "location" not in remote_bootstrap.headers
-    assert f"window.location.replace({json.dumps(target)})" in remote_bootstrap.text
-    assert "; Secure" in remote_bootstrap.headers["set-cookie"]
+    assert "set-cookie" not in remote_bootstrap.headers
+    remote_redeem_match = re.search(
+        r"window\.location\.replace\((\"[^\"]+\")\)", remote_bootstrap.text
+    )
+    assert remote_redeem_match is not None
+    remote_redeem = remote_isolated.get(
+        json.loads(remote_redeem_match.group(1)), follow_redirects=False
+    )
+    assert remote_redeem.status_code == 200
+    assert f"window.location.replace({json.dumps(target)})" in remote_redeem.text
+    assert "; Secure" in remote_redeem.headers["set-cookie"]
     remote_document = remote_isolated.get(target)
     assert remote_document.status_code == 200
     assert "CAPABILITY SITE" in remote_document.text

@@ -282,6 +282,40 @@ def _path_preview_bootstrap_url(request: Request, cid8: str, port: int, intent: 
     return urllib.parse.urlunparse((scheme, netloc, path, "", query, ""))
 
 
+def _locked_preview_navigation(destination: str) -> Response:
+    """Return a script-only document that starts a fresh navigation on this origin."""
+    nonce = secrets.token_urlsafe(18)
+    safe_destination_json = (
+        _json.dumps(destination)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    document = (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<meta name=\"referrer\" content=\"no-referrer\">"
+        "<title>Opening isolated preview</title></head><body>"
+        f"<script nonce=\"{nonce}\">window.location.replace({safe_destination_json})</script>"
+        "<noscript>JavaScript is required to open this isolated preview.</noscript>"
+        "</body></html>"
+    )
+    return Response(
+        document,
+        status_code=200,
+        media_type="text/html",
+        headers={
+            "content-security-policy": (
+                "default-src 'none'; "
+                f"script-src 'nonce-{nonce}'; "
+                "base-uri 'none'; form-action 'none'; frame-ancestors *"
+            ),
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "no-referrer",
+            "cache-control": "no-store",
+        },
+    )
+
+
 async def _wake_for_preview(
     runtime: ConversationRuntime, cid8: str, port: int, *, owner_id: str
 ) -> str | None:
@@ -434,41 +468,23 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             return Response(
                 "preview intent scope mismatch", status_code=403, media_type="text/plain"
             )
-        # H084: do not redirect in the same cross-site navigation that arrived
-        # from the application origin. Firefox correctly withholds a newly set
-        # SameSite=Strict cookie for the rest of that redirect chain, which
-        # turns the target into a 403. Finish loading a minimal document on the
-        # isolated origin, then start a fresh same-site navigation from there.
-        # Keep the cookie Strict and HttpOnly; do not weaken the boundary to
-        # SameSite=None/Lax merely to make the redirect work.
-        nonce = secrets.token_urlsafe(18)
-        safe_target_json = (
-            _json.dumps(target)
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
-        )
-        bootstrap_document = (
-            "<!doctype html><html><head><meta charset=\"utf-8\">"
-            "<meta name=\"referrer\" content=\"no-referrer\">"
-            "<title>Opening isolated preview</title></head><body>"
-            f"<script nonce=\"{nonce}\">window.location.replace({safe_target_json})</script>"
-            "<noscript>JavaScript is required to open this isolated preview.</noscript>"
-            "</body></html>"
-        )
-        response = Response(
-            bootstrap_document,
-            status_code=200,
-            media_type="text/html",
-            headers={
-                "content-security-policy": (
-                    "default-src 'none'; "
-                    f"script-src 'nonce-{nonce}'; "
-                    "base-uri 'none'; form-action 'none'; frame-ancestors *"
-                ),
-                "x-content-type-options": "nosniff",
-            },
-        )
+        # H084: a Strict cookie set by the first 127.0.0.1 -> localhost iframe
+        # response is not reliably accepted at all; merely replacing a 303 with
+        # a 200 document is insufficient. Land on the isolated origin first
+        # without setting a cookie. Its script then redeems the same short-lived
+        # signed intent through a second, now same-site document. Only that
+        # response installs the narrow capability before navigating to target.
+        stage = request.query_params.get("stage")
+        if stage is None:
+            redeem_query = urllib.parse.urlencode(
+                {"intent": request.query_params.get("intent", ""), "stage": "redeem"}
+            )
+            redeem_target = f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}?{redeem_query}"
+            return _locked_preview_navigation(redeem_target)
+        if stage != "redeem":
+            return Response("invalid preview stage", status_code=403, media_type="text/plain")
+
+        response = _locked_preview_navigation(target)
         forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[
             0
         ].strip()
@@ -481,8 +497,6 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             samesite="strict",
             path=expected_prefix,
         )
-        response.headers["referrer-policy"] = "no-referrer"
-        response.headers["cache-control"] = "no-store"
         return response
 
 
