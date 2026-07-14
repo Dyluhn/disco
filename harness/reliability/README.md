@@ -39,27 +39,37 @@ Useful selection examples:
 .venv/bin/python3 -m harness.reliability.run --proof live --dry-run
 ```
 
-Do not run two full live campaign processes at once: isolated suites use fixed loopback ports. Parallelism is already inside one campaign and inside the Build soak.
+Do not run two full live campaign processes at once: every live suite owns a disposable
+App+Agent stack on fixed campaign loopback ports. Parallelism is already inside one
+campaign and inside the Build soak. The matrix never targets the operator's default
+`:8000`/`:8800` services.
 
 ## Live prerequisites
 
-The normal live Build/Search/Agent lanes expect the development App and Agent servers to be running with `DISCO_INSPECT=1`. Build adjudication also requires the real provider relay ledger; the runner refuses to turn missing provider/cleanup evidence into a pass.
+The live lanes require signed seed state for the exact driver. The wrapper copies that
+state into a new stack directory, enables inspect evidence, and assigns a separate
+provider ledger to every suite. The runner refuses missing, malformed, underscoped, or
+wrong-host/model evidence; an observed fallback is a product failure.
 
 Set the inputs that apply to the local installation:
 
 ```bash
-export DISCO_PROVIDER_LEDGER=/absolute/path/to/provider-relay.jsonl
-export DISCO_SOAK_MODEL=your-live-build-driver-id
-export DISCO_RELIABILITY_GVISOR=1
-
-# Disposable MCP suites copy these into isolated App+Agent stacks.
+# Every model-driven live suite copies these into an isolated App+Agent stack.
 export DISCO_RELIABILITY_SEED_CONFIG="$PWD/disco-config.json"
 export DISCO_RELIABILITY_SEED_SECRETS="$HOME/.config/disco/secrets.json"
 export DISCO_RELIABILITY_SEED_SECRET_KEY='the key that encrypted that secrets file'
 export DISCO_RELIABILITY_SEED_APPROVALS="$PWD/disco-approved-origins.json"
+export DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST='your-provider.example'
+export DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL='exact-wire-model-id'
+
+# Set only when the seeded sandbox is a verified real runsc/gVisor backend.
+export DISCO_RELIABILITY_GVISOR=1
 ```
 
-`MINIMAX_RELAY_LOG` is accepted in place of `DISCO_PROVIDER_LEDGER`. Do not print or commit `DISCO_RELIABILITY_SEED_SECRET_KEY`; pass it through the environment only.
+Do not set a shared `DISCO_PROVIDER_LEDGER`; the outer runner replaces it with a
+suite-private path. `MINIMAX_RELAY_LOG` remains supported by direct build-soak use.
+Do not print or commit `DISCO_RELIABILITY_SEED_SECRET_KEY`; pass it through the
+environment only.
 
 Run three ordinary full waves, stopping immediately if any one fails, then make the fourth the promotion check:
 

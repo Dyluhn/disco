@@ -3,7 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from harness.reliability.isolated_stack import StackManager, _temporary_environment
+from disco.core.llm import ConfigStore, default_config
+
+from harness.reliability.isolated_stack import (
+    StackManager,
+    _temporary_environment,
+)
 
 
 def test_temporary_environment_restores_parent_values(monkeypatch) -> None:
@@ -89,3 +94,40 @@ def test_stack_accepts_only_explicit_reliability_egress_override(
     )
 
     assert manager.env["DISCO_BUILD_EGRESS"] == "sealed"
+
+
+def test_gvisor_lane_can_preserve_seeded_sandbox(monkeypatch, tmp_path: Path) -> None:
+    """The isolated App+Agent pair may retain a real seeded runsc backend."""
+
+    repo = Path(__file__).resolve().parents[3]
+    seed = tmp_path / "seed-config.json"
+    sandbox = default_config().sandbox.model_copy(
+        update={
+            "backend": "gvisor",
+            "docker_socket": "ssh://sandbox@100.64.0.10",
+            "runtime": "runsc",
+        }
+    )
+    ConfigStore(seed).save(default_config().model_copy(update={"sandbox": sandbox}))
+    monkeypatch.setenv("DISCO_RELIABILITY_SEED_SECRET_KEY", "x" * 64)
+
+    manager = StackManager(
+        repo=repo,
+        root=tmp_path / "stack-gvisor",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=seed,
+        seed_secrets=None,
+        seed_approvals=None,
+        preserve_seed_sandbox=True,
+    )
+
+    with _temporary_environment(
+        manager.env,
+        ("DISCO_CONFIG", "DISCO_SECRETS", "DISCO_APPROVALS", "DISCO_SECRET_KEY"),
+    ):
+        persisted = ConfigStore(manager.config_path).load().sandbox
+    assert persisted.backend == "gvisor"
+    assert persisted.runtime == "runsc"
+    assert persisted.docker_socket == "ssh://sandbox@100.64.0.10"

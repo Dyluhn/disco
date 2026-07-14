@@ -302,10 +302,36 @@ suites:
     timeout_s: 43200
     memory_gib: 18
     units: 100
+    provider_evidence: true
+    requires_env: &provider_seed
+      - DISCO_RELIABILITY_SEED_CONFIG
+      - DISCO_RELIABILITY_SEED_SECRETS
+      - DISCO_RELIABILITY_SEED_SECRET_KEY
+      - DISCO_RELIABILITY_SEED_APPROVALS
     command:
       - "{python}"
       - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{repo}"
+      - "--agent-port"
+      - "18101"
+      - "--app-port"
+      - "18901"
+      - "--ui-port"
+      - "5291"
+      - "--"
+      - "{python}"
+      - "-m"
       - "harness.build_soak.run"
+      - "--base-url"
+      - "http://127.0.0.1:18101"
+      - "--db"
+      - "{suite_out}/stack/disco.db"
+      - "--projects-root"
+      - "{suite_out}/stack/projects"
       - "--scenario"
       - "static_html_minimal,must_plan_before_tool,multifile_static_site,verify_catches_broken_then_fixed,diag_predict_reflect_smoke,diag_multifile,diag_form_verify,diag_script_run,diag_devserver,appkit_finish_autonomous"
       - "--iterations"
@@ -315,7 +341,7 @@ suites:
       - "--memory-reserve-gib"
       - "32"
       - "--out"
-      - "{suite_out}"
+      - "{suite_out}/soak"
     claims: [build.api_shapes_live]
 
   - id: live-build-revisions
@@ -325,10 +351,32 @@ suites:
     timeout_s: 43200
     memory_gib: 18
     units: 100
+    provider_evidence: true
+    requires_env: *provider_seed
     command:
       - "{python}"
       - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{repo}"
+      - "--agent-port"
+      - "18102"
+      - "--app-port"
+      - "18902"
+      - "--ui-port"
+      - "5292"
+      - "--"
+      - "{python}"
+      - "-m"
       - "harness.build_soak.run"
+      - "--base-url"
+      - "http://127.0.0.1:18102"
+      - "--db"
+      - "{suite_out}/stack/disco.db"
+      - "--projects-root"
+      - "{suite_out}/stack/projects"
       - "--scenario"
       - "revise_after_finish,steer_while_running_requires_plan_update_or_clear_execution_note,revise_twice_complex,diag_revise,revise_thrice_complex"
       - "--iterations"
@@ -338,18 +386,34 @@ suites:
       - "--memory-reserve-gib"
       - "32"
       - "--out"
-      - "{suite_out}"
+      - "{suite_out}/soak"
     claims: [build.revisions_live]
 
   - id: live-build-lifecycle
     proof: live
     kind: playwright
-    cwd: "{frontend}"
+    cwd: "{repo}"
     timeout_s: 86400
     memory_gib: 20
     units: 50
-    environment: {LIVE_WORKERS: "6", LIVE_PORT: "5174"}
+    provider_evidence: true
+    requires_env: *provider_seed
+    environment: {LIVE_WORKERS: "6"}
     command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18103"
+      - "--app-port"
+      - "18903"
+      - "--ui-port"
+      - "5293"
+      - "--"
       - "npx"
       - "playwright"
       - "test"
@@ -368,10 +432,32 @@ suites:
     timeout_s: 43200
     memory_gib: 18
     units: 100
+    provider_evidence: true
+    requires_env: *provider_seed
     command:
       - "{python}"
       - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{repo}"
+      - "--agent-port"
+      - "18104"
+      - "--app-port"
+      - "18904"
+      - "--ui-port"
+      - "5294"
+      - "--"
+      - "{python}"
+      - "-m"
       - "harness.build_soak.run"
+      - "--base-url"
+      - "http://127.0.0.1:18104"
+      - "--db"
+      - "{suite_out}/stack/disco.db"
+      - "--projects-root"
+      - "{suite_out}/stack/projects"
       - "--scenario"
       - "agent_general_task"
       - "--iterations"
@@ -381,7 +467,7 @@ suites:
       - "--memory-reserve-gib"
       - "32"
       - "--out"
-      - "{suite_out}"
+      - "{suite_out}/soak"
     claims: [agent.general_tasks_live]
 
   - id: live-agent-workflow-mcp
@@ -391,14 +477,11 @@ suites:
     timeout_s: 86400
     memory_gib: 20
     units: 30
+    provider_evidence: true
     # MCP settings are global to a stack. The wrapper below owns a disposable,
     # restartable App+Agent pair so approval/reload cycles never touch the user's
     # live configuration. A seeded driver config is required for the model run.
-    requires_env:
-      - DISCO_RELIABILITY_SEED_CONFIG
-      - DISCO_RELIABILITY_SEED_SECRETS
-      - DISCO_RELIABILITY_SEED_SECRET_KEY
-      - DISCO_RELIABILITY_SEED_APPROVALS
+    requires_env: *provider_seed
     environment: {LIVE_WORKERS: "1"}
     command:
       - "{python}"
@@ -409,11 +492,11 @@ suites:
       - "--cwd"
       - "{frontend}"
       - "--agent-port"
-      - "18001"
+      - "18105"
       - "--app-port"
-      - "18801"
+      - "18905"
       - "--ui-port"
-      - "5274"
+      - "5295"
       - "--"
       - "npx"
       - "playwright"
@@ -429,13 +512,34 @@ suites:
   - id: live-agent-gvisor-novnc
     proof: live
     kind: playwright
-    cwd: "{frontend}"
+    cwd: "{repo}"
     timeout_s: 43200
     memory_gib: 12
     units: 10
-    requires_env: [DISCO_RELIABILITY_GVISOR]
-    environment: {LIVE_WORKERS: "2", LIVE_PORT: "5178"}
+    provider_evidence: true
+    requires_env:
+      - DISCO_RELIABILITY_GVISOR
+      - DISCO_RELIABILITY_SEED_CONFIG
+      - DISCO_RELIABILITY_SEED_SECRETS
+      - DISCO_RELIABILITY_SEED_SECRET_KEY
+      - DISCO_RELIABILITY_SEED_APPROVALS
+    environment: {LIVE_WORKERS: "2"}
     command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18106"
+      - "--app-port"
+      - "18906"
+      - "--ui-port"
+      - "5296"
+      - "--preserve-seed-sandbox"
+      - "--"
       - "npx"
       - "playwright"
       - "test"
@@ -450,12 +554,28 @@ suites:
   - id: live-search-grounding
     proof: live
     kind: playwright
-    cwd: "{frontend}"
+    cwd: "{repo}"
     timeout_s: 43200
     memory_gib: 12
     units: 100
-    environment: {LIVE_WORKERS: "6", LIVE_PORT: "5175"}
+    provider_evidence: true
+    requires_env: *provider_seed
+    environment: {LIVE_WORKERS: "6"}
     command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18107"
+      - "--app-port"
+      - "18907"
+      - "--ui-port"
+      - "5297"
+      - "--"
       - "npx"
       - "playwright"
       - "test"
@@ -470,12 +590,28 @@ suites:
   - id: live-search-deep
     proof: live
     kind: playwright
-    cwd: "{frontend}"
+    cwd: "{repo}"
     timeout_s: 86400
     memory_gib: 16
     units: 25
-    environment: {LIVE_WORKERS: "4", LIVE_PORT: "5176"}
+    provider_evidence: true
+    requires_env: *provider_seed
+    environment: {LIVE_WORKERS: "4"}
     command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18108"
+      - "--app-port"
+      - "18908"
+      - "--ui-port"
+      - "5298"
+      - "--"
       - "npx"
       - "playwright"
       - "test"
@@ -490,12 +626,28 @@ suites:
   - id: live-search-audio
     proof: live
     kind: playwright
-    cwd: "{frontend}"
+    cwd: "{repo}"
     timeout_s: 43200
     memory_gib: 10
     units: 10
-    environment: {LIVE_WORKERS: "2", LIVE_PORT: "5177"}
+    provider_evidence: true
+    requires_env: *provider_seed
+    environment: {LIVE_WORKERS: "2"}
     command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18109"
+      - "--app-port"
+      - "18909"
+      - "--ui-port"
+      - "5299"
+      - "--"
       - "npx"
       - "playwright"
       - "test"
@@ -514,11 +666,8 @@ suites:
     timeout_s: 43200
     memory_gib: 10
     units: 10
-    requires_env:
-      - DISCO_RELIABILITY_SEED_CONFIG
-      - DISCO_RELIABILITY_SEED_SECRETS
-      - DISCO_RELIABILITY_SEED_SECRET_KEY
-      - DISCO_RELIABILITY_SEED_APPROVALS
+    provider_evidence: true
+    requires_env: *provider_seed
     environment: {LIVE_WORKERS: "1"}
     command:
       - "{python}"
@@ -529,11 +678,11 @@ suites:
       - "--cwd"
       - "{frontend}"
       - "--agent-port"
-      - "18003"
+      - "18110"
       - "--app-port"
-      - "18803"
+      - "18910"
       - "--ui-port"
-      - "5276"
+      - "5300"
       - "--"
       - "npx"
       - "playwright"
@@ -562,11 +711,11 @@ suites:
       - "--cwd"
       - "{frontend}"
       - "--agent-port"
-      - "18002"
+      - "18111"
       - "--app-port"
-      - "18802"
+      - "18911"
       - "--ui-port"
-      - "5275"
+      - "5301"
       - "--clean"
       - "--"
       - "npx"

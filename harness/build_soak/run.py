@@ -1647,6 +1647,47 @@ def _run_batch_item(
     }
 
 
+def _require_exact_provider(
+    selected: dict[str, dict[str, Any]],
+    *,
+    expected_host: str,
+    expected_model: str,
+) -> dict[str, dict[str, Any]]:
+    """Inject the campaign's exact wire-provider assertion into every scenario.
+
+    Scenario fixtures remain provider-neutral for hermetic classifier tests. A
+    live run, however, must not let that neutrality turn the provider oracle into
+    a SKIP. Existing contradictory assertions are rejected instead of overwritten.
+    """
+
+    host = expected_host.strip()
+    model = expected_model.strip()
+    if not host or not model:
+        raise ValueError("live provider evidence requires nonempty expected host and model")
+    secured = copy.deepcopy(selected)
+    for scenario_id, scenario in secured.items():
+        assertions = scenario.setdefault("assertions", {})
+        if not isinstance(assertions, dict):
+            raise ValueError(f"{scenario_id}.assertions must be a mapping")
+        existing = assertions.get("provider") or {}
+        if not isinstance(existing, dict):
+            raise ValueError(f"{scenario_id}.assertions.provider must be a mapping")
+        for field, required in (("require_host_substr", host), ("model", model)):
+            configured = existing.get(field)
+            if configured is not None and str(configured) != required:
+                raise ValueError(
+                    f"{scenario_id}.assertions.provider.{field}={configured!r} "
+                    f"conflicts with required {required!r}"
+                )
+        assertions["provider"] = {
+            **existing,
+            "require_ledger": True,
+            "require_host_substr": host,
+            "model": model,
+        }
+    return secured
+
+
 async def _amain(args: argparse.Namespace) -> int:
     from .adapters.disco_api import HttpTransport  # live deps only on the CLI path
 
@@ -1680,6 +1721,16 @@ async def _amain(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 3
+    if any(scenario.get("requires_relay_ledger", True) for scenario in selected.values()):
+        try:
+            selected = _require_exact_provider(
+                selected,
+                expected_host=args.expected_provider_host,
+                expected_model=args.expected_provider_model,
+            )
+        except ValueError as exc:
+            print(f"[build-soak] INFRA_FAILURE: {exc}", file=sys.stderr)
+            return 3
     repo_root = Path(__file__).resolve().parents[2]
     commit = _git_commit(repo_root)
     db_path = args.db or os.environ.get("DISCO_DB") or str(repo_root / "disco.db")
@@ -1879,6 +1930,16 @@ def main(argv: list[str] | None = None) -> int:
         "live RAM/CPU/disk headroom",
     )
     p.add_argument("--model", default=None, help="driver model (default $DISCO_SOAK_MODEL)")
+    p.add_argument(
+        "--expected-provider-host",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST", ""),
+        help="required substring in every observed provider-ledger host",
+    )
+    p.add_argument(
+        "--expected-provider-model",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL", ""),
+        help="exact model id required in every observed provider-ledger record",
+    )
     p.add_argument("--out", default=_DEFAULT_OUT, help="output root for run folders")
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")
     p.add_argument("--base-url", default=_DEFAULT_BASE_URL)

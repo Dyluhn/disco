@@ -80,6 +80,7 @@ class StackManager:
         seed_config: Path | None,
         seed_secrets: Path | None,
         seed_approvals: Path | None,
+        preserve_seed_sandbox: bool = False,
     ) -> None:
         self.repo = repo
         self.root = root
@@ -91,6 +92,7 @@ class StackManager:
         self.app: subprocess.Popen[bytes] | None = None
         self._lock = threading.Lock()
         self._generation = 0
+        self.preserve_seed_sandbox = preserve_seed_sandbox
         self.root.mkdir(parents=True, exist_ok=False)
         (self.root / "projects").mkdir()
         (self.root / "skills").mkdir()
@@ -167,14 +169,16 @@ class StackManager:
         ):
             store = ConfigStore(self.config_path)
             config = store.load()
-            sandbox = config.sandbox.model_copy(
-                update={
-                    "backend": "process",
-                    "docker_socket": "",
-                    "runtime": "runc",
-                    "workspace_root": str(self.root / "sandbox-workspaces"),
-                }
-            )
+            sandbox = config.sandbox
+            if not self.preserve_seed_sandbox:
+                sandbox = sandbox.model_copy(
+                    update={
+                        "backend": "process",
+                        "docker_socket": "",
+                        "runtime": "runc",
+                        "workspace_root": str(self.root / "sandbox-workspaces"),
+                    }
+                )
             config = config.model_copy(
                 update={
                     "projects": ProjectStorageSettings(
@@ -333,6 +337,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="ignore seed config/secrets variables and start from generated defaults",
     )
+    parser.add_argument(
+        "--preserve-seed-sandbox",
+        action="store_true",
+        help="retain the seeded sandbox backend (required for real gVisor proof)",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -354,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         seed_approvals=(
             None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_APPROVALS")
         ),
+        preserve_seed_sandbox=args.preserve_seed_sandbox,
     )
     control: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None

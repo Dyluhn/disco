@@ -45,6 +45,8 @@ from harness.reliability.state import (
 )
 
 DEFAULT_MATRIX = Path(__file__).with_name("matrix.yaml")
+_EXPECTED_PROVIDER_HOST_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST"
+_EXPECTED_PROVIDER_MODEL_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL"
 
 
 def _utc_now() -> str:
@@ -245,6 +247,74 @@ def _build_soak_result(out: Path, *, exit_code: int, units: int) -> tuple[str, i
     return PASS, units, f"{statuses['PASS']} build-soak trial(s) passed"
 
 
+def _provider_evidence_result(
+    path: Path,
+    *,
+    expected_host: str,
+    expected_model: str,
+    units: int,
+) -> tuple[str, int, str]:
+    """Fail closed on absent, malformed, or fallback provider-call evidence."""
+
+    if not path.is_file():
+        return INVALID, 0, "provider ledger was not produced"
+    records: list[dict[str, Any]] = []
+    try:
+        for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not raw.strip():
+                continue
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                return INVALID, 0, f"provider ledger line {line_number} is not an object"
+            records.append(parsed)
+    except (OSError, json.JSONDecodeError) as exc:
+        return INVALID, 0, f"provider ledger is unreadable: {type(exc).__name__}"
+    if not records:
+        return INVALID, 0, "provider ledger contains no calls"
+
+    required_host = expected_host.strip().lower()
+    required_model = expected_model.strip()
+    if not required_host or not required_model:
+        return INVALID, 0, "expected provider host/model is empty"
+
+    conversations: set[str] = set()
+    for index, record in enumerate(records):
+        host = str(record.get("host") or "").strip().lower()
+        model = str(record.get("model") or "").strip()
+        conversation_id = str(record.get("conversation_id") or "").strip()
+        if not host or not model or not conversation_id:
+            return (
+                INVALID,
+                0,
+                f"provider ledger record {index} is missing host/model/conversation_id",
+            )
+        if required_host not in host:
+            return (
+                FAIL,
+                0,
+                f"provider fallback detected: host {host!r} does not contain {required_host!r}",
+            )
+        if model != required_model:
+            return (
+                FAIL,
+                0,
+                f"provider fallback detected: model {model!r} != {required_model!r}",
+            )
+        conversations.add(conversation_id)
+    if len(conversations) < units:
+        return (
+            INVALID,
+            0,
+            f"provider ledger covers only {len(conversations)}/{units} required conversation(s)",
+        )
+    return (
+        PASS,
+        units,
+        f"{len(records)} provider call(s) across {len(conversations)} conversation(s) "
+        f"used {required_host}/{required_model}",
+    )
+
+
 def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:
     if not path.is_file():
         return INFRA, 0, "fresh-device harness produced no result evidence"
@@ -322,7 +392,14 @@ async def _run_suite(
     started_at = _utc_now()
     suite_out = campaign_out / suite.id
     suite_out.mkdir(parents=True, exist_ok=False)
-    missing_env = [name for name in suite.requires_env if not os.environ.get(name)]
+    provider_env = (
+        (_EXPECTED_PROVIDER_HOST_ENV, _EXPECTED_PROVIDER_MODEL_ENV)
+        if suite.provider_evidence
+        else ()
+    )
+    missing_env = [
+        name for name in (*suite.requires_env, *provider_env) if not os.environ.get(name)
+    ]
     base = {
         "suite_id": suite.id,
         "proof": suite.proof,
@@ -356,8 +433,18 @@ async def _run_suite(
         }
 
     env = os.environ.copy()
-    env.update(suite.environment)
+    try:
+        env.update(
+            {key: _expand(value, suite_context) for key, value in suite.environment.items()}
+        )
+    except ValueError as exc:
+        return {**base, "status": INVALID, "reason": str(exc), "finished_at": _utc_now()}
     env["DISCO_RELIABILITY_SUITE_OUT"] = str(suite_out)
+    provider_ledger_path = suite_out / "provider-ledger.jsonl"
+    if suite.provider_evidence:
+        # Never inherit or share an ambient ledger across parallel suites. Each
+        # campaign-owned stack writes an isolated, auditable call stream.
+        env["DISCO_PROVIDER_LEDGER"] = str(provider_ledger_path)
     command, structured_path = _structured_command(suite, command, suite_out, env)
     log_path = suite_out / "suite.log"
     exit_code = -1
@@ -422,6 +509,25 @@ async def _run_suite(
     else:
         status, units_passed, reason = FAIL, 0, f"command exited {exit_code}"
 
+    provider_evidence: dict[str, Any] | None = None
+    if suite.provider_evidence:
+        provider_status, provider_units, provider_reason = _provider_evidence_result(
+            provider_ledger_path,
+            expected_host=os.environ.get(_EXPECTED_PROVIDER_HOST_ENV, ""),
+            expected_model=os.environ.get(_EXPECTED_PROVIDER_MODEL_ENV, ""),
+            units=suite.units,
+        )
+        provider_evidence = {
+            "status": provider_status,
+            "reason": provider_reason,
+            "units_passed": provider_units,
+            "path": str(provider_ledger_path),
+        }
+        if status == PASS and provider_status != PASS:
+            status, units_passed, reason = provider_status, 0, provider_reason
+        elif status != PASS and provider_status != PASS:
+            reason = f"{reason}; provider evidence: {provider_reason}"
+
     result = {
         **base,
         "status": status,
@@ -432,6 +538,8 @@ async def _run_suite(
         "command": command,
         "log_path": str(log_path),
     }
+    if provider_evidence is not None:
+        result["provider_evidence"] = provider_evidence
     if suite.proof == "fresh_device":
         result["fresh_device_id"] = _fresh_device_fingerprint(structured_path or Path())
     print(f"[reliability] {status} {suite.id}: {reason}")

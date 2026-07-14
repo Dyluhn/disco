@@ -7,9 +7,38 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from yaml.nodes import MappingNode
 
 PROOFS = frozenset({"hermetic", "live", "fresh_device"})
 KINDS = frozenset({"build_soak", "fresh_device", "generic", "playwright", "vitest"})
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys.
+
+    PyYAML's default loader silently keeps the last duplicate. In a promotion
+    matrix that can change a suite kind, command, or proof without leaving any
+    visible validation error, so duplicate keys are invalid evidence.
+    """
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader, node: MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise ValueError(
+                f"duplicate YAML mapping key {key!r} at line {key_node.start_mark.line + 1}"
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +63,7 @@ class Suite:
     claims: tuple[str, ...]
     requires_env: tuple[str, ...]
     environment: dict[str, str]
+    provider_evidence: bool
 
 
 @dataclass(frozen=True)
@@ -86,7 +116,7 @@ def _positive_float(raw: dict[str, Any], key: str, owner: str) -> float:
 
 def load_matrix(path: str | Path) -> ReliabilityMatrix:
     source = Path(path)
-    raw = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    raw = yaml.load(source.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
     if raw.get("schema_version") != 1:
         raise ValueError("reliability matrix schema_version must be 1")
 
@@ -143,6 +173,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
 
         required_env = item.get("requires_env") or []
         environment = item.get("environment") or {}
+        provider_evidence = item.get("provider_evidence", False)
         if not isinstance(required_env, list) or not all(
             isinstance(name, str) and name for name in required_env
         ):
@@ -152,6 +183,10 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             for key, value in environment.items()
         ):
             raise ValueError(f"{suite_id}.environment must be a string mapping")
+        if not isinstance(provider_evidence, bool):
+            raise ValueError(f"{suite_id}.provider_evidence must be a boolean")
+        if provider_evidence and proof != "live":
+            raise ValueError(f"{suite_id}.provider_evidence is valid only for live proof")
 
         suites[suite_id] = Suite(
             id=suite_id,
@@ -165,6 +200,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             claims=tuple(str(claim_id) for claim_id in claim_ids),
             requires_env=tuple(required_env),
             environment=dict(environment),
+            provider_evidence=provider_evidence,
         )
 
     if not claims:
