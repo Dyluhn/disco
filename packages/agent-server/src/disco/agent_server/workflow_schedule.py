@@ -16,6 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
 from disco.core.owners import install_owner_id
@@ -41,28 +42,41 @@ def _new_run_id() -> str:
     return f"wfsrun_{uuid.uuid4().hex}"
 
 
-def _next_future_run(cron: str, after: datetime) -> datetime | None:
+def _next_future_run(
+    cron: str,
+    after: datetime,
+    *,
+    timezone: str = "UTC",
+) -> datetime | None:
     try:
-        it = CronSim(cron, after)
+        zone = ZoneInfo(timezone)
+        it = CronSim(cron, after.astimezone(zone))
         for dt in it:
             if dt > after:
                 return dt
         return None
-    except (CronSimError, ValueError, TypeError, StopIteration):
+    except (CronSimError, ZoneInfoNotFoundError, ValueError, TypeError, StopIteration):
         return None
 
 
-def _was_coalesced(cron: str, now: datetime, next_run: datetime) -> bool:
+def _was_coalesced(
+    cron: str,
+    now: datetime,
+    next_run: datetime,
+    *,
+    timezone: str = "UTC",
+) -> bool:
     try:
+        zone = ZoneInfo(timezone)
         count = 0
-        for dt in CronSim(cron, next_run):
+        for dt in CronSim(cron, next_run.astimezone(zone)):
             if dt > now:
                 break
             count += 1
             if count > 1:
                 return True
         return False
-    except (CronSimError, ValueError, TypeError):
+    except (CronSimError, ZoneInfoNotFoundError, ValueError, TypeError):
         return False
 
 
@@ -180,7 +194,11 @@ class JsonWorkflowScheduleStore:
             owner_id=owner_id or install_owner_id(),
             spec=spec,
             created_at=current,
-            next_run=_next_future_run(spec.cron, current),
+            next_run=_next_future_run(
+                spec.cron,
+                current,
+                timezone=spec.timezone,
+            ),
         )
         _write_json_atomic(self._path_for(row.schedule_id), row.to_json_dict())
         return row
@@ -348,9 +366,21 @@ class WorkflowScheduleManager:
                 next_run = next_run.replace(tzinfo=UTC)
             if now < next_run:
                 continue
-            coalesced = _was_coalesced(row.spec.cron, now, next_run)
+            coalesced = _was_coalesced(
+                row.spec.cron,
+                now,
+                next_run,
+                timezone=row.spec.timezone,
+            )
             await self._execute_run(row, coalesced=coalesced)
-            store.update_next_run(row.schedule_id, _next_future_run(row.spec.cron, now))
+            store.update_next_run(
+                row.schedule_id,
+                _next_future_run(
+                    row.spec.cron,
+                    now,
+                    timezone=row.spec.timezone,
+                ),
+            )
 
     async def _execute_run(
         self, row: WorkflowScheduleRow, *, coalesced: bool

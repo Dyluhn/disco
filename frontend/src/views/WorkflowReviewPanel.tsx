@@ -9,6 +9,7 @@ import {
   useScheduleWorkflow,
   useWorkflowReviews,
 } from "@/hooks/useWorkflows";
+import { browserScheduleTimezone } from "@/lib/scheduleLocal";
 import type { WorkflowReview } from "@/types/workflow";
 
 function JsonBlock({ label, value }: { label: string; value: unknown }) {
@@ -99,6 +100,7 @@ function WorkflowCard({
         instanceId: workflow.instance_id,
         instanceDigest: workflow.definition_digest,
         cron: cron.trim(),
+        timezone: browserScheduleTimezone(),
       },
       {
         onSuccess: () => {

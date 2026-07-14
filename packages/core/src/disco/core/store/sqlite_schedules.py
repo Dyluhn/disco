@@ -36,14 +36,15 @@ class ScheduleStore:
         self._conn.execute(
             "INSERT OR IGNORE INTO schedules "
             "(schedule_id, conversation_id, owner_id, rrule, description, "
-            "depth, model_override, created_at, enabled, next_run) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "timezone, depth, model_override, created_at, enabled, next_run) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 row["schedule_id"],
                 row["conversation_id"],
                 row["owner_id"],
                 row["rrule"],
                 row["description"],
+                row.get("timezone") or "UTC",
                 row.get("depth"),
                 row.get("model_override"),
                 row["created_at"],

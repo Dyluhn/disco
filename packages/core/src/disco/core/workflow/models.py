@@ -16,12 +16,10 @@ import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
-from typing import Literal
+from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
-
-from ..owners import install_owner_id
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -30,6 +28,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from ..owners import install_owner_id
 
 _STRICT = ConfigDict(frozen=True, extra="forbid")
 
@@ -516,6 +516,7 @@ class ScheduleSpec(BaseModel):
     instance_id: _SmallStr
     instance_digest: _DigestStr
     cron: _SmallStr
+    timezone: _SmallStr = "UTC"
     enabled: bool = True
 
     @field_validator("cron")
@@ -525,6 +526,15 @@ class ScheduleSpec(BaseModel):
             CronSim(value, datetime(2020, 1, 1, tzinfo=UTC))
         except (CronSimError, ValueError, TypeError) as exc:
             raise ValueError(f"invalid cron expression: {value!r}") from exc
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_is_valid(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
         return value
 
 
@@ -639,7 +649,8 @@ def _policy_findings(defn: WorkflowDefinition) -> list[WorkflowValidationFinding
                 "warning",
                 "browser_without_egress",
                 "policies.egress_allow",
-                "workflow uses browser but policies.egress_allow is empty; sealed runs cannot reach the network",
+                "workflow uses browser but policies.egress_allow is empty; "
+                "sealed runs cannot reach the network",
             )
         )
     writable_mounts = sorted(m.server for m in defn.mcp_mounts if not m.read_only)

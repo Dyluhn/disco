@@ -12,6 +12,7 @@ import { useState } from "react";
 import { CalendarClock, Plus, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentFetch } from "@/api/client";
+import { browserScheduleTimezone } from "@/lib/scheduleLocal";
 import { parseScheduleNL } from "@/lib/scheduleNL";
 
 // ---- API functions ----------------------------------------------------------
@@ -21,6 +22,7 @@ interface ScheduleRow {
   conversation_id: string;
   rrule: string;
   description: string;
+  timezone: string;
   depth: string | null;
   model_override: string | null;
   created_at: string;
@@ -31,6 +33,7 @@ interface ScheduleRow {
 interface PreviewResult {
   next_runs: string[];
   rrule: string;
+  timezone: string;
 }
 
 async function fetchSchedules(cid: string): Promise<ScheduleRow[]> {
@@ -42,7 +45,13 @@ async function fetchSchedules(cid: string): Promise<ScheduleRow[]> {
 
 async function createSchedule(
   cid: string,
-  payload: { rrule: string; description: string; depth?: string; model_override?: string },
+  payload: {
+    rrule: string;
+    description: string;
+    timezone: string;
+    depth?: string;
+    model_override?: string;
+  },
 ): Promise<ScheduleRow> {
   const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`, {
     method: "POST",
@@ -63,11 +72,15 @@ async function deleteSchedule(scheduleId: string): Promise<void> {
   if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
 }
 
-async function previewSchedule(rrule: string, n = 3): Promise<PreviewResult> {
+async function previewSchedule(
+  rrule: string,
+  timezone: string,
+  n = 3,
+): Promise<PreviewResult> {
   const r = await agentFetch(`/api/schedules/preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rrule, n }),
+    body: JSON.stringify({ rrule, timezone, n }),
   });
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
@@ -89,11 +102,12 @@ export const SCHEDULE_PRESETS = [
 
 // ---- sub-components ---------------------------------------------------------
 
-function fmtDatetime(iso: string): string {
+function fmtDatetime(iso: string, timezone: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
       weekday: "short", month: "short", day: "numeric",
       hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+      timeZone: timezone,
     });
   } catch {
     return iso;
@@ -133,11 +147,14 @@ function ConfirmCard({
         <ol className="list-decimal list-inside space-y-px">
           {preview.next_runs.map((t) => (
             <li key={t} data-next-run={t} className="font-ui text-[0.82rem] text-text">
-              {fmtDatetime(t)}
+              {fmtDatetime(t, preview.timezone)}
             </li>
           ))}
         </ol>
       </div>
+      <p className="font-ui text-[0.78rem] text-text-muted">
+        Time zone: <span className="font-medium text-text">{preview.timezone}</span>
+      </p>
       <div className="flex items-center justify-end gap-inline">
         <button
           type="button"
@@ -164,11 +181,13 @@ function ConfirmCard({
 
 interface DraftState {
   input: string;  // raw NL input from the user
+  description: string | null;
 }
 
-const EMPTY_DRAFT: DraftState = { input: "" };
+const EMPTY_DRAFT: DraftState = { input: "", description: null };
 
 export function ScheduleSection({ conversationId }: { conversationId: string }) {
+  const timezone = browserScheduleTimezone();
   const qc = useQueryClient();
   const key = ["schedules", conversationId];
 
@@ -183,7 +202,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
   });
 
   const createMutation = useMutation({
-    mutationFn: (payload: { rrule: string; description: string }) =>
+    mutationFn: (payload: { rrule: string; description: string; timezone: string }) =>
       createSchedule(conversationId, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: key });
@@ -219,8 +238,9 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const result = await previewSchedule(parsed.rrule!, 3);
-      setPreview({ ...result, rrule: parsed.rrule!, });
+      const result = await previewSchedule(parsed.rrule!, timezone, 3);
+      setDraft((current) => ({ ...current, description: parsed.description }));
+      setPreview({ ...result, rrule: parsed.rrule!, timezone });
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : "Preview failed");
       setPreview(null);
@@ -230,15 +250,15 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
   };
 
   /** Select a known-good preset: set the input and immediately fetch a preview. */
-  const handleSelectPreset = async (cron: string) => {
-    setDraft({ input: cron });
+  const handleSelectPreset = async (cron: string, description: string) => {
+    setDraft({ input: cron, description });
     setParseError(null);
     setPreviewError(null);
     setPreviewLoading(true);
     setPreview(null);
     try {
-      const result = await previewSchedule(cron, 3);
-      setPreview({ ...result, rrule: cron });
+      const result = await previewSchedule(cron, timezone, 3);
+      setPreview({ ...result, rrule: cron, timezone });
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : "Preview failed");
     } finally {
@@ -250,7 +270,11 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
     if (!preview) return;
     const parsed = parseScheduleNL(draft.input);
     if (!parsed.success || !parsed.rrule) return;
-    createMutation.mutate({ rrule: parsed.rrule, description: parsed.description });
+    createMutation.mutate({
+      rrule: parsed.rrule,
+      description: draft.description || parsed.description,
+      timezone,
+    });
   };
 
   const anyError = removeMutation.error || createMutation.error;
@@ -288,7 +312,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
       {creating && preview && (
         <ConfirmCard
           preview={preview}
-          description={parseScheduleNL(draft.input).description || draft.input}
+          description={draft.description || parseScheduleNL(draft.input).description || draft.input}
           onConfirm={handleConfirm}
           onCancel={closeForm}
           busy={createMutation.isPending}
@@ -299,14 +323,14 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
         <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
           {/* Quick-pick presets — emit known-good cron directly */}
           <div className="flex flex-wrap gap-hair">
-            {SCHEDULE_PRESETS.map(({ label, cron }) => (
+            {SCHEDULE_PRESETS.map(({ label, cron, description }) => (
               <button
                 key={cron}
                 type="button"
                 data-disco-control="settings.schedule-preset"
                 data-cron={cron}
                 disabled={previewLoading}
-                onClick={() => handleSelectPreset(cron)}
+                onClick={() => handleSelectPreset(cron, description)}
                 className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40"
               >
                 {label}
@@ -320,7 +344,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
             data-disco-control="settings.schedule-input"
             value={draft.input}
             onChange={(e) => {
-              setDraft({ input: e.target.value });
+              setDraft({ input: e.target.value, description: null });
               setParseError(null);
               setPreviewError(null);
             }}
@@ -383,9 +407,10 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
                 </span>
               </div>
               <p className="font-mono text-[0.74rem] text-text-faint">{s.rrule}</p>
+              <p className="font-ui text-[0.74rem] text-text-faint">{s.timezone}</p>
               {s.next_run && (
                 <p className="font-ui text-[0.78rem] text-text-muted">
-                  Next: {fmtDatetime(s.next_run)}
+                  Next: {fmtDatetime(s.next_run, s.timezone)}
                 </p>
               )}
             </div>

@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _new_schedule_id() -> str:
@@ -32,6 +33,7 @@ class Schedule(BaseModel):
     owner_id: str
     rrule: str  # cron expression, e.g. "*/2 * * * *"
     description: str
+    timezone: str = "UTC"
     depth: str | None = None  # Deep Research depth tier
     model_override: str | None = None  # driver model override
     created_at: datetime = Field(default_factory=_now)
@@ -45,6 +47,7 @@ class Schedule(BaseModel):
             "owner_id": self.owner_id,
             "rrule": self.rrule,
             "description": self.description,
+            "timezone": self.timezone,
             "depth": self.depth,
             "model_override": self.model_override,
             "created_at": self.created_at.isoformat(),
@@ -62,6 +65,9 @@ class Schedule(BaseModel):
             owner_id=row["owner_id"],
             rrule=row["rrule"],
             description=row["description"],
+            # Explicit migration: legacy rows were evaluated as UTC cron, so a
+            # missing value remains UTC rather than adopting the host timezone.
+            timezone=str(row.get("timezone") or "UTC"),
             depth=row.get("depth"),
             model_override=row.get("model_override"),
             created_at=datetime.fromisoformat(created_at) if created_at else _now(),
@@ -106,8 +112,18 @@ class CreateScheduleBody(BaseModel):
 
     rrule: str  # 5-field cron expression
     description: str = ""
+    timezone: str = "UTC"
     depth: str | None = None
     model_override: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_exists(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
+        return value
 
 
 class PreviewScheduleBody(BaseModel):
@@ -115,3 +131,13 @@ class PreviewScheduleBody(BaseModel):
 
     rrule: str
     n: int = 3  # number of upcoming run times to return
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_exists(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA timezone: {value!r}") from exc
+        return value

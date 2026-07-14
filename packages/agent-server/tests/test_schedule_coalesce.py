@@ -303,6 +303,57 @@ def test_next_n_runs_returns_sorted_future_times():
         assert f.tzinfo is not None, "fire times must be timezone-aware"
 
 
+def test_weekly_preset_stays_nine_am_in_persisted_timezone():
+    """F06: cron fields are wall-clock fields in the schedule's saved timezone,
+    not UTC fields wearing a local-time label."""
+    from zoneinfo import ZoneInfo
+
+    chicago = ZoneInfo("America/Chicago")
+    after = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
+    fires = next_n_runs(
+        "0 9 * * 1",
+        n=3,
+        after=after,
+        timezone="America/Chicago",
+    )
+
+    assert [fire.astimezone(chicago).weekday() for fire in fires] == [0, 0, 0]
+    assert [fire.astimezone(chicago).hour for fire in fires] == [9, 9, 9]
+
+
+def test_local_schedule_has_explicit_dst_gap_and_fold_policy():
+    """F06: cronsim shifts a nonexistent 02:30 to 03:00 and chooses the first
+    occurrence of an ambiguous 01:30.  Pin that policy instead of leaving DST
+    behavior implicit and vulnerable to timezone/host changes."""
+    from zoneinfo import ZoneInfo
+
+    chicago = ZoneInfo("America/Chicago")
+    spring = next_n_runs(
+        "30 2 * * *",
+        n=1,
+        after=datetime(2026, 3, 7, 12, 0, tzinfo=UTC),
+        timezone="America/Chicago",
+    )[0].astimezone(chicago)
+    fall = next_n_runs(
+        "30 1 * * *",
+        n=1,
+        after=datetime(2026, 10, 31, 12, 0, tzinfo=UTC),
+        timezone="America/Chicago",
+    )[0].astimezone(chicago)
+
+    assert (spring.hour, spring.minute) == (3, 0)
+    assert (fall.hour, fall.minute, fall.fold) == (1, 30, 0)
+
+
+def test_invalid_schedule_timezone_fails_closed():
+    assert next_n_runs(
+        "0 9 * * 1",
+        n=1,
+        after=datetime(2026, 7, 12, tzinfo=UTC),
+        timezone="Mars/Olympus_Mons",
+    ) == []
+
+
 def test_invalid_rrule_returns_empty():
     """Invalid cron expression → empty list (never raises, never silently produces garbage)."""
     result = next_n_runs("not a cron expr", n=3)

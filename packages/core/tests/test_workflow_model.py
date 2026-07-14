@@ -7,9 +7,9 @@ import re
 import pytest
 from disco.core.workflow import (
     BUILTIN_WORKFLOW_TOOLS,
+    WORKFLOW_CONTROL_TOOLS,
     McpMount,
     ScheduleSpec,
-    WORKFLOW_CONTROL_TOOLS,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
@@ -17,10 +17,10 @@ from disco.core.workflow import (
     WorkflowPolicies,
     WorkflowVerify,
     compile_workflow_scope,
-    workflow_finish_supports_verify,
-    workflow_finish_tool_schema,
     render_workflow_output_path,
     validate_definition,
+    workflow_finish_supports_verify,
+    workflow_finish_tool_schema,
 )
 from pydantic import ValidationError
 
@@ -285,12 +285,24 @@ def test_schedule_spec_validates_cron() -> None:
     )
 
     assert spec.enabled is True
+    assert spec.timezone == "UTC"
+
+    chicago = spec.model_copy(update={"timezone": "America/Chicago"})
+    assert ScheduleSpec.model_validate(chicago.model_dump()).timezone == "America/Chicago"
 
     with pytest.raises(ValidationError, match="invalid cron expression"):
         ScheduleSpec(
             instance_id="wf_ok",
             instance_digest=digest,
             cron="garbage",
+        )
+
+    with pytest.raises(ValidationError, match="unknown IANA timezone"):
+        ScheduleSpec(
+            instance_id="wf_ok",
+            instance_digest=digest,
+            cron="0 9 * * 1",
+            timezone="Mars/Olympus_Mons",
         )
 
 

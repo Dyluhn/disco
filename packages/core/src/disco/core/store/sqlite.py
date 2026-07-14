@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     owner_id        TEXT NOT NULL,
     rrule           TEXT NOT NULL,
     description     TEXT NOT NULL,
+    timezone        TEXT NOT NULL DEFAULT 'UTC',
     depth           TEXT,
     model_override  TEXT,
     created_at      TEXT NOT NULL,
@@ -271,6 +272,15 @@ class SqliteEventStore:
             # (untrusted third-party data) — used to enforce read-only at the server
             # edge and badge it in the UI. NULL = a normal first-party conversation.
             self._conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            # F06 migration is intentionally UTC: old rows were evaluated as UTC.
+            # Reinterpreting them in the host's local zone would silently change
+            # their firing time. New rows persist the user's selected IANA zone.
+            self._conn.execute(
+                "ALTER TABLE schedules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
+            )
         except sqlite3.OperationalError:
             pass  # column already exists
         # Legacy share rows could not preserve their original metadata. Freeze

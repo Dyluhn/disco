@@ -16,12 +16,14 @@ inject now_fn + sleep_fn, call the internal method directly, assert on the store
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server.schedule import ScheduleManager
+from disco.agent_server.schedule_models import Schedule
 from disco.core.events import (
     EventSource,
     LLMMessage,
@@ -32,6 +34,44 @@ from disco.core.loop.engine import AgentLoop
 from disco.core.store.sqlite import SqliteEventStore
 
 # ---- helpers -----------------------------------------------------------------
+
+
+def test_legacy_schedule_schema_migrates_to_explicit_utc(tmp_path):
+    """F06 migration: old cron rows keep their prior UTC firing semantics."""
+    db_path = tmp_path / "legacy-schedules.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE schedules ("
+        "schedule_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, "
+        "owner_id TEXT NOT NULL, rrule TEXT NOT NULL, description TEXT NOT NULL, "
+        "depth TEXT, model_override TEXT, created_at TEXT NOT NULL, "
+        "enabled INTEGER NOT NULL DEFAULT 1, next_run TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO schedules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "sched_legacy",
+            "conv_legacy",
+            "local",
+            "0 9 * * 1",
+            "legacy Monday",
+            None,
+            None,
+            "2026-01-01T00:00:00+00:00",
+            1,
+            "2026-01-05T09:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteEventStore(db_path)
+    try:
+        row = store.list_schedules(owner_id="local")[0]
+        assert row["timezone"] == "UTC"
+        assert Schedule.from_store_row(row).timezone == "UTC"
+    finally:
+        store.close()
 
 
 def _store() -> SqliteEventStore:

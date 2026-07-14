@@ -47,6 +47,7 @@ class ScheduleService:
         owner_id: str,
         rrule: str,
         description: str,
+        timezone: str = "UTC",
         depth: str | None = None,
         model_override: str | None = None,
     ) -> dict:
@@ -57,6 +58,7 @@ class ScheduleService:
             owner_id=owner_id,
             rrule=rrule,
             description=description,
+            timezone=timezone,
             depth=depth,
             model_override=model_override,
         )
@@ -143,12 +145,22 @@ class ScheduleService:
             return None
         return row.model_dump(mode="json")
 
-    def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
+    def preview_schedule_runs(
+        self,
+        rrule: str,
+        n: int = 3,
+        *,
+        timezone: str = "UTC",
+    ) -> list[str]:
         """Preview next N run times for a cron expression (ISO-8601 strings).
         Returns [] for invalid expressions."""
         return [
             dt.isoformat()
-            for dt in self._schedule_manager().preview_next_runs(rrule, n)
+            for dt in self._schedule_manager().preview_next_runs(
+                rrule,
+                n,
+                timezone=timezone,
+            )
         ]
 
     def list_recent_schedule_runs(

@@ -17,6 +17,7 @@ import logging
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
 from disco.core import (
@@ -59,39 +60,51 @@ def validate_rrule(rrule: str) -> bool:
     return _parse_cron(rrule) is not None
 
 
-def next_n_runs(rrule: str, n: int = 3, *, after: datetime | None = None) -> list[datetime]:
-    """Return the next N scheduled fire times for `rrule` after `after` (UTC).
+def next_n_runs(
+    rrule: str,
+    n: int = 3,
+    *,
+    after: datetime | None = None,
+    timezone: str = "UTC",
+) -> list[datetime]:
+    """Return the next N wall-clock fires in the persisted IANA ``timezone``.
 
     Returns an empty list if the expression is invalid.  The returned datetimes
-    are timezone-aware (UTC or the tz embedded in the CronSim start point)."""
+    are timezone-aware. Legacy schedules explicitly default to UTC."""
     start = after if after is not None else datetime.now(UTC)
-    # CronSim yields times >= start; use start directly so we get fires from now.
     try:
-        it = CronSim(rrule, start)
+        zone = ZoneInfo(timezone)
+        it = CronSim(rrule, start.astimezone(zone))
         results: list[datetime] = []
         for dt in it:
             results.append(dt)
             if len(results) >= n:
                 break
         return results
-    except (CronSimError, ValueError, TypeError, StopIteration):
+    except (CronSimError, ZoneInfoNotFoundError, ValueError, TypeError, StopIteration):
         return []
 
 
-def _next_future_run(rrule: str, after: datetime) -> datetime | None:
+def _next_future_run(
+    rrule: str,
+    after: datetime,
+    *,
+    timezone: str = "UTC",
+) -> datetime | None:
     """First fire time strictly after `after` (the coalesce-advance step).
 
     This is the key invariant for run-once coalescing: we always advance
     next_run PAST the current time, so we never fire the same fire twice even
     if N fires were missed while the server was down."""
     try:
-        it = CronSim(rrule, after)
+        zone = ZoneInfo(timezone)
+        it = CronSim(rrule, after.astimezone(zone))
         for dt in it:
             if dt > after:
                 return dt
             # cronsim may yield `after` itself; skip until strictly past.
         return None
-    except (CronSimError, ValueError, TypeError, StopIteration):
+    except (CronSimError, ZoneInfoNotFoundError, ValueError, TypeError, StopIteration):
         return None
 
 
@@ -128,6 +141,7 @@ class ScheduleManager:
         owner_id: str,
         rrule: str,
         description: str,
+        timezone: str = "UTC",
         depth: str | None = None,
         model_override: str | None = None,
     ) -> Schedule:
@@ -135,14 +149,19 @@ class ScheduleManager:
         expression is invalid (never silent — callers surface this to the user)."""
         if not validate_rrule(rrule):
             raise ValueError(f"Invalid cron expression: {rrule!r}")
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone: {timezone!r}") from exc
 
         now = self._now_fn()
-        next_run = _next_future_run(rrule, now)
+        next_run = _next_future_run(rrule, now, timezone=timezone)
         sched = Schedule(
             conversation_id=conversation_id,
             owner_id=owner_id,
             rrule=rrule,
             description=description or rrule,
+            timezone=timezone,
             depth=depth,
             model_override=model_override,
             created_at=now,
@@ -160,9 +179,15 @@ class ScheduleManager:
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
         return self._store.delete_schedule(schedule_id, owner_id=owner_id)
 
-    def preview_next_runs(self, rrule: str, n: int = 3) -> list[datetime]:
+    def preview_next_runs(
+        self,
+        rrule: str,
+        n: int = 3,
+        *,
+        timezone: str = "UTC",
+    ) -> list[datetime]:
         """Next N run times from now. Returns [] for invalid expressions."""
-        return next_n_runs(rrule, n, after=self._now_fn())
+        return next_n_runs(rrule, n, after=self._now_fn(), timezone=timezone)
 
     async def fire_now(self, schedule_id: str, *, owner_id: str) -> bool:
         """Run a schedule IMMEDIATELY, out of band (gap #98 — the UI/harness 'fire now').
@@ -266,7 +291,11 @@ class ScheduleManager:
                 coalesced = self._was_coalesced(sched, now, next_run)
                 await self._execute_run(sched, coalesced=coalesced)
                 # Advance to the next FUTURE fire (strictly after now).
-                next_future = _next_future_run(sched.rrule, now)
+                next_future = _next_future_run(
+                    sched.rrule,
+                    now,
+                    timezone=sched.timezone,
+                )
                 self._store.update_schedule_next_run(
                     sched.schedule_id,
                     next_future.isoformat() if next_future else None,
@@ -280,7 +309,8 @@ class ScheduleManager:
         More than one → coalesced.  This is informational; the policy (one run
         regardless) is enforced by the caller — this just labels the run."""
         try:
-            it = CronSim(sched.rrule, next_run)
+            zone = ZoneInfo(sched.timezone)
+            it = CronSim(sched.rrule, next_run.astimezone(zone))
             count = 0
             for dt in it:
                 if dt > now:
@@ -289,7 +319,7 @@ class ScheduleManager:
                 if count > 1:
                     return True
             return False
-        except (CronSimError, ValueError, TypeError):
+        except (CronSimError, ZoneInfoNotFoundError, ValueError, TypeError):
             return False
 
     async def _original_query(self, conversation_id: str) -> str | None:

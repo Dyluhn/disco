@@ -4338,6 +4338,7 @@ class ConversationRuntime:
         owner_id: str,
         rrule: str,
         description: str,
+        timezone: str = "UTC",
         depth: str | None = None,
         model_override: str | None = None,
     ) -> dict:
@@ -4346,6 +4347,7 @@ class ConversationRuntime:
             owner_id=owner_id,
             rrule=rrule,
             description=description,
+            timezone=timezone,
             depth=depth,
             model_override=model_override,
         )
@@ -4407,8 +4409,14 @@ class ConversationRuntime:
             include_unclaimed_legacy=include_unclaimed_legacy,
         )
 
-    def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
-        return self._schedule.preview_schedule_runs(rrule, n)
+    def preview_schedule_runs(
+        self,
+        rrule: str,
+        n: int = 3,
+        *,
+        timezone: str = "UTC",
+    ) -> list[str]:
+        return self._schedule.preview_schedule_runs(rrule, n, timezone=timezone)
 
     # -- activity dashboard ----------------------------------------------------
 

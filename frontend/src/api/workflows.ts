@@ -333,12 +333,14 @@ export async function scheduleWorkflow(input: {
   instanceId: string;
   instanceDigest: string;
   cron: string;
+  timezone: string;
 }): Promise<Record<string, unknown>> {
   if (agentLive()) {
     return agentSend<Record<string, unknown>>("POST", "/api/workflows/schedules", {
       instance_id: input.instanceId,
       instance_digest: input.instanceDigest,
       cron: input.cron,
+      timezone: input.timezone,
       enabled: true,
     });
   }
@@ -349,6 +351,7 @@ export async function scheduleWorkflow(input: {
       instance_id: input.instanceId,
       instance_digest: input.instanceDigest,
       cron: input.cron,
+      timezone: input.timezone,
       enabled: true,
     },
   };

@@ -46,6 +46,7 @@ def make_schedules_router(
                 owner_id=current_owner_id(request),
                 rrule=body.rrule,
                 description=body.description,
+                timezone=body.timezone,
                 depth=body.depth,
                 model_override=schedule_model,
             )
@@ -94,13 +95,17 @@ def make_schedules_router(
         saving a schedule — the confirm card shows next-3-runs to the user."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        times = runtime.preview_schedule_runs(body.rrule, body.n)
+        times = runtime.preview_schedule_runs(
+            body.rrule,
+            body.n,
+            timezone=body.timezone,
+        )
         if not times:
             raise HTTPException(
                 status_code=422,
                 detail={"reason": f"Invalid or non-firing cron expression: {body.rrule!r}"},
             )
-        return {"next_runs": times, "rrule": body.rrule}
+        return {"next_runs": times, "rrule": body.rrule, "timezone": body.timezone}
 
     @router.post("/api/workflows/schedules")
     async def create_workflow_schedule(body: ScheduleSpec, request: Request) -> dict:
