@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 
 import pytest
-from disco.agent_server.verify.model_verifier import ModelVerifier, _SYSTEM_PROMPT
+from disco.agent_server.verify.model_verifier import (
+    _SYSTEM_PROMPT,
+    ModelVerifier,
+    _structural_failure_cause,
+)
 from disco.core.llm import (
     CompletionResponse,
+    LLMTransientError,
     ModelRole,
     Requirement,
     TokenUsage,
@@ -31,6 +36,18 @@ class _Router:
             finish_reason="stop",
             model_used="verifier-fake",
         )
+
+
+def test_model_verifier_provider_failure_cause_retains_only_safe_http_shape() -> None:
+    safe = LLMTransientError("provider opencode-go returned HTTP 429")
+    unsafe = LLMTransientError("upstream body contained API_KEY=do-not-retain")
+    assert _structural_failure_cause(safe) == (
+        "LLMTransientError: provider opencode-go returned HTTP 429"
+    )
+    assert _structural_failure_cause(unsafe) == "LLMTransientError"
+    assert _structural_failure_cause(LLMTransientError("connection error: secret-url")) == (
+        "LLMTransientError: connection error"
+    )
 
 
 @pytest.mark.asyncio
@@ -183,3 +200,27 @@ async def test_model_verifier_plain_web_prompt_unchanged() -> None:
     assert req.messages[0].content == _SYSTEM_PROMPT
     payload = json.loads(req.messages[1].content)
     assert "medium" not in payload
+
+
+@pytest.mark.asyncio
+async def test_model_verifier_parse_failure_is_structural_bounded_and_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_response = "TOP_SECRET_PROVIDER_RESPONSE_NOT_JSON"
+    router = _Router(secret_response)
+    seed = VerifierContextSeed(
+        contract={"kind": "static.site"},
+        deliverable_paths=["index.html"],
+        check_results={"passed": True},
+    )
+
+    with caplog.at_level("WARNING"):
+        verdict = await ModelVerifier(router, conversation_id="conv").judge(seed)
+
+    assert verdict.verdict == "unavailable"
+    assert verdict.failure_fingerprint == "model_verifier_unavailable"
+    assert "JSONDecodeError" in verdict.detail
+    assert "line 1 column 1" in verdict.detail
+    assert secret_response not in verdict.detail
+    assert secret_response not in caplog.text
+    assert "JSONDecodeError" in caplog.text

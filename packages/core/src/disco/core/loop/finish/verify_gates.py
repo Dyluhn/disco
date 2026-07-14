@@ -51,6 +51,50 @@ _STARTUP_DIAGNOSTIC_SECRET_RE = re.compile(
     r"(?i)\b(?:authorization|api[_-]?key|token|secret)\b"
     r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s;]+"
 )
+_MODEL_VERIFIER_META_KEYS = (
+    "model_verifier_status",
+    "model_verifier_applied",
+    "model_verifier_cause",
+)
+_SAFE_MODEL_VERIFIER_CAUSE_RE = re.compile(
+    r"(?:"
+    r"model verifier unavailable \("
+    r"(?:JSONDecodeError: [A-Za-z0-9 _.-]{1,100} at line \d+ column \d+|"
+    r"ValidationError: \d+ field error\(s\) \[[A-Za-z0-9_,.-]{1,160}\]|"
+    r"LLM[A-Za-z]+Error(?:: provider [A-Za-z0-9_.-]{1,80} returned HTTP \d{3}"
+    r"(?: type=[A-Za-z0-9_.-]{1,80})?|: (?:request timed out|connection error))?)"
+    r"\)|"
+    r"model verifier deadline exceeded|"
+    r"judge exception: [A-Za-z_][A-Za-z0-9_]{0,100}|"
+    r"deterministic host failure floor retained"
+    r")"
+)
+
+
+def _bounded_model_verifier_cause(value: object) -> str:
+    clean = "".join(
+        char for char in str(value or "") if char in "\n\t" or ord(char) >= 32
+    )
+    clean = _STARTUP_DIAGNOSTIC_SECRET_RE.sub("<redacted>", clean)
+    clean = clean[:256]
+    if _SAFE_MODEL_VERIFIER_CAUSE_RE.fullmatch(clean):
+        return clean
+    return "model verifier unavailable (unclassified structural failure)"
+
+
+def _model_verifier_fallback(
+    base: dict[str, Any], *, status: str, cause: object
+) -> dict[str, Any]:
+    out = dict(base)
+    out.update(
+        {
+            "model_verifier": True,
+            "model_verifier_status": status,
+            "model_verifier_applied": False,
+            "model_verifier_cause": _bounded_model_verifier_cause(cause),
+        }
+    )
+    return out
 
 
 class _WorkflowPathParams(dict[str, object]):
@@ -716,6 +760,8 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 ),
                 "failures": list(typed.failures),
                 "model_verifier": True,
+                "model_verifier_status": typed.verdict,
+                "model_verifier_applied": True,
             }
         )
         return out
@@ -761,28 +807,44 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 self._loop.conversation_id,
                 deliverable.artifact_path,
             )
-            return host_verdict
-        except Exception:  # noqa: BLE001 — verifier judge must not crash finish flow
+            return _model_verifier_fallback(
+                host_verdict,
+                status="timeout",
+                cause="model verifier deadline exceeded",
+            )
+        except Exception as exc:  # noqa: BLE001 — verifier judge must not crash finish flow
             _LOG.warning(
                 "model verifier failed for %s:%s",
                 self._loop.conversation_id,
                 deliverable.artifact_path,
                 exc_info=True,
             )
-            return host_verdict
+            return _model_verifier_fallback(
+                host_verdict,
+                status="error",
+                cause=f"judge exception: {type(exc).__name__}",
+            )
 
         judged = self._typed_verifier_verdict_to_host_verdict(host_verdict, typed)
+        if (
+            typed.verdict == "unavailable"
+            and typed.failure_fingerprint == "model_verifier_unavailable"
+        ):
+            return _model_verifier_fallback(
+                host_verdict,
+                status="unavailable",
+                cause=typed.detail or typed.failure_fingerprint,
+            )
         # Deterministic host failures are a hard floor. A reading/vision judge can
         # add detail to a failure, but it cannot green-light a broken runtime.
         if not host_verdict.get("passed") and (
             typed.verified or typed.verdict in {"unavailable", "unverifiable"}
         ):
-            return host_verdict
-        if (
-            typed.verdict == "unavailable"
-            and typed.failure_fingerprint == "model_verifier_unavailable"
-        ):
-            return host_verdict
+            return _model_verifier_fallback(
+                host_verdict,
+                status=typed.verdict,
+                cause="deterministic host failure floor retained",
+            )
         return judged
 
     async def _host_verify_failure_disposition(
@@ -948,6 +1010,13 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 else f"Browser startup diagnostic: {startup_diagnostic}"
             )
 
+        verifier_meta: dict[str, Any] = {
+            "requested_verification": deliverable.requested_verification
+        }
+        for key in _MODEL_VERIFIER_META_KEYS:
+            if key in host_verdict:
+                verifier_meta[key] = host_verdict[key]
+
         await self._loop._emit(
             VerifierShadowEvent(
                 artifact_path=deliverable.artifact_path,
@@ -956,7 +1025,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 host_verdict=host_label,
                 agreement=agreement,
                 detail=detail or None,
-                meta={"requested_verification": deliverable.requested_verification},
+                meta=dict(verifier_meta),
             )
         )
         verdict_event = await self._loop._emit(
@@ -967,7 +1036,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 verdict=host_label,
                 detail=detail or None,
                 failures=self._verdict_failures(host_verdict),
-                meta={"requested_verification": deliverable.requested_verification},
+                meta=dict(verifier_meta),
             )
         )
         hook = getattr(self._loop, "_host_verifier_verdict_hook", None)

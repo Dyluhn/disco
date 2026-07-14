@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from disco.core.events import LLMMessage
@@ -17,11 +18,13 @@ from disco.core.llm import (
     CallContext,
     CapabilityProfile,
     CompletionRequest,
+    LLMError,
     ModelRole,
     OperatingMode,
     Requirement,
 )
 from disco.core.loop import TypedVerifierVerdict, VerifierContextSeed
+from pydantic import ValidationError
 
 _LOG = logging.getLogger(__name__)
 
@@ -101,6 +104,44 @@ def _normalise_verdict_payload(obj: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _structural_failure_cause(exc: Exception) -> str:
+    """Describe response failures without retaining model output or credentials."""
+    if isinstance(exc, json.JSONDecodeError):
+        return (
+            f"JSONDecodeError: {exc.msg} at line {exc.lineno} "
+            f"column {exc.colno}"
+        )
+    if isinstance(exc, ValidationError):
+        error_types = sorted(
+            {
+                str(error.get("type") or "validation_error")
+                for error in exc.errors(include_url=False, include_input=False)
+            }
+        )
+        return (
+            f"ValidationError: {exc.error_count()} field error(s) "
+            f"[{','.join(error_types[:8])}]"
+        )
+    if isinstance(exc, LLMError):
+        # OpenAIProvider deliberately raises this bounded form without the raw
+        # response body. Retain it when it matches that structural contract.
+        safe = str(exc)
+        if re.fullmatch(
+            r"provider [A-Za-z0-9_.-]{1,80} returned HTTP \d{3}"
+            r"(?: type=[A-Za-z0-9_.-]{1,80})?",
+            safe,
+        ):
+            return f"{type(exc).__name__}: {safe}"
+        if safe.startswith("request timed out:"):
+            return f"{type(exc).__name__}: request timed out"
+        if safe.startswith("connection error:"):
+            return f"{type(exc).__name__}: connection error"
+        return type(exc).__name__
+    # Arbitrary router/provider exceptions can embed request/response bodies in
+    # str(exc). Persist only their class; HTTP/provider layers own richer safe logs.
+    return type(exc).__name__
+
+
 class ModelVerifier:
     """LLM-backed verifier judge over a bounded seed."""
 
@@ -138,12 +179,13 @@ class ModelVerifier:
             obj = _normalise_verdict_payload(_extract_json_object(resp.text))
             return TypedVerifierVerdict.model_validate(obj)
         except Exception as exc:  # noqa: BLE001
-            _LOG.warning("model verifier unavailable", exc_info=True)
+            cause = _structural_failure_cause(exc)
+            _LOG.warning("model verifier unavailable (%s)", cause)
             return TypedVerifierVerdict(
                 verified=False,
                 verdict="unavailable",
-                detail=f"model verifier unavailable: {exc}",
-                failures=[{"kind": "verifier_unavailable", "message": str(exc)}],
+                detail=f"model verifier unavailable ({cause})",
+                failures=[{"kind": "verifier_unavailable", "message": cause}],
                 next_action="",
                 failure_fingerprint="model_verifier_unavailable",
             )

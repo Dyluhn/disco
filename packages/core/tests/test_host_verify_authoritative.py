@@ -13,6 +13,7 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
     ToolResult,
+    VerifierShadowEvent,
     VerifierVerdictEvent,
 )
 from disco.core.events import EventSource
@@ -25,6 +26,7 @@ from disco.core.loop import (
     VerifierContextSeed,
     host_verify_authoritative_enabled,
 )
+from disco.core.loop.finish.verify_gates import _bounded_model_verifier_cause
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -148,6 +150,12 @@ def _env_messages(events) -> list[str]:
 
 def _statuses(events) -> list[tuple[str, str | None]]:
     return [(e.status.value, e.detail) for e in events if isinstance(e, StatusEvent)]
+
+
+def test_model_verifier_event_cause_rejects_untrusted_free_form_text() -> None:
+    assert _bounded_model_verifier_cause(
+        "provider echoed TOP_SECRET_RESPONSE_CONTENT"
+    ) == "model verifier unavailable (unclassified structural failure)"
 
 
 @pytest.mark.asyncio
@@ -290,6 +298,60 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
     assert "Typed failure only." in builder_context
     assert "RAW_CHECK_SECRET" not in builder_context
     assert judge.transcript not in builder_context
+
+
+@pytest.mark.asyncio
+async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_events() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    judge = _VerifierJudge(
+        TypedVerifierVerdict(
+            verified=False,
+            verdict="unavailable",
+            detail=(
+                "model verifier unavailable "
+                "(JSONDecodeError: Expecting value at line 1 column 1)"
+            ),
+            failures=[
+                {
+                    "kind": "verifier_unavailable",
+                    "message": "JSONDecodeError: line 1 column 1",
+                }
+            ],
+            failure_fingerprint="model_verifier_unavailable",
+        )
+    )
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+        verifier_judge=judge,
+    )
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events("conv")
+    verdict = next(event for event in events if isinstance(event, VerifierVerdictEvent))
+    shadow = next(event for event in events if isinstance(event, VerifierShadowEvent))
+    # Deterministic host evidence remains authoritative and green, but the
+    # independent judge degradation can no longer disappear into that verdict.
+    assert verdict.verified is True and verdict.verdict == "pass"
+    for event in (verdict, shadow):
+        assert event.meta["model_verifier_status"] == "unavailable"
+        assert event.meta["model_verifier_applied"] is False
+        assert event.meta["model_verifier_cause"] == (
+            "model verifier unavailable "
+            "(JSONDecodeError: Expecting value at line 1 column 1)"
+        )
 
 
 @pytest.mark.asyncio
