@@ -204,6 +204,7 @@ class _HostBusServer:
             port=self._port,
             loop="asyncio",
             log_level="warning",
+            ws="websockets-sansio",
             ssl_certfile=str(self._cert_path),
             ssl_keyfile=str(self._key_path),
         )
