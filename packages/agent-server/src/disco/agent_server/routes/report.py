@@ -7,11 +7,11 @@ import contextlib
 import json
 import posixpath
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from disco.core import MessageEvent, ReportEvent
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -53,6 +53,12 @@ class AudioBody(BaseModel):
     """
 
     follow_up_seqs: list[int] | None = None
+
+
+# Keep the public optional-body defaults unchanged while making FastAPI's body
+# binding explicit. FastAPI deep-copies field defaults for each request.
+_DEFAULT_EXPORT_BODY = ExportBody()
+_DEFAULT_AUDIO_BODY = AudioBody()
 
 
 # ── Helper: gather follow-up pairs from the event log ─────────────────────────
@@ -103,10 +109,7 @@ def _gather_follow_up_pairs(
         if msg.message.role == "user" and (msg.seq or -1) in selected:
             question = msg.message.content or ""
             answer = ""
-            if (
-                i + 1 < len(post_report)
-                and post_report[i + 1].message.role == "assistant"
-            ):
+            if i + 1 < len(post_report) and post_report[i + 1].message.role == "assistant":
                 answer = post_report[i + 1].message.content or ""
                 i += 2
             else:
@@ -149,9 +152,7 @@ async def _resolve_export_payload(
         from disco.core.brand import is_valid_template as _is_valid_template
 
         if not _is_valid_template(f"{theme}-{mode}"):
-            raise HTTPException(
-                status_code=400, detail=f"Unknown template {theme!r}/{mode!r}"
-            )
+            raise HTTPException(status_code=400, detail=f"Unknown template {theme!r}/{mode!r}")
 
     # Both formats serialize inline so theme/mode, follow-ups, AND the generated
     # TITLE (W-10) are honored.  The runtime.export_report path threads none of
@@ -168,9 +169,7 @@ async def _resolve_export_payload(
         (e for e in reversed(events) if isinstance(e, ReportEvent)), None
     )
     if report is None:
-        raise HTTPException(
-            status_code=404, detail={"ok": False, "reason": "no_report"}
-        )
+        raise HTTPException(status_code=404, detail={"ok": False, "reason": "no_report"})
 
     # W-10: prefer the real generated conversation title for the cover/title
     # page; the serializers fall back to report.query when it's None/empty.
@@ -239,9 +238,7 @@ async def _resolve_audio_inputs(
 # ── Router factory ────────────────────────────────────────────────────────────
 
 
-def make_report_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/conversations/{conversation_id}/report/export")
@@ -249,7 +246,7 @@ def make_report_router(
         conversation_id: str,
         request: Request,
         fmt: str = Query(...),
-        body: ExportBody = ExportBody(),
+        body: Annotated[ExportBody, Body()] = _DEFAULT_EXPORT_BODY,
     ) -> Response:
         """Export the latest Deep Research report as MD or PDF.
 
@@ -261,9 +258,7 @@ def make_report_router(
         Returns 404 when no ReportEvent exists for this conversation.
         Returns 400 for an unknown format."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
 
         valid_fmts = frozenset({"md", "pdf"})
@@ -306,7 +301,7 @@ def make_report_router(
         conversation_id: str,
         request: Request,
         mode: str = Query("podcast"),
-        body: AudioBody = AudioBody(),
+        body: Annotated[AudioBody, Body()] = _DEFAULT_AUDIO_BODY,
     ) -> dict:
         """Generate (or return the cached) audio overview for the latest Deep
         Research report on this conversation.  Runs the audio pipeline in-process
@@ -416,13 +411,9 @@ def make_report_router(
             except TtsDisabled:
                 await queue.put({"stage": "error", "reason": "tts_disabled"})
             except (TtsBackendError, TurnScriptError) as exc:
-                await queue.put(
-                    {"stage": "error", **_audio_generation_failure(exc)}
-                )
+                await queue.put({"stage": "error", **_audio_generation_failure(exc)})
             except Exception as exc:  # never hang the stream on an unexpected error
-                await queue.put(
-                    {"stage": "error", "reason": "internal", "detail": str(exc)}
-                )
+                await queue.put({"stage": "error", "reason": "internal", "detail": str(exc)})
             finally:
                 await queue.put(None)  # sentinel: generation finished
 
@@ -451,9 +442,7 @@ def make_report_router(
         )
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
-    async def report_audio_file(
-        conversation_id: str, name: str, request: Request
-    ) -> Response:
+    async def report_audio_file(conversation_id: str, name: str, request: Request) -> Response:
         """Serve a cached audio-overview file (mp3 / transcript) as an attachment.
         Jailed: canonical basename only + resolve-jail to this conversation's cache."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)

@@ -64,7 +64,11 @@ def _make_report() -> ReportEvent:
         ],
         passages=[
             {"id": "p0", "source_title": "Avian Speed DB", "source_url": "https://example.com/p0"},
-            {"id": "p1", "source_title": "Ornithology Journal", "source_url": "https://example.com/p1"},
+            {
+                "id": "p1",
+                "source_title": "Ornithology Journal",
+                "source_url": "https://example.com/p1",
+            },
         ],
         all_hits=[],
         unsupported_count=1,
@@ -76,7 +80,7 @@ def _make_report() -> ReportEvent:
 def _fake_pcm(seconds: float = 0.1, sample_rate: int = 24000) -> np.ndarray:
     """Tiny float32 PCM — enough to mix and encode but tiny enough not to be slow."""
     n = int(seconds * sample_rate)
-    return (np.ones(n, dtype=np.float32) * 0.1)
+    return np.ones(n, dtype=np.float32) * 0.1
 
 
 # A canned, well-formed turn-script — the LLM call is monkeypatched to return
@@ -105,7 +109,12 @@ def _install_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
         return _fake_pcm()
 
     async def _fake_remote(
-        text: str, voice: str, base_url: str, *, api_key: str = "", model: str = ""  # noqa: ARG001
+        text: str,
+        voice: str,
+        base_url: str,
+        *,
+        api_key: str = "",
+        model: str = "",  # noqa: ARG001
     ) -> np.ndarray:
         return _fake_pcm()
 
@@ -201,9 +210,7 @@ def test_generate_report_audio_in_process(
     assert "swallow" in tr.lower()
 
 
-def test_generate_report_audio_disabled(
-    configure_tts, tts_disabled, tmp_path
-) -> None:
+def test_generate_report_audio_disabled(configure_tts, tts_disabled, tmp_path) -> None:
     """`tts.enabled = False` → :class:`TtsDisabled` (NOT a fake success)."""
     configure_tts(tts_disabled)
     out_dir = tmp_path / "conv_disabled" / "audio"
@@ -217,9 +224,7 @@ def test_generate_report_audio_disabled(
     assert not (out_dir / "audio_overview.mp3").exists()
 
 
-def test_generate_report_audio_synth_failure(
-    configure_tts, tmp_path, monkeypatch
-) -> None:
+def test_generate_report_audio_synth_failure(configure_tts, tmp_path, monkeypatch) -> None:
     """A synth that returns None → :class:`TtsBackendError`."""
     tts = TtsSettings(enabled=True, provider="bundled")
     configure_tts(tts)
@@ -253,6 +258,42 @@ def test_endpoint_404_no_report(client: TestClient) -> None:
     detail = r.json()["detail"]
     assert detail["ok"] is False
     assert detail["reason"] == "no_report"
+
+
+def test_report_route_optional_body_contract(client: TestClient) -> None:
+    """Absent, empty, and null bodies retain the existing default-body contract."""
+    cid = _create_conv(client)
+    paths = (
+        f"/api/conversations/{cid}/report/export?fmt=md",
+        f"/conversations/{cid}/report/audio",
+    )
+    for path in paths:
+        for request_kwargs in ({}, {"json": {}}, {"json": None}):
+            response = client.post(path, **request_kwargs)
+            assert response.status_code == 404, response.text
+            assert response.json()["detail"]["reason"] == "no_report"
+
+    openapi = client.app.openapi()
+    request_bodies = {
+        path: openapi["paths"][path]["post"]["requestBody"]
+        for path in (
+            "/api/conversations/{conversation_id}/report/export",
+            "/conversations/{conversation_id}/report/audio",
+        )
+    }
+    assert all("required" not in body for body in request_bodies.values())
+    assert request_bodies["/api/conversations/{conversation_id}/report/export"]["content"][
+        "application/json"
+    ]["schema"]["default"] == {
+        "theme": "disco",
+        "mode": "light",
+    }
+    assert (
+        request_bodies["/conversations/{conversation_id}/report/audio"]["content"][
+            "application/json"
+        ]["schema"]["default"]
+        == {}
+    )
 
 
 def test_endpoint_503_tts_disabled(
@@ -364,10 +405,12 @@ def test_report_http_adapter_preserves_provider_finish_reason(monkeypatch) -> No
 
         def json(self) -> dict:
             return {
-                "choices": [{
-                    "message": {"content": "{"},
-                    "finish_reason": "length",
-                }]
+                "choices": [
+                    {
+                        "message": {"content": "{"},
+                        "finish_reason": "length",
+                    }
+                ]
             }
 
     class _Client:
@@ -524,6 +567,7 @@ def test_endpoint_idempotent(
         raise RuntimeError("LLM should NOT be called on a cache hit")
 
     from disco.tools.builtin import audio_overview as _ao
+
     _ao._call_llm = _broken_llm  # type: ignore[attr-defined]
 
     r2 = client.post(f"/conversations/{cid}/report/audio")
@@ -579,9 +623,7 @@ def test_report_to_overview_text_strips_citations() -> None:
 # ---- WALK-21 / D3: mode-aware cache + single-speaker tests ------------------
 
 
-def test_mode_aware_cache_key_no_collision(
-    configure_tts, tts_enabled, tmp_path
-) -> None:
+def test_mode_aware_cache_key_no_collision(configure_tts, tts_enabled, tmp_path) -> None:
     """Podcast and single modes write DIFFERENT cache files in the same out_dir.
 
     This prevents the two modes from colliding when both are requested for the
@@ -634,9 +676,7 @@ def test_mode_aware_cache_key_no_collision(
     assert mp3_single.exists()
 
 
-def test_single_mode_transcript_no_host_labels(
-    configure_tts, tts_enabled, tmp_path
-) -> None:
+def test_single_mode_transcript_no_host_labels(configure_tts, tts_enabled, tmp_path) -> None:
     """Single-mode transcript must NOT emit 'Host A' / 'Host B' labels (WALK-21 / D3).
     The voice is just spoken text — no dialogue attribution."""
     configure_tts(tts_enabled)
@@ -701,9 +741,7 @@ def test_endpoint_single_mode_200(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] is True
-    assert "single" in body["mp3_url"], (
-        f"Expected 'single' in mp3_url; got {body['mp3_url']!r}"
-    )
+    assert "single" in body["mp3_url"], f"Expected 'single' in mp3_url; got {body['mp3_url']!r}"
 
 
 # ---- WALK-13 / D1: reporthook test -----------------------------------------
@@ -723,6 +761,7 @@ def test_fetch_reporthook_logs_progress(tmp_path, monkeypatch) -> None:
             reporthook(2, 50, 100)  # 100 %
         # Write a dummy file so rename works.
         import pathlib
+
         pathlib.Path(dest).write_bytes(b"fake")
         return (dest, {})
 
@@ -801,6 +840,7 @@ def test_generate_report_audio_with_follow_ups(
     # Cache file must include a hash that encodes the follow-up content (B3:
     # content-hash cache key); the file name format is audio_overview_<mode>_<hash12>.mp3.
     import re as _re
+
     assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", mp3_path.name), (
         f"expected content-hash filename, got {mp3_path.name!r}"
     )
@@ -808,7 +848,8 @@ def test_generate_report_audio_with_follow_ups(
     # The LLM payload user-content must include the follow-up text.
     assert len(captured_payloads) >= 1
     user_content = " ".join(
-        m.get("content", "") for m in captured_payloads[0].get("messages", [])
+        m.get("content", "")
+        for m in captured_payloads[0].get("messages", [])
         if m.get("role") == "user"
     )
     assert "European swallow" in user_content or "Follow-up" in user_content
@@ -824,9 +865,7 @@ def test_generate_report_audio_follow_ups_separate_cache(
     out_dir = tmp_path / "conv_sep" / "audio"
 
     base_mp3, _ = asyncio.run(
-        report_audio_mod.generate_report_audio(
-            report, tts_settings=tts_enabled, out_dir=out_dir
-        )
+        report_audio_mod.generate_report_audio(report, tts_settings=tts_enabled, out_dir=out_dir)
     )
     fu_mp3, _ = asyncio.run(
         report_audio_mod.generate_report_audio(
@@ -838,6 +877,7 @@ def test_generate_report_audio_follow_ups_separate_cache(
     assert base_mp3 != fu_mp3, "base and follow-up audio must use distinct filenames"
     # Both names follow the audio_overview_<mode>_<hash12> pattern.
     import re as _re
+
     assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", base_mp3.name)
     assert _re.search(r"audio_overview_\w+_[0-9a-f]{12}\.mp3$", fu_mp3.name)
 
@@ -1052,9 +1092,7 @@ def test_progress_emits_download_only_when_missing(
     assert any(e["pct"] == 100 for e in dl)  # reaches 100 % at the end of the file
 
 
-def test_progress_cache_hit_no_download(
-    configure_tts, tts_enabled, tmp_path, monkeypatch
-) -> None:
+def test_progress_cache_hit_no_download(configure_tts, tts_enabled, tmp_path, monkeypatch) -> None:
     """W-08: a warm-cache run emits cache_hit and NEVER downloading_model — even
     when the model files happen to be absent (a cache hit needs no synth)."""
     configure_tts(tts_enabled)
