@@ -874,6 +874,11 @@ class AgentLoop:
         # unlike cancel() which must take the lock to emit IDLE); the run() loop
         # observes it at its next step boundary, emits PAUSED, and returns.
         self._pause_requested = asyncio.Event()
+        # F12 — cancel/steer/pause can wake the driver's otherwise idle
+        # 10/30/90-second provider backoff without aborting an in-flight model
+        # response or tool side effect. Control methods set this before waiting
+        # on `_lock`; the driver releases the lock at the next safe checkpoint.
+        self._retry_interrupt = asyncio.Event()
         # Watch-it-write sink (optional). The runtime wires this to the store's
         # ephemeral broadcast; when set, the driver's streamed tool-call arg
         # fragments are decoded into growing file-content frames and published
@@ -1790,6 +1795,7 @@ class AgentLoop:
                 # mid-model-step interrupt would need driver cooperation.
                 if self._pause_requested.is_set():
                     self._pause_requested.clear()
+                    self._retry_interrupt.clear()
                     await self._emit(StatusEvent(status=ConversationStatus.PAUSED))
                     return await self.get_state()
 
@@ -2131,47 +2137,51 @@ class AgentLoop:
         """Append a USER message. Never dropped; picked up at the next iteration
         (the next View includes it). If the conversation had FINISHED/STUCK, it
         reopens to IDLE (§2). `steer` differs only in UI intent (BoD §13.4)."""
-        async with self._lock:
-            state = await self.get_state()
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.USER,
-                    message=LLMMessage(role="user", content=text),
-                    meta={"steer": True} if steer else {},
+        self._retry_interrupt.set()
+        try:
+            async with self._lock:
+                state = await self.get_state()
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(role="user", content=text),
+                        meta={"steer": True} if steer else {},
+                    )
                 )
-            )
-            self._reconcile_mode_from_events(await self._events())
-            if state.execution_status in (
-                ConversationStatus.FINISHED,
-                ConversationStatus.STUCK,
-            ):
-                await self._emit(StatusEvent(status=ConversationStatus.IDLE))
-            # DURABLE NO_REPLAN fix — deterministic re-plan at steer INGEST. A
-            # scope-adding/revision steer on an APPROVED plan must re-enter PLANNING the
-            # MOMENT it arrives, so the next write is gated by `_gate_planning_mode` until
-            # a revised plan is approved (Manus-UX: a mid-run scope change surfaces a
-            # VISIBLE re-plan boundary, not a silent build on the stale plan). The two
-            # polling guards (`_maybe_reenter_planning_for_followup` + the mid-step gate)
-            # are POLLING-based and RACE with an in-flight turn whose response buries the
-            # unprocessed-user marker; doing it at ingest is race-free. SKIP while a
-            # confirmation / plan-approval is pending (those control-pending states are
-            # owned by confirm/reject/approve). Q&A is exempt (`is_revision_intent`).
-            if (
-                steer
-                and self.mode != OperatingMode.PLANNING
-                and state.execution_status
-                not in (
-                    ConversationStatus.WAITING_FOR_CONFIRMATION,
-                    ConversationStatus.AWAITING_PLAN_APPROVAL,
-                )
-                and signals.is_revision_intent(text)
-            ):
-                evs = await self._events()
-                if not signals.current_blocked_question_landing(evs) and any(
-                    isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in evs
+                self._reconcile_mode_from_events(await self._events())
+                if state.execution_status in (
+                    ConversationStatus.FINISHED,
+                    ConversationStatus.STUCK,
                 ):
-                    await self._enter_revision_planning(text)
-        return await self.get_state()
+                    await self._emit(StatusEvent(status=ConversationStatus.IDLE))
+                # DURABLE NO_REPLAN fix — deterministic re-plan at steer INGEST. A
+                # scope-adding/revision steer on an APPROVED plan must re-enter PLANNING the
+                # MOMENT it arrives, so the next write is gated by `_gate_planning_mode` until
+                # a revised plan is approved (Manus-UX: a mid-run scope change surfaces a
+                # VISIBLE re-plan boundary, not a silent build on the stale plan). The two
+                # polling guards (`_maybe_reenter_planning_for_followup` + the mid-step gate)
+                # are POLLING-based and RACE with an in-flight turn whose response buries the
+                # unprocessed-user marker; doing it at ingest is race-free. SKIP while a
+                # confirmation / plan-approval is pending (those control-pending states are
+                # owned by confirm/reject/approve). Q&A is exempt (`is_revision_intent`).
+                if (
+                    steer
+                    and self.mode != OperatingMode.PLANNING
+                    and state.execution_status
+                    not in (
+                        ConversationStatus.WAITING_FOR_CONFIRMATION,
+                        ConversationStatus.AWAITING_PLAN_APPROVAL,
+                    )
+                    and signals.is_revision_intent(text)
+                ):
+                    evs = await self._events()
+                    if not signals.current_blocked_question_landing(evs) and any(
+                        isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in evs
+                    ):
+                        await self._enter_revision_planning(text)
+            return await self.get_state()
+        finally:
+            self._retry_interrupt.clear()
 
     async def steer(self, text: str) -> ConversationState:
         return await self.send_message(text, steer=True)
@@ -2699,10 +2709,12 @@ class AgentLoop:
         "pause does nothing until I steer" bug. Instead set a flag the run()
         loop observes at its next step boundary, where it emits PAUSED."""
         self._pause_requested.set()
+        self._retry_interrupt.set()
         return await self.get_state()
 
     async def resume(self) -> ConversationState:
         self._pause_requested.clear()  # WALK-18 — resume cancels a pending pause
+        self._retry_interrupt.clear()
         async with self._lock:
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
         return await self.run()
@@ -2710,6 +2722,10 @@ class AgentLoop:
     async def cancel(self) -> ConversationState:
         """Cooperative stop (distinct from the network-level kill switch, §7.3).
         Emits a terminal IDLE; the loop returns at its next checkpoint."""
-        async with self._lock:
-            await self._emit(StatusEvent(status=ConversationStatus.IDLE, detail="cancelled"))
-        return await self.get_state()
+        self._retry_interrupt.set()
+        try:
+            async with self._lock:
+                await self._emit(StatusEvent(status=ConversationStatus.IDLE, detail="cancelled"))
+            return await self.get_state()
+        finally:
+            self._retry_interrupt.clear()

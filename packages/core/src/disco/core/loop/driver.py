@@ -178,6 +178,35 @@ class Driver:
             fields["tool_name"] = tool_name
         log_event("agent.repair", **fields)
 
+    async def _wait_retry_backoff(self, delay_s: float) -> bool:
+        """Wait for a retry delay, returning False when a control op interrupts it.
+
+        The drive loop holds its step lock while it calls the provider.  A plain
+        ``sleep`` therefore also held that lock for the full 10/30/90-second
+        ladder, preventing cancel and steer from reaching their next checkpoint.
+        Race the delay against the loop-owned control event and clean up both
+        tasks on every exit.  This interrupts only an idle backoff; an in-flight
+        provider response or tool side effect remains atomic.
+        """
+        interrupt = self._loop._retry_interrupt
+        if interrupt.is_set():
+            return False
+
+        delay_task = asyncio.create_task(_sleep(delay_s))
+        interrupt_task = asyncio.create_task(interrupt.wait())
+        tasks = (delay_task, interrupt_task)
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if delay_task in done:
+                await delay_task
+            interrupted = interrupt_task in done or interrupt.is_set()
+            return not interrupted
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _persist_empty_reasoning_diagnostic(self, diagnostic: dict) -> None:
         await self._loop._emit(
             MessageEvent(
@@ -845,10 +874,22 @@ class Driver:
                     return await self._pause_driver_unavailable()
                 except LLMTransientError:
                     if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
-                        await _sleep(_DRIVER_RETRY_BACKOFFS_S[attempts])
+                        self._record_model_repair(
+                            "driver_transient_backoff", attempt=attempts + 1
+                        )
+                        if not await self._wait_retry_backoff(
+                            _DRIVER_RETRY_BACKOFFS_S[attempts]
+                        ):
+                            self._record_model_repair(
+                                "driver_transient_interrupted", attempt=attempts + 1
+                            )
+                            return None, Disp.CONTINUE
                         attempts += 1
                         continue
                     else:
+                        self._record_model_repair(
+                            "driver_transient_exhausted", attempt=attempts + 1
+                        )
                         return await self._pause_driver_unavailable()
                 except LLMError as e:
                     if _is_tool_result_adjacency_protocol_error(e):
