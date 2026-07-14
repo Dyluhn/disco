@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -11,6 +12,8 @@ import os
 import re
 import secrets as _secrets
 import shlex
+import shutil
+import tempfile
 import time
 import uuid
 from collections.abc import Callable
@@ -258,6 +261,7 @@ class ProcessKernel(KernelSession):
         self._workspace = Path(workspace_path).absolute()
         self._km: Any | None = None
         self._kc: Any | None = None
+        self._ipc_dir: Path | None = None
         self._seq = 0
 
     async def start(self) -> None:
@@ -265,7 +269,18 @@ class ProcessKernel(KernelSession):
 
         from .base import clean_sandbox_env
 
-        self._km = AsyncKernelManager(kernel_name="python3")
+        if os.name != "posix":
+            raise SandboxError(
+                "process kernel requires POSIX IPC transport; refusing plaintext TCP"
+            )
+        self._ipc_dir = Path(tempfile.mkdtemp(prefix="disco-kernel-ipc-"))
+        self._ipc_dir.chmod(0o700)
+        ipc_base = self._ipc_dir / "kernel"
+        self._km = AsyncKernelManager(
+            kernel_name="python3",
+            transport="ipc",
+            ip=str(ipc_base),
+        )
         # Ensure the kernel runs in the workspace directory
         self._km.extra_arguments = ["--ProjectManager.root_dir=" + str(self._workspace)]
 
@@ -275,18 +290,26 @@ class ProcessKernel(KernelSession):
         # and the OpenRouter key. The connection info is passed via the connection
         # file (argv), not the env, so a minimal env is sufficient. Same allowlist
         # as the shell path (base.clean_sandbox_env) so they cannot drift.
-        await self._km.start_kernel(
-            cwd=str(self._workspace),
-            env=clean_sandbox_env(self._workspace),
-        )
-        self._kc = self._km.client()
-        assert self._kc is not None  # client() always returns a KernelClient
-        self._kc.start_channels()
-        await self._kc.wait_for_ready(timeout=60)
+        try:
+            await self._km.start_kernel(
+                cwd=str(self._workspace),
+                env=clean_sandbox_env(self._workspace),
+            )
+            self._kc = self._km.client()
+            assert self._kc is not None  # client() always returns a KernelClient
+            self._kc.start_channels()
+            await self._kc.wait_for_ready(timeout=60)
 
-        # Setup memory limit: 4GiB as required by BP-08
-        setup_cell = "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
-        await self.execute(setup_cell, timeout_s=10)
+            # Setup memory limit: 4GiB as required by BP-08
+            setup_cell = (
+                "import resource; "
+                "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+            )
+            await self.execute(setup_cell, timeout_s=10)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.shutdown()
+            raise
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
         if not self._kc:
@@ -462,6 +485,9 @@ class ProcessKernel(KernelSession):
 
     async def restart(self) -> None:
         if self._km:
+            old_client = self._kc
+            if old_client is not None:
+                old_client.stop_channels()
             await self._km.restart_kernel()
             self._kc = self._km.client()
             assert self._kc is not None  # client() always returns a KernelClient
@@ -475,20 +501,26 @@ class ProcessKernel(KernelSession):
 
     async def shutdown(self) -> None:
         km, kc = self._km, self._kc
+        ipc_dir = self._ipc_dir
         self._km = None
         self._kc = None
+        self._ipc_dir = None
         try:
-            if kc is not None:
-                # jupyter_client does not close DEALER/SUB channel sockets when the
-                # Python reference is discarded.  The client owns those channels,
-                # so close them explicitly before asking the manager to terminate
-                # the kernel process.
-                kc.stop_channels()
+            try:
+                if kc is not None:
+                    # jupyter_client does not close DEALER/SUB channel sockets when the
+                    # Python reference is discarded.  The client owns those channels,
+                    # so close them explicitly before asking the manager to terminate
+                    # the kernel process.
+                    kc.stop_channels()
+            finally:
+                # A broken channel close must not strand the independently-owned
+                # kernel process. Preserve the channel exception after this attempt.
+                if km is not None:
+                    await km.shutdown_kernel()
         finally:
-            # A broken channel close must not strand the independently-owned
-            # kernel process. Preserve the channel exception after this attempt.
-            if km is not None:
-                await km.shutdown_kernel()
+            if ipc_dir is not None:
+                shutil.rmtree(ipc_dir, ignore_errors=True)
 
 
 class GatewayKernel(KernelSession):

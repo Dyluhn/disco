@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shutil
+import stat
 import statistics
 import time
 from pathlib import Path
@@ -72,6 +73,18 @@ dynamic = f'/workspace/{root.name}'
 def test_process_workspace_literal_rewrite_preserves_ipython_only_cells(tmp_path):
     code = "%run /workspace/scripts/task.py"
     assert _rewrite_process_workspace_literals(code, tmp_path) == code
+
+
+@pytest.mark.asyncio
+async def test_process_kernel_refuses_plaintext_fallback_without_posix_ipc(
+    tmp_path, monkeypatch
+):
+    pk = ProcessKernel(str(tmp_path))
+    monkeypatch.setattr("disco.tools.sandbox.kernel.os.name", "nt")
+    with pytest.raises(SandboxError, match="refusing plaintext TCP"):
+        await pk.start()
+    assert pk._km is None
+    assert pk._ipc_dir is None
 
 
 @pytest.mark.asyncio
@@ -170,6 +183,32 @@ async def test_kernel_integration_state():
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_process_kernel_uses_protected_absolute_ipc_transport(tmp_path):
+    """H081: local code/output never traverses plaintext TCP/ZMQ sockets."""
+    pk = ProcessKernel(str(tmp_path))
+    ipc_dir: Path | None = None
+    try:
+        await pk.start()
+        assert pk._km is not None
+        assert pk._km.transport == "ipc"
+        assert Path(pk._km.ip).is_absolute()
+        ipc_dir = pk._ipc_dir
+        assert ipc_dir is not None and ipc_dir.is_dir()
+        assert stat.S_IMODE(ipc_dir.stat().st_mode) == 0o700
+        assert len(list(ipc_dir.glob("kernel-*"))) == 5
+
+        first = await pk.execute("secret_state = 40; secret_state + 2", timeout_s=10)
+        assert first.ok and first.result_repr == "42"
+        await pk.restart()
+        restarted = await pk.execute("6 * 7", timeout_s=10)
+        assert restarted.ok and restarted.result_repr == "42"
+    finally:
+        await pk.shutdown()
+    assert ipc_dir is not None and not ipc_dir.exists()
 
 
 @pytest.mark.integration

@@ -11,6 +11,8 @@ allowlisted PATH/HOME/TMPDIR/DISCO_WORKSPACE (shared with the shell path via
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import jupyter_client.manager as _jm
 
 
@@ -23,15 +25,23 @@ async def test_process_kernel_launches_with_scrubbed_env(monkeypatch):
         def start_channels(self) -> None:
             pass
 
+        def stop_channels(self) -> None:
+            pass
+
         async def wait_for_ready(self, timeout: int = 60) -> None:
             pass
 
     class _FakeKM:
-        def __init__(self, kernel_name: str | None = None) -> None:
+        def __init__(self, kernel_name: str | None = None, **kw: object) -> None:
+            captured["manager_kernel_name"] = kernel_name
+            captured["manager_options"] = kw
             self.extra_arguments: list[str] = []
 
         async def start_kernel(self, **kw: object) -> None:
             captured.update(kw)
+
+        async def shutdown_kernel(self) -> None:
+            pass
 
         def client(self) -> _FakeKC:
             return _FakeKC()
@@ -51,6 +61,11 @@ async def test_process_kernel_launches_with_scrubbed_env(monkeypatch):
 
     await pk.start()
 
+    manager_options = captured["manager_options"]
+    assert isinstance(manager_options, dict)
+    assert manager_options["transport"] == "ipc"
+    assert Path(str(manager_options["ip"])).is_absolute()
+
     env = captured.get("env")
     assert isinstance(env, dict), "start_kernel called without env= → inherits os.environ (leak)"
     assert "DISCO_SECRET_KEY" not in env
@@ -60,3 +75,4 @@ async def test_process_kernel_launches_with_scrubbed_env(monkeypatch):
     assert env["PATH"]
     assert env["HOME"] == "/tmp/disco-ws-test"
     assert env["DISCO_WORKSPACE"] == "/tmp/disco-ws-test"
+    await pk.shutdown()
