@@ -205,8 +205,8 @@ def test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths():
 
 def test_serve_argument_literals_are_metadata_not_dictated_content():
     text = (
-        'Build a hero with heading "Launch Day". Then call serve with path '
-        '"/workspace/release" and title "Selected reliability release".'
+        'Build a hero with heading "Launch Day". Then call the\nserve tool exactly once '
+        'with path "/workspace/release" and\ntitle "Selected reliability release".'
     )
 
     assert extract_dictated_content_literals(text) == ["Launch Day"]

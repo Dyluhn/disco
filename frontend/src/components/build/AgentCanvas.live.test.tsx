@@ -5,12 +5,12 @@
  *  - enabled + streamable         → AUTO-starts (live-url called with NO click), iframe
  *                                    shows, green-blink "Live" badge appears on iframe load.
  *  - session ends (live-ready→F)  → live-stop called, reverts to screenshots.
- *  - auto-start FAILS             → silent screenshot fallback, no "Live view unavailable".
+ *  - auto-start FAILS             → visible, bounded screenshot fallback.
  *  - owner-cid teardown on switch still fires.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentCanvas } from "./AgentCanvas";
 import type { AgentEvent } from "@/types/agent";
@@ -171,7 +171,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
   }, 20000);
 
-  it("(e) auto-start FAILS → silent screenshot fallback, no 'Live view unavailable' banner", async () => {
+  it("(e) auto-start FAILS → visible screenshot fallback while bounded retry continues", async () => {
     await enable(true);
     live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
     wrap(<AgentCanvas {...baseProps} />);
@@ -182,13 +182,18 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
         expect.stringContaining("/browser/live-url"),
       ),
     );
-    // no iframe, no badge, and crucially NO scary banner — just the screenshot empty-state.
+    // No iframe or badge, but the fallback is explicit instead of silently hiding
+    // that the requested live stream failed to start.
     await waitFor(() =>
       expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument(),
     );
     expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
-    expect(screen.queryByText(/live view unavailable/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("live-fallback-notice")).toHaveTextContent(
+        /temporarily unavailable; retrying/i,
+      ),
+    );
   });
 
   it("(g) TRANSIENT live-url failure (no_upstream) does NOT latch — retries and succeeds once the browser is up", async () => {
@@ -215,11 +220,38 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     wrap(<AgentCanvas {...baseProps} />);
     await waitFor(() => expect(live.urlCalls).toBe(1));
     // Wait across several poll ticks; a doomed result must NOT keep hammering live-url.
-    await new Promise((r) => setTimeout(r, 9000));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 9000));
+    });
     expect(live.urlCalls).toBe(1); // still exactly one — latched, no storm
     expect(screen.queryByTestId("novnc-iframe")).not.toBeInTheDocument();
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("live-fallback-notice")).toHaveTextContent(
+        /unavailable after bounded startup attempts/i,
+      ),
+    );
   }, 15000);
+
+  it("(i) persistent transient failure stops after three attempts and stays visible", async () => {
+    await enable(true);
+    live.urlFor = () => rejectReason("no_upstream");
+    wrap(<AgentCanvas {...baseProps} />);
+
+    await waitFor(
+      () => {
+        expect(live.urlCalls).toBe(3);
+        expect(screen.getByTestId("live-fallback-notice")).toHaveTextContent(
+          /unavailable after bounded startup attempts/i,
+        );
+      },
+      { timeout: 12000 },
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 4500));
+    });
+    expect(live.urlCalls).toBe(3);
+  }, 18000);
 
   it("(f) tears down the OWNING conversation's stack when switching conversations while live", async () => {
     await enable(true);

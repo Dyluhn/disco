@@ -79,6 +79,17 @@ function fileWrite(path: string, content: string): AgentEvent {
   } as AgentEvent;
 }
 
+function appDeliverable(path: string): AgentEvent {
+  return {
+    id: `deliverable-${path}`,
+    kind: "deliverable",
+    title: "Selected app",
+    path,
+    artifact_kind: "app",
+    deployment_url: "",
+  } as AgentEvent;
+}
+
 const HTML = fileWrite("index.html", "<html><body><h1>Done</h1></body></html>");
 const NOTE = fileWrite("notes.txt", "no html here");
 
@@ -144,6 +155,32 @@ describe("ExecutionCanvas — untrusted preview hardening (rp-06 import)", () =>
     // empty sandbox attr = no scripts: a script here could reach open-CORS APIs
     expect(screen.getByTitle("Static preview")).toHaveAttribute("sandbox", "");
     expect(screen.getByText(/Scripted preview is disabled/i)).toBeInTheDocument();
+  });
+});
+
+describe("PreviewPane — selected handoff entry", () => {
+  it("renders the selected nested app and never the stale workspace root", () => {
+    useBuildPreviewMock.mockReturnValue({ data: null });
+    render(
+      withClient(
+        <PreviewPane
+          events={[
+            fileWrite("index.html", "<h1>STALE ROOT MUST NEVER OPEN</h1>"),
+            fileWrite("release/index.html", "<h1>SELECTED RELEASE ONE</h1>"),
+            appDeliverable("release/index.html"),
+          ]}
+          status="FINISHED"
+          cid="conv_selected_entry"
+        />,
+      ),
+    );
+
+    const srcdoc = screen.getByTitle("Static preview").getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain("SELECTED RELEASE ONE");
+    expect(srcdoc).not.toContain("STALE ROOT MUST NEVER OPEN");
+    expect(srcdoc).toContain(
+      '<base href="http://agent.test:8000/conversations/conv_selected_entry/preview-app/">',
+    );
   });
 });
 

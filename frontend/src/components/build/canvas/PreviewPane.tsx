@@ -3,7 +3,7 @@ import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ExternalLink, History, MonitorPlay, MousePointer2, Pencil, RotateCw, Undo2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
+import { deriveDeliverable, deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import { agentHttpBase, ApiError, previewBootstrapUrl, previewHostUrl } from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
@@ -263,6 +263,11 @@ export function PreviewPane({
   // C5: separate the file list so we can both derive srcDoc AND detect server-side
   // HTML artifacts (content="") that deriveSrcDoc now returns null for.
   const files = useMemo(() => deriveFiles(events), [events]);
+  const selectedDeliverable = useMemo(() => deriveDeliverable(events), [events]);
+  const selectedHtmlPath =
+    selectedDeliverable && /\.html?$/i.test(selectedDeliverable.path)
+      ? selectedDeliverable.path
+      : undefined;
 
   // A workspace ROLLBACK invalidates the event-derived file view: restored bytes
   // are not event-carried (append-only log), so a srcdoc built from file events
@@ -303,8 +308,9 @@ export function PreviewPane({
             cid
               ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
               : undefined,
+            selectedHtmlPath,
           ),
-    [cid, files, untrusted, srcdocStaleAfterRestore],
+    [cid, files, selectedHtmlPath, untrusted, srcdocStaleAfterRestore],
   );
 
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
@@ -325,12 +331,15 @@ export function PreviewPane({
   // URL that the iframe loads in Edit mode (server-stamped + selection-injected).
   const entryHtmlPath = useMemo(() => {
     const withContent = files.filter((f) => f.content && /\.html$/i.test(f.path));
+    if (selectedHtmlPath) {
+      return withContent.find((f) => f.path === selectedHtmlPath)?.path ?? null;
+    }
     return (
       withContent.find((f) => /(^|\/)index\.html$/i.test(f.path))?.path ??
       withContent[0]?.path ??
       null
     );
-  }, [files]);
+  }, [files, selectedHtmlPath]);
 
   // A1.4/A1.6 — Edit mode is only offered when there's a real steer wire, a real
   // entry HTML to stamp, a conversation, and the run is trusted. Otherwise no
@@ -358,8 +367,13 @@ export function PreviewPane({
   // artifact (slides_generate / deliverable with empty content string).  If found,
   // we can preview it via the ?inline=true route with a sandboxed iframe.
   const inlineHtmlArtifact = useMemo(
-    () => files.find((f) => !f.content && /\.html$/i.test(f.path)) ?? null,
-    [files],
+    () => {
+      if (selectedHtmlPath) {
+        return files.find((f) => f.path === selectedHtmlPath && !f.content) ?? null;
+      }
+      return files.find((f) => !f.content && /\.html$/i.test(f.path)) ?? null;
+    },
+    [files, selectedHtmlPath],
   );
   const proxyAvailable = Boolean(data?.available && cid);
 

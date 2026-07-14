@@ -22,6 +22,16 @@ function wrap(ui: React.ReactElement) {
 const fileWrite = (path: string, content: string): AgentEvent =>
   ({ id: `w-${path}`, kind: "action", thought: "", tool_call: { tool_name: "file_write", arguments: { path, content } } }) as AgentEvent;
 
+const appDeliverable = (path: string): AgentEvent =>
+  ({
+    id: `d-${path}`,
+    kind: "deliverable",
+    title: "Selected app",
+    path,
+    artifact_kind: "app",
+    deployment_url: "",
+  }) as AgentEvent;
+
 describe("AgentCanvas — the operator inspector", () => {
   it("renders Browser / Artifacts / Console tabs (not the build IDE's Files/Terminal/Preview)", () => {
     wrap(<AgentCanvas events={[]} status="RUNNING" cid="c1" />);
@@ -44,5 +54,23 @@ describe("AgentCanvas — the operator inspector", () => {
   it("defaults to Artifacts when files exist but no screenshot", () => {
     wrap(<AgentCanvas events={[fileWrite("notes.md", "# hi")]} status="FINISHED" cid="c1" />);
     expect(screen.getByRole("tab", { name: /artifacts/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("previews the selected nested app instead of an earlier stale root", () => {
+    wrap(
+      <AgentCanvas
+        events={[
+          fileWrite("index.html", "<h1>STALE ROOT MUST NEVER OPEN</h1>"),
+          fileWrite("release/index.html", "<h1>SELECTED RELEASE ONE</h1>"),
+          appDeliverable("release/index.html"),
+        ]}
+        status="FINISHED"
+        cid="c-selected"
+      />,
+    );
+
+    const srcdoc = screen.getByTitle("Artifact preview").getAttribute("srcdoc") ?? "";
+    expect(srcdoc).toContain("SELECTED RELEASE ONE");
+    expect(srcdoc).not.toContain("STALE ROOT MUST NEVER OPEN");
   });
 });

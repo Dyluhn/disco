@@ -337,9 +337,13 @@ async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
 @pytest.mark.asyncio
 async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> None:
     """Browser infrastructure absence is terminal but can never become a pass."""
-    host = _HostVerifier(
-        _verdict(passed=False, fp="browser_unavailable", verdict="unverifiable")
+    host_verdict = _verdict(
+        passed=False, fp="browser_unavailable", verdict="unverifiable"
     )
+    host_verdict["startup_diagnostic"] = (
+        "exit=1; API_KEY=do-not-retain chromium launch failed"
+    )
+    host = _HostVerifier(host_verdict)
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
     agent = ScriptedAgent(
         [
@@ -363,6 +367,11 @@ async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> N
     assert len(verdicts) == 1
     assert verdicts[0].verified is False
     assert verdicts[0].verdict == "unverifiable"
+    assert verdicts[0].detail is not None
+    assert "Browser startup diagnostic: exit=1; <redacted> chromium launch failed" in (
+        verdicts[0].detail
+    )
+    assert "do-not-retain" not in verdicts[0].detail
     assert ("RUNNING", "unverified_release") in _statuses(events)
     env = _env_messages(events)
     assert any("WITHOUT browser-render verification" in m for m in env)

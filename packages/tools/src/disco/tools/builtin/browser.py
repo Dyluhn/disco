@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import shlex
 import sys
 import uuid
@@ -46,6 +47,10 @@ from ._outcomes import fail_outcome
 _DAEMON_PATH = "/workspace/.pmx/_browser_daemon.py"
 _DAEMON_URL = "http://127.0.0.1:8901"
 _DAEMON_PORT_PATH = "/workspace/.pmx/browser-port"
+_STARTUP_SECRET_RE = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|token|secret)\b"
+    r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s;]+"
+)
 
 # ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
 # backend has no usable browser" (e.g. the process/dev backend ships no Playwright/
@@ -73,7 +78,10 @@ class BrowserUnavailableError(RuntimeError):
 def _bounded_startup_diagnostic(output: object, exit_code: object = None) -> str:
     """Return bounded startup-only evidence without importing the host environment."""
 
-    text = str(output or "").strip()
+    text = "".join(
+        char for char in str(output or "") if char in "\n\t" or ord(char) >= 32
+    ).strip()
+    text = _STARTUP_SECRET_RE.sub("<redacted>", text)
     if len(text) > 1200:
         text = "…" + text[-1199:]
     prefix = f"exit={exit_code}; " if exit_code is not None else ""

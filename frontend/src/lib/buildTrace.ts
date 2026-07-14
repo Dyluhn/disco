@@ -593,11 +593,16 @@ export function deriveFiles(
  *   base.  A srcdoc document otherwise has no useful URL, so images, fonts,
  *   nested links, and runtime fetches with relative URLs all fail even when the
  *   corresponding workspace files exist.
+ * @param selectedEntryPath - Optional canonical handoff path from the latest
+ *   DeliverableEvent. When present, that exact HTML is the only eligible entry;
+ *   a missing/empty selection fails closed instead of falling back to a stale
+ *   workspace-root index.html.
  */
 export function deriveSrcDoc(
   files: WorkspaceFile[],
   injectionScript?: string,
   baseUrl?: string,
+  selectedEntryPath?: string,
 ): string | null {
   if (files.length === 0) return null;
   const byName = new Map<string, string>();
@@ -607,9 +612,11 @@ export function deriveSrcDoc(
     byName.set(f.path, f.content);
     byName.set(f.path.split("/").pop() ?? f.path, f.content);
   }
-  const entry =
-    files.find((f) => /(^|\/)index\.html$/i.test(f.path)) ??
-    files.find((f) => /\.html$/i.test(f.path));
+  const selectedPath = selectedEntryPath?.trim();
+  const entry = selectedPath
+    ? files.find((f) => f.path === selectedPath)
+    : files.find((f) => /(^|\/)index\.html$/i.test(f.path)) ??
+      files.find((f) => /\.html$/i.test(f.path));
   // C5: server-side artifacts land with content="" (bytes=0) — return null so the
   // existing `srcDoc != null` guards suppress the blank white frame and the pane
   // can fall back to the ?inline=true route or the placeholder instead.

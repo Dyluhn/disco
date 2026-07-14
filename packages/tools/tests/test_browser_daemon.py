@@ -592,6 +592,19 @@ async def test_browser_early_daemon_exit_preserves_bounded_diagnostic(monkeypatc
     assert len(diagnostic) <= 1280
     assert ctx.sessions.view.await_count == 0
 
+
+def test_browser_startup_diagnostic_redacts_secret_shaped_output():
+    from disco.tools.builtin.browser import _bounded_startup_diagnostic
+
+    diagnostic = _bounded_startup_diagnostic(
+        "API_KEY=do-not-retain Authorization: Bearer also-secret\nlaunch failed",
+        1,
+    )
+
+    assert diagnostic == "exit=1; <redacted> <redacted>\nlaunch failed"
+    assert "do-not-retain" not in diagnostic
+    assert "also-secret" not in diagnostic
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_browser_daemon_integration_real_chromium(tmp_path):

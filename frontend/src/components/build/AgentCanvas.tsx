@@ -12,7 +12,14 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import { Download, FileCode2, FileSpreadsheet, FileText, Globe, History, Package, Presentation, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { deriveActivity, deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
+import {
+  deriveActivity,
+  deriveDeliverable,
+  deriveFiles,
+  deriveLiveSignal,
+  deriveSrcDoc,
+  deriveTerminal,
+} from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
 import {
   agentGet,
@@ -99,6 +106,7 @@ function fmtBytes(n: number): string {
  * other failure (no_upstream, no_daemon, no_sandbox, network blip) is TRANSIENT: the
  * readiness-gated poll retries it on the next tick once the browser is genuinely up. */
 const DOOMED_LIVE_URL_REASONS: ReadonlySet<string> = new Set(["unsupported_backend", "disabled"]);
+const LIVE_URL_FAILURE_CAP = 3;
 
 /** Pull the machine `reason` out of a failed agentGet (ApiError.message carries the raw
  * JSON body `{reason, message}`). Returns null when there's no parseable reason — which
@@ -169,8 +177,8 @@ function BrowserPane({
   // REDESIGN: there is NO manual "Live" button. When the feature is enabled in Settings
   // AND the backend can actually stream (live-ready true) AND the agent has a browser
   // session up, the live view AUTO-STARTS; it tears down when the session ends, the
-  // conversation switches, the feature is disabled, or the pane unmounts. A scary
-  // start-failure is never surfaced — we silently fall back to the screenshot reel.
+  // conversation switches, the feature is disabled, or the pane unmounts. Start
+  // failures remain visible while the screenshot reel provides a bounded fallback.
   const { data: liveBrowserCfg } = useLiveBrowserConfig();
   const liveBrowserEnabled = liveBrowserCfg?.enabled ?? false;
   // liveView carries the cid that OWNS the stack (`ownerCid`) — BrowserPane is not
@@ -188,6 +196,9 @@ function BrowserPane({
   // True once the noVNC iframe has actually LOADED — the honest "genuinely streaming"
   // signal gating the green-blink "Live" badge (not merely "we requested a URL").
   const [iframeConnected, setIframeConnected] = useState(false);
+  const [liveStartFailure, setLiveStartFailure] = useState<"retrying" | "unavailable" | null>(
+    null,
+  );
   // Mirror live state into a ref so the poll/unmount effects read the latest value
   // without re-subscribing on every change.
   const liveViewRef = useRef(liveView);
@@ -198,6 +209,7 @@ function BrowserPane({
   // NOT latch, so the next readiness tick retries once the browser is genuinely up. Reset
   // when the session ends / the conversation switches so a fresh browse can re-start.
   const doomedRef = useRef<string | null>(null);
+  const startFailuresRef = useRef(0);
   // Guards against overlapping live-url calls (a slow start spanning >1 poll tick). The
   // poll cadence (4s) is the retry clock, so retries are bounded — never a render-storm.
   const startInFlightRef = useRef(false);
@@ -221,11 +233,14 @@ function BrowserPane({
   useEffect(() => {
     if (!liveBrowserEnabled || !cid) {
       setLiveReady(false);
+      setLiveStartFailure(null);
       return;
     }
     let cancelled = false;
     let missStreak = 0;
     doomedRef.current = null; // fresh conversation → clear any prior doomed verdict
+    startFailuresRef.current = 0;
+    setLiveStartFailure(null);
     const probe = async () => {
       let ready = false;
       try {
@@ -245,26 +260,47 @@ function BrowserPane({
         if (!liveViewRef.current && !startInFlightRef.current && doomedRef.current !== cid) {
           startInFlightRef.current = true;
           try {
-            const data = await agentSend<{ ready: boolean; novnc_path: string; port: number }>(
+            const data = await agentSend<{
+              ready: boolean;
+              novnc_path: string;
+              port: number;
+              reason?: string;
+            }>(
               "POST",
               `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
             );
+            if (!data.ready || !data.port || !data.novnc_path) {
+              throw new Error(
+                JSON.stringify({ reason: data.reason || "no_upstream" }),
+              );
+            }
             // SECURITY: build the single-origin proxy URL client-side
             // ({cid8}-6080.localhost). The server intentionally never returns a raw sandbox
             // host:port — that would bypass the auth/cid-scoping proxy. previewHostUrl is
             // the same helper the dev-server preview uses.
             const src = await previewBootstrapUrl(cid, data.port, data.novnc_path);
-            if (!cancelled && src) {
+            if (!src) {
+              throw new Error(JSON.stringify({ reason: "no_upstream" }));
+            }
+            if (!cancelled) {
+              startFailuresRef.current = 0;
+              setLiveStartFailure(null);
               setIframeConnected(false);
               setLiveView({ url: src, novnc_path: "", ownerCid: cid });
             }
           } catch (e: unknown) {
-            // SILENT fallback — no banner, no false affordance. Distinguish DOOMED from
-            // TRANSIENT: a hard capability/config error latches (stop retrying); anything
-            // else (no_upstream / no_daemon / network blip) leaves doomedRef unset so the
-            // next poll tick retries once the browser is genuinely up.
-            if (DOOMED_LIVE_URL_REASONS.has(liveUrlReason(e) ?? "")) {
+            // Distinguish DOOMED from TRANSIENT without exposing raw backend errors.
+            // Transient starts retry only at the 4s readiness cadence and stop after
+            // LIVE_URL_FAILURE_CAP attempts; the visible screenshot fallback remains
+            // honest instead of silently hammering live-url forever.
+            if (cancelled) return;
+            startFailuresRef.current += 1;
+            const exhausted = startFailuresRef.current >= LIVE_URL_FAILURE_CAP;
+            if (DOOMED_LIVE_URL_REASONS.has(liveUrlReason(e) ?? "") || exhausted) {
               doomedRef.current = cid;
+              setLiveStartFailure("unavailable");
+            } else {
+              setLiveStartFailure("retrying");
             }
           } finally {
             startInFlightRef.current = false;
@@ -282,6 +318,8 @@ function BrowserPane({
         setLiveView(null);
         setIframeConnected(false);
         doomedRef.current = null; // allow a fresh auto-start if browsing resumes
+        startFailuresRef.current = 0;
+        setLiveStartFailure(null);
       }
     };
     void probe();
@@ -302,6 +340,8 @@ function BrowserPane({
       setLiveView(null);
       setIframeConnected(false);
       doomedRef.current = null;
+      startFailuresRef.current = 0;
+      setLiveStartFailure(null);
     }
   }, [liveBrowserEnabled, liveView, cid]);
 
@@ -332,6 +372,17 @@ function BrowserPane({
   // iframe has loaded (iframeConnected), AND the backend still confirms the stack is
   // running (liveReady). Only then do we show the green-blink "Live" badge.
   const streaming = !!liveView && iframeConnected && liveReady;
+  const LiveFailureNotice = liveStartFailure ? (
+    <div
+      role="status"
+      data-testid="live-fallback-notice"
+      className="shrink-0 border-b border-warn/30 bg-warn/10 px-body py-hair font-ui text-[0.72rem] text-warn"
+    >
+      {liveStartFailure === "retrying"
+        ? "Live view temporarily unavailable; retrying. Showing captured screenshots meanwhile."
+        : "Live view unavailable after bounded startup attempts. Showing captured screenshots instead."}
+    </div>
+  ) : null;
 
   const Header =
     url || driving || liveView ? (
@@ -393,12 +444,13 @@ function BrowserPane({
   }
 
   // No screenshot we can actually load (none captured, or no cid to fetch against)
-  // → an honest empty state, never a broken <img>. (Auto-start failure also lands here:
-  // a SILENT fallback to screenshots, never a "Live view unavailable" banner.)
+  // → an honest empty state, never a broken <img>. Auto-start failure also lands
+  // here with LiveFailureNotice, so the screenshot fallback is explicit.
   if (!hero || !cid) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-screenshot-state="empty">
         {Header}
+        {LiveFailureNotice}
         <Empty>
           <p className="text-text-muted">
             When the agent uses a browser, the pages it visits show here — a screenshot for each
@@ -417,6 +469,7 @@ function BrowserPane({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {Header}
+      {LiveFailureNotice}
       <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-[oklch(0.15_0.005_260)] p-inline">
         <WorkspaceImage
           key={heroSrc}
@@ -494,10 +547,21 @@ function ArtifactsPane({
   onSteer?: (text: string) => void;
 }) {
   const files = useMemo(() => deriveFiles(events), [events]);
+  const selectedDeliverable = useMemo(() => deriveDeliverable(events), [events]);
+  const selectedHtmlPath =
+    selectedDeliverable && /\.html?$/i.test(selectedDeliverable.path)
+      ? selectedDeliverable.path
+      : undefined;
   // §4.1 C-EDIT-1: inject selection agent for trusted (non-untrusted) iframes.
   const srcDoc = useMemo(
-    () => deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
-    [files, untrusted],
+    () =>
+      deriveSrcDoc(
+        files,
+        untrusted ? undefined : SELECTION_AGENT_SCRIPT,
+        undefined,
+        selectedHtmlPath,
+      ),
+    [files, selectedHtmlPath, untrusted],
   );
 
   // §4.1 C-EDIT-1: ref + selection state for the artifact preview iframe.

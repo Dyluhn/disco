@@ -111,7 +111,7 @@ _SHELL_COMMAND_WORDS = frozenset(
 )
 _SHELL_OPERATOR_RE = re.compile(r"(?:^|\s)(?:&&|\|\||[|;<>])(?:\s|$)|`|\$\(")
 _SERVE_METADATA_PREFIX_RE = re.compile(
-    r"\b(?:call|invoke|use)\b[^\n.!?]{0,240}\bserve\b[^\n.!?]{0,160}"
+    r"\b(?:call|invoke|use)\b[^.!?]{0,240}\bserve\b[^.!?]{0,160}"
     r"\b(?:path|title)\s*$",
     re.IGNORECASE,
 )

@@ -47,6 +47,11 @@ from .common import (
     _vision_mode,
 )
 
+_STARTUP_DIAGNOSTIC_SECRET_RE = re.compile(
+    r"(?i)\b(?:authorization|api[_-]?key|token|secret)\b"
+    r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s;]+"
+)
+
 
 class _WorkflowPathParams(dict[str, object]):
     def __missing__(self, key: str) -> str:
@@ -927,6 +932,21 @@ class _HostVerifyGateMixin(_FinishGateProto):
             else None
         )
         detail = str(host_verdict.get("summary") or host_verdict.get("detail") or "")
+        startup_diagnostic = str(host_verdict.get("startup_diagnostic") or "").strip()
+        if startup_diagnostic:
+            startup_diagnostic = "".join(
+                char
+                for char in startup_diagnostic
+                if char in "\n\t" or ord(char) >= 32
+            )
+            startup_diagnostic = _STARTUP_DIAGNOSTIC_SECRET_RE.sub(
+                "<redacted>", startup_diagnostic
+            )[:1280]
+            detail = (
+                f"{detail}\nBrowser startup diagnostic: {startup_diagnostic}"
+                if detail
+                else f"Browser startup diagnostic: {startup_diagnostic}"
+            )
 
         await self._loop._emit(
             VerifierShadowEvent(

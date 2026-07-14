@@ -84,6 +84,32 @@ describe("deriveSrcDoc", () => {
     expect(doc).toBe("<h1>Hi</h1>");
   });
 
+  it("renders the selected handoff entry instead of an earlier stale root", () => {
+    const doc = deriveSrcDoc(
+      [
+        f("index.html", "<h1>STALE ROOT</h1>"),
+        f("release/index.html", "<h1>SELECTED RELEASE</h1>"),
+      ],
+      undefined,
+      "http://agent.test/conversations/conv_selected/preview-app/",
+      "release/index.html",
+    );
+
+    expect(doc).toContain("SELECTED RELEASE");
+    expect(doc).not.toContain("STALE ROOT");
+  });
+
+  it("fails closed when the selected handoff entry is absent", () => {
+    expect(
+      deriveSrcDoc(
+        [f("index.html", "<h1>STALE ROOT</h1>")],
+        undefined,
+        undefined,
+        "release/index.html",
+      ),
+    ).toBeNull();
+  });
+
   it("inlines a local stylesheet link", () => {
     const doc = deriveSrcDoc([
       f("index.html", '<head><link rel="stylesheet" href="style.css"></head><body>x</body>'),
