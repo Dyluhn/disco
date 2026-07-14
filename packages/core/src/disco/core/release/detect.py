@@ -171,11 +171,24 @@ _PY_TOKENS = frozenset(
 # neutral base images run exactly these; a declared start whose head is NOT here fails
 # closed to `toolchain_unsupported` (§7 crit 4 / §15: NO node-fallback for an arbitrary
 # executable merely because its name can be guessed — ruby/go/php/caddy/`./server`/bun/
-# deno/uv/poetry are all rejected). Node base: the npm-family launchers. Python base: a
-# bare interpreter (matched by the `python` prefix, e.g. `python3.12`) plus the
-# ASGI/WSGI servers the image can install.
-_SUPPORTED_NODE_HEADS = frozenset({"node", "npm", "npx", "yarn", "pnpm"})
+# deno/uv/poetry are all rejected). Node base: the npm-family launchers the base image
+# ACTUALLY provisions — `node`/`npm`/`npx` ONLY. `pnpm`/`yarn` are DELIBERATELY EXCLUDED
+# (R2 / G05): the `node:22-bookworm-slim` image ships no pnpm/yarn, so a typed
+# `pnpm start` / `yarn start` intent must fail closed with `toolchain_unsupported`
+# exactly as the SOURCE-driven package-manager reject already does for a committed
+# pnpm/yarn lockfile — never accepted and lowered into an image that cannot run it
+# (§8.8: mapping them to npm is FAILURE). Python base: a bare interpreter (matched by
+# the `python` prefix, e.g. `python3.12`) plus the ASGI/WSGI servers the image installs.
+_SUPPORTED_NODE_HEADS = frozenset({"node", "npm", "npx"})
 _SUPPORTED_PY_SERVER_HEADS = frozenset({"uvicorn", "gunicorn", "hypercorn"})
+
+# Package-manager / runtime launcher heads the neutral base images do NOT provision. A
+# TYPED intent whose start/build/install command heads with one of these — or that
+# declares one as its `package_manager` — fails closed with `toolchain_unsupported`
+# (R2 / G05), the intent-path analogue of the source-driven `_unsupported_pm_blocker` /
+# `_unsupported_node_pm_declaration` rejects. Includes each manager's `x`-suffixed
+# one-off runner (`bunx`/`pnpx`) so it cannot slip through as a build/install head.
+_UNPROVISIONED_MANAGERS = frozenset({"pnpm", "pnpx", "yarn", "bun", "bunx", "deno", "poetry", "uv"})
 
 
 def _is_supported_toolchain_head(head: str) -> bool:
@@ -1481,15 +1494,59 @@ def _declared_python_deps(files: Mapping[str, str | bytes]) -> frozenset[str]:
     return frozenset(names)
 
 
+def _declared_manager_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome (R2 / G05) when a TYPED intent names
+    a package manager the neutral base images do NOT provision — pnpm / yarn / bun / deno
+    / poetry / uv (or an `x`-runner like `bunx`/`pnpx`) — as its `build_cmd` /
+    `install_cmd` HEAD, or as its declared `package_manager`. The intent-path analogue of
+    the source-driven `_unsupported_pm_blocker` / `_unsupported_node_pm_declaration`
+    rejects: the manager is NEVER silently mapped onto npm/pip and lowered into an image
+    that cannot run it (§8.8). `None` when no unprovisioned manager is named. The start
+    HEAD is covered separately by the `_is_supported_toolchain_head` allowlist."""
+    for field_name, argv in (("build_cmd", intent.build_cmd), ("install_cmd", intent.install_cmd)):
+        if not argv:
+            continue
+        head = argv[0].rsplit("/", 1)[-1].lower()
+        if head in _UNPROVISIONED_MANAGERS:
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the declared {field_name} heads with {head!r}, a package manager the "
+                    "neutral base image does not provision; the detector will NOT silently "
+                    "map it onto npm/pip. Use npm (package-lock.json) / pip "
+                    "(requirements.txt), or vendor the toolchain explicitly."
+                ),
+                field=field_name,
+                evidence=(f"toolchain evidence: {field_name} head {head!r} not on the base image",),
+            )
+    if intent.package_manager is not None:
+        manager = intent.package_manager.strip().lower()
+        if manager in _UNPROVISIONED_MANAGERS:
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the declared package_manager {manager!r} is not provisioned in the "
+                    "neutral base image; the detector will NOT silently map it onto "
+                    "npm/pip. Declare npm or pip, or vendor the toolchain explicitly."
+                ),
+                field="package_manager",
+                evidence=(
+                    f"toolchain evidence: package_manager {manager!r} not on the base image",
+                ),
+            )
+    return None
+
+
 def _toolchain_blocker(
     intent: ReleaseIntent, files: Mapping[str, str | bytes]
 ) -> _DetectBlocker | None:
     """A `toolchain_unsupported` fail-closed outcome when the declared start command
     cannot run on the neutral base image: a head that is NOT a supported toolchain
     (anything outside the allowlist — ruby/go/php/caddy/`./server`/bun/deno/uv/poetry
-    all fail here, never a Node fallback), or a python start executable that is a pip
-    package absent from the declared dependencies. `None` when the toolchain is
-    supported."""
+    AND pnpm/yarn all fail here, never a Node fallback), a python start executable that
+    is a pip package absent from the declared dependencies, or an unprovisioned package
+    manager named in build_cmd/install_cmd/package_manager (R2 / G05). `None` when the
+    toolchain is supported."""
     head = intent.start_cmd[0].rsplit("/", 1)[-1].lower()
     if not _is_supported_toolchain_head(head):
         return _DetectBlocker(
@@ -1497,8 +1554,9 @@ def _toolchain_blocker(
             message=(
                 f"the declared start command head {head!r} is not a supported toolchain "
                 "on the neutral base image; the detector will NOT guess a runtime from an "
-                "executable name. Declare a supported start (node/npm/npx/yarn/pnpm, or a "
-                "python interpreter / uvicorn / gunicorn), or vendor the runtime explicitly."
+                "executable name (pnpm/yarn/bun/deno/poetry/uv are not provisioned). "
+                "Declare a supported start (node/npm/npx, or a python interpreter / "
+                "uvicorn / gunicorn / hypercorn), or vendor the runtime explicitly."
             ),
             field="start_cmd",
             evidence=(f"toolchain evidence: unsupported start head {head!r} (not on allowlist)",),
@@ -1517,7 +1575,7 @@ def _toolchain_blocker(
                 field="start_cmd",
                 evidence=(f"toolchain evidence: python start executable {head!r} not declared",),
             )
-    return None
+    return _declared_manager_blocker(intent)
 
 
 def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
@@ -1548,7 +1606,7 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     argument by shape alone and is still accepted; declaring such a value inline remains a
     caller error the representation cannot detect. Credentials must be passed as a whole
     `${NAME}` reference to a declared env var."""
-    declared = frozenset(intent.required_env) | {intent.port_env}
+    declared = frozenset(intent.required_env) | {var.name for var in intent.env} | {intent.port_env}
     for field, argv in (("start_cmd", intent.start_cmd), ("build_cmd", intent.build_cmd)):
         try:
             check_declaration_argv(argv, declared_names=declared, field=field)
@@ -1567,6 +1625,28 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
                 field=field,
                 evidence=(f"command-grammar evidence: {field} rejected by the runtime grammar",),
             )
+    # R2 (G03): a declared `install_cmd` heads with a NON-runtime-start executable (`pip`,
+    # `npm`, `yarn`), so the runtime-HEAD grammar does NOT apply (it would false-reject
+    # `pip install`) — but the SAME head-agnostic credential rails DO: an install command
+    # is lowered verbatim into the emitted Dockerfile `RUN`, so a positional / config-role
+    # / flag literal credential there must fail closed exactly like a migrate_cmd secret.
+    try:
+        check_no_inline_secret_cli(intent.install_cmd, declared_names=declared, field="install_cmd")
+        check_no_positional_credential(
+            intent.install_cmd, declared_names=declared, field="install_cmd"
+        )
+    except ValueError:
+        return _DetectBlocker(
+            code="toolchain_unsupported",
+            message=(
+                "the declared install_cmd carries a secret on a credential-bearing flag "
+                "(e.g. '--token VALUE') or a bare positional literal credential; an install "
+                "credential must be a whole ${NAME} reference to a declared env var, never "
+                "an inline literal that would be lowered into the exported Dockerfile RUN."
+            ),
+            field="install_cmd",
+            evidence=("command-grammar evidence: install_cmd carries an inline secret",),
+        )
     # WO-C5 #3 F5: a resource `migrate_cmd` is lowered VERBATIM into the compose
     # migrate-service command + serialized into release.json, so an inline secret CLI
     # value there would ship in the bundle. The runtime-head grammar does NOT apply (a
@@ -1616,14 +1696,184 @@ def _classify_secret(name: str) -> SecretClass:
     return SecretClass.public
 
 
+def _node_has_dependencies(pkg: object) -> bool:
+    """Whether a parsed root `package.json` declares ANY dependencies (runtime, dev,
+    optional, or peer). A no-build interpreted node app WITH declared dependencies must
+    install them for its image to run (R2 / G04); a package.json with none has nothing
+    to install, so no install layer is derived."""
+    if not isinstance(pkg, dict):
+        return False
+    for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        value = pkg.get(key)
+        if isinstance(value, dict) and value:
+            return True
+    return False
+
+
+def _intent_install(
+    intent: ReleaseIntent,
+    files: Mapping[str, str | bytes],
+    runtime: RuntimeStrategy,
+    *,
+    force_node: bool = False,
+) -> tuple[tuple[str, ...], str | None, str | None] | _DetectBlocker:
+    """The `(install_cmd, package_manager, lockfile)` for a typed-intent candidate, or a
+    `_DetectBlocker` when the package manager is ambiguous/unprovisioned (R2 / G04).
+
+    An EXPLICIT `install_cmd` wins (carrying the declared package_manager / lockfile).
+    Otherwise a SAFE default is derived ONLY where the manager + manifest are unambiguous:
+    a node `package.json` (with declared dependencies, OR `force_node` for a build that
+    always installs) → `npm ci` when a lockfile is present else `npm install`; a python
+    `requirements.txt` → `pip install -r requirements.txt` (a bare `pyproject.toml` →
+    `pip install .`). Derivation first re-applies the SOURCE-path toolchain guards — a
+    lockfile disagreement, an unsupported bun/pnpm/yarn manager, an unsupported
+    poetry/uv, a build-time `.npmrc` secret — so an unprovisioned/ambiguous tree fails
+    closed instead of deriving a broken install. A stack with no manifest (or a
+    no-dependency node app) installs nothing."""
+    if intent.install_cmd:
+        return (intent.install_cmd, intent.package_manager, intent.lockfile)
+    if runtime is RuntimeStrategy.node or runtime is RuntimeStrategy.static:
+        pkg = _root_package_json(files)
+        if pkg is None:
+            return ((), intent.package_manager, intent.lockfile)
+        if not force_node and not _node_has_dependencies(pkg):
+            return ((), intent.package_manager, intent.lockfile)
+        conflict = _lockfile_conflict(files)
+        if conflict is not None:
+            return conflict
+        toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+        if toolchain is not None:
+            return toolchain
+        declared = _unsupported_node_pm_declaration(files, pkg)
+        if declared is not None:
+            return declared
+        build_secret = _secret_build_blocker(files)
+        if build_secret is not None:
+            return build_secret
+        lockfile, manager, install = _node_install(files)
+        return (install, manager, lockfile)
+    if runtime is RuntimeStrategy.python:
+        toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_PY_PM)
+        if toolchain is not None:
+            return toolchain
+        tree = _paths(files)
+        if "requirements.txt" in tree:
+            return (("pip", "install", "-r", "requirements.txt"), "pip", None)
+        if "pyproject.toml" in tree:
+            return (("pip", "install", "."), "pip", None)
+        return ((), intent.package_manager, intent.lockfile)
+    return ((), intent.package_manager, intent.lockfile)
+
+
+def _intent_env_result(intent: ReleaseIntent) -> tuple[EnvVarDecl, ...] | _DetectBlocker:
+    """Merge the intent's `required_env` shorthand and its typed `env` declarations into
+    the candidate's env set (R2 / G03), or a `_DetectBlocker` on a build-scope secret.
+
+    `required_env` names become runtime/required decls (secret-SHAPE classified). A typed
+    `env` decl carries its own scope / requiredness / secret class and, for a name in
+    both, WINS — except a secret-SHAPED name is never DOWNGRADED to public (fail-closed).
+    A BUILD-scope secret decl fails closed with `secret_build_env_unsupported`, exactly as
+    a source-discovered secret build var does (a secret-free bundle cannot supply a
+    build-time secret). Deterministic: `required_env` order, then first-seen `env` order."""
+    by_name: dict[str, EnvVarDecl] = {}
+    order: list[str] = []
+    for name in intent.required_env:
+        by_name[name] = EnvVarDecl(
+            name=name, scope=EnvScope.runtime, required=True, secret=_classify_secret(name)
+        )
+        order.append(name)
+    for decl in intent.env:
+        secret = decl.secret
+        if _classify_secret(decl.name) is SecretClass.secret:
+            secret = SecretClass.secret  # fail-closed: never downgrade a secret-shaped name
+        if decl.scope is EnvScope.build and secret is SecretClass.secret:
+            return _DetectBlocker(
+                code="secret_build_env_unsupported",
+                message=(
+                    f"the declared build-scope env var {decl.name!r} is secret; a "
+                    "secret-free self-host bundle cannot supply a build-time secret (a "
+                    "build arg would leak it into image build history), so this build is "
+                    "not supported. Declare it as a runtime var, rename it to a public "
+                    "build var, or remove the build-time secret dependency."
+                ),
+                field="build_env",
+                evidence=(f"build-secret evidence: declared secret build var {decl.name!r}",),
+            )
+        if decl.name not in by_name:
+            order.append(decl.name)
+        by_name[decl.name] = EnvVarDecl(
+            name=decl.name,
+            scope=decl.scope,
+            required=decl.required,
+            secret=secret,
+            binding=decl.binding,
+            consumers=decl.consumers,
+        )
+    return tuple(by_name[name] for name in order)
+
+
+def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
+    """A typed intent describing a STATIC site — a prebuilt tree served as-is, or a
+    build-then-serve bundle whose built assets land in `output_dir` (R2 / G03 / G06). A
+    static site is SERVED, not started, so it legitimately has no `start_cmd`. Fails
+    closed on an unprovisioned toolchain or a build-time secret; otherwise a single
+    static ingress served from `output_dir` (defaulting to the workspace root)."""
+    manager_blocker = _declared_manager_blocker(intent)
+    if manager_blocker is not None:
+        return _fail_closed(manager_blocker)
+    # A raw sidecar reaches emission without the tool's grammar gate, so re-apply it to
+    # the build_cmd (start is empty here) + the migrate/positional credential rails.
+    grammar = _command_grammar_blocker(intent)
+    if grammar is not None:
+        return _fail_closed(grammar)
+    # A build ALWAYS installs first, so derive an install even for a no-dependency
+    # package.json (force_node); a prebuilt static serve (no build_cmd) installs nothing.
+    install_outcome = _intent_install(
+        intent, files, RuntimeStrategy.static, force_node=bool(intent.build_cmd)
+    )
+    if isinstance(install_outcome, _DetectBlocker):
+        return _fail_closed(install_outcome)
+    install_cmd, package_manager, lockfile = install_outcome
+    env = _intent_env_result(intent)
+    if isinstance(env, _DetectBlocker):
+        return _fail_closed(env)
+    service = ReleaseService(
+        id=_INGRESS_ID,
+        role=ServiceRole.ingress,
+        runtime=RuntimeStrategy.static,
+        package_manager=package_manager,
+        lockfile=lockfile,
+        install_cmd=install_cmd,
+        build_cmd=intent.build_cmd,
+        output_dir=intent.output_dir if intent.output_dir is not None else ".",
+        port_env=intent.port_env,
+        health_path=intent.health_path,
+    )
+    return DetectionResult(
+        assessment=ReleaseAssessment.candidate,
+        services=(service,),
+        resources=intent.resources,
+        env=env,
+        evidence=(_intent_evidence(intent),),
+        reasons=(
+            "static release shape declared by a typed release intent "
+            "(build command, output directory, and env names supplied).",
+        ),
+    )
+
+
 def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
-    # A release intent with NO start command cannot describe a runnable app: there is
-    # no process to launch. Rather than fabricate a runnable candidate (the emitter
-    # would default an empty start to `npm start`), fail closed to needs_review
-    # naming the missing start command. The port defaults to the $PORT contract and a
-    # health path is optional (consistent with detector-produced candidates), so a
-    # non-empty start_cmd is the honest minimum contract for a candidate.
+    # R2 (G03/G06): a static site (a prebuilt tree, or a build-then-serve bundle) is
+    # SERVED, not started, so it has no `start_cmd`. It is recognized when the intent
+    # declares a `static` runtime OR an `output_dir` (which only makes sense for a static
+    # bundle) — routed to the static shape rather than the no-start needs_review below.
     if not intent.start_cmd:
+        if intent.runtime is RuntimeStrategy.static or intent.output_dir is not None:
+            return _static_from_intent(intent, files)
+        # A release intent with NO start command AND no static shape cannot describe a
+        # runnable app: there is no process to launch. Rather than fabricate a runnable
+        # candidate (the emitter would default an empty start to `npm start`), fail
+        # closed to needs_review naming the missing start command.
         return DetectionResult(
             assessment=ReleaseAssessment.needs_review,
             evidence=("typed release intent declared without a start command",),
@@ -1635,7 +1885,8 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
             missing=_missing_fields(("start_cmd",)),
         )
     # The declared start command must run on the neutral base image (a supported
-    # runner + any pip-package start executable declared as a dependency).
+    # runner + any pip-package start executable declared as a dependency), and must not
+    # name an unprovisioned package manager (pnpm/yarn/bun/…) in start/build/install.
     toolchain = _toolchain_blocker(intent, files)
     if toolchain is not None:
         return _fail_closed(toolchain)
@@ -1669,23 +1920,29 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
                 evidence=(f"health evidence: no route for conventional {intent.health_path!r}",),
             )
         )
+    # R2 (G03): the runtime strategy is the declared one, else inferred from the start
+    # argv's interpreter token.
+    runtime = intent.runtime if intent.runtime is not None else _runtime_from_argv(intent.start_cmd)
+    # R2 (G04): a runtime dependency install no longer depends on a build step — an
+    # interpreted candidate (declared deps, no build) installs them, or fails closed.
+    install_outcome = _intent_install(intent, files, runtime)
+    if isinstance(install_outcome, _DetectBlocker):
+        return _fail_closed(install_outcome)
+    install_cmd, package_manager, lockfile = install_outcome
+    env = _intent_env_result(intent)
+    if isinstance(env, _DetectBlocker):
+        return _fail_closed(env)
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
-        runtime=_runtime_from_argv(intent.start_cmd),
+        runtime=runtime,
+        package_manager=package_manager,
+        lockfile=lockfile,
+        install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
         start_cmd=intent.start_cmd,
         port_env=intent.port_env,
         health_path=intent.health_path,
-    )
-    env = tuple(
-        EnvVarDecl(
-            name=name,
-            scope=EnvScope.runtime,
-            required=True,
-            secret=_classify_secret(name),
-        )
-        for name in intent.required_env
     )
     return DetectionResult(
         assessment=ReleaseAssessment.candidate,

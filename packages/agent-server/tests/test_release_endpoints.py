@@ -193,7 +193,12 @@ def test_release_schema_identical_key_set_across_assessments(store, tmp_path, mo
     assert node["assessment"] == "candidate"
     assert node["self_host"] is True
     assert {e["name"] for e in node["required_env"]} == {"API_BASE_URL", "SESSION_SECRET"}
-    assert node["ingress"] == {"service": "web", "port": "PORT", "health_path": None}
+    assert node["ingress"] == {
+        "service": "web",
+        "runtime": "node",
+        "port": "PORT",
+        "health_path": None,
+    }
     assert node["spec_digest"] and node["spec_digest"].startswith("sha256:")
 
     # (b) opaque/unknown stack -> needs_review with repairable field-naming blockers
@@ -347,7 +352,9 @@ def test_overlay_collision_fails_closed_with_typed_conflict(store, tmp_path, mon
 def test_secret_never_leaks_into_zip_or_release_json(store, tmp_path, monkeypatch):
     client, ps = _client_for(store, tmp_path, monkeypatch)
     files = dict(_NODE_FILES)
-    files[".env"] = b"DATABASE_URL=postgres://u:PLANTED-731-hunter2@h/db\nSECRET=PLANTED-731-hunter2\n"
+    files[".env"] = (
+        b"DATABASE_URL=postgres://u:PLANTED-731-hunter2@h/db\nSECRET=PLANTED-731-hunter2\n"
+    )
     files[".dev.vars"] = b"ADMIN_TOKEN=PLANTED-731-hunter2\n"
     _seed(ps, store, "conv_secret", files, intent=_NODE_INTENT)
 

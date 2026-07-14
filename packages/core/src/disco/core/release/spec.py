@@ -624,12 +624,16 @@ class GeneratedFileRef(BaseModel):
 # ---- release intent (the `release_declare` payload) ---------------------------
 
 # The CURRENT schema version of the persisted `ReleaseIntent` sidecar shape. WO-C4
-# grows the intent's typed fields (an install argv-list, the package manager /
-# lockfile, the static output directory) BEYOND the v1 shape, so the version is
-# bumped to 2. A persisted v1 sidecar is therefore never silently reinterpreted
-# (§8.11): `parse_release_intent` migrates a v1/legacy shape deterministically and
-# rejects a NEWER one — the persisted shape change is version-gated end to end.
-RELEASE_INTENT_SCHEMA_VERSION = 2
+# grew the intent to v2 (schema version tag). The R2 remediation (G03) completes the
+# typed declaration contract the shape already CLAIMED but lacked — an explicit
+# `runtime` strategy, an install argv-list, the package manager / lockfile, the static
+# `output_dir`, and scoped `env` declarations (build/runtime scope, requiredness,
+# secret class) — a persisted shape change, so the version is bumped to 3. A persisted
+# v1/v2 sidecar is therefore never silently reinterpreted (§8.11):
+# `parse_release_intent` migrates an older shape deterministically (its fields are a
+# strict subset of v3, so the new fields default) and rejects a NEWER one — the
+# persisted shape change is version-gated end to end.
+RELEASE_INTENT_SCHEMA_VERSION = 3
 
 
 class ReleaseIntent(BaseModel):
@@ -641,25 +645,65 @@ class ReleaseIntent(BaseModel):
     path, the required env-var NAMES, and the resources it needs. Defined here so
     the tool layer and later work orders share ONE schema for the declaration.
 
-    `schema_version` versions the PERSISTED shape (§8.11): the WO-C4 lowering adds
+    `schema_version` versions the PERSISTED shape (§8.11): the WO-C4/R2 lowering adds
     version-gated persistence so a stored sidecar always self-identifies its shape
     and an older one is migrated (never silently reinterpreted) by
-    `parse_release_intent`; it is bumped to `RELEASE_INTENT_SCHEMA_VERSION`."""
+    `parse_release_intent`; it is bumped to `RELEASE_INTENT_SCHEMA_VERSION`.
+
+    R2 (G03) completes the CONTRACT the shape claimed but lacked: an explicit `runtime`
+    strategy, an `install_cmd` argv-list (so a runtime dependency install no longer
+    depends on a build step), the `package_manager` / `lockfile` it installs with, the
+    static build `output_dir`, and scoped `env` declarations (each an `EnvVarDecl` with
+    build/runtime scope, requiredness, and secret class). These reuse the SAME
+    field validators as the `ReleaseService`/`ReleaseSpec` contract (`_validate_argv`
+    token hygiene for `install_cmd`, `check_workspace_rel_path` for `lockfile` /
+    `output_dir`, `EnvVarDecl`'s own name/scope guards for `env`)."""
 
     model_config = _STRICT
 
     schema_version: int = Field(default=RELEASE_INTENT_SCHEMA_VERSION, ge=1)
+    # R2 (G03): the runtime strategy the app is built/run as. `None` means "infer from
+    # the start command" (the historical behaviour); an explicit `static` lets a
+    # prebuilt / build-then-serve site declare it has no long-running process.
+    runtime: RuntimeStrategy | None = Field(default=None, exclude_if=lambda value: value is None)
     build_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
+    # R2 (G03): the runtime DEPENDENCY-install argv (e.g. `("npm", "ci")` /
+    # `("pip", "install", "-r", "requirements.txt")`). Explicit-wins over the detector's
+    # safe derivation; it is token-hygiene checked here and credential-rail checked at
+    # the tool boundary (a non-runtime head like `pip` is legal, so it is NOT run
+    # through the runtime-start grammar).
+    install_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
     start_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
+    # R2 (G03): the package manager + lockfile the install uses. NAMES/paths only.
+    package_manager: _ShortStr | None = Field(default=None, exclude_if=lambda value: value is None)
+    lockfile: _PathStr | None = Field(default=None, exclude_if=lambda value: value is None)
+    # R2 (G03/G06): where a static build's output lands (e.g. `dist`), lowered into the
+    # two-stage `COPY --from=build /app/<output_dir>/` copy. Workspace-relative.
+    output_dir: _PathStr | None = Field(default=None, exclude_if=lambda value: value is None)
     port_env: _EnvNameStr = "PORT"
     health_path: _PathStr | None = Field(default=None, exclude_if=lambda value: value is None)
     required_env: tuple[_EnvNameStr, ...] = Field(default_factory=tuple, max_length=_MAX_ENV)
+    # R2 (G03): scoped env declarations — each carries scope (build/runtime),
+    # requiredness, and secret class. A NAMES-ONLY superset of `required_env` (which
+    # stays a runtime/required shorthand); detection MERGES the two.
+    env: tuple[EnvVarDecl, ...] = Field(default_factory=tuple, max_length=_MAX_ENV)
     resources: tuple[ResourceDecl, ...] = Field(default_factory=tuple, max_length=_MAX_RESOURCES)
 
-    @field_validator("build_cmd", "start_cmd")
+    @field_validator("build_cmd", "start_cmd", "install_cmd")
     @classmethod
     def _commands_are_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return _validate_argv(value, field="ReleaseIntent command")
+
+    @field_validator("lockfile", "output_dir")
+    @classmethod
+    def _optional_paths_are_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        # R2 (G03/G06): the SAME workspace-relative POSIX guard `ReleaseService` uses —
+        # no absolute path, traversal, control char, or COPY-flag-shaped segment — so a
+        # declared `output_dir`/`lockfile` can never split a Dockerfile `COPY` line.
+        check_workspace_rel_path(value, field="ReleaseIntent path")
+        return value
 
     @field_validator("port_env")
     @classmethod
@@ -696,12 +740,12 @@ def parse_release_intent(raw: object) -> ReleaseIntent:
     version-gated per §8.11 so an older shape is never silently reinterpreted:
 
     * ``schema_version == RELEASE_INTENT_SCHEMA_VERSION`` (or a legacy shape carrying
-      no version, treated as v1) is validated / migrated deterministically. A v1
-      shape (the pre-WO-C4 fields, a strict SUBSET of v2) migrates by dropping the
-      version tag and letting the new v2 fields default — a total, deterministic
-      adapter, so the same v1 bytes always yield the same v2 intent.
+      no version, treated as v1) is validated / migrated deterministically. An OLDER
+      shape (a v1/v2 payload, whose fields are a strict SUBSET of v3) migrates by
+      dropping the version tag and letting the new v3 fields default — a total,
+      deterministic adapter, so the same older bytes always yield the same v3 intent.
     * a NEWER ``schema_version`` (one this build does not know) is REJECTED with
-      `IntentUpgradeError` rather than mis-read as v2.
+      `IntentUpgradeError` rather than mis-read as the current schema.
 
     Raises `IntentUpgradeError` for a version-gate refusal (a NEWER schema, or a v1
     shape carrying a field the current schema forbids — an upgrade this build cannot
@@ -720,8 +764,8 @@ def parse_release_intent(raw: object) -> ReleaseIntent:
         )
     if version_obj == RELEASE_INTENT_SCHEMA_VERSION:
         return ReleaseIntent.model_validate(raw)
-    # v1 / legacy: migrate deterministically — drop the version tag; the pre-WO-C4
-    # fields are a strict subset of v2, so the new fields default.
+    # v1 / v2 / legacy: migrate deterministically — drop the version tag; the older
+    # fields are a strict subset of v3, so the new fields default.
     migrated = {key: value for key, value in raw.items() if key != "schema_version"}
     try:
         return ReleaseIntent.model_validate(migrated)
@@ -942,8 +986,7 @@ class ReleaseSpec(BaseModel):
                     continue
                 if dep in visiting:
                     raise ValueError(
-                        "the service dependency graph contains a cycle "
-                        f"(reached {dep!r} again)"
+                        f"the service dependency graph contains a cycle (reached {dep!r} again)"
                     )
                 if dep not in done:
                     _visit(dep)
@@ -968,11 +1011,7 @@ class ReleaseSpec(BaseModel):
         if len(self.services) <= 1:
             return self
         for var in self.env:
-            if (
-                var.scope is EnvScope.runtime
-                and var.binding is None
-                and var.consumers is None
-            ):
+            if var.scope is EnvScope.runtime and var.binding is None and var.consumers is None:
                 raise ValueError(
                     f"env var {var.name!r} is unbound and declares no consumers in a "
                     "multi-service spec; implicit fan-out is forbidden — declare its "

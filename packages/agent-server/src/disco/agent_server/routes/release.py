@@ -114,11 +114,17 @@ class _ResponseEnv(BaseModel):
 class _IngressInfo(BaseModel):
     """The single public entrypoint of a detected release. `port` is the env-var
     NAME the ingress binds (the `$PORT` contract) — the neutral spec carries no
-    literal port number; the host owns the concrete port at deploy time."""
+    literal port number; the host owns the concrete port at deploy time. `runtime`
+    is the generic, provider-neutral strategy the ingress is built/run as
+    (`node`/`python`/`static`/`dev_server`/`container`) so a consumer (R4's
+    SelfHostPanel) can label the outcome without parsing the bundle; the full build
+    detail (install/build argv, `output_dir`, package manager) lives in the bundle's
+    `release.json`."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     service: str
+    runtime: str
     port: str
     health_path: str | None = None
 
@@ -328,16 +334,12 @@ def _recover_masked_candidate(
     if intent is not None or detection.assessment is ReleaseAssessment.candidate:
         return detection
     masked = {
-        path
-        for path in files
-        if posixpath.normpath(path) in _CONTAINER_MANIFEST_OVERLAY_PATHS
+        path for path in files if posixpath.normpath(path) in _CONTAINER_MANIFEST_OVERLAY_PATHS
     }
     if not masked:
         return detection
     unmasked = {path: data for path, data in files.items() if path not in masked}
-    recovered = detect_release(
-        unmasked, intent=None, provenance=Provenance(imported=imported)
-    )
+    recovered = detect_release(unmasked, intent=None, provenance=Provenance(imported=imported))
     if recovered.assessment is ReleaseAssessment.candidate:
         return recovered
     return detection
@@ -390,9 +392,7 @@ def assess_release(
     # reported honestly rather than as a generic container review. `effective` is the
     # detection whose SHAPE the overlay is generated from; the collision check below
     # then runs against the FULL workspace, so the masked reserved file is reported.
-    effective = _recover_masked_candidate(
-        detection, files, intent=intent, imported=imported
-    )
+    effective = _recover_masked_candidate(detection, files, intent=intent, imported=imported)
 
     ingress = effective.ingress
     assessment = effective.assessment
@@ -418,7 +418,10 @@ def assess_release(
         else:
             digest = spec_digest(spec)
             ingress_info = _IngressInfo(
-                service=ingress.id, port=ingress.port_env, health_path=ingress.health_path
+                service=ingress.id,
+                runtime=ingress.runtime.value,
+                port=ingress.port_env,
+                health_path=ingress.health_path,
             )
 
     blockers: list[_ResponseBlocker] = []
@@ -468,9 +471,7 @@ def assess_release(
                 )
             else:
                 overlay_files = {
-                    path: overlay[path]
-                    for path in overlay
-                    if not is_runtime_secret_path(path)
+                    path: overlay[path] for path in overlay if not is_runtime_secret_path(path)
                 }
                 self_host = True
         else:

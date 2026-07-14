@@ -47,7 +47,7 @@ from disco.core.release.command_grammar import (
     check_no_inline_secret_cli,
     check_no_positional_credential,
 )
-from disco.core.release.spec import ReleaseIntent, ResourceDecl
+from disco.core.release.spec import EnvVarDecl, ReleaseIntent, ResourceDecl, RuntimeStrategy
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
@@ -92,7 +92,51 @@ class ReleaseDeclareArgs(BaseModel):
         default_factory=list,
         description=(
             "How to BUILD the app before starting, as an argv LIST (e.g. "
-            '["npm", "ci"]) — NEVER a shell string. Omit when there is no build step.'
+            '["npm", "run", "build"]) — NEVER a shell string. Omit when there is no build step.'
+        ),
+    )
+    install_cmd: list[str] = Field(
+        default_factory=list,
+        description=(
+            "How to INSTALL runtime dependencies before build/start, as an argv LIST "
+            '(e.g. ["npm", "ci"] or ["pip", "install", "-r", "requirements.txt"]) — NEVER '
+            "a shell string. Omit to let detection derive a safe default (npm ci/install "
+            "for a package.json, pip install for a requirements.txt) when unambiguous."
+        ),
+    )
+    runtime: RuntimeStrategy | None = Field(
+        default=None,
+        description=(
+            "The runtime strategy the app is built/run as (node / python / static / "
+            "dev_server / container). Omit to infer it from the start command; declare "
+            '"static" for a prebuilt or build-then-serve site that has no long-running '
+            "process."
+        ),
+    )
+    package_manager: str | None = Field(
+        default=None,
+        description='The package manager the install uses (e.g. "npm", "pip") — a NAME only.',
+    )
+    lockfile: str | None = Field(
+        default=None,
+        description=(
+            "The workspace-relative lockfile the install pins to (e.g. "
+            '"package-lock.json"), so `npm ci` can be used. Omit when there is none.'
+        ),
+    )
+    output_dir: str | None = Field(
+        default=None,
+        description=(
+            'Where a static build\'s output lands (e.g. "dist"), served as the site '
+            "root — a workspace-relative directory, never absolute or traversing."
+        ),
+    )
+    env: list[EnvVarDecl] = Field(
+        default_factory=list,
+        description=(
+            "Scoped env-var declarations (NAMES ONLY): each carries a scope (build or "
+            "runtime), requiredness, and secret class. A typed superset of required_env "
+            "(which stays a runtime/required shorthand). NEVER a value."
         ),
     )
     port_env: str = Field(
@@ -167,11 +211,17 @@ class ReleaseDeclareTool:
         # token, a non-name port_env, etc. A rejected declaration persists NOTHING.
         try:
             intent = ReleaseIntent(
+                runtime=args.runtime,
                 build_cmd=tuple(args.build_cmd),
+                install_cmd=tuple(args.install_cmd),
                 start_cmd=tuple(args.start_cmd),
+                package_manager=args.package_manager,
+                lockfile=args.lockfile,
+                output_dir=args.output_dir,
                 port_env=args.port_env,
                 health_path=args.health_path,
                 required_env=tuple(args.required_env),
+                env=tuple(args.env),
                 resources=tuple(args.resources),
             )
         except ValidationError as exc:
@@ -188,10 +238,31 @@ class ReleaseDeclareTool:
         # executable/shell, an unknown flag, and every inline secret CLI form
         # (`--token VALUE` / `--password VALUE` / URL userinfo), NOT a secret-flag
         # blacklist. A rejection persists NOTHING and echoes NO value.
-        declared = frozenset(intent.required_env) | {intent.port_env}
+        declared = (
+            frozenset(intent.required_env) | {var.name for var in intent.env} | {intent.port_env}
+        )
         try:
             check_declaration_argv(intent.start_cmd, declared_names=declared, field="start_cmd")
             check_declaration_argv(intent.build_cmd, declared_names=declared, field="build_cmd")
+        except ValueError:
+            return ToolOutcome(
+                success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION
+            )
+
+        # R2 (G03): an explicit install_cmd legitimately heads with a NON-runtime-start
+        # executable (`pip`, `npm`, `yarn`), so the runtime-START grammar
+        # (`check_declaration_argv`) must NOT gate it — it would false-reject `pip
+        # install`. It gets the SAME head-agnostic credential rails a migrate_cmd does
+        # (token hygiene already ran in ReleaseIntent's validators): no inline secret on
+        # a credential flag, no bare positional / `config set` literal credential. A
+        # rejection persists NOTHING and echoes NO value.
+        try:
+            check_no_inline_secret_cli(
+                intent.install_cmd, declared_names=declared, field="install_cmd"
+            )
+            check_no_positional_credential(
+                intent.install_cmd, declared_names=declared, field="install_cmd"
+            )
         except ValueError:
             return ToolOutcome(
                 success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION

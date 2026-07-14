@@ -194,8 +194,12 @@ def check_workspace_rel_path(value: str, *, field: str) -> None:
         raise ValueError(f"{field} must be a non-empty path")
     if value.startswith("/"):
         raise ValueError(f"{field} must be workspace-relative (no leading '/')")
-    if "\x00" in value:
-        raise ValueError(f"{field} must not contain a NUL byte")
+    # A control character (NUL / CR / LF / tab / …) must be rejected explicitly: the
+    # `_REL_PATH_RE` anchors with `$`, which matches BEFORE a single trailing `\n`, so a
+    # value like `dist\n` would otherwise slip past the regex and split the emitted
+    # `COPY /app/<output_dir>/` line into a new Dockerfile instruction (R2 / G06).
+    if any(ch < " " or ch == "\x7f" for ch in value):
+        raise ValueError(f"{field} must not contain a control character (NUL, CR, LF, tab, …)")
     if not _REL_PATH_RE.match(value):
         raise ValueError(
             f"{field} contains a disallowed character; a workspace path may use letters, "

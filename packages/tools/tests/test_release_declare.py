@@ -426,14 +426,31 @@ def test_registered_in_agent_build_scope_not_appkit() -> None:
 
 
 def test_no_env_value_field_exists_on_the_schema() -> None:
-    # defense in depth: the args schema has no place to put a value at all
-    props = ReleaseDeclareArgs.model_json_schema()["properties"]
-    assert "env" not in props
+    # Defense in depth: the R2/G03 intent contract EXPANDS the declarable fields (an
+    # explicit runtime strategy, an install argv, the package manager / lockfile, the
+    # static output_dir, and scoped `env` declarations) — but every one stays
+    # NAMES-ONLY / argv-LIST / a typed shape, so there is still NO place to put a secret
+    # VALUE. `env` is a list of typed `EnvVarDecl` (names + scope/requiredness/secret
+    # class), which is value-free BY CONSTRUCTION (no `value` field), NOT a
+    # `{"NAME": "value"}` blob.
+    schema = ReleaseDeclareArgs.model_json_schema()
+    props = schema["properties"]
     assert set(props) == {
+        "runtime",
         "start_cmd",
         "build_cmd",
+        "install_cmd",
+        "package_manager",
+        "lockfile",
+        "output_dir",
         "port_env",
         "health_path",
         "required_env",
+        "env",
         "resources",
     }
+    # `env` items are the typed, value-free EnvVarDecl — never a free-form value map.
+    assert props["env"].get("items") == {"$ref": "#/$defs/EnvVarDecl"}
+    env_decl_props = set(schema["$defs"]["EnvVarDecl"]["properties"])
+    assert "value" not in env_decl_props, "an EnvVarDecl must record a NAME, never a value"
+    assert env_decl_props == {"name", "scope", "required", "secret", "binding", "consumers"}

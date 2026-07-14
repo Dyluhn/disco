@@ -1227,6 +1227,7 @@ def _reject_positional_command_secrets(spec: ReleaseSpec) -> None:
     for service in spec.services:
         commands.append(("service start_cmd", service.start_cmd))
         commands.append(("service build_cmd", service.build_cmd))
+        commands.append(("service install_cmd", service.install_cmd))
         commands.append(("service migrate_cmd", service.migrate_cmd))
     for resource in spec.resources:
         commands.append(("resource migrate_cmd", resource.migrate_cmd))

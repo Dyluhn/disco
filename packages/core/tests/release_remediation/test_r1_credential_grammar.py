@@ -20,9 +20,8 @@ secret); rejections are asserted value-free.
 
 from __future__ import annotations
 
-import base64
-import os
-import secrets
+import random
+import string
 
 import pytest
 from disco.core.release.command_grammar import (
@@ -153,20 +152,47 @@ def test_whole_env_reference_is_never_credential() -> None:
         assert looks_like_credential_literal(ref) is False
 
 
-def test_generic_rail_catches_live_base64url_secrets() -> None:
-    """The Tier-B generic rail catches the ENTIRE base64url class STRUCTURALLY — proven
-    with freshly-generated ``secrets.token_urlsafe`` / ``urlsafe_b64encode`` tokens
-    (never fixed sentinels), so it is a shape detector, not a value match. This is the
-    class the earlier `-`/`_`-exclusion regression had silently stopped catching."""
-    for _ in range(50):
-        for token in (
-            secrets.token_urlsafe(32),
-            secrets.token_urlsafe(48),
-            base64.urlsafe_b64encode(os.urandom(33)).decode().rstrip("="),
-        ):
-            assert looks_like_credential_literal(token) is True, (
-                "a live base64url secret was not recognized as credential material"
-            )
+# A FIXED, representative taxonomy of opaque secret blobs spanning BOTH generic tiers:
+# Tier-A contiguous base62/hex (no word-separators), and Tier-B base64url that admits
+# `-`/`_` but is NON-wordlike (each carries a long mixed-alphanumeric run). Deterministic
+# BY DESIGN — the earlier `secrets.token_urlsafe` version was NONDETERMINISTIC: it could
+# emit a token whose `-`/`_`-split segments are ALL alphabetic, which the Tier-B rail
+# INTENTIONALLY spares as a human kebab/snake identifier, so ~1-in-N runs failed. The rail
+# does not claim to catch that carve-out; this fixed set exercises the shapes it DOES.
+_REPRESENTATIVE_OPAQUE_SECRETS = (
+    "kJ8x2L2mNoPq3Rs4TuVw7Xy0aB1cD2eF3gH4iJ5",  # Tier A — base62 contiguous
+    "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c",  # Tier A — lowercase hex
+    "Zx4Kd0Lp2Rn7Tv1Bh4Mj6Yc9Se5Ag8Qw3Ef6Rt7",  # Tier A — base62 mixed
+    "kJ8x-L2mNoPqRs4-TuVwXyZ0aB1cD2eF3gH4iJ5",  # Tier B — base64url, non-wordlike
+    "R2_kJ8x9L2mNoPqRs4TuVwXyZ0aB1cD2eF3gH4iJ",  # Tier B — base64url with `_`
+    "xY7z_Qa1Bc2De3Fg4Hi5Jk6Lm7No8Pq9Rs0Tu-vW",  # Tier B — base64url mixed
+)
+
+
+def test_generic_rail_catches_representative_opaque_secrets() -> None:
+    """The generic rail catches representative opaque/base64url secret SHAPES
+    DETERMINISTICALLY — a fixed taxonomy (Tier-A contiguous base62/hex + Tier-B
+    non-wordlike base64url), never a random token that could land on the wordlike
+    carve-out the rail intentionally spares (the source of the earlier flakiness)."""
+    for token in _REPRESENTATIVE_OPAQUE_SECRETS:
+        assert looks_like_credential_literal(token) is True, (
+            "a representative opaque secret shape was not recognized as credential material"
+        )
+
+
+def test_generic_rail_catches_seeded_base62_secrets_deterministically() -> None:
+    """Broad, REPRODUCIBLE coverage of the opaque-secret space: a FIXED-SEED generator of
+    contiguous base62 blobs (>= 32 chars, no word-separators) — every one is a Tier-A
+    opaque blob the rail catches, and the fixed seed means the run is byte-stable (no
+    `secrets`/clock randomness that could flake). Same seed → same 200 tokens every run."""
+    rng = random.Random(20260714)
+    alphabet = string.ascii_letters + string.digits
+    for _ in range(200):
+        length = rng.randint(32, 48)
+        token = "".join(rng.choice(alphabet) for _ in range(length))
+        assert looks_like_credential_literal(token) is True, (
+            "a seeded base62 opaque secret was not recognized as credential material"
+        )
 
 
 def test_generic_rail_spares_near_threshold_kebab_snake_identifiers() -> None:
