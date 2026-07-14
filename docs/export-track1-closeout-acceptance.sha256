@@ -10,7 +10,8 @@
   "manifest_excludes_self": "docs/export-track1-closeout-acceptance.sha256",
   "anti_bypass_operational_reading": "A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
   "files": {
-    ".github/workflows/export-track1-closeout.yml": "a08695b1f551aec9a9799f46b93fe796c5f3ec106b07f656c8a4807bdb9c5004",
+    ".github/workflows/export-track1-closeout.yml": "651bb2d05a31225f660445f40f212e1fdabbea16a447ea2e4d0d38fbfe0827ec",
+    "docs/export-track1-closeout-suppression-baseline.json": "c558fae43af0e8e38ad8293694a0d2ff83cf0a13c43191e6d08c043486d2a3b7",
     "docs/export-track1-closeout-work-orders.md": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
     "frontend/e2e/export-track1-closeout/selfhost-candidate.spec.ts": "e4ad1f8651e7203c0e4c6946b294514b1619af18f1c3a2bdd4f6d02a45265447",
     "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts": "24079e15f0df881970332bed369df2df1436738594cf8d990b0690b1aa27910b",
@@ -55,8 +56,8 @@
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
-    "scripts/gen_closeout_acceptance_manifest.py": "5ceb68934b647ec1587b6458388195ad094c6ef6cb42882dbe783abfdb6d6fbd",
-    "scripts/verify_export_track1_closeout.py": "863d99cd11acb6fb577de9873365df0033a1b8d99039de727f1a1cc8367b4e38"
+    "scripts/gen_closeout_acceptance_manifest.py": "956b768e7d048c979368931f278cabdfba211ba8e94b42eaf5b111e56570fb92",
+    "scripts/verify_export_track1_closeout.py": "0a54cc0b176b903603cb2683831a87a8ceb3ce2217ecbbac9330c8176a9071e2"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
@@ -258,7 +259,9 @@
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[compose-ps.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[docker-inspect-sanitized.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[docker-versions.txt]",
+    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[frontend-e2e.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[frontend-vitest.json]",
+    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[g11-typecheck.txt]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-closeout.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-live.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-nonlive.xml]",

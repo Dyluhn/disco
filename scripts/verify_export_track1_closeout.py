@@ -88,6 +88,10 @@ _HYGIENE_SCAN_FILES: tuple[str, ...] = (
     "pytest-closeout.xml",
     "pytest-live.xml",
     "frontend-vitest.json",
+    # R6: the structured Firefox e2e report is a written text artifact too — a planted
+    # credential sentinel here must likewise force passed:false (plan §9.4 / criterion 6).
+    "frontend-e2e.json",
+    "g11-typecheck.txt",
     "anti-bypass-scan.json",
     "docker-versions.txt",
     *_DOCKER_HOST_ARTIFACTS,
@@ -164,6 +168,60 @@ _TS_IMPORT_RE = re.compile(r"""^\s*import\s+(?P<body>.+?)\s+from\s+["']""")
 _TS_IMPORT_BLOCK_RE = re.compile(r"""import\s+(?P<body>.+?)\s+from\s+["']""", re.DOTALL)
 # `const v = vi` / `let v = vi` / `v = vi` — a local aliased to the vi test runner.
 _VI_ALIAS_RE = re.compile(r"\b(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s*=\s*vi\s*[;\n]")
+
+# ---- G18 no-new-suppression: campaign-diff scanner rules (plan §9.4 / criterion 4) ----
+# Each pattern matches the ACTUAL directive SYNTAX (a trailing comment directive, a
+# decorator, a real call, or a YAML key), NOT a bare prose substring — so an explanatory
+# comment ("no continue-on-error / skip path") or a docstring mentioning "xfail" is not
+# flagged. ``@ts-expect-error`` is deliberately NOT matched: it is a negative type
+# ASSERTION (tsc errors TS2578 if the expected error is absent), the inverse of a
+# suppression, so it can never hide a real error — and the frozen g11 guard contract
+# relies on that exclusion. ``@ts-nocheck`` IS matched: unlike ``@ts-expect-error`` it
+# disables type-checking for the WHOLE file, so it can hide real errors on the
+# typecheck:build + g11 tsc lanes. The module-level ``pytestmark`` global is matched only
+# when it assigns a ``mark.skip``/``mark.skipif``/``mark.xfail`` (a whole-module skip the
+# per-test decorator patterns miss); a legitimate ``pytestmark = pytest.mark.integration``
+# / ``mark.export_track1_closeout`` marker is NOT a suppression and is not flagged.
+# Out of scope by design: config-file ignore lists (e.g. ``[tool.ruff] ignore`` in
+# pyproject.toml) — a distinct, human-reviewed class backstopped by the plan §4.4
+# independent diff review, not this token scan.
+_G18_SUPPRESSION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("noqa", re.compile(r"#\s*noqa")),
+    ("type_ignore", re.compile(r"#\s*type:\s*ignore")),
+    ("pyright_ignore", re.compile(r"#\s*pyright:\s*ignore")),
+    ("ruff_noqa", re.compile(r"#\s*ruff:\s*noqa")),
+    ("eslint_disable", re.compile(r"eslint-disable")),
+    ("ts_ignore", re.compile(r"//\s*@ts-ignore")),
+    ("ts_nocheck", re.compile(r"//\s*@ts-nocheck")),
+    ("continue_on_error", re.compile(r"continue-on-error\s*:")),
+    ("pytest_skip", re.compile(r"@pytest\.mark\.skip|@pytest\.mark\.skipif|pytest\.skip\s*\(")),
+    ("pytest_xfail", re.compile(r"@pytest\.mark\.xfail|pytest\.xfail\s*\(")),
+    (
+        "pytestmark_skip",
+        re.compile(r"\bpytestmark\b\s*=.*\bmark\.(?:skipif|skip|xfail)\b"),
+    ),
+    ("js_skip", re.compile(r"\b(?:describe|test|it)\s*\.\s*skip\s*\(")),
+    ("js_only", re.compile(r"\b(?:describe|test|it)\s*\.\s*only\s*\(")),
+)
+# Authoritative source of a hunk's destination file: the ``diff --git a/… b/…`` header.
+# Parsing this (not solely ``+++ b/``) keeps the scan anchored even when a runner's git is
+# configured with ``diff.noprefix=true`` and emits ``+++ x`` (no ``b/`` prefix) — which
+# would otherwise leave ``cur_file`` None and silently no-op the ENTIRE scan (fail-open).
+# _run_scanner_lane additionally forces ``--src-prefix=a/ --dst-prefix=b/`` at the diff
+# invocation so prefixes are always present regardless of the host's git config.
+_DIFF_GIT_HEADER_RE: re.Pattern[str] = re.compile(r"^diff --git a/.+ b/(?P<dst>.+)$")
+# The diff scan covers real code/config only.
+_G18_DIFF_SCAN_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".jsx", ".yml", ".yaml")
+# Exempt the two gate-definition scripts (they DEFINE these patterns as detection rules)
+# and the release_remediation meta-test dir (its mutation tests embed suppression tokens
+# as fixtures). Both are byte-hashed by the manifest and reviewed; excluding them from the
+# token scan is what stops the gate from flagging its own definition. Docs/JSON/manifest
+# are excluded by suffix.
+_G18_DIFF_EXEMPT_PREFIXES = (
+    "scripts/verify_export_track1_closeout.py",
+    "scripts/gen_closeout_acceptance_manifest.py",
+    "packages/agent-server/tests/release_remediation/",
+)
 
 
 @dataclass
@@ -470,20 +528,219 @@ def _run_frontend_lane(
     bproc = _run(["npx", "vite", "build"], cwd=frontend_dir)
     detail["build"] = {"exit_code": bproc.returncode}
 
+    # BROWSER e2e GATE (G13(b) / G19 / plan §9.1-§9.3). The Firefox lane runs SEPARATELY
+    # in _run_browser_e2e (called by main BEFORE this lane) and writes its structured JSON
+    # report to evidence_dir/frontend-e2e.json. Here we only PARSE + GATE on that report:
+    #   * absent report  -> status "not_executed_offline", browser_ok False (the frozen
+    #     G13(b) call hits exactly this: a fresh empty evidence_dir has no report);
+    #   * present report -> green browser only if it EXECUTED and expected>0, unexpected==0,
+    #     flaky==0, skipped==0 AND the executed spec set equals the frozen e2e inventory
+    #     (all frontend/e2e/export-track1-closeout/*.spec.ts).
+    # browser_ok is folded into lane.green, so an un-run / failed / partial browser proof
+    # can never be a green, gating input to passed:true.
     e2e_dir = repo / manifest_mod.FRONTEND_E2E_DIR
-    e2e_specs = sorted(p.name for p in e2e_dir.glob("*.spec.ts")) if e2e_dir.exists() else []
-    detail["playwright_e2e"] = {
-        "status": "not_executed_offline",
-        "reason": (
-            "the frozen candidate/needs_review/not_web Firefox proofs need a "
-            "fixture-mode server + a browser and cannot run in this offline verifier; "
-            "they are frozen (hashed) and do NOT block `passed` here (LIMITATION)"
-        ),
-        "frozen_specs": e2e_specs,
-    }
+    expected_specs = {p.name for p in e2e_dir.glob("*.spec.ts")} if e2e_dir.exists() else set()
+    browser_ok, browser_detail = _parse_playwright_e2e(
+        evidence_dir / "frontend-e2e.json", expected_specs
+    )
+    detail["playwright_e2e"] = browser_detail
 
     lane.green = bool(
-        vitest_ok and file_set_ok and titles_ok and tproc.returncode == 0 and bproc.returncode == 0
+        vitest_ok
+        and file_set_ok
+        and titles_ok
+        and tproc.returncode == 0
+        and bproc.returncode == 0
+        and browser_ok
+    )
+    return lane
+
+
+# ---- browser e2e (Firefox) lane (plan §9.1-§9.3) ------------------------------
+
+
+def _playwright_spec_basenames(data: dict[str, object]) -> set[str]:
+    """Every ``*.spec.ts`` file basename that appears in a Playwright JSON report's suite
+    tree — the set of spec files that actually EXECUTED. Walks nested suites/specs so a
+    dropped or extra spec file surfaces as a spec-set mismatch."""
+    names: set[str] = set()
+
+    def _walk(node: object) -> None:
+        if not isinstance(node, dict):
+            return
+        file_val = node.get("file")
+        if isinstance(file_val, str) and file_val.endswith(".spec.ts"):
+            names.add(Path(file_val).name)
+        for key in ("suites", "specs"):
+            children = node.get(key)
+            if isinstance(children, list):
+                for child in children:
+                    _walk(child)
+
+    top = data.get("suites")
+    if isinstance(top, list):
+        for suite in top:
+            _walk(suite)
+    return names
+
+
+def _parse_playwright_e2e(path: Path, expected_specs: set[str]) -> tuple[bool, dict[str, object]]:
+    """Parse the structured Firefox report at ``path`` and decide ``browser_ok``. Pure +
+    importable so the committed mutation tests drive it WITHOUT running a browser.
+
+    Returns ``(browser_ok, detail)``. ``browser_ok`` is True ONLY when the run executed and
+    Playwright's ``stats`` show ``expected > 0`` with ``unexpected == flaky == skipped == 0``
+    AND the executed spec-file basenames equal ``expected_specs`` (the frozen e2e
+    inventory). An ABSENT report is recorded as ``not_executed_offline`` (the frozen G13(b)
+    state); an unparseable report or one _run_browser_e2e marked ``browser_run_failed`` /
+    ``not_executed_offline`` is likewise not green. Fail-closed: missing counts default to a
+    failing value."""
+    if not path.is_file():
+        return False, {
+            "status": "not_executed_offline",
+            "browser_ok": False,
+            "reason": (
+                "no frontend-e2e.json in the evidence dir — the Firefox e2e lane did not "
+                "execute (the frozen candidate/needs_review Firefox proofs need a "
+                "fixture-mode server + a browser); an un-run browser proof cannot be green"
+            ),
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False, {"status": "unparseable", "browser_ok": False}
+    if not isinstance(data, dict):
+        return False, {"status": "unparseable", "browser_ok": False}
+    marked = data.get("status")
+    if marked in {"browser_run_failed", "not_executed_offline"}:
+        return False, {
+            "status": str(marked),
+            "browser_ok": False,
+            "exit_code": data.get("exit_code"),
+        }
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+
+    def _stat(key: str, absent_default: int) -> int:
+        raw = stats.get(key, absent_default) if isinstance(stats, dict) else absent_default
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return absent_default
+
+    expected = _stat("expected", 0)
+    unexpected = _stat("unexpected", 1)
+    flaky = _stat("flaky", 1)
+    skipped = _stat("skipped", 1)
+    executed_specs = _playwright_spec_basenames(data)
+    spec_set_ok = executed_specs == expected_specs and bool(expected_specs)
+    browser_ok = bool(
+        expected > 0 and unexpected == 0 and flaky == 0 and skipped == 0 and spec_set_ok
+    )
+    return browser_ok, {
+        "status": "executed",
+        "browser_ok": browser_ok,
+        "counts": {
+            "expected": expected,
+            "unexpected": unexpected,
+            "flaky": flaky,
+            "skipped": skipped,
+        },
+        "executed_specs": sorted(executed_specs),
+        "expected_specs": sorted(expected_specs),
+        "spec_set_ok": spec_set_ok,
+    }
+
+
+def _run_browser_e2e(repo: Path, evidence_dir: Path) -> dict[str, object]:
+    """RUN the frozen Firefox e2e proofs (``npx playwright test <FRONTEND_E2E_DIR>
+    --reporter=json --project=firefox``, fixture mode) and write the structured report to
+    ``evidence_dir/frontend-e2e.json`` (plan §9.1/§9.3). Kept SEPARATE from
+    _run_frontend_lane (which only parses+gates) so the frozen G13(b) test — which calls
+    _run_frontend_lane alone against a fresh empty evidence_dir — records
+    ``not_executed_offline``. Called by main() BEFORE the frontend lane.
+
+    On a host without ``npx`` no report is written (the frontend lane then records
+    not_executed_offline). When Playwright emits no parseable JSON (e.g. the fixture server
+    failed to boot), a truthful ``browser_run_failed`` record is written — NEVER a
+    success-shaped report — so the frontend lane's browser gate is non-green."""
+    frontend_dir = repo / "frontend"
+    out_path = evidence_dir / "frontend-e2e.json"
+    summary: dict[str, object] = {"command": manifest_mod.COMMAND_INVENTORY["browser_e2e"]}
+    if shutil.which("npx") is None:
+        summary["status"] = "not_executed_offline"
+        summary["reason"] = "npx unavailable on this host; browser e2e lane cannot run"
+        return summary
+    e2e_rel = manifest_mod.FRONTEND_E2E_DIR.split("/", 1)[1]
+    proc = _run(
+        ["npx", "playwright", "test", e2e_rel, "--reporter=json", "--project=firefox"],
+        cwd=frontend_dir,
+    )
+    summary["exit_code"] = proc.returncode
+    report: object = None
+    stdout = (proc.stdout or "").strip()
+    if stdout:
+        try:
+            report = json.loads(stdout)
+        except json.JSONDecodeError:
+            report = None
+    if isinstance(report, dict):
+        out_path.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        summary["status"] = "executed"
+    else:
+        # Truthful failure record: Playwright produced no parseable JSON report (missing
+        # browser, fixture-server boot failure, crash). NEVER a success-shaped artifact.
+        failure = {
+            "status": "browser_run_failed",
+            "exit_code": proc.returncode,
+            "note": (
+                "playwright did not emit a parseable JSON report on stdout; the Firefox "
+                "e2e lane did not complete — recorded as failed, not faked"
+            ),
+        }
+        out_path.write_text(json.dumps(failure, indent=2) + "\n", encoding="utf-8")
+        summary["status"] = "browser_run_failed"
+    return summary
+
+
+# ---- G11 dedicated compile lane (plan §9.1) -----------------------------------
+
+
+def _run_g11_compile_lane(repo: Path, evidence_dir: Path) -> LaneResult:
+    """The dedicated G11 nullable-binding compile gate: ``npx tsc -p
+    tsconfig.closeout-g11.json --noEmit`` (plan §9.1). A separate top-level lane (folded
+    into all_lanes_green) so it never perturbs the frozen G13(b) _run_frontend_lane
+    behavior. Green iff tsc exits 0. Firefox/vitest transpile without type-checking, so
+    this dedicated compile is the only proof of the version_seq/tree_digest nullability
+    contract."""
+    frontend_dir = repo / "frontend"
+    lane = LaneResult(name="g11-typecheck", status="ran")
+    artifact = evidence_dir / "g11-typecheck.txt"
+    if shutil.which("npx") is None:
+        lane.green = False
+        lane.detail = {
+            "npx_available": False,
+            "note": "npx unavailable; G11 compile lane cannot run",
+        }
+        artifact.write_text("npx unavailable; G11 compile lane did not run\n", encoding="utf-8")
+        return lane
+    proc = _run(
+        ["npx", "tsc", "-p", "tsconfig.closeout-g11.json", "--noEmit"],
+        cwd=frontend_dir,
+    )
+    lane.exit_code = proc.returncode
+    lane.green = proc.returncode == 0
+    lane.detail = {
+        "npx_available": True,
+        "command": manifest_mod.COMMAND_INVENTORY["g11_typecheck"],
+        "exit_code": proc.returncode,
+    }
+    artifact.write_text(
+        f"exit_code: {proc.returncode}\n\n"
+        f"--- stdout ---\n{proc.stdout}\n"
+        f"--- stderr ---\n{proc.stderr}\n",
+        encoding="utf-8",
     )
     return lane
 
@@ -819,6 +1076,135 @@ def _production_src_files(repo: Path) -> list[Path]:
     return files
 
 
+def _g18_scanned_path(path: str) -> bool:
+    """A campaign-diff path the G18 no-new-suppression scan inspects: real code/config,
+    excluding the two gate-definition scripts and the release_remediation meta-test dir
+    (which legitimately embed suppression tokens). Docs/JSON are excluded by suffix."""
+    if not path.endswith(_G18_DIFF_SCAN_SUFFIXES):
+        return False
+    return not any(path.startswith(prefix) for prefix in _G18_DIFF_EXEMPT_PREFIXES)
+
+
+def _load_suppression_baseline(repo: Path) -> tuple[set[tuple[str, str]], str]:
+    """Load the owner-approved suppression baseline (plan §9.4). Returns
+    ``(entries, note)`` where entries is a set of ``(repo-relative-file, stripped-line)``
+    pairs. An absent/unparseable baseline yields an EMPTY set (fail-closed: any new
+    suppression then trips the scan) with an explanatory note."""
+    path = repo / manifest_mod.SUPPRESSION_BASELINE_REL
+    if not path.is_file():
+        return set(), f"suppression baseline absent ({manifest_mod.SUPPRESSION_BASELINE_REL})"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return set(), f"suppression baseline is not valid JSON: {exc}"
+    entries: set[tuple[str, str]] = set()
+    approved = data.get("approved", []) if isinstance(data, dict) else []
+    if isinstance(approved, list):
+        for entry in approved:
+            if not isinstance(entry, dict):
+                continue
+            file_val = entry.get("file")
+            line_val = entry.get("line")
+            if isinstance(file_val, str) and isinstance(line_val, str):
+                entries.add((file_val, line_val.strip()))
+    return entries, "loaded"
+
+
+def _scan_campaign_diff_suppressions(
+    diff_text: str, baseline: set[tuple[str, str]]
+) -> list[dict[str, object]]:
+    """Scan a unified ``git diff`` for NEWLY-ADDED suppression directives (plan §9.4 /
+    criterion 4). For every ADDED line ('+') in a scanned file (see ``_g18_scanned_path``)
+    whose text matches a suppression pattern, emit a violation UNLESS its
+    ``(file, stripped-line)`` pair is in the owner-approved ``baseline``. Pure/importable
+    so the committed mutation tests drive it with synthetic hunks. New-file line numbers
+    are tracked from the ``@@`` hunk headers for locability; matching is by text, never by
+    line number, so drift cannot break a baseline entry."""
+    violations: list[dict[str, object]] = []
+    cur_file: str | None = None
+    new_lineno = 0
+    for raw in diff_text.splitlines():
+        if raw.startswith("diff --git "):
+            # AUTHORITATIVE per-file anchor: take the destination path from the
+            # ``diff --git a/… b/…`` header. This is what makes the scan robust to a
+            # no-prefix diff (``+++ x``) — cur_file is already set here, so a ``+++`` line
+            # lacking a ``b/`` prefix cannot blank it and vacuously pass the whole gate.
+            header = _DIFF_GIT_HEADER_RE.match(raw)
+            cur_file = header.group("dst") if header is not None else None
+            new_lineno = 0
+            continue
+        if raw.startswith("+++ b/"):
+            cur_file = raw[6:]  # unambiguous refinement when a b/ prefix is present
+            continue
+        if raw.startswith("+++") or raw.startswith("---") or raw.startswith("diff "):
+            continue
+        if raw.startswith("@@"):
+            match = re.search(r"\+(\d+)", raw)
+            new_lineno = int(match.group(1)) if match else 0
+            continue
+        if raw.startswith("+"):
+            added = raw[1:]
+            if cur_file is not None and _g18_scanned_path(cur_file):
+                stripped = added.strip()
+                if (cur_file, stripped) not in baseline:
+                    for kind, pattern in _G18_SUPPRESSION_PATTERNS:
+                        if pattern.search(added):
+                            violations.append(
+                                {
+                                    "file": cur_file,
+                                    "line": new_lineno,
+                                    "rule": f"new_suppression_{kind}",
+                                    "detail": stripped[:200],
+                                }
+                            )
+                            break
+            new_lineno += 1
+        elif raw.startswith("-"):
+            continue
+        else:
+            new_lineno += 1
+    return violations
+
+
+# ---- command inventory gate (G19 / plan §9 criterion 3) -----------------------
+
+
+def _observed_command_ids(repo: Path) -> set[str]:
+    """The set of command IDs this verifier actually dispatches on this host. The Python
+    lanes always run; the frontend/browser/G11 commands run only when node/npm/npx are
+    present. On a real acceptance host (all tools present) this equals
+    ``manifest_mod.REQUIRED_COMMAND_IDS``; a host missing a toolchain OMITS commands and
+    the inventory gate then fails (an acceptance run cannot omit a required command)."""
+    ids = {"python_nonlive", "python_closeout", "python_closeout_collect", "live_docker"}
+    if shutil.which("npx") is not None and shutil.which("npm") is not None:
+        ids |= {
+            "frontend_vitest",
+            "frontend_typecheck",
+            "frontend_build",
+            "g11_typecheck",
+            "browser_e2e",
+        }
+    return ids
+
+
+def _check_command_inventory(
+    observed_ids: set[str], required_ids: frozenset[str]
+) -> tuple[bool, dict[str, object]]:
+    """Gate the observed command inventory against the FROZEN required inventory: it must
+    EXACTLY equal it — an omitted command OR an additional/substitute command is rejected
+    (plan §9 criterion 3). Pure/importable so the mutation tests drive it directly."""
+    missing = sorted(required_ids - observed_ids)
+    extra = sorted(observed_ids - required_ids)
+    ok = not missing and not extra
+    return ok, {
+        "ok": ok,
+        "missing": missing,
+        "extra": extra,
+        "required_count": len(required_ids),
+        "observed_count": len(observed_ids),
+    }
+
+
 def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     """The anti-bypass static scan (plan §4.4 / §4.9).
 
@@ -862,6 +1248,26 @@ def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
         for lineno, line in enumerate(text.splitlines(), start=1):
             violations.extend(_scan_production_line(rel, lineno, line))
 
+    # G18 (plan §9.4 / criterion 4): scan the campaign diff (BASELINE_SHA..HEAD) for
+    # NEWLY-ADDED suppression directives and reject any not in the owner-approved baseline.
+    suppression_baseline, baseline_note = _load_suppression_baseline(repo)
+    # Force a/ b/ prefixes so the diff carries them even if this host's git has
+    # diff.noprefix=true (or a noprefix alias); a prefix-less diff would otherwise leave
+    # the parser's cur_file None and silently no-op the whole scan (fail-open). The parser
+    # is also hardened to anchor on the `diff --git` header (see _DIFF_GIT_HEADER_RE).
+    diff_text = _run(
+        [
+            "git",
+            "diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            f"{manifest_mod.BASELINE_SHA}..HEAD",
+        ],
+        cwd=repo,
+    ).stdout
+    diff_violations = _scan_campaign_diff_suppressions(diff_text, suppression_baseline)
+    violations.extend(diff_violations)
+
     def _violation_sort_key(v: dict[str, object]) -> tuple[str, int, str]:
         line = v["line"]
         return (str(v["file"]), line if isinstance(line, int) else 0, str(v["rule"]))
@@ -885,6 +1291,19 @@ def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
             "frontend_test_files": len(fe_files),
             "production_src_files": len(prod_files),
         },
+        "campaign_diff_suppressions": {
+            "baseline_note": baseline_note,
+            "baseline_rel": manifest_mod.SUPPRESSION_BASELINE_REL,
+            "baseline_ratified_count": len(suppression_baseline),
+            "diff_range": f"{manifest_mod.BASELINE_SHA}..HEAD",
+            "new_suppression_violations": len(diff_violations),
+            "scan_note": (
+                "every ADDED line in the campaign diff (real code/config only; the two "
+                "gate-definition scripts and the release_remediation meta-tests are "
+                "exempt) is scanned for new suppressions; a hit not in the owner-approved "
+                "baseline fails this lane (plan §9.4 / criterion 4)"
+            ),
+        },
         "violations": violations,
     }
     (evidence_dir / "anti-bypass-scan.json").write_text(
@@ -896,6 +1315,7 @@ def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
         green=clean,
         detail={
             "violation_count": len(violations),
+            "new_suppression_violations": len(diff_violations),
             "scanned": report["scanned"],
             "artifact": str(evidence_dir / "anti-bypass-scan.json"),
         },
@@ -905,21 +1325,45 @@ def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
 # ---- Docker-host-only evidence placeholders (honest, never faked) -------------
 
 
-def _write_docker_host_artifacts(evidence_dir: Path, docker_available: bool) -> dict[str, str]:
-    status = "produced_by_live_lane_on_docker_host"
-    note = (
-        "This artifact is produced by the live-docker lane on a real Docker host "
-        "(plan §12). "
-        + (
-            "A Docker engine is present but the live lane did not complete a clean lifecycle; "
-            if docker_available
-            else "No Docker engine is available here; "
+def _write_docker_host_artifacts(
+    evidence_dir: Path, docker_available: bool, *, live_lifecycle_ok: bool = False
+) -> dict[str, str]:
+    """Write the Docker-host evidence artifacts with a TRUTHFUL status tied to the ACTUAL
+    live lifecycle (G13(a) / plan §9.2). The live-production claim
+    ``produced_by_live_lane_on_docker_host`` is stamped ONLY when a Docker engine is
+    present AND the live lane completed a clean lifecycle (``live_lifecycle_ok``); with no
+    engine the status is ``absent_no_docker_engine``, and with an engine but a failed lane
+    it is ``live_lane_failed``. ``live_lifecycle_ok`` is keyword-only and defaults to a
+    NOT-live value, so the frozen G13(a) call ``_write_docker_host_artifacts(dir,
+    docker_available=False)`` can never emit the live claim."""
+    if docker_available and live_lifecycle_ok:
+        status = "produced_by_live_lane_on_docker_host"
+        note = (
+            "This artifact was produced by the live-docker lane on a real Docker host that "
+            "completed a clean lifecycle (plan §12) — a genuine live-production record."
         )
-        + "it is honestly absent, not faked."
-    )
+    elif docker_available:
+        status = "live_lane_failed"
+        note = (
+            "A Docker engine is present but the live-docker lane did NOT complete a clean "
+            "lifecycle; this artifact records that failure honestly and is NOT a "
+            "live-production claim."
+        )
+    else:
+        status = "absent_no_docker_engine"
+        note = (
+            "No Docker engine is available on this host, so the live-docker lane could not "
+            "run; this artifact is honestly marked absent, not faked, and carries no "
+            "live-production claim."
+        )
     written: dict[str, str] = {}
     for name in _DOCKER_HOST_ARTIFACTS:
-        payload = {"status": status, "available": docker_available, "note": note}
+        payload = {
+            "status": status,
+            "available": docker_available,
+            "live_lifecycle_ok": live_lifecycle_ok,
+            "note": note,
+        }
         (evidence_dir / name).write_text(
             json.dumps(payload, indent=2) + "\n" if name.endswith(".json") else note + "\n",
             encoding="utf-8",
@@ -993,13 +1437,21 @@ def _final_verdict(
     clean: bool,
     author: bool,
     hygiene_ok: bool,
+    command_inventory_ok: bool = True,
 ) -> bool:
-    """The single release-verdict conjunction (extracted verbatim from ``main`` for
-    testability — identical behavior, no new logic): ``passed`` is true iff the frozen
-    manifest verified, EVERY lane is green, the checkout is clean, this is NOT an
-    ``--author`` run, and the evidence-hygiene scan found no planted credential. Any one
-    false forces ``passed`` false; ``--author`` can never pass."""
-    return bool(frozen_ok and all_lanes_green and clean and not author and hygiene_ok)
+    """The single release-verdict conjunction: ``passed`` is true iff the frozen manifest
+    verified, EVERY lane is green, the checkout is clean, this is NOT an ``--author`` run,
+    the evidence-hygiene scan found no planted credential, AND the observed command
+    inventory exactly equals the frozen required inventory (G19 / plan §9 criterion 3). Any
+    one false forces ``passed`` false; ``--author`` can never pass."""
+    return bool(
+        frozen_ok
+        and all_lanes_green
+        and clean
+        and not author
+        and hygiene_ok
+        and command_inventory_ok
+    )
 
 
 def _not_passed_reasons(
@@ -1009,6 +1461,8 @@ def _not_passed_reasons(
     frozen_ok: bool,
     lanes: list[LaneResult],
     hygiene_ok: bool,
+    command_inventory_ok: bool = True,
+    command_inventory_detail: dict[str, object] | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if author:
@@ -1026,6 +1480,12 @@ def _not_passed_reasons(
         reasons.append(
             "evidence hygiene: a registered planted-credential sentinel appears in a "
             "written evidence artifact (see evidence_hygiene.violations)"
+        )
+    if not command_inventory_ok:
+        detail = command_inventory_detail or {}
+        reasons.append(
+            "command inventory does not equal the frozen required inventory "
+            f"(missing={detail.get('missing')} extra={detail.get('extra')})"
         )
     return reasons
 
@@ -1118,8 +1578,17 @@ def main(argv: list[str] | None = None) -> int:
     }
     lanes.append(closeout)
 
+    # BROWSER e2e (Firefox) runs BEFORE the frontend lane so the structured report exists
+    # in evidence_dir for _run_frontend_lane to parse and gate on (plan §9.1-§9.3).
+    browser_summary = _run_browser_e2e(repo, evidence_dir)
+
     frontend = _run_frontend_lane(repo, evidence_dir, frontend_inventory)
     lanes.append(frontend)
+
+    # G11 dedicated compile lane (plan §9.1): a SEPARATE top-level lane so it never
+    # perturbs the frozen G13(b) _run_frontend_lane behavior.
+    g11 = _run_g11_compile_lane(repo, evidence_dir)
+    lanes.append(g11)
 
     live = _run_live_lane(repo, evidence_dir)
     lanes.append(live)
@@ -1128,7 +1597,18 @@ def main(argv: list[str] | None = None) -> int:
     lanes.append(scanner)
 
     docker_available = tool_versions.get("docker", "unavailable") != "unavailable"
-    docker_host_artifacts = _write_docker_host_artifacts(evidence_dir, docker_available)
+    # G13(a) / §9.2: the Docker-host artifact status is tied to the ACTUAL live lifecycle,
+    # so no success-sounding status is written without a successful live lane.
+    docker_host_artifacts = _write_docker_host_artifacts(
+        evidence_dir, docker_available, live_lifecycle_ok=live.green is True
+    )
+
+    # G19 / §9 criterion 3: the observed command inventory must EXACTLY equal the frozen
+    # required inventory (omitted OR substitute/extra commands rejected).
+    observed_command_ids = _observed_command_ids(repo)
+    command_inventory_ok, command_inventory_detail = _check_command_inventory(
+        observed_command_ids, manifest_mod.REQUIRED_COMMAND_IDS
+    )
 
     # EVIDENCE HYGIENE (WO-B): after every text artifact is written and BEFORE `passed`
     # is computed, prove no registered planted-credential sentinel reached the evidence.
@@ -1143,8 +1623,10 @@ def main(argv: list[str] | None = None) -> int:
         clean=clean,
         author=args.author,
         hygiene_ok=hygiene_ok,
+        command_inventory_ok=command_inventory_ok,
     )
 
+    browser_written = browser_summary.get("status") in {"executed", "browser_run_failed"}
     evidence = {
         "schema": "export-track1-closeout-evidence/v1",
         "passed": passed,
@@ -1163,6 +1645,13 @@ def main(argv: list[str] | None = None) -> int:
             "missing": missing,
             "extra": extra,
         },
+        "command_inventory": {
+            **command_inventory_detail,
+            "observed": sorted(observed_command_ids),
+            "required": sorted(manifest_mod.REQUIRED_COMMAND_IDS),
+            "descriptors": manifest_mod.COMMAND_INVENTORY,
+        },
+        "browser_e2e": browser_summary,
         "evidence_hygiene": {"ok": hygiene_ok, "violations": hygiene_violations},
         "lanes": [asdict(lane) for lane in lanes],
         "evidence_files": {
@@ -1170,6 +1659,8 @@ def main(argv: list[str] | None = None) -> int:
             "pytest-closeout.xml": "written",
             "pytest-live.xml": "written",
             "frontend-vitest.json": "written" if frontend.detail.get("npx_available") else "absent",
+            "frontend-e2e.json": "written" if browser_written else "absent",
+            "g11-typecheck.txt": "written",
             "docker-versions.txt": "written",
             "anti-bypass-scan.json": "written",
             **docker_host_artifacts,
@@ -1180,6 +1671,8 @@ def main(argv: list[str] | None = None) -> int:
             frozen_ok=frozen_ok,
             lanes=lanes,
             hygiene_ok=hygiene_ok,
+            command_inventory_ok=command_inventory_ok,
+            command_inventory_detail=command_inventory_detail,
         ),
     }
     (evidence_dir / "evidence.json").write_text(

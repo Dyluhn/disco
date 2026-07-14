@@ -60,6 +60,10 @@ FROZEN_FILES: tuple[str, ...] = (
     # The dedicated tsconfig for the G11 nullable-binding compile lane (acceptance-v4).
     # The contract file it checks lives under the frozen frontend/src/test dir glob.
     "frontend/tsconfig.closeout-g11.json",
+    # R6 (G18): the owner-approved suppression baseline the anti-bypass diff scanner
+    # reads. Freezing it means adding an approved suppression requires a manifest
+    # regeneration + re-review (tamper-evident), not a silent edit.
+    "docs/export-track1-closeout-suppression-baseline.json",
 )
 
 # The baseline the harness is authored against (plan header).
@@ -92,6 +96,58 @@ NONLIVE_TEST_PATHS: tuple[str, ...] = (
     "packages/agent-server/tests",
 )
 NONLIVE_MARKER = "not integration"
+
+# ---- R6 additions (plan §9): the frozen required command inventory (G19 / criterion 3)
+# and the suppression-baseline path (G18 / criterion 4). These are CONSTANTS ONLY — they
+# are NOT emitted into the manifest JSON, so adding them perturbs ONLY this script's own
+# frozen file hash (regenerate + re-review), never the closeout test-dir hashes or the
+# python/frontend inventories. The verifier imports them so the manifest stays the single
+# source of truth for the lane definitions.
+
+# The exact command each verifier lane runs, keyed by a stable ID. The verifier records
+# the IDs it actually dispatched and gates on EXACT set-equality with
+# REQUIRED_COMMAND_IDS: an omitted command OR a substitute/additional command is rejected
+# (criterion 3). The browser and G11 descriptors name the e2e DIRECTORY and the dedicated
+# tsconfig — never a nonexistent single ``e2e/export-track1-closeout.spec.ts`` file (G19).
+# Descriptors use repo/frontend-relative paths for byte-stability across hosts.
+COMMAND_INVENTORY: dict[str, str] = {
+    "python_nonlive": (
+        "python -m pytest packages/core/tests packages/tools/tests "
+        "packages/agent-server/tests -o addopts= -m 'not integration' --junitxml"
+    ),
+    "python_closeout": (
+        "python -m pytest packages/core/tests/export_track1_closeout "
+        "packages/tools/tests/export_track1_closeout "
+        "packages/agent-server/tests/export_track1_closeout -o addopts= "
+        "-m 'export_track1_closeout and not integration' --junitxml"
+    ),
+    "python_closeout_collect": (
+        "python -m pytest packages/core/tests/export_track1_closeout "
+        "packages/tools/tests/export_track1_closeout "
+        "packages/agent-server/tests/export_track1_closeout -o addopts= "
+        "-m 'export_track1_closeout and not integration' --collect-only -q"
+    ),
+    "frontend_vitest": "npx vitest run src/test/export-track1-closeout --reporter=json",
+    "frontend_typecheck": "npm run typecheck:build",
+    "frontend_build": "npx vite build",
+    "g11_typecheck": "npx tsc -p tsconfig.closeout-g11.json --noEmit",
+    "browser_e2e": (
+        "npx playwright test e2e/export-track1-closeout --reporter=json --project=firefox"
+    ),
+    "live_docker": (
+        "python -m pytest "
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
+        "-o addopts= -m 'export_track1_closeout and integration' -ra --junitxml"
+    ),
+}
+REQUIRED_COMMAND_IDS: frozenset[str] = frozenset(COMMAND_INVENTORY)
+
+# The committed, owner-approved suppression baseline the G18 diff scanner reads (plan
+# §9.4 / criterion 4). Any suppression token newly added in the campaign diff
+# (BASELINE_SHA..HEAD) whose (file, stripped-line) pair is NOT recorded here fails the
+# anti-bypass scanner lane. Frozen (hashed above) so approving a suppression is
+# tamper-evident.
+SUPPRESSION_BASELINE_REL = "docs/export-track1-closeout-suppression-baseline.json"
 
 # ---- the anti-bypass operational reading (§4.4), quoted verbatim by the scanner
 # docstring, this manifest ``note``, and ``anti-bypass-scan.json`` -----------------
