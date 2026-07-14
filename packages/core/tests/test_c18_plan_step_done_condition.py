@@ -44,6 +44,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
     ObservationEvent,
+    PlanEvent,
     StatusEvent,
     ToolCall,
     ToolResult,
@@ -70,6 +71,7 @@ class _FakeSandbox:
     def __init__(self, workspace_path: str, files: dict[str, bytes] | None = None) -> None:
         self.workspace_path = workspace_path
         self._files: dict[str, bytes] = dict(files or {})
+        self.file_exists_calls: list[str] = []
 
     async def read_file(self, path: str) -> bytes:
         if path not in self._files:
@@ -85,6 +87,7 @@ class _FakeSandbox:
         the FS. The C18 check now calls THIS instead of a literal host path."""
         from pathlib import Path
 
+        self.file_exists_calls.append(path)
         return (Path(self.workspace_path) / path).exists()
 
 
@@ -523,11 +526,14 @@ async def test_c18_container_backend_absent_file_still_not_met(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_c18_real_workspace_path_escape_still_fails(tmp_path):
-    """The path-escape hard-FAIL is preserved for a backend with a real
-    `workspace_path`: a predicate path resolving OUTSIDE the workspace is a hard
-    FAIL (NOT met), even if `file_exists` would say the (out-of-scope) file is
-    present. The escape check runs BEFORE the sandbox is consulted."""
+async def test_c18_real_workspace_path_escape_is_rejected_before_approval(tmp_path):
+    """An escaping predicate never reaches approval or the sandbox evaluator.
+
+    The lower-level evaluator retains fail-closed traversal coverage in
+    test_dod_evaluator.py for legacy/persisted specs. The public planning boundary
+    is now stricter: it rejects the unsafe immutable gate and lets the model submit
+    a corrected plan.
+    """
     workspace = tmp_path / "ws"
     workspace.mkdir()
     # Plant a file OUTSIDE the workspace that the escaping path would reach.
@@ -551,8 +557,13 @@ async def test_c18_real_workspace_path_escape_still_fails(tmp_path):
                     ],
                 },
             ),
-            action_step("plan_step", {"index": 1, "state": "done"}),
-            finish_step(),
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "corrected",
+                    "steps": [{"title": "safe step"}],
+                },
+            ),
         ]
     )
     loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
@@ -560,16 +571,23 @@ async def test_c18_real_workspace_path_escape_still_fails(tmp_path):
     loop._planning_tools = frozenset(["file_read"])
     await loop.send_message("go")
     await loop.run()
-    await loop.approve_plan()
-    await loop.run()
 
     events = await store.get_events(CID)
-    notes = _advisory_notes(events)
-    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
-    note = notes[0]
-    assert "NOT met" in note.message.content
-    assert "escapes workspace" in note.message.content
-    assert note.meta.get("passed") is False
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert [plan.summary for plan in plans] == ["corrected"]
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    )
+    assert any(
+        isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and "safe exact workspace file" in event.message.content
+        for event in events
+    )
+    assert _advisory_notes(events) == []
+    assert sbx.file_exists_calls == []
 
 
 # ---------------------------------------------------------------------------
