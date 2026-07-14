@@ -42,7 +42,11 @@ nothing.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
-from disco.core.release.command_grammar import check_declaration_argv, check_no_inline_secret_cli
+from disco.core.release.command_grammar import (
+    check_declaration_argv,
+    check_no_inline_secret_cli,
+    check_no_positional_credential,
+)
 from disco.core.release.spec import ReleaseIntent, ResourceDecl
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -201,6 +205,14 @@ class ReleaseDeclareTool:
         try:
             for resource in intent.resources:
                 check_no_inline_secret_cli(
+                    resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
+                )
+                # WO-C5 #3 / G02: also reject a bare POSITIONAL literal credential (or a
+                # `config set <credential-key> <literal>` role form) in a migrate_cmd —
+                # the runtime-head grammar does not apply to a migration tool, but a
+                # positional secret would ship verbatim in the migrate command +
+                # release.json exactly like a flag secret.
+                check_no_positional_credential(
                     resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
                 )
         except ValueError:

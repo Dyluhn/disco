@@ -56,7 +56,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
-from disco.core.release.command_grammar import flag_env_ref, whole_env_ref
+from disco.core.release.command_grammar import (
+    flag_env_ref,
+    looks_like_credential_literal,
+    whole_env_ref,
+)
 from disco.core.release.spec import (
     EnvScope,
     EnvVarDecl,
@@ -332,9 +336,7 @@ def _resource_consumers(spec: ReleaseSpec, resource_id: str) -> tuple[str, ...]:
     return ()
 
 
-def _service_mounts(
-    spec: ReleaseSpec, service_id: str, volume_names: dict[str, str]
-) -> list[str]:
+def _service_mounts(spec: ReleaseSpec, service_id: str, volume_names: dict[str, str]) -> list[str]:
     """The `<volume>:<dir>` mount entries for ONE service — ONLY the resources that
     declare it a consumer (WO-C7 §11.1/§11.2). Sorted by mount target (a total order
     — the schema rejects duplicate targets) for a deterministic, order-independent
@@ -1212,6 +1214,34 @@ def _revalidated(spec: ReleaseSpec) -> ReleaseSpec:
     return ReleaseSpec.model_validate(spec.model_dump(mode="json"))
 
 
+def _reject_positional_command_secrets(spec: ReleaseSpec) -> None:
+    """Defense in depth (GAP G02): refuse to EMIT a spec whose service start / build /
+    migrate command — or a resource migrate_cmd — carries a bare POSITIONAL literal
+    credential, even after detection's command-grammar gate. A credential-capable operand
+    must be a whole ${NAME} reference; a literal secret is never lowered into the
+    Dockerfile CMD / compose migrate command / release.json.
+    Flags carry their own value-hygiene upstream (a flag inline secret is rejected at
+    declaration), so only bare operands are scanned. Value-free: the message names the
+    rule, never the offending token (which can be the secret)."""
+    commands: list[tuple[str, tuple[str, ...]]] = []
+    for service in spec.services:
+        commands.append(("service start_cmd", service.start_cmd))
+        commands.append(("service build_cmd", service.build_cmd))
+        commands.append(("service migrate_cmd", service.migrate_cmd))
+    for resource in spec.resources:
+        commands.append(("resource migrate_cmd", resource.migrate_cmd))
+    for command_field, argv in commands:
+        for token in argv:
+            if token.startswith("-"):
+                continue
+            if looks_like_credential_literal(token):
+                raise ValueError(
+                    f"cannot emit a self-host overlay: a {command_field} carries a bare "
+                    "positional literal credential; reference secrets by a whole ${NAME} "
+                    "env var, never inline."
+                )
+
+
 def emit_local_compose(spec: ReleaseSpec) -> dict[str, str]:
     """Lower a `ReleaseSpec` into the complete, secret-free self-host overlay:
     `{path: content}`.
@@ -1233,6 +1263,7 @@ def emit_local_compose(spec: ReleaseSpec) -> dict[str, str]:
     field validators is REJECTED before ANY byte is emitted; validation fails BEFORE
     emission)."""
     spec = _revalidated(spec)
+    _reject_positional_command_secrets(spec)
     ingress = _ingress_service(spec)
     if ingress.runtime is RuntimeStrategy.dev_server:
         return _emit_dev_server_overlay(spec, ingress)

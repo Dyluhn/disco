@@ -43,6 +43,7 @@ on it, and the ``tools`` layer can import the runtime grammar downward.
 
 from __future__ import annotations
 
+import math
 import re
 
 # ---- whole env reference (the ONE expandable command-token form) --------------
@@ -468,6 +469,258 @@ def _inline_secret_error(field: str) -> ValueError:
     )
 
 
+# ---- positional credential literals (the G02 hole) ----------------------------
+#
+# A bare POSITIONAL command operand is NOT automatically harmless. Token hygiene
+# proves a token is a shell-inert literal, and the runtime grammar (below) proves
+# every FLAG is known and every flag VALUE is a whole ${NAME} reference — but a
+# credential can also ride a POSITIONAL slot with no flag, no `=`, and no shell
+# metacharacter (`node MYSECRET server.js`, `npm config set //host/:_authToken TOKEN`).
+# Such a token passes every existing guard yet bakes a shipped secret into the
+# exported start command (GAP G02). `looks_like_credential_literal` closes that hole
+# PRINCIPLED: by the SHAPE of the value and, for config-set, by the ROLE of the
+# operand — NEVER a deny-list of known secret VALUES, registry hosts, or fixture
+# commands (that would be the §9 forbidden shortcut). A credential-capable value must
+# be a whole ${NAME} reference to a declared env var; it may never be literal data.
+
+# Rail 1 — KNOWN secret token FORMAT FAMILIES: structural regexes anchored at the
+# token start (an argv token is one exec element, so the credential is the whole token
+# or its recognizable vendor-prefixed body). This is a FORMAT TAXONOMY, not a value
+# list: each pattern matches the *shape* an entire family of secrets shares, so a
+# brand-new token of that family is caught without naming any specific value.
+_CREDENTIAL_FORMAT_RES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^npm_[A-Za-z0-9]{30,}$"),  # npm access token
+    re.compile(r"^gh[pousr]_[A-Za-z0-9]{30,}$"),  # GitHub PAT / OAuth / refresh / server
+    re.compile(r"^github_pat_[A-Za-z0-9_]{30,}$"),  # GitHub fine-grained PAT
+    re.compile(r"^sk-(?:ant-)?[A-Za-z0-9_-]{20,}$"),  # OpenAI / Anthropic secret key
+    re.compile(r"^xox[baprs]-[A-Za-z0-9-]{10,}$"),  # Slack token
+    re.compile(r"^AKIA[0-9A-Z]{16}$"),  # AWS access key id
+    re.compile(r"^AIza[0-9A-Za-z_-]{35}$"),  # Google API key
+    re.compile(r"^glpat-[A-Za-z0-9_-]{20,}$"),  # GitLab personal access token
+    re.compile(r"^[sr]k_(?:live|test)_[A-Za-z0-9]{20,}$"),  # Stripe secret / restricted key
+    re.compile(r"^dop_v1_[A-Za-z0-9]{40,}$"),  # DigitalOcean PAT
+    re.compile(r"^SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}$"),  # SendGrid API key
+    re.compile(r"^eyJ[A-Za-z0-9_-]{6,}\.eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}$"),  # JWT
+    re.compile(r"^hf_[A-Za-z0-9]{30,}$"),  # HuggingFace access token
+    re.compile(r"^shp(?:at|ss|ca|pa)_[A-Fa-f0-9]{32}$"),  # Shopify access/shared/app secret
+    re.compile(r"^xapp-[0-9]-[A-Za-z0-9-]{15,}$"),  # Slack app-level token
+    re.compile(r"^AGE-SECRET-KEY-1[0-9A-Z]{40,}$"),  # age identity (secret key)
+    re.compile(r"^age1[0-9a-z]{40,}$"),  # age recipient (public key)
+)
+
+# Rail 2 — a GENERIC high-entropy opaque single-blob token, in TWO tiers so an opaque
+# secret is caught whether or not it carries the base64url word-separators `-`/`_`, WHILE
+# a human-readable kebab/snake identifier (a D1 `database_name`, a resource id, a service
+# slug) is spared. Both tiers exclude '/' (a path/registry key), '.', and ':' — so a
+# dotted host, a `main:app` module target, a versioned interpreter (`python3.12`), and any
+# file with an extension are excluded BY CONSTRUCTION — and require length >= 32.
+#
+# * TIER A — a CONTIGUOUS base16/32/62 run (letters, digits, base64 fillers `=+`; NO
+#   `-`/`_`). A blob with no word-separators is opaque by construction, so a modest
+#   entropy floor (`_MIN_OPAQUE_SECRET_ENTROPY`) suffices (a hex API key sits near
+#   H≈3.99 and must stay caught). This catches base62/hex keys and a separator-free
+#   base64url token.
+# * TIER B — a SEPARATOR-BEARING run that also admits `-`/`_` (base64url, `token_urlsafe`,
+#   generic opaque `-`/`_` secrets). Here `-`/`_` alone no longer prove "secret" (they
+#   also spell a kebab/snake NAME), so this tier demands BOTH a HIGHER entropy floor
+#   (`_MIN_SEPARATOR_SECRET_ENTROPY`) AND that the token is NOT a wordlike identifier
+#   (`_is_wordlike_identifier`). Empirically the classes separate: benign kebab/snake
+#   identifiers top out near H≈3.95, while base64url/opaque `-`/`_` secrets start near
+#   H≈4.24 — the 4.1 floor sits in that gap, and the wordlike guard adds a structural
+#   margin so a word-rich identifier above the floor (e.g. `alpha-bravo-charlie-…`) is
+#   still spared. Vendor tokens that carry `-`/`_` with a known prefix (JWT, `github_pat_…`,
+#   Slack, age, Shopify) are caught structurally by Rail 1 regardless of entropy.
+_OPAQUE_BLOB_RE = re.compile(r"^[A-Za-z0-9=+]+$")
+_SEPARATOR_BLOB_RE = re.compile(r"^[A-Za-z0-9=+_-]+$")
+_LOWER_HEX_SEGMENT_RE = re.compile(r"[0-9a-f]+")
+_MIN_OPAQUE_SECRET_LEN = 32
+_MIN_OPAQUE_SECRET_ENTROPY = 3.5
+_MIN_SEPARATOR_SECRET_ENTROPY = 4.1
+# A `[-_]`-split segment no longer than this MAY be a benign short id fragment (a hex
+# shard suffix like `1ef23532`); a longer non-word, non-number segment is opaque.
+_MAX_WORDLIKE_SEGMENT = 12
+
+# Substrings (matched case-INSENSITIVELY) that mark a package-manager CONFIG KEY as
+# credential-config — a key whose VALUE is a credential (`_authToken`,
+# `//host/:_auth`, `password`, `token`, `apikey`, `credential`, …). Detected by the
+# SHAPE of the key, NEVER by a specific registry host: a `config set` whose key is
+# credential-shaped must take a whole ${NAME} reference, never a literal secret value.
+_CREDENTIAL_CONFIG_KEY_MARKERS = (
+    "authtoken",
+    "_auth",
+    "token",
+    "password",
+    "secret",
+    "apikey",
+    "api_key",
+    "credential",
+)
+
+# The package-manager heads whose `set <key> <value>` (no `config`) shorthand also
+# writes config (`npm set //host/:_authToken VALUE`).
+_CONFIG_SET_HEADS = frozenset({"npm", "pnpm", "yarn", "pip", "pip3"})
+
+
+def _is_wordlike_identifier(token: str) -> bool:
+    """Whether a `-`/`_`-separated token reads as a HUMAN identifier (a kebab/snake
+    name) rather than an opaque secret blob. True iff it splits into >= 2 non-empty
+    segments where EVERY segment is a readable fragment: a pure-alphabetic word, a
+    pure-numeric run, a very short (<= 4 char) version/shard token (`q3`, `v2`, `01`),
+    or a short lowercase-hex id (`1ef23532`). A single long mixed-case alphanumeric
+    segment — the signature of a base64url / opaque secret chunk — makes it False."""
+    segments = [segment for segment in re.split(r"[-_]", token) if segment]
+    if len(segments) < 2:
+        return False
+    for segment in segments:
+        if segment.isalpha() or segment.isdigit() or len(segment) <= 4:
+            continue
+        if len(segment) <= _MAX_WORDLIKE_SEGMENT and _LOWER_HEX_SEGMENT_RE.fullmatch(segment):
+            continue
+        return False
+    return True
+
+
+def _shannon_entropy_bits_per_char(token: str) -> float:
+    """The Shannon entropy of `token` in bits per character (0.0 for an empty or
+    single-repeated-character string). A high value means an opaque, near-random blob;
+    a low value means a repetitive / dictionary-like word."""
+    if not token:
+        return 0.0
+    counts: dict[str, int] = {}
+    for char in token:
+        counts[char] = counts.get(char, 0) + 1
+    length = len(token)
+    entropy = 0.0
+    for count in counts.values():
+        probability = count / length
+        entropy -= probability * math.log2(probability)
+    return entropy
+
+
+def looks_like_credential_literal(token: str) -> bool:
+    """Whether a bare argv operand is UNMISTAKABLY credential material by STRUCTURE.
+
+    Two principled rails, neither a value list: (1) the token matches a KNOWN secret
+    token FORMAT FAMILY (npm / GitHub / OpenAI-Anthropic / Slack incl. app-level / AWS /
+    Google / GitLab / Stripe / DigitalOcean / SendGrid / JWT / HuggingFace / Shopify /
+    age — structural regexes over the *shape* a whole family shares), or (2) it is a
+    GENERIC opaque high-entropy blob (length >= 32, NO '/'), in two tiers: a CONTIGUOUS
+    base62/hex run (no `-`/`_`) at entropy >= 3.5, OR a SEPARATOR-BEARING base64url run
+    (admits `-`/`_`) at entropy >= 4.1 that is NOT a wordlike kebab/snake identifier. A
+    whole ${NAME}/$NAME reference is the sanctioned way to carry a secret and is NEVER
+    flagged. Returns False for the benign operands real commands use — `server.js`,
+    `worker.js`, `node`, `npm`, `config`, `set`, `//registry.example/:_authToken` (a
+    path/key with '/'), `main:app`, `dist/server.js`, a kebab/snake identifier like a D1
+    `database_name` (`acme-records-team_members-1ef2`), versioned interpreters, flags,
+    and short subcommands — so it is a shape detector, not a single-sentinel matcher."""
+    if whole_env_ref(token) is not None:
+        return False
+    for pattern in _CREDENTIAL_FORMAT_RES:
+        if pattern.match(token):
+            return True
+    # Generic high-entropy fallback (two tiers). A '/' marks a path/registry key; a
+    # too-short token cannot be a high-entropy secret.
+    if "/" in token or len(token) < _MIN_OPAQUE_SECRET_LEN:
+        return False
+    entropy = _shannon_entropy_bits_per_char(token)
+    if _OPAQUE_BLOB_RE.match(token):
+        # Tier A — a contiguous base62/hex blob with NO word-separators.
+        return entropy >= _MIN_OPAQUE_SECRET_ENTROPY
+    if _SEPARATOR_BLOB_RE.match(token):
+        # Tier B — admits base64url `-`/`_`: demand a higher entropy floor AND a
+        # non-wordlike structure, so a kebab/snake identifier is never mistaken for one.
+        return entropy >= _MIN_SEPARATOR_SECRET_ENTROPY and not _is_wordlike_identifier(token)
+    return False
+
+
+def _is_credential_config_key(key: str) -> bool:
+    """Whether a package-manager config KEY is credential-config by SHAPE (its
+    lowercased form contains an auth-token / password / secret / api-key / credential
+    marker) — never a specific registry host."""
+    lowered = key.lower()
+    return any(marker in lowered for marker in _CREDENTIAL_CONFIG_KEY_MARKERS)
+
+
+def check_credential_config_role(
+    argv: tuple[str, ...], *, declared_names: frozenset[str], field: str
+) -> None:
+    """Reject a package-manager credential-config form that sets a credential-shaped
+    key to a LITERAL value (WO / GAP G02, operand ROLE rail).
+
+    Detects the ROLE `... config set <key> <value>` (npm / pnpm / yarn / pip) and the
+    `<pm> set <key> <value>` shorthand, then — when `<key>` is credential-config by
+    SHAPE (`_is_credential_config_key`) — requires `<value>` to be a whole DECLARED
+    ${NAME} reference; a literal value is rejected value-free. Detection is by operand
+    role + key shape, NEVER by the specific `//registry.example/...` host or the token
+    value, so a brand-new registry / key is caught the same way. Value-free message: a
+    rejected value can itself be the secret."""
+    length = len(argv)
+    for index in range(length):
+        token = argv[index].lower()
+        key_index: int | None = None
+        if token == "config" and index + 1 < length and argv[index + 1].lower() == "set":
+            key_index = index + 2
+        elif (
+            token == "set"
+            and index == 1
+            and argv[0].rsplit("/", 1)[-1].lower() in _CONFIG_SET_HEADS
+        ):
+            key_index = index + 1
+        if key_index is None or key_index + 1 >= length:
+            continue
+        key, value = argv[key_index], argv[key_index + 1]
+        if not _is_credential_config_key(key):
+            continue
+        ref = whole_env_ref(value)
+        if ref is None or ref not in declared_names:
+            raise ValueError(
+                f"{field} sets a credential-shaped config key to a literal value "
+                "(a 'config set <key> <value>' whose key names an auth token / password "
+                "/ secret / api key / credential); the value must be a whole ${NAME} "
+                "reference to a declared env var, never an inline literal that would be "
+                "baked into the exported command"
+            )
+
+
+def check_no_positional_credential(
+    argv: tuple[str, ...], *, declared_names: frozenset[str], field: str
+) -> None:
+    """HEAD-AGNOSTIC positional-credential hygiene for an argv that is NOT a runtime
+    command — a resource / service ``migrate_cmd`` heads with a migration TOOL
+    (alembic / wrangler / ``manage.py`` / an npm script), OUTSIDE the §9 runtime grammar,
+    so ``check_declaration_argv`` (which would reject the non-runtime head) must NOT run
+    on it. Instead this applies the SAME two G02 rails ``check_declaration_argv`` applies
+    to a start/build command, minus the head grammar:
+
+    * the operand-ROLE rail (``check_credential_config_role`` — a ``config set
+      <credential-key> <literal>`` must reference a declared ``${NAME}``), and
+    * the positional-SHAPE rail — any POSITIONAL operand (a token that is neither a flag
+      nor a whole ``${NAME}`` reference) that is credential material by SHAPE
+      (``looks_like_credential_literal``) is rejected value-free.
+
+    Flags are governed by the sibling ``check_no_inline_secret_cli`` (the ``--token
+    VALUE`` inline-secret rail), so a leading-``-`` token is skipped here; a whole
+    ``${NAME}`` reference is always allowed. Benign migration commands keep exact argv
+    semantics — ``alembic -c alembic.ini upgrade head``, ``wrangler d1 migrations
+    apply``, ``python manage.py migrate``, ``npm run migrate`` all pass (their operands
+    are short subcommands / dotted module paths, never a credential blob). Value-free: a
+    rejected value can itself be the secret."""
+    check_credential_config_role(argv, declared_names=declared_names, field=field)
+    for token in argv:
+        if token.startswith("-"):
+            continue
+        if whole_env_ref(token) is not None:
+            continue
+        if looks_like_credential_literal(token):
+            raise ValueError(
+                f"{field} carries a bare positional literal that is credential material "
+                "by its structure (a recognized secret token format, or an opaque "
+                "high-entropy blob); pass a credential as a whole ${NAME} reference to a "
+                "declared env var, never as an inline literal operand baked into the "
+                "exported command"
+            )
+
+
 def _head_family(head: str) -> str | None:
     """The supported runtime family for a command head (basename, lowercased), or
     ``None`` if the executable is not one the neutral base images run."""
@@ -501,6 +754,9 @@ def check_declaration_argv(
             "(node/npm/npx/yarn/pnpm, python, or uvicorn/gunicorn/hypercorn); an "
             "arbitrary program, shell, or path is rejected"
         )
+    # GAP G02 (operand ROLE rail): a `config set <credential-key> <literal>` form must
+    # take a whole ${NAME} reference, not a literal secret value.
+    check_credential_config_role(argv, declared_names=declared_names, field=field)
     known = _KNOWN_FLAGS[family]
     index = 1
     while index < len(argv):
@@ -538,19 +794,35 @@ def check_declaration_argv(
                 f"{field} carries an unknown flag or an inline literal value; a flag "
                 "value must be a whole ${NAME} reference to a declared env var"
             )
-        # A non-flag operand (script / module / subcommand): already hygiene-checked as
-        # a shell-inert literal, so it has a defined role as a command argument.
+        # A non-flag operand (script / module / subcommand). It is hygiene-checked as a
+        # shell-inert literal — but "shell-inert" is NOT "harmless": a bare positional
+        # literal credential (`node MYSECRET server.js`, `npm config set … npm_XXXX`)
+        # would otherwise ride this slot and bake a shipped secret into the exported
+        # command (GAP G02). A credential-capable value must be a whole ${NAME} reference
+        # (accepted above), never a literal, so a positional operand that is credential
+        # material BY SHAPE is rejected here — value-free (the value can be the secret).
+        if looks_like_credential_literal(token):
+            raise ValueError(
+                f"{field} carries a bare positional literal that is credential material "
+                "by its structure (a recognized secret token format, or an opaque "
+                "high-entropy blob); pass a credential as a whole ${NAME} reference to a "
+                "declared env var, never as an inline literal operand baked into the "
+                "exported command"
+            )
         index += 1
 
 
 __all__ = [
+    "check_credential_config_role",
     "check_declaration_argv",
     "check_health_path",
     "check_no_inline_secret_cli",
+    "check_no_positional_credential",
     "check_persistent_path",
     "check_sqlite_local_url",
     "check_token_hygiene",
     "check_workspace_rel_path",
     "flag_env_ref",
+    "looks_like_credential_literal",
     "whole_env_ref",
 ]

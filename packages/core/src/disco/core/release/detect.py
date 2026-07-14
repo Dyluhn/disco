@@ -64,6 +64,7 @@ from typing import NamedTuple
 from disco.core.release.command_grammar import (
     check_declaration_argv,
     check_no_inline_secret_cli,
+    check_no_positional_credential,
 )
 from disco.core.release.spec import (
     EnvScope,
@@ -1531,14 +1532,22 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     URL userinfo) or any unsupported executable / unknown flag fails closed to
     needs_review and is NEVER lowered into the emitted Dockerfile CMD + release.json.
     The message is value-free: it names the field, never the offending argv (which can
-    carry the secret). Only the runtime start/build argv are gated — a `migrate_cmd`
-    legitimately heads with a non-runtime migration tool (alembic / wrangler) and is
-    out of this grammar's scope.
+    carry the secret). The full runtime-HEAD grammar gates only the start/build argv — a
+    `migrate_cmd` legitimately heads with a non-runtime migration tool (alembic /
+    wrangler) — but the head-agnostic credential rails DO apply to the migrate_cmd too
+    (`check_no_inline_secret_cli` for a flag secret, `check_no_positional_credential` for
+    a bare positional / config-role credential), so no migrate secret ships either.
 
-    INHERENT ACCEPTED LIMIT: a BARE POSITIONAL secret (`node server.js MYSECRET`) is
-    indistinguishable from a benign positional operand, so it is accepted here exactly
-    as the tool accepts it — declaring a secret as a positional value is a caller error
-    the representation cannot detect, and is out of the secret-CLI-form charter."""
+    POSITIONAL-CREDENTIAL RAIL (G02): a BARE POSITIONAL literal credential
+    (`node server.js npm_...`, a `config set //host/:_authToken <literal>`) is REJECTED
+    here now — `check_declaration_argv` (start/build) and `check_no_positional_credential`
+    (migrate) flag it by credential SHAPE (recognized secret token formats / an opaque
+    high-entropy blob) and by the config-set operand ROLE. RESIDUAL INHERENT LIMIT: a
+    credential that is genuinely INDISTINGUISHABLE from a benign operand — a low-entropy,
+    dotted, or path-shaped literal secret — cannot be told apart from a real command
+    argument by shape alone and is still accepted; declaring such a value inline remains a
+    caller error the representation cannot detect. Credentials must be passed as a whole
+    `${NAME}` reference to a declared env var."""
     declared = frozenset(intent.required_env) | {intent.port_env}
     for field, argv in (("start_cmd", intent.start_cmd), ("build_cmd", intent.build_cmd)):
         try:
@@ -1569,14 +1578,23 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
             check_no_inline_secret_cli(
                 resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
             )
+            # GAP G02 (migrate_cmd): a migration tool runs OUTSIDE the runtime-head
+            # grammar, but a bare POSITIONAL literal credential (or a `config set
+            # <credential-key> <literal>` role form) in a migrate_cmd is lowered verbatim
+            # into the compose migrate-service command + release.json, so it must fail
+            # closed here exactly as a start/build positional credential does.
+            check_no_positional_credential(
+                resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
+            )
         except ValueError:
             return _DetectBlocker(
                 code="toolchain_unsupported",
                 message=(
-                    "a resource migrate_cmd carries an inline secret on a credential-bearing "
-                    "flag (e.g. '--token VALUE'); a migration credential must be a whole "
-                    "${NAME} reference to a declared env var, never an inline literal that "
-                    "would be lowered into the exported migrate command + release.json."
+                    "a resource migrate_cmd carries a secret on a credential-bearing flag "
+                    "(e.g. '--token VALUE') or a bare positional literal credential; a "
+                    "migration credential must be a whole ${NAME} reference to a declared "
+                    "env var, never an inline literal that would be lowered into the "
+                    "exported migrate command + release.json."
                 ),
                 field="migrate_cmd",
                 evidence=("command-grammar evidence: migrate_cmd carries an inline secret",),
