@@ -209,6 +209,9 @@ test("mixed MCP servers degrade, recover, revoke, and survive restart without hi
 
     // F10/F14: a failed optional sibling neither kills readiness nor lies about
     // the reachable server, including after a full App+Agent restart.
+    // Quiesce the browser first: an active shell polls /api/activity and would
+    // make Vite report a harness-caused ECONNREFUSED during the intentional stop.
+    await page.goto("about:blank");
     await restartReliabilityStack();
     await waitForRuntimeStatus(request, reachableName, "connected");
     const restartedDegraded = await waitForRuntimeStatus(
@@ -277,6 +280,7 @@ test("mixed MCP servers degrade, recover, revoke, and survive restart without hi
     await waitForRuntimeStatus(request, reachableName, "connected");
     await expectMounted(request, reachableName, true);
 
+    await page.goto("about:blank");
     await restartReliabilityStack();
     await waitForRuntimeStatus(request, reachableName, "connected");
     await waitForRuntimeStatus(request, recoveringName, "connected");
