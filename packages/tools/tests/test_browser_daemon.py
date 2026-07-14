@@ -1,6 +1,7 @@
 import asyncio
 import os
 import pathlib
+import subprocess
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -591,6 +592,61 @@ async def test_browser_early_daemon_exit_preserves_bounded_diagnostic(monkeypatc
     assert diagnostic.endswith("playwright chromium launch boom")
     assert len(diagnostic) <= 1280
     assert ctx.sessions.view.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_process_daemon_grants_installed_playwright_package_root(monkeypatch):
+    """H070: clean process sessions must still import the shipped browser runtime."""
+
+    import disco.tools.builtin.browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "_installed_chromium_executable", lambda: None)
+    monkeypatch.setattr(
+        browser_mod,
+        "_installed_playwright_runtime",
+        lambda: ("/opt/disco/bin/python3", "/opt/disco/site-packages"),
+    )
+    tool = BrowserTool()
+    ctx = MagicMock(spec=ToolContext)
+    ctx.sandbox = AsyncMock()
+    ctx.sandbox.shares_host_network = True
+    ctx.sandbox.workspace_path = "/tmp/process-workspace"
+    ctx.sandbox.exec_shell.return_value = ExecResult(exit_code=1, stdout="", stderr="")
+    ctx.sandbox.read_file.side_effect = FileNotFoundError
+    ctx.sessions = AsyncMock()
+    ctx.sessions.exec.return_value = ExecOutcome(
+        running=False,
+        exit_code=1,
+        output="expected stop",
+    )
+
+    with pytest.raises(browser_mod.BrowserUnavailableError):
+        await tool._ensure_daemon(ctx)
+
+    command = ctx.sessions.exec.await_args.args[1]
+    assert "PYTHONPATH=/opt/disco/site-packages" in command
+    assert "DISCO_BROWSER_PORT=0" in command
+    assert "/opt/disco/bin/python3 /workspace/.pmx/_browser_daemon.py" in command
+
+
+def test_installed_playwright_runtime_imports_under_clean_env():
+    """The derived interpreter must match Playwright's compiled dependencies."""
+
+    from disco.tools.builtin.browser import _installed_playwright_runtime
+
+    runtime = _installed_playwright_runtime()
+    if runtime is None:
+        pytest.skip("installed Playwright runtime is required")
+    interpreter, pythonpath = runtime
+    result = subprocess.run(
+        [interpreter, "-c", "from playwright.sync_api import sync_playwright"],
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "PYTHONPATH": pythonpath},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_browser_startup_diagnostic_redacts_secret_shaped_output():

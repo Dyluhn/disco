@@ -9,6 +9,10 @@ byte-identical with `self.` rewritten to `self._loop.` (sibling calls stay
 in-collaborator).
 """
 
+# Intentional re-export surface consumed by split mixins via
+# ``from .common import *``; locally-unused imports are part of that API.
+# ruff: noqa: F401
+
 from __future__ import annotations
 
 import asyncio
@@ -360,7 +364,7 @@ def _is_web_deliverable(events: list[Event]) -> bool:
             ):
                 path = ev.tool_call.arguments.get("path")
                 # Canonical workspace-root paths
-                if path in ("index.html", "./index.html"):
+                if isinstance(path, str) and _safe_deliverable_file_path(path) == "index.html":
                     return True
         elif isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "server_status":
             content = ev.tool_result.content
@@ -385,6 +389,13 @@ def _safe_deliverable_file_path(path: str, *, app_root: bool = False) -> str | N
     raw = (path or "").strip()
     if not raw:
         return None
+    # File/shell tools publicly accept canonical /workspace-rooted paths. Strip
+    # only that exact capability root, then apply the same traversal jail as a
+    # relative path. Other absolute paths remain forbidden.
+    if raw == "/workspace":
+        raw = "."
+    elif raw.startswith("/workspace/"):
+        raw = raw.removeprefix("/workspace/")
     norm = posixpath.normpath(raw)
     if norm in ("", "."):
         return "index.html" if app_root else None

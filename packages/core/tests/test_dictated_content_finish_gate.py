@@ -7,7 +7,9 @@ prior revisions forward, and releases loudly at the shared cap discipline.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from disco.core import (
@@ -21,6 +23,7 @@ from disco.core import (
 )
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP
+from disco.core.loop.finish.common import _safe_deliverable_file_path
 from disco.core.loop.plan_conditions import (
     dictated_content_conditions_from_events,
     extract_dictated_content_literals,
@@ -34,20 +37,40 @@ class _Sandbox:
         self.workspace_path = str(root)
         self._root = root
 
+    def _target(self, path: str) -> Path:
+        relative = path.removeprefix("/workspace/") if path.startswith("/workspace/") else path
+        return self._root / relative
+
     async def file_exists(self, path: str) -> bool:
-        return (self._root / path).is_file()
+        return self._target(path).is_file()
 
     async def read_file(self, path: str) -> bytes:
-        return (self._root / path).read_bytes()
+        return self._target(path).read_bytes()
 
     async def write_file(self, path: str, data: bytes) -> None:
-        target = self._root / path
+        target = self._target(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
     async def list_dir(self, path: str) -> list[str]:
-        target = self._root / path
+        target = self._target(path)
         return [p.name for p in target.iterdir()]
+
+    async def resolve_relpath(self, path: str) -> str:
+        return self._target(path).relative_to(self._root).as_posix()
+
+    async def exec_shell(self, command: str, timeout_s: int = 5):  # noqa: ANN201, ARG002
+        """Implement the DoD sandbox's non-empty-file evidence probe."""
+
+        relative = shlex.split(command)[-1]
+        target = self._target(relative)
+        passed = target.is_file() and target.stat().st_size > 0
+        return SimpleNamespace(
+            exit_code=0 if passed else 1,
+            stdout="",
+            stderr="",
+            timed_out=False,
+        )
 
 
 class _FSBuildExecutor(FakeExecutor):
@@ -65,7 +88,7 @@ class _FSBuildExecutor(FakeExecutor):
     async def execute(self, call):
         self.calls.append(call)
         if call.tool_name == "file_write":
-            path = self.root / str(call.arguments.get("path") or "")
+            path = self.sandbox._target(str(call.arguments.get("path") or ""))
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(str(call.arguments.get("content") or ""), encoding="utf-8")
         return ToolResult(
@@ -121,6 +144,28 @@ def _submit_mixed_plan() -> object:
                         "path": "assets/blob.dat",
                     },
                 },
+            ],
+        },
+    )
+
+
+def _submit_absolute_multifile_plan() -> object:
+    paths = [
+        "/workspace/index.html",
+        "/workspace/release/index.html",
+        "/workspace/release/assets/theme.css",
+        "/workspace/release/scripts/app.js",
+    ]
+    return action_step(
+        "submit_plan",
+        {
+            "summary": "multi-file selected release",
+            "steps": [
+                {
+                    "title": f"write {path}",
+                    "done_condition": {"kind": "file_exists", "path": path},
+                }
+                for path in paths
             ],
         },
     )
@@ -213,6 +258,73 @@ def test_serve_argument_literals_are_metadata_not_dictated_content():
     assert extract_dictated_content_literals(
         'Build a page title "Selected reliability release".'
     ) == ["Selected reliability release"]
+
+
+def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
+    assert _safe_deliverable_file_path("/workspace/release/index.html") == (
+        "release/index.html"
+    )
+    assert _safe_deliverable_file_path("/workspace", app_root=True) == "index.html"
+    assert _safe_deliverable_file_path("/workspace/../secret.txt") is None
+    assert _safe_deliverable_file_path("/workspace/../../etc/passwd") is None
+    assert _safe_deliverable_file_path("/workspaces/index.html") is None
+    assert _safe_deliverable_file_path("/etc/passwd") is None
+
+
+@pytest.mark.asyncio
+async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
+    tmp_path: Path,
+):
+    """H076: literals in sibling text assets must not be copied into the entry."""
+
+    files = {
+        "index.html": "STALE ROOT MUST NEVER OPEN",
+        "release/index.html": "<h1>SELECTED RELEASE ONE</h1>",
+        "release/assets/theme.css": "src:url(proof.woff2) format('woff2')",
+        "release/scripts/app.js": (
+            "document.body.dataset.scriptLoaded='true'; // SCRIPT ASSET LOADED"
+        ),
+    }
+    for path, content in files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    loop, store = build_loop(
+        ScriptedAgent([_submit_absolute_multifile_plan()]),
+        conversation_id="dictated-absolute-multifile",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "Create root index.html with 'STALE ROOT MUST NEVER OPEN', selected release "
+        "HTML with 'SELECTED RELEASE ONE', CSS format 'woff2', and JS values 'true' "
+        "and 'SCRIPT ASSET LOADED'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent(
+        [
+            action_step(
+                "file_write",
+                {
+                    "path": "/workspace/release/index.html",
+                    "content": "<h1>SELECTED RELEASE ONE</h1>",
+                },
+            ),
+            _finish(),
+        ]
+    )
+    state = await loop.run()
+    events = await store.get_events("dictated-absolute-multifile")
+
+    assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
+    assert not any("quoted user literal is missing" in msg for msg in _env_messages(events))
+    assert (
+        tmp_path / "release/index.html"
+    ).read_text(encoding="utf-8") == "<h1>SELECTED RELEASE ONE</h1>"
 
 
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():

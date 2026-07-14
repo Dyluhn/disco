@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
 import json
+import pathlib
 import re
 import shlex
 import sys
@@ -103,6 +105,29 @@ def _installed_chromium_executable() -> str | None:
     except Exception:  # noqa: BLE001 — absence is handled as browser unavailable
         return None
     return executable if Path(executable).is_file() else None
+
+
+def _installed_playwright_runtime() -> tuple[str, str] | None:
+    """ABI-matched interpreter and package root for the dev process daemon.
+
+    Process sandboxes intentionally receive a clean environment with no host
+    virtualenv metadata. The daemon still runs from the host installation on
+    this shared-FS backend, so derive the venv interpreter from Playwright's
+    package root and grant only that root through PYTHONPATH. Selecting the
+    matching interpreter matters for compiled dependencies such as greenlet.
+    Container backends keep their image-owned python3 contract.
+    """
+
+    spec = importlib.util.find_spec("playwright")
+    if spec is None or not spec.origin:
+        return None
+    package_root = pathlib.Path(spec.origin).resolve().parent.parent
+    try:
+        venv_python = package_root.parents[2] / "bin" / "python3"
+    except IndexError:
+        venv_python = pathlib.Path()
+    interpreter = venv_python if venv_python.is_file() else pathlib.Path(sys.executable)
+    return str(interpreter), str(package_root)
 
 _MAX_TEXT = 4000  # cap the quarantined text the agent sees
 
@@ -391,10 +416,10 @@ class BrowserTool:
             # ROOT-3 — terminal, non-retryable: this backend has no browser. Carry a
             # structured flag so verify_web_app can degrade gracefully, and a clearly
             # worded error so the agent skips browser-based verification.
-            structured: dict[str, Any] = {"browser_unavailable": True}
+            unavailable: dict[str, Any] = {"browser_unavailable": True}
             if e.startup_diagnostic:
-                structured["startup_diagnostic"] = e.startup_diagnostic
-            return fail_outcome(str(e), structured=structured)
+                unavailable["startup_diagnostic"] = e.startup_diagnostic
+            return fail_outcome(str(e), structured=unavailable)
         except Exception as e:
             return fail_outcome(
                 f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}"
@@ -437,8 +462,6 @@ class BrowserTool:
             return daemon_url
 
         # Not running -> ship and start
-        import pathlib
-
         daemon_src_path = pathlib.Path(__file__).parent / "_browser_daemon.py"
         daemon_src = daemon_src_path.read_text()
         await ctx.sandbox.write_file(_DAEMON_PATH, daemon_src.encode("utf-8"))
@@ -458,14 +481,24 @@ class BrowserTool:
             await ctx.sandbox.exec_shell(f"rm -f {_DAEMON_PORT_PATH}", timeout_s=5)
         if process_backend:
             executable = await asyncio.to_thread(_installed_chromium_executable)
+            playwright_runtime = await asyncio.to_thread(_installed_playwright_runtime)
             executable_env = (
                 f" DISCO_BROWSER_EXECUTABLE={shlex.quote(executable)}"
                 if executable
                 else ""
             )
+            daemon_python, playwright_pythonpath = playwright_runtime or (
+                sys.executable,
+                "",
+            )
+            pythonpath_env = (
+                f" PYTHONPATH={shlex.quote(playwright_pythonpath)}"
+                if playwright_pythonpath
+                else ""
+            )
             command = (
-                f"DISCO_BROWSER_PORT=0{executable_env} "
-                f"{shlex.quote(sys.executable)} {_DAEMON_PATH}"
+                f"DISCO_BROWSER_PORT=0{executable_env}{pythonpath_env} "
+                f"{shlex.quote(daemon_python)} {_DAEMON_PATH}"
             )
         else:
             command = f"python3 {_DAEMON_PATH}"
