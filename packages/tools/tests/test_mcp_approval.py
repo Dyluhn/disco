@@ -6,6 +6,7 @@ re-approval required path.
 
 from __future__ import annotations
 
+import pytest
 from disco.core import SecurityRisk
 from disco.tools.mcp.approval import (
     ApprovalRecord,
@@ -14,6 +15,68 @@ from disco.tools.mcp.approval import (
     compute_description_hash,
 )
 from disco.tools.mcp.config import McpServerConfig
+
+
+class TestMcpServerConfigTargets:
+    @pytest.mark.parametrize("command", [None, [], [""], ["   "]])
+    def test_stdio_rejects_missing_or_empty_command(self, command: list[str] | None) -> None:
+        with pytest.raises(ValueError, match="requires a non-empty command"):
+            McpServerConfig(
+                name="invalid",
+                transport="stdio",
+                command=command,
+                risk_tier=SecurityRisk.LOW,
+            )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "",
+            "not-a-url",
+            "ftp://mcp.example/tools",
+            "https://user:secret@mcp.example/tools",
+            "https://mcp.example/tools#fragment",
+            "https://mcp.example:invalid/tools",
+            " https://mcp.example/tools",
+            "https://mcp.example/bad path",
+            "https://mcp.example\\@attacker.example/tools",
+        ],
+    )
+    def test_streamable_http_rejects_unsafe_or_malformed_url(self, url: str) -> None:
+        with pytest.raises(ValueError, match=r"absolute HTTP\(S\) URL"):
+            McpServerConfig(
+                name="invalid",
+                transport="streamable_http",
+                url=url,
+                risk_tier=SecurityRisk.LOW,
+            )
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://127.0.0.1:43117/mcp",
+            "https://mcp.example/tools?scope=read",
+            "https://[::1]:43117/mcp",
+        ],
+    )
+    def test_streamable_http_accepts_absolute_http_urls(self, url: str) -> None:
+        config = McpServerConfig(
+            name="valid",
+            transport="streamable_http",
+            url=url,
+            risk_tier=SecurityRisk.LOW,
+        )
+        assert config.url == url
+
+    def test_validation_error_hides_credential_shaped_input(self) -> None:
+        with pytest.raises(ValueError) as raised:
+            McpServerConfig(
+                name="invalid",
+                transport="streamable_http",
+                url="https://operator:credential@mcp.example/tools",
+                risk_tier=SecurityRisk.LOW,
+            )
+        assert "credential" not in str(raised.value)
 
 
 class TestComputeDescriptionHash:

@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import re
 from typing import Literal
+from urllib.parse import urlsplit
 
 from disco.core import SecurityRisk
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # SecretRef = a key name in the SecretsStore — never a raw value (§6).
 # The loader resolves it at pool-start time; the raw secret never touches the config.
@@ -28,7 +29,7 @@ _VALID_TRANSPORTS: frozenset[str] = frozenset({"stdio", "streamable_http"})
 class McpServerConfig(BaseModel):
     """One MCP server — the shape the UI writes and the pool reads."""
 
-    model_config = {"frozen": True}
+    model_config = {"frozen": True, "hide_input_in_errors": True}
 
     name: str
     transport: Literal["stdio", "streamable_http"]
@@ -75,6 +76,42 @@ class McpServerConfig(BaseModel):
         # enum values are upper-case. Accept both representations so the exact
         # config the operator approved can be loaded by the agent server.
         return v.upper() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _validate_transport_target(self) -> McpServerConfig:
+        if self.transport == "stdio":
+            if not self.command or not self.command[0].strip():
+                raise ValueError("stdio transport requires a non-empty command")
+            return self
+        raw = self.url or ""
+        try:
+            parsed = urlsplit(raw)
+            hostname = parsed.hostname
+            # Accessing ``port`` makes urllib reject malformed/non-numeric
+            # ports instead of leaving the failure for a later connection.
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                "streamable_http URL must be an absolute HTTP(S) URL without "
+                "userinfo, whitespace, or a fragment"
+            ) from exc
+        if (
+            not raw
+            or raw != raw.strip()
+            or any(character.isspace() or ord(character) < 32 for character in raw)
+            or "\\" in raw
+            or "#" in raw
+            or parsed.scheme not in {"http", "https"}
+            or hostname is None
+            or port is not None and not 1 <= port <= 65535
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(
+                "streamable_http URL must be an absolute HTTP(S) URL without "
+                "userinfo, whitespace, or a fragment"
+            )
+        return self
 
 
 class McpSettings(BaseModel):

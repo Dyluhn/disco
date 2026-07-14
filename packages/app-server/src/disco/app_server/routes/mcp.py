@@ -29,7 +29,10 @@ def make_mcp_router(state: ConfigState) -> APIRouter:
 
     @router.patch("/api/mcp/servers/{name}")
     async def update_mcp_server(name: str, body: McpServerPatchDTO) -> McpConnectionDTO:
-        result = state.update_mcp_server(name, body)
+        try:
+            result = state.update_mcp_server(name, body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if result is None:
             raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
         return result

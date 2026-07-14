@@ -162,6 +162,9 @@ class McpConfigService:
         }
         if body.transport == "stdio":
             srv["command"] = [body.url]
+        from disco.tools.mcp.config import McpServerConfig
+
+        McpServerConfig.model_validate({"name": body.name, **srv})
         servers = {**cfg.servers, body.name: srv}
         # The Settings UI exposes per-connection switches, not a separate
         # top-level MCP switch.  A fresh install starts with ``mcp.enabled``
@@ -191,18 +194,32 @@ class McpConfigService:
         cfg = self._mcp_config()
         if name not in cfg.servers:
             return None
+        if patch.name is not None and patch.name != name:
+            raise ValueError("MCP server name cannot be changed; create a new server instead")
         existing = cfg.servers[name]
         updated = {**existing}
-        if patch.transport:
+        if patch.transport is not None:
             updated["transport"] = patch.transport
-        if patch.url:
+        if "url" in patch.model_fields_set:
             updated["url"] = patch.url
+        if updated.get("transport") == "stdio" and (
+            "url" in patch.model_fields_set or patch.transport == "stdio"
+        ):
+            updated["command"] = [patch.url or updated.get("url", "")]
+        elif patch.transport == "streamable_http":
+            # Do not leave an inactive process launch target in the signed
+            # HTTP config. It could otherwise be resurrected by a later edit.
+            for field in ("command", "args", "env"):
+                updated.pop(field, None)
         if patch.enabled is not None:
             updated["enabled"] = patch.enabled
         if "allowed_tools" in patch.model_fields_set:
             updated["allowed_tools"] = patch.allowed_tools
         if patch.risk_tier:
             updated["risk_tier"] = patch.risk_tier
+        from disco.tools.mcp.config import McpServerConfig
+
+        McpServerConfig.model_validate({"name": name, **updated})
         from disco.tools.mcp.approval import compute_config_hash
 
         current_config_hash = compute_config_hash({"name": name, **updated})

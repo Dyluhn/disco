@@ -162,6 +162,27 @@ def test_mcp_create_duplicate_is_400(client):
     )
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["not-a-url", "ftp://mcp.example/tools", "https://user:secret@mcp.example/tools"],
+)
+def test_mcp_create_rejects_invalid_http_target_without_persisting(
+    client, config_store, url
+):
+    response = client.post(
+        "/api/mcp/servers",
+        json={"name": "invalid", "url": url, "transport": "streamable_http"},
+    )
+
+    assert response.status_code == 400
+    assert "absolute HTTP(S) URL" in response.text
+    assert url not in response.text
+    assert "secret" not in response.text
+    assert client.get("/api/mcp").json() == []
+    assert config_store.load().mcp.servers == {}
+    assert config_store.load().mcp.enabled is False
+
+
 def test_mcp_patch_toggle_enabled(client, config_store):
     """PATCH toggles enabled without resetting transport or configured risk."""
     client.post(
@@ -197,6 +218,89 @@ def test_mcp_patch_toggle_enabled(client, config_store):
     assert reenabled.status_code == 200
     assert reenabled.json()["enabled"] is True
     assert config_store.load().mcp.enabled is True
+
+
+def test_mcp_invalid_config_edit_is_transactional(client, config_store, config_state):
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "transactional",
+            "url": "https://old.example.com/mcp",
+            "transport": "streamable_http",
+        },
+    )
+    assert created.status_code == 201, created.text
+    approved_hash = _approve_config(client, "transactional")
+    assert config_state._store.origin_approved(
+        "https://old.example.com/other",
+        "mcp:transactional",
+        "",
+        secret_store=config_state._secrets,
+    )
+
+    changed = client.patch(
+        "/api/mcp/servers/transactional",
+        json={"url": "not-a-url"},
+    )
+
+    assert changed.status_code == 400
+    persisted = config_store.load().mcp.servers["transactional"]
+    assert persisted["url"] == "https://old.example.com/mcp"
+    assert _connection(client, "transactional")["config_hash"] == approved_hash
+    assert config_state._store.origin_approved(
+        "https://old.example.com/other",
+        "mcp:transactional",
+        "",
+        secret_store=config_state._secrets,
+    )
+
+
+def test_mcp_stdio_url_edit_updates_the_executed_command(client, config_store):
+    created = client.post(
+        "/api/mcp/servers",
+        json={"name": "stdio_edit", "url": "old-command", "transport": "stdio"},
+    )
+    assert created.status_code == 201, created.text
+
+    changed = client.patch(
+        "/api/mcp/servers/stdio_edit",
+        json={"url": "new-command"},
+    )
+
+    assert changed.status_code == 200, changed.text
+    persisted = config_store.load().mcp.servers["stdio_edit"]
+    assert persisted["url"] == "new-command"
+    assert persisted["command"] == ["new-command"]
+
+
+def test_mcp_patch_rejects_empty_url_and_silent_rename(client, config_store):
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "unchanged",
+            "url": "https://mcp.example/tools",
+            "transport": "streamable_http",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    assert client.patch("/api/mcp/servers/unchanged", json={"url": ""}).status_code == 400
+    assert (
+        client.patch("/api/mcp/servers/unchanged", json={"name": "renamed"}).status_code
+        == 400
+    )
+    assert set(config_store.load().mcp.servers) == {"unchanged"}
+    assert config_store.load().mcp.servers["unchanged"]["url"] == (
+        "https://mcp.example/tools"
+    )
+
+    invalid_stdio = client.post(
+        "/api/mcp/servers",
+        json={"name": "empty_stdio", "url": "", "transport": "stdio"},
+    )
+    assert invalid_stdio.status_code == 400
+    assert "requires a non-empty command" in invalid_stdio.text
+    assert set(config_store.load().mcp.servers) == {"unchanged"}
 
 
 def test_mcp_config_edit_immediately_revokes_stale_signed_origin(client, store, config_state):
