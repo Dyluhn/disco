@@ -162,10 +162,10 @@ from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
 from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
+from .security_live_verifier import make_security_live_verifier
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_store import JsonSpaceStore
-from .security_live_verifier import make_security_live_verifier
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier

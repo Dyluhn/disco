@@ -875,10 +875,12 @@ def classify_dossier(
             _t = _terminal_status_epoch(run.events)
             _s = _min_event_epoch(run.events)
             if _t is not None and _s is not None:
-                # [REL-5b] after_terminal is the BUILD-runaway signal the ProviderLedgerOracle reads.
+                # [REL-5b] after_terminal is the BUILD-runaway signal the ProviderLedgerOracle
+                # reads.
                 # Stamp it True ONLY for a tool-bearing (build-driver) call past terminal — a tool-
-                # less SUMMARIZER/auto-title call is benign and must not read as PROVIDER_CALL_AFTER_
-                # TERMINAL. Unmarked records default has_tools=True (fail-closed → still flagged).
+                # less SUMMARIZER/auto-title call is benign and must not read as
+                # PROVIDER_CALL_AFTER_TERMINAL. Unmarked records default has_tools=True
+                # (fail-closed → still flagged).
                 provider_ledger = [
                     {**r, "after_terminal": float(r["ts"]) > _t and bool(r.get("has_tools", True))}
                     for r in _recs
@@ -1274,7 +1276,10 @@ async def _collect_terminal_cleanup_evidence(
     with contextlib.suppress(Exception):
         terminal = DiscoApiClient._status_of(getattr(run, "state_final", {}) or {})
     if terminal:
-        ev["lifecycle"] = {"terminal": terminal, "statuses": list(getattr(run, "timeline", []) or [])}
+        ev["lifecycle"] = {
+            "terminal": terminal,
+            "statuses": list(getattr(run, "timeline", []) or []),
+        }
 
     # provider-after-terminal — [codex] anchor on the TERMINAL STATUS event's epoch (from the FROZEN
     # run.events), then count relay calls whose ts is strictly AFTER it. A post-hoc baseline or a
@@ -1288,7 +1293,12 @@ async def _collect_terminal_cleanup_evidence(
     terminal_epoch = _terminal_status_epoch(events)
     run_start_epoch = _min_event_epoch(events)
     calls_after: int | None = None
-    if relay_log and os.path.exists(relay_log) and terminal_epoch is not None and run_start_epoch is not None:
+    if (
+        relay_log
+        and os.path.exists(relay_log)
+        and terminal_epoch is not None
+        and run_start_epoch is not None
+    ):
         await asyncio.sleep(grace_s)
         try:
             with open(relay_log, encoding="utf-8") as f:
@@ -1301,11 +1311,14 @@ async def _collect_terminal_cleanup_evidence(
             calls_during_run = sum(1 for t, _ in _ts_recs if run_start_epoch <= t <= terminal_epoch)
             if calls_during_run > 0:  # relay PROVEN live for this run → trust the after-count
                 # [REL-5b] count only BUILD-driver (tool-bearing) calls after terminal. A tool-less
-                # SUMMARIZER call — the async auto-title fired off kick() — is NOT a build runaway, so
-                # it must not classify a clean FINISHED run as SIDECAR_NOT_STOPPED. A real post-
-                # terminal driver runaway carries the tool catalog (has_tools=True) → still flagged.
+                # SUMMARIZER call — the async auto-title fired off kick() — is NOT a build runaway,
+                # so it must not classify a clean FINISHED run as SIDECAR_NOT_STOPPED. A real
+                # post-terminal driver runaway carries the tool catalog (has_tools=True) → still
+                # flagged.
                 calls_after = sum(1 for t, ht in _ts_recs if t > terminal_epoch and ht)
-            else:  # relay captured nothing for this run → 0-after is meaningless → omit (fail-closed)
+            else:
+                # Relay captured nothing for this run: 0-after is meaningless, so omit it
+                # (fail-closed).
                 calls_after = None
                 timeline.append(
                     "REL-5: relay ledger captured 0 calls in this run's window — provider-after-"
@@ -1333,7 +1346,10 @@ async def _collect_terminal_cleanup_evidence(
     # sidecar — stopped_at_terminal iff the release tore the containers down; provider calls only if
     # we could actually measure them (else the slice is omitted → oracle skips, honest).
     if calls_after is not None:
-        ev["sidecar"] = {"stopped_at_terminal": released_ok, "provider_calls_after_terminal": calls_after}
+        ev["sidecar"] = {
+            "stopped_at_terminal": released_ok,
+            "provider_calls_after_terminal": calls_after,
+        }
 
     # cleanup — preferred path: count only resources whose names embed THIS conversation's sandbox
     # instance id(s). Parallel lanes may have live sandboxes after our release; those are not this
@@ -1558,7 +1574,11 @@ async def run_once(
         if _live_measure and _missing:
             return _invalid_run_record(
                 out_root, run_id, scenario,
-                f"terminal cleanup not adjudicable — missing evidence slice(s): {', '.join(_missing)} "
+                out_root,
+                run_id,
+                scenario,
+                "terminal cleanup not adjudicable — missing evidence slice(s): "
+                f"{', '.join(_missing)} "
                 "(set MINIMAX_RELAY_LOG and ensure the container probe is available so the "
                 "sidecar/cleanup oracles cannot silently SKIP into a green pass)",
                 code=fc.RUN_INTERRUPTED,
@@ -1725,7 +1745,10 @@ async def _amain(args: argparse.Namespace) -> int:
     # positive scenario without it — else run_once's _live_measure is False, the sidecar/cleanup
     # slices are omitted, the oracles SKIP, and the run classifies SKIP-as-PASS. A scenario opts out
     # only by explicitly declaring `requires_relay_ledger: false` (a pure classifier/negative case).
-    if any(scenario.get("requires_relay_ledger", True) for scenario in selected.values()) and not _relay_log_path():
+    relay_required = any(
+        scenario.get("requires_relay_ledger", True) for scenario in selected.values()
+    )
+    if relay_required and not _relay_log_path():
         print(
             "[build-soak] INFRA_FAILURE: scenario requires the relay ledger to adjudicate terminal "
             "cleanup + provider-after-terminal — set DISCO_PROVIDER_LEDGER or MINIMAX_RELAY_LOG. "

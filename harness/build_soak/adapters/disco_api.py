@@ -1854,7 +1854,8 @@ def _shell_removes(command: str, norm_path: str) -> bool:
 # declared path in a way we cannot reconstruct from the action alone, so after one of these the path
 # degrades to content-unprovable (present_unproven) rather than leaving an earlier modeled write's
 # sha standing as the "final" expected — which false-INVALIDs a snapshot that correctly holds the
-# post-mutation bytes. Fail-safe by design: only ever relaxes a sha to present, never a false INVALID.
+# post-mutation bytes. Fail-safe by design: only ever relaxes a sha to present, never a false
+# INVALID.
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
 _SCRIPT_MUTATE_TOOLS = frozenset({"run_project_script"})
 
@@ -1976,14 +1977,16 @@ def _agent_declared_expected(
                 if _shell_removes(command, np):
                     last_mut[np] = (seq, "absent", None)
                 else:
-                    # OPAQUE mutation. A shell command can rewrite a declared path (sed -i / redirect
-                    # / heredoc / an interpreter one-liner) in a way we cannot reconstruct — and we
-                    # can't reliably tell a write from a read from the command string. Enumerating
-                    # "which shell forms write" lost twice (missed `shell_exec`, missed heredocs), so
+                    # OPAQUE mutation. A shell command can rewrite a declared path (sed -i /
+                    # redirect / heredoc / an interpreter one-liner) in a way we cannot reconstruct
+                    # — and we can't reliably tell a write from a read from the command string.
+                    # Enumerating "which shell forms write" lost twice (missed `shell_exec`, missed
+                    # heredocs), so
                     # fail SAFE: any non-rm shell op downgrades every declared path to
                     # content-unprovable. Seq-ordered, so this only overrides an EARLIER modeled
                     # write's sha (a later real file_write re-establishes a precise sha). Cost is
-                    # precision (present_unproven vs sha) — never a false INVALID, which is the point.
+                    # precision (present_unproven vs sha) — never a false INVALID, which is the
+                    # point.
                     last_mut[np] = (seq, "present", None)
         elif name in _SCRIPT_MUTATE_TOOLS:
             # run_project_script mutates via its `operations` list; a save/replace_text op on a
@@ -2113,7 +2116,12 @@ class HttpTransport:
     an exposed/remote target can supply DISCO_SOAK_PAIRING_TOKEN instead. The
     session cookie + CSRF header then ride every request (and the WS connect)."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 120.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8000",
+        *,
+        timeout_s: float = 120.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout_s
         self._cookie: str | None = None  # "disco_session=<value>"

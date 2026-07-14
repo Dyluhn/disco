@@ -182,7 +182,18 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
     async def _fake_stream(**kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         seen_kwargs.update(kwargs)
         yield {"type": "state", "status": "running"}
-        yield {"type": "final", "answer": {"query": "q", "blocks": [], "claims": [], "passages": [], "all_hits": [], "unsupported_count": 0, "follow_ups": []}}
+        yield {
+            "type": "final",
+            "answer": {
+                "query": "q",
+                "blocks": [],
+                "claims": [],
+                "passages": [],
+                "all_hits": [],
+                "unsupported_count": 0,
+                "follow_ups": [],
+            },
+        }
         yield {"type": "state", "status": "finished"}
 
     fake_rt = mock.MagicMock()
@@ -235,7 +246,18 @@ async def test_ws_research_no_conversation_id_is_none() -> None:
     async def _fake_stream(**kwargs: Any) -> AsyncIterator[dict[str, Any]]:
         seen_kwargs.update(kwargs)
         yield {"type": "state", "status": "running"}
-        yield {"type": "final", "answer": {"query": "q", "blocks": [], "claims": [], "passages": [], "all_hits": [], "unsupported_count": 0, "follow_ups": []}}
+        yield {
+            "type": "final",
+            "answer": {
+                "query": "q",
+                "blocks": [],
+                "claims": [],
+                "passages": [],
+                "all_hits": [],
+                "unsupported_count": 0,
+                "follow_ups": [],
+            },
+        }
         yield {"type": "state", "status": "finished"}
 
     fake_rt = mock.MagicMock()
@@ -291,9 +313,17 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 
     # Fake search returns one hit; extraction returns nothing useful.
     fake_search = AsyncMock()
-    fake_search.search = AsyncMock(return_value=[
-        MagicMock(url="https://example.com", title="Example", snippet="", source_engine="test", rank=0),
-    ])
+    fake_search.search = AsyncMock(
+        return_value=[
+            MagicMock(
+                url="https://example.com",
+                title="Example",
+                snippet="",
+                source_engine="test",
+                rank=0,
+            ),
+        ]
+    )
     fake_extraction = AsyncMock()
     fake_extraction.extract_many = AsyncMock(return_value=[])
     fake_reranker = AsyncMock()
@@ -382,7 +412,13 @@ async def test_dr_run_extra_passages_seeded_into_legs() -> None:
     # Track what extra_passages each leg sees.
     seen_extra: list[Passage] = []
 
-    async def _patched_gather(subq: Any, *, extra_passages: list[Any] = [], **kw: Any) -> Any:
+    async def _patched_gather(
+        subq: Any,
+        *,
+        extra_passages: list[Any] | None = None,
+        **kw: Any,
+    ) -> Any:
+        extra_passages = extra_passages or []
         seen_extra.extend(extra_passages)
         from disco.retrieval.deep_research.gather import SubQuestionResult
         return SubQuestionResult(subq=subq, passages=list(extra_passages))

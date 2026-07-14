@@ -2033,7 +2033,12 @@ def _insert_event(db_path, cid, event):
         conn.close()
 
 
-def _observation_for_action(seq: int, event: dict[str, Any], *, success: bool = True) -> dict[str, Any]:
+def _observation_for_action(
+    seq: int,
+    event: dict[str, Any],
+    *,
+    success: bool = True,
+) -> dict[str, Any]:
     tc = event["tool_call"]
     return {
         "id": f"evt_{seq}",
@@ -2086,7 +2091,11 @@ async def test_wait_for_first_file_write_requires_successful_write_family_observ
             _observation_for_action(11, good_write),
         ],
     )
-    client = DiscoApiClient(FakeTransport(db, states=["RUNNING"]), db_path=str(db), poll_interval_s=0.0)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["RUNNING"]),
+        db_path=str(db),
+        poll_interval_s=0.0,
+    )
 
     assert await client.wait_for_first_file_write(_CID, timeout_s=0.1) == 10
 
@@ -2802,7 +2811,8 @@ async def test_cleanly_terminal_run_is_released(tmp_path):
         timeout_s=5,
     )
     assert record["status"] == "PASS", record
-    assert any(p[0].endswith("/kill") for p in transport.posts)  # terminal → released (orphan teardown)
+    # Terminal state releases the orphaned runtime.
+    assert any(p[0].endswith("/kill") for p in transport.posts)
 
 
 @pytest.mark.asyncio
@@ -2996,7 +3006,12 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
     run = _cleanup_run()
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
-        cast(DiscoApiClient, _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]})),
+        cast(
+            DiscoApiClient,
+            _CleanupKillClient(
+                {"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}
+            ),
+        ),
         "conv_terminal",
         run,
         baseline_containers=0,
@@ -3290,7 +3305,10 @@ def test_shell_removes_requires_exact_path_and_pure_rm():
     assert not _shell_removes("rm -f 'site output'", "site output/index.html")
     # A pure two-path mv removes the declared source from its original path.
     assert _shell_removes("mv 'index page.html' archive/index.html", "index page.html")
-    assert _shell_removes("mv -- 'space path/index.html' archive/index.html", "space path/index.html")
+    assert _shell_removes(
+        "mv -- 'space path/index.html' archive/index.html",
+        "space path/index.html",
+    )
     assert not _shell_removes("mv export/index.html index.html", "index.html")
 
 

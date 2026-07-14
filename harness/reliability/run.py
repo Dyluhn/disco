@@ -31,9 +31,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from harness.build_soak.resources import GIB, read_host_resources
-from harness.reliability.matrix import PROOFS, ReliabilityMatrix, Suite, load_matrix
-from harness.reliability.state import (
+from harness.build_soak.resources import GIB, read_host_resources  # noqa: E402
+from harness.reliability.matrix import (  # noqa: E402
+    PROOFS,
+    ReliabilityMatrix,
+    Suite,
+    load_matrix,
+)
+from harness.reliability.state import (  # noqa: E402
     FAIL,
     INFRA,
     INVALID,
