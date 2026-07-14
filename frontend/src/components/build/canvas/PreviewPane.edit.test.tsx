@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
-const { useBuildPreviewMock } = vi.hoisted(() => ({
+const { previewBootstrapUrlMock, useBuildPreviewMock } = vi.hoisted(() => ({
+  previewBootstrapUrlMock: vi.fn(() => new Promise<string | null>(() => {})),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
 }));
 
@@ -27,7 +28,11 @@ vi.mock("@/hooks/useBuildPreview", () => ({
 
 vi.mock("@/api/client", async () => {
   const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return { ...actual, agentHttpBase: () => "http://agent.test:8000" };
+  return {
+    ...actual,
+    agentHttpBase: () => "http://agent.test:8000",
+    previewBootstrapUrl: previewBootstrapUrlMock,
+  };
 });
 
 function withClient(ui: ReactElement) {

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +52,26 @@ vi.mock("@/components/ModelLeaderPill", () => ({
   ModelLeaderPill: () => <button type="button">Model</button>,
 }));
 
+// The real Radix scope menu has its own component coverage. W-06 needs only its
+// public value/callback contract while it verifies ResearchSurface state ownership.
+vi.mock("@/components/ScopeControl", () => ({
+  ScopeControl: ({
+    value,
+    onChange,
+  }: {
+    value: "standard" | "deep_research";
+    onChange: (scope: "standard" | "deep_research") => void;
+  }) => (
+    <button
+      type="button"
+      aria-label={`Scope: ${value === "standard" ? "Standard" : "Deep Research"}`}
+      onClick={() => onChange(value === "standard" ? "deep_research" : "standard")}
+    >
+      Change scope
+    </button>
+  ),
+}));
+
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -100,18 +120,18 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
 
   it("W-06 keeps typed draft text when toggling standard search to Deep Research and back", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ResearchSurface />);
+    await act(() => {
+      renderWithProviders(<ResearchSurface />);
+    });
 
     const draft = "compare battery commercialization timelines";
     await user.type(screen.getByLabelText("Ask Disco a question"), draft);
 
     await user.click(screen.getByRole("button", { name: /scope: standard/i }));
-    await user.click(await screen.findByText("Deep Research"));
-    expect(screen.getByLabelText("Ask Disco a question")).toHaveValue(draft);
+    expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
 
     await user.click(screen.getByRole("button", { name: /scope: deep research/i }));
-    await user.click(await screen.findByText("Standard"));
-    expect(screen.getByLabelText("Ask Disco a question")).toHaveValue(draft);
+    expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
   });
 
   it("W-07 Attach is usable before a cid exists and uploads through the lazy cid pipeline", async () => {

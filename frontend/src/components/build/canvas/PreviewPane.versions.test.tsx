@@ -13,6 +13,7 @@ const {
   restoreWorkspaceVersionMock,
   showToastMock,
   pathPreviewBootstrapUrlMock,
+  previewBootstrapUrlMock,
   useBuildPreviewMock,
   useWorkspaceVersionsMock,
 } = vi.hoisted(() => ({
@@ -24,6 +25,9 @@ const {
       `http://localhost:8000/__disco/path-preview-auth/${cid}?target=${encodeURIComponent(targetPath)}`,
     ),
   ),
+  // Version-history tests never exercise a live dev-server capability. Keep that
+  // unrelated async effect pending so no state commit can outlive a sync assertion.
+  previewBootstrapUrlMock: vi.fn(() => new Promise<string | null>(() => {})),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   useWorkspaceVersionsMock: vi.fn(),
 }));
@@ -47,6 +51,7 @@ vi.mock("@/api/client", async () => {
     agentHttpBase: () => "http://agent.test:8000",
     previewHostUrl: () => "http://preview.test",
     pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
+    previewBootstrapUrl: previewBootstrapUrlMock,
   };
 });
 

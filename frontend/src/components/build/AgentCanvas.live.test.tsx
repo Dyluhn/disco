@@ -13,6 +13,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentCanvas } from "./AgentCanvas";
+import { agentGet, agentSend } from "@/api/client";
 import type { AgentEvent } from "@/types/agent";
 
 // Mock the live-browser config hook (per-test overridden).
@@ -103,7 +104,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
     expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument();
     // never probes live-ready when disabled.
-    const { agentGet } = await import("@/api/client");
     expect(agentGet).not.toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready"));
   });
 
@@ -111,7 +111,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     await enable(true);
     live.ready = { ready: false, reason: "unsupported_backend" };
     wrap(<AgentCanvas {...baseProps} />);
-    const { agentGet } = await import("@/api/client");
     // it polls live-ready…
     await waitFor(() =>
       expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready")),
@@ -127,7 +126,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
   it("(c) enabled + streamable → AUTO-starts (no click) and shows the green-blink Live badge on iframe load", async () => {
     await enable(true);
     wrap(<AgentCanvas {...baseProps} />);
-    const { agentSend } = await import("@/api/client");
     // auto-start: live-url is called WITHOUT any user click.
     await waitFor(() =>
       expect(agentSend).toHaveBeenCalledWith(
@@ -154,7 +152,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     fireEvent.load(iframe);
     await screen.findByTestId("live-badge");
 
-    const { agentSend } = await import("@/api/client");
     (agentSend as ReturnType<typeof vi.fn>).mockClear();
     // The browser session ends → the probe now reports not-ready. After 2 consecutive
     // misses (~8s) the view must tear down. Polling is every 4s; advance fake timers.
@@ -175,7 +172,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     await enable(true);
     live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
     wrap(<AgentCanvas {...baseProps} />);
-    const { agentSend } = await import("@/api/client");
     await waitFor(() =>
       expect(agentSend).toHaveBeenCalledWith(
         "POST",
@@ -255,7 +251,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
 
   it("(f) tears down the OWNING conversation's stack when switching conversations while live", async () => {
     await enable(true);
-    const { agentSend } = await import("@/api/client");
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const ui = (cid: string) => (
       <QueryClientProvider client={qc}>

@@ -12,13 +12,33 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { ResearchSurface } from "@/components/ResearchSurface";
 import * as clientModule from "@/api/client";
+
+// ScopeControl's Radix menu is covered independently in controls.test.tsx. This
+// parent-state test needs only its value/callback contract.
+vi.mock("@/components/ScopeControl", () => ({
+  ScopeControl: ({
+    value,
+    onChange,
+  }: {
+    value: "standard" | "deep_research";
+    onChange: (scope: "standard" | "deep_research") => void;
+  }) => (
+    <button
+      type="button"
+      aria-label={`Scope: ${value === "standard" ? "Standard" : "Deep Research"}`}
+      onClick={() => onChange(value === "standard" ? "deep_research" : "standard")}
+    >
+      Change scope
+    </button>
+  ),
+}));
 
 function renderSurface() {
   const qc = new QueryClient({
@@ -44,8 +64,10 @@ describe("W-06 — draft persists across Search ↔ Deep Research toggle", () =>
   afterEach(() => vi.restoreAllMocks());
 
   it("keeps the typed query when toggling standard → deep research → back", async () => {
+    await act(() => {
+      renderSurface();
+    });
     const user = userEvent.setup();
-    renderSurface();
 
     const DRAFT = "quantum error correction survey";
 
@@ -57,15 +79,13 @@ describe("W-06 — draft persists across Search ↔ Deep Research toggle", () =>
     // Toggle scope → Deep Research. The standard input unmounts; DR mounts its
     // OWN QueryInput. The draft must still be there (shared parent state).
     await user.click(screen.getByRole("button", { name: /Scope: Standard/i }));
-    await user.click(screen.getByRole("menuitem", { name: /Deep Research/i }));
 
     const drInput = await screen.findByPlaceholderText(/multi-page report/i);
     expect(drInput).toHaveValue(DRAFT);
 
     // Toggle back → standard; the draft still persists across the second swap.
     await user.click(screen.getByRole("button", { name: /Scope: Deep Research/i }));
-    await user.click(screen.getByRole("menuitem", { name: /Standard/i }));
 
-    expect(screen.getByPlaceholderText(/ask anything/i)).toHaveValue(DRAFT);
+    expect(await screen.findByPlaceholderText(/ask anything/i)).toHaveValue(DRAFT);
   });
 });

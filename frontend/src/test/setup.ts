@@ -1,4 +1,17 @@
 import "@testing-library/jest-dom/vitest";
+import { forbiddenTestDiagnostic } from "./diagnostics";
+
+// Passing tests must not bury React async-boundary violations or jsdom's
+// unsupported full-page navigation error. Preserve every other console error
+// verbatim (including intentional degradation-path evidence such as ChartBlock).
+const reportConsoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const diagnostic = forbiddenTestDiagnostic(args);
+  if (diagnostic) {
+    throw new Error(`Forbidden test diagnostic: ${diagnostic}`);
+  }
+  reportConsoleError(...args);
+};
 
 // jsdom lacks matchMedia (theme detection) and these layout APIs the UI touches.
 if (!window.matchMedia) {

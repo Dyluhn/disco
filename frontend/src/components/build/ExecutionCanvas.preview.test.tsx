@@ -12,7 +12,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { FilesPane } from "@/components/build/canvas/FilesPane";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
@@ -108,6 +108,24 @@ function appDeliverable(path: string): AgentEvent {
 
 const HTML = fileWrite("index.html", "<html><body><h1>Done</h1></body></html>");
 const NOTE = fileWrite("notes.txt", "no html here");
+
+function unresolvedCapability(): Promise<string | null> {
+  return new Promise(() => {});
+}
+
+function enableLiveCapability() {
+  previewBootstrapUrlMock.mockImplementation((cid: string, port: number) =>
+    Promise.resolve(`http://${cid}-${port}.localhost:8000/__disco/preview-auth?signed=1`),
+  );
+}
+
+beforeEach(() => {
+  useBuildPreviewMock.mockReturnValue({ data: null });
+  // PreviewPane mints a live capability for every cid, even when the rendered
+  // branch is static. Most tests do not exercise that effect; leaving its explicit
+  // mock pending prevents an irrelevant state update after a synchronous test ends.
+  previewBootstrapUrlMock.mockImplementation(unresolvedCapability);
+});
 
 /** A minimal Vite/bundler index.html: the <script type="module" src="/src/...">
  *  reference makes the srcdoc iframe unrunnable (E2 detection). */
@@ -319,6 +337,7 @@ describe("PreviewPane — selected handoff entry", () => {
 
 describe("PreviewPane — E2: bundler entry defaults to live server when proxy is available", () => {
   it("shows the live iframe (not the broken srcdoc) by default for a Vite entry", async () => {
+    enableLiveCapability();
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -342,6 +361,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
   });
 
   it("defaults to RENDERED for plain static HTML even when a proxy is available (2026-07-07 walkthrough)", async () => {
+    enableLiveCapability();
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -379,6 +399,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
 
 describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
   it("mints a path capability instead of opening generated code on the authenticated agent origin", async () => {
+    enableLiveCapability();
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -410,6 +431,7 @@ describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
   });
 
   it("fails closed when the isolated path capability cannot be created", async () => {
+    enableLiveCapability();
     pathPreviewBootstrapUrlMock.mockRejectedValueOnce(new Error("capability unavailable"));
     useBuildPreviewMock.mockReturnValue({
       data: {

@@ -83,7 +83,7 @@ describe("AuthorB unbiased gate — W-13/W-16/W-19/W-21 slide UI", () => {
     expect(screen.getByRole("link", { name: /Web page/i })).toBeInTheDocument();
   });
 
-  it("W-21 renames the editable deck tab to Edit/Export Slides", () => {
+  it("W-21 renames the editable deck tab to Edit/Export Slides", async () => {
     const events: AgentEvent[] = [
       {
         id: "slides-action",
@@ -116,6 +116,9 @@ describe("AuthorB unbiased gate — W-13/W-16/W-19/W-21 slide UI", () => {
 
     expect(screen.getByRole("tab", { name: /Edit\/Export Slides/i })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /^Edit Slides$/i })).not.toBeInTheDocument();
+    // The foreground editor starts its async deck load. Keep it mounted through
+    // that public commit so no DeckEditorPane state update outlives the test.
+    expect(await screen.findByTestId("deck-editor-body")).toBeInTheDocument();
   });
 
   it("W-21 edit-text input uses dark text against the highlighted edit background", async () => {

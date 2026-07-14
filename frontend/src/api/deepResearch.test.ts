@@ -73,6 +73,8 @@ function exportCall(stub: ReturnType<typeof vi.fn>) {
 // ---- tests ------------------------------------------------------------------
 
 describe("exportReport", () => {
+  let anchorClick: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     // jsdom has no URL.createObjectURL — stub it so downloadBlob doesn't throw
     vi.stubGlobal("URL", {
@@ -80,10 +82,16 @@ describe("exportReport", () => {
       createObjectURL: vi.fn().mockReturnValue("blob:fake"),
       revokeObjectURL: vi.fn(),
     });
-    // document.body.appendChild / anchor.click are available in jsdom; no stub needed.
+    // A synthetic download click is the browser boundary under test. jsdom turns
+    // the real anchor implementation into an asynchronous unsupported-navigation
+    // error, so intercept that one browser primitive explicitly.
+    anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
   });
 
   afterEach(() => {
+    anchorClick.mockRestore();
     vi.unstubAllGlobals();
   });
 
@@ -99,6 +107,7 @@ describe("exportReport", () => {
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
+    expect(anchorClick).toHaveBeenCalledTimes(1);
   });
 
   it("POSTs to agent-server base, not bare /api (pdf, no docx)", async () => {

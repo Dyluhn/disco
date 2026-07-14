@@ -184,6 +184,10 @@ describe("DeckEditorPane", () => {
       html_file: "deck.html",
       pptx_file: "deck.pptx",
     });
+    // Keep the component mounted through the pending save's public UI commit.
+    // Ending the test immediately after resolving the promise let its lowered-deck
+    // and saving-state updates escape the testing-library act boundary.
+    expect(await screen.findAllByText("Edit 1")).not.toHaveLength(0);
   });
 
   it("surfaces a load error rather than a blank pane", async () => {

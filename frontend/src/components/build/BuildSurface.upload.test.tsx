@@ -11,7 +11,7 @@
  *     env-message valve, not ⚠-styled as a warning
  */
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
@@ -103,8 +103,11 @@ describe("UploadComposer", () => {
     const file = new File(["a,b,c"], "a.csv", { type: "text/csv" });
     fireEvent.drop(group, { preventDefault: vi.fn(), dataTransfer: { files: [file] } });
 
-    await vi.waitFor(() => expect(ensureCid).toHaveBeenCalled());
-    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith("conv_lazy", [file]));
+    await waitFor(() => expect(ensureCid).toHaveBeenCalled());
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("conv_lazy", [file]));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled(),
+    );
   });
 
   // W-07: when ensureCid resolves null (e.g. offline) the upload is a no-op — never
@@ -118,7 +121,10 @@ describe("UploadComposer", () => {
     const file = new File(["x"], "x.txt", { type: "text/plain" });
     fireEvent.drop(group, { preventDefault: vi.fn(), dataTransfer: { files: [file] } });
 
-    await vi.waitFor(() => expect(ensureCid).toHaveBeenCalled());
+    await waitFor(() => expect(ensureCid).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled(),
+    );
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -139,7 +145,10 @@ describe("UploadComposer", () => {
     fireEvent.drop(group, { preventDefault: vi.fn(), dataTransfer: dt });
 
     // Wait for async upload
-    await vi.waitFor(() => expect(spy).toHaveBeenCalledWith("conv_abc", [file]));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("conv_abc", [file]));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled(),
+    );
   });
 });
 

@@ -14,7 +14,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NeedMoreCard } from "./NeedMoreCard";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { useMode } from "@/shell/mode";
@@ -187,10 +187,21 @@ function renderCard(overrides?: Partial<React.ComponentProps<typeof NeedMoreCard
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("NeedMoreCard", () => {
+  let anchorClick: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    // Downloads are verified through filename/body/object-URL assertions. Stub
+    // only the browser navigation primitive that jsdom intentionally lacks.
+    anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
     // Restore default capabilities (pdf off) before each test.
     _caps.current = { md: true, pdf: false };
+  });
+
+  afterEach(() => {
+    anchorClick.mockRestore();
   });
 
   // (a) All three buttons render

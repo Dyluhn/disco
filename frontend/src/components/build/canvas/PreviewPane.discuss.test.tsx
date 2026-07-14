@@ -19,7 +19,14 @@ import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import type { SelectionEnvelope } from "@/lib/selectionBridge";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
-const { useBuildPreviewMock, resetSelectionSpy, disarmSpy, selectionRef } = vi.hoisted(() => ({
+const {
+  previewBootstrapUrlMock,
+  useBuildPreviewMock,
+  resetSelectionSpy,
+  disarmSpy,
+  selectionRef,
+} = vi.hoisted(() => ({
+  previewBootstrapUrlMock: vi.fn(() => new Promise<string | null>(() => {})),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   resetSelectionSpy: vi.fn(),
   disarmSpy: vi.fn(),
@@ -32,7 +39,11 @@ vi.mock("@/hooks/useBuildPreview", () => ({
 
 vi.mock("@/api/client", async () => {
   const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return { ...actual, agentHttpBase: () => "http://agent.test:8000" };
+  return {
+    ...actual,
+    agentHttpBase: () => "http://agent.test:8000",
+    previewBootstrapUrl: previewBootstrapUrlMock,
+  };
 });
 
 vi.mock("@/hooks/useElementSelect", () => ({
