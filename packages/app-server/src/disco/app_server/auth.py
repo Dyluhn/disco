@@ -145,14 +145,21 @@ def _public_ui_url() -> str:
 
 def _print_boot_banner() -> None:
     ui_url = _public_ui_url()
+    pairing_lines = (
+        ["  Loopback auto-pair is enabled; no pairing token is printed."]
+        if _auto_pair_enabled()
+        else [
+            "  If the browser asks for a pairing token, paste this token:",
+            f"  {pairing_token()}",
+        ]
+    )
     lines = [
         "",
         "================ Disco self-host boot ================",
         f"UI: {ui_url}",
         "First-run admin pairing:",
         f"  Open {ui_url}",
-        "  If the browser asks for a pairing token, paste this token:",
-        f"  {pairing_token()}",
+        *pairing_lines,
         "After pairing, configure a driver model in Settings -> Models & Providers.",
         "Proof step: docker compose exec agent-server disco-verify --quick",
         "======================================================",
@@ -202,9 +209,7 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if (
             method in _UNSAFE_METHODS
             and not _is_testclient(request)
-            and not SessionSigner.csrf_valid(
-                session, request.headers.get(CSRF_HEADER)
-            )
+            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
         ):
             return Response("csrf required", status_code=403)
         owner_check = await self._authorize_conversation_path(request, session)
@@ -241,7 +246,10 @@ def make_auth_router() -> APIRouter:
     router = APIRouter()
     signer = SessionSigner()
     _print_boot_banner()
-    _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
+    if _auto_pair_enabled():
+        _LOG.info("Disco loopback auto-pair enabled; pairing token omitted from logs")
+    else:
+        _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:

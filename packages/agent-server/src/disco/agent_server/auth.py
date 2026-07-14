@@ -195,9 +195,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         if (
             method in _UNSAFE_METHODS
             and not _is_testclient(request)
-            and not SessionSigner.csrf_valid(
-                session, request.headers.get(CSRF_HEADER)
-            )
+            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
         ):
             return Response("csrf required", status_code=403)
         owner_check = await self._authorize_conversation_path(request, session)
@@ -233,7 +231,10 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
 def make_auth_router() -> APIRouter:
     router = APIRouter()
     signer = SessionSigner()
-    _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
+    if _auto_pair_enabled():
+        _LOG.info("Disco loopback auto-pair enabled; pairing token omitted from logs")
+    else:
+        _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:
