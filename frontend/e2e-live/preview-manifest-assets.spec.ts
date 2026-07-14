@@ -21,6 +21,7 @@ import {
   restartReliabilityStack,
   type EventJson,
 } from "./reliability-helpers";
+import { latestStoppedStatus } from "@/lib/harness/terminalConversationStatus";
 
 type Surface = "build" | "agent";
 
@@ -111,12 +112,7 @@ async function waitForCommittedFinish(
   let latest: EventJson[] = [];
   while (Date.now() < deadline) {
     latest = await allEvents(request, cid);
-    const terminal = latest.find(
-      (event) =>
-        (event.seq ?? 0) > afterSeq &&
-        event.kind === "status" &&
-        new Set(["ERROR", "STUCK"]).has(String(event.status)),
-    );
+    const terminal = latestStoppedStatus(latest, afterSeq);
     if (terminal) {
       throw new Error(`conversation ${cid} reached ${terminal.status}: ${String(terminal.detail ?? "")}`);
     }
