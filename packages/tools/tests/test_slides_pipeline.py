@@ -35,6 +35,7 @@ from disco.tools.builtin._slides_pipeline import (
     _coerce_known_theme_aliases,
     _extract_json_object,
     _parse_authored_deck,
+    _purpose_for_model_endpoint,
     _retry_msg,
     _stage_assets,
     _stage_fill,
@@ -962,6 +963,31 @@ async def test_render_c1_deck_gates_editable_source_on_real_sidecar(tmp_workspac
 
 
 # ---- remote-driver auth (deck author can use a paid/remote LLM) --------------
+
+
+@pytest.mark.parametrize(("stored_ref", "runtime_ref"), [("", None), (None, "")])
+def test_keyless_driver_endpoint_normalizes_empty_secret_refs(
+    stored_ref: str | None, runtime_ref: str | None
+) -> None:
+    """S01: keyless endpoints must match whether config/runtime encode no key as
+    an empty string or None. A one-sided normalization silently returned
+    ``model:unknown``, failed origin approval, and degraded a deck to Marp."""
+
+    entry = MagicMock(
+        base_url="http://127.0.0.1:18080/v1",
+        provider="local-driver",
+        api_key_env=stored_ref,
+    )
+    cfg = MagicMock(models={"driver": entry})
+
+    assert (
+        _purpose_for_model_endpoint(
+            cfg,
+            "http://127.0.0.1:18080/v1",
+            runtime_ref,
+        )
+        == "model:local-driver"
+    )
 
 
 @pytest.mark.asyncio
