@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -137,22 +139,50 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
 
     isolated = TestClient(app, base_url="http://localhost:18240")
     bootstrap = isolated.get(path_bootstrap_url, follow_redirects=False)
-    assert bootstrap.status_code == 303
-    assert bootstrap.headers["location"].startswith(
-        f"/conversations/{cid}/preview-app/"
+    target = f"/conversations/{cid}/preview-app/"
+    # H084: a 303 keeps the original 127.0.0.1 -> localhost cross-site
+    # navigation context, so Firefox withholds a newly set SameSite=Strict
+    # cookie on the redirect. Complete one locked-down document on the isolated
+    # origin first; its script starts a new same-site navigation.
+    assert bootstrap.status_code == 200
+    assert "location" not in bootstrap.headers
+    assert f"window.location.replace({json.dumps(target)})" in bootstrap.text
+    assert "default-src 'none'" in bootstrap.headers["content-security-policy"]
+    nonce_match = re.search(r'<script nonce="([A-Za-z0-9_-]+)">', bootstrap.text)
+    assert nonce_match is not None
+    assert (
+        f"script-src 'nonce-{nonce_match.group(1)}'"
+        in bootstrap.headers["content-security-policy"]
     )
+    assert bootstrap.headers["x-content-type-options"] == "nosniff"
     set_cookie = bootstrap.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
     assert "samesite=strict" in set_cookie.lower()
     assert f"Path=/conversations/{cid}/preview-app/" in set_cookie
     assert SESSION_COOKIE not in set_cookie
 
-    document = isolated.get(bootstrap.headers["location"])
+    document = isolated.get(target)
     css = isolated.get(f"/conversations/{cid}/preview-app/assets/site.css")
     script = isolated.get(f"/conversations/{cid}/preview-app/assets/site.js")
     assert document.status_code == 200 and "CAPABILITY SITE" in document.text
     assert css.status_code == 200 and css.text == "h1{color:green}"
     assert script.status_code == 200 and "scriptLoaded" in script.text
+
+    # The signed target may contain an arbitrary query. It must remain data in
+    # the bootstrap script rather than breaking out of the JSON string or CSP.
+    hostile_target = "/?next=</script><script>globalThis.pwned=1</script>"
+    hostile_capability = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+        json={"port": 8000, "target_path": hostile_target},
+    )
+    assert hostile_capability.status_code == 200
+    hostile_bootstrap = isolated.get(
+        hostile_capability.json()["path_bootstrap_url"], follow_redirects=False
+    )
+    assert hostile_bootstrap.status_code == 200
+    assert "</script><script>" not in hostile_bootstrap.text
+    assert "\\u003c/script\\u003e\\u003cscript\\u003e" in hostile_bootstrap.text
 
     # The preview capability is exact to this conversation and preview route.
     other = isolated.get(f"/conversations/{other_cid}/preview-app/")
@@ -180,9 +210,11 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
         app, base_url="https://a1b2c3d4-8000.mybox.example"
     )
     remote_bootstrap = remote_isolated.get(remote_url, follow_redirects=False)
-    assert remote_bootstrap.status_code == 303
+    assert remote_bootstrap.status_code == 200
+    assert "location" not in remote_bootstrap.headers
+    assert f"window.location.replace({json.dumps(target)})" in remote_bootstrap.text
     assert "; Secure" in remote_bootstrap.headers["set-cookie"]
-    remote_document = remote_isolated.get(remote_bootstrap.headers["location"])
+    remote_document = remote_isolated.get(target)
     assert remote_document.status_code == 200
     assert "CAPABILITY SITE" in remote_document.text
     store.close()

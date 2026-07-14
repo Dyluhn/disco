@@ -7,6 +7,7 @@ import contextlib
 import json as _json
 import logging
 import mimetypes
+import secrets
 import urllib.parse
 from pathlib import PurePosixPath
 
@@ -433,7 +434,41 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             return Response(
                 "preview intent scope mismatch", status_code=403, media_type="text/plain"
             )
-        response = Response(status_code=303, headers={"location": target})
+        # H084: do not redirect in the same cross-site navigation that arrived
+        # from the application origin. Firefox correctly withholds a newly set
+        # SameSite=Strict cookie for the rest of that redirect chain, which
+        # turns the target into a 403. Finish loading a minimal document on the
+        # isolated origin, then start a fresh same-site navigation from there.
+        # Keep the cookie Strict and HttpOnly; do not weaken the boundary to
+        # SameSite=None/Lax merely to make the redirect work.
+        nonce = secrets.token_urlsafe(18)
+        safe_target_json = (
+            _json.dumps(target)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+        bootstrap_document = (
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<meta name=\"referrer\" content=\"no-referrer\">"
+            "<title>Opening isolated preview</title></head><body>"
+            f"<script nonce=\"{nonce}\">window.location.replace({safe_target_json})</script>"
+            "<noscript>JavaScript is required to open this isolated preview.</noscript>"
+            "</body></html>"
+        )
+        response = Response(
+            bootstrap_document,
+            status_code=200,
+            media_type="text/html",
+            headers={
+                "content-security-policy": (
+                    "default-src 'none'; "
+                    f"script-src 'nonce-{nonce}'; "
+                    "base-uri 'none'; form-action 'none'; frame-ancestors *"
+                ),
+                "x-content-type-options": "nosniff",
+            },
+        )
         forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[
             0
         ].strip()
