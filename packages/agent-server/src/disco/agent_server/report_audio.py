@@ -3,7 +3,7 @@
 Builds a two-voice MP3 + transcript from a finished Deep Research ReportEvent
 by REUSING the existing audio pipeline (`packages.tools.audio_overview`):
   - LLM turn-script generation (`_build_llm_payload` / `_call_llm`)
-  - JSON validation + one retry (`_validate_turn_script`)
+  - Indexed JSON batch validation + bounded truncation/malformed recovery
   - Per-turn synthesis via bundled Kokoro OR a remote OpenAI-compatible
     `/v1/audio/speech` endpoint (the same `bundled|speaches|openai` three-tier
     model Settings → Audio already exposes)
@@ -74,8 +74,7 @@ class TtsBackendError(Exception):
 
 
 class TurnScriptError(Exception):
-    """Raised when the LLM cannot produce a valid turn-script (and the one-shot
-    retry also fails).  Route → 502."""
+    """Raised when bounded LLM assembly cannot produce a complete turn-script."""
 
 
 # ---- TTS settings resolution ------------------------------------------------
@@ -265,7 +264,7 @@ async def _authenticated_call_llm(
     *,
     api_key_env: str | None,
     purpose: str,
-) -> str:
+) -> audio_overview.LLMResponseLike:
     if getattr(audio_overview._call_llm, "__name__", "") == "_fake_llm":
         return await audio_overview._call_llm(payload, llm_url)
 
@@ -304,31 +303,18 @@ async def _authenticated_call_llm(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        return audio_overview.LLMResponse(
+            content=choice["message"].get("content") or "",
+            finish_reason=choice.get("finish_reason"),
+        )
 
 
 async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
-    """LLM turn-script generation + validation, with one malformed-output retry.
+    """Generate a complete mode-aware script through the shared batch protocol."""
 
-    Mode ``"single"`` relaxes the ≥2-turns rule and coerces stray 'B' speakers
-    to 'A'.  Raises :class:`TurnScriptError` if the LLM call fails or the output
-    is still invalid after the retry.  Returns the validated list of turns.
-    """
-    _validate = (
-        audio_overview._validate_turn_script_single
-        if mode == "single"
-        else audio_overview._validate_turn_script
-    )
-    # C2: inject acronym-first-mention instruction into the payload.
-    # This supplements the existing prompt (owned by the audio_overview tool) by
-    # inserting a system message that the local server-side adapter controls, so
-    # the TTS script expands abbreviations (HTTP/3, API, ML) on first mention —
-    # avoiding letter-soup in generated speech.
     llm_url, llm_model, api_key_env, purpose = _resolve_report_llm()
-    payload = audio_overview._build_llm_payload_for_model(
-        overview_text, llm_model, mode=mode
-    )
-    payload["messages"].insert(0, {
+    acronym_instruction = {
         "role": "system",
         "content": (
             "IMPORTANT: When you encounter an acronym or abbreviation for the FIRST TIME "
@@ -336,53 +322,26 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
             "'HTTP/3 (Hypertext Transfer Protocol version 3)' not just 'HTTP/3'. "
             "After the first mention you may use the short form freely."
         ),
-    })
+    }
+
+    async def call(payload: dict[str, Any]) -> audio_overview.LLMResponseLike:
+        return await _authenticated_call_llm(
+            payload,
+            llm_url,
+            api_key_env=api_key_env,
+            purpose=purpose,
+        )
+
     try:
-        raw_response = await _authenticated_call_llm(
-            payload, llm_url, api_key_env=api_key_env, purpose=purpose
+        return await audio_overview._generate_segmented_turn_script(
+            overview_text,
+            llm_model,
+            mode=mode,
+            call_llm=call,
+            system_messages=(acronym_instruction,),
         )
-    except Exception as e:
-        raise TurnScriptError(f"LLM call failed while generating turn-script: {e}") from e
-
-    raw_json = audio_overview._extract_json(raw_response)
-    turns, error = _validate(raw_json)
-
-    # One retry on malformed output (mirrors the tool).  Re-use the already-built
-    # payload (with the C2 system message already prepended) for the retry, so
-    # the retry also benefits from the acronym instruction.
-    if error is not None:
-        retry_payload = dict(payload)  # shallow copy; messages list will be extended
-        retry_payload["messages"] = list(payload["messages"])  # own copy of the list
-        retry_payload["messages"].append({"role": "assistant", "content": raw_response})
-        retry_payload["messages"].append(
-            {
-                "role": "user",
-                "content": (
-                    f"Your JSON output was invalid: {error}\n\n"
-                    f"Please fix the errors and output ONLY a valid JSON array "
-                    f"of turns. Each turn must have 'speaker' (A or B) and "
-                    f"'text' (non-empty string)."
-                ),
-            }
-        )
-        try:
-            raw_response2 = await _authenticated_call_llm(
-                retry_payload, llm_url, api_key_env=api_key_env, purpose=purpose
-            )
-        except Exception as e:
-            raise TurnScriptError(
-                f"Turn-script validation failed: {error}; retry LLM call also failed: {e}"
-            ) from e
-
-        raw_json2 = audio_overview._extract_json(raw_response2)
-        turns, error2 = _validate(raw_json2)
-        if error2 is not None:
-            raise TurnScriptError(
-                f"Turn-script validation failed after retry. First: {error}; retry: {error2}"
-            )
-
-    assert turns is not None  # validated above
-    return turns
+    except audio_overview.AudioScriptGenerationError as exc:
+        raise TurnScriptError(str(exc)) from exc
 
 
 async def generate_report_audio(

@@ -23,6 +23,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -236,6 +237,101 @@ async def test_full_happy_path():
         assert outcome.structured["voice_a"] == "af_heart"
         assert outcome.structured["voice_b"] == "af_bella"
         assert outcome.structured["backend"] == "bundled"
+
+
+async def test_segmented_long_script_completes_transcript_and_audio_workflow():
+    """A long indexed script reaches both artifacts with every turn exactly once."""
+
+    calls: list[dict] = []
+
+    def _segmented_llm(payload: dict, _llm_url: str):
+        calls.append(payload)
+        content = payload["messages"][-1]["content"]
+        match = re.search(r"contiguous turn indexes (\d+) through (\d+)", content)
+        assert match is not None
+        start, end = (int(value) for value in match.groups())
+        turns = [
+            {
+                "index": index,
+                "speaker": "A" if index % 2 else "B",
+                "text": f"Structured workflow turn {index}: " + "source detail " * 40,
+            }
+            for index in range(start, end + 1)
+        ]
+        from disco.tools.builtin.audio_overview import LLMResponse
+
+        return LLMResponse(
+            content=json.dumps({"total_turns": 12, "turns": turns}),
+            finish_reason="stop",
+        )
+
+    with tempfile.TemporaryDirectory() as td:
+        workspace = Path(td)
+        tool = AudioOverviewTool()
+        with (
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
+            mock.patch(
+                "disco.tools.builtin.audio_overview._call_llm",
+                side_effect=_segmented_llm,
+            ),
+            mock.patch(
+                "disco.tools.builtin.audio_overview._synthesize_local",
+                side_effect=_mock_synth_local,
+            ),
+        ):
+            outcome = await tool.run(
+                AudioOverviewArgs(
+                    report_text=SAMPLE_REPORT + "\nCitation source: annual filing [1].",
+                    filename="segmented_long",
+                ),
+                _ctx(_jailed_sandbox(workspace)),
+            )
+
+        assert outcome.success, outcome.content
+        assert len(calls) == 3
+        transcript = (workspace / "segmented_long.md").read_text()
+        for index in range(1, 13):
+            assert transcript.count(f"Structured workflow turn {index}:") == 1
+        assert transcript.count("source detail") == 12 * 40
+        _assert_mp3_head((workspace / "segmented_long.mp3").read_bytes())
+
+
+async def test_repeated_provider_truncation_fails_before_tts_or_partial_files():
+    calls = 0
+
+    def _always_truncated(_payload: dict, _llm_url: str):
+        nonlocal calls
+        calls += 1
+        from disco.tools.builtin.audio_overview import LLMResponse
+
+        return LLMResponse(content="{", finish_reason="length")
+
+    with tempfile.TemporaryDirectory() as td:
+        workspace = Path(td)
+        synth = mock.AsyncMock(side_effect=_mock_synth_local)
+        with (
+            _patch_tts(TtsSettings(enabled=True, provider="bundled")),
+            mock.patch(
+                "disco.tools.builtin.audio_overview._call_llm",
+                side_effect=_always_truncated,
+            ),
+            mock.patch(
+                "disco.tools.builtin.audio_overview._synthesize_local",
+                synth,
+            ),
+        ):
+            outcome = await AudioOverviewTool().run(
+                AudioOverviewArgs(report_text=SAMPLE_REPORT, filename="truncated"),
+                _ctx(_jailed_sandbox(workspace)),
+            )
+
+        assert not outcome.success
+        assert calls == 3
+        assert "finish_reason='length'" in outcome.content
+        assert "no partial artifact" in outcome.content
+        synth.assert_not_awaited()
+        assert not (workspace / "truncated.mp3").exists()
+        assert not (workspace / "truncated.md").exists()
 
 
 async def test_malformed_then_retry():

@@ -20,6 +20,8 @@ Acceptance covered:
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 
 import numpy as np
 import pytest
@@ -297,6 +299,173 @@ def test_endpoint_200_with_seeded_report(
     assert r_tr.status_code == 200
     assert r_tr.headers["content-type"].startswith("text/markdown")
     assert "Audio Overview Transcript" in r_tr.text
+
+
+def test_endpoint_recovers_length_stop_and_serves_complete_unique_transcript(
+    client: TestClient,
+    store: SqliteEventStore,
+    configure_tts,
+    tts_enabled,
+    monkeypatch,
+) -> None:
+    """The report route shares length-aware assembly and completes mocked TTS."""
+
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    payloads: list[dict] = []
+    from disco.tools.builtin import audio_overview as _ao
+
+    async def _fake_llm(payload: dict, _llm_url: str):
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _ao.LLMResponse(
+                content='{"total_turns":12,"turns":[{"index":1,"text":"cut',
+                finish_reason="length",
+            )
+        user_content = payload["messages"][-1]["content"]
+        match = re.search(r"contiguous turn indexes (\d+) through (\d+)", user_content)
+        assert match is not None
+        start, end = (int(value) for value in match.groups())
+        turns = [
+            {
+                "index": index,
+                "speaker": "A" if index % 2 else "B",
+                "text": f"Endpoint assembled turn {index}: cited report fact [source].",
+            }
+            for index in range(start, end + 1)
+        ]
+        return _ao.LLMResponse(
+            content=json.dumps({"total_turns": 12, "turns": turns}),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(_ao, "_call_llm", _fake_llm)
+    response = client.post(f"/conversations/{cid}/report/audio")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    transcript = client.get(body["transcript_url"])
+    assert transcript.status_code == 200
+    assert len(payloads) == 7
+    assert "African Swallow" in payloads[0]["messages"][-1]["content"]
+    for index in range(1, 13):
+        assert transcript.text.count(f"Endpoint assembled turn {index}:") == 1
+    mp3 = client.get(body["mp3_url"])
+    assert mp3.status_code == 200 and len(mp3.content) > 0
+
+
+def test_report_http_adapter_preserves_provider_finish_reason(monkeypatch) -> None:
+    from disco.core.llm import ConfigStore
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "choices": [{
+                    "message": {"content": "{"},
+                    "finish_reason": "length",
+                }]
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, *_args: object, **_kwargs: object) -> _Response:
+            return _Response()
+
+    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *_args: True)
+    monkeypatch.setattr(report_audio_mod.httpx, "AsyncClient", lambda **_kwargs: _Client())
+    result = asyncio.run(
+        report_audio_mod._authenticated_call_llm(
+            {"messages": []},
+            "http://provider.invalid/v1",
+            api_key_env=None,
+            purpose="model:test",
+        )
+    )
+    assert isinstance(result, report_audio_mod.audio_overview.LLMResponse)
+    assert result.finish_reason == "length"
+
+
+def test_report_endpoint_retains_one_normal_malformed_correction(
+    client: TestClient,
+    store: SqliteEventStore,
+    configure_tts,
+    tts_enabled,
+    monkeypatch,
+) -> None:
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    payloads: list[dict] = []
+    from disco.tools.builtin import audio_overview as _ao
+
+    async def _fake_llm(payload: dict, _llm_url: str):
+        payloads.append(payload)
+        if len(payloads) == 1:
+            return _ao.LLMResponse(content="ordinary malformed output", finish_reason="stop")
+        all_content = "\n".join(message["content"] for message in payload["messages"])
+        match = re.search(r"contiguous turn indexes (\d+) through (\d+)", all_content)
+        assert match is not None
+        start, end = (int(value) for value in match.groups())
+        turns = [
+            {
+                "index": index,
+                "speaker": "A" if index % 2 else "B",
+                "text": f"Malformed recovery turn {index}.",
+            }
+            for index in range(start, end + 1)
+        ]
+        return _ao.LLMResponse(
+            content=json.dumps({"total_turns": 12, "turns": turns}),
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(_ao, "_call_llm", _fake_llm)
+    response = client.post(f"/conversations/{cid}/report/audio")
+
+    assert response.status_code == 200, response.text
+    assert len(payloads) == 4
+    assert len(payloads[1]["messages"]) == 4  # system + request + invalid + correction
+    transcript = client.get(response.json()["transcript_url"]).text
+    for index in range(1, 13):
+        assert transcript.count(f"Malformed recovery turn {index}.") == 1
+
+
+def test_endpoint_repeated_length_stop_is_bounded_and_actionable(
+    client: TestClient,
+    store: SqliteEventStore,
+    configure_tts,
+    tts_enabled,
+    monkeypatch,
+) -> None:
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+    calls = 0
+    from disco.tools.builtin import audio_overview as _ao
+
+    async def _fake_llm(_payload: dict, _llm_url: str):
+        nonlocal calls
+        calls += 1
+        return _ao.LLMResponse(content="{", finish_reason="length")
+
+    monkeypatch.setattr(_ao, "_call_llm", _fake_llm)
+    response = client.post(f"/conversations/{cid}/report/audio")
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["reason"] == "tts_backend"
+    assert "finish_reason='length'" in detail["detail"]
+    assert "no partial artifact" in detail["detail"]
+    assert calls == 3
 
 
 def test_endpoint_idempotent(

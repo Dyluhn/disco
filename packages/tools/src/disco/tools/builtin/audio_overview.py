@@ -4,9 +4,10 @@ Pipeline:
   0. Resolve TTS settings from ConfigStore (toggle / backend / voices). If the
      feature is disabled, fail soft so the model never loads (saves RAM).
   1. Accept the report text.
-  2. Call an LLM (OpenAI-compatible chat completions) to generate a JSON
-     turn-script: [{"speaker": "A"|"B", "text": "..."}].
-  3. Validate the JSON schema + retry ONCE on malformed output.
+  2. Call an LLM (OpenAI-compatible chat completions) for bounded, indexed JSON
+     turn batches and retain its completion status.
+  3. Assemble contiguous batches; shrink on explicit truncation and retry ONCE
+     on ordinary malformed output.
   4. Synthesise each turn to float32 PCM @ 24 kHz — bundled in-process Kokoro
      (default, ONNX/CPU) or a remote Speaches endpoint, per Settings → Audio.
   5. Mix the per-turn PCM with inter-turn silence, then encode the whole
@@ -24,6 +25,7 @@ import io
 import json
 import re
 import wave
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +48,29 @@ class Turn(BaseModel):
     text: str = Field(min_length=1)
 
 
+@dataclass(frozen=True)
+class LLMResponse:
+    """The provider fields needed to distinguish complete output from truncation."""
+
+    content: str
+    finish_reason: str | None
+
+
+type LLMResponseLike = str | LLMResponse
+
+
+# Each request produces an independently valid JSON batch.  Four turns keeps the
+# spoken output comfortably below the common OpenAI-compatible 4096-token cap,
+# including room for a reasoning pass.  A length stop shrinks this batch (4 -> 2
+# -> 1) rather than replaying the same oversized whole-script request.
+_SCRIPT_BATCH_TURNS = 4
+_SCRIPT_MAX_PROVIDER_CALLS = 32
+_SCRIPT_MAX_TRUNCATIONS_PER_BATCH = 3
+_SCRIPT_REASONING_TOKEN_RESERVE = 3072
+_SCRIPT_TOKENS_PER_TURN = 256
+_SCRIPT_MAX_OUTPUT_TOKENS = 4096
+
+
 @dataclass
 class _ResolvedTts:
     """Resolved TTS settings for one overview run (the output of Step 0)."""
@@ -64,7 +89,7 @@ _TURN_SCRIPT_PROMPT = """You are a podcast scriptwriter. Given a research report
 two-host audio script covering the key insights. Host A is the lead analyst;
 Host B is the co-host who asks follow-ups and adds colour.
 
-Output ONLY a JSON array of turns. Each turn is an object with:
+Each turn has:
   "speaker": "A" or "B"
   "text": one or two sentences (natural spoken language, no markdown)
 
@@ -75,14 +100,14 @@ introducing the topic.
 Report to convert:
 {report_text}
 
-Output ONLY valid JSON array, nothing else:"""
+Follow the JSON batch protocol below exactly."""
 
 _SINGLE_SCRIPT_PROMPT = """You are an audio narrator. Given a research report, write an honest,
 thorough single-voice walkthrough of the key findings.
 Cover the main insights, openly discuss any gaps or tensions in the sources,
 and give the listener a balanced, honest assessment of what the research shows.
 
-Output ONLY a JSON array of turns. Each turn is an object with:
+Each turn has:
   "speaker": "A"
   "text": two to three sentences (natural spoken language, no markdown)
 
@@ -92,7 +117,7 @@ Keep it informative and conversational. ~10-16 turns total. Each turn should be
 Report to narrate:
 {report_text}
 
-Output ONLY valid JSON array, nothing else:"""
+Follow the JSON batch protocol below exactly."""
 
 
 def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
@@ -102,22 +127,92 @@ def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
 
 
 def _build_llm_payload_for_model(report_text: str, model: str, mode: str = "podcast") -> dict:
+    return _build_segment_payload_for_model(
+        report_text,
+        model,
+        mode=mode,
+        start_turn=1,
+        requested_turns=_SCRIPT_BATCH_TURNS,
+        total_turns=None,
+        prior_turns=(),
+    )
+
+
+def _segment_output_tokens(requested_turns: int) -> int:
+    """Bound output by batch size while retaining room for reasoning models."""
+
+    return min(
+        _SCRIPT_MAX_OUTPUT_TOKENS,
+        _SCRIPT_REASONING_TOKEN_RESERVE + requested_turns * _SCRIPT_TOKENS_PER_TURN,
+    )
+
+
+def _build_segment_payload_for_model(
+    report_text: str,
+    model: str,
+    *,
+    mode: str,
+    start_turn: int,
+    requested_turns: int,
+    total_turns: int | None,
+    prior_turns: Sequence[Turn],
+    system_messages: Sequence[dict[str, str]] = (),
+) -> dict[str, Any]:
     prompt = _SINGLE_SCRIPT_PROMPT if mode == "single" else _TURN_SCRIPT_PROMPT
+    min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
+    end_turn = start_turn + requested_turns - 1
+    if total_turns is None:
+        total_instruction = (
+            f"Choose total_turns once in the inclusive range {min_turns}..{max_turns}."
+        )
+    else:
+        end_turn = min(end_turn, total_turns)
+        total_instruction = f"Use total_turns={total_turns}; do not change it."
+    context = ""
+    if prior_turns:
+        context_rows = [
+            {
+                "index": start_turn - len(prior_turns) + offset,
+                "speaker": turn.speaker,
+                "text": turn.text,
+            }
+            for offset, turn in enumerate(prior_turns)
+        ]
+        context = (
+            "\nFor continuity only, these already accepted turns precede this batch; "
+            "do not repeat them:\n"
+            + json.dumps(context_rows, ensure_ascii=False)
+        )
+    batch_protocol = f"""
+
+Return ONLY one valid JSON object with exactly this shape:
+{{
+  "total_turns": <integer>,
+  "turns": [
+    {{"index": <integer>, "speaker": "A" or "B", "text": "spoken text"}}
+  ]
+}}
+
+{total_instruction}
+Generate exactly the contiguous turn indexes {start_turn} through {end_turn}.
+Never repeat an earlier turn index. Do not include markdown fences or prose outside JSON.
+""" + context
     return {
         "model": model,
         "messages": [
+            *system_messages,
             {
                 "role": "user",
-                "content": prompt.format(report_text=report_text),
+                "content": prompt.format(report_text=report_text) + batch_protocol,
             }
         ],
         "temperature": 0.7,
-        "max_tokens": 4096,
+        "max_tokens": _segment_output_tokens(requested_turns),
     }
 
 
-async def _call_llm(payload: dict, llm_url: str) -> str:
-    """Call the LLM to generate the turn-script. Returns raw response text."""
+async def _call_llm(payload: dict, llm_url: str) -> LLMResponse:
+    """Call the LLM without discarding the provider's completion status."""
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
     ) as client:
@@ -128,10 +223,16 @@ async def _call_llm(payload: dict, llm_url: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        return LLMResponse(
+            content=choice["message"].get("content") or "",
+            finish_reason=choice.get("finish_reason"),
+        )
 
 
-async def _call_llm_with_key(payload: dict, llm_url: str, api_key: str) -> str:
+async def _call_llm_with_key(
+    payload: dict, llm_url: str, api_key: str
+) -> LLMResponse:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -145,7 +246,11 @@ async def _call_llm_with_key(payload: dict, llm_url: str, api_key: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        return LLMResponse(
+            content=choice["message"].get("content") or "",
+            finish_reason=choice.get("finish_reason"),
+        )
 
 
 def _extract_json(text: str) -> str:
@@ -239,6 +344,259 @@ def _validate_turn_script_single(raw_json: str) -> tuple[list[Turn] | None, str 
         turns.append(Turn(speaker="A", text=text.strip()))
 
     return turns, None
+
+
+class AudioScriptGenerationError(RuntimeError):
+    """A bounded script-generation attempt could not produce a complete script."""
+
+
+@dataclass(frozen=True)
+class _ScriptBatch:
+    total_turns: int
+    turns: list[Turn]
+
+
+def _extract_script_json(text: str) -> str:
+    """Extract the first complete JSON object or array without joining fragments."""
+
+    stripped = text.strip()
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, (dict, list)):
+        return stripped
+
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(stripped):
+        if char not in "[{":
+            continue
+        try:
+            value, end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return stripped[index : index + end]
+    return stripped
+
+
+def _validate_script_batch(
+    raw_json: str,
+    *,
+    mode: str,
+    start_turn: int,
+    requested_turns: int,
+    expected_total: int | None,
+) -> tuple[_ScriptBatch | None, list[Turn] | None, str | None]:
+    """Validate one indexed batch, or an explicit legacy complete-array response."""
+
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        return None, None, f"Invalid JSON: {exc}"
+
+    validate_full = (
+        _validate_turn_script_single if mode == "single" else _validate_turn_script
+    )
+    if isinstance(data, list):
+        if start_turn != 1:
+            return None, None, "Continuation returned an unindexed legacy turn array"
+        legacy_turns, error = validate_full(raw_json)
+        return None, legacy_turns, error
+    if not isinstance(data, dict):
+        return None, None, "Script batch must be a JSON object"
+
+    total = data.get("total_turns")
+    if isinstance(total, bool) or not isinstance(total, int):
+        return None, None, "Script batch total_turns must be an integer"
+    min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
+    if not min_turns <= total <= max_turns:
+        return (
+            None,
+            None,
+            f"Script batch total_turns must be between {min_turns} and {max_turns}",
+        )
+    if expected_total is not None and total != expected_total:
+        return (
+            None,
+            None,
+            f"Script batch changed total_turns from {expected_total} to {total}",
+        )
+    if start_turn > total:
+        return None, None, f"Script batch starts at {start_turn} after total_turns={total}"
+
+    items = data.get("turns")
+    if not isinstance(items, list):
+        return None, None, "Script batch turns must be a JSON array"
+    expected_count = min(requested_turns, total - start_turn + 1)
+    if len(items) != expected_count:
+        return (
+            None,
+            None,
+            f"Script batch must contain exactly {expected_count} contiguous turns; "
+            f"received {len(items)}",
+        )
+
+    turns: list[Turn] = []
+    for offset, item in enumerate(items):
+        expected_index = start_turn + offset
+        if not isinstance(item, dict):
+            return None, None, f"Turn {expected_index} is not an object"
+        index = item.get("index")
+        if index != expected_index:
+            return (
+                None,
+                None,
+                f"Expected turn index {expected_index}, received {index!r}; "
+                "turns must not be skipped or repeated",
+            )
+        speaker = item.get("speaker")
+        if speaker not in ("A", "B"):
+            return None, None, f"Turn {expected_index}: invalid speaker {speaker!r}"
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None, None, f"Turn {expected_index}: text must be a non-empty string"
+        turns.append(Turn(speaker="A" if mode == "single" else speaker, text=text.strip()))
+    return _ScriptBatch(total_turns=total, turns=turns), None, None
+
+
+def _coerce_llm_response(value: LLMResponseLike) -> LLMResponse:
+    """Keep string-returning test/provider adapters compatible, with unknown status."""
+
+    if isinstance(value, LLMResponse):
+        return value
+    if isinstance(value, str):
+        return LLMResponse(content=value, finish_reason=None)
+    raise TypeError(f"LLM adapter returned unsupported response type {type(value).__name__}")
+
+
+def _malformed_retry_payload(
+    payload: dict[str, Any], response: str, error: str
+) -> dict[str, Any]:
+    retry_payload = dict(payload)
+    retry_payload["messages"] = list(payload["messages"])
+    retry_payload["messages"].extend([
+        {"role": "assistant", "content": response},
+        {
+            "role": "user",
+            "content": (
+                f"Your JSON batch was invalid: {error}\n\n"
+                "Return ONLY a corrected, complete JSON object for the exact indexed "
+                "batch requested. Do not repeat, skip, or renumber turns."
+            ),
+        },
+    ])
+    return retry_payload
+
+
+async def _generate_segmented_turn_script(
+    report_text: str,
+    model: str,
+    *,
+    mode: str,
+    call_llm: Callable[[dict[str, Any]], Awaitable[LLMResponseLike]],
+    system_messages: Sequence[dict[str, str]] = (),
+) -> list[Turn]:
+    """Generate and deterministically assemble bounded, independently valid batches."""
+
+    accepted: list[Turn] = []
+    total_turns: int | None = None
+    batch_size = _SCRIPT_BATCH_TURNS
+    provider_calls = 0
+
+    while total_turns is None or len(accepted) < total_turns:
+        start_turn = len(accepted) + 1
+        malformed_retry_used = False
+        truncations = 0
+        retry_payload: dict[str, Any] | None = None
+
+        while True:
+            provider_calls += 1
+            if provider_calls > _SCRIPT_MAX_PROVIDER_CALLS:
+                raise AudioScriptGenerationError(
+                    "Audio turn-script exceeded the bounded 32-call assembly limit; "
+                    f"stopped before turn {start_turn} with no partial artifact written"
+                )
+            requested_turns = min(
+                batch_size,
+                (total_turns - len(accepted)) if total_turns is not None else batch_size,
+            )
+            payload = retry_payload or _build_segment_payload_for_model(
+                report_text,
+                model,
+                mode=mode,
+                start_turn=start_turn,
+                requested_turns=requested_turns,
+                total_turns=total_turns,
+                prior_turns=accepted[-2:],
+                system_messages=system_messages,
+            )
+            try:
+                response = _coerce_llm_response(await call_llm(payload))
+            except Exception as exc:
+                raise AudioScriptGenerationError(
+                    f"LLM call failed while generating audio turn {start_turn}: {exc}; "
+                    "no partial artifact was written"
+                ) from exc
+
+            finish_reason = (response.finish_reason or "").strip().lower()
+            if finish_reason == "length":
+                truncations += 1
+                if (
+                    truncations >= _SCRIPT_MAX_TRUNCATIONS_PER_BATCH
+                    or requested_turns == 1
+                ):
+                    raise AudioScriptGenerationError(
+                        "Provider truncated the audio turn-script batch at "
+                        f"turn {start_turn} after {truncations} bounded attempts "
+                        "(finish_reason='length'); no partial artifact was written"
+                    )
+                batch_size = max(1, requested_turns // 2)
+                retry_payload = None
+                continue
+            if finish_reason not in ("", "stop", "end_turn", "eos", "eos_token"):
+                raise AudioScriptGenerationError(
+                    "Provider did not complete the audio turn-script batch at "
+                    f"turn {start_turn} (finish_reason={finish_reason!r}); "
+                    "no partial artifact was written"
+                )
+
+            raw_json = _extract_script_json(response.content)
+            batch, legacy_turns, error = _validate_script_batch(
+                raw_json,
+                mode=mode,
+                start_turn=start_turn,
+                requested_turns=requested_turns,
+                expected_total=total_turns,
+            )
+            if error is not None:
+                if malformed_retry_used:
+                    raise AudioScriptGenerationError(
+                        "Audio turn-script batch remained invalid after one correction "
+                        f"at turn {start_turn}: {error}; no partial artifact was written"
+                    )
+                malformed_retry_used = True
+                retry_payload = _malformed_retry_payload(payload, response.content, error)
+                continue
+            if legacy_turns is not None:
+                return legacy_turns
+            assert batch is not None
+            if total_turns is None:
+                total_turns = batch.total_turns
+            accepted.extend(batch.turns)
+            break
+
+    serialized = json.dumps([turn.model_dump() for turn in accepted])
+    validate_full = (
+        _validate_turn_script_single if mode == "single" else _validate_turn_script
+    )
+    validated, error = validate_full(serialized)
+    if error is not None or validated is None:
+        raise AudioScriptGenerationError(
+            f"Assembled audio turn-script failed final validation: {error}; "
+            "no partial artifact was written"
+        )
+    return validated
 
 
 async def _synthesize_local(text: str, voice: str) -> Any:
@@ -436,70 +794,26 @@ class AudioOverviewTool:
     async def _generate_turn_script(
         self, report_text: str, llm_url: str, llm_model: str, llm_key: str = ""
     ) -> tuple[list[Turn] | None, ToolOutcome | None]:
-        """Steps 1 & 2: call the LLM for a JSON turn-script, validate it, and retry
-        ONCE on malformed output. Returns (turns, None) on success or
-        (None, failure_outcome) on any unrecoverable error."""
-        payload = _build_llm_payload_for_model(report_text, llm_model)
+        """Generate a complete script through the bounded shared batch protocol."""
+
+        async def call(payload: dict[str, Any]) -> LLMResponseLike:
+            if llm_key:
+                return await _call_llm_with_key(payload, llm_url, llm_key)
+            return await _call_llm(payload, llm_url)
+
         try:
-            raw_response = (
-                await _call_llm_with_key(payload, llm_url, llm_key)
-                if llm_key
-                else await _call_llm(payload, llm_url)
+            turns = await _generate_segmented_turn_script(
+                report_text,
+                llm_model,
+                mode="podcast",
+                call_llm=call,
             )
-        except Exception as e:
+        except AudioScriptGenerationError as exc:
             return None, ToolOutcome(
                 success=False,
-                content=f"LLM call failed while generating turn-script: {e}",
-                error=str(e),
+                content=str(exc),
+                error=str(exc),
             )
-
-        raw_json = _extract_json(raw_response)
-        turns, error = _validate_turn_script(raw_json)
-
-        # One retry on malformed output.
-        if error is not None:
-            retry_payload = _build_llm_payload_for_model(report_text, llm_model)
-            retry_payload["messages"].append(
-                {"role": "assistant", "content": raw_response}
-            )
-            retry_payload["messages"].append(
-                {
-                    "role": "user",
-                    "content": f"Your JSON output was invalid: {error}\n\n"
-                    f"Please fix the errors and output ONLY a valid JSON array "
-                    f"of turns. Each turn must have 'speaker' (A or B) and "
-                    f"'text' (non-empty string).",
-                }
-            )
-            try:
-                raw_response2 = (
-                    await _call_llm_with_key(retry_payload, llm_url, llm_key)
-                    if llm_key
-                    else await _call_llm(retry_payload, llm_url)
-                )
-            except Exception as e:
-                return None, ToolOutcome(
-                    success=False,
-                    content=(
-                        f"Turn-script validation failed: {error}\n"
-                        f"Retry LLM call also failed: {e}"
-                    ),
-                    error=error,
-                )
-
-            raw_json2 = _extract_json(raw_response2)
-            turns, error2 = _validate_turn_script(raw_json2)
-            if error2 is not None:
-                return None, ToolOutcome(
-                    success=False,
-                    content=(
-                        f"Turn-script validation failed after retry.\n"
-                        f"First error: {error}\n"
-                        f"Retry error: {error2}"
-                    ),
-                    error=error2,
-                )
-
         return turns, None
 
     async def _synthesize_turns(
