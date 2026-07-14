@@ -115,6 +115,34 @@ async def test_no_duplicate_when_serve_already_emitted(tmp_path: Path):
     assert (await _app_deliverables(store, cid))[0].title == "My app"
 
 
+async def test_explicit_files_handoff_suppresses_synthetic_app(tmp_path: Path):
+    """Any explicit serve handoff wins; lifecycle must not invent a conflicting app."""
+    store = SqliteEventStore(":memory:")
+    cid = "conv-files-handoff"
+    (tmp_path / "index.html").write_text("<html>stale root</html>")
+    selected = tmp_path / "release"
+    selected.mkdir()
+    (selected / "index.html").write_text("<html>selected report</html>")
+    await store.append(
+        cid,
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="Selected report",
+            path="release/index.html",
+            artifact_kind="files",
+        ),
+    )
+
+    await _mgr(store)._maybe_synthesize_app_deliverable(cid, tmp_path)
+
+    events = await store.get_events(cid)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [(event.artifact_kind, event.path) for event in deliverables] == [
+        ("files", "release/index.html")
+    ]
+    assert await _app_deliverables(store, cid) == []
+
+
 async def test_no_deliverable_when_no_index_html(tmp_path: Path):
     """A build with no index.html (e.g. a CLI tool / data run) gets no app card."""
     store = SqliteEventStore(":memory:")

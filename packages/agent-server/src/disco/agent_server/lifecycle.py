@@ -770,10 +770,10 @@ class LifecycleManager:
             if index is None:
                 return
             existing = await self._rt._store.get_events(conversation_id)
-            if any(
-                isinstance(e, DeliverableEvent) and e.artifact_kind == "app"
-                for e in existing
-            ):
+            if any(isinstance(e, DeliverableEvent) for e in existing):
+                # This fallback exists only for builds that never called serve.
+                # Any explicit handoff wins, including a downloadable HTML file;
+                # silently inventing a conflicting app can select a stale root.
                 return  # codex P1b: idempotency read goes through the store
             rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
             path = rel_dir if rel_dir and rel_dir != "." else "."
