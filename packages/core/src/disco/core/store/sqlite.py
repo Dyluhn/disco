@@ -239,6 +239,7 @@ class SqliteEventStore:
         # set the DB path only at store construction (live-caught 2026-07-03).
         self.db_path: str = "" if str(path) == ":memory:" else str(path)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._closed = False
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=FULL;")  # durable on commit (G2)
@@ -303,7 +304,28 @@ class SqliteEventStore:
         self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
 
     def close(self) -> None:
+        """Release the connection; safe to call more than once."""
+        if self._closed:
+            return
         self._conn.close()
+        self._closed = True
+
+    def __del__(self) -> None:
+        """Defensive last-resort cleanup for an owner that omitted ``close``.
+
+        Long-lived services still close stores explicitly.  This finalizer keeps
+        short-lived/error-path owners from leaking the underlying sqlite handle
+        until interpreter shutdown, where Python 3.13 reports ResourceWarning.
+        """
+        if getattr(self, "_closed", True):
+            return
+        try:
+            self.close()
+        except sqlite3.Error:
+            # Destructors cannot safely surface cleanup exceptions.  Restrict the
+            # fallback to SQLite's own close errors; all normal ownership paths
+            # remain explicit and observable through close().
+            pass
 
     # ---- conversation metadata (extends the protocol; used by app-server) ----
 

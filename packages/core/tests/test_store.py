@@ -8,6 +8,7 @@ reconnect/replay subscribe path.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import pytest
 from disco.core import (
@@ -27,6 +28,19 @@ def store() -> SqliteEventStore:
     s = SqliteEventStore(":memory:")
     yield s
     s.close()
+
+
+def test_close_is_idempotent_and_finalizer_releases_forgotten_connection() -> None:
+    explicit = SqliteEventStore(":memory:")
+    explicit.close()
+    explicit.close()
+
+    forgotten = SqliteEventStore(":memory:")
+    connection = forgotten._conn
+    forgotten.__del__()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+    forgotten.__del__()  # idempotent even when finalization is retried
 
 
 # ---- append-only ------------------------------------------------------------
