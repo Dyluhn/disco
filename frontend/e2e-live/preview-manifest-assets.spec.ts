@@ -318,17 +318,29 @@ async function assertBuildIframe(
         return element.ownerDocument.fonts.check("16px ProofFont", "Ж");
       }),
     ).toBe(true);
+    // A finished Build auto-selects Preview, so this iframe can complete its
+    // graph before this helper is reached (the popup handoff runs first). A
+    // page response listener is prospective only; merge it with the frame's
+    // own same-origin Resource Timing history instead of treating an empty
+    // listener as proof that earlier requests never happened.
+    const completedResources = await body.evaluate((element) =>
+      (element.ownerDocument.defaultView?.performance.getEntriesByType("resource") ?? []).map(
+        (entry) => entry.name,
+      ),
+    );
+    const observedResponses = [...new Set([...responses, ...completedResources])];
     for (const expected of [
       "/assets/theme.css?theme=7",
       "/scripts/app.js?mode=live",
       "/media/hero%20image.svg?asset=1",
       "/fonts/proof.woff2?font=1",
     ]) {
-      expect(responses.some((url) => url.includes(expected)), `iframe never loaded ${expected}`).toBe(
-        true,
-      );
+      expect(
+        observedResponses.some((url) => url.includes(expected)),
+        `iframe never loaded ${expected}`,
+      ).toBe(true);
     }
-    return responses;
+    return observedResponses;
   } finally {
     page.off("response", listener);
   }
