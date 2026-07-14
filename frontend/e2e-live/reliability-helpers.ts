@@ -3,6 +3,7 @@ import {
   type APIRequestContext,
   type APIResponse,
 } from "@playwright/test";
+import { assessAgentErrorThrash } from "@/lib/harness/thrashOracle";
 
 export const AGENT_API = (
   process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000"
@@ -18,6 +19,7 @@ export type EventJson = {
   kind?: string;
   status?: string;
   detail?: string | null;
+  error?: string | null;
   source?: string;
   action_id?: string;
   message?: { role?: string; content?: string };
@@ -289,6 +291,12 @@ export function assertNoThrash(events: EventJson[], trace: InspectTrace): void {
     repairs.length,
     `too many hidden model/provider repairs: ${JSON.stringify(repairs)}`,
   ).toBeLessThanOrEqual(3);
+
+  const agentErrors = assessAgentErrorThrash(events);
+  expect(
+    agentErrors.violations,
+    `standalone agent_error thrash: ${JSON.stringify(agentErrors)}`,
+  ).toEqual([]);
   const repairCounts = new Map<string, number>();
   for (const repair of repairs) {
     const kind = String(repair.repair_kind ?? "unknown");

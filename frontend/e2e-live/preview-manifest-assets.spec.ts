@@ -27,6 +27,7 @@ type Surface = "build" | "agent";
 
 const RELEASE_ENTRY = "release/index.html";
 const ROOT_STALE = "STALE ROOT MUST NEVER OPEN";
+const RELEASE_TITLE = "RELIABILITY RELEASE";
 const FIRST_MARKER = "SELECTED RELEASE ONE";
 const SECOND_MARKER = "SELECTED RELEASE TWO";
 const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
@@ -45,8 +46,9 @@ substitute a one-file app. Create these exact files in the workspace:
 
 1. Root index.html containing only the visible text '${ROOT_STALE}'. It is an
    intentionally stale scaffold and must never be served or selected.
-2. release/index.html containing a normal HTML document with visible h1 text
-   '${FIRST_MARKER}', a Cyrillic Ж character inside an element with id font-proof,
+2. release/index.html containing a normal HTML document with the exact title element
+   '<title>${RELEASE_TITLE}</title>', visible h1 text '${FIRST_MARKER}', a Cyrillic Ж
+   character inside an element with id font-proof,
    a stylesheet link href './assets/theme.css?theme=7', a deferred script src
    './scripts/app.js?mode=live', an img id hero src
    './media/hero%20image.svg?asset=1#hero', and an anchor id nested-link href
@@ -429,7 +431,8 @@ test("Build and Agent open the selected multi-file manifest across restart and r
           content:
             `Revise only the selected release. Change the visible h1 in ${RELEASE_ENTRY} ` +
             `from '${FIRST_MARKER}' to exactly '${SECOND_MARKER}'. Keep every external asset ` +
-            `and route intact, serve exactly '${RELEASE_ENTRY}', verify, and finish. Never serve ` +
+            `and route intact, preserve the exact '<title>${RELEASE_TITLE}</title>', serve ` +
+            `exactly '${RELEASE_ENTRY}', verify, and finish. Never serve ` +
             "the stale root index.html.",
         },
       },
@@ -444,6 +447,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     assertNoThrash(buildSecond.events, await inspectTrace(request, buildCid));
     await assertApiGraph(request, buildCid, SECOND_MARKER);
     const current = await (await request.get(`${AGENT_API}/conversations/${buildCid}/preview-app/`)).text();
+    expect(current).toContain(`<title>${RELEASE_TITLE}</title>`);
     expect(current).not.toContain(FIRST_MARKER);
     await assertApiGraph(request, buildCid, FIRST_MARKER, buildFirst.version);
     await openFromHandoff(context, page, buildCid, SECOND_MARKER);
