@@ -45,3 +45,47 @@ def test_stack_copies_all_signed_model_state(monkeypatch, tmp_path: Path) -> Non
     assert manager.env["DISCO_CONFIG"] == str(manager.config_path)
     assert manager.env["DISCO_SECRETS"] == str(manager.secrets_path)
     assert manager.env["DISCO_APPROVALS"] == str(manager.approvals_path)
+
+
+def test_stack_defaults_to_filtered_egress_despite_ambient_open(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """H-001: an operator's ambient open posture must not weaken campaign proof."""
+
+    monkeypatch.setenv("DISCO_BUILD_EGRESS", "open")
+    monkeypatch.delenv("DISCO_RELIABILITY_BUILD_EGRESS", raising=False)
+    monkeypatch.setattr(StackManager, "_prepare_config", lambda self: None)
+
+    manager = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "stack-filtered",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=None,
+        seed_secrets=None,
+        seed_approvals=None,
+    )
+
+    assert manager.env["DISCO_BUILD_EGRESS"] == "filtered"
+
+
+def test_stack_accepts_only_explicit_reliability_egress_override(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("DISCO_BUILD_EGRESS", "open")
+    monkeypatch.setenv("DISCO_RELIABILITY_BUILD_EGRESS", "sealed")
+    monkeypatch.setattr(StackManager, "_prepare_config", lambda self: None)
+
+    manager = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "stack-sealed",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=None,
+        seed_secrets=None,
+        seed_approvals=None,
+    )
+
+    assert manager.env["DISCO_BUILD_EGRESS"] == "sealed"

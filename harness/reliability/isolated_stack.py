@@ -138,7 +138,13 @@ class StackManager:
                 # dependency on the operator's container socket.
                 "DISCO_SANDBOX": "process",
                 "DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV": "1",
-                "DISCO_BUILD_EGRESS": "open",
+                # Do not inherit an ambient production/dev override and do not
+                # silently widen the product default. A campaign that explicitly
+                # needs another posture must name it through the reliability-only
+                # control, making the exception visible in its recorded command.
+                "DISCO_BUILD_EGRESS": os.environ.get(
+                    "DISCO_RELIABILITY_BUILD_EGRESS", "filtered"
+                ),
             }
         )
         return env
