@@ -13,7 +13,13 @@ from pathlib import PurePosixPath
 import httpx
 import websockets
 from disco.core import ConversationStatus, DeliverableEvent, StatusEvent, WorkspaceVersionEvent
-from disco.core.auth import PREVIEW_BOOTSTRAP_PATH, PreviewCapabilitySigner
+from disco.core.auth import (
+    PATH_PREVIEW_BOOTSTRAP_PATH,
+    PREVIEW_BOOTSTRAP_PATH,
+    PreviewCapabilitySigner,
+    path_preview_cookie_name,
+    preview_ttl_s,
+)
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
@@ -23,7 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..auth import current_session, websocket_session
-from ..preview_inject import inject_element_mention_picker
+from ..preview_inject import inject_element_mention_picker, inject_selection_agent
 from ..runtime import ConversationRuntime
 from ._common import (
     require_owned_conversation,
@@ -148,6 +154,7 @@ def _serve_static_from_snapshot(
     *,
     version: int | None = None,
     entry_path: str | None = None,
+    inject_selection: bool = False,
 ) -> Response | None:
     """runthru-v2: serve a FINISHED build's static site DIRECTLY from the host
     ProjectStore snapshot when the sandbox can't be woken (build finished + reaped,
@@ -187,7 +194,10 @@ def _serve_static_from_snapshot(
             return Response("preview asset not found", status_code=404, media_type="text/plain")
         return None
     ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-    body = inject_element_mention_picker(target.read_bytes(), ctype)
+    body = target.read_bytes()
+    if inject_selection:
+        body = inject_selection_agent(body, ctype)
+    body = inject_element_mention_picker(body, ctype)
     return Response(content=body, media_type=ctype)
 
 
@@ -248,6 +258,27 @@ def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) 
     scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
     query = urllib.parse.urlencode({"intent": intent})
     return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, ""))
+
+
+def _path_preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) -> str:
+    """Return a Firefox-safe isolated origin for committed static previews."""
+    url = request.url
+    hostname = url.hostname or "localhost"
+    if hostname in {"127.0.0.1", "::1"}:
+        preview_host = "localhost"
+    elif hostname == "localhost":
+        preview_host = "127.0.0.1"
+    else:
+        # Remote front doors already route this capability-gated wildcard host
+        # to the agent server. HostPreviewProxyMiddleware passes the dedicated
+        # static path routes through instead of treating them as a live port.
+        preview_host = f"{cid8}-{port}.{hostname}"
+    netloc = preview_host if url.port is None else f"{preview_host}:{url.port}"
+    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
+    query = urllib.parse.urlencode({"intent": intent})
+    path = f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
+    return urllib.parse.urlunparse((scheme, netloc, path, "", query, ""))
 
 
 async def _wake_for_preview(
@@ -350,7 +381,74 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             target_path=target,
         )
         bootstrap = _preview_bootstrap_url(request, cid8, body.port, intent)
-        return {"bootstrap_url": bootstrap, "target_path": target, "port": body.port}
+        target_parts = urllib.parse.urlsplit(target)
+        if target_parts.scheme or target_parts.netloc or target_parts.fragment:
+            raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
+        safe_target = _safe_preview_path(target_parts.path, allow_leading_slash=True)
+        if safe_target is None:
+            raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
+        path_prefix = f"/conversations/{conversation_id}/preview-app/"
+        path_target = f"{path_prefix}{safe_target}"
+        if target_parts.query:
+            path_target = f"{path_target}?{target_parts.query}"
+        path_bootstrap = None
+        if body.port == PREVIEW_PORT:
+            path_intent = cap_signer.mint_intent(
+                session=session,
+                conversation_id=conversation_id,
+                port=body.port,
+                target_path=path_target,
+                path_prefix=path_prefix,
+            )
+            path_bootstrap = _path_preview_bootstrap_url(
+                request, cid8, body.port, path_intent
+            )
+        return {
+            "bootstrap_url": bootstrap,
+            "path_bootstrap_url": path_bootstrap,
+            "target_path": target,
+            "port": body.port,
+        }
+
+    @router.get(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}")
+    async def path_preview_bootstrap(cid8: str, request: Request) -> Response:
+        if len(cid8) != 8 or any(ch not in "0123456789abcdef" for ch in cid8.lower()):
+            return Response("invalid preview target", status_code=403, media_type="text/plain")
+        minted = cap_signer.mint_cookie_from_intent(request.query_params.get("intent", ""))
+        if minted is None:
+            return Response("invalid preview intent", status_code=403, media_type="text/plain")
+        token, target = minted
+        target_path = target.split("?", 1)[0]
+        cap = cap_signer.verify(
+            token,
+            cid8=cid8,
+            port=PREVIEW_PORT,
+            method="GET",
+            path=target_path,
+        )
+        expected_prefix = (
+            f"/conversations/{cap.conversation_id}/preview-app/" if cap is not None else ""
+        )
+        if cap is None or not target_path.startswith(expected_prefix):
+            return Response(
+                "preview intent scope mismatch", status_code=403, media_type="text/plain"
+            )
+        response = Response(status_code=303, headers={"location": target})
+        forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[
+            0
+        ].strip()
+        response.set_cookie(
+            path_preview_cookie_name(cid8),
+            token,
+            max_age=preview_ttl_s(),
+            httponly=True,
+            secure=forwarded_scheme == "https" or request.url.scheme == "https",
+            samesite="strict",
+            path=expected_prefix,
+        )
+        response.headers["referrer-policy"] = "no-referrer"
+        response.headers["cache-control"] = "no-store"
+        return response
 
 
 def _register_live_browser_start_route(
@@ -584,10 +682,18 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
 
         Uses wake_for_preview so a suspended sandbox is rematerialised on demand —
         the passive preview_upstream check only finds live in-memory executors."""
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        preview_cap = getattr(request.state, "preview_capability", None)
+        if preview_cap is None:
+            conversation_id = await require_owned_conversation(request, store, conversation_id)
+            owner_id = current_session(request).owner_id
+        else:
+            if preview_cap.conversation_id != conversation_id:
+                return Response(
+                    "preview capability mismatch", status_code=403, media_type="text/plain"
+                )
+            owner_id = preview_cap.owner_id
         if runtime is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
-        owner_id = current_session(request).owner_id
         cid8 = conversation_id.removeprefix("conv_")[:8]
         safe_path = _safe_preview_path(path, allow_leading_slash=True)
         if safe_path is None or is_runtime_secret_path(safe_path):
@@ -613,6 +719,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 safe_path,
                 version=version,
                 entry_path=entry_path,
+                inject_selection=preview_cap is not None,
             )
             if served is not None:
                 return served
@@ -630,6 +737,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 conversation_id,
                 safe_path,
                 entry_path=entry_path,
+                inject_selection=preview_cap is not None,
             )
             if served is not None:
                 return served
@@ -660,6 +768,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 safe_path,
                 version=version,
                 entry_path=entry_path,
+                inject_selection=preview_cap is not None,
             )
             if served is not None:
                 return served

@@ -4,7 +4,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ExternalLink, History, MonitorPlay, MousePointer2, Pencil, RotateCw, Undo2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveDeliverable, deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
-import { agentHttpBase, ApiError, previewBootstrapUrl, previewHostUrl } from "@/api/client";
+import {
+  agentHttpBase,
+  ApiError,
+  previewBootstrapUrl,
+  previewHostUrl,
+  staticPreviewBootstrapUrl,
+} from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
@@ -313,6 +319,14 @@ export function PreviewPane({
     [cid, files, selectedHtmlPath, untrusted, srcdocStaleAfterRestore],
   );
 
+  const committedStaticPreview =
+    status === "FINISHED" &&
+    !untrusted &&
+    cid !== null &&
+    selectedDeliverable?.kind === "app" &&
+    events.some((event) => event.kind === "workspace_version");
+  const [staticPreviewSrc, setStaticPreviewSrc] = useState<string | null>(null);
+
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
   // allowedOrigin is "null" (the string) — sandboxed iframes without
   // allow-same-origin always report origin "null" in postMessage events.
@@ -324,7 +338,7 @@ export function PreviewPane({
     selection: srcdocSelection,
     walkUp: srcdocWalkUp,
     resetSelection: srcdocResetSelection,
-  } = useElementSelect(srcdocIframeRef, "null");
+  } = useElementSelect(srcdocIframeRef, originOf(staticPreviewSrc) ?? "null");
 
   // A1.6 — the entry HTML's workspace path (same pick as deriveSrcDoc: index.html,
   // else any *.html with real client-side content). Used to build the preview-edit
@@ -381,6 +395,24 @@ export function PreviewPane({
   // is NOT reachable, also ask the backend to restart the static serve, then
   // re-poll availability. So a hung/down preview is always user-fixable here.
   const [reloadKey, setReloadKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    if (!committedStaticPreview || !cid || srcDoc === null) {
+      setStaticPreviewSrc(null);
+      return;
+    }
+    void staticPreviewBootstrapUrl(cid, "/")
+      .then((url) => {
+        if (!cancelled) setStaticPreviewSrc(url);
+      })
+      .catch(() => {
+        // The existing opaque-origin srcdoc remains the safe, honest fallback.
+        if (!cancelled) setStaticPreviewSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, committedStaticPreview, reloadKey, srcDoc]);
   const [previewPort, setPreviewPort] = useState(8000);
   const boundPorts = (data?.ports ?? [])
     .filter((p) => p.owner != null)
@@ -510,7 +542,7 @@ export function PreviewPane({
   );
   const srcdocMention = useElementMention(
     srcdocIframeRef,
-    "null",
+    originOf(staticPreviewSrc) ?? "null",
     handleElementMention,
     mentionable && srcDoc !== null,
   );
@@ -698,6 +730,7 @@ export function PreviewPane({
     // selection-injected preview-edit route (`src=`). data-oid stamping needs the
     // line-aware server parser, so click-to-edit only works against that route.
     const showEdit = editMode && canEdit && editSrc !== null;
+    const showCommittedStatic = !showEdit && committedStaticPreview && staticPreviewSrc !== null;
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
@@ -768,12 +801,22 @@ export function PreviewPane({
             title={showEdit ? "Editable preview" : "Static preview"}
             // Edit mode loads the server-stamped route by URL; view mode renders
             // the client-assembled srcDoc. Both keep the SAME ref + overlay.
-            {...(showEdit ? { src: editSrc } : { srcDoc })}
+            {...(showEdit
+              ? { src: editSrc }
+              : showCommittedStatic
+                ? { src: staticPreviewSrc }
+                : { srcDoc })}
             // untrusted → empty sandbox (no scripts): a script here could reach this
             // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
             // No allow-same-origin in either mode → the frame reports origin "null"
             // (matches useElementSelect(..., "null")) and can't reach this instance.
-            sandbox={untrusted ? "" : "allow-scripts"}
+            sandbox={
+              untrusted
+                ? ""
+                : showCommittedStatic
+                  ? "allow-scripts allow-same-origin"
+                  : "allow-scripts"
+            }
             className="h-full w-full border-0 bg-white"
           />
           <SelectionOverlay

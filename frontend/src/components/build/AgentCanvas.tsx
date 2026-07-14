@@ -26,6 +26,7 @@ import {
   agentSend,
   agentHttpBase,
   previewBootstrapUrl,
+  staticPreviewBootstrapUrl,
 } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
@@ -502,11 +503,13 @@ function FileRow({ file, cid }: { file: WorkspaceFile; cid: string | null }) {
 
 function ArtifactsPane({
   events,
+  status,
   cid,
   untrusted,
   onSteer,
 }: {
   events: AgentEvent[];
+  status: ConversationStatus;
   cid: string | null;
   untrusted: boolean;
   /** W-26 — steer the agent from the artifact-preview selection ("Discuss with
@@ -530,6 +533,30 @@ function ArtifactsPane({
       ),
     [files, selectedHtmlPath, untrusted],
   );
+  const committedStaticPreview =
+    status === "FINISHED" &&
+    !untrusted &&
+    cid !== null &&
+    selectedDeliverable?.kind === "app" &&
+    events.some((event) => event.kind === "workspace_version");
+  const [staticPreviewSrc, setStaticPreviewSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!committedStaticPreview || !cid || srcDoc === null) {
+      setStaticPreviewSrc(null);
+      return;
+    }
+    void staticPreviewBootstrapUrl(cid, "/")
+      .then((url) => {
+        if (!cancelled) setStaticPreviewSrc(url);
+      })
+      .catch(() => {
+        if (!cancelled) setStaticPreviewSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, committedStaticPreview, srcDoc]);
 
   // §4.1 C-EDIT-1: ref + selection state for the artifact preview iframe.
   const artifactIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -540,7 +567,10 @@ function ArtifactsPane({
     selection: artifactSelection,
     walkUp: artifactWalkUp,
     resetSelection: artifactResetSelection,
-  } = useElementSelect(artifactIframeRef, "null");
+  } = useElementSelect(
+    artifactIframeRef,
+    staticPreviewSrc ? new URL(staticPreviewSrc).origin : "null",
+  );
 
   if (files.length === 0)
     return <Empty>Outputs the agent produces — files, spreadsheets, pages — show up here.</Empty>;
@@ -559,10 +589,16 @@ function ArtifactsPane({
             <iframe
               ref={artifactIframeRef}
               title="Artifact preview"
-              srcDoc={srcDoc}
+              {...(staticPreviewSrc ? { src: staticPreviewSrc } : { srcDoc })}
               // untrusted (shared/imported run) → empty sandbox, no scripts: a script
               // here could reach this instance's open-CORS APIs. Trusted keeps allow-scripts.
-              sandbox={untrusted ? "" : "allow-scripts"}
+              sandbox={
+                untrusted
+                  ? ""
+                  : staticPreviewSrc
+                    ? "allow-scripts allow-same-origin"
+                    : "allow-scripts"
+              }
               className="h-full w-full border-0 bg-white"
             />
             <SelectionOverlay
@@ -746,7 +782,13 @@ export function AgentCanvas({
           <BrowserPane events={events} status={status} cid={cid} />
         </Tabs.Content>
         <Tabs.Content value="artifacts" className="h-full focus:outline-none">
-          <ArtifactsPane events={events} cid={cid} untrusted={untrusted} onSteer={onSteer} />
+          <ArtifactsPane
+            events={events}
+            status={status}
+            cid={cid}
+            untrusted={untrusted}
+            onSteer={onSteer}
+          />
         </Tabs.Content>
         <Tabs.Content value="console" className="h-full focus:outline-none">
           <ConsolePane events={events} />

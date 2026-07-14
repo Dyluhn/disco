@@ -13,11 +13,13 @@ from disco.agent_server.preview_inject import (
     inject_element_mention_picker,
 )
 from disco.core.auth import (
+    PATH_PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_COOKIE,
     PreviewCapabilitySigner,
     preview_ttl_s,
 )
+from disco.tools.sandbox._container import PREVIEW_PORT
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _LOG = logging.getLogger(__name__)
@@ -144,6 +146,19 @@ class HostPreviewProxyMiddleware:
                 await send({"type": "websocket.close", "code": 1008, "reason": "unknown port"})
             return
 
+        # H079: committed static previews use the same isolated wildcard host on
+        # remote deployments, but their bytes come from the selected snapshot
+        # route rather than the live port proxy. Pass only those two narrow path
+        # families to the application, whose middleware requires the separate,
+        # path-scoped preview capability on every asset request.
+        path = str(scope.get("path") or "/")
+        if port == PREVIEW_PORT and (
+            path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
+            or (path.startswith("/conversations/") and "/preview-app/" in path)
+        ):
+            await self.app(scope, receive, send)
+            return
+
         if (
             self.require_capability
             and scope["type"] == "websocket"
@@ -154,7 +169,6 @@ class HostPreviewProxyMiddleware:
             )
             return
 
-        path = str(scope.get("path") or "/")
         if self.require_capability and scope["type"] == "http" and path == PREVIEW_BOOTSTRAP_PATH:
             await self._handle_preview_bootstrap(scope, send, cid8, port)
             return

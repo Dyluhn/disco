@@ -152,6 +152,22 @@ export async function previewBootstrapUrl(
   return result.bootstrap_url;
 }
 
+/** Capability-gated selected-snapshot URL on an origin isolated from the app session.
+ * Used for trusted, committed static sites so relative CSS/JS/media requests carry
+ * only a preview cookie and can never inherit the owner's application session. */
+export async function staticPreviewBootstrapUrl(
+  cid: string,
+  targetPath = "/",
+): Promise<string | null> {
+  if (!agentLive()) return null;
+  const result = await agentSend<{ path_bootstrap_url: string }>(
+    "POST",
+    `/conversations/${encodeURIComponent(cid)}/preview/capability`,
+    { port: 8000, target_path: targetPath },
+  );
+  return result.path_bootstrap_url;
+}
+
 /** An API error that carries the real backend message (surfaced to the UI). */
 export class ApiError extends Error {
   constructor(

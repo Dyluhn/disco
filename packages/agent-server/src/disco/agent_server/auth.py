@@ -11,9 +11,11 @@ from typing import Any
 
 from disco.core.auth import (
     CSRF_HEADER,
+    PATH_PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_BOOTSTRAP_PATH,
     SESSION_COOKIE,
     AuthSession,
+    PreviewCapabilitySigner,
     SessionSigner,
     allowed_frontend_origins,
     configured_admin_token,
@@ -21,10 +23,12 @@ from disco.core.auth import (
     origin_allowed,
     origin_permitted,
     pairing_token,
+    path_preview_cookie_name,
     request_traversed_proxy,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
+from disco.tools.sandbox._container import PREVIEW_PORT
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -34,6 +38,9 @@ from .host_service_bus import is_bus_route_raw
 _LOG = logging.getLogger(__name__)
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
+_PATH_PREVIEW_RE = re.compile(
+    r"^/conversations/(?P<cid>conv_[A-Za-z0-9_-]+)/preview-app(?:/|$)"
+)
 # Derived LIVE from the shared session secret at each use: identical to the
 # app-server's token and stable across restarts, so ONE pasted token pairs both
 # origins. See disco.core.auth.pairing_token. Re-usable (secret is the root of
@@ -105,6 +112,8 @@ def _is_public_http(path: str, method: str) -> bool:
         return True
     if path == PREVIEW_BOOTSTRAP_PATH:
         return True
+    if method == "GET" and path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/"):
+        return True
     return False
 
 
@@ -170,6 +179,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._store = store
         self._signer = SessionSigner()
+        self._preview_signer = PreviewCapabilitySigner()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -188,6 +198,11 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             return Response("forbidden origin", status_code=403)
         session = self._authenticate_request(request)
         if session is None:
+            is_path_preview, preview_error = await self._authenticate_path_preview(request)
+            if is_path_preview:
+                if preview_error is not None:
+                    return preview_error
+                return await call_next(request)
             return Response("auth required", status_code=401)
         request.state.auth_session = session
         if _is_admin_path(path) and not session.is_admin:
@@ -202,6 +217,42 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         if owner_check is not None:
             return owner_check
         return await call_next(request)
+
+    async def _authenticate_path_preview(
+        self, request: Request
+    ) -> tuple[bool, Response | None]:
+        """Accept only a signed, path-scoped static-preview capability.
+
+        The bool identifies this route family. A ``None`` response means its
+        capability authenticated; otherwise the response is the exact refusal.
+        """
+        if request.method.upper() != "GET":
+            return False, None
+        match = _PATH_PREVIEW_RE.match(request.url.path)
+        if match is None:
+            return False, None
+        conversation_id = match.group("cid")
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        try:
+            cookie_name = path_preview_cookie_name(cid8)
+        except ValueError:
+            return True, Response("preview capability required", status_code=403)
+        cap = self._preview_signer.verify(
+            request.cookies.get(cookie_name),
+            cid8=cid8,
+            port=PREVIEW_PORT,
+            method="GET",
+            path=request.url.path,
+        )
+        if cap is None or cap.conversation_id != conversation_id:
+            return True, Response("preview capability required", status_code=403)
+        owner = await self._store.conversation_owner_id(conversation_id)
+        if owner is None:
+            return True, Response("conversation not found", status_code=404)
+        if owner != cap.owner_id:
+            return True, Response("conversation forbidden", status_code=403)
+        request.state.preview_capability = cap
+        return True, None
 
     def _authenticate_request(self, request: Request) -> AuthSession | None:
         session = self._signer.verify(request.cookies.get(SESSION_COOKIE))

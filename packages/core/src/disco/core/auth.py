@@ -24,6 +24,7 @@ SESSION_COOKIE = "disco_session"
 CSRF_HEADER = "X-Disco-CSRF"
 PREVIEW_COOKIE = "disco_preview_cap"
 PREVIEW_BOOTSTRAP_PATH = "/__disco/preview-auth"
+PATH_PREVIEW_BOOTSTRAP_PATH = "/__disco/path-preview-auth"
 
 _DEFAULT_SESSION_TTL_S = 12 * 60 * 60
 _DEFAULT_PREVIEW_TTL_S = 15 * 60
@@ -63,6 +64,14 @@ class PreviewCapability:
     method: str
     path_prefix: str
     expires_at: int
+
+
+def path_preview_cookie_name(cid8: str) -> str:
+    """Per-conversation name so concurrent isolated previews cannot clobber each other."""
+    normalized = "".join(ch for ch in cid8.lower() if ch in "0123456789abcdef")[:8]
+    if len(normalized) != 8:
+        raise ValueError("path preview cookie requires an eight-character hex id")
+    return f"disco_path_preview_{normalized}"
 
 
 def allowed_frontend_origins() -> tuple[str, ...]:
@@ -349,7 +358,9 @@ class SessionSigner:
     def __init__(self, codec: SignedTokenCodec | None = None) -> None:
         self._codec = codec or SignedTokenCodec()
 
-    def mint(self, *, owner_id: str = DEFAULT_OWNER_ID, is_admin: bool = False) -> tuple[str, AuthSession]:
+    def mint(
+        self, *, owner_id: str = DEFAULT_OWNER_ID, is_admin: bool = False
+    ) -> tuple[str, AuthSession]:
         now = int(time.time())
         session = AuthSession(
             owner_id=(owner_id.strip() or DEFAULT_OWNER_ID),
@@ -410,8 +421,18 @@ class PreviewCapabilitySigner:
         self._codec = codec or SignedTokenCodec()
 
     def mint_intent(
-        self, *, session: AuthSession, conversation_id: str, port: int, target_path: str = "/"
+        self,
+        *,
+        session: AuthSession,
+        conversation_id: str,
+        port: int,
+        target_path: str = "/",
+        path_prefix: str = "/",
     ) -> str:
+        target = target_path if target_path.startswith("/") else f"/{target_path}"
+        prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+        if not target.split("?", 1)[0].startswith(prefix):
+            raise ValueError("preview target must be inside its capability prefix")
         now = int(time.time())
         return self._codec.sign(
             {
@@ -421,8 +442,8 @@ class PreviewCapabilitySigner:
                 "cid": conversation_id,
                 "port": int(port),
                 "method": "WEBSOCKET" if target_path.startswith("ws:") else "GET",
-                "prefix": "/",
-                "target": target_path if target_path.startswith("/") else f"/{target_path}",
+                "prefix": prefix,
+                "target": target,
                 "jti": secrets.token_urlsafe(18),
                 "exp": now + intent_ttl_s(),
             }

@@ -10,7 +10,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
@@ -25,8 +25,11 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 // never produces in fixture mode (no AGENT_BASE → getPreview returns
 // available:false). vi.hoisted runs before any imports, so the mock reference
 // is safe inside the vi.mock factory below.
-const { useBuildPreviewMock } = vi.hoisted(() => ({
+const { useBuildPreviewMock, staticPreviewBootstrapUrlMock } = vi.hoisted(() => ({
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  staticPreviewBootstrapUrlMock: vi.fn((cid: string) =>
+    Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
+  ),
 }));
 
 vi.mock("@/hooks/useBuildPreview", () => ({
@@ -42,6 +45,7 @@ vi.mock("@/api/client", async () => {
   return {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
+    staticPreviewBootstrapUrl: staticPreviewBootstrapUrlMock,
   };
 });
 
@@ -181,6 +185,70 @@ describe("PreviewPane — selected handoff entry", () => {
     expect(srcdoc).toContain(
       '<base href="http://agent.test:8000/conversations/conv_selected_entry/preview-app/">',
     );
+  });
+
+  it("loads a finished trusted multi-file site from the isolated static origin", async () => {
+    useBuildPreviewMock.mockReturnValue({ data: null });
+    render(
+      withClient(
+        <PreviewPane
+          events={[
+            fileWrite(
+              "release/index.html",
+              '<link rel="stylesheet" href="assets/site.css"><script src="assets/site.js"></script>',
+            ),
+            fileWrite("release/assets/site.css", "body{color:green}"),
+            fileWrite("release/assets/site.js", "document.body.dataset.scriptLoaded='true'"),
+            appDeliverable("release/index.html"),
+            {
+              id: "version-1",
+              kind: "workspace_version",
+              version_seq: 1,
+              tree_digest: "selected-tree",
+              trigger: "finish",
+            } as AgentEvent,
+          ]}
+          status="FINISHED"
+          cid="conv_a1b2c3d4selected"
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      const frame = screen.getByTitle("Static preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4selected",
+      );
+      expect(frame).not.toHaveAttribute("srcdoc");
+      expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+    });
+    expect(staticPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+      "conv_a1b2c3d4selected",
+      "/",
+    );
+  });
+
+  it("never gives an untrusted imported site the isolated executable origin", () => {
+    staticPreviewBootstrapUrlMock.mockClear();
+    render(
+      withClient(
+        <PreviewPane
+          events={[
+            fileWrite("release/index.html", '<script src="assets/site.js"></script>'),
+            fileWrite("release/assets/site.js", "globalThis.pwned=true"),
+            appDeliverable("release/index.html"),
+          ]}
+          status="FINISHED"
+          cid={null}
+          untrusted
+        />,
+      ),
+    );
+    const frame = screen.getByTitle("Static preview");
+    expect(frame).toHaveAttribute("srcdoc");
+    expect(frame).toHaveAttribute("sandbox", "");
+    expect(staticPreviewBootstrapUrlMock).not.toHaveBeenCalled();
   });
 });
 

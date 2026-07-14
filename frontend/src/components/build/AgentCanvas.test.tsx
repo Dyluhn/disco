@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
 import type { AgentEvent } from "@/types/agent";
@@ -11,6 +11,16 @@ vi.mock("@/hooks/useModels", async (importOriginal) => {
   return {
     ...actual,
     useLiveBrowserConfig: vi.fn(() => ({ data: { enabled: false }, isLoading: false })),
+  };
+});
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/client")>();
+  return {
+    ...actual,
+    staticPreviewBootstrapUrl: vi.fn((cid: string) =>
+      Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
+    ),
   };
 });
 
@@ -72,5 +82,35 @@ describe("AgentCanvas — the operator inspector", () => {
     const srcdoc = screen.getByTitle("Artifact preview").getAttribute("srcdoc") ?? "";
     expect(srcdoc).toContain("SELECTED RELEASE ONE");
     expect(srcdoc).not.toContain("STALE ROOT MUST NEVER OPEN");
+  });
+
+  it("loads a committed multi-file app through the isolated static capability", async () => {
+    wrap(
+      <AgentCanvas
+        events={[
+          fileWrite("release/index.html", '<script src="assets/app.js"></script>'),
+          fileWrite("release/assets/app.js", "document.body.dataset.loaded='true'"),
+          appDeliverable("release/index.html"),
+          {
+            id: "v-selected",
+            kind: "workspace_version",
+            version_seq: 1,
+            tree_digest: "selected-tree",
+            trigger: "finish",
+          } as AgentEvent,
+        ]}
+        status="FINISHED"
+        cid="conv_a1b2c3d4agent"
+      />,
+    );
+    await waitFor(() => {
+      const frame = screen.getByTitle("Artifact preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4agent",
+      );
+      expect(frame).not.toHaveAttribute("srcdoc");
+      expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+    });
   });
 });
