@@ -20,6 +20,8 @@ import logging
 import pathlib
 import posixpath
 import shlex
+import socket
+import urllib.parse
 import uuid
 from typing import Any
 
@@ -151,6 +153,33 @@ def _probe_ssh_reachable(docker_socket: str, connect_timeout: int = _SSH_CONNECT
         raise SandboxUnavailableError(f"Docker host unreachable over SSH at {docker_socket}: {msg}")
 
 
+def _probe_local_socket_reachable(docker_socket: str, timeout_s: float) -> None:
+    """Own the local UDS connect attempt before DockerClient's constructor does.
+
+    docker-py's UnixHTTPConnection creates a socket inside ``connect`` and raises
+    before retaining it when the daemon path is unavailable.  That orphan cannot
+    be closed by a caller because DockerClient construction itself never returns.
+    A context-managed preflight prevents that SDK path from being entered for an
+    unreachable local daemon.
+    """
+    parsed = urllib.parse.urlparse(docker_socket)
+    if parsed.scheme not in {"unix", "http+unix"}:
+        return
+    path = urllib.parse.unquote(parsed.path or parsed.netloc)
+    if not path:
+        raise SandboxUnavailableError(
+            f"Docker local socket endpoint has no path: {docker_socket}"
+        )
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(timeout_s)
+            probe.connect(path)
+    except OSError as exc:
+        raise SandboxUnavailableError(
+            f"Docker local socket unreachable at {docker_socket}: {exc}"
+        ) from exc
+
+
 def _put_file(container: Any, dir_path: str, name: str, data: bytes) -> None:
     """`put_archive` a single file into a container dir — used to drop the
     stdlib-only egress proxy script into the sidecar (no image rebuild)."""
@@ -213,6 +242,7 @@ class GvisorSandboxService:
         if self._injected_client is not None:
             return self._injected_client
         if self._client_cache is None:
+            client: Any | None = None
             try:
                 import docker
 
@@ -239,9 +269,16 @@ class GvisorSandboxService:
                     # would leak the ssh subprocess + its to_thread worker for minutes.
                     _probe_ssh_reachable(base_url)
                     kwargs["use_ssh_client"] = True
+                else:
+                    _probe_local_socket_reachable(
+                        base_url, float(self._cfg.client_timeout_s)
+                    )
                 client = docker.DockerClient(**kwargs)
                 client.ping()
             except Exception as exc:  # noqa: BLE001 — map to a typed infra error
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.close()
                 raise SandboxUnavailableError(
                     f"Docker unreachable at {self._cfg.docker_socket}: {exc}"
                 ) from exc
@@ -589,6 +626,12 @@ class GvisorSandboxService:
                 # NO host env beyond capability-granted values. For a filtered box that's
                 # the proxy routing vars (defense in depth atop the no-route network).
                 environment=environment,
+                # Run every model-controlled process as the configured workspace
+                # principal.  Merely owning the tmpfs mount as this UID is not
+                # sufficient: without an explicit runtime user the image defaults
+                # to root, and guest-side atomic-write staging turns every scaffold
+                # back into a root-owned file.
+                user=f"{self._cfg.workspace_uid}:{self._cfg.workspace_uid}",
                 working_dir=self._cfg.container_workspace,
                 detach=True,
                 name=container_name,

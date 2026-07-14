@@ -380,12 +380,37 @@ class PodmanSandboxService:
         if self._injected_client is not None:
             return self._injected_client
         if self._client_cache is None:
+            # podman-py's UDSConnection allocates a socket and, when connect()
+            # itself fails, raises before assigning that socket to the connection.
+            # Neither Session.close nor PodmanClient.close can then reach it.  Use
+            # the already-required native CLI for the availability probe, so an
+            # unreachable daemon is rejected before the SDK opens a transport.
+            try:
+                rc, _out, _err = self._cli_runner(
+                    ["podman", "--url", self._cli_url, "info", "--format", "json"],
+                    float(self._cfg.client_timeout_s),
+                )
+            except Exception as exc:  # noqa: BLE001 — normalize the availability boundary
+                raise SandboxUnavailableError(
+                    f"Podman unreachable at {self._cfg.podman_url}: "
+                    "native client probe could not run"
+                ) from exc
+            if rc != 0:
+                raise SandboxUnavailableError(
+                    f"Podman unreachable at {self._cfg.podman_url}: "
+                    f"native client probe exited {rc}"
+                )
+            client: Any | None = None
             try:
                 from podman import PodmanClient
 
                 client = PodmanClient(base_url=self._cfg.podman_url)
-                client.ping()
             except Exception as exc:  # noqa: BLE001 — map to a typed infra error
+                # Construction is normally transport-lazy after the native probe,
+                # but close any partially initialized client defensively.
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.close()
                 raise SandboxUnavailableError(
                     f"Podman unreachable at {self._cfg.podman_url}: {exc}"
                 ) from exc
@@ -765,6 +790,11 @@ class PodmanSandboxService:
                 # (defense in depth atop the no-route network) are passed — that's
                 # the ONLY exception.
                 environment=environment,
+                # The base image creates UID 1000 but intentionally has no USER
+                # directive.  Pin the sandbox (not the privileged policy sidecar)
+                # to the workspace principal so guest cp/mv staging preserves an
+                # editable non-root ownership boundary.
+                user=f"{self._cfg.workspace_uid}:{self._cfg.workspace_uid}",
                 working_dir=self._cfg.container_workspace,
                 name=name,
                 labels=labels,
@@ -863,7 +893,7 @@ class PodmanSandboxService:
         blocking SSH/socket call can't block the event loop."""
 
         def _probe() -> None:
-            self._client()  # PodmanClient(...).ping(), typed "Podman unreachable at <url>: …"
+            self._client()  # native probe + lazy PodmanClient, typed on failure
 
         await asyncio.to_thread(_probe)
 

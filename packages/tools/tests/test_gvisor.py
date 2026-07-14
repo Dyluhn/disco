@@ -424,7 +424,7 @@ async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     # this deployment's ceiling (default_cpu=4.0, default_memory_mb=2048), so they flow
     # through unchanged — proving the limits reach the create call. (Above-max clamping is
     # the separate test_spec_cannot_loosen_bounds_above_config_max regression.)
-    cfg = SandboxConfig(workspace_root=str(tmp_path), default_cpu=4.0)
+    cfg = SandboxConfig(workspace_root=str(tmp_path), default_cpu=4.0, workspace_uid=1234)
     svc = GvisorSandboxService(cfg, client=client)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.run_kwargs
@@ -433,12 +433,16 @@ async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     # EPIC H host-protection: the create call carries a pids cap (cgroup pids.max). The
     # spec left `pids` unset → the backend's config default (512) is applied.
     assert kw["pids_limit"] == 512
+    # F02: mount ownership alone is insufficient; the guest write principal must
+    # match it or atomic scaffold writes become root-owned.
+    assert kw["user"] == "1234:1234"
     # workspace is an ephemeral, size-capped tmpfs volume mounted at /workspace.
     (volume_name,) = kw["volumes"].keys()
     assert kw["volumes"][volume_name] == {"bind": "/workspace", "mode": "rw"}
     volume = client.volumes.objects[volume_name]
     assert volume.options["driver"] == "local"
     assert "size=4096m" in volume.options["driver_opts"]["o"]
+    assert "uid=1234,gid=1234" in volume.options["driver_opts"]["o"]
 
 
 async def test_pids_limit_spec_override_and_config_default(tmp_path):
@@ -564,7 +568,8 @@ async def test_image_missing_is_a_typed_error(tmp_path):
 
 
 async def test_docker_unreachable_is_a_typed_error(tmp_path):
-    # No injected client → it builds a real client against a bogus socket and fails.
+    # H027: a caller-owned UDS probe rejects this before DockerClient's failed
+    # constructor can allocate and orphan its own Unix socket.
     cfg = SandboxConfig(workspace_root=str(tmp_path), docker_socket="unix:///nonexistent.sock")
     svc = GvisorSandboxService(cfg)
     with pytest.raises(SandboxUnavailableError, match="Docker unreachable"):

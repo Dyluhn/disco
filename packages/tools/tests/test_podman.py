@@ -310,7 +310,9 @@ async def test_limits_and_no_env_leak_in_create(monkeypatch):
     fs: dict[str, bytes] = {}
     client = FakePodmanClient(has_image=True, fs=fs)
     cli = FakeCli(fs)
-    cfg = SandboxConfig(backend="podman", runtime="crun", default_cpu=4.0)
+    cfg = SandboxConfig(
+        backend="podman", runtime="crun", default_cpu=4.0, workspace_uid=1234
+    )
     svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.create_kwargs
@@ -318,6 +320,9 @@ async def test_limits_and_no_env_leak_in_create(monkeypatch):
     assert kw["cpu_quota"] == 200_000 and kw["cpu_period"] == 100_000
     # EPIC H host-protection: pids cap (cgroup pids.max) carried on the socket create.
     assert kw["pids_limit"] == 512  # spec unset → config default
+    # F02: the sandbox itself must run as the same non-root principal that owns
+    # the workspace volume.  The policy sidecar remains separately privileged.
+    assert kw["user"] == "1234:1234"
     assert kw.get("pid_mode") != "host"  # own PID namespace, never the host's
     assert kw["environment"] == {}  # no host env into the box
 
@@ -338,12 +343,45 @@ async def test_timeout_reported_and_file_round_trip():
 
 
 async def test_podman_unreachable_is_typed_error():
-    # bogus UNIX socket → fails fast (an ssh:// url would block on the connect),
-    # exercising the same _client() error-mapping path.
+    # The native CLI probe rejects the endpoint BEFORE podman-py's failed UDS
+    # connect can allocate-and-orphan a socket (H026).
     cfg = SandboxConfig(backend="podman", podman_url="http+unix:///nonexistent/podman.sock")
-    svc = PodmanSandboxService(cfg, cli_runner=lambda a, t: (0, b"", b""))
+    svc = PodmanSandboxService(cfg, cli_runner=lambda a, t: (125, b"", b"unreachable"))
     with pytest.raises(SandboxUnavailableError, match="Podman unreachable"):
         await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+
+def test_failed_native_probe_never_constructs_leaky_sdk_client(monkeypatch):
+    """H026: reject failure before the SDK can allocate its orphaned UDS socket."""
+    import podman
+
+    created: list[object] = []
+
+    def factory(**kwargs):
+        created.append(kwargs)
+        raise AssertionError("SDK must not be constructed after failed native probe")
+
+    monkeypatch.setattr(podman, "PodmanClient", factory)
+    svc = PodmanSandboxService(
+        SandboxConfig(backend="podman", podman_url="unix:///missing.sock"),
+        cli_runner=lambda _argv, _timeout: (125, b"", b"unreachable"),
+    )
+    with pytest.raises(SandboxUnavailableError, match="Podman unreachable"):
+        svc._client()
+    assert created == []
+    assert svc._client_cache is None
+
+
+def test_native_probe_spawn_failure_is_typed():
+    def unavailable(_argv, _timeout):
+        raise OSError("podman executable unavailable")
+
+    svc = PodmanSandboxService(
+        SandboxConfig(backend="podman", podman_url="unix:///missing.sock"),
+        cli_runner=unavailable,
+    )
+    with pytest.raises(SandboxUnavailableError, match="native client probe could not run"):
+        svc._client()
 
 
 def test_config_is_podman_and_crun_and_cli_url():
