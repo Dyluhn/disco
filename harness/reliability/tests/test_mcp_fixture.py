@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from disco.core import SecurityRisk
 from disco.tools.mcp.config import McpServerConfig
 from disco.tools.mcp.http import McpHttpClient
@@ -50,3 +53,31 @@ async def test_fixture_speaks_to_production_streamable_http_client() -> None:
     finally:
         await client.close()
         server.close()
+
+
+async def test_fixture_keeps_optional_get_stream_open_without_reconnect_thrash(
+    caplog,
+) -> None:
+    fixture = ReliabilityMcpServer()
+    fixture.start()
+    client = McpHttpClient(
+        McpServerConfig(
+            name="reliability",
+            transport="streamable_http",
+            url=fixture.mcp_url,
+            risk_tier="low",
+        ),
+        init_timeout_s=2.0,
+        call_timeout_s=2.0,
+    )
+    try:
+        with caplog.at_level(logging.INFO, logger="mcp.client.streamable_http"):
+            await client.connect()
+            tools = await client.list_tools()
+            await asyncio.sleep(1.2)
+            await client.close()
+        assert {tool.name for tool in tools} >= {"reliability_echo", "search", "fetch"}
+        assert "GET stream disconnected" not in caplog.text
+    finally:
+        await client.close()
+        fixture.close()

@@ -7,8 +7,26 @@ from disco.core.llm import ConfigStore, default_config
 
 from harness.reliability.isolated_stack import (
     StackManager,
+    _child_environment,
     _temporary_environment,
 )
+
+
+def test_playwright_child_environment_removes_conflicting_no_color() -> None:
+    source = {"NO_COLOR": "1", "RETAIN_ME": "yes"}
+
+    environment = _child_environment(["npx", "playwright", "test"], source)
+
+    assert "NO_COLOR" not in environment
+    assert environment["RETAIN_ME"] == "yes"
+
+
+def test_non_playwright_child_environment_preserves_no_color() -> None:
+    source = {"NO_COLOR": "1", "RETAIN_ME": "yes"}
+
+    environment = _child_environment(["python", "-m", "pytest"], source)
+
+    assert environment == source
 
 
 def test_temporary_environment_restores_parent_values(monkeypatch) -> None:

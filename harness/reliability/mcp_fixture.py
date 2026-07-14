@@ -41,6 +41,7 @@ class _FixtureState:
     def __init__(self, log_path: Path | None) -> None:
         self.log_path = log_path
         self._lock = threading.Lock()
+        self.session_closed = threading.Event()
         self.calls: list[dict[str, Any]] = []
 
     def record(self, payload: dict[str, Any]) -> None:
@@ -96,11 +97,31 @@ class _Handler(BaseHTTPRequestHandler):
                 calls = list(self.state.calls)
             self._send_json(HTTPStatus.OK, {"calls": calls})
             return
+        if self.path == "/mcp":
+            # Streamable HTTP permits a long-lived GET SSE channel for
+            # server-initiated messages. Returning 405 is protocol-valid for a
+            # server that does not offer that channel, but the current official
+            # client starts a bounded reconnect ladder on every lifecycle. The
+            # reliability fixture implements the complete channel so its own
+            # omissions cannot masquerade as product retry thrash.
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            try:
+                while not self.state.session_closed.wait(0.25):
+                    self.wfile.write(b": reliability keepalive\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         self._send_empty(HTTPStatus.METHOD_NOT_ALLOWED)
 
     def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         # The official client terminates a Streamable-HTTP session on close.
         if self.path == "/mcp":
+            self.state.session_closed.set()
             self._send_empty(HTTPStatus.NO_CONTENT)
             return
         self._send_empty(HTTPStatus.NOT_FOUND)
@@ -138,6 +159,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_empty(HTTPStatus.ACCEPTED)
             return
         if method == "initialize":
+            self.state.session_closed.clear()
             requested = str(params.get("protocolVersion") or "2024-11-05")
             self._send_json(
                 HTTPStatus.OK,
@@ -300,6 +322,7 @@ class ReliabilityMcpServer:
         self._thread.start()
 
     def close(self) -> None:
+        self._server.fixture_state.session_closed.set()  # type: ignore[attr-defined]
         self._server.shutdown()
         self._server.server_close()
         if self._thread is not None:
@@ -342,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         server.serve_forever()
     finally:
+        server._server.fixture_state.session_closed.set()  # type: ignore[attr-defined]
         server._server.server_close()
         stop.set()
     return 0

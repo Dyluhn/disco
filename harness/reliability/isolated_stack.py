@@ -23,6 +23,14 @@ from typing import Any
 from disco.core.llm import ConfigStore, ProjectStorageSettings
 
 
+def _child_environment(command: list[str], source: dict[str, str] | None = None) -> dict[str, str]:
+    """Return a command environment without contradictory color controls."""
+    environment = dict(os.environ if source is None else source)
+    if any(Path(argument).name.lower() == "playwright" for argument in command):
+        environment.pop("NO_COLOR", None)
+    return environment
+
+
 @contextlib.contextmanager
 def _temporary_environment(source: dict[str, str], keys: tuple[str, ...]):
     """Apply the stack's signed-state environment while preparing its config."""
@@ -144,9 +152,7 @@ class StackManager:
                 # silently widen the product default. A campaign that explicitly
                 # needs another posture must name it through the reliability-only
                 # control, making the exception visible in its recorded command.
-                "DISCO_BUILD_EGRESS": os.environ.get(
-                    "DISCO_RELIABILITY_BUILD_EGRESS", "filtered"
-                ),
+                "DISCO_BUILD_EGRESS": os.environ.get("DISCO_RELIABILITY_BUILD_EGRESS", "filtered"),
             }
         )
         return env
@@ -181,9 +187,7 @@ class StackManager:
                 )
             config = config.model_copy(
                 update={
-                    "projects": ProjectStorageSettings(
-                        projects_root=str(self.root / "projects")
-                    ),
+                    "projects": ProjectStorageSettings(projects_root=str(self.root / "projects")),
                     "sandbox": sandbox,
                     "live_browser": config.live_browser.model_copy(update={"enabled": False}),
                     # Never inherit an operator's global MCP connections into a
@@ -360,9 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         ui_port=args.ui_port,
         seed_config=None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_CONFIG"),
         seed_secrets=None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_SECRETS"),
-        seed_approvals=(
-            None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_APPROVALS")
-        ),
+        seed_approvals=(None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_APPROVALS")),
         preserve_seed_sandbox=args.preserve_seed_sandbox,
     )
     control: ThreadingHTTPServer | None = None
@@ -372,7 +374,7 @@ def main(argv: list[str] | None = None) -> int:
         control, control_url, token = _control_server(manager)
         thread = threading.Thread(target=control.serve_forever, daemon=True)
         thread.start()
-        child_env = os.environ.copy()
+        child_env = _child_environment(command)
         child_env.update(
             {
                 "DISCO_RELIABILITY_ISOLATED_STACK": "1",
