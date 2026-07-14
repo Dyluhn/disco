@@ -57,11 +57,14 @@ FROZEN_FILES: tuple[str, ...] = (
     "packages/agent-server/tests/integration/_closeout_live_support.py",
     ".github/workflows/export-track1-closeout.yml",
     "docs/export-track1-closeout-work-orders.md",
+    # The dedicated tsconfig for the G11 nullable-binding compile lane (acceptance-v4).
+    # The contract file it checks lives under the frozen frontend/src/test dir glob.
+    "frontend/tsconfig.closeout-g11.json",
 )
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v3"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v4"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -282,7 +285,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "with only the plain source download"
         ),
     },
-    # ---- R0 acceptance-v2 additions: the independent-audit gap-ledger proving reds
+    # ---- R0 acceptance additions: the independent-audit gap-ledger proving reds
     # (plan Consolidated Remediation Plan, gaps G02/G04/G05/G06/G07/G12/G13). One
     # representative index entry per gap; sibling nodes named in expected_failure. All
     # node IDs cross-checked against a real `pytest --collect-only` (the machine-truth
@@ -436,16 +439,17 @@ RED_TESTS: tuple[dict[str, object], ...] = (
         ),
     },
     {
-        # acceptance-v3 (R0 reopen): the G08/G11 binding red at the REAL download
-        # URL-construction boundary — fails because the binding is omitted, INDEPENDENT
-        # of panel reachability (no component render). Distinct from the R4-activated
-        # e2e (which fails at reachability). Its fix is R4.
+        # acceptance-v4 (R0 reopen): the G08/G11 binding red at the REAL download
+        # URL-construction boundary. SELF-DISCRIMINATING and non-rewriteable: it SUPPLIES
+        # the binding to the boundary via the predeclared 2-arg contract, so the R4
+        # production fix turns it green with NO test edit. INDEPENDENT of panel
+        # reachability (no component render).
         "work_order": "R4/G08",
         "lane": "frontend",
         "node_id": (
             "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
             "::WO-A (G08) — the download URL binds to the release's version_seq + "
-            "spec_digest > carries the bound release's version_seq + spec_digest on the "
+            "spec_digest > carries the SUPPLIED binding ['v7 / g08a-0007'] on the "
             "download URL"
         ),
         "boundary": (
@@ -454,23 +458,62 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "no panel/component is rendered"
         ),
         "expected_failure": (
-            "downloadProject(cid) is structurally cid-only, so the requested /download "
-            "URL omits the version_seq + spec_digest C2 binding — the test fails at the "
-            "binding assertion (version_seq present) AFTER the reachability guard passes, "
-            "proving the failure is the omitted binding, not an unreachable panel. The "
-            "G11 sibling asserts an unbound (spec_digest=null) release must not fabricate "
-            "a binding. This is a CONSERVATIVE contract-red (it can never go falsely green "
-            "while the binding is absent), not a self-discriminating one: because the seam "
-            "is cid-only, turning it green requires the R4 binding fix AND routing the "
-            "binding through this call — the frozen test itself may be updated at R4 (it "
-            "deliberately does not pre-commit to whether R4 has downloadProject fetch its "
-            "own /release or the caller pass the binding). Fix = R4."
+            "the test SUPPLIES the self-host binding to the real boundary via the "
+            "predeclared future contract downloadProject(cid, {version_seq, spec_digest}) "
+            "using a test-side compatibility cast against today's 1-arg implementation. "
+            "Today the extra runtime arg is ignored and downloadProject builds a cid-only "
+            "/download URL, so the two BOUND cases (materially different fixtures "
+            "v7/sha256:g08a-0007 and v42/sha256:g08b-0042, run through the SAME assertions) "
+            "FAIL at the exact-value assertion (sp.get('version_seq') === '7'/'42') and the "
+            "URL-encoding assertion (raw contains spec_digest=sha256%3A...). The unbound "
+            "case (binding=null) PASSES: no version_seq/spec_digest is fabricated. "
+            "SELF-DISCRIMINATING: at R4 downloadProject(cid, binding) appends the SUPPLIED "
+            "values (URL-encoded) and every case goes green through PRODUCTION ALONE — the "
+            "frozen test is never edited (the expected values ARE the test's own inputs, so "
+            "two distinct bindings cannot be satisfied by any hardcoded value). Fix = R4."
+        ),
+    },
+    {
+        # acceptance-v4 (R0 reopen): the REAL G11 nullable-binding proving red — a
+        # dedicated TypeScript COMPILE lane (not vitest transpilation). The frozen
+        # contract file is hashed under the frontend/src/test dir glob; the tsconfig is
+        # a frozen file. Self-discriminating: the R4 production type fix flips it green
+        # with no contract edit.
+        "work_order": "R4/G11",
+        "lane": "frontend-typecheck",
+        "node_id": (
+            "frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts"
+            " (checked by: cd frontend && "
+            "npx tsc -p tsconfig.closeout-g11.json --noEmit)"
+        ),
+        "boundary": (
+            "a real tsc --noEmit compile over a dedicated tsconfig (tsconfig.build.json "
+            "excludes src/test, and vitest transpiles without type-checking, so a "
+            "dedicated config is required); the contract annotates an unsnapshotted "
+            "ReleaseResponse with null spec_digest/version_seq/tree_digest"
+        ),
+        "expected_diagnostics": [
+            "src/test/export-track1-closeout/g11-nullable-binding.contract.ts(90,3): "
+            "error TS2322: Type 'null' is not assignable to type 'number'.",
+            "src/test/export-track1-closeout/g11-nullable-binding.contract.ts(92,3): "
+            "error TS2322: Type 'null' is not assignable to type 'string'.",
+        ],
+        "expected_failure": (
+            "the frontend ReleaseResponse types version_seq as number and tree_digest as "
+            "string (only spec_digest is nullable), though the backend "
+            "(routes/release.py) permits null for all three on an unsnapshotted release. "
+            "The command exits NONZERO (exit 2) today with the two TS2322 diagnostics "
+            "above (version_seq @90, tree_digest @92); spec_digest @89 raises nothing "
+            "since it is already nullable — which is why the pre-existing spec_digest-only "
+            "sibling never proved G11. SELF-DISCRIMINATING: the R4 production type "
+            "correction (version_seq: number | null; tree_digest: string | null) makes "
+            "the command exit 0 with the frozen contract unedited. Fix = R4."
         ),
     },
 )
 
 
-# ---- R0 acceptance-v2 remediation ledger (plan Consolidated Remediation Plan) -----
+# ---- R0 acceptance remediation ledger (plan Consolidated Remediation Plan) --------
 # The independent audit of candidate 581d1fbe found gaps the acceptance-v1 harness
 # missed (G01-G19). R0 is the legitimate re-freeze: it LANDS the proving reds against
 # 581d1fbe WITHOUT any production change (fixes R1-R6 are PARKED). This block is the
@@ -481,22 +524,34 @@ RED_TESTS: tuple[dict[str, object], ...] = (
 _R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
 _R0_TOOLS = "packages/tools/tests/export_track1_closeout"
 REMEDIATION_R0: dict[str, object] = {
-    "acceptance_version": "v3",
+    "acceptance_version": "v4",
     "base_candidate": "581d1fbe",
     "plan_doc": "docs/export-track1-closeout-remediation-plan.md",
+    "ratification_status": (
+        "acceptance-v4 is a CANDIDATE for independent human review. No human has reviewed, "
+        "signed, or protected any acceptance tag in this campaign; v2/v3 are annotated but "
+        "unsigned, local-only, and not protected; v1 was lightweight. R0 is NOT complete "
+        "until an independent human inspects the semantic diff, reruns the gates, creates a "
+        "signed annotated export-track1-closeout-acceptance-v4 tag, and publishes it to the "
+        "protected authoritative remote. This manifest asserts NO human ratification has "
+        "occurred."
+    ),
     "summary": (
         "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the "
         "proving reds against 581d1fbe with NO production change; the R1-R6 production "
         "fixes are PARKED. acceptance-v1 (G01) was a LIGHTWEIGHT tag moved AFTER C1-C6; "
-        "v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) "
-        "commit preceding all remediation. G19 fixed: the frozen frontend gate now "
-        "targets e2e/export-track1-closeout/** (a directory), not the nonexistent single "
-        "spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible). "
-        "v3 (R0 reopen, v2 tag unmoved): adds the G08/G11 binding red at the real download "
-        "URL-construction boundary (proving_reds_frontend), makes the G02 planted "
-        "credential absent from console + JUnit evidence (source redaction + a verifier "
-        "evidence-hygiene gate), zeroes Ruff/format on the changed set, and commits the "
-        "canonical remediation plan."
+        "v2 and v3 are ANNOTATED reviewer(subagent)-created tags on acceptance-only "
+        "(production-free) commits preceding all remediation, but are UNSIGNED, LOCAL-ONLY, "
+        "and NOT PROTECTED. G19 fixed: the frozen frontend gate targets "
+        "e2e/export-track1-closeout/** (a directory). G10 harness contradiction fixed. "
+        "v4 (R0 reopen, v2/v3 tags unmoved) makes three residual harness weaknesses "
+        "correct: (a) the G08 binding red is now SELF-DISCRIMINATING and non-rewriteable "
+        "(it SUPPLIES the binding via the predeclared 2-arg contract, so R4 turns it green "
+        "through production alone), (b) a REAL G11 compile red (proving_reds_compile) via a "
+        "dedicated tsconfig proves the version_seq/tree_digest nullability gap the "
+        "spec_digest-only sibling never did, (c) the evidence-hygiene gate is now "
+        "REGRESSION-PROOF via committed mutation tests. Ruff/format zeroed; the canonical "
+        "full remediation plan is committed."
     ),
     "proving_reds": [
         f"{_R0_AGENT}/test_g02_positional_credential.py"
@@ -533,17 +588,39 @@ REMEDIATION_R0: dict[str, object] = {
     "proving_reds_frontend": [
         "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
         "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
-        " > carries the bound release's version_seq + spec_digest on the download URL",
+        " > carries the SUPPLIED binding ['v7 / g08a-0007'] on the download URL",
+        "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+        "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
+        " > carries the SUPPLIED binding ['v42 / g08b-0042'] on the download URL",
+    ],
+    "proving_reds_compile": [
+        {
+            "contract": "frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts",
+            "command": "cd frontend && npx tsc -p tsconfig.closeout-g11.json --noEmit",
+            "expected_exit": 2,
+            "expected_diagnostics": [
+                "g11-nullable-binding.contract.ts(90,3): error TS2322: "
+                "Type 'null' is not assignable to type 'number'.",
+                "g11-nullable-binding.contract.ts(92,3): error TS2322: "
+                "Type 'null' is not assignable to type 'string'.",
+            ],
+            "turns_green_at": "R4 (version_seq: number | null; tree_digest: string | null)",
+        },
     ],
     "evidence_hygiene": (
         "G02's planted credential must never reach the acceptance evidence. The G02 test "
         "redacts every failure-message interpolation of the sentinel AND parametrizes on "
         "the position id (not the sentinel-bearing argv) so pytest's own funcarg repr "
-        "cannot leak it; verify_export_track1_closeout.py adds an evidence-hygiene gate "
-        "that scans every written text artifact (JUnit XMLs, vitest json, anti-bypass "
-        "scan, docker-versions, docker-host artifacts) for the registered marker and "
-        "fails closed into `passed` if it appears — regression-proof, and it stores only "
-        "the non-secret marker, never the literal."
+        "cannot leak it; verify_export_track1_closeout.py has an evidence-hygiene gate that "
+        "scans every written text artifact (JUnit XMLs, vitest json, anti-bypass scan, "
+        "docker-versions, docker-host artifacts) for the registered marker and fails closed "
+        "into `passed` (via _final_verdict) if it appears; it stores only the non-secret "
+        "marker, never the literal. REGRESSION-PROOF via committed mutation tests: "
+        "test_evidence_hygiene_regression.py proves per-artifact-class mutation trips the "
+        "scan, the violation records only file/line/label (never the value), a hygiene "
+        "violation forces the final verdict false, clean evidence is accepted, and the real "
+        "G02 proving-red JUnit + console contain zero marker and zero full-sentinel "
+        "occurrences — without the regression test writing the full credential itself."
     ),
     "r4_activated_deferred": {
         "G08_e2e": (
@@ -694,8 +771,10 @@ def build_manifest(root: Path) -> dict[str, object]:
     note = (
         "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness "
         "(WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 "
-        "EXCEPT this manifest (a file cannot hash itself); the reviewer-created "
-        f"protected tag {ACCEPTANCE_TAG} freezes the manifest itself. "
+        "EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag "
+        f"{ACCEPTANCE_TAG} is a CANDIDATE: an independent human must create the signed "
+        "annotated tag and protect it in the authoritative remote — it does not yet exist "
+        "and no human has ratified it (see remediation_r0.ratification_status). "
         "python_closeout_inventory is generated deterministically from "
         "`pytest --collect-only` over the closeout dirs (marker "
         "'export_track1_closeout and not integration'); the verifier reads it back FROM "
@@ -703,12 +782,14 @@ def build_manifest(root: Path) -> dict[str, object]:
         "cannot hide a test. frontend_closeout_inventory lists the frozen vitest files "
         "(+ titles) the frontend lane compares. red_tests names one representative "
         "failing public-boundary test per work order C1–C8 plus the frontend C3/C6 "
-        "reds, AND (acceptance-v3 / R0) one per independent-audit gap "
-        "G02/G04/G05/G06/G07/G12/G13 plus the G08/G11 frontend URL-binding red; "
-        "remediation_r0 carries the 15-node backend proving set, the frontend proving "
-        "red, the evidence-hygiene guarantee, and the R4-activated / record-only / "
-        "ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only "
-        "freezes the reds). Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
+        "reds, AND (acceptance-v4 / R0) one per independent-audit gap "
+        "G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and "
+        "the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend "
+        "proving set, the frontend proving reds, the G11 compile red + evidence-hygiene "
+        "regression, the ratification_status (acceptance-v4 is a CANDIDATE — no human has "
+        "signed/protected any tag), and the R4-activated / record-only / ratified-baseline "
+        "ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
+        "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
     return {
         "schema": "export-track1-closeout-acceptance/v1",

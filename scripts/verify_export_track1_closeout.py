@@ -913,6 +913,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _final_verdict(
+    *,
+    frozen_ok: bool,
+    all_lanes_green: bool,
+    clean: bool,
+    author: bool,
+    hygiene_ok: bool,
+) -> bool:
+    """The single release-verdict conjunction (extracted verbatim from ``main`` for
+    testability — identical behavior, no new logic): ``passed`` is true iff the frozen
+    manifest verified, EVERY lane is green, the checkout is clean, this is NOT an
+    ``--author`` run, and the evidence-hygiene scan found no planted credential. Any one
+    false forces ``passed`` false; ``--author`` can never pass."""
+    return bool(frozen_ok and all_lanes_green and clean and not author and hygiene_ok)
+
+
 def _not_passed_reasons(
     *,
     author: bool,
@@ -1048,7 +1064,13 @@ def main(argv: list[str] | None = None) -> int:
     hygiene_ok, hygiene_violations = _scan_evidence_hygiene(evidence_dir)
 
     all_lanes_green = all(lane.green is True for lane in lanes)
-    passed = bool(frozen_ok and all_lanes_green and clean and not args.author and hygiene_ok)
+    passed = _final_verdict(
+        frozen_ok=frozen_ok,
+        all_lanes_green=all_lanes_green,
+        clean=clean,
+        author=args.author,
+        hygiene_ok=hygiene_ok,
+    )
 
     evidence = {
         "schema": "export-track1-closeout-evidence/v1",

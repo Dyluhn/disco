@@ -1,0 +1,17 @@
+{
+  // G11 nullable-binding contract — a DEDICATED type-check scope so the ONLY
+  // diagnostics are the frozen contract's version_seq/tree_digest null errors.
+  //
+  // Why a separate config: `tsconfig.build.json` (the `npm run typecheck:build`
+  // gate) EXCLUDES `src/test/**`, so it never type-checks this contract; and
+  // vitest transpiles rather than type-checks, so a `.test`/`.contract` file's
+  // TYPE errors are invisible to `npm run test`. This config restores a real,
+  // isolated `tsc` type-check over just the contract (and the production type it
+  // imports), inheriting tsconfig.app.json's strict settings and path aliases.
+  //
+  // `include` here OVERRIDES the inherited `["src"]`, so tsc roots ONLY at the
+  // contract file; it still follows the `@/types/release` import to type-check the
+  // real production type (release.ts has no errors, so it contributes none).
+  "extends": "./tsconfig.app.json",
+  "include": ["src/test/export-track1-closeout/g11-nullable-binding.contract.ts"]
+}
