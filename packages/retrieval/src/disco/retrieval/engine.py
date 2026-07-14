@@ -29,6 +29,13 @@ class VectorStoreLike(Protocol):
     async def query(self, namespace: str, vector: list[float], *, top_k: int) -> list[Passage]: ...
 
 
+@runtime_checkable
+class HitExtractionProvider(Protocol):
+    """Optional affinity-preserving extraction extension."""
+
+    async def extract_hits(self, hits: list[SearchHit]) -> list[ExtractedDoc]: ...
+
+
 async def extract_discovered_hits(
     extraction: ExtractionProvider, hits: list[SearchHit]
 ) -> list[ExtractedDoc]:
@@ -38,9 +45,8 @@ async def extract_discovered_hits(
     additionally implement ``extract_hits`` when discovery provenance determines
     which extractor can read a result (notably MCP search/fetch pairs).
     """
-    extract_hits = getattr(extraction, "extract_hits", None)
-    if callable(extract_hits):
-        return await extract_hits(hits)
+    if isinstance(extraction, HitExtractionProvider):
+        return await extraction.extract_hits(hits)
     return await extraction.extract_many([hit.url for hit in hits])
 
 

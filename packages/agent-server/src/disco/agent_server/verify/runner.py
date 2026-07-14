@@ -36,6 +36,7 @@ import httpx
 from disco.core.auth import CSRF_HEADER, SESSION_COOKIE
 from disco.core.evidence.schema import redact
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
+from websockets.typing import Origin
 
 from .probe import app_body_problem, validate_app_deliverables
 from .reliability import run_reliability_metrics
@@ -178,7 +179,7 @@ class HttpVerifyClient(AbstractVerifyClient):
         _transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._origin = self._base_url
+        self._origin = Origin(self._base_url)
         self._cookies = httpx.Cookies()
         self._csrf_token = ""
         self._transport = _transport

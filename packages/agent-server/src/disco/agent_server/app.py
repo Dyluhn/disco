@@ -137,11 +137,15 @@ def create_app(
         idle_sweep_task: asyncio.Task | None = None
         schedule_task: asyncio.Task | None = None
         if runtime is not None:
-            _seed_builtin_workflows_for_runtime(runtime)
+            # Narrow once outside the nested startup coroutine. Type checkers
+            # correctly refuse to retain Optional narrowing for a closure over
+            # the outer parameter, even though create_app never reassigns it.
+            active_runtime = runtime
+            _seed_builtin_workflows_for_runtime(active_runtime)
 
             async def _start_mcp_without_owning_readiness() -> None:
                 try:
-                    await runtime._start_mcp_pool()
+                    await active_runtime._start_mcp_pool()
                 except Exception:
                     # Approval and per-server connection failures are handled by
                     # McpManager. An unexpected aggregate error is still logged,
@@ -152,14 +156,14 @@ def create_app(
                 _start_mcp_without_owning_readiness(), name="mcp-startup"
             )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
-                await runtime.reconcile_orphaned_runs()
+                await active_runtime.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
-                await runtime.prewarm_model_probe()
+                await active_runtime.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once
-                await runtime.prewarm_vision_probe()
-            idle_sweep_task = asyncio.create_task(runtime._idle_sweep_loop())
+                await active_runtime.prewarm_vision_probe()
+            idle_sweep_task = asyncio.create_task(active_runtime._idle_sweep_loop())
             # RP-08: start the schedule manager loop alongside the idle sweep.
-            schedule_task = asyncio.create_task(runtime._schedule_manager_loop())
+            schedule_task = asyncio.create_task(active_runtime._schedule_manager_loop())
         yield
         if schedule_task is not None:
             schedule_task.cancel()
