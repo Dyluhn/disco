@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 from disco.core.env import disco_env
 from disco.tools import ToolDef
@@ -173,7 +175,7 @@ class McpManager:
             http_server_allowed_hosts=allowed_hosts,
         )
 
-    def _mcp_proxy_env(self) -> dict[str, str] | None:
+    def _mcp_proxy_env(self, url: str | None = None) -> dict[str, str] | None:
         """The HTTP(S)_PROXY env the orchestrator-side MCP HTTP client routes
         through, governed by the SAME PMX_BUILD_EGRESS posture as the sandbox spec
         (single source of truth — no divergent egress policy).
@@ -190,6 +192,19 @@ class McpManager:
         posture = egress_posture.lower().strip()
         if posture != "filtered":
             return None
+        # An approved loopback MCP server is already confined to the Agent
+        # host. Sending it through an optional outbound sidecar makes local
+        # Settings connections fail whenever that sidecar is absent. Bypass is
+        # deliberately limited to URL-parsed loopback names/addresses; remote,
+        # unspecified, link-local, and private-network hosts remain proxied.
+        host_name = (urlsplit(url).hostname or "").lower().rstrip(".") if url else ""
+        if host_name == "localhost":
+            return None
+        try:
+            if host_name and ipaddress.ip_address(host_name).is_loopback:
+                return None
+        except ValueError:
+            pass
         from disco.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
 
         host = disco_env("MCP_EGRESS_PROXY_HOST", "127.0.0.1")
@@ -474,7 +489,7 @@ class McpManager:
         # client must NOT bypass the sidecar. open posture → None (direct). See
         # docs/workorders/RP-05b-orchestrator-proxy-decision.md.
         try:
-            await client.connect(proxy_env=self._mcp_proxy_env())
+            await client.connect(proxy_env=self._mcp_proxy_env(srv.url))
         except Exception:
             self._rt._mcp_http_clients[name] = client  # register for close
             raise

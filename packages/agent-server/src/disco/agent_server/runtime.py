@@ -1660,8 +1660,8 @@ class ConversationRuntime:
     def _mcp_egress_hosts(self) -> frozenset[str]:
         return self._mcp._mcp_egress_hosts()
 
-    def _mcp_proxy_env(self) -> dict[str, str] | None:
-        return self._mcp._mcp_proxy_env()
+    def _mcp_proxy_env(self, url: str | None = None) -> dict[str, str] | None:
+        return self._mcp._mcp_proxy_env(url)
 
     def _build_sandbox_spec(
         self,

@@ -358,7 +358,8 @@ async def test_mcp_proxy_env_follows_build_egress_posture(monkeypatch):
     from disco.core import SqliteEventStore
     from disco.tools.sandbox._container import EGRESS_PROXY_PORT
 
-    runtime = ConversationRuntime(SqliteEventStore(":memory:"))
+    store = SqliteEventStore(":memory:")
+    runtime = ConversationRuntime(store)
 
     # BP-G10 flipped the DEFAULT build egress to "filtered", so an unset
     # PMX_BUILD_EGRESS now means filtered → a real proxy env (NOT direct).
@@ -375,6 +376,12 @@ async def test_mcp_proxy_env_follows_build_egress_posture(monkeypatch):
     assert env is not None
     assert env["HTTP_PROXY"] == f"http://10.0.0.5:{EGRESS_PROXY_PORT}"
     assert env["https_proxy"] == f"http://10.0.0.5:{EGRESS_PROXY_PORT}"
+    assert runtime._mcp_proxy_env("http://localhost:9123/mcp") is None
+    assert runtime._mcp_proxy_env("http://127.0.0.9:9123/mcp") is None
+    assert runtime._mcp_proxy_env("http://[::1]:9123/mcp") is None
+    assert runtime._mcp_proxy_env("http://10.0.0.9:9123/mcp") is not None
+    assert runtime._mcp_proxy_env("https://remote.example/mcp") is not None
+    store.close()
 
 
 def test_secret_absent_from_build_sandbox_spec(monkeypatch):
@@ -407,7 +414,8 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     # meaningful negative (the value genuinely exists at the orchestrator boundary).
     assert client._resolve_headers()["Authorization"] == SECRET
 
-    runtime = ConversationRuntime(SqliteEventStore(":memory:"))
+    store = SqliteEventStore(":memory:")
+    runtime = ConversationRuntime(store)
     # Register the client WITHOUT a live connect — _mcp_egress_hosts only reads
     # client._url / client.allowed_hosts, which exist at construction.
     runtime._mcp_http_clients["sec_srv"] = client
@@ -420,6 +428,7 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     # ...but the MCP host DID union into the egress allowlist (the boundary is
     # selective, and the spec genuinely carries MCP-derived state).
     assert any("secret-mcp.example" in h for h in spec.egress_allow)
+    store.close()
 
 
 @pytest.mark.asyncio

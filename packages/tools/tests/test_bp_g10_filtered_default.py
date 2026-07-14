@@ -46,6 +46,16 @@ from test_gvisor import FakeDockerClient
 # 1. The default flip — the core acceptance
 # ---------------------------------------------------------------------------
 
+_RUNTIMES = []
+
+
+@pytest.fixture(autouse=True)
+def _close_runtime_stores():
+    yield
+    while _RUNTIMES:
+        runtime = _RUNTIMES.pop()
+        runtime._store.close()
+
 
 def _runtime():
     """A minimal ConversationRuntime — the spec helpers read `_sandbox_spec`
@@ -53,7 +63,9 @@ def _runtime():
     from disco.agent_server.runtime import ConversationRuntime
     from disco.core import SqliteEventStore
 
-    return ConversationRuntime(SqliteEventStore(":memory:"))
+    runtime = ConversationRuntime(SqliteEventStore(":memory:"))
+    _RUNTIMES.append(runtime)
+    return runtime
 
 
 def test_default_build_spec_is_filtered():
@@ -258,12 +270,10 @@ async def test_compose_build_loop_default_produces_filtered_spec():
     receives is filtered (registry allowlist, no NETWORK). This is the
     BEHAVIORAL acceptance — the default flip is real, not just a spec
     helper internal change."""
-    from disco.agent_server.runtime import ConversationRuntime
-    from disco.core import SqliteEventStore
     from disco.core.llm import DefaultLLMRouter
     from disco.core.loop import RouterAgent
 
-    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt = _runtime()
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
 
