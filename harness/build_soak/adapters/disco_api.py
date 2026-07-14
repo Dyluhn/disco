@@ -56,6 +56,7 @@ from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
 
+from ..events import NormalizationError, normalize_events
 from ..oracles.thrash import ThrashOracle
 
 # Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
@@ -76,6 +77,7 @@ _LOG = logging.getLogger("build_soak.disco_api")
 # ---- status vocabulary (mirrors disco.core.ConversationStatus as plain strings) --
 
 TERMINAL_STATES = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK", "IDLE"})
+LIVE_THRASH_STOP = "LIVE_THRASH_STOP"
 # A cooperative / no-progress PAUSE (the actionless valve). NOT terminal — it is
 # RESUMABLE, so the runner (acting as the user) resumes it a bounded number of times.
 PAUSED_STATE = "PAUSED"
@@ -411,7 +413,7 @@ class DiscoApiClient:
         inspect_trace: dict[str, Any] | None,
         *,
         terminal_status: str = "",
-    ) -> None:
+    ) -> bool:
         """Evaluate one in-run snapshot; require two matching live samples.
 
         A just-committed ActionEvent may not have its ObservationEvent yet. Two
@@ -422,12 +424,20 @@ class DiscoApiClient:
 
         scenario = self._live_thrash_scenario
         if scenario is None:
-            return
+            return False
         self._live_thrash_samples += 1
+        try:
+            normalized_events = normalize_events(events)
+        except NormalizationError as exc:
+            # The frozen classifier owns INVALID_RUN adjudication for corrupt
+            # evidence. A live sampler must never reinterpret a row-shaped or
+            # malformed prefix as a stream of failed actions.
+            _LOG.error("live thrash sampler could not normalize events: %s", exc)
+            return False
         failed = [
             result.to_dict()
             for result in ThrashOracle().check(
-                events,
+                normalized_events,
                 scenario=scenario,
                 inspect_trace=inspect_trace,
             )
@@ -436,7 +446,7 @@ class DiscoApiClient:
         if not failed:
             self._live_thrash_candidate = ""
             self._live_thrash_candidate_count = 0
-            return
+            return False
         fingerprint = json.dumps(failed, sort_keys=True, separators=(",", ":"))
         if fingerprint == self._live_thrash_candidate:
             self._live_thrash_candidate_count += 1
@@ -445,15 +455,17 @@ class DiscoApiClient:
             self._live_thrash_candidate_count = 1
         terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
         if not terminal and self._live_thrash_candidate_count < 2:
-            return
+            return False
         if fingerprint in self._live_thrash_recorded:
-            return
+            return False
         self._live_thrash_recorded.add(fingerprint)
         finding = {
             "detected_at_epoch": time.time(),
             "terminal_status": terminal_status or None,
-            "event_count": len(events),
-            "max_event_seq": max((int(event.get("seq", -1)) for event in events), default=-1),
+            "event_count": len(normalized_events),
+            "max_event_seq": max(
+                (int(event.get("seq", -1)) for event in normalized_events), default=-1
+            ),
             "confirmation_samples": self._live_thrash_candidate_count,
             "oracle_results": failed,
         }
@@ -463,23 +475,24 @@ class DiscoApiClient:
             self.last_conversation_id,
             failed,
         )
+        return True
 
     async def _sample_live_thrash(
         self, conversation_id: str, *, terminal_status: str = ""
-    ) -> None:
+    ) -> bool:
         if self._live_thrash_scenario is None:
-            return
+            return False
         now = time.monotonic()
         terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
         if not terminal and now - self._live_thrash_last_sample < 1.0:
-            return
+            return False
         self._live_thrash_last_sample = now
         try:
             events = self.collect_events(conversation_id)
             trace = await self.collect_inspect_trace(conversation_id)
         except Exception:  # noqa: BLE001 — final evidence gate catches missing trace
-            return
-        self.observe_live_thrash_snapshot(
+            return False
+        return self.observe_live_thrash_snapshot(
             events,
             trace,
             terminal_status=terminal_status,
@@ -746,7 +759,27 @@ class DiscoApiClient:
         seen_active = False
         while True:
             last = self._status_of(await self.get_state(conversation_id))
-            await self._sample_live_thrash(conversation_id, terminal_status=last)
+            thrash_crossed = await self._sample_live_thrash(
+                conversation_id, terminal_status=last
+            )
+            if thrash_crossed and last not in TERMINAL_STATES:
+                # A confirmed oracle failure is a spend/reliability stop, not a
+                # log message. Kill the campaign-owned conversation immediately;
+                # the frozen event stream still classifies the concrete failure.
+                try:
+                    killed = await self.kill(conversation_id)
+                    _LOG.error(
+                        "stopped conversation=%s after live thrash threshold (http=%s)",
+                        conversation_id,
+                        killed.get("http_status"),
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain the hard stop
+                    _LOG.error(
+                        "failed to kill conversation=%s after live thrash threshold: %s",
+                        conversation_id,
+                        type(exc).__name__,
+                    )
+                return LIVE_THRASH_STOP
             if stop_on_gate and last in GATE_STATES:
                 return last
             # A WORK terminal only ENDS the wait when it is the follow-up's OWN new terminal

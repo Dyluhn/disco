@@ -125,6 +125,62 @@ def test_provider_evidence_fails_hidden_fallback(tmp_path: Path) -> None:
     assert "provider fallback detected" in reason
 
 
+def test_provider_evidence_allows_exact_toolless_auxiliary_calls(tmp_path: Path) -> None:
+    path = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": None,
+                "has_tools": False,
+            },
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_1",
+                "has_tools": True,
+            },
+        ],
+    )
+
+    status, units, reason = _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )
+
+    assert (status, units) == (PASS, 1)
+    assert "1 auxiliary" in reason
+
+
+def test_provider_evidence_rejects_unscoped_tool_calls(tmp_path: Path) -> None:
+    path = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": None,
+                "has_tools": True,
+            }
+        ],
+    )
+
+    status, units, reason = _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )
+
+    assert (status, units) == (INVALID, 0)
+    assert "no conversation_id" in reason
+
+
 def test_provider_evidence_rejects_absent_or_under_scoped_ledger(tmp_path: Path) -> None:
     missing = tmp_path / "missing.jsonl"
     assert _provider_evidence_result(

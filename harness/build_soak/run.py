@@ -38,6 +38,7 @@ from .adapters.disco_api import (
     AWAITING_USER_DECISION,
     AWAITING_USER_QUESTION,
     FOLLOWUP_PICKUP_TIMEOUT,
+    LIVE_THRASH_STOP,
     PAUSED_STATE,
     PROGRESSING_TIMEOUT,
     TERMINAL_STATES,
@@ -567,7 +568,7 @@ async def drive_scenario(
     after_terminal = [f for f in followups if f.get("trigger") != _TRIGGER_AFTER_FIRST_FILE_WRITE]
 
     # Phase 1: the initial build (+ any mid-run steer) to terminal.
-    await _drive_to_terminal(
+    initial_status = await _drive_to_terminal(
         client,
         cid,
         autonomous=autonomous,
@@ -584,7 +585,18 @@ async def drive_scenario(
         declared_followup_requires_revision=declared_followup_requires_revision,
     )
 
-    if cancel_at and cancel_at.get("trigger") == _TRIGGER_AFTER_TERMINAL:
+    if initial_status == LIVE_THRASH_STOP:
+        timeline.append(
+            "confirmed live thrash threshold stopped the conversation; "
+            "skipping every remaining follow-up"
+        )
+        after_terminal = []
+
+    if (
+        initial_status != LIVE_THRASH_STOP
+        and cancel_at
+        and cancel_at.get("trigger") == _TRIGGER_AFTER_TERMINAL
+    ):
         await _cancel_at_trigger(
             client,
             cid,

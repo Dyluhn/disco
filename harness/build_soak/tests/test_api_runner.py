@@ -22,6 +22,7 @@ from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKED_UP,
     FOLLOWUP_PICKUP_TIMEOUT,
     FOLLOWUP_REPLANNED,
+    LIVE_THRASH_STOP,
     CollectedRun,
     DiscoApiClient,
     SnapshotNotReadyError,
@@ -197,15 +198,62 @@ def test_live_thrash_monitor_confirms_repeated_model_repair(tmp_path):
         ]
     }
 
-    client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
+    assert not client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
     assert client.live_thrash_monitor["findings"] == []
-    client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
+    assert client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
 
     monitor = client.live_thrash_monitor
     assert monitor["enabled"] is True
     assert monitor["sample_count"] == 2
     assert len(monitor["findings"]) == 1
     assert monitor["findings"][0]["oracle_results"][0]["code"] == "MODEL_REPAIR_THRASH"
+
+
+def test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(tmp_path):
+    client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
+    client.enable_live_thrash_monitor(_smoke_scenario())
+    rows = [
+        {
+            "seq": event["seq"],
+            "kind": event["kind"],
+            "source": event["source"],
+            "id": event["id"],
+            "created_at": event.get("timestamp", "2026-01-01T00:00:00Z"),
+            "payload": json.dumps(event),
+        }
+        for event in clean_smoke_log()
+    ]
+
+    assert not client.observe_live_thrash_snapshot(rows, None, terminal_status="RUNNING")
+    assert not client.observe_live_thrash_snapshot(rows, None, terminal_status="RUNNING")
+    assert client.live_thrash_monitor["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_progress_poll_kills_conversation_on_confirmed_live_thrash(
+    monkeypatch, tmp_path
+):
+    client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
+    client.enable_live_thrash_monitor(_smoke_scenario())
+
+    async def crossed(_conversation_id: str, *, terminal_status: str = "") -> bool:
+        return True
+
+    killed: list[str] = []
+
+    async def kill(conversation_id: str) -> dict[str, object]:
+        killed.append(conversation_id)
+        return {"http_status": 200}
+
+    monkeypatch.setattr(client, "_sample_live_thrash", crossed)
+    monkeypatch.setattr(client, "kill", kill)
+
+    result = await client.poll_until_terminal_or_gate(
+        _CID, inactivity_s=5, hard_cap_s=5
+    )
+
+    assert result == LIVE_THRASH_STOP
+    assert killed == [_CID]
 
 
 # ---- happy-path: drive + dossier + classify -> PASS -------------------------

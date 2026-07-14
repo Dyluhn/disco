@@ -277,15 +277,16 @@ def _provider_evidence_result(
         return INVALID, 0, "expected provider host/model is empty"
 
     conversations: set[str] = set()
+    auxiliary_calls = 0
     for index, record in enumerate(records):
         host = str(record.get("host") or "").strip().lower()
         model = str(record.get("model") or "").strip()
         conversation_id = str(record.get("conversation_id") or "").strip()
-        if not host or not model or not conversation_id:
+        if not host or not model:
             return (
                 INVALID,
                 0,
-                f"provider ledger record {index} is missing host/model/conversation_id",
+                f"provider ledger record {index} is missing host/model",
             )
         if required_host not in host:
             return (
@@ -299,6 +300,21 @@ def _provider_evidence_result(
                 0,
                 f"provider fallback detected: model {model!r} != {required_model!r}",
             )
+        if not conversation_id:
+            # Preflight and async title/summarizer calls carry no conversation
+            # metadata and no tools. They still must use the exact provider, but
+            # must not invalidate otherwise scoped driver evidence. A tool-bearing
+            # call without a conversation remains invalid: it cannot be assigned
+            # to a trial or checked for post-terminal runaway.
+            if record.get("has_tools") is False:
+                auxiliary_calls += 1
+                continue
+            return (
+                INVALID,
+                0,
+                f"provider ledger record {index} has tools or unknown call type "
+                "but no conversation_id",
+            )
         conversations.add(conversation_id)
     if len(conversations) < units:
         return (
@@ -309,7 +325,8 @@ def _provider_evidence_result(
     return (
         PASS,
         units,
-        f"{len(records)} provider call(s) across {len(conversations)} conversation(s) "
+        f"{len(records)} provider call(s) ({auxiliary_calls} auxiliary) across "
+        f"{len(conversations)} conversation(s) "
         f"used {required_host}/{required_model}",
     )
 
