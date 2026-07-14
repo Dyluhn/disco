@@ -523,6 +523,45 @@ async def test_browser_ensure_daemon_restart_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_browser_ensure_daemon_recovers_stale_internal_session():
+    """An unhealthy daemon may leave its platform-owned tmux pane busy.
+
+    Recovery belongs inside BrowserTool: model-facing shell tools correctly reject
+    ``__browser`` and must never be asked to kill or inspect it.
+    """
+    tool = BrowserTool()
+    ctx = MagicMock(spec=ToolContext)
+    ctx.sandbox = AsyncMock()
+    ctx.sessions = AsyncMock()
+
+    ctx.sandbox.exec_shell.side_effect = [
+        ExecResult(exit_code=1, stdout="", stderr=""),
+        ExecResult(exit_code=0, stdout="", stderr=""),
+    ]
+
+    await tool._ensure_daemon(ctx)
+
+    ctx.sessions.kill_foreground.assert_awaited_once_with("__browser")
+    ctx.sessions.exec.assert_awaited_once_with(
+        "__browser", "python3 /workspace/.pmx/_browser_daemon.py", None
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_ensure_daemon_keeps_healthy_internal_session():
+    tool = BrowserTool()
+    ctx = MagicMock(spec=ToolContext)
+    ctx.sandbox = AsyncMock()
+    ctx.sessions = AsyncMock()
+    ctx.sandbox.exec_shell.return_value = ExecResult(exit_code=0, stdout="", stderr="")
+
+    assert await tool._ensure_daemon(ctx) == "http://127.0.0.1:8901"
+
+    ctx.sessions.kill_foreground.assert_not_awaited()
+    ctx.sessions.exec.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     """ROOT-3 (slides spiral): when the daemon never comes up, run() must return a
     clear, terminal unverified-browser ToolOutcome (success=False + structured
@@ -961,5 +1000,84 @@ async def test_process_browser_uses_runtime_through_production_session_wrapper()
         assert outcome.structured is not None
         assert "wrapped browser runtime" in str(outcome.structured.get("text"))
         assert session.shares_host_network is True
+    finally:
+        await session.destroy()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_process_browser_recovers_stale_busy_daemon_session():
+    """Public BrowserTool boundary recovers after losing a live daemon's port."""
+    import socket
+    import uuid
+
+    conversation_id = "brws" + uuid.uuid4().hex
+    session = SandboxSession(
+        ProcessSandboxService(),
+        owner_id="browser-integration",
+        conversation_id=conversation_id,
+    )
+    try:
+        await session.write_file(
+            "/workspace/index.html",
+            b"<html><body><h1>stale daemon recovered</h1></body></html>",
+        )
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            fixture_port = int(probe.getsockname()[1])
+        started = await session.sessions.exec(
+            "fixture",
+            f"python3 -m http.server {fixture_port}",
+            None,
+        )
+        assert started.running
+        for _ in range(20):
+            health = await session.exec_shell(
+                f"curl -sf http://127.0.0.1:{fixture_port}/", timeout_s=2
+            )
+            if health.exit_code == 0:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("fixture server did not become healthy")
+
+        ctx = ToolContext(
+            sandbox=session,
+            sessions=session.sessions,
+            workspace_path=session.workspace_path or "",
+            timeout_s=30,
+            capabilities={
+                Capability.NETWORK,
+                Capability.DISPLAY,
+                Capability.FILESYSTEM,
+                Capability.SHELL,
+            },
+            owner_id="browser-integration",
+            conversation_id=conversation_id,
+        )
+        first = await BrowserTool().run(
+            BrowserArgs(action="navigate", url=f"http://127.0.0.1:{fixture_port}/"),
+            ctx,
+        )
+        assert first.success, first.error
+        assert (await session.sessions.view("__browser")).running
+
+        with socket.socket() as stale_probe:
+            stale_probe.bind(("127.0.0.1", 0))
+            stale_port = int(stale_probe.getsockname()[1])
+        await session.write_file(
+            "/workspace/.pmx/browser-port", str(stale_port).encode("ascii")
+        )
+
+        recovered = await BrowserTool().run(
+            BrowserArgs(action="navigate", url=f"http://127.0.0.1:{fixture_port}/"),
+            ctx,
+        )
+        assert recovered.success, recovered.error
+        assert "stale daemon recovered" in str((recovered.structured or {}).get("text"))
+        replacement_port = int(
+            (await session.read_file("/workspace/.pmx/browser-port")).decode().strip()
+        )
+        assert replacement_port != stale_port
     finally:
         await session.destroy()

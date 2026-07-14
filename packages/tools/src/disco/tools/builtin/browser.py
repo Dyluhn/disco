@@ -462,7 +462,17 @@ class BrowserTool:
         if await self._daemon_healthy(ctx, daemon_url):
             return daemon_url
 
-        # Not running -> ship and start
+        # The process backend's tmux session outlives the Agent process.  After an
+        # Agent restart its daemon endpoint/port file can be gone while the
+        # platform-owned ``__browser`` pane is still busy with the old python
+        # process.  Starting directly in that pane raises SessionBusy and exposes
+        # an impossible recovery recipe to the model: model-facing shell tools
+        # intentionally reject reserved ``__`` sessions.  Recover our own bounded
+        # internal session here before shipping one fresh daemon.  The session
+        # manager treats a missing session as an idempotent no-op.
+        await ctx.sessions.kill_foreground("__browser")
+
+        # Not healthy -> ship and start
         daemon_src_path = pathlib.Path(__file__).parent / "_browser_daemon.py"
         daemon_src = daemon_src_path.read_text()
         await ctx.sandbox.write_file(_DAEMON_PATH, daemon_src.encode("utf-8"))
