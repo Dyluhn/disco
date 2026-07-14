@@ -130,6 +130,22 @@ export async function requireReliabilityStack(
   csrfByRequest.set(request, session.csrf_token!);
 }
 
+export async function restartReliabilityStack(): Promise<void> {
+  const control = process.env.DISCO_RELIABILITY_STACK_CONTROL_URL;
+  const token = process.env.DISCO_RELIABILITY_STACK_CONTROL_TOKEN;
+  expect(control, "isolated stack control URL is required").toBeTruthy();
+  expect(token, "isolated stack control token is required").toBeTruthy();
+  const response = await fetch(`${control}/restart`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await response.text();
+  expect(
+    response.ok,
+    `isolated stack restart failed: ${response.status} ${body}`,
+  ).toBe(true);
+}
+
 export async function authenticatedMutation(
   request: APIRequestContext,
   url: string,

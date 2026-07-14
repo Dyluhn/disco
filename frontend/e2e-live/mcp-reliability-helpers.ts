@@ -1,6 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
+import { createServer } from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,12 +20,19 @@ export type McpDraft = {
   riskTier?: "low" | "medium" | "high" | "critical";
 };
 
-export async function startMcpFixture(testInfo: TestInfo): Promise<McpFixture> {
-  const external = process.env.DISCO_RELIABILITY_MCP_URL?.trim();
+export async function startMcpFixture(
+  testInfo: TestInfo,
+  options: { port?: number; label?: string; allowExternal?: boolean } = {},
+): Promise<McpFixture> {
+  const external =
+    options.allowExternal === false
+      ? ""
+      : process.env.DISCO_RELIABILITY_MCP_URL?.trim();
   if (external) return { process: null, mcpUrl: external, callsUrl: null };
 
-  const ready = testInfo.outputPath("mcp-fixture-ready.json");
-  const calls = testInfo.outputPath("mcp-fixture-calls.jsonl");
+  const label = options.label ? `-${options.label.replace(/[^a-z0-9_-]/gi, "_")}` : "";
+  const ready = testInfo.outputPath(`mcp-fixture${label}-ready.json`);
+  const calls = testInfo.outputPath(`mcp-fixture${label}-calls.jsonl`);
   fs.mkdirSync(path.dirname(ready), { recursive: true });
   const python =
     process.env.DISCO_RELIABILITY_PYTHON ?? path.join(REPO, ".venv", "bin", "python3");
@@ -34,7 +42,7 @@ export async function startMcpFixture(testInfo: TestInfo): Promise<McpFixture> {
       "-m",
       "harness.reliability.mcp_fixture",
       "--port",
-      "0",
+      String(options.port ?? 0),
       "--ready-file",
       ready,
       "--log",
@@ -61,6 +69,24 @@ export async function startMcpFixture(testInfo: TestInfo): Promise<McpFixture> {
   const payload = JSON.parse(fs.readFileSync(ready, "utf-8")) as { mcp_url: string };
   const base = payload.mcp_url.replace(/\/mcp$/, "");
   return { process: child, mcpUrl: payload.mcp_url, callsUrl: `${base}/calls` };
+}
+
+export async function freeLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("could not reserve a loopback port for MCP recovery");
+  }
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return port;
 }
 
 export async function stopMcpFixture(fixture: McpFixture): Promise<void> {
