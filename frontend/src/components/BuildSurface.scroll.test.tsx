@@ -129,6 +129,7 @@ function stubGeometry(
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("W-01: resumed builds recover the real task in the H1", () => {
@@ -199,6 +200,8 @@ describe("W-41: scroll-to-latest chevron", () => {
     fireEvent.scroll(feed);
     const chevron = screen.getByRole("button", { name: /scroll to latest activity/i });
     expect(chevron).toBeInTheDocument();
+    expect(screen.getByTestId("build-scroll-to-latest-dock")).toContainElement(chevron);
+    expect(chevron).not.toHaveClass("absolute");
 
     // Clicking jumps to the bottom and dismisses the chevron.
     const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
@@ -207,5 +210,23 @@ describe("W-41: scroll-to-latest chevron", () => {
     expect(
       screen.queryByRole("button", { name: /scroll to latest activity/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("uses an immediate scroll when the operator prefers reduced motion", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({ matches: true }),
+    );
+    const user = userEvent.setup();
+    buildState = baseBuild({ status: "RUNNING" });
+    renderSurface(<BuildSurface />);
+    const feed = feedEl();
+    stubGeometry(feed, { scrollHeight: 1000, clientHeight: 300, scrollTop: 0 });
+    fireEvent.scroll(feed);
+
+    await user.click(screen.getByRole("button", { name: /scroll to latest activity/i }));
+
+    const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "auto" });
   });
 });

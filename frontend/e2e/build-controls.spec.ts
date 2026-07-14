@@ -1,5 +1,26 @@
 import { expect, test } from "@playwright/test";
 
+async function seedOverflowingActivityFeed(page: import("@playwright/test").Page) {
+  const feed = page.getByTestId("build-activity-feed");
+  await feed.evaluate((node) => {
+    const prior = node.querySelector<HTMLElement>("[data-f15-transcript]");
+    if (prior) prior.remove();
+    const transcript = document.createElement("pre");
+    transcript.dataset.f15Transcript = "true";
+    transcript.style.margin = "0";
+    transcript.style.whiteSpace = "pre";
+    transcript.textContent = Array.from(
+      { length: 120 },
+      (_, index) =>
+        `stream ${index.toString().padStart(3, "0")}: const longValue = "${"x".repeat(180)}";`,
+    ).join("\n");
+    node.append(transcript);
+    node.scrollTop = 0;
+    node.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await expect(page.getByRole("button", { name: "Scroll to latest activity" })).toBeVisible();
+}
+
 // Visual + functional proof of the build-control safety polish: Kill is gated
 // behind an inline confirm so a mis-click can't tear down a long build.
 test.describe("Build controls — Kill confirmation", () => {
@@ -58,5 +79,88 @@ test.describe("Build surface — sticky plan tracker", () => {
     if (before && after) expect(Math.abs(after.y - before.y)).toBeLessThan(40);
 
     await page.screenshot({ path: "e2e/_artifacts/sticky-plan.png", fullPage: false });
+  });
+});
+
+test.describe("Build surface — scroll-to-latest accessibility", () => {
+  test("the chevron has a non-overlapping dock across width, zoom, and streaming changes", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByRole("radio", { name: "build" }).click();
+    const input = page.getByPlaceholder(/describe what you want/i);
+    await input.fill("Write a fizzbuzz script, run it, then delete it to clean up.");
+    await input.press("Enter");
+    await expect(page.getByTestId("build-activity-feed")).toBeVisible();
+    await seedOverflowingActivityFeed(page);
+
+    const assertDocked = async () => {
+      const feedBox = await page.getByTestId("build-activity-feed").boundingBox();
+      const dockBox = await page.getByTestId("build-scroll-to-latest-dock").boundingBox();
+      const buttonBox = await page
+        .getByRole("button", { name: "Scroll to latest activity" })
+        .boundingBox();
+      expect(feedBox).not.toBeNull();
+      expect(dockBox).not.toBeNull();
+      expect(buttonBox).not.toBeNull();
+      if (!feedBox || !dockBox || !buttonBox) return;
+      expect(dockBox.y).toBeGreaterThanOrEqual(feedBox.y + feedBox.height - 1);
+      expect(buttonBox.y).toBeGreaterThanOrEqual(feedBox.y + feedBox.height - 1);
+      expect(buttonBox.x).toBeGreaterThanOrEqual(0);
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(
+        await page.evaluate(() => window.innerWidth),
+      );
+    };
+
+    await test.step("desktop at 100%", assertDocked);
+
+    await test.step("desktop at 200% zoom", async () => {
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "2";
+      });
+      await assertDocked();
+    });
+
+    await test.step("mobile width with a growing stream", async () => {
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "1";
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByTestId("build-activity-feed").evaluate((node) => {
+        // The narrow layout can grow with the page instead of overflowing its
+        // feed. Constrain the viewport to exercise the actual chevron state.
+        node.style.height = "240px";
+        node.style.flex = "0 0 240px";
+        const transcript = node.querySelector<HTMLElement>("[data-f15-transcript]");
+        if (transcript) transcript.textContent += `\n${"streaming text ".repeat(100)}`;
+        node.scrollTop = 0;
+        node.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await assertDocked();
+    });
+
+    const button = page.getByRole("button", { name: "Scroll to latest activity" });
+    for (let attempts = 0; attempts < 40 && !(await button.evaluate((el) => el === document.activeElement)); attempts += 1) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(button).toBeFocused();
+    const focusStyle = await button.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+    });
+    expect(focusStyle.outlineStyle).not.toBe("none");
+    expect(Number.parseFloat(focusStyle.outlineWidth)).toBeGreaterThan(0);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.getByTestId("build-activity-feed").evaluate((node) => {
+      node.scrollTo = ((options: ScrollToOptions) => {
+        node.dataset.f15ScrollBehavior = options.behavior ?? "auto";
+      }) as typeof node.scrollTo;
+    });
+    await button.press("Enter");
+    await expect(page.getByTestId("build-activity-feed")).toHaveAttribute(
+      "data-f15-scroll-behavior",
+      "auto",
+    );
   });
 });

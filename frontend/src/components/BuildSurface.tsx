@@ -88,6 +88,17 @@ const FRAMING: Record<
   },
 };
 
+function preferredScrollBehavior(): ScrollBehavior {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ) {
+    return "auto";
+  }
+  return "smooth";
+}
+
 export function BuildSurface({
   resumeCid,
   framing = "build",
@@ -217,7 +228,7 @@ export function BuildSurface({
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const prevStatusRef = useRef(b.status);
   const prevDeliverableRef = useRef<string | null>(null);
-  // W-41: a floating "scroll to latest" chevron — shown only when the operator
+  // W-41: a docked "scroll to latest" chevron — shown only when the operator
   // has scrolled up far enough (>200px from the bottom) to have lost the live
   // tail; hidden once they're back at the bottom. The feed only auto-follows when
   // already near the bottom (below), so without this affordance a user reading
@@ -233,7 +244,7 @@ export function BuildSurface({
     const el = feedScrollRef.current;
     if (!el) return;
     if (typeof el.scrollTo === "function") {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      el.scrollTo({ top: el.scrollHeight, behavior: preferredScrollBehavior() });
     } else {
       el.scrollTop = el.scrollHeight;
     }
@@ -264,7 +275,7 @@ export function BuildSurface({
     // the TOP. Confirm/decision/question gates + capstones still scroll to bottom.
     if (statusTransitioned && b.status === "AWAITING_PLAN_APPROVAL") {
       if (typeof el.scrollTo === "function") {
-        el.scrollTo({ top: 0, behavior: "smooth" });
+        el.scrollTo({ top: 0, behavior: preferredScrollBehavior() });
       } else {
         el.scrollTop = 0;
       }
@@ -272,7 +283,7 @@ export function BuildSurface({
       // Smooth in the browser; fall back to the scrollTop property (jsdom has no
       // scrollTo) so the behavior is testable.
       if (typeof el.scrollTo === "function") {
-        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        el.scrollTo({ top: el.scrollHeight, behavior: preferredScrollBehavior() });
       } else {
         el.scrollTop = el.scrollHeight;
       }
@@ -474,7 +485,7 @@ export function BuildSurface({
           </div>
         </div>
 
-        <div className="relative mt-section flex min-h-0 flex-1 flex-col px-body">
+        <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
           <div className="flex items-baseline justify-between">
             <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
               Activity
@@ -600,19 +611,25 @@ export function BuildSurface({
               </>
             )}
           </div>
-          {/* W-41: floating jump-to-latest control, centered over the feed's
-              bottom edge; only mounted when scrolled up past the threshold. */}
+          {/* F15/W-41: the jump-to-latest control occupies its own flex row.
+              Keeping it outside the scroll viewport reserves real layout space
+              at every width/zoom and prevents it from covering transcript text. */}
           {showScrollDown && (
-            <button
-              type="button"
-              onClick={scrollFeedToBottom}
-              aria-label="Scroll to latest activity"
-              title="Scroll to latest activity"
-              data-disco-control="build.scroll-to-bottom"
-              className="absolute bottom-section left-1/2 z-20 flex -translate-x-1/2 items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
+            <div
+              data-testid="build-scroll-to-latest-dock"
+              className="flex shrink-0 items-center justify-center py-hair"
             >
-              <ChevronDown className="size-4" aria-hidden />
-            </button>
+              <button
+                type="button"
+                onClick={scrollFeedToBottom}
+                aria-label="Scroll to latest activity"
+                title="Scroll to latest activity"
+                data-disco-control="build.scroll-to-bottom"
+                className="flex items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
+              >
+                <ChevronDown className="size-4" aria-hidden />
+              </button>
+            </div>
           )}
         </div>
 
