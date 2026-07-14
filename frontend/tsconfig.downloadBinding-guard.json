@@ -1,0 +1,10 @@
+{
+  // NON-FROZEN regression scope (mirrors tsconfig.closeout-g11.json): isolate the
+  // criterion-6 type-negative guard so its `@ts-expect-error` directives are the only
+  // thing under test. `typecheck:build` excludes tests, and vitest transpiles rather
+  // than type-checks, so this dedicated `tsc` pass is what actually enforces the guard.
+  "extends": "./tsconfig.app.json",
+  // The contract transitively imports client.ts (which reads `import.meta.env`), so the
+  // Vite ambient env declaration must be in scope — it is not reachable by import graph.
+  "include": ["src/api/downloadBinding.typeguard.contract.ts", "src/vite-env.d.ts"]
+}

@@ -37,6 +37,7 @@ import type {
   WSClientFrame,
   WSServerFrame,
 } from "@/types/agent";
+import { isSnapshottedDemoProject } from "./projects";
 import type { JsonPatchOp, LoweredDeck } from "@/components/build/editor/types";
 import {
   agentFetch,
@@ -463,11 +464,42 @@ function runningState(): ConversationState {
   return { ...gateState, execution_status: "RUNNING", pending_action_id: null, pending_plan_id: null };
 }
 
-function subscribeFixture(onFrame: (f: WSServerFrame) => void): AgentHandle {
+/** The rehydrated FINISHED state for a resumed snapshotted demo project (see
+ * `subscribeFixture`). Minimal but well-formed: the finished workspace snapshot is
+ * restored, so the surface shows the finished-handoff region and the release query
+ * enables. The `conversation_id` is the resumed cid (not the fresh-run FIXTURE_CID). */
+function rehydratedFinishedState(cid: string): ConversationState {
+  return {
+    conversation_id: cid,
+    execution_status: "FINISHED",
+    iteration: 0,
+    max_iterations: 500,
+    last_seq: 0,
+    pending_action_id: null,
+    pending_plan_id: null,
+  };
+}
+
+function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle {
   let cancelled = false;
   let atGate = false; // paused at the per-action confirmation gate
   let atPlan = false; // paused at the plan-approval gate
   let atAsk = false; // paused at the free-form Ask-gate (AWAITING_USER_QUESTION)
+
+  // Offline/demo fidelity: RESUMING a project that has a persisted finished snapshot
+  // (a snapshotted demo project in the fixture registry) rehydrates to a FINISHED
+  // view — exactly what a live agent does on resume (restore the committed snapshot).
+  // This makes the finished-handoff panels (Self-host / Deliverable) mount from the
+  // project's release verdict. It fires on the BARE subscribe a resume performs (a
+  // resume carries no `kick`); a fresh run uses a non-snapshotted cid, so its live
+  // plan→build→finish flow is untouched. Driven by the registry, not a cid allowlist.
+  if (isSnapshottedDemoProject(cid)) {
+    void (async () => {
+      await fixtureDelay(120);
+      if (cancelled) return;
+      onFrame({ type: "state", state: rehydratedFinishedState(cid) });
+    })();
+  }
 
   async function emit(events: typeof traceBeforeGate, final: ConversationState | null) {
     for (const event of events) {
@@ -657,7 +689,7 @@ export function subscribeConversation(
   // Dispatch by cid: the Deep Research fixture lives in its own module so the
   // Build fixture stays unmodified.
   if (cid === FIXTURE_DEEP_CID) return subscribeDeepFixture(onFrame);
-  return subscribeFixture(onFrame);
+  return subscribeFixture(cid, onFrame);
 }
 
 // ---- share (RP-06) ---------------------------------------------------------

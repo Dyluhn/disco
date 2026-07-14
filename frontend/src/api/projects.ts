@@ -144,6 +144,17 @@ const fixtureReleases: Record<string, ReleaseResponse> = {
   },
 };
 
+/** True when `cid` names an offline DEMO project that has a persisted workspace
+ * snapshot (`last_snapshot_at` set in the fixture registry). Such a project was
+ * committed at a finished state, so RESUMING it offline legitimately rehydrates to a
+ * FINISHED view — exactly what a live agent does on resume (restore the committed
+ * snapshot). The agent-stream fixture consults this to decide whether a bare resume
+ * (no kick) should surface the finished-handoff panels, mirroring the real backend
+ * consulting its workspace store. Driven by the registry, never a spec/test marker. */
+export function isSnapshottedDemoProject(cid: string): boolean {
+  return fixtureProjects.some((p) => p.id === cid && p.last_snapshot_at != null);
+}
+
 /** The offline release verdict for `cid`. Unknown projects get the stable
  * `not_web` shape (same key set, empty topology) — never a missing/partial body. */
 function fixtureRelease(cid: string): ReleaseResponse {
@@ -177,14 +188,52 @@ export async function listProjects(): Promise<ProjectsList> {
   return agentGet<ProjectsList>("/api/projects");
 }
 
-/** Trigger a browser download of the project's workspace zip. Returns nothing
+/** A SOURCE binding pins a self-host download to the EXACT immutable committed
+ * version the operator was shown (WO-C2 §6). BOTH fields are concrete (non-null) by
+ * construction — a caller with a nullable release field must narrow it first, so an
+ * unsnapshotted/unbound release can never fabricate a binding onto the URL. */
+export interface DownloadBinding {
+  version_seq: number;
+  spec_digest: string;
+}
+
+/** The real browser-download mechanism: an anchor navigation to `href`. Used for
+ * BOTH the live blob URL (after the authed fetch streams the zip) and the offline
+ * bound URL (the browser GETs the pinned zip directly). jsdom no-ops the click; a
+ * real browser downloads. Appended before click (some browsers require it). */
+function triggerAnchorDownload(href: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** Trigger a browser download of the project's workspace zip. When `binding` is
+ * supplied the download is SOURCE-BOUND: its query carries the exact
+ * (`version_seq`, `spec_digest`) the release verdict named, so the byte stream is the
+ * immutable stored version — never a drifting live mirror (WO-C2 §6). A `null`
+ * binding requests the plain, unbound zip and fabricates NO query. Returns nothing
  * on success; throws on a server error (e.g. files_missing → 404). */
-export async function downloadProject(cid: string): Promise<void> {
+export async function downloadProject(cid: string, binding: DownloadBinding | null): Promise<void> {
+  // Real URL-encoding (URLSearchParams → `:` becomes `%3A`), not a raw splice.
+  const query = binding
+    ? `?${new URLSearchParams({
+        version_seq: String(binding.version_seq),
+        spec_digest: binding.spec_digest,
+      }).toString()}`
+    : "";
+  const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/download${query}`;
   if (!agentLive()) {
     await fixtureDelay();
+    // Offline/demo fidelity: a BOUND download still issues a real, browser-observable
+    // GET to the bound URL so the operator's browser downloads the pinned zip (the
+    // fixture server 404s the body — the binding riding the query is the point). An
+    // UNBOUND offline download has no live workspace to stream, so it stays a no-op.
+    if (binding) triggerAnchorDownload(url, `${cid}.zip`);
     return;
   }
-  const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/download`;
   const res = await agentFetch(url, { headers: { accept: "application/zip" } });
   if (!res.ok) {
     let reason = `${res.status}`;
@@ -198,12 +247,7 @@ export async function downloadProject(cid: string): Promise<void> {
   }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = `${cid}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  triggerAnchorDownload(objectUrl, `${cid}.zip`);
   URL.revokeObjectURL(objectUrl);
 }
 
@@ -228,12 +272,7 @@ export async function exportProjectManifest(cid: string): Promise<void> {
   const text = JSON.stringify(await res.json(), null, 2);
   const blob = new Blob([text], { type: "application/json" });
   const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = `${cid}-manifest.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  triggerAnchorDownload(objectUrl, `${cid}-manifest.json`);
   URL.revokeObjectURL(objectUrl);
 }
 

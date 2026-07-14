@@ -70,6 +70,12 @@ export interface ReleaseResponse {
   ingress: ReleaseIngress | null;
   self_host: boolean;
   spec_digest: string | null;
-  version_seq: number;
-  tree_digest: string;
+  // Nullable to mirror the agent-server `ReleaseResponse` (`int | None` / `str | None`):
+  // an UNSNAPSHOTTED workspace has never committed a version, so it can name no
+  // concrete committed source — `version_seq` and `tree_digest` come back `null`. A
+  // consumer that wants to pin a source-bound download must narrow BOTH to non-null
+  // first (see `downloadProject`'s `DownloadBinding`), which is the guard that keeps
+  // an unbound release from ever riding a bound download URL.
+  version_seq: number | null;
+  tree_digest: string | null;
 }

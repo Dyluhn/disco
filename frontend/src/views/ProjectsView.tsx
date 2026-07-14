@@ -166,7 +166,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
           type="button"
           data-disco-control="projects.download-zip"
           data-zip-disabled={project.files_missing || download.isPending}
-          onClick={() => download.mutate(project.id)}
+          onClick={() => download.mutate({ id: project.id, binding: null })}
           disabled={project.files_missing || download.isPending}
           aria-label={`Download source: ${project.title}`}
           title={project.files_missing ? "Files missing — nothing to download" : "Download source"}

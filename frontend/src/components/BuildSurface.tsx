@@ -423,7 +423,7 @@ export function BuildSurface({
               <div className="flex shrink-0 flex-col items-end gap-hair">
                 <button
                   type="button"
-                  onClick={() => b.cid && download.mutate(b.cid)}
+                  onClick={() => b.cid && download.mutate({ id: b.cid, binding: null })}
                   disabled={download.isPending}
                   aria-label="Download source"
                   data-disco-control="build.export-zip"
@@ -603,7 +603,7 @@ export function BuildSurface({
                 "noopener,noreferrer",
               )
             }
-            onDownload={() => b.cid && download.mutate(b.cid)}
+            onDownload={() => b.cid && download.mutate({ id: b.cid, binding: null })}
             onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}
           />
           {/* WO-9: capability-driven Self-host handoff — renders from the release
@@ -613,7 +613,22 @@ export function BuildSurface({
           {b.status === "FINISHED" && release.data && (
             <SelfHostPanel
               release={release.data}
-              onDownload={() => b.cid && download.mutate(b.cid)}
+              onDownload={() => {
+                const r = release.data;
+                if (!b.cid || !r) return;
+                // Bind the download to the release ONLY when it is a genuine
+                // self-host candidate whose source is fully named — both
+                // version_seq AND spec_digest concrete. This narrowing is the guard:
+                // because the release type makes those fields nullable, passing them
+                // without the `!== null` narrowing is a compile error (a null binding
+                // can never ride a bound URL). A non-candidate (needs_review / not_web)
+                // downloads the plain, unbound zip.
+                const binding =
+                  r.self_host && r.version_seq !== null && r.spec_digest !== null
+                    ? { version_seq: r.version_seq, spec_digest: r.spec_digest }
+                    : null;
+                download.mutate({ id: b.cid, binding });
+              }}
             />
           )}
           {b.pendingAction && (

@@ -12,6 +12,7 @@ import {
   getProjectManifest,
   getProjectRelease,
   listProjects,
+  type DownloadBinding,
 } from "@/api/projects";
 import type { ProjectManifest, ProjectsList } from "@/types/project";
 import type { ReleaseResponse } from "@/types/release";
@@ -34,9 +35,14 @@ export function useDeleteProject() {
   });
 }
 
+/** Download a project's workspace zip. The mutation variable carries the optional
+ * SOURCE binding: a self-host `candidate` passes its concrete `{version_seq,
+ * spec_digest}` so the download is pinned to that immutable version; a plain
+ * (unbound) download passes `binding: null`. */
 export function useDownloadProject() {
   return useMutation({
-    mutationFn: (id: string) => downloadProject(id),
+    mutationFn: (vars: { id: string; binding: DownloadBinding | null }) =>
+      downloadProject(vars.id, vars.binding),
   });
 }
 
