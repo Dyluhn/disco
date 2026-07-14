@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useToast, type ToastApi } from "@/components/Toast";
+import { useToast, type ToastApi } from "@/components/toastApi";
 import type { ConversationStatus } from "@/types/agent";
 
 const TERMINAL_STATUSES = new Set<ConversationStatus>(["FINISHED", "ERROR", "STUCK"]);

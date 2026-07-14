@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,11 +30,17 @@ const PROMPT =
 // keep-alive sockets ("socket hang up"), and the agent-server stalling for
 // 45-60s while the in-sandbox browser-verify path runs (observed live in
 // bp-12 run 3). Retry generously — total tolerance ≈ 5×(30s + 3s) ≈ 2.7 min.
-async function getJson(request: any, url: string): Promise<any> {
+interface WireEvent {
+  kind?: string;
+  source?: string;
+  message?: { content?: string };
+}
+
+async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await (await request.get(url, { timeout: 30_000 })).json();
+      return (await (await request.get(url, { timeout: 30_000 })).json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 3_000));
@@ -43,13 +49,21 @@ async function getJson(request: any, url: string): Promise<any> {
   throw lastErr;
 }
 
-async function state(request: any, cid: string): Promise<string> {
-  return (await getJson(request, `${API}/conversations/${cid}/state`)).execution_status;
+async function state(request: APIRequestContext, cid: string): Promise<string> {
+  return (
+    await getJson<{ execution_status: string }>(
+      request,
+      `${API}/conversations/${cid}/state`,
+    )
+  ).execution_status;
 }
 
-async function events(request: any, cid: string): Promise<any[]> {
-  const body = await getJson(request, `${API}/conversations/${cid}/events`);
-  return body.events ?? body; // tolerate either wire shape
+async function events(request: APIRequestContext, cid: string): Promise<WireEvent[]> {
+  const body = await getJson<{ events?: WireEvent[] } | WireEvent[]>(
+    request,
+    `${API}/conversations/${cid}/events`,
+  );
+  return Array.isArray(body) ? body : (body.events ?? []); // tolerate either wire shape
 }
 
 test("stop → resume continues the same run to FINISHED (live)", async ({ page, request }) => {

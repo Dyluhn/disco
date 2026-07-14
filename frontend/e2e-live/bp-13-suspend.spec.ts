@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,11 +42,20 @@ const FOLLOW_UP =
 // keep-alive sockets ("socket hang up"), and the agent-server stalling for
 // 45-60s while the in-sandbox browser-verify path runs (observed live in
 // bp-12 run 3). Retry generously — total tolerance ≈ 5×(30s + 3s) ≈ 2.7 min.
-async function getJson(request: any, url: string): Promise<any> {
+interface WireEvent {
+  kind?: string;
+}
+
+interface ConversationState {
+  execution_status: string;
+  extras?: { sandbox?: string };
+}
+
+async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await (await request.get(url, { timeout: 30_000 })).json();
+      return (await (await request.get(url, { timeout: 30_000 })).json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 3_000));
@@ -55,21 +64,24 @@ async function getJson(request: any, url: string): Promise<any> {
   throw lastErr;
 }
 
-async function fullState(request: any, cid: string): Promise<any> {
-  return getJson(request, `${API}/conversations/${cid}/state`);
+async function fullState(request: APIRequestContext, cid: string): Promise<ConversationState> {
+  return getJson<ConversationState>(request, `${API}/conversations/${cid}/state`);
 }
 
-async function status(request: any, cid: string): Promise<string> {
+async function status(request: APIRequestContext, cid: string): Promise<string> {
   return (await fullState(request, cid)).execution_status;
 }
 
-async function events(request: any, cid: string): Promise<any[]> {
-  const body = await getJson(request, `${API}/conversations/${cid}/events`);
-  return body.events ?? body; // tolerate either wire shape
+async function events(request: APIRequestContext, cid: string): Promise<WireEvent[]> {
+  const body = await getJson<{ events?: WireEvent[] } | WireEvent[]>(
+    request,
+    `${API}/conversations/${cid}/events`,
+  );
+  return Array.isArray(body) ? body : (body.events ?? []); // tolerate either wire shape
 }
 
 async function waitForStatus(
-  request: any,
+  request: APIRequestContext,
   cid: string,
   wanted: string[],
   deadlineMs: number,

@@ -13,7 +13,7 @@ import { useElementMention } from "@/hooks/useElementMention";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { useToast } from "@/components/Toast";
+import { useToast } from "@/components/toastApi";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { ELEMENT_MENTION_PICKER_SCRIPT } from "@/lib/elementMentionPicker";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";

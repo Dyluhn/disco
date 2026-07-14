@@ -10,7 +10,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandle } from "@/api/agent";
-import type { ConversationState, WSClientFrame, WSServerFrame } from "@/types/agent";
+import type { ConversationState, WSServerFrame } from "@/types/agent";
 import { useBuildStream } from "./useBuildStream";
 
 let sink: ((f: WSServerFrame) => void) | null = null;
@@ -18,7 +18,7 @@ let sink: ((f: WSServerFrame) => void) | null = null;
 vi.mock("@/api/agent", () => ({
   subscribeConversation: (_cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle => {
     sink = onFrame;
-    return { send: (_f: WSClientFrame) => {}, cancel: () => {} };
+    return { send: () => {}, cancel: () => {} };
   },
 }));
 

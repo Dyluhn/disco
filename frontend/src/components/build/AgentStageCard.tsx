@@ -17,19 +17,10 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { deriveLiveSignal } from "@/lib/buildTrace";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
+import { deriveStage, type AgentStage } from "@/components/build/agentStage";
 import type { ActivityItem } from "@/lib/buildTrace";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
-
-export type AgentStage =
-  | "planning"
-  | "reading"
-  | "executing"
-  | "building"
-  | "stalled"
-  | "done"
-  | "idle";
 
 const STAGE_LABEL: Record<AgentStage, string> = {
   planning: "Planning",
@@ -40,36 +31,6 @@ const STAGE_LABEL: Record<AgentStage, string> = {
   done: "Done",
   idle: "Idle",
 };
-
-/** Map the live signal + status onto one coarse stage. Pure + exported for tests. */
-export function deriveStage(events: AgentEvent[], status: ConversationStatus): AgentStage {
-  if (status === "FINISHED") return "done";
-  if (status === "STUCK" || status === "ERROR") return "stalled";
-  const sig = deriveLiveSignal(events, status);
-  switch (sig.kind) {
-    case "idle":
-      return "idle";
-    case "starting":
-      return "planning";
-    case "waiting_for_you":
-      // The gate panels render separately; here just reflect that a turn is settling.
-      return "planning";
-    case "thinking_about_user_message":
-      return "reading";
-    case "composing_next_step":
-      return "executing";
-    case "tool_executing": {
-      const t = sig.tool_name;
-      if (t === "update_plan_progress" || t === "plan" || t.startsWith("plan_")) return "planning";
-      if (t.startsWith("file_") || t === "shell") return "building";
-      if (t === "browser" || t === "search" || t === "fetch" || t === "read" || t.startsWith("mcp__"))
-        return "reading";
-      return "executing";
-    }
-    default:
-      return "idle";
-  }
-}
 
 const ACTIVE_STAGES = new Set<AgentStage>(["planning", "reading", "executing", "building"]);
 

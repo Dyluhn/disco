@@ -1,7 +1,7 @@
 import { AlertTriangle, CalendarClock, Check, Loader2, Play, Plus, ShieldCheck, Workflow } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useState } from "react";
-import { useToast } from "@/components/Toast";
+import { useToast } from "@/components/toastApi";
 import { WorkflowAuthorForm } from "@/components/workflows/WorkflowAuthorForm";
 import {
   useApproveWorkflow,

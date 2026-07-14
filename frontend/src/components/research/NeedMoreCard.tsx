@@ -203,30 +203,30 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
 
   // Shared helper: fetch export blob from server and trigger a download.
   // Used by both FSA and non-FSA paths so all export types get titles.
-  async function _fetchExportBlob(
-    fmt: "md" | "pdf",
-    bodyPayload: string | undefined,
-  ): Promise<Blob> {
-    const res = await agentFetch(
-      `/api/conversations/${cid}/report/export?fmt=${fmt}`,
-      {
-        method: "POST",
-        headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
-        body: bodyPayload,
-      },
-    );
-    if (!res.ok) {
-      let detail = `${res.status}`;
-      try {
-        const body = await res.json();
-        detail = body.detail?.reason || body.detail || JSON.stringify(body);
-      } catch {
-        /* not JSON */
+  const fetchExportBlob = useCallback(
+    async (fmt: "md" | "pdf", bodyPayload: string | undefined): Promise<Blob> => {
+      const res = await agentFetch(
+        `/api/conversations/${cid}/report/export?fmt=${fmt}`,
+        {
+          method: "POST",
+          headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
+          body: bodyPayload,
+        },
+      );
+      if (!res.ok) {
+        let detail = `${res.status}`;
+        try {
+          const body = await res.json();
+          detail = body.detail?.reason || body.detail || JSON.stringify(body);
+        } catch {
+          /* not JSON */
+        }
+        throw new Error(`Export failed (${res.status}): ${detail}`);
       }
-      throw new Error(`Export failed (${res.status}): ${detail}`);
-    }
-    return res.blob();
-  }
+      return res.blob();
+    },
+    [cid],
+  );
 
   // B4: derive filename from report title, not conv_id.
   const baseFilename = sanitizeFilename(report.query);
@@ -245,7 +245,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     if (hasFollowUps) exportBody.follow_up_seqs = followUpSeqs;
     const bodyPayload = JSON.stringify(exportBody);
     try {
-      const blob = await _fetchExportBlob("md", bodyPayload);
+      const blob = await fetchExportBlob("md", bodyPayload);
       if (fsa) {
         await saveViaPicker(blob, {
           suggestedName: baseFilename + ".md",
@@ -269,7 +269,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     } finally {
       setExporting(null);
     }
-  }, [report.query, cid, fsa, hasFollowUps, followUpSeqs, baseFilename, tpl]);
+  }, [fsa, hasFollowUps, followUpSeqs, baseFilename, tpl, fetchExportBlob]);
 
   const handleFmt = useCallback(
     async (fmt: "pdf") => {
@@ -286,7 +286,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
       try {
         const ext = ".pdf";
         const mimeType = "application/pdf";
-        const blob = await _fetchExportBlob(fmt, bodyPayload);
+        const blob = await fetchExportBlob(fmt, bodyPayload);
         if (fsa) {
           await saveViaPicker(blob, {
             suggestedName: baseFilename + ext,
@@ -311,7 +311,7 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
         setExporting(null);
       }
     },
-    [cid, fsa, hasFollowUps, followUpSeqs, baseFilename, tpl],
+    [fsa, hasFollowUps, followUpSeqs, baseFilename, tpl, fetchExportBlob],
   );
 
   return (

@@ -20,13 +20,17 @@ test("P8 click-to-edit through the real UI", async ({ page }) => {
 
   // Approve the plan (stable hook), then wait for FINISHED.
   const approve = page.locator('[data-disco-control="approve-plan"]').first();
-  try { await approve.waitFor({ state: "visible", timeout: 300_000 }); await approve.click(); } catch {}
+  try { await approve.waitFor({ state: "visible", timeout: 300_000 }); await approve.click(); } catch {
+    // Autonomous runs may not present a plan gate.
+  }
   await expect(page.getByText(/\bfinished\b/i).first()).toBeVisible({ timeout: 600_000 });
   await page.screenshot({ path: `${shots}/edit-01-finished.png`, fullPage: true });
 
   // Open the Preview tab, then toggle Edit mode via the STABLE hook (its accessible
   // name is an aria-label, not "Edit" — use data-disco-control).
-  try { await page.getByRole("tab", { name: /preview/i }).click(); } catch {}
+  try { await page.getByRole("tab", { name: /preview/i }).click(); } catch {
+    // Preview may already be selected.
+  }
   await page.waitForTimeout(1500);
   const editToggle = page.locator('[data-disco-control="build.edit-toggle"]').first();
   await editToggle.click({ timeout: 30_000 });
@@ -49,7 +53,9 @@ test("P8 click-to-edit through the real UI", async ({ page }) => {
   await page.screenshot({ path: `${shots}/edit-02-editmode.png`, fullPage: true });
 
   // Arm Inspect, then click the headline INSIDE the edit iframe.
-  try { await page.getByRole("button", { name: /inspect/i }).first().click({ timeout: 15_000 }); } catch {}
+  try { await page.getByRole("button", { name: /inspect/i }).first().click({ timeout: 15_000 }); } catch {
+    // Preserve the screenshot sequence when inspect is already armed.
+  }
   await page.waitForTimeout(800);
   await frame.locator("h1").first().click({ timeout: 15_000 });
   await page.waitForTimeout(1200);

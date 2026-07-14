@@ -13,7 +13,9 @@ test("P8 edit composer — visual evidence on a settled build", async ({ page })
   await page.screenshot({ path: `${shots}/shot-01-resumed.png`, fullPage: true });
 
   // Preview tab, then Edit mode via the stable hook.
-  try { await page.getByRole("tab", { name: /preview/i }).click(); } catch {}
+  try { await page.getByRole("tab", { name: /preview/i }).click(); } catch {
+    // Preview may already be selected.
+  }
   await page.waitForTimeout(1500);
   await page.locator('[data-disco-control="build.edit-toggle"]').first().click({ timeout: 30_000 });
   await page.waitForTimeout(2500);

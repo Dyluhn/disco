@@ -11,7 +11,7 @@
  * so a browser-verified build was falsely flagged VERIFICATION_GATE_BYPASSED.
  *
  * This is fail-closed: `passed` is true only when the build BOTH inspected its deliverable AND
- * disco accepted the finish as verified (clean FINISHED/VERIFIED, no unverified/​unverifiable
+ * disco accepted the finish as verified (clean FINISHED/VERIFIED, no unverified/unverifiable
  * release). It does NOT re-implement disco's console-error logic — it defers to disco's terminal
  * verdict (a build that rendered a broken page never finishes normally).
  */

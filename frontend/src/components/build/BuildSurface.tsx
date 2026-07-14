@@ -7,7 +7,7 @@ import { useRef, useState } from "react";
 import { Paperclip } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { uploadFiles } from "@/api/agent";
-import { useToast } from "@/components/Toast";
+import { useToast } from "@/components/toastApi";
 
 interface UploadComposerProps {
   cid: string | null;

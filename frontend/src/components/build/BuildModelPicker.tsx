@@ -11,7 +11,7 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { driverCostTag } from "@/lib/cost";
 import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
-import { useToast } from "@/components/Toast";
+import { useToast } from "@/components/toastApi";
 import type { DriverModel } from "@/types/agent";
 
 export function BuildModelPicker({

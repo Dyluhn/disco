@@ -176,7 +176,7 @@ export function HistoryView() {
   const querySpaceId = spaceFilter === "all" ? undefined : spaceFilter === "unfiled" ? null : spaceFilter;
   const { data, isLoading, isError, refetch } = useConversations(querySpaceId);
   const { data: spacesData } = useSpaces();
-  const spaces = spacesData?.spaces ?? [];
+  const spaces = useMemo(() => spacesData?.spaces ?? [], [spacesData]);
   const spaceNameById = useMemo(
     () => new Map(spaces.map((space) => [space.space_id, space.name])),
     [spaces],

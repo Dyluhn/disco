@@ -295,11 +295,11 @@ export function BuildSurface({
   );
   const steerWithMention = useCallback(
     (text: string) => b.steer(consumeElementMention(text)),
-    [b.steer, consumeElementMention],
+    [b, consumeElementMention],
   );
   const requestPlanWithMention = useCallback(
     (text: string) => b.requestPlan(consumeElementMention(text)),
-    [b.requestPlan, consumeElementMention],
+    [b, consumeElementMention],
   );
   const elementMentionChip = (
     <ElementMentionChip mention={elementMention} onRemove={() => setElementMention(null)} />

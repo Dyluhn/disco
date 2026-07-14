@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  */
 
 const API = "http://127.0.0.1:8000";
-const BASE_URL = "http://localhost:5174";
 const SCREENSHOT_DIR = path.resolve(__dirname, "../../test-record/screenshots/dc-01");
 const RECORD_DIR = path.resolve(__dirname, "../../test-record/dc-01");
 
@@ -29,11 +28,15 @@ const PROMPT =
   // it alive after FINISHED is DC-02's deliverable, not DC-01's.
   "Then run the command 'sleep 600' and wait for it to complete (call shell_wait as many times as needed) before finishing.";
 
-async function getJson(request: any, url: string): Promise<any> {
+interface ConversationState {
+  execution_status: string;
+}
+
+async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await (await request.get(url, { timeout: 30_000 })).json();
+      return (await (await request.get(url, { timeout: 30_000 })).json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 3_000));
@@ -42,12 +45,12 @@ async function getJson(request: any, url: string): Promise<any> {
   throw lastErr;
 }
 
-async function fullState(request: any, cid: string): Promise<any> {
-  return getJson(request, `${API}/conversations/${cid}/state`);
+async function fullState(request: APIRequestContext, cid: string): Promise<ConversationState> {
+  return getJson<ConversationState>(request, `${API}/conversations/${cid}/state`);
 }
 
 async function waitForStatus(
-  request: any,
+  request: APIRequestContext,
   cid: string,
   wanted: string[],
   deadlineMs: number,

@@ -9,31 +9,17 @@
  * neutral one — without being alarmist.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { CircleDollarSign, Info, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-
-export type ToastTone = "neutral" | "cost";
+import { ToastContext, type ToastApi, type ToastTone } from "@/components/toastApi";
 
 interface Toast {
   id: number;
   title: string;
   body?: string;
   tone: ToastTone;
-}
-
-export interface ToastApi {
-  /** Show a transient toast. Returns its id (so a caller could dismiss early). */
-  show: (t: { title: string; body?: string; tone?: ToastTone; ttlMs?: number }) => number;
-}
-
-const ToastContext = createContext<ToastApi | null>(null);
-
-/** Access the toast API. Safe no-op if no provider is mounted (e.g. unit tests
- *  that render a pill in isolation) — so callers never need to guard. */
-export function useToast(): ToastApi {
-  return useContext(ToastContext) ?? { show: () => -1 };
 }
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {

@@ -6,7 +6,7 @@ import { costLabel, costTag } from "@/lib/cost";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import { isFree, isMetered, type ModelInfo, type ModelProvider } from "@/types/models";
 import { CapabilityBadges } from "./CapabilityBadges";
-import { useToast } from "./Toast";
+import { useToast } from "./toastApi";
 
 /**
  * The model "leader" pill (Prompt 3C). Selects, by hand, the model that LEADS

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@/types/agent";
-import { latestEditableDeckBase } from "./AgentCanvas";
+import { latestEditableDeckBase } from "./latestEditableDeckBase";
 
 function obs(structured: Record<string, unknown>): AgentEvent {
   return {

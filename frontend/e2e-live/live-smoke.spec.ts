@@ -26,7 +26,9 @@ test("live build smoke through the real UI", async ({ page }) => {
   // rendered text (data-disco-control="approve-plan", PlanPanel.tsx). Autonomous
   // runs may skip the gate, so tolerate absence.
   const approve = page.locator('[data-disco-control="approve-plan"]').first();
-  try { await approve.waitFor({ state: "visible", timeout: 300_000 }); await approve.click(); } catch {}
+  try { await approve.waitFor({ state: "visible", timeout: 300_000 }); await approve.click(); } catch {
+    // Autonomous runs may not present a plan gate.
+  }
   await page.screenshot({ path: `${shots}/03-running.png` });
 
   // Build-surface truth via TWO independent oracles, both host-owned:

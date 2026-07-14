@@ -20,7 +20,7 @@ import type { AgentEvent } from "@/types/agent";
 import * as agentApi from "@/api/agent";
 
 // Silence the toast (no provider in test)
-vi.mock("@/components/Toast", () => ({
+vi.mock("@/components/toastApi", () => ({
   useToast: () => ({ show: vi.fn() }),
 }));
 

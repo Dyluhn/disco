@@ -12,9 +12,10 @@ import { Markdown } from "@/components/Markdown";
 import { CitedText } from "@/components/blocks";
 import { ClaimVerdicts } from "@/components/research/ClaimVerdicts";
 import { SupportMeter } from "@/components/research/SupportMeter";
+import { asGroundedAnswer } from "@/components/research/groundedAnswer";
 import { cn } from "@/lib/cn";
 import type { AssemblingSection } from "@/lib/deepResearchTrace";
-import type { GroundedAnswer, Passage, SearchHit, VerifiedClaim } from "@/types/grounded";
+import type { GroundedAnswer, VerifiedClaim } from "@/types/grounded";
 import type { ReportEvent } from "@/types/agent";
 
 interface Props {
@@ -55,24 +56,6 @@ const CONFIDENCE_VARIANT: Record<
     tone: "text-unsupported",
   },
 };
-
-/** Cast report.passages + report.all_hits into the typed shapes CitedText
- * resolves. They're plain dicts on the event wire (kept core-free of
- * retrieval imports); the cast lives at the render boundary.
- * Exported so sibling surfaces (DeepResearchSurface) can resolve [[id]]
- * markers in follow-up answers with the same report corpus. */
-export function asGroundedAnswer(report: ReportEvent | null, query: string): GroundedAnswer | null {
-  if (!report) return null;
-  return {
-    query,
-    blocks: [],
-    claims: report.claims ?? [],
-    passages: report.passages as unknown as Passage[],
-    all_hits: report.all_hits as unknown as SearchHit[],
-    unsupported_count: report.unsupported_count,
-    follow_ups: [],
-  };
-}
 
 /** REAL verdict counts from the report's per-claim NLI verdicts. These exist
  *  GLOBALLY (GroundedAnswer.claims) — a ReportSection carries only

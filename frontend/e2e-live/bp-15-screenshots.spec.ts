@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,11 +41,16 @@ const PROMPT =
 
 // bp-12 template hazards: uvicorn keep-alive recycling + 45-60s server stalls
 // while in-sandbox browser-verify runs. Retry generously.
-async function getJson(request: any, url: string): Promise<any> {
+interface ConversationState {
+  execution_status: string;
+  sandbox_backend?: string;
+}
+
+async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await (await request.get(url, { timeout: 30_000 })).json();
+      return (await (await request.get(url, { timeout: 30_000 })).json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 3_000));
@@ -54,12 +59,12 @@ async function getJson(request: any, url: string): Promise<any> {
   throw lastErr;
 }
 
-async function fullState(request: any, cid: string): Promise<any> {
-  return getJson(request, `${API}/conversations/${cid}/state`);
+async function fullState(request: APIRequestContext, cid: string): Promise<ConversationState> {
+  return getJson<ConversationState>(request, `${API}/conversations/${cid}/state`);
 }
 
 async function waitForStatus(
-  request: any,
+  request: APIRequestContext,
   cid: string,
   wanted: string[],
   deadlineMs: number,

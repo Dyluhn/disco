@@ -44,7 +44,8 @@ import type { ScopeId } from "@/shell/mode";
 import type { ReportExportFmt } from "@/api/deepResearch";
 import { DeepBoundedNotice } from "./DeepBoundedNotice";
 import { DeepProgressStrip } from "./DeepProgressStrip";
-import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
+import { DeepReportView } from "./DeepReportView";
+import { asGroundedAnswer } from "./groundedAnswer";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { RecencySelector } from "./RecencySelector";
 // IterativeToggle removed from the UI 2026-07-07 (Dylan): iterative grounding

@@ -30,7 +30,7 @@ describe("DeepReportView table rendering", () => {
       unsupported_count: 0,
       depth_tier: "standard_deep",
       bounded_by: "rounds",
-    } as any;
+    } as unknown as ReportEvent;
 
     render(
       <DeepReportView
@@ -80,7 +80,7 @@ describe("DeepReportView table rendering", () => {
       passages: [],
       all_hits: [],
       unsupported_count: 0,
-    } as any;
+    } as unknown as ReportEvent;
 
     render(
       <DeepReportView
@@ -116,7 +116,7 @@ describe("DeepReportView table rendering", () => {
       ],
       all_hits: [],
       unsupported_count: 0,
-    } as any;
+    } as unknown as ReportEvent;
 
     render(
       <DeepReportView
@@ -150,7 +150,7 @@ describe("DeepReportView — F3 cid prop threading", () => {
     // block artifacts the download wiring is already in place.  This test
     // verifies the prop is forwarded without TypeScript errors or runtime
     // crashes, and that the report content still renders correctly.
-    const mockReport: any = {
+    const mockReport = {
       type: "report",
       query: "battery commercialization",
       summary: "Executive summary text.",
@@ -169,7 +169,7 @@ describe("DeepReportView — F3 cid prop threading", () => {
       unsupported_count: 0,
       depth_tier: "standard_deep",
       bounded_by: null,
-    };
+    } as unknown as ReportEvent;
 
     // Must not throw; the prop is only consumed downstream when block-level
     // artifacts (sheet, slides) appear in a section.
@@ -192,7 +192,7 @@ describe("DeepReportView — F3 cid prop threading", () => {
   });
 
   it("F3: renders identically when cid is undefined (backward-compat, no false affordance)", () => {
-    const mockReport: any = {
+    const mockReport = {
       type: "report",
       query: "q",
       summary: null,
@@ -211,7 +211,7 @@ describe("DeepReportView — F3 cid prop threading", () => {
       unsupported_count: 0,
       depth_tier: "standard_deep",
       bounded_by: null,
-    };
+    } as unknown as ReportEvent;
 
     // cid omitted → behaviour unchanged from before F3 (no download, no error)
     render(
@@ -257,7 +257,7 @@ describe("DeepReportView — WALK-03 disputed_notes citation resolution", () => 
       unsupported_count: 0,
       bounded_by: null,
       depth_tier: "standard_deep",
-    } as any;
+    } as unknown as ReportEvent;
 
     render(
       <DeepReportView
@@ -306,7 +306,7 @@ describe("DeepReportView — WALK-03 disputed_notes citation resolution", () => 
       unsupported_count: 0,
       bounded_by: null,
       depth_tier: "standard_deep",
-    } as any;
+    } as unknown as ReportEvent;
 
     render(
       <DeepReportView

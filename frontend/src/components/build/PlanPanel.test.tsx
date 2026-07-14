@@ -11,7 +11,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { defaultPlanPanelExpanded, PlanPanel } from "@/components/build/PlanPanel";
+import { PlanPanel } from "@/components/build/PlanPanel";
+import { defaultPlanPanelExpanded } from "@/components/build/planPanelState";
 import type { PlanView } from "@/lib/buildTrace";
 
 const NO_STEPS: PlanView = {

@@ -1,12 +1,12 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
+import type { ConversationSummary } from "@/types/conversation";
 import { HistoryView } from "./HistoryView";
 
-function withConversations(conversations: any[]) {
+function withConversations(conversations: ConversationSummary[]) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,11 +35,16 @@ const PROMPT =
 
 // bp-12 template hazards: uvicorn keep-alive recycling + 45-60s server stalls
 // while in-sandbox browser-verify runs. Retry generously.
-async function getJson(request: any, url: string): Promise<any> {
+interface LiveSession {
+  name: string;
+  busy?: boolean;
+}
+
+async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      return await (await request.get(url, { timeout: 30_000 })).json();
+      return (await (await request.get(url, { timeout: 30_000 })).json()) as T;
     } catch (err) {
       lastErr = err;
       await new Promise((r) => setTimeout(r, 3_000));
@@ -48,17 +53,25 @@ async function getJson(request: any, url: string): Promise<any> {
   throw lastErr;
 }
 
-async function status(request: any, cid: string): Promise<string> {
-  return (await getJson(request, `${API}/conversations/${cid}/state`)).execution_status;
+async function status(request: APIRequestContext, cid: string): Promise<string> {
+  return (
+    await getJson<{ execution_status: string }>(
+      request,
+      `${API}/conversations/${cid}/state`,
+    )
+  ).execution_status;
 }
 
-async function sessions(request: any, cid: string): Promise<any[]> {
-  const body = await getJson(request, `${API}/conversations/${cid}/sessions`);
+async function sessions(request: APIRequestContext, cid: string): Promise<LiveSession[]> {
+  const body = await getJson<{ sessions?: LiveSession[] }>(
+    request,
+    `${API}/conversations/${cid}/sessions`,
+  );
   return body.sessions ?? [];
 }
 
 async function waitForStatus(
-  request: any,
+  request: APIRequestContext,
   cid: string,
   wanted: string[],
   deadlineMs: number,
@@ -110,7 +123,7 @@ test("Terminal tab shows live tmux sessions mid-build, history fallback after su
   //    while the build is RUNNING. The agent's serve step keeps one busy.
   //    Also assert the route NEVER leaks `__*` names (order prohibition).
   const sessionDeadline = Date.now() + 600_000;
-  let liveSessions: any[] = [];
+  let liveSessions: LiveSession[] = [];
   let sawBusy = false;
   let leakedInternal = false;
   while (Date.now() < sessionDeadline) {
@@ -142,7 +155,7 @@ test("Terminal tab shows live tmux sessions mid-build, history fallback after su
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "terminal-live.png") });
 
   // Wire shape spot-check on /view for the first session.
-  const view = await getJson(
+  const view = await getJson<{ content?: unknown }>(
     request,
     `${API}/conversations/${cid}/sessions/${encodeURIComponent(chipName)}/view?tail_chars=10000`,
   );
@@ -159,7 +172,7 @@ test("Terminal tab shows live tmux sessions mid-build, history fallback after su
   const st = await waitForStatus(request, cid, ["FINISHED", "ERROR"], 900_000);
   expect(st, `build ended ${st}`).toBe("FINISHED");
   const emptyDeadline = Date.now() + 120_000;
-  let post: any[] = [{ name: "sentinel" }];
+  let post: LiveSession[] = [{ name: "sentinel" }];
   while (Date.now() < emptyDeadline) {
     post = await sessions(request, cid);
     if (post.length === 0) break;

@@ -12,7 +12,7 @@
  *  (h) Selection resets to all-selected when modal reopens
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { IncludeFollowUpsModal } from "./IncludeFollowUpsModal";
@@ -87,7 +87,6 @@ describe("IncludeFollowUpsModal", () => {
   // (b) Answered pairs selected by default
   it("pre-selects all pairs that have answers", () => {
     renderModal();
-    const buttons = screen.getAllByRole("button", { name: /What about the sparrow|Any penguins/i });
     // The two answered pairs should be aria-pressed=true
     const pressedButtons = screen.getAllByRole("button").filter(
       (b) => b.getAttribute("aria-pressed") === "true",

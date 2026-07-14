@@ -109,15 +109,13 @@ export function useElementSelect(
 
   // Disarm on unmount to clean up the in-frame handler.
   useEffect(() => {
+    const iframe = iframeRef.current;
     return () => {
-      const iframe = iframeRef.current;
       if (iframe && nonceRef.current) {
         sendToFrame(iframe, makeDisarmCommand(nonceRef.current));
       }
     };
-  // iframeRef is a stable ref object; we only need the cleanup effect on mount.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [iframeRef]);
 
   return { armed, arm, disarm, selection, walkUp, resetSelection };
 }

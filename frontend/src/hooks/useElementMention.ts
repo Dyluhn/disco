@@ -67,9 +67,9 @@ export function useElementMention(
   }, [allowedOrigin]);
 
   useEffect(() => {
+    const iframe = iframeRef.current;
     return () => {
       const nonce = nonceRef.current;
-      const iframe = iframeRef.current;
       if (iframe && nonce) {
         sendElementMentionCommand(iframe, makeElementMentionDisarmCommand(nonce));
       }

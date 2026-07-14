@@ -85,13 +85,13 @@ describe("ChartBlock component", () => {
   // ---- invalid payload → table fallback, never crashes ------------------
 
   it("renders table fallback for non-array data", () => {
-    const block: any = {
+    const block = {
       kind: "chart",
       id: "b1",
       chart_type: "bar",
       data: "not an array",
       title: "Invalid Chart",
-    };
+    } as unknown as AnswerBlock;
     render(<BlockView block={block} answer={null} />);
 
     expect(screen.getByText("(Invalid chart data)")).toBeInTheDocument();
@@ -99,13 +99,13 @@ describe("ChartBlock component", () => {
   });
 
   it("renders table fallback for null data", () => {
-    const block: any = {
+    const block = {
       kind: "chart",
       id: "b2",
       chart_type: "line",
       data: null,
       title: "Null Data",
-    };
+    } as unknown as AnswerBlock;
     render(<BlockView block={block} answer={null} />);
 
     expect(screen.getByText("(Invalid chart data)")).toBeInTheDocument();
@@ -155,12 +155,12 @@ describe("ChartBlock component", () => {
       throw new Error("Rendering failed");
     });
 
-    const block: any = {
+    const block = {
       kind: "chart",
       id: "b5",
       chart_type: "bar",
       data: [{ weird: 1 }], // no label or value key
-    };
+    } as unknown as AnswerBlock;
     render(<BlockView block={block} answer={null} />);
 
     // tableData is still constructed (rows have empty/undefined strings),

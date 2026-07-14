@@ -102,7 +102,6 @@ export function AudioPlayer({ src, className }: AudioPlayerProps) {
       aria-label="Audio overview player"
     >
       {/* Hidden real audio element — not a visible widget; state is managed above */}
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio ref={audioRef} src={src} preload="metadata" aria-hidden />
 
       {/* Play / Pause toggle */}

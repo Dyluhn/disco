@@ -34,43 +34,10 @@ import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { useLiveBrowserConfig } from "@/hooks/useModels";
 import { DeckEditorPane } from "@/components/build/DeckEditorPane";
+import { latestEditableDeckBase } from "@/components/build/latestEditableDeckBase";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 type TabId = "browser" | "artifacts" | "console" | "history" | "deck";
-
-/** The base name of the most-recent deck that carries an editable AuthoredDeck
- * sidecar (A2.0 sets structured.editable_source on the slides_generate C2 path).
- * That sidecar is what the in-app deck editor reads — its absence means the deck
- * is a Marp/markdown deck (no editable source), so the Edit/Export Slides tab must
- * not appear (no false affordance). Latest editable deck wins. Null when none. */
-export function latestEditableDeckBase(events: AgentEvent[]): string | null {
-  // The LATEST render per base decides editability (mirrors the server's
-  // _sidecar_is_current guard): a later non-editable regen of a base (Marp/fallback —
-  // base_name but no editable_source) supersedes its earlier editable sidecar, so the
-  // stale sidecar must NOT be offered (editing it would overwrite the newer deck).
-  const decided = new Set<string>();
-  for (let i = events.length - 1; i >= 0; i--) {
-    const e = events[i];
-    if (e.kind !== "observation") continue;
-    const { tool_name, structured, success } = e.tool_result;
-    if (tool_name !== "slides_generate" || !success || !structured) continue;
-    const editable = structured.editable_source;
-    const baseName = typeof structured.base_name === "string" ? structured.base_name : null;
-    const base =
-      baseName ??
-      (typeof editable === "string" && editable
-        ? editable.replace(/\.authored\.json$/i, "")
-        : null);
-    if (!base || decided.has(base)) continue; // a LATER event already decided this base
-    decided.add(base); // this is the latest render of `base`
-    // The editor route jails the base to a plain name (no "/"); a nested deck like
-    // "reports/q2" is downloadable but NOT editable — don't offer a tab that 404s.
-    if (base.includes("/")) continue;
-    if (typeof editable === "string" && editable) return base; // …and it's editable
-    // else: latest render of this base is non-editable → skip; scan other bases
-  }
-  return null;
-}
 
 /** All screenshot_paths the browser/MCP tools produced, in chronological order
  * (latest last). Real, straight from each observation's structured payload. */

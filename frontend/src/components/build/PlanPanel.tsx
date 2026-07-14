@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Markdown } from "@/components/Markdown";
+import { defaultPlanPanelExpanded } from "@/components/build/planPanelState";
 import { planProgressSummary } from "@/lib/buildTrace";
 import type { StepState, PlanView } from "@/lib/buildTrace";
 import type { ConversationStatus } from "@/types/agent";
@@ -49,16 +50,6 @@ function StepIcon({ state }: { state: StepState }) {
       />
     );
   return <CircleDashed className="size-3.5 shrink-0 text-text-faint" aria-hidden />;
-}
-
-export function defaultPlanPanelExpanded({
-  gate,
-  status,
-}: {
-  gate: boolean;
-  status?: ConversationStatus;
-}): boolean {
-  return gate || status === "AWAITING_PLAN_APPROVAL";
 }
 
 /** Build's single, honest progress signal: derived from the REAL conversation status,

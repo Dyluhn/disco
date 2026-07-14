@@ -30,7 +30,7 @@ vi.mock("@/hooks/useWorkspaceVersions", () => ({
   useWorkspaceVersions: (...args: unknown[]) => useWorkspaceVersionsMock(...args),
 }));
 
-vi.mock("@/components/Toast", () => ({
+vi.mock("@/components/toastApi", () => ({
   useToast: () => ({ show: showToastMock }),
 }));
 

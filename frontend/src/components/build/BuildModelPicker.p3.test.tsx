@@ -26,7 +26,7 @@ vi.mock("@/hooks/useDriverModels", () => ({
   useLastSelectedModel: vi.fn(),
 }));
 
-vi.mock("@/components/Toast", () => ({
+vi.mock("@/components/toastApi", () => ({
   useToast: () => ({ show: vi.fn() }),
 }));
 

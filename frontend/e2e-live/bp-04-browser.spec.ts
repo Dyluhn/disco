@@ -142,7 +142,6 @@ test("feed renders the browser daemon observation (fence + TITLE) for the live b
       "no FINISHED conversation among the known 25 has a qualifying browser observation",
     );
   }
-  const obsContent = witness!.obs!.tool_result!.content ?? "";
   const st = (witness!.obs!.tool_result!.structured ?? {}) as Record<string, unknown>;
 
   // 3. Open the build through the real UI (Resume route) and wait for feed rows.

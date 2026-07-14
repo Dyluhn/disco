@@ -117,14 +117,14 @@ export function useBuild(
     } catch {
       /* gate rejected (a run is in flight) — keep the existing model */
     }
-  }, [session?.cid, stream.status, modelId]);
+  }, [session?.cid, stream, modelId]);
 
   // Resume a terminal/paused conversation — PATCH the (possibly newly-picked) model
   // first so the re-kick composes with it, then call the underlying HTTP resume.
   const resume = useCallback(async () => {
     await applyModelBeforeContinue();
     stream.resume();
-  }, [applyModelBeforeContinue, stream.resume]);
+  }, [applyModelBeforeContinue, stream]);
 
   // Re-enter plan mode (the "Plan a change…" composer in the settled state) — same
   // patch-before-kick discipline so a model change before replanning takes effect.
@@ -133,7 +133,7 @@ export function useBuild(
       await applyModelBeforeContinue();
       stream.requestPlan(text);
     },
-    [applyModelBeforeContinue, stream.requestPlan],
+    [applyModelBeforeContinue, stream],
   );
 
   // Steer / answer a settled (FINISHED/STUCK/PAUSED) conversation — also honor a
@@ -143,7 +143,7 @@ export function useBuild(
       await applyModelBeforeContinue();
       stream.steer(text);
     },
-    [applyModelBeforeContinue, stream.steer],
+    [applyModelBeforeContinue, stream],
   );
 
   // Resume path: when a route param hands us a cid, jump straight in. The

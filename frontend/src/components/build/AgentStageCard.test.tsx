@@ -10,7 +10,8 @@
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { AgentStageCard, deriveStage } from "@/components/build/AgentStageCard";
+import { AgentStageCard } from "@/components/build/AgentStageCard";
+import { deriveStage } from "@/components/build/agentStage";
 import type { ActivityItem } from "@/lib/buildTrace";
 import type { AgentEvent } from "@/types/agent";
 
