@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
 from disco.core import SecurityRisk
 from disco.tools.mcp.config import McpServerConfig
 from disco.tools.mcp.http import McpHttpClient
@@ -80,4 +81,22 @@ async def test_fixture_keeps_optional_get_stream_open_without_reconnect_thrash(
         assert "GET stream disconnected" not in caplog.text
     finally:
         await client.close()
+        fixture.close()
+
+
+async def test_session_delete_does_not_race_optional_get_stream_closed() -> None:
+    fixture = ReliabilityMcpServer()
+    fixture.start()
+    timeout = httpx.Timeout(2.0, read=2.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("GET", fixture.mcp_url) as response:
+                assert response.status_code == 200
+                chunks = response.aiter_bytes()
+                assert b"reliability keepalive" in await anext(chunks)
+
+                deleted = await client.delete(fixture.mcp_url)
+                assert deleted.status_code == 204
+                assert b"reliability keepalive" in await anext(chunks)
+    finally:
         fixture.close()
