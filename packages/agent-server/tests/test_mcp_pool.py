@@ -288,6 +288,7 @@ async def test_pool_approval_from_real_db_table():
         assert len(pool2.approval_pending()) == 0
     finally:
         await pool2.aclose()
+        conn.close()
 
 
 @pytest.mark.asyncio
@@ -502,39 +503,44 @@ def test_mcp_approval_required_frame_reaches_ws_client():
     from fastapi.testclient import TestClient
 
     store = SqliteEventStore(":memory:")
-    client = TestClient(create_app(store))
-    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
+    try:
+        with TestClient(create_app(store)) as client:
+            cid = client.post("/conversations", json={"owner_id": "local"}).json()[
+                "conversation_id"
+            ]
 
-    with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
-        assert ws.receive_json()["type"] == "state"
+            with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
+                assert ws.receive_json()["type"] == "state"
 
-        # The ephemeral pump subscribes LAZILY — the queue is registered only when
-        # pump_ephemeral's `async for` first iterates (sqlite.py:_subscribe_
-        # ephemeral). publish_ephemeral is fire-and-forget and drops frames with
-        # no live subscriber, so wait until the pump is subscribed before emitting.
-        deadline = time.time() + 5.0
-        while not store._eph_subscribers.get(cid):
-            assert time.time() < deadline, "ephemeral pump never subscribed"
-            time.sleep(0.02)
+                # The ephemeral pump subscribes LAZILY — the queue is registered only when
+                # pump_ephemeral's `async for` first iterates (sqlite.py:_subscribe_
+                # ephemeral). publish_ephemeral is fire-and-forget and drops frames with
+                # no live subscriber, so wait until the pump is subscribed before emitting.
+                deadline = time.time() + 5.0
+                while not store._eph_subscribers.get(cid):
+                    assert time.time() < deadline, "ephemeral pump never subscribed"
+                    time.sleep(0.02)
 
-        # Emit the exact ephemeral dict the runtime emits for a re-approval event.
-        store.publish_ephemeral(
-            cid,
-            {
-                "type": "mcp_approval_required",
-                "server": "bad_ws_srv",
-                "description_hash": "a" * 64,
-                "old_description_hash": "b" * 64,
-            },
-        )
+                # Emit the exact ephemeral dict the runtime emits for a re-approval event.
+                store.publish_ephemeral(
+                    cid,
+                    {
+                        "type": "mcp_approval_required",
+                        "server": "bad_ws_srv",
+                        "description_hash": "a" * 64,
+                        "old_description_hash": "b" * 64,
+                    },
+                )
 
-        # It arrives over the real socket as the typed WSServerFrame (app.py
-        # pump_ephemeral wrapped it) — proving the dispatch boundary, not a mock.
-        frame = ws.receive_json()
-        assert frame["type"] == "mcp_approval_required"
-        assert frame["mcp_approval"]["server"] == "bad_ws_srv"
-        assert frame["mcp_approval"]["description_hash"] == "a" * 64
-        assert frame["mcp_approval"]["old_description_hash"] == "b" * 64
+                # It arrives over the real socket as the typed WSServerFrame (app.py
+                # pump_ephemeral wrapped it) — proving the dispatch boundary, not a mock.
+                frame = ws.receive_json()
+                assert frame["type"] == "mcp_approval_required"
+                assert frame["mcp_approval"]["server"] == "bad_ws_srv"
+                assert frame["mcp_approval"]["description_hash"] == "a" * 64
+                assert frame["mcp_approval"]["old_description_hash"] == "b" * 64
+    finally:
+        store.close()
 
 
 # ---- P5: wrapper-level invocation test ---------------------------------------

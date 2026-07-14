@@ -25,11 +25,13 @@ def test_build_egress_union_is_superset_not_replacement():
     """ANTI-GAMING: the result is a SUPERSET — pre-existing hosts AND MCP
     hosts BOTH survive. A test that would still pass if you REPLACED the
     set is a reject. This test explicitly asserts BOTH sets survive."""
-    existing = frozenset({
-        "registry.npmjs.org",
-        "pypi.org",
-        "github.com",
-    })
+    existing = frozenset(
+        {
+            "registry.npmjs.org",
+            "pypi.org",
+            "github.com",
+        }
+    )
 
     mcp_urls = ["https://api.example.com/mcp", "https://mcp2.org:9090/stream"]
     mcp_allowed = ["cdn.example.com", "*.mcp.org"]
@@ -152,6 +154,7 @@ def test_runtime_mcp_egress_hosts_method():
 
     assert "test-mcp.example.com:8443" in hosts
     assert "cdn.test.example.com" in hosts
+    store.close()
 
 
 def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
@@ -167,7 +170,8 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
     from disco.tools.mcp.config import McpServerConfig
     from disco.tools.mcp.http import McpHttpClient
 
-    runtime = ConversationRuntime(SqliteEventStore(":memory:"))
+    store = SqliteEventStore(":memory:")
+    runtime = ConversationRuntime(store)
     config = McpServerConfig(
         name="egress_srv",
         transport="streamable_http",
@@ -176,14 +180,10 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
         risk_tier=SecurityRisk.MEDIUM,
         enabled=True,
     )
-    runtime._mcp_http_clients["egress_srv"] = McpHttpClient(
-        server=config, call_timeout_s=5.0
-    )
+    runtime._mcp_http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._build_sandbox_spec(
-        mcp_egress_hosts=runtime._mcp_egress_hosts()
-    )
+    spec = runtime._build_sandbox_spec(mcp_egress_hosts=runtime._mcp_egress_hosts())
 
     allow = set(spec.egress_allow)
     # Registry hosts survive (a REPLACEMENT would have dropped these).
@@ -198,3 +198,4 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
     # the additions above came from the MCP union, not from the spec by default.
     spec_bare = runtime._build_sandbox_spec(mcp_egress_hosts=frozenset())
     assert set(spec_bare.egress_allow) == set(REGISTRY_EGRESS_ALLOW)
+    store.close()

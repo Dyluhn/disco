@@ -51,8 +51,13 @@ async def test_stdio_client_init_timeout():
         command=[sys.executable, "-c", "import time; time.sleep(60)"],
         init_timeout_s=1.0,
     )
-    with pytest.raises((asyncio.TimeoutError, TimeoutError, OSError, EOFError)):
-        await client.connect()
+    try:
+        with pytest.raises((asyncio.TimeoutError, TimeoutError, OSError, EOFError)):
+            await client.connect()
+    finally:
+        # A failed connect owns and drains every partially-entered resource;
+        # explicit close remains harmless for callers that always clean up.
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -67,6 +72,23 @@ async def test_stdio_client_close_is_idempotent(fake_server_command):
     await client.close()
     # Second close should NOT raise
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stdio_client_close_from_different_task_uses_lifecycle_owner(
+    fake_server_command,
+):
+    client = McpStdioClient(
+        command=[fake_server_command[0]],
+        args=fake_server_command[1:],
+        init_timeout_s=10.0,
+    )
+    await client.connect()
+
+    await asyncio.create_task(client.close())
+
+    with pytest.raises(RuntimeError, match="not connected"):
+        _ = client.session
 
 
 @pytest.mark.asyncio

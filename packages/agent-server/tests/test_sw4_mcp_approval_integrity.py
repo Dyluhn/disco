@@ -24,6 +24,7 @@ from disco.tools.mcp.approval import compute_config_hash, compute_description_ha
 from disco.tools.mcp.config import McpServerConfig, McpSettings
 from disco.tools.mcp.pool import McpPool
 from mcp.types import Tool as MCPTool
+
 from packages.tools.tests.mcp_fakes import FAKE_TOOL_DESCRIPTORS
 
 
@@ -167,9 +168,8 @@ async def test_unapproved_http_config_never_reaches_connect(
     pending = rt._mcp_approval_pending["new_http"]
     assert pending["kind"] == "config"
     assert pending["old_hash"] == ""
-    assert pending["new_hash"] == compute_config_hash(
-        {"name": "new_http", **raw}
-    )
+    assert pending["new_hash"] == compute_config_hash({"name": "new_http", **raw})
+    rt._store.close()
 
 
 class _FakeStdioClient:
@@ -184,9 +184,7 @@ class _FakeStdioClient:
     async def list_tools(self) -> list[MCPTool]:
         return list(type(self).tools)
 
-    async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": tool_name}], "isError": False}
 
     async def close(self) -> None:
@@ -303,8 +301,11 @@ async def test_stdio_tool_is_host_scoped_and_configured_risk_reaches_gate(
         assert tool.runs_in == "in_process"
         assert tool.base_risk is SecurityRisk.HIGH
         assert risk is SecurityRisk.HIGH
-        assert BlastRadiusConfirm().should_confirm_action(
-            risk, scope=tool.runs_in, tool_name=tool.name
-        ) is True
+        assert (
+            BlastRadiusConfirm().should_confirm_action(
+                risk, scope=tool.runs_in, tool_name=tool.name
+            )
+            is True
+        )
     finally:
         await pool.aclose()

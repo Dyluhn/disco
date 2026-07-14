@@ -51,6 +51,22 @@ _FAKE_SERVER_RAW_TOOLS = FAKE_TOOL_DESCRIPTORS
 _FAKE_SERVER_EXPECTED_HASH = compute_description_hash(_FAKE_SERVER_RAW_TOOLS)
 
 
+@pytest.fixture(autouse=True)
+def _close_event_stores(monkeypatch):
+    original = SqliteEventStore
+    stores = []
+
+    def tracked_store(*args, **kwargs):
+        store = original(*args, **kwargs)
+        stores.append(store)
+        return store
+
+    monkeypatch.setitem(globals(), "SqliteEventStore", tracked_store)
+    yield
+    for store in stores:
+        store.close()
+
+
 def _fake_stdio_command() -> list[str]:
     """The command that boots the FakeStdioServer (subprocess per pool start)."""
     return [

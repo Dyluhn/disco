@@ -11,6 +11,7 @@ status.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import tempfile
 from typing import Any
@@ -76,7 +77,8 @@ class McpStdioClient:
         self._init_timeout_s = init_timeout_s
         self._session: ClientSession | None = None
         self._stderr_lines: list[str] = []
-        self._transport = None
+        self._owner_task: asyncio.Task[None] | None = None
+        self._stop_event: asyncio.Event | None = None
 
     # ---- lifecycle -----------------------------------------------------------
 
@@ -86,6 +88,36 @@ class McpStdioClient:
         Times out after `init_timeout_s` on the initialize() call (SDK #1452
         hang defense). Stderr is captured into a buffer.
         """
+        if self._session is not None:
+            return self._session
+        if self._owner_task is not None and not self._owner_task.done():
+            raise RuntimeError("MCP stdio connection is already starting")
+
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[ClientSession] = loop.create_future()
+        self._stop_event = asyncio.Event()
+        self._stderr_lines.clear()
+        self._owner_task = asyncio.create_task(
+            self._run_connection(ready, self._stop_event),
+            name=f"mcp-stdio:{self._command[0]}",
+        )
+        try:
+            return await ready
+        except BaseException:
+            owner = self._owner_task
+            if owner is not None:
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await owner
+            self._owner_task = None
+            self._stop_event = None
+            raise
+
+    async def _run_connection(
+        self,
+        ready: asyncio.Future[ClientSession],
+        stop: asyncio.Event,
+    ) -> None:
+        """Own every SDK cancel scope and subprocess context in one task."""
         full_cmd = self._command + self._args
         # Start from a CLEAN base (PATH/locale/tmp only — never the host's
         # secrets) and overlay only the SecretsStore-resolved refs the user
@@ -100,44 +132,50 @@ class McpStdioClient:
             env=resolved_env,
         )
 
-        self._stderr_lines.clear()
-
         # Capture stderr into a temp file — the SDK's stdio_client
         # accepts an errlog TextIO. We use a temp file (has fileno())
         # and read it back after init for the per-server status (D4).
         errlog = tempfile.TemporaryFile(mode="w+", suffix=".stderr")
-
-        # The SDK's stdio_client yields (read_stream, write_stream).
-        # We wrap them in a ClientSession and call initialize().
-        streams = stdio_client(params, errlog=errlog)
-        read, write = await streams.__aenter__()
-        self._transport = streams
-
-        session = ClientSession(read, write)
-        self._session = session
-        await session.__aenter__()
+        init_failure: TimeoutError | None = None
 
         try:
-            await asyncio.wait_for(
-                session.initialize(), timeout=self._init_timeout_s
-            )
-        except TimeoutError as err:
-            raise TimeoutError(
-                f"MCP server {self._command[0]!r} did not respond to initialize() "
-                f"within {self._init_timeout_s}s"
-            ) from err
-
-        # Read captured stderr into our buffer (D4: real stderr capture)
-        try:
-            errlog.flush()
-            errlog.seek(0)
-            captured = errlog.read()
-            if captured:
-                self._stderr_lines.append(captured)
+            async with stdio_client(params, errlog=errlog) as (read, write):
+                async with ClientSession(read, write) as session:
+                    try:
+                        await asyncio.wait_for(session.initialize(), timeout=self._init_timeout_s)
+                    except TimeoutError as err:
+                        init_failure = TimeoutError(
+                            f"MCP server {self._command[0]!r} did not respond to "
+                            f"initialize() within {self._init_timeout_s}s"
+                        )
+                        init_failure.__cause__ = err
+                    if init_failure is None:
+                        errlog.flush()
+                        errlog.seek(0)
+                        captured = errlog.read()
+                        if captured:
+                            self._stderr_lines.append(captured)
+                        self._session = session
+                        if not ready.done():
+                            ready.set_result(session)
+                        await stop.wait()
+            if init_failure is not None:
+                raise init_failure
+        except BaseException as exc:
+            if not ready.done():
+                # AnyIO may wrap a timeout raised inside its task groups. Keep
+                # the documented timeout type after those groups have drained,
+                # without flattening unrelated exception groups.
+                ready.set_exception(init_failure or exc)
+            elif not isinstance(exc, asyncio.CancelledError):
+                _LOG.warning(
+                    "McpStdioClient owner stopped for %r: %s",
+                    self._command[0],
+                    type(exc).__name__,
+                )
         finally:
+            self._session = None
             errlog.close()
-
-        return session
 
     @property
     def session(self) -> ClientSession:
@@ -156,19 +194,23 @@ class McpStdioClient:
 
         SIGTERM, then SIGKILL after a 2s grace (the brief is explicit).
         """
-        if self._session is not None:
-            try:
-                await asyncio.wait_for(self._session.__aexit__(None, None, None), timeout=2.0)
-            except Exception:
-                pass
+        owner = self._owner_task
+        stop = self._stop_event
+        if owner is None:
             self._session = None
-
-        if self._transport is not None:
-            try:
-                await asyncio.wait_for(self._transport.__aexit__(None, None, None), timeout=2.0)
-            except Exception:
-                pass
-            self._transport = None
+            return
+        if stop is not None:
+            stop.set()
+        try:
+            await asyncio.wait_for(asyncio.shield(owner), timeout=5.0)
+        except TimeoutError:
+            owner.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await owner
+        finally:
+            self._session = None
+            self._owner_task = None
+            self._stop_event = None
 
     async def list_tools(self) -> list:
         """Fetch the server's tool list via the MCP session."""
@@ -186,4 +228,3 @@ class McpStdioClient:
             "content": list(result.content),
             "isError": getattr(result, "isError", False),
         }
-

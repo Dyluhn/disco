@@ -15,6 +15,22 @@ from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 
+@pytest.fixture(autouse=True)
+def _close_helper_stores(monkeypatch):
+    original = build_loop
+    stores = []
+
+    def tracked_build_loop(*args, **kwargs):
+        loop, store = original(*args, **kwargs)
+        stores.append(store)
+        return loop, store
+
+    monkeypatch.setitem(globals(), "build_loop", tracked_build_loop)
+    yield
+    for store in stores:
+        store.close()
+
+
 class _SplitExecutor:
     """Models the RP-05c advertise/callable split.
 
@@ -171,9 +187,7 @@ def _requery_hint_contents(view):
     saw immediately after the first requery bounce.
     """
     return [
-        m.content
-        for m in view.messages
-        if m.role == "user" and "Unknown tool" in (m.content or "")
+        m.content for m in view.messages if m.role == "user" and "Unknown tool" in (m.content or "")
     ]
 
 
@@ -220,9 +234,7 @@ async def test_unknown_tool_hint_suggests_nearest_with_assist_on():
     assert "Unknown tool 'file_writ'" in hint, f"Hint should still name the unknown tool: {hint!r}"
     assert "Available:" in hint, f"Hint should still list available tools: {hint!r}"
     # The new assist-gated suggestion must be present.
-    assert "did you mean" in hint, (
-        f"Hint should contain 'did you mean' when assist is ON: {hint!r}"
-    )
+    assert "did you mean" in hint, f"Hint should contain 'did you mean' when assist is ON: {hint!r}"
     assert "file_write" in hint, (
         f"Hint should suggest 'file_write' as the nearest real tool: {hint!r}"
     )
