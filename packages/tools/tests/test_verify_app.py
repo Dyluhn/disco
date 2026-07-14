@@ -410,7 +410,10 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
             success=False,
             content="",
             error=BROWSER_UNAVAILABLE_MSG,
-            structured={"browser_unavailable": True},
+            structured={
+                "browser_unavailable": True,
+                "startup_diagnostic": "exit=1; chromium launch failed",
+            },
         )
 
     monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
@@ -421,7 +424,12 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
     assert out.structured["browser_unavailable"] is True
     assert out.structured["verdict"] == "unverifiable"
     assert out.structured["verdict"] != "degraded"
-    assert out.structured["passed"] is True
+    assert out.structured["passed"] is False
+    assert out.structured["failure_fingerprint"] == "browser_unavailable"
+    assert out.structured["startup_diagnostic"] == (
+        "exit=1; chromium launch failed"
+    )
+    assert out.content.startswith("VERIFY_WEB_APP: UNVERIFIABLE")
     assert "skip browser-based verification" in out.content
 
 

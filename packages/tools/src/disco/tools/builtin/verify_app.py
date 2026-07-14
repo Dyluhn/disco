@@ -186,17 +186,22 @@ class VerifyWebAppTool:
                     # DEGRADED that it would try to "fix" forever.
                     unverifiable = {
                         "verdict": "unverifiable",
-                        "passed": True,
+                        "passed": False,
                         "url": url,
                         "http_status": http_status,
                         "browser_unavailable": True,
-                        "failure_fingerprint": "",
+                        "failure_fingerprint": "browser_unavailable",
                         "summary": (
                             f"server reachable at {url} (HTTP {http_status}); "
                             f"{BROWSER_UNAVAILABLE_MSG}"
                         ),
                         "next_action": "",
                     }
+                    startup_diagnostic = (browser_outcome.structured or {}).get(
+                        "startup_diagnostic"
+                    )
+                    if startup_diagnostic:
+                        unverifiable["startup_diagnostic"] = startup_diagnostic
                     # WO-TC3: the render checks can't run here, but the component
                     # checks CAN (integrity/deps need only bytes; probes are
                     # HTTP-level and the server IS reachable) — never skip them.
@@ -208,9 +213,7 @@ class VerifyWebAppTool:
                         content=(
                             "VERIFY_WEB_APP: "
                             + (
-                                "FAIL"
-                                if not unverifiable["passed"]
-                                else "UNVERIFIABLE (server reachable)"
+                                "UNVERIFIABLE (server reachable)"
                             )
                             + "\n"
                             f"url: {url}  http_status: {http_status}\n"

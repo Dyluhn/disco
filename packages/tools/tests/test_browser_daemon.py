@@ -8,7 +8,7 @@ from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.browser import BrowserArgs, BrowserTool
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import ProcessSandboxService
-from disco.tools.sandbox.shell_sessions import ShellSessionManager
+from disco.tools.sandbox.shell_sessions import ExecOutcome, SessionView, ShellSessionManager
 
 
 @pytest.mark.asyncio
@@ -542,6 +542,12 @@ async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     ctx.timeout_s = 30
     # Every health check fails → the daemon never starts.
     ctx.sandbox.exec_shell.return_value = ExecResult(exit_code=1, stdout="", stderr="")
+    ctx.sessions.exec.return_value = ExecOutcome(
+        running=True, exit_code=None, output="starting browser daemon"
+    )
+    ctx.sessions.view.return_value = SessionView(
+        running=False, output="chromium launch failed: missing runtime"
+    )
 
     # _ensure_daemon raises the TYPED terminal error...
     with pytest.raises(BrowserUnavailableError):
@@ -550,9 +556,41 @@ async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     # ...and run() converts it into a terminal, non-retryable outcome (no exception).
     out = await tool.run(BrowserArgs(action="navigate", url="http://127.0.0.1:8000/"), ctx)
     assert out.success is False
-    assert out.structured == {"browser_unavailable": True}
+    assert out.structured["browser_unavailable"] is True
+    assert out.structured["startup_diagnostic"] == (
+        "chromium launch failed: missing runtime"
+    )
     assert out.error == BROWSER_UNAVAILABLE_MSG
     assert "do not retry" in out.error
+
+
+@pytest.mark.asyncio
+async def test_browser_early_daemon_exit_preserves_bounded_diagnostic(monkeypatch):
+    from disco.tools.builtin.browser import BROWSER_UNAVAILABLE_MSG
+
+    tool = BrowserTool()
+    ctx = MagicMock(spec=ToolContext)
+    ctx.sandbox = AsyncMock()
+    ctx.sessions = AsyncMock()
+    ctx.timeout_s = 30
+    ctx.sandbox.exec_shell.return_value = ExecResult(
+        exit_code=1, stdout="", stderr=""
+    )
+    ctx.sessions.exec.return_value = ExecOutcome(
+        running=False,
+        exit_code=1,
+        output="X" * 1500 + "\nplaywright chromium launch boom",
+    )
+
+    out = await tool.run(BrowserArgs(action="navigate", url="http://127.0.0.1:8000/"), ctx)
+
+    assert out.success is False
+    assert out.error == BROWSER_UNAVAILABLE_MSG
+    diagnostic = out.structured["startup_diagnostic"]
+    assert diagnostic.startswith("exit=1; …")
+    assert diagnostic.endswith("playwright chromium launch boom")
+    assert len(diagnostic) <= 1280
+    assert ctx.sessions.view.await_count == 0
 
 @pytest.mark.integration
 @pytest.mark.asyncio

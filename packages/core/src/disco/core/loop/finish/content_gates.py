@@ -20,6 +20,67 @@ from .common import (
     _safe_deliverable_file_path,
 )
 
+_DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".avi",
+        ".doc",
+        ".docx",
+        ".eot",
+        ".gif",
+        ".gz",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".m4a",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".odt",
+        ".ogg",
+        ".otf",
+        ".pdf",
+        ".png",
+        ".ppt",
+        ".pptx",
+        ".sqlite",
+        ".sqlite3",
+        ".tar",
+        ".ttf",
+        ".wasm",
+        ".wav",
+        ".webm",
+        ".webp",
+        ".woff",
+        ".woff2",
+        ".xls",
+        ".xlsx",
+        ".zip",
+    }
+)
+
+
+def _dictated_content_text_candidate(path: str, data: bytes) -> bool:
+    """Whether bytes may safely participate in a user-visible text floor.
+
+    Known binary extensions are always excluded. Unknown extensions must still
+    be valid NUL-free UTF-8, which protects binary artifacts without preventing
+    extensionless or uncommon text deliverables from carrying dictated copy.
+    Empty non-binary files remain candidates so missing content fails loudly.
+    """
+
+    if posixpath.splitext(path)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
+        return False
+    if not data:
+        return True
+    if b"\x00" in data:
+        return False
+    try:
+        data.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return False
+    return True
+
 
 class _ContentGateMixin(_FinishGateProto):
     def _contract_required_deliverable_paths(self) -> list[str]:
@@ -141,6 +202,8 @@ class _ContentGateMixin(_FinishGateProto):
             data = await self._read_deliverable_bytes(path)
             if data is None:
                 continue
+            if not _dictated_content_text_candidate(path, data):
+                continue
             readable = True
             contents.append((path, data))
         if not readable:
@@ -237,7 +300,9 @@ class _ContentGateMixin(_FinishGateProto):
                         f"This literal was dictated in the user instruction for plan "
                         f"revision {cond.revision} and is carried forward into the "
                         "current revision. The match is case-sensitive and exact. "
-                        "Update the deliverable so it contains that exact text, then "
+                        "It needs to appear in one appropriate text deliverable, not "
+                        "in every listed file. Never add text to a binary asset. Update "
+                        "a suitable text deliverable so it contains that exact text, then "
                         "finish again.\n"
                         "</system-reminder>"
                     ),

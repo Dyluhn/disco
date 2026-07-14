@@ -110,6 +110,11 @@ _SHELL_COMMAND_WORDS = frozenset(
     }
 )
 _SHELL_OPERATOR_RE = re.compile(r"(?:^|\s)(?:&&|\|\||[|;<>])(?:\s|$)|`|\$\(")
+_SERVE_METADATA_PREFIX_RE = re.compile(
+    r"\b(?:call|invoke|use)\b[^\n.!?]{0,240}\bserve\b[^\n.!?]{0,160}"
+    r"\b(?:path|title)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _has_unspaced_slash(text: str) -> bool:
@@ -152,6 +157,21 @@ def _skip_dictated_literal(text: str) -> bool:
     return _looks_like_shell_command(s)
 
 
+def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
+    """True when a quote is the value of an explicitly requested serve argument.
+
+    Dictated-content conditions protect user-visible copy, not tool metadata. A
+    prompt such as ``call serve ..., title 'Release'`` previously turned the
+    handoff title into a content floor and drove models to inject it into every
+    declared artifact, including binary files. Keep the context rule narrow: a
+    nearby call/use/invoke + serve + path/title shape is required, so ordinary
+    requests such as ``page title 'Release'`` remain protected content.
+    """
+
+    prefix = instruction[max(0, quote_start - 480) : quote_start]
+    return _SERVE_METADATA_PREFIX_RE.search(prefix) is not None
+
+
 def extract_dictated_content_literals(text: str) -> list[str]:
     """Extract quoted user-authored content literals from a build instruction.
 
@@ -165,7 +185,11 @@ def extract_dictated_content_literals(text: str) -> list[str]:
     seen: set[str] = set()
     for mt in _QUOTED_LITERAL_RE.finditer(text or ""):
         literal = mt.group(1) if mt.group(1) is not None else mt.group(2)
-        if literal is None or _skip_dictated_literal(literal):
+        if (
+            literal is None
+            or _skip_dictated_literal(literal)
+            or _is_serve_metadata_literal(text, mt.start())
+        ):
             continue
         if literal in seen:
             continue

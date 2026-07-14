@@ -1,5 +1,6 @@
 """Browser, host, export, and render-verification gates for FinishGate."""
 
+# ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -942,7 +943,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             VerifierVerdictEvent(
                 artifact_path=deliverable.artifact_path,
                 artifact_kind=deliverable.artifact_kind,
-                verified=bool(host_verdict.get("passed")),
+                verified=bool(host_verdict.get("passed")) and host_label == "pass",
                 verdict=host_label,
                 detail=detail or None,
                 failures=self._verdict_failures(host_verdict),
@@ -961,12 +962,40 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     exc_info=True,
                 )
         if authoritative and deliverable.artifact_kind == "app":
-            if host_verdict.get("passed"):
+            if host_verdict.get("passed") and host_label == "pass":
                 self._loop._browser_verify_refusals = 0
                 return Disp.FALLTHROUGH
             if host_label == "unavailable":
                 # Missing host-verifier infrastructure is not proof the app is broken;
                 # fall through so the inline browser gate remains the enforcement path.
+                return Disp.FALLTHROUGH
+            if host_label == "unverifiable":
+                # Browser infrastructure was explicitly unavailable. This is not a
+                # verified pass, but retrying the identical daemon launch in the inline
+                # gate contradicts the terminal browser_unavailable contract. Release
+                # once with a durable incomplete marker that UIs/harnesses can classify.
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="unverified_release",
+                    )
+                )
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "⚠ Finished WITHOUT browser-render verification — the "
+                                "host verifier reported the app UNVERIFIABLE because its "
+                                "browser infrastructure could not run. The deliverable is "
+                                "UNVERIFIED and may be INCOMPLETE; do not report it as a "
+                                "verified pass."
+                            ),
+                        ),
+                    )
+                )
+                self._loop._browser_verify_refusals = 0
                 return Disp.FALLTHROUGH
             return await self._host_verify_failure_disposition(deliverable, host_verdict)
         return Disp.FALLTHROUGH
@@ -1498,7 +1527,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # inline browser gate as enforcement — otherwise unavailable would slip
         # through BOTH gates and an app could finish with no verification.
         verdict = _latest_host_verifier_verdict(events, _last_productive_seq(events))
-        return verdict in ("pass", "fail")
+        return verdict in ("pass", "fail", "unverifiable")
 
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish

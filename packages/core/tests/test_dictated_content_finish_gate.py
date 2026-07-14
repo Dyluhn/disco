@@ -94,6 +94,38 @@ def _submit_plan(summary: str = "p") -> object:
     )
 
 
+def _submit_mixed_plan() -> object:
+    return action_step(
+        "submit_plan",
+        {
+            "summary": "text plus binary deliverables",
+            "steps": [
+                {
+                    "title": "write artifact",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "artifact.txt",
+                    },
+                },
+                {
+                    "title": "include font",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "fonts/proof.woff2",
+                    },
+                },
+                {
+                    "title": "include opaque binary",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "assets/blob.dat",
+                    },
+                },
+            ],
+        },
+    )
+
+
 def _write(content: str) -> object:
     return action_step("file_write", {"path": "artifact.txt", "content": content})
 
@@ -171,6 +203,18 @@ def test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths():
     ]
 
 
+def test_serve_argument_literals_are_metadata_not_dictated_content():
+    text = (
+        'Build a hero with heading "Launch Day". Then call serve with path '
+        '"/workspace/release" and title "Selected reliability release".'
+    )
+
+    assert extract_dictated_content_literals(text) == ["Launch Day"]
+    assert extract_dictated_content_literals(
+        'Build a page title "Selected reliability release".'
+    ) == ["Selected reliability release"]
+
+
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():
     directive = _scoped_edit_directive(human_label='h1 — "NightOwl Coffee"')
     events = [
@@ -233,6 +277,45 @@ async def test_finish_refused_until_dictated_literal_lands(tmp_path: Path):
     assert state.execution_status == ConversationStatus.FINISHED
     assert any("Get Started" in m and "artifact.txt" in m for m in env)
     assert sum("quoted user literal is missing" in m for m in env) == 1
+
+
+@pytest.mark.asyncio
+async def test_dictated_content_gate_never_targets_binary_deliverables(tmp_path: Path):
+    font_bytes = b"wOF2\x00\x01\x00\x00binary-font-payload\xff"
+    opaque_bytes = b"opaque\x00binary\xfe"
+    font_path = tmp_path / "fonts" / "proof.woff2"
+    opaque_path = tmp_path / "assets" / "blob.dat"
+    font_path.parent.mkdir(parents=True)
+    opaque_path.parent.mkdir(parents=True)
+    font_path.write_bytes(font_bytes)
+    opaque_path.write_bytes(opaque_bytes)
+
+    loop, store = build_loop(
+        ScriptedAgent([_submit_mixed_plan()]),
+        conversation_id="dictated-binary-safety",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build the artifact with exact label "Get Started".')
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent(
+        [_write("plain content"), _finish(), _write("plain content\nGet Started"), _finish()]
+    )
+    state = await loop.run()
+
+    events = await store.get_events("dictated-binary-safety")
+    reminders = [m for m in _env_messages(events) if "quoted user literal is missing" in m]
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(reminders) == 1
+    assert "`artifact.txt`" in reminders[0]
+    assert "proof.woff2" not in reminders[0]
+    assert "blob.dat" not in reminders[0]
+    assert "Never add text to a binary asset" in reminders[0]
+    assert font_path.read_bytes() == font_bytes
+    assert opaque_path.read_bytes() == opaque_bytes
 
 
 @pytest.mark.asyncio

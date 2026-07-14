@@ -335,6 +335,42 @@ async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> None:
+    """Browser infrastructure absence is terminal but can never become a pass."""
+    host = _HostVerifier(
+        _verdict(passed=False, fp="browser_unavailable", verdict="unverifiable")
+    )
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert execu.verify_calls == 0
+    assert len(host.calls) == 1
+    events = await store.get_events("conv")
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert len(verdicts) == 1
+    assert verdicts[0].verified is False
+    assert verdicts[0].verdict == "unverifiable"
+    assert ("RUNNING", "unverified_release") in _statuses(events)
+    env = _env_messages(events)
+    assert any("WITHOUT browser-render verification" in m for m in env)
+    assert any("UNVERIFIED" in m and "INCOMPLETE" in m for m in env)
+    assert not any("Host verification did not pass" in m for m in env)
+
+
+@pytest.mark.asyncio
 async def test_authoritative_non_web_without_handoff_stays_unchanged() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))

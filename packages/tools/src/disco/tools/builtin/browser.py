@@ -65,6 +65,20 @@ class BrowserUnavailableError(RuntimeError):
     clear 'skip browser verification' outcome rather than a generic error the agent
     retries forever."""
 
+    def __init__(self, message: str, *, startup_diagnostic: str = "") -> None:
+        super().__init__(message)
+        self.startup_diagnostic = startup_diagnostic
+
+
+def _bounded_startup_diagnostic(output: object, exit_code: object = None) -> str:
+    """Return bounded startup-only evidence without importing the host environment."""
+
+    text = str(output or "").strip()
+    if len(text) > 1200:
+        text = "…" + text[-1199:]
+    prefix = f"exit={exit_code}; " if exit_code is not None else ""
+    return (prefix + text).strip()[:1280]
+
 
 def _installed_chromium_executable() -> str | None:
     """Resolve the trusted runtime's installed Chromium without leaking HOME.
@@ -369,7 +383,10 @@ class BrowserTool:
             # ROOT-3 — terminal, non-retryable: this backend has no browser. Carry a
             # structured flag so verify_web_app can degrade gracefully, and a clearly
             # worded error so the agent skips browser-based verification.
-            return fail_outcome(str(e), structured={"browser_unavailable": True})
+            structured: dict[str, Any] = {"browser_unavailable": True}
+            if e.startup_diagnostic:
+                structured["startup_diagnostic"] = e.startup_diagnostic
+            return fail_outcome(str(e), structured=structured)
         except Exception as e:
             return fail_outcome(
                 f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}"
@@ -444,7 +461,16 @@ class BrowserTool:
             )
         else:
             command = f"python3 {_DAEMON_PATH}"
-        await ctx.sessions.exec("__browser", command, None)
+        started = await ctx.sessions.exec("__browser", command, None)
+        if getattr(started, "running", None) is False:
+            diagnostic = _bounded_startup_diagnostic(
+                getattr(started, "output", ""),
+                getattr(started, "exit_code", None),
+            )
+            raise BrowserUnavailableError(
+                BROWSER_UNAVAILABLE_MSG,
+                startup_diagnostic=diagnostic or "browser daemon exited during startup",
+            )
 
         # Poll health (up to 10s)
         for _ in range(10):
@@ -454,7 +480,18 @@ class BrowserTool:
                 return daemon_url
             await asyncio.sleep(1.0)
 
-        raise BrowserUnavailableError(BROWSER_UNAVAILABLE_MSG)
+        diagnostic = "browser daemon did not publish a healthy endpoint"
+        try:
+            view = await ctx.sessions.view("__browser")
+            pane = _bounded_startup_diagnostic(getattr(view, "output", ""))
+            if pane:
+                diagnostic = pane
+        except Exception:  # noqa: BLE001 — retain the stable fallback diagnostic
+            pass
+        raise BrowserUnavailableError(
+            BROWSER_UNAVAILABLE_MSG,
+            startup_diagnostic=diagnostic,
+        )
 
     @staticmethod
     def _format_source(location: dict[str, Any]) -> str:
