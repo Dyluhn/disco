@@ -590,6 +590,73 @@ async def test_c18_real_workspace_path_escape_is_rejected_before_approval(tmp_pa
     assert sbx.file_exists_calls == []
 
 
+@pytest.mark.asyncio
+async def test_c18_placeholder_http_gate_is_rejected_before_plan_persistence(tmp_path):
+    """A future single-label URL never becomes an immutable external gate.
+
+    The live failure reached a correct durable build, then paused after three DNS
+    failures because ``http://should-be-verified-later`` had been accepted during
+    planning. The public boundary must reject that plan, give actionable feedback,
+    and accept a corrected plan that omits the unverifiable condition.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sbx = _FakeSandbox(str(workspace))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "unsafe placeholder",
+                    "steps": [
+                        {
+                            "title": "Verify the future preview",
+                            "done_condition": {
+                                "kind": "http_ok",
+                                "url": "http://should-be-verified-later",
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "corrected",
+                    "steps": [{"title": "Build and verify the exact files"}],
+                },
+            ),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert [plan.summary for plan in plans] == ["corrected"]
+    assert await store.get_dod_spec(CID) is None
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    )
+    feedback = [
+        event.message.content
+        for event in events
+        if isinstance(event, MessageEvent) and event.source == EventSource.ENVIRONMENT
+    ]
+    assert any(
+        "concrete, already-known fully qualified hostname or IP address" in message
+        and "omit the condition" in message
+        for message in feedback
+    )
+    assert _advisory_notes(events) == []
+    assert sbx.file_exists_calls == []
+
+
 # ---------------------------------------------------------------------------
 # F-2 — container backend: command predicate ran on the HOST (cwd=None), not
 # in the box. Fix: when sbx has `exec_shell`, run the predicate INSIDE THE BOX.

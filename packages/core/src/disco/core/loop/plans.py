@@ -93,6 +93,42 @@ def _is_loopback_hostname(hostname: str | None) -> bool:
         return False
 
 
+def _is_concrete_http_hostname(hostname: str | None) -> bool:
+    """Whether an immutable HTTP gate names a concrete FQDN or IP address.
+
+    Single-label names are commonly model-authored lifecycle placeholders (the
+    observed live failure used ``should-be-verified-later``). They may also depend
+    on private search-domain state that the immutable evaluator cannot establish.
+    IP literals remain valid, as do DNS names with at least two RFC-compatible
+    labels. IDNA conversion keeps legitimate internationalized hostnames usable.
+    """
+    if not hostname:
+        return False
+    candidate = hostname.rstrip(".")
+    if not candidate:
+        return False
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        try:
+            ascii_hostname = candidate.encode("idna").decode("ascii")
+        except UnicodeError:
+            return False
+        labels = ascii_hostname.split(".")
+        if len(labels) < 2 or len(ascii_hostname) > 253:
+            return False
+        return all(
+            label
+            and len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(character.isalnum() or character == "-" for character in label)
+            for label in labels
+        )
+    else:
+        return True
+
+
 def _comparable_workspace_path(path: str) -> PurePosixPath | None:
     """Normalize a model-authored guest path for cross-predicate comparison.
 
@@ -170,6 +206,14 @@ def validate_plan_done_conditions(plan: PlanEvent) -> list[str]:
                     "immutable finish gate. Omit this condition and use exact "
                     "file_exists deliverables; platform preview verification runs "
                     "separately."
+                )
+            elif not _is_concrete_http_hostname(hostname):
+                errors.append(
+                    f"step {index} http_ok URL {predicate.url!r} does not name a "
+                    "concrete, already-known fully qualified hostname or IP address. "
+                    "A single-label, future, or placeholder host cannot become an "
+                    "immutable finish gate. Use the exact external FQDN/IP only when "
+                    "it is already known, or omit the condition."
                 )
 
     for index, predicate, path in files:

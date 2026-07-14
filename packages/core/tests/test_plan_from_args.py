@@ -219,7 +219,15 @@ def test_done_condition_validation_rejects_loopback_http(url: str) -> None:
     assert "local preview host" in validate_plan_done_conditions(ev)[0]
 
 
-def test_done_condition_validation_preserves_non_loopback_http() -> None:
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/health",
+        "http://192.0.2.1:8080/health",
+        "http://[2001:db8::1]/health",
+    ],
+)
+def test_done_condition_validation_preserves_concrete_external_http(url: str) -> None:
     ev = _planner().plan_from_args(
         {
             "summary": "Plan",
@@ -228,7 +236,7 @@ def test_done_condition_validation_preserves_non_loopback_http() -> None:
                     "title": "Check deployed service",
                     "done_condition": {
                         "kind": "http_ok",
-                        "url": "https://example.com/health",
+                        "url": url,
                     },
                 }
             ],
@@ -237,6 +245,36 @@ def test_done_condition_validation_preserves_non_loopback_http() -> None:
     )
 
     assert validate_plan_done_conditions(ev) == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://should-be-verified-later",
+        "https://preview",
+        "http://internal:3000/health",
+    ],
+)
+def test_done_condition_validation_rejects_single_label_placeholder_http(
+    url: str,
+) -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": [
+                {
+                    "title": "Check a future service",
+                    "done_condition": {"kind": "http_ok", "url": url},
+                }
+            ],
+        },
+        events=[],
+    )
+
+    errors = validate_plan_done_conditions(ev)
+    assert len(errors) == 1
+    assert "concrete, already-known fully qualified hostname or IP address" in errors[0]
+    assert "omit the condition" in errors[0]
 
 
 def test_raw_done_condition_validation_never_silently_drops_malformed_gate() -> None:
