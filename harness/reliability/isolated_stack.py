@@ -24,8 +24,16 @@ from disco.core.llm import ConfigStore, ProjectStorageSettings
 
 
 def _child_environment(command: list[str], source: dict[str, str] | None = None) -> dict[str, str]:
-    """Return a command environment without contradictory color controls."""
+    """Return a command environment without secrets or contradictory color controls."""
     environment = dict(os.environ if source is None else source)
+    for key in (
+        "DISCO_RELIABILITY_SEED_SECRET_KEY",
+        "DISCO_SECRET_KEY",
+        "PMX_SECRET_KEY",
+        "DISCO_AUTH_SECRET",
+        "PMX_AUTH_SECRET",
+    ):
+        environment.pop(key, None)
     if any(Path(argument).name.lower() == "playwright" for argument in command):
         environment.pop("NO_COLOR", None)
     return environment

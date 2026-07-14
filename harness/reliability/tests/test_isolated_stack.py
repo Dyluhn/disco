@@ -29,6 +29,21 @@ def test_non_playwright_child_environment_preserves_no_color() -> None:
     assert environment == source
 
 
+def test_child_environment_never_forwards_master_or_authentication_keys() -> None:
+    source = {
+        "DISCO_RELIABILITY_SEED_SECRET_KEY": "seed-master",
+        "DISCO_SECRET_KEY": "runtime-master",
+        "PMX_SECRET_KEY": "legacy-master",
+        "DISCO_AUTH_SECRET": "session-signer",
+        "PMX_AUTH_SECRET": "legacy-session-signer",
+        "RETAIN_ME": "yes",
+    }
+
+    environment = _child_environment(["npx", "playwright", "test"], source)
+
+    assert environment == {"RETAIN_ME": "yes"}
+
+
 def test_temporary_environment_restores_parent_values(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CONFIG", "parent")
     monkeypatch.delenv("DISCO_APPROVALS", raising=False)
