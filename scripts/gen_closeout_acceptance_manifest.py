@@ -61,7 +61,7 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v2"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v3"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -318,7 +318,9 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "::test_interpreted_candidate_with_deps_emits_dependency_install_layer"
             "[express_node_no_build]"
         ),
-        "boundary": "real release + /download routes; assertion on emitted Dockerfile bytes in the zip",
+        "boundary": (
+            "real release + /download routes; assertion on emitted Dockerfile bytes in the zip"
+        ),
         "expected_failure": (
             "a typed INTERPRETED candidate with dependencies and NO build step emits an "
             "empty build_cmd, so local_compose._effective_install_cmd returns () and the "
@@ -335,7 +337,9 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py"
             "::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm"
         ),
-        "boundary": "real release + /download routes; assertion on /release JSON + emitted Dockerfile bytes",
+        "boundary": (
+            "real release + /download routes; assertion on /release JSON + emitted Dockerfile bytes"
+        ),
         "blocker_code": "toolchain_unsupported",
         "expected_failure": (
             "a typed intent with start_cmd ('pnpm','start') is accepted as a candidate "
@@ -353,7 +357,10 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py"
             "::test_declared_static_output_dir_round_trips_into_sidecar"
         ),
-        "boundary": "real ConversationRuntime executing the real ReleaseDeclareTool; persisted sidecar bytes on disk",
+        "boundary": (
+            "real ConversationRuntime executing the real ReleaseDeclareTool; "
+            "persisted sidecar bytes on disk"
+        ),
         "blocker_code": "extra_forbidden",
         "expected_failure": (
             "ReleaseIntent has extra='forbid' and no output_dir field, so a declaration "
@@ -371,7 +378,9 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py"
             "::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]"
         ),
-        "boundary": "real release + /download routes; emitted compose.yaml parsed in-process with PyYAML",
+        "boundary": (
+            "real release + /download routes; emitted compose.yaml parsed in-process with PyYAML"
+        ),
         "expected_failure": (
             "a resource with persistent_path '/app.db' (parent dir = '/') is accepted "
             "self_host:true but Compose mounts the named volume at /data (the "
@@ -389,7 +398,10 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py"
             "::test_g12_appkit_dockerfile_has_no_heredoc_copy"
         ),
-        "boundary": "real release + /download routes; emitted AppKit Dockerfile bytes read from the download zip",
+        "boundary": (
+            "real release + /download routes; emitted AppKit Dockerfile bytes "
+            "read from the download zip"
+        ),
         "expected_failure": (
             "the AppKit dev_server overlay (local_compose._dev_server_dockerfile) emits a "
             "heredoc 'COPY <<'DISCO_ENTRYPOINT' …' — a BuildKit/Buildx-only feature — but "
@@ -423,6 +435,38 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "evidence as live. Fix = R6."
         ),
     },
+    {
+        # acceptance-v3 (R0 reopen): the G08/G11 binding red at the REAL download
+        # URL-construction boundary — fails because the binding is omitted, INDEPENDENT
+        # of panel reachability (no component render). Distinct from the R4-activated
+        # e2e (which fails at reachability). Its fix is R4.
+        "work_order": "R4/G08",
+        "lane": "frontend",
+        "node_id": (
+            "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+            "::WO-A (G08) — the download URL binds to the release's version_seq + "
+            "spec_digest > carries the bound release's version_seq + spec_digest on the "
+            "download URL"
+        ),
+        "boundary": (
+            "the real downloadProject() URL construction (api/projects.ts:187) reached "
+            "via the globalThis.__DISCO_ENV config seam + a real recording global fetch; "
+            "no panel/component is rendered"
+        ),
+        "expected_failure": (
+            "downloadProject(cid) is structurally cid-only, so the requested /download "
+            "URL omits the version_seq + spec_digest C2 binding — the test fails at the "
+            "binding assertion (version_seq present) AFTER the reachability guard passes, "
+            "proving the failure is the omitted binding, not an unreachable panel. The "
+            "G11 sibling asserts an unbound (spec_digest=null) release must not fabricate "
+            "a binding. This is a CONSERVATIVE contract-red (it can never go falsely green "
+            "while the binding is absent), not a self-discriminating one: because the seam "
+            "is cid-only, turning it green requires the R4 binding fix AND routing the "
+            "binding through this call — the frozen test itself may be updated at R4 (it "
+            "deliberately does not pre-commit to whether R4 has downloadProject fetch its "
+            "own /release or the caller pass the binding). Fix = R4."
+        ),
+    },
 )
 
 
@@ -437,8 +481,9 @@ RED_TESTS: tuple[dict[str, object], ...] = (
 _R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
 _R0_TOOLS = "packages/tools/tests/export_track1_closeout"
 REMEDIATION_R0: dict[str, object] = {
-    "acceptance_version": "v2",
+    "acceptance_version": "v3",
     "base_candidate": "581d1fbe",
+    "plan_doc": "docs/export-track1-closeout-remediation-plan.md",
     "summary": (
         "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the "
         "proving reds against 581d1fbe with NO production change; the R1-R6 production "
@@ -446,7 +491,12 @@ REMEDIATION_R0: dict[str, object] = {
         "v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) "
         "commit preceding all remediation. G19 fixed: the frozen frontend gate now "
         "targets e2e/export-track1-closeout/** (a directory), not the nonexistent single "
-        "spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible)."
+        "spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible). "
+        "v3 (R0 reopen, v2 tag unmoved): adds the G08/G11 binding red at the real download "
+        "URL-construction boundary (proving_reds_frontend), makes the G02 planted "
+        "credential absent from console + JUnit evidence (source redaction + a verifier "
+        "evidence-hygiene gate), zeroes Ruff/format on the changed set, and commits the "
+        "canonical remediation plan."
     ),
     "proving_reds": [
         f"{_R0_AGENT}/test_g02_positional_credential.py"
@@ -480,16 +530,32 @@ REMEDIATION_R0: dict[str, object] = {
         f"{_R0_AGENT}/test_g13_verifier_truthfulness.py"
         "::test_frontend_lane_unexecuted_browser_must_block_green",
     ],
+    "proving_reds_frontend": [
+        "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
+        "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
+        " > carries the bound release's version_seq + spec_digest on the download URL",
+    ],
+    "evidence_hygiene": (
+        "G02's planted credential must never reach the acceptance evidence. The G02 test "
+        "redacts every failure-message interpolation of the sentinel AND parametrizes on "
+        "the position id (not the sentinel-bearing argv) so pytest's own funcarg repr "
+        "cannot leak it; verify_export_track1_closeout.py adds an evidence-hygiene gate "
+        "that scans every written text artifact (JUnit XMLs, vitest json, anti-bypass "
+        "scan, docker-versions, docker-host artifacts) for the registered marker and "
+        "fails closed into `passed` if it appears — regression-proof, and it stores only "
+        "the non-secret marker, never the literal."
+    ),
     "r4_activated_deferred": {
-        "G08": (
+        "G08_e2e": (
             "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the "
             "self-host download-binding e2e. RED at reachability today (the candidate/"
             "needs-review SelfHostPanel is unreachable offline, same wall as G09); its "
             "version_seq+spec_digest binding teeth activate once R4 restores reachability. "
-            "The G11 null-binding concern is FOLDED here (guard belongs at the URL-"
-            "construction seam api/projects.ts:187 + types/release.ts:73-74 nullability, "
-            "NOT a marker stamped on the panel) plus the R4 type-nullability fix. NOT "
-            "counted among the R0 proving reds."
+            "The binding itself is now ALSO proven directly by proving_reds_frontend "
+            "(g08-download-url-binding.test.tsx), which fails at the URL boundary "
+            "INDEPENDENT of panel reachability. The G11 null-binding concern is covered by "
+            "that vitest's unbound-release guard + the R4 types/release.ts:73-74 "
+            "nullability fix."
         ),
     },
     "record_only": {
@@ -509,7 +575,9 @@ REMEDIATION_R0: dict[str, object] = {
         "'# noqa: BLE001' (G18) — the SINGLE ratified pre-existing suppression; it "
         "strengthens the test (catches a churner crash). No new suppressions added."
     ),
-    "parked_production_fixes": "R1(G02) R2(G03-G06) R3(G07) R4(G08-G11) R5(G12) R6(G13,G18,G19) R7(G14) R8(G15-G17)",
+    "parked_production_fixes": (
+        "R1(G02) R2(G03-G06) R3(G07) R4(G08-G11) R5(G12) R6(G13,G18,G19) R7(G14) R8(G15-G17)"
+    ),
 }
 
 
@@ -635,11 +703,12 @@ def build_manifest(root: Path) -> dict[str, object]:
         "cannot hide a test. frontend_closeout_inventory lists the frozen vitest files "
         "(+ titles) the frontend lane compares. red_tests names one representative "
         "failing public-boundary test per work order C1–C8 plus the frontend C3/C6 "
-        "reds, AND (acceptance-v2 / R0) one per independent-audit gap "
-        "G02/G04/G05/G06/G07/G12/G13; remediation_r0 carries the full 15-node R0 "
-        "proving set plus the R4-activated / record-only / ratified-baseline ledger "
-        "(the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
-        "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
+        "reds, AND (acceptance-v3 / R0) one per independent-audit gap "
+        "G02/G04/G05/G06/G07/G12/G13 plus the G08/G11 frontend URL-binding red; "
+        "remediation_r0 carries the 15-node backend proving set, the frontend proving "
+        "red, the evidence-hygiene guarantee, and the R4-activated / record-only / "
+        "ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only "
+        "freezes the reds). Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
     return {
         "schema": "export-track1-closeout-acceptance/v1",

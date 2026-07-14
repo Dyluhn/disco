@@ -86,8 +86,7 @@ _OVERLAY_NAMES = frozenset(
 # owns the service and no install_cmd is populated.
 _EXPRESS_FILES: dict[str, bytes] = {
     "package.json": (
-        b'{"name":"svc","dependencies":{"express":"^4.19.2"},'
-        b'"scripts":{"start":"node server.js"}}'
+        b'{"name":"svc","dependencies":{"express":"^4.19.2"},"scripts":{"start":"node server.js"}}'
     ),
     "server.js": (
         b"const express = require('express');\n"

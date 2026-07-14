@@ -86,6 +86,17 @@ _CRED_SENTINEL = "npm_G02POSCRED0aK7bQ2xR9mL4wZ8vT1nH6pJ3cF5dS"
 # provenance evidence line) — "absence is checkable".
 _CRED_MARKER = "G02POSCRED"
 
+
+def _redact(value: object) -> str:
+    """``repr(value)`` with the planted G02 credential MASKED, so a failure message that
+    interpolates a command/token can never write the sentinel into pytest's JUnit XML or
+    console. The full sentinel is replaced FIRST (it CONTAINS the marker), then any
+    standalone marker is masked too, covering partial / provenance-clamped echoes."""
+    text = repr(value)
+    text = text.replace(_CRED_SENTINEL, "«G02-CRED-REDACTED»")
+    return text.replace(_CRED_MARKER, "«G02-CRED-REDACTED»")
+
+
 # A minimal node service (binds `$PORT`) whose ONLY release-relevant declaration is the
 # host-owned intent sidecar — so the positional credential in `start_cmd` is the single
 # thing under test.
@@ -105,6 +116,14 @@ _POSITIONS: list[tuple[str, list[str]]] = [
     ("trailing", ["npm", "config", "set", "//registry.example/:_authToken", _CRED_SENTINEL]),
 ]
 _POSITION_IDS = [case[0] for case in _POSITIONS]
+# Position id -> start_cmd. The tests parametrize on the POSITION id, NOT the raw
+# credential-bearing command list: pytest reprs every test PARAMETER in each failure's
+# funcargs header, so a `start_cmd` parameter would write the sentinel into the JUnit XML
+# + console for the proving-red failures regardless of assert-message redaction. Resolved
+# as a LOCAL inside each test (locals are shown only under `--showlocals`, which the
+# acceptance lanes never pass), the sentinel reaches evidence through no surface. Node IDs
+# stay `[leading]`/`[middle]`/`[trailing]`; the driven command values are identical.
+_START_CMD_BY_POSITION: dict[str, list[str]] = dict(_POSITIONS)
 
 
 # ---- harness (real ASGI app + real ProjectStore; only ConfigStore.load is seamed) ----
@@ -275,11 +294,10 @@ def _bound_overlay_texts(client: TestClient, cid: str) -> dict[str, str]:
 # ===========================================================================
 
 
-@pytest.mark.parametrize("position,start_cmd", _POSITIONS, ids=_POSITION_IDS)
+@pytest.mark.parametrize("position", _POSITION_IDS, ids=_POSITION_IDS)
 @pytest.mark.asyncio
 async def test_positional_credential_rejected_at_release_declare(
     position: str,
-    start_cmd: list[str],
     _store: SqliteEventStore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -293,6 +311,7 @@ async def test_positional_credential_rejected_at_release_declare(
     as a ``--token VALUE`` flag form is (§9.2). On 581dfbe the runtime grammar accepts any
     positional operand, so the declare is ACCEPTED (``success`` is True) and a
     ``release-intent.json`` carrying the literal is persisted — the RED this test pins."""
+    start_cmd = _START_CMD_BY_POSITION[position]
     cid = _cid(closeout_name, "conv_g02tool")
     runtime, _client_unused, _ps = _runtime_and_client(_store, tmp_path, monkeypatch)
     result = await _declare(runtime, _store, cid, start_cmd)
@@ -307,10 +326,10 @@ async def test_positional_credential_rejected_at_release_declare(
     # 581dfbe — the positional-operand branch of check_declaration_argv accepts it.
     assert not result.success and result.error, (
         f"[{position}] release_declare ACCEPTED a start command carrying a bare positional "
-        f"literal credential ({start_cmd!r}); GAP G02 requires it to fail closed with a "
-        "typed error, exactly as a `--token VALUE` flag form is rejected. 581dfbe accepts "
+        f"literal credential ({_redact(start_cmd)}); GAP G02 requires it to fail closed with "
+        "a typed error, exactly as a `--token VALUE` flag form is rejected. 581dfbe accepts "
         "any positional operand (its runtime grammar scrutinizes only flags), so the "
-        f"credential is over-accepted (success={result.success!r}, error={result.error!r})."
+        f"credential is over-accepted (success={result.success!r}, error={_redact(result.error)})."
     )
     # A rejected declaration persists NOTHING — no release-intent sidecar carrying the
     # literal anywhere under the configured projects root. RED on 581dfbe (one is written).
@@ -330,10 +349,9 @@ async def test_positional_credential_rejected_at_release_declare(
 # ===========================================================================
 
 
-@pytest.mark.parametrize("position,start_cmd", _POSITIONS, ids=_POSITION_IDS)
+@pytest.mark.parametrize("position", _POSITION_IDS, ids=_POSITION_IDS)
 def test_positional_credential_does_not_ship_through_release_download(
     position: str,
-    start_cmd: list[str],
     _store: SqliteEventStore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -350,6 +368,7 @@ def test_positional_credential_does_not_ship_through_release_download(
     positional operand, ``/release`` is a self-hostable ``candidate``, and the bound
     ``/download`` zip ships the literal verbatim in the emitted ``Dockerfile`` CMD +
     ``release.json`` — the RED this test pins."""
+    start_cmd = _START_CMD_BY_POSITION[position]
     cid = _cid(closeout_name, "conv_g02route")
     client, ps = _client(_store, tmp_path, monkeypatch)
     _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _NODE_FILES)

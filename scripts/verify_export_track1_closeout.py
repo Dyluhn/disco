@@ -65,6 +65,31 @@ _DOCKER_HOST_ARTIFACTS = (
     "cleanup.txt",
 )
 
+# ---- evidence-hygiene scan: registered planted-credential sentinels (WO-B) -----
+# LABEL -> distinctive MARKER substring. Every written TEXT evidence artifact is scanned
+# for these markers; any hit fails acceptance CLOSED (folds into `passed`), making the
+# ABSENCE of a planted credential from the evidence enforceable and regression-proof.
+# We register the MARKER (a unique NON-secret substring of the planted token) and NOT the
+# full credential literal, so this verifier source never itself re-plants a real secret
+# value — yet the marker is a substring of the literal, so scanning for it still catches
+# the literal wherever it lands. ``G02POSCRED`` is the positional-credential sentinel
+# planted in ``tests/export_track1_closeout/test_g02_positional_credential.py``.
+_EVIDENCE_HYGIENE_SENTINELS: dict[str, str] = {
+    "G02_POSITIONAL_CRED": "G02POSCRED",
+}
+# The TEXT evidence artifacts the hygiene scan reads (each scanned only if it exists).
+# NOT ``evidence.json`` — it is written AFTER this scan runs and would otherwise, by
+# recording violations, scan itself.
+_HYGIENE_SCAN_FILES: tuple[str, ...] = (
+    "pytest-nonlive.xml",
+    "pytest-closeout.xml",
+    "pytest-live.xml",
+    "frontend-vitest.json",
+    "anti-bypass-scan.json",
+    "docker-versions.txt",
+    *_DOCKER_HOST_ARTIFACTS,
+)
+
 # ---- anti-bypass scanner: production-source rules (plan §4.9) ------------------
 # Closeout-specific tokens that must NEVER appear in production source (any hit is a
 # violation): the seed env, the frozen fixture dir names, and the C8 secret/build
@@ -830,6 +855,38 @@ def _write_docker_host_artifacts(evidence_dir: Path, docker_available: bool) -> 
     return written
 
 
+# ---- evidence-hygiene scan (WO-B) ---------------------------------------------
+
+
+def _scan_evidence_hygiene(evidence_dir: Path) -> tuple[bool, list[dict[str, object]]]:
+    """Scan every written TEXT evidence artifact for any REGISTERED planted-credential
+    sentinel and return ``(ok, violations)``. Records a typed violation — the evidence
+    file NAME + the 1-based line number + the sentinel LABEL ONLY, and NEVER the
+    surrounding text or the matched value — for each hit, so a leak is located without
+    the report itself re-emitting the credential. Runs AFTER the evidence files are
+    written and folds into ``passed`` exactly like ``frozen_ok``/``clean``, which makes
+    the credential's absence enforceable and regression-proof. Reads leniently: a
+    sentinel is ASCII, so a ``replace``-errors decode cannot hide it and a non-UTF-8
+    artifact cannot crash the gate."""
+    violations: list[dict[str, object]] = []
+    for name in _HYGIENE_SCAN_FILES:
+        path = evidence_dir / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for label, marker in _EVIDENCE_HYGIENE_SENTINELS.items():
+                if marker in line:
+                    violations.append({"file": name, "line": lineno, "sentinel": label})
+
+    def _sort_key(v: dict[str, object]) -> tuple[str, int, str]:
+        line = v["line"]
+        return (str(v["file"]), line if isinstance(line, int) else 0, str(v["sentinel"]))
+
+    violations.sort(key=_sort_key)
+    return (not violations), violations
+
+
 # ---- CLI ----------------------------------------------------------------------
 
 
@@ -862,6 +919,7 @@ def _not_passed_reasons(
     clean: bool,
     frozen_ok: bool,
     lanes: list[LaneResult],
+    hygiene_ok: bool,
 ) -> list[str]:
     reasons: list[str] = []
     if author:
@@ -875,6 +933,11 @@ def _not_passed_reasons(
             reasons.extend(lane.rejection_reasons)
         elif lane.green is not True:
             reasons.append(f"{lane.name} lane not green")
+    if not hygiene_ok:
+        reasons.append(
+            "evidence hygiene: a registered planted-credential sentinel appears in a "
+            "written evidence artifact (see evidence_hygiene.violations)"
+        )
     return reasons
 
 
@@ -978,8 +1041,14 @@ def main(argv: list[str] | None = None) -> int:
     docker_available = tool_versions.get("docker", "unavailable") != "unavailable"
     docker_host_artifacts = _write_docker_host_artifacts(evidence_dir, docker_available)
 
+    # EVIDENCE HYGIENE (WO-B): after every text artifact is written and BEFORE `passed`
+    # is computed, prove no registered planted-credential sentinel reached the evidence.
+    # Fails CLOSED and folds into `passed` exactly like `frozen_ok`/`clean` — never
+    # weakening an existing gate (it can only make passing harder).
+    hygiene_ok, hygiene_violations = _scan_evidence_hygiene(evidence_dir)
+
     all_lanes_green = all(lane.green is True for lane in lanes)
-    passed = bool(frozen_ok and all_lanes_green and clean and not args.author)
+    passed = bool(frozen_ok and all_lanes_green and clean and not args.author and hygiene_ok)
 
     evidence = {
         "schema": "export-track1-closeout-evidence/v1",
@@ -999,6 +1068,7 @@ def main(argv: list[str] | None = None) -> int:
             "missing": missing,
             "extra": extra,
         },
+        "evidence_hygiene": {"ok": hygiene_ok, "violations": hygiene_violations},
         "lanes": [asdict(lane) for lane in lanes],
         "evidence_files": {
             "pytest-nonlive.xml": "written",
@@ -1010,7 +1080,11 @@ def main(argv: list[str] | None = None) -> int:
             **docker_host_artifacts,
         },
         "not_passed_reasons": _not_passed_reasons(
-            author=args.author, clean=clean, frozen_ok=frozen_ok, lanes=lanes
+            author=args.author,
+            clean=clean,
+            frozen_ok=frozen_ok,
+            lanes=lanes,
+            hygiene_ok=hygiene_ok,
         ),
     }
     (evidence_dir / "evidence.json").write_text(

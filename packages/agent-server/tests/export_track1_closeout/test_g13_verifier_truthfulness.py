@@ -213,7 +213,8 @@ def test_frontend_lane_unexecuted_browser_must_block_green(tmp_path: Path) -> No
     # the full frozen inventory — so it stays deterministically green across manifest regens.
     assert detail["vitest"]["file_set_ok"] is True, (
         f"precondition: isolated vitest file-set must equal the curated green subset; "
-        f"extra={detail['vitest'].get('extra_files')!r} missing={detail['vitest'].get('missing_files')!r}"
+        f"extra={detail['vitest'].get('extra_files')!r} "
+        f"missing={detail['vitest'].get('missing_files')!r}"
     )
     assert detail["typecheck"]["exit_code"] == 0, "precondition: typecheck:build must pass"
     assert detail["build"]["exit_code"] == 0, "precondition: vite build must pass"

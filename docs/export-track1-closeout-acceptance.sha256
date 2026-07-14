@@ -1,7 +1,7 @@
 {
   "schema": "export-track1-closeout-acceptance/v1",
-  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself); the reviewer-created protected tag export-track1-closeout-acceptance-v2 freezes the manifest itself. python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ titles) the frontend lane compares. red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v2 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13; remediation_r0 carries the full 15-node R0 proving set plus the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
-  "acceptance_tag": "export-track1-closeout-acceptance-v2",
+  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself); the reviewer-created protected tag export-track1-closeout-acceptance-v3 freezes the manifest itself. python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ titles) the frontend lane compares. red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v3 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the G08/G11 frontend URL-binding red; remediation_r0 carries the 15-node backend proving set, the frontend proving red, the evidence-hygiene guarantee, and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v3",
   "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
   "seed": {
     "env": "CLOSEOUT_SEED",
@@ -22,6 +22,7 @@
     "frontend/src/test/export-track1-closeout/c3-projects-badge-honest.test.tsx": "d31e7aeea43fb656083f488d7aa6d04d0c1a82918c21405a03b267d1066784b5",
     "frontend/src/test/export-track1-closeout/c3-verified-wording.test.tsx": "6681c91837b9a309a9e9c8f4ceaa8815c0190f32e826fde9b9c2af1ce78ac834",
     "frontend/src/test/export-track1-closeout/c6-collision-blockers.test.tsx": "8da008c2e076b6d97568cab90c171a03193f87df3a7625f9653473cdc0dbb4ad",
+    "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx": "9a519fc18cc5c8ce09af99a6d3e2c8623a22bbe965db8182a89e4a73ddda88e1",
     "packages/agent-server/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py": "cecb5d40d755a8335b1106bace6bfe5bd9c8eafb5cfbbd1845c7c8e6a20f74cb",
     "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py": "c1bd42e5082622ad8724fc8998c444839f13ac4f04a104c6644e1d0a8248d174",
@@ -33,12 +34,12 @@
     "packages/agent-server/tests/export_track1_closeout/test_c6_dirprefix_collision.py": "040ad9a0ba478b26abf4ba7863e0e390a2f9d7a00aebc3c9c1bd957d7ca0fe21",
     "packages/agent-server/tests/export_track1_closeout/test_c7_empty_consumers.py": "e960b62ecf3e8caf6dd91f853d86ce933e46b28d90f65cd5087f50c876407d2c",
     "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py": "01f39684091a8e3534d50d19758e57f77a03298b63105ff6245fe2065d06c5ad",
-    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py": "036436bdc50d50e803294c3590405561c85c82a96c4c9354da3fd7ef9bb67bf0",
-    "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py": "ee07125cb69e47c63d6232e9dc9af6f5cdc82959a8230d6dbb46000fb0ee4a2c",
-    "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py": "8993ebdd603019f3c6364876572081f4fe4ae321fac138ee7dd2d41b5d49d215",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py": "7d3d3c932e20e5d805bbb8e1c5da4922b4a6536ba01208acdc78df924c46a5c3",
+    "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py": "7236fe65221d3fb7d066c095aa0c83a400fb8098b31d22ac3e975fac78b386b6",
+    "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py": "50a3f0181b1bb40dca0c4861cbfbaa0666986be3c5cad40e563922687b58231d",
     "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py": "a05a9236c4f41d348c35afd130afcc29bdbe7d41d4c8caaad8c0620fae8f72c8",
     "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py": "19db9a3acb3fcbbd35dd6db992691163d4e5a50287302c6bb4418bba74550e21",
-    "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "d574a2f28da285618f40140c1b89c96f4b399744aea3eba49e38ff0037b238bd",
+    "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "3d90bfc39a976be1ea952c6d893efc1cdc6a532e8ea946ab20e4891071355dac",
     "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
     "packages/agent-server/tests/integration/_closeout_live_support.py": "ca596d4708bc78742abcc641f95391c9f0015e315410b27ccf45373d15b4c3ba",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "42dbd6c14ad689c89c9287e410d04874dc0f9b03499b51bfd2da05b85d09a546",
@@ -50,8 +51,8 @@
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
-    "scripts/gen_closeout_acceptance_manifest.py": "0c6f4c4c26c860d8a57d2926b013e3acef84aca72fb94cbcc2002920222cca42",
-    "scripts/verify_export_track1_closeout.py": "8ebeb5ba27f112e30db21217dd7081f3c00ae317d9f070e97e12fc23545568e8"
+    "scripts/gen_closeout_acceptance_manifest.py": "d511a38b65548157df692bf275a0207f4efa23e2e976f3ff2d718d33d120ca0f",
+    "scripts/verify_export_track1_closeout.py": "f7ffa6d66d0e083ae705e62eabfe7dc8d0a64772aaa06b7d25ba07e9229edf8b"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
@@ -466,6 +467,13 @@
       "tests": [
         "renders every collision blocker (code + exact path) and only the plain download"
       ]
+    },
+    "g08-download-url-binding.test.tsx": {
+      "describe": "WO-A (G08) — the download URL binds to the release's version_seq + spec_digest",
+      "tests": [
+        "carries the bound release's version_seq + spec_digest on the download URL",
+        "G11: an unbound release (spec_digest=null) must not fabricate a binding on the URL"
+      ]
     }
   },
   "red_tests": [
@@ -605,12 +613,20 @@
       "node_id": "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_docker_evidence_absent_engine_must_not_claim_live_production",
       "boundary": "imports the REAL verify_export_track1_closeout.py module and calls its real functions on a real tmp filesystem — the code under test, not a mock",
       "expected_failure": "(a) _write_docker_host_artifacts writes status='produced_by_live_lane_on_docker_host' even when NO Docker engine ran (the status string itself lies; only the separate 'available' flag betrays it); (b) sibling test_frontend_lane_unexecuted_browser_must_block_green — _run_frontend_lane computes lane.green from vitest+typecheck+build ONLY, so the Playwright browser e2e is reported green though it never executed, folding into all_lanes_green -> passed:true. The G13(b) mirror is a curated always-green vitest subset (c3/c6) so the ONLY reason green could differ is the un-gated browser lane — exactly the defect. Must not label unproduced evidence as live. Fix = R6."
+    },
+    {
+      "work_order": "R4/G08",
+      "lane": "frontend",
+      "node_id": "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest > carries the bound release's version_seq + spec_digest on the download URL",
+      "boundary": "the real downloadProject() URL construction (api/projects.ts:187) reached via the globalThis.__DISCO_ENV config seam + a real recording global fetch; no panel/component is rendered",
+      "expected_failure": "downloadProject(cid) is structurally cid-only, so the requested /download URL omits the version_seq + spec_digest C2 binding — the test fails at the binding assertion (version_seq present) AFTER the reachability guard passes, proving the failure is the omitted binding, not an unreachable panel. The G11 sibling asserts an unbound (spec_digest=null) release must not fabricate a binding. This is a CONSERVATIVE contract-red (it can never go falsely green while the binding is absent), not a self-discriminating one: because the seam is cid-only, turning it green requires the R4 binding fix AND routing the binding through this call — the frozen test itself may be updated at R4 (it deliberately does not pre-commit to whether R4 has downloadProject fetch its own /release or the caller pass the binding). Fix = R4."
     }
   ],
   "remediation_r0": {
-    "acceptance_version": "v2",
+    "acceptance_version": "v3",
     "base_candidate": "581d1fbe",
-    "summary": "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the proving reds against 581d1fbe with NO production change; the R1-R6 production fixes are PARKED. acceptance-v1 (G01) was a LIGHTWEIGHT tag moved AFTER C1-C6; v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) commit preceding all remediation. G19 fixed: the frozen frontend gate now targets e2e/export-track1-closeout/** (a directory), not the nonexistent single spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible).",
+    "plan_doc": "docs/export-track1-closeout-remediation-plan.md",
+    "summary": "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the proving reds against 581d1fbe with NO production change; the R1-R6 production fixes are PARKED. acceptance-v1 (G01) was a LIGHTWEIGHT tag moved AFTER C1-C6; v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) commit preceding all remediation. G19 fixed: the frozen frontend gate now targets e2e/export-track1-closeout/** (a directory), not the nonexistent single spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible). v3 (R0 reopen, v2 tag unmoved): adds the G08/G11 binding red at the real download URL-construction boundary (proving_reds_frontend), makes the G02 planted credential absent from console + JUnit evidence (source redaction + a verifier evidence-hygiene gate), zeroes Ruff/format on the changed set, and commits the canonical remediation plan.",
     "proving_reds": [
       "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[leading]",
       "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[middle]",
@@ -628,8 +644,12 @@
       "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_docker_evidence_absent_engine_must_not_claim_live_production",
       "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_frontend_lane_unexecuted_browser_must_block_green"
     ],
+    "proving_reds_frontend": [
+      "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest > carries the bound release's version_seq + spec_digest on the download URL"
+    ],
+    "evidence_hygiene": "G02's planted credential must never reach the acceptance evidence. The G02 test redacts every failure-message interpolation of the sentinel AND parametrizes on the position id (not the sentinel-bearing argv) so pytest's own funcarg repr cannot leak it; verify_export_track1_closeout.py adds an evidence-hygiene gate that scans every written text artifact (JUnit XMLs, vitest json, anti-bypass scan, docker-versions, docker-host artifacts) for the registered marker and fails closed into `passed` if it appears — regression-proof, and it stores only the non-secret marker, never the literal.",
     "r4_activated_deferred": {
-      "G08": "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the self-host download-binding e2e. RED at reachability today (the candidate/needs-review SelfHostPanel is unreachable offline, same wall as G09); its version_seq+spec_digest binding teeth activate once R4 restores reachability. The G11 null-binding concern is FOLDED here (guard belongs at the URL-construction seam api/projects.ts:187 + types/release.ts:73-74 nullability, NOT a marker stamped on the panel) plus the R4 type-nullability fix. NOT counted among the R0 proving reds."
+      "G08_e2e": "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the self-host download-binding e2e. RED at reachability today (the candidate/needs-review SelfHostPanel is unreachable offline, same wall as G09); its version_seq+spec_digest binding teeth activate once R4 restores reachability. The binding itself is now ALSO proven directly by proving_reds_frontend (g08-download-url-binding.test.tsx), which fails at the URL boundary INDEPENDENT of panel reachability. The G11 null-binding concern is covered by that vitest's unbound-release guard + the R4 types/release.ts:73-74 nullability fix."
     },
     "record_only": {
       "G09_e2e_reachability": "4 Firefox e2e reachability reds (candidate x2 + needs-review x2 SelfHostPanel unreachable in Build+Agent offline; the not-web path is reachable and passes) — confirmed via live Firefox. Activates at R4.",

@@ -87,9 +87,7 @@ _TOOLCHAIN_UNSUPPORTED_BLOCKER = "toolchain_unsupported"
 # TYPED INTENT's start_cmd). Source alone would detect a plain npm candidate.
 _PNPM_START_FILES: dict[str, bytes] = {
     "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
-    "server.js": (
-        b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"
-    ),
+    "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),
 }
 # A host-owned typed intent whose start command NAMES pnpm — the sidecar the release
 # route reads (written via `_seed_project(..., intent=...)`).
@@ -265,7 +263,7 @@ def test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm(
         f"assessment={body['assessment']!r}, self_host={body['self_host']!r}, "
         f"blockers={sorted(codes)}. `_toolchain_blocker` allowlists pnpm via "
         "_SUPPORTED_NODE_HEADS, so a `pnpm start` intent slips through and the emitted "
-        "node:22-bookworm-slim image runs `CMD [\"pnpm\", \"start\"]` with no pnpm "
+        'node:22-bookworm-slim image runs `CMD ["pnpm", "start"]` with no pnpm '
         "installed — unrunnable. It must fail closed with toolchain_unsupported OR "
         f"provision/pin pnpm in the image. Emitted Dockerfile:\n{dockerfile}"
     )
