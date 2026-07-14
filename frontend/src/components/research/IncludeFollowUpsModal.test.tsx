@@ -76,6 +76,28 @@ function renderModal(opts: RenderOpts = {}) {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("IncludeFollowUpsModal", () => {
+  it("has a Radix-backed accessible dialog name without title contract errors", () => {
+    const consoleError = vi.spyOn(console, "error");
+
+    try {
+      renderModal();
+      const dialog = screen.getByRole("dialog", { name: "Include follow-ups?" });
+      const titleId = dialog.getAttribute("aria-labelledby");
+      expect(titleId).toBeTruthy();
+      expect(document.getElementById(titleId!)).toHaveTextContent("Include follow-ups?");
+
+      const titleContractErrors = consoleError.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" &&
+          message.includes("DialogContent") &&
+          message.includes("DialogTitle"),
+      );
+      expect(titleContractErrors).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   // (a) Renders pairs
   it("renders question text for each follow-up pair", () => {
     renderModal();

@@ -319,6 +319,47 @@ describe("NeedMoreCard", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("gives every report action dialog a Radix-backed accessible name", async () => {
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, "error");
+
+    try {
+      renderCard();
+
+      await user.click(screen.getByRole("button", { name: /Export as/i }));
+      const exportDialog = await screen.findByRole("dialog", { name: "Export report" });
+      const exportTitleId = exportDialog.getAttribute("aria-labelledby");
+      expect(exportTitleId).toBeTruthy();
+      expect(document.getElementById(exportTitleId!)).toHaveTextContent("Export report");
+
+      await user.click(
+        within(exportDialog).getByRole("button", { name: /Close export dialog/i }),
+      );
+      await waitFor(() => expect(exportDialog).not.toBeInTheDocument());
+
+      await user.click(screen.getByRole("button", { name: /Audio Overview/i }));
+      const audioDialog = await screen.findByRole("dialog", {
+        name: "Generate audio overview",
+      });
+      const audioTitleId = audioDialog.getAttribute("aria-labelledby");
+      expect(audioTitleId).toBeTruthy();
+      expect(document.getElementById(audioTitleId!)).toHaveTextContent(
+        "Generate audio overview",
+      );
+      expect(audioTitleId).not.toBe(exportTitleId);
+
+      const titleContractErrors = consoleError.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" &&
+          message.includes("DialogContent") &&
+          message.includes("DialogTitle"),
+      );
+      expect(titleContractErrors).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("Export modal shows PDF as disabled when server lacks WeasyPrint", async () => {
     const user = userEvent.setup();
     renderCard();

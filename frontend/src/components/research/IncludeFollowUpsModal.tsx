@@ -148,13 +148,9 @@ export function IncludeFollowUpsModal({
             "bg-[color-mix(in_oklch,var(--surface-1)_95%,transparent)]",
             "backdrop-blur-xl border border-hairline rounded-card p-body pmx-rise",
           )}
-          aria-labelledby="include-fu-title"
         >
           <div className="flex items-center justify-between">
-            <Dialog.Title
-              id="include-fu-title"
-              className="font-ui text-[0.95rem] font-semibold text-text"
-            >
+            <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
               Include follow-ups?
             </Dialog.Title>
             <Dialog.Close asChild>
