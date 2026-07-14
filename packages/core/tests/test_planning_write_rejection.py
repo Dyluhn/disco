@@ -12,14 +12,153 @@ from __future__ import annotations
 
 import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
-from disco.core import ActionEvent, AgentErrorEvent, ObservationEvent, PlanEvent, StatusEvent
-from disco.core.events import ConversationStatus
+from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
+    MessageEvent,
+    ObservationEvent,
+    PlanEvent,
+    StatusEvent,
+)
+from disco.core.dod import FileExistsPredicate
+from disco.core.events import ConversationStatus, EventSource
 from disco.core.llm import OperatingMode
 from loop_fakes import ScriptedAgent, action_step
 
 
 def _submit_plan_step(summary="p"):
     return action_step("submit_plan", {"summary": summary, "steps": [{"title": "do"}]})
+
+
+def _unsafe_done_conditions_plan():
+    return action_step(
+        "submit_plan",
+        {
+            "summary": "unsafe external gates",
+            "steps": [
+                {
+                    "title": "Create fonts directory",
+                    "done_condition": {"kind": "file_exists", "path": "release/fonts"},
+                },
+                {
+                    "title": "Write proof font",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "/workspace/release/fonts/proof.woff2",
+                    },
+                },
+                {
+                    "title": "Serve the release",
+                    "done_condition": {
+                        "kind": "http_ok",
+                        "url": "http://localhost:3000",
+                    },
+                },
+                {
+                    "title": "Malformed condition",
+                    "done_condition": {"kind": "file_exists"},
+                },
+                {
+                    "title": "Escaping file",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "/workspace/../../etc/passwd",
+                    },
+                },
+                {
+                    "title": "Unsafe command",
+                    "done_condition": {
+                        "kind": "command",
+                        "cmd": "rm -rf /",
+                    },
+                },
+            ],
+        },
+    )
+
+
+async def test_unsafe_done_conditions_rejected_then_corrected_plan_arms_cleanly():
+    corrected = action_step(
+        "submit_plan",
+        {
+            "summary": "safe exact gate",
+            "steps": [
+                {
+                    "title": "Write proof font",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "release/fonts/proof.woff2",
+                    },
+                }
+            ],
+        },
+    )
+    agent = ScriptedAgent([_unsafe_done_conditions_plan(), corrected])
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-invalid-done-condition-recovers",
+        executor=BuildExecutor(),
+    )
+    await loop.send_message("build a release")
+    await loop.run()
+
+    events = await store.get_events("pw-invalid-done-condition-recovers")
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert len(plans) == 1
+    assert plans[0].summary == "safe exact gate"
+    assert [step.done_condition for step in plans[0].steps] == [
+        FileExistsPredicate(path="release/fonts/proof.woff2")
+    ]
+    assert sum(
+        isinstance(event, StatusEvent)
+        and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    ) == 1
+    feedback = [
+        event.message.content
+        for event in events
+        if isinstance(event, MessageEvent) and event.source == EventSource.ENVIRONMENT
+    ]
+    assert any("parent directory" in message for message in feedback)
+    assert any("local preview host" in message for message in feedback)
+    assert any("done_condition is malformed" in message for message in feedback)
+    assert any("safe exact workspace file" in message for message in feedback)
+    assert any("command condition is hard-denied" in message for message in feedback)
+    assert any("Invalid plan attempt 1/3" in message for message in feedback)
+
+    await loop.approve_plan()
+    spec = await store.get_dod_spec("pw-invalid-done-condition-recovers")
+    assert spec is not None
+    assert spec.predicates == [FileExistsPredicate(path="release/fonts/proof.woff2")]
+
+
+async def test_repeated_unsafe_done_conditions_land_bounded_stuck():
+    agent = ScriptedAgent([_unsafe_done_conditions_plan() for _ in range(3)])
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-invalid-done-condition-bounded",
+        executor=BuildExecutor(),
+    )
+    loop._autonomous = True
+    await loop.send_message("build a release")
+    await loop.run()
+
+    events = await store.get_events("pw-invalid-done-condition-bounded")
+    assert not any(isinstance(event, PlanEvent) for event in events)
+    assert sum(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.RUNNING
+        and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    ) == 3
+    state = await loop.get_state()
+    assert state.execution_status == ConversationStatus.STUCK
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    )
 
 
 async def test_write_in_planning_is_rejected_then_recovers_to_plan():

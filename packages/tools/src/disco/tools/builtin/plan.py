@@ -11,13 +11,12 @@ sandbox) and carry no side effects, so they are LOW risk and never gate a build.
   check steps off honestly (agent-driven; an unreported step simply stays pending).
 
 C18 — `PlanStepInput.done_condition` is an OPTIONAL machine-checkable predicate the
-agent attaches to a step. When the step is later marked done via `plan_step(idx,
-'done')`, the engine evaluates the predicate and emits a visible pass/fail note in
-the trace. ADVISORY ONLY: failure does not block the run, does not nudge the agent,
-and does not duplicate the C1c finish gate. The predicate REUSES the
-`disco.core.dod.DoDPredicate` shape (file_exists / command / http_ok) so the
-planner speaks the same vocabulary as the DoD spec — but this check is local and
-advisory, not the fresh-context DoD evaluation C1b runs.
+agent attaches to a step. When the step is later marked done, C18 emits an advisory
+pass/fail note. Separately, every accepted condition is captured on approval as an
+immutable C1c finish gate and evaluated again from fresh sandbox evidence. Unsafe or
+internally contradictory conditions are rejected before approval. The predicate
+reuses `disco.core.dod.DoDPredicate` (file_exists / command / http_ok), so the local
+progress note and the external finish contract share one vocabulary.
 """
 
 from __future__ import annotations
@@ -51,10 +50,15 @@ class PlanStepInput(BaseModel):
             "them (this is how the system confirms you built what was asked — "
             "declaring a file you never create will block finish, not pass it). "
             "Other shapes (`{'kind': 'command', 'cmd': ..., 'expect_exit': 0}` | "
-            "`{'kind': 'http_ok', 'url': ..., 'expect_status': 200}`) are also "
-            "evaluated when you mark the step done and shown in the trace; today "
-            "only `file_exists` gates finish. Same discriminated union as "
-            "`disco.core.dod.DoDPredicate`."
+            "`{'kind': 'http_ok', 'url': ..., 'expect_status': 200}`) also gate "
+            "finish after approval. Never use file_exists for a directory; name "
+            "the exact nested file instead. Never use localhost, 127.0.0.0/8, ::1, "
+            "or another loopback URL for http_ok: local preview ports/lifecycle are "
+            "managed dynamically and verified separately. Omit done_condition when "
+            "there is no safe exact predicate; do not guess. Traversal/host-absolute "
+            "file paths, malformed conditions, and hard-denied commands are rejected "
+            "before approval rather than silently dropped. Same discriminated union "
+            "as `disco.core.dod.DoDPredicate`."
         ),
     )
 
@@ -101,8 +105,12 @@ class SubmitPlanTool:
             "`context` block explaining what you found and why this plan. For every step "
             "that creates a file, attach a `done_condition` of "
             "`{'kind': 'file_exists', 'path': '<that file>'}` — this is how the system "
-            "verifies, at finish, that you actually built what was asked. Do not take any "
-            "state-changing action until the plan is approved."
+            "verifies, at finish, that you actually built what was asked. Every accepted "
+            "done_condition becomes an immutable external finish gate. A directory is "
+            "not a file: name exact nested files, never parent directories. Never guess a "
+            "localhost/loopback preview URL or port; preview verification is managed "
+            "separately. Omit an unsafe condition. Do not take any state-changing action "
+            "until the plan is approved."
         ),
         args_model=SubmitPlanArgs,
         base_risk=SecurityRisk.LOW,

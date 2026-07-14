@@ -15,12 +15,21 @@ tests drive it through a Planner over a trivial stand-in loop.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
 from disco.core.events import PlanEvent
-from disco.core.loop.plans import Planner
+from disco.core.loop.plans import (
+    Planner,
+    validate_plan_done_conditions,
+    validate_raw_plan_done_conditions,
+)
 
 
 def _planner() -> Planner:
-    return Planner(loop=object())  # type: ignore[arg-type]  # plan_from_args ignores the loop here
+    return Planner(  # type: ignore[arg-type] — parse-only stand-in
+        loop=SimpleNamespace(_plan_step_predicates={}, _autonomous=False)
+    )
 
 
 def test_trailing_summary_close_tag_is_stripped() -> None:
@@ -144,3 +153,138 @@ def test_steps_item_wrapper_unwraps_for_minimax_dialect() -> None:
     )
 
     assert [s.title for s in ev.steps] == ["Scaffold", "Wire it up"]
+
+
+def test_done_condition_validation_normalizes_guest_paths_without_prefix_collisions() -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": [
+                {
+                    "title": "Directory mistake",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "/workspace/release/fonts",
+                    },
+                },
+                {
+                    "title": "Nested file",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "workspace/release/fonts/proof.woff2",
+                    },
+                },
+                {
+                    "title": "Similar prefix is a file",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "release/fonts-backup",
+                    },
+                },
+            ],
+        },
+        events=[],
+    )
+
+    errors = validate_plan_done_conditions(ev)
+    assert len(errors) == 1
+    assert "release/fonts" in errors[0]
+    assert "release/fonts/proof.woff2" in errors[0]
+    assert "fonts-backup" not in errors[0]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:3000",
+        "http://sub.localhost:8080",
+        "http://127.0.0.42:3000",
+        "http://[::1]:3000",
+    ],
+)
+def test_done_condition_validation_rejects_loopback_http(url: str) -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": [
+                {
+                    "title": "Serve",
+                    "done_condition": {"kind": "http_ok", "url": url},
+                }
+            ],
+        },
+        events=[],
+    )
+
+    assert "local preview host" in validate_plan_done_conditions(ev)[0]
+
+
+def test_done_condition_validation_preserves_non_loopback_http() -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": [
+                {
+                    "title": "Check deployed service",
+                    "done_condition": {
+                        "kind": "http_ok",
+                        "url": "https://example.com/health",
+                    },
+                }
+            ],
+        },
+        events=[],
+    )
+
+    assert validate_plan_done_conditions(ev) == []
+
+
+def test_raw_done_condition_validation_never_silently_drops_malformed_gate() -> None:
+    errors = validate_raw_plan_done_conditions(
+        {
+            "steps": [
+                {"title": "missing path", "done_condition": {"kind": "file_exists"}},
+                {"title": "wrong shape", "done_condition": "file_exists output.txt"},
+                {"title": "explicit omission", "done_condition": None},
+                {"title": "no condition"},
+            ]
+        }
+    )
+
+    assert len(errors) == 2
+    assert all("not silently discarded" in error for error in errors)
+
+
+def test_done_condition_validation_rejects_impossible_file_and_command_shapes() -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": [
+                {
+                    "title": "root directory",
+                    "done_condition": {"kind": "file_exists", "path": "/workspace"},
+                },
+                {
+                    "title": "traversal",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "/workspace/../../etc/passwd",
+                    },
+                },
+                {
+                    "title": "hard denied",
+                    "done_condition": {"kind": "command", "cmd": "rm -rf /"},
+                },
+                {
+                    "title": "safe command",
+                    "done_condition": {"kind": "command", "cmd": "test -s output.txt"},
+                },
+            ],
+        },
+        events=[],
+    )
+
+    errors = validate_plan_done_conditions(ev)
+    assert len(errors) == 3
+    assert sum("safe exact workspace file" in error for error in errors) == 2
+    assert sum("hard-denied" in error for error in errors) == 1

@@ -96,8 +96,12 @@ from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for
     Observer,
 )
 from .plan_conditions import PlanStepConditions
-from .plans import Planner
 from .planning_harvest import harvest_revision_plan_after_refusal
+from .plans import (
+    Planner,
+    validate_plan_done_conditions,
+    validate_raw_plan_done_conditions,
+)
 from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
     _RECITATION_SENTINEL,
     RecitationRegrounder,
@@ -304,6 +308,7 @@ _FORCE_SUBMIT_DIRECTIVE = (
 # forced-submit recovery (narrow tools to submit_plan). Gated default-ON; kill switch
 # DISCO_REVISION_FORCE_SUBMIT=0.
 _REVISION_FORCE_SUBMIT_K = 2
+_INVALID_PLAN_DONE_CONDITION_CAP = 3
 
 # Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
 # AFTER a change/revision steer landed mid-step (the in-flight write-through race).
@@ -1242,6 +1247,67 @@ class AgentLoop:
             if tc is not None and tc.tool_name == self._plan_tool:
                 self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
                 plan = self._plan_from_args(tc.arguments, events)
+                condition_errors = validate_raw_plan_done_conditions(tc.arguments)
+                condition_errors.extend(validate_plan_done_conditions(plan))
+                if condition_errors:
+                    # Do not persist or approve a plan whose machine conditions
+                    # become impossible/unsupported immutable finish gates.  The
+                    # transient C18 map was populated while parsing, so explicitly
+                    # discard this rejected revision before the model retries.
+                    self._planner.discard_plan_predicates(plan.revision)
+                    start_seq = signals.current_planning_segment_start_seq(events)
+                    prior = sum(
+                        1
+                        for event in events
+                        if isinstance(event, StatusEvent)
+                        and event.detail == "invalid_plan_done_conditions"
+                        and (start_seq is None or (event.seq or 0) > start_seq)
+                    )
+                    attempt = prior + 1
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail="invalid_plan_done_conditions",
+                        )
+                    )
+                    rendered = "\n".join(f"- {error}" for error in condition_errors)
+                    if attempt >= _INVALID_PLAN_DONE_CONDITION_CAP:
+                        await self._land_blocked(
+                            reason="invalid_plan_done_conditions",
+                            guidance=(
+                                "The planner repeatedly submitted unsafe Definition-of-Done "
+                                f"conditions ({attempt}/{_INVALID_PLAN_DONE_CONDITION_CAP}). "
+                                "No plan was approved and no execution began. Correct these "
+                                f"conditions before retrying:\n{rendered}"
+                            ),
+                            legacy_status=ConversationStatus.STUCK,
+                            legacy_detail="invalid_plan_done_conditions",
+                        )
+                        return Disp.HALT
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "<system-reminder>\n"
+                                    "Your proposed plan was NOT accepted because its "
+                                    "done_condition values would become immutable external "
+                                    "finish gates and are unsafe or internally inconsistent:\n"
+                                    f"{rendered}\n\n"
+                                    "Submit a corrected plan. Do not replace a required "
+                                    "directory with a file and do not guess a local preview "
+                                    "port. Omit a condition when there is no safe, exact "
+                                    "machine-checkable predicate. "
+                                    f"Invalid plan attempt {attempt}/"
+                                    f"{_INVALID_PLAN_DONE_CONDITION_CAP}.\n"
+                                    "</system-reminder>"
+                                ),
+                            ),
+                            meta={"blocking": "invalid_plan_done_conditions"},
+                        )
+                    )
+                    return Disp.CONTINUE
                 await self._emit(plan)
                 # [REL-RC A1] A ZERO-STEP REVISION plan must NOT auto-approve. MiniMax-M3
                 # frequently submits a revision plan with no parseable steps; auto-approving it
@@ -1285,9 +1351,10 @@ class AgentLoop:
                     # do we keep the original controlled STUCK terminal.
                     instruction = signals.current_revision_instruction(events)
                     if instruction:
-                        # Construct a FRESH PlanEvent (new id) — NOT plan.model_copy, which preserves
-                        # the already-emitted empty plan's id, so _emit would dedup it (idempotent on
-                        # (conversation_id, id)) and _latest_plan would still return the EMPTY plan →
+                        # Construct a FRESH PlanEvent (new id) — NOT plan.model_copy,
+                        # which preserves the already-emitted empty plan's id, so
+                        # _emit would dedup it (idempotent on (conversation_id, id))
+                        # and _latest_plan would still return the EMPTY plan →
                         # stranded execution (Codex code-gate catch).
                         synth = PlanEvent(
                             summary=plan.summary or instruction[:120],
@@ -2163,18 +2230,18 @@ class AgentLoop:
 
     async def _arm_dod_from_plan(self) -> None:
         """C1c WIRING — on plan approval, arm the (previously dark) Definition-of-Done
-        finish gate from the plan's OWN committed, machine-checkable `file_exists`
-        done_conditions, so `finish` is blocked until the deliverables the model said it
-        would create actually exist. This closes "declare a step then skip it" by
+        finish gate from the plan's OWN committed, machine-checkable done_conditions,
+        so `finish` is blocked until the files, commands, and HTTP checks the model
+        declared are satisfied. This closes "declare a step then skip it" by
         construction (the strongest anti-gaming the agentic-builder literature found that
         needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
         state, never to the model's free-text self-assessment).
 
-        Scoped deliberately for a SAFE first slice:
-          * file_exists ONLY. command/http_ok carry infra-false-block ambiguity (a gated
-            command or a probe timeout reads as FAIL) — deferred until the evaluator grows an
-            explicit infra-vs-task channel.
-          * Empty-guard: no file_exists predicate ⇒ DO NOT set a spec. An empty spec makes the
+        Safety contract:
+          * Pre-approval validation rejects cross-step file/directory contradictions and
+            loopback HTTP preview guesses. Command/http_ok have an explicit infra-vs-task
+            channel; unverifiable evidence remains visible and fail-closed.
+          * Empty-guard: no accepted predicate ⇒ DO NOT set a spec. An empty spec makes the
             evaluator return passed=False (a deterministic block loop), so a plan that declared
             no checkable deliverable must leave the gate dark, not armed-and-failing.
           * Write-once (by store design): the FIRST approved plan captures the DoD; a later
@@ -2194,20 +2261,19 @@ class AgentLoop:
         if plan is None or not getattr(plan, "steps", None):
             return
         # v1 armed file_exists only; v2.1 includes command + http_ok now that the evaluator
-        # has an infra-vs-task channel (a denied command / unprobeable server RELEASES the
-        # gate instead of false-blocking — only a command that RAN-and-failed or a server
-        # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
+        # has an infra-vs-task channel. A denied command / unprobeable server is visibly
+        # UNVERIFIABLE and remains fail-closed rather than weakening the acceptance bar;
         # command/http_ok add real build/test + runtime-serve verification.
         _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
         # Narrow via a local (pyright cannot narrow through getattr) so the list is
         # typed list[DoDPredicate], not list[DoDPredicate | None]. (pre-existing
         # reportAssignmentType, fixed while touching this file for CXT-6.)
-        file_preds: list[DoDPredicate] = []
+        gateable_preds: list[DoDPredicate] = []
         for s in plan.steps:
             dc = getattr(s, "done_condition", None)
             if dc is not None and getattr(dc, "kind", None) in _GATEABLE_KINDS:
-                file_preds.append(dc)
-        if not file_preds:
+                gateable_preds.append(dc)
+        if not gateable_preds:
             return
         try:
             # replace_dod_spec = write-once BOOTSTRAP on the first arm + MONOTONIC
@@ -2217,7 +2283,7 @@ class AgentLoop:
             # rejected store-side and the existing, stronger bar holds.
             await self.store.replace_dod_spec(
                 self.conversation_id,
-                DoDSpec(predicates=file_preds),
+                DoDSpec(predicates=gateable_preds),
                 actor="system:plan_approval",
             )
         except DoDSpecAlreadySet:

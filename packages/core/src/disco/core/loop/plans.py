@@ -9,11 +9,20 @@ to `self._loop.`.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
-from ..dod import predicate_from_obj
+from ..dod import (
+    CommandExitPredicate,
+    FileExistsPredicate,
+    HTTPOkPredicate,
+    predicate_from_obj,
+)
+from ..dod_util import _hard_deny_reason
 from ..events import (
     ActionEvent,
     AlternativeOption,
@@ -26,6 +35,8 @@ from ..events import (
     PlanStep,
     StatusEvent,
 )
+from ..view import _latest_plan
+from ..workspace_paths import strip_redundant_workspace_prefix
 from .messages import (
     _PLAN_EXPLORE_FORCE,
     _PLAN_EXPLORE_READ_CAP,
@@ -34,7 +45,6 @@ from .messages import (
     _render_replan_plan_digest,
 )
 from .turn_control import _CONTINUE_OPTION_ID
-from ..view import _latest_plan
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -66,8 +76,143 @@ _PLAN_TAG_RE = re.compile(
 _AUTONOMOUS_ASSUMPTIONS_PREAMBLE = (
     "## Assumptions\n"
     "- Autonomous mode is on, so questions_v2 structured intake was skipped.\n"
-    "- Defer-don't-block: ambiguous preferences will be handled with reasonable defaults and kept easy to revise.\n"
+    "- Defer-don't-block: ambiguous preferences will be handled with reasonable "
+    "defaults and kept easy to revise.\n"
 )
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    lowered = hostname.rstrip(".").lower()
+    if lowered == "localhost" or lowered.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(lowered).is_loopback
+    except ValueError:
+        return False
+
+
+def _comparable_workspace_path(path: str) -> PurePosixPath | None:
+    """Normalize a model-authored guest path for cross-predicate comparison.
+
+    Traversal/host-absolute paths remain the evaluator's fail-closed concern.  We
+    simply exclude them from ancestor comparison rather than accidentally
+    normalizing an unsafe shape into a different path.
+    """
+    clean = strip_redundant_workspace_prefix(path.strip())
+    candidate = PurePosixPath(clean)
+    if not clean or candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    return candidate
+
+
+def validate_plan_done_conditions(plan: PlanEvent) -> list[str]:
+    """Return actionable errors for predicates that cannot be safely armed.
+
+    Every accepted plan predicate becomes an immutable external finish gate.
+    Reject contradictions before approval instead of letting the model discover
+    them through repeated, unsatisfiable finish attempts.
+    """
+    errors: list[str] = []
+    files: list[tuple[int, FileExistsPredicate, PurePosixPath]] = []
+    for index, step in enumerate(plan.steps, start=1):
+        predicate = step.done_condition
+        if isinstance(predicate, FileExistsPredicate):
+            comparable = _comparable_workspace_path(predicate.path)
+            if comparable is None:
+                errors.append(
+                    f"step {index} file_exists path {predicate.path!r} is not a "
+                    "safe exact workspace file. The workspace root, directory-shaped "
+                    "paths, traversal, and host-absolute paths cannot become finish "
+                    "gates. Name one exact nonempty file under /workspace."
+                )
+            elif predicate.path.rstrip() != predicate.path:
+                errors.append(
+                    f"step {index} file_exists path {predicate.path!r} ends in "
+                    "whitespace and is unsafe as an immutable file gate. Name the "
+                    "exact workspace file or omit the condition."
+                )
+            elif predicate.path.endswith("/"):
+                errors.append(
+                    f"step {index} file_exists path {predicate.path!r} is "
+                    "directory-shaped, but file_exists requires a nonempty regular "
+                    "file. Name an exact file inside the directory."
+                )
+            else:
+                files.append((index, predicate, comparable))
+        elif isinstance(predicate, CommandExitPredicate):
+            denied = _hard_deny_reason(predicate.cmd)
+            if denied is not None:
+                errors.append(
+                    f"step {index} command condition is hard-denied ({denied}) and "
+                    "therefore cannot become an immutable finish gate. Use a safe "
+                    "read-only verification command or omit the condition."
+                )
+        elif isinstance(predicate, HTTPOkPredicate):
+            try:
+                parsed = urlsplit(predicate.url)
+                hostname = parsed.hostname
+            except ValueError:
+                parsed = None
+                hostname = None
+            if parsed is None or parsed.scheme not in {"http", "https"} or not hostname:
+                errors.append(
+                    f"step {index} http_ok URL {predicate.url!r} is not an absolute "
+                    "HTTP(S) URL and cannot become an immutable finish gate. Correct "
+                    "the URL or omit the condition."
+                )
+            elif _is_loopback_hostname(hostname):
+                errors.append(
+                    f"step {index} http_ok URL {predicate.url!r} targets a local "
+                    "preview host. Local preview ports and lifecycle are managed "
+                    "dynamically by the platform, so this would be an unreliable "
+                    "immutable finish gate. Omit this condition and use exact "
+                    "file_exists deliverables; platform preview verification runs "
+                    "separately."
+                )
+
+    for index, predicate, path in files:
+        for child_index, child_predicate, child_path in files:
+            if index == child_index or path not in child_path.parents:
+                continue
+            errors.append(
+                f"step {index} file_exists path {predicate.path!r} is a parent "
+                f"directory of step {child_index} path {child_predicate.path!r}. "
+                "file_exists requires a nonempty regular file, so both conditions "
+                "cannot be true. Remove the directory condition and keep the exact "
+                "nested file deliverable."
+            )
+            break
+    return errors
+
+
+def validate_raw_plan_done_conditions(arguments: dict) -> list[str]:
+    """Reject malformed predicates bypassing the intercepted tool schema.
+
+    ``submit_plan`` never executes as a normal tool in PLANNING, so its Pydantic
+    model is not the enforcement boundary.  Parsing remains lenient for display
+    compatibility, but approval must not silently drop a present, malformed gate.
+    """
+    raw_steps = _unwrap_steps_item_wrapper(arguments.get("steps"))
+    if not isinstance(raw_steps, list):
+        return []
+    errors: list[str] = []
+    for index, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, dict) or "done_condition" not in raw_step:
+            continue
+        condition = raw_step.get("done_condition")
+        if condition is None:
+            continue
+        try:
+            predicate_from_obj(condition)
+        except Exception as exc:  # noqa: BLE001 — rendered as bounded model feedback
+            errors.append(
+                f"step {index} done_condition is malformed ({type(exc).__name__}). "
+                "Correct it to one documented predicate object or omit it; it was "
+                "not silently discarded."
+            )
+    return errors
 
 
 def _strip_plan_tags(text: object | None) -> str:
@@ -184,6 +329,15 @@ class Planner:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
 
+    def discard_plan_predicates(self, revision: int) -> None:
+        """Remove transient C18 entries for a plan rejected before persistence."""
+        predicates = getattr(self._loop, "_plan_step_predicates", None)
+        if not isinstance(predicates, dict):
+            return
+        for key in tuple(predicates):
+            if key[0] == revision:
+                predicates.pop(key, None)
+
     async def note_planning_read_and_maybe_force(self) -> None:
         """(B2/B6) Count one consecutive PLANNING-mode read and, on CROSSING the
         cap, inject ONE forcing reminder ("you have enough context — submit_plan
@@ -262,6 +416,11 @@ class Planner:
         # Re-seed per-plan-revision (a re-plan supersedes the prior map; we
         # don't keep stale predicates from an obsolete revision).
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
+        # A rejected submit_plan is allowed to recover with a corrected plan at
+        # the same revision. Clear its transient advisory map before rebuilding,
+        # otherwise an omitted condition from the rejected attempt survives and
+        # can be evaluated against the corrected plan.
+        self.discard_plan_predicates(revision)
         # [REL-RC A3] Only ITERATE `steps` when it is a real list. A model that mis-routes the
         # step array as a STRING into the `steps` slot would otherwise char-iterate ("abc" →
         # 'a','b','c' → bogus single-char steps); that string is instead routed to _harvest_steps
