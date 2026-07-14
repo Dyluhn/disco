@@ -437,11 +437,15 @@ async def test_corrupt_host_configuration_fails_closed_before_egress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     configs, secrets, approvals = _configured(tmp_path)
-    with sqlite3.connect(tmp_path / "state.db") as conn:
+    conn = sqlite3.connect(tmp_path / "state.db")
+    try:
         conn.execute(
             "UPDATE stripe_app_configs SET allowed_return_origins = ?",
             ('["https://app.example.com", 7]',),
         )
+        conn.commit()
+    finally:
+        conn.close()
     monkeypatch.setattr(
         "disco.core.stripe_host_service.guarded_request",
         lambda *_args, **_kwargs: pytest.fail("corrupt config reached egress"),
