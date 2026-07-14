@@ -15,6 +15,7 @@ from disco.retrieval.local_encoders import (
     FastEmbedEmbedder,
     FastEmbedNLIVerifier,
     FastEmbedReranker,
+    _embedding_factory,
     _sigmoid,
 )
 from disco.retrieval.models import Passage
@@ -58,6 +59,12 @@ def test_providers_conform_to_their_protocols():
 def test_sigmoid_squashes_logits_to_probabilities():
     assert _sigmoid(0.0) == pytest.approx(0.5)
     assert 0.0 < _sigmoid(-8) < _sigmoid(0) < _sigmoid(8) < 1.0
+
+
+def test_multilingual_e5_pins_mean_pooling() -> None:
+    factory = _embedding_factory("intfloat/multilingual-e5-large")
+
+    assert factory.__name__ == "PooledEmbedding"
 
 
 async def test_rerank_truncates_and_batches_to_bound_memory(monkeypatch):

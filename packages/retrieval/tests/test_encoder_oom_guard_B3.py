@@ -41,6 +41,7 @@ def _reset(monkeypatch):
     """Each test starts with cleared singletons so lazy-load fires fresh."""
     monkeypatch.setattr(le, "_embedding_model", None)
     monkeypatch.setattr(le, "_cross_encoder", None)
+    monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
 
 
 # ── (1) LOW RAM → EncoderUnavailable raised, no model instantiated ─────────────
@@ -74,8 +75,6 @@ def test_low_ram_lite_tier_uses_lower_threshold(monkeypatch):
     """PMX_ENCODER_TIER=lite lowers the threshold to 0.5 GB; 0.6 GB must pass."""
     monkeypatch.setenv("PMX_ENCODER_TIER", "lite")
     monkeypatch.setattr(le, "_mem_available_gb", lambda: 0.6)  # 0.6 GB > 0.5 GB threshold
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     # Should NOT raise — 0.6 GB is above the 0.5 GB lite threshold.
     instance = le._embedding()
     assert instance.model_name == le.EMBED_MODEL_LITE
@@ -110,8 +109,6 @@ def test_ample_ram_embed_loads_normally(monkeypatch):
     """With RAM well above the full-tier 4 GB threshold, _embedding() instantiates
     the model normally (fastembed constructor mocked — no download)."""
     monkeypatch.setattr(le, "_mem_available_gb", lambda: 32.0)  # 32 GB >> 4 GB
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     instance = le._embedding()
 
     assert isinstance(instance, _FakeEmbedder)
@@ -134,7 +131,6 @@ def test_ample_ram_reranker_loads_normally(monkeypatch):
 def test_ample_ram_no_encoder_unavailable_raised(monkeypatch):
     """Verify no EncoderUnavailable is raised when RAM is ample."""
     monkeypatch.setattr(le, "_mem_available_gb", lambda: 16.0)
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
     monkeypatch.setattr(
         "fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder
     )
@@ -200,8 +196,6 @@ def test_proc_meminfo_unavailable_skips_guard(monkeypatch):
     """When /proc/meminfo is unreadable (non-Linux, sandboxed), _mem_available_gb()
     returns inf and the guard is a no-op (no spurious EncoderUnavailable)."""
     monkeypatch.setattr(le, "_mem_available_gb", lambda: float("inf"))
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     # Should load normally even without the proc check.
     instance = le._embedding()
     assert isinstance(instance, _FakeEmbedder)

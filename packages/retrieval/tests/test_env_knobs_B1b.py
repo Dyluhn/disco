@@ -45,7 +45,7 @@ def _reset(monkeypatch):
     """Fresh singletons + fake constructors for every test."""
     monkeypatch.setattr(le, "_embedding_model", None)
     monkeypatch.setattr(le, "_cross_encoder", None)
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
+    monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
     monkeypatch.setattr(
         "fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder
     )

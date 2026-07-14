@@ -30,6 +30,7 @@ def main() -> None:
         app,
         host=cast(str, disco_env("HOST", "127.0.0.1")),
         port=int(cast(str, disco_env("PORT", "8800"))),
+        ws="websockets-sansio",
     )
 
 

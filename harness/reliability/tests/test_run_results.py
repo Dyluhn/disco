@@ -10,8 +10,18 @@ from harness.reliability.run import (
     _playwright_result,
     _provider_evidence_result,
     _pytest_result,
+    _suite_subprocess_environment,
 )
 from harness.reliability.state import FAIL, INVALID, PASS
+
+
+def test_playwright_environment_drops_conflicting_no_color(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    assert "NO_COLOR" not in _suite_subprocess_environment("playwright")
+    assert _suite_subprocess_environment("generic")["NO_COLOR"] == "1"
 
 
 def test_playwright_skip_is_invalid_not_pass(tmp_path: Path) -> None:

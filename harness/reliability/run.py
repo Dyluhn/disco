@@ -109,8 +109,7 @@ class WeightedSuitePool:
             async with self._lock:
                 memory_fits = self._active_memory + memory_bytes <= self.memory_budget
                 live_memory_fits = (
-                    resources.memory_available_bytes
-                    >= self.memory_reserve_bytes + memory_bytes
+                    resources.memory_available_bytes >= self.memory_reserve_bytes + memory_bytes
                 )
                 disk_fits = resources.disk_free_bytes >= self.disk_reserve_bytes
                 count_fits = self._active_count < self.max_parallel
@@ -364,6 +363,16 @@ async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     await process.wait()
 
 
+def _suite_subprocess_environment(kind: str) -> dict[str, str]:
+    env = os.environ.copy()
+    if kind == "playwright":
+        # Playwright deliberately sets FORCE_COLOR for its web server and
+        # workers. Inheriting NO_COLOR as well makes Node warn on every child
+        # process, so let Playwright own color policy for Playwright suites.
+        env.pop("NO_COLOR", None)
+    return env
+
+
 def _structured_command(
     suite: Suite, command: list[str], suite_out: Path, env: dict[str, str]
 ) -> tuple[list[str], Path | None]:
@@ -432,11 +441,9 @@ async def _run_suite(
             "finished_at": _utc_now(),
         }
 
-    env = os.environ.copy()
+    env = _suite_subprocess_environment(suite.kind)
     try:
-        env.update(
-            {key: _expand(value, suite_context) for key, value in suite.environment.items()}
-        )
+        env.update({key: _expand(value, suite_context) for key, value in suite.environment.items()})
     except ValueError as exc:
         return {**base, "status": INVALID, "reason": str(exc), "finished_at": _utc_now()}
     env["DISCO_RELIABILITY_SUITE_OUT"] = str(suite_out)

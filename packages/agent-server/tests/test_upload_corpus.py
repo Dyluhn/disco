@@ -317,6 +317,13 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     # RuntimeWarning. We assign a real async-generator function so calling
     # stream_complete yields an async iterator directly.
     fake_router = AsyncMock()
+    follow_up_response = MagicMock()
+    follow_up_response.text = (
+        "What evidence supports the answer?\n"
+        "Which exceptions matter most?\n"
+        "What should be investigated next?"
+    )
+    fake_router.complete = AsyncMock(return_value=follow_up_response)
 
     async def _fake_token_stream(req: Any) -> AsyncIterator[Any]:
         chunk = MagicMock()

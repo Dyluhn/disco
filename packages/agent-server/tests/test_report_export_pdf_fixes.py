@@ -13,6 +13,7 @@ from disco.agent_server.report_export import (
     _build_pdf_html,
     _cover_subtitle_text,
     _render_section_body,
+    _report_pdf_url_fetcher,
     pdf_available,
     serialize_markdown,
     serialize_pdf,
@@ -41,6 +42,14 @@ _LOCAL_LLM_TABLE = (
     "35-48 GB, Q4 | M4 Max 64 GB or M3 Ultra 192 GB |\n"
     "| Nemotron / GLM-5.2 mid-tier (size not specified in cited sources) | n/a | n/a |\n"
 )
+
+
+def test_pdf_fetcher_allows_data_only_without_deprecated_default() -> None:
+    fetched = _report_pdf_url_fetcher("data:text/plain;base64,aGVsbG8=")
+
+    assert fetched.read() == b"hello"
+    with pytest.raises(ValueError, match="external PDF resource fetch blocked"):
+        _report_pdf_url_fetcher("https://example.com/tracker.png")
 
 
 def _report_with_chart() -> ReportEvent:

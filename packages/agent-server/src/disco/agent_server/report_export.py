@@ -31,7 +31,6 @@ from typing import Literal, cast
 
 import markdown as _md
 from disco.core import ReportEvent
-from disco.core.events import report_truncation
 from disco.core.brand import (
     definition_mark_html,
     font_face_css,
@@ -47,6 +46,7 @@ from disco.core.brand.chart_svg import (
     render_chart_table,
 )
 from disco.core.brand.tokens import Theme
+from disco.core.events import report_truncation
 from disco.core.think import strip_think_spans
 
 logger = logging.getLogger(__name__)
@@ -605,9 +605,14 @@ def _lazy_import_weasyprint():
 
 def _report_pdf_url_fetcher(url: str, *args, **kwargs):
     if str(url).startswith("data:"):
-        from weasyprint import default_url_fetcher
+        from weasyprint import URLFetcher
 
-        return default_url_fetcher(url, *args, **kwargs)
+        # We embed the licensed fonts as data URIs and reject every external
+        # scheme. Pin redirect behavior off explicitly: WeasyPrint 69 removed
+        # the old default fetcher's redirect semantics for security reasons.
+        return URLFetcher(
+            allowed_protocols={"data"}, allow_redirects=False
+        ).fetch(url, *args, **kwargs)
     raise ValueError("external PDF resource fetch blocked")
 
 

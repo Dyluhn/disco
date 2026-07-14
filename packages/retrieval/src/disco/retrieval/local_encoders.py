@@ -134,6 +134,7 @@ def _tier_rerank_default() -> str:
     tier = _env_default("ENCODER_TIER", _TIER_FULL).lower()
     return RERANK_MODEL_LITE if tier == _TIER_LITE else RERANK_MODEL
 
+
 # A cross-encoder's attention is O(seq_len^2) per (query, passage) pair, and
 # fastembed does NOT truncate inputs to the model's window — so reranking
 # full-page passages (thousands of tokens) blows ONNX attention memory up to
@@ -148,6 +149,11 @@ _RERANK_BATCH = 8
 # Process-wide single load (downloads once, stays resident).
 _embedding_model: Any | None = None
 _cross_encoder: Any | None = None
+
+# fastembed 0.8 moved multilingual E5 from the old CLS behavior to mean
+# pooling. Instantiate that implementation explicitly so the behavior cannot
+# drift again behind TextEmbedding's version-dependent registry shim.
+_EXPLICIT_MEAN_EMBED_MODEL = "intfloat/multilingual-e5-large"
 
 
 def _arena_session_kwargs() -> dict[str, Any]:
@@ -177,16 +183,26 @@ def _arena_session_kwargs() -> dict[str, Any]:
     return {"enable_cpu_mem_arena": val in ("on", "true", "1", "yes")}
 
 
+def _embedding_factory(model_name: str) -> Any:
+    if model_name.lower() == _EXPLICIT_MEAN_EMBED_MODEL.lower():
+        from fastembed.text.pooled_embedding import PooledEmbedding
+
+        return PooledEmbedding
+    from fastembed import TextEmbedding
+
+    return TextEmbedding
+
+
 def _embedding() -> Any:
     global _embedding_model
     if _embedding_model is None:
-        from fastembed import TextEmbedding
-
         # Explicit PMX_EMBED_MODEL wins; fall back to tier-aware default.
         model_name = disco_env("EMBED_MODEL") or _tier_embed_default()
         # RAM guard: raises EncoderUnavailable instead of letting an OOM kill the process.
         _require_ram(model_name)
-        _embedding_model = TextEmbedding(model_name=model_name, **_arena_session_kwargs())
+        _embedding_model = _embedding_factory(model_name)(
+            model_name=model_name, **_arena_session_kwargs()
+        )
     return _embedding_model
 
 

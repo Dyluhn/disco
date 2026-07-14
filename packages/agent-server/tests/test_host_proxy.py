@@ -239,7 +239,13 @@ async def real_ws_server():
 
     app = Starlette(routes=[WebSocketRoute("/ws", EchoWSEndpoint)])
 
-    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="critical")
+    config = uvicorn.Config(
+        app=app,
+        host="127.0.0.1",
+        port=port,
+        log_level="critical",
+        ws="websockets-sansio",
+    )
     server = uvicorn.Server(config)
 
     task = asyncio.create_task(server.serve())
@@ -270,7 +276,13 @@ async def proxy_app_server(real_ws_server):
 
     app.add_middleware(HostPreviewProxyMiddleware, upstream_resolver=resolver)
 
-    config = uvicorn.Config(app=app, host="127.0.0.1", port=port, log_level="debug")
+    config = uvicorn.Config(
+        app=app,
+        host="127.0.0.1",
+        port=port,
+        log_level="debug",
+        ws="websockets-sansio",
+    )
     server = uvicorn.Server(config)
 
     task = asyncio.create_task(server.serve())

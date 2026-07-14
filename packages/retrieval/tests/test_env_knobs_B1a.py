@@ -39,6 +39,7 @@ def _reset_singletons(monkeypatch):
     """Each test starts with fresh (None) singletons so env changes take effect."""
     monkeypatch.setattr(le, "_embedding_model", None)
     monkeypatch.setattr(le, "_cross_encoder", None)
+    monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
 
 
 # ── PMX_EMBED_MODEL ───────────────────────────────────────────────────────────
@@ -47,8 +48,6 @@ def _reset_singletons(monkeypatch):
 def test_embed_default_when_env_unset(monkeypatch):
     """Without PMX_EMBED_MODEL, _embedding() instantiates with EMBED_MODEL default."""
     monkeypatch.delenv("PMX_EMBED_MODEL", raising=False)
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     instance = le._embedding()
 
     assert instance.model_name == le.EMBED_MODEL
@@ -57,8 +56,6 @@ def test_embed_default_when_env_unset(monkeypatch):
 def test_embed_override_from_env(monkeypatch):
     """With PMX_EMBED_MODEL=foo/bar, _embedding() instantiates with foo/bar."""
     monkeypatch.setenv("PMX_EMBED_MODEL", "foo/bar")
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     instance = le._embedding()
 
     assert instance.model_name == "foo/bar"
@@ -67,8 +64,6 @@ def test_embed_override_from_env(monkeypatch):
 def test_embed_singleton_cached(monkeypatch):
     """Second call to _embedding() returns the cached instance (no re-creation)."""
     monkeypatch.delenv("PMX_EMBED_MODEL", raising=False)
-    monkeypatch.setattr("fastembed.TextEmbedding", _FakeEmbedder)
-
     a = le._embedding()
     b = le._embedding()
 

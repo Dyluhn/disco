@@ -47,6 +47,7 @@ dev = [
     # Chromium (one-time `playwright install chromium` fetches the browser).
     # The container image installs its own in deploy/sandbox/Dockerfile.
     "playwright>=1.45",
+    "httpx2>=2.5.0",
 ]
 
 [tool.pytest.ini_options]

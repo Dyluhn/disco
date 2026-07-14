@@ -79,9 +79,7 @@ def main() -> None:
 
         install_json_logging(level)
     else:
-        logging.basicConfig(
-            level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-        )
+        logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     ensure_process_secret_key()
     db_path = disco_env("DB", "disco.db")
     assert db_path is not None  # default above is non-None
@@ -96,6 +94,10 @@ def main() -> None:
         app,
         host=host,
         port=int(port),
+        # Uvicorn's legacy websockets adapter imports APIs deprecated by
+        # websockets 14+. The sans-I/O adapter is the maintained path and
+        # preserves the ASGI WebSocket contract used by the agent surface.
+        ws="websockets-sansio",
     )
 
 
