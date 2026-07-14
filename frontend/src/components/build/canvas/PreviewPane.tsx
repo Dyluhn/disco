@@ -9,7 +9,6 @@ import {
   ApiError,
   pathPreviewBootstrapUrl,
   previewBootstrapUrl,
-  previewHostUrl,
 } from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
@@ -326,6 +325,7 @@ export function PreviewPane({
     selectedDeliverable?.kind === "app" &&
     events.some((event) => event.kind === "workspace_version");
   const [staticPreviewSrc, setStaticPreviewSrc] = useState<string | null>(null);
+  const [staticPreviewFailure, setStaticPreviewFailure] = useState(false);
 
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
   // allowedOrigin is "null" (the string) — sandboxed iframes without
@@ -397,22 +397,29 @@ export function PreviewPane({
   const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    if (!committedStaticPreview || !cid || srcDoc === null) {
+    setStaticPreviewFailure(false);
+    if (!committedStaticPreview || !cid) {
       setStaticPreviewSrc(null);
       return;
     }
     void pathPreviewBootstrapUrl(cid, "/")
       .then((url) => {
-        if (!cancelled) setStaticPreviewSrc(url);
+        if (cancelled) return;
+        setStaticPreviewSrc(url);
+        setStaticPreviewFailure(url === null);
       })
       .catch(() => {
-        // The existing opaque-origin srcdoc remains the safe, honest fallback.
-        if (!cancelled) setStaticPreviewSrc(null);
+        if (cancelled) return;
+        // Known client-side bytes can still use the opaque srcdoc. When the
+        // bytes exist only in the committed workspace, surface an honest
+        // isolation failure instead of silently substituting a live server.
+        setStaticPreviewSrc(null);
+        setStaticPreviewFailure(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [cid, committedStaticPreview, reloadKey, srcDoc]);
+  }, [cid, committedStaticPreview, reloadKey]);
   const [previewPort, setPreviewPort] = useState(8000);
   const boundPorts = (data?.ports ?? [])
     .filter((p) => p.owner != null)
@@ -492,25 +499,42 @@ export function PreviewPane({
       {restoreNotice.text}
     </div>
   ) : null;
-  const rawProxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
-  const [proxySrc, setProxySrc] = useState<string | null>(rawProxySrc);
+  type IsolatedLivePreview = {
+    requestKey: string;
+    url: string | null;
+    failed: boolean;
+  };
+  const liveProxyTarget = `/?r=${reloadKey}`;
+  const liveProxyRequestKey = cid ? `${cid}:${previewPort}:${liveProxyTarget}` : "";
+  const [isolatedLivePreview, setIsolatedLivePreview] =
+    useState<IsolatedLivePreview | null>(null);
   useEffect(() => {
     let cancelled = false;
     if (!cid) {
-      setProxySrc(null);
       return;
     }
-    void previewBootstrapUrl(cid, previewPort, `/?r=${reloadKey}`)
+    const requestKey = liveProxyRequestKey;
+    void previewBootstrapUrl(cid, previewPort, liveProxyTarget)
       .then((url) => {
-        if (!cancelled) setProxySrc(url ?? rawProxySrc);
+        if (!cancelled) {
+          setIsolatedLivePreview({ requestKey, url, failed: url === null });
+        }
       })
       .catch(() => {
-        if (!cancelled) setProxySrc(rawProxySrc);
+        // Executable generated content must never fall back to an unsigned raw
+        // wildcard URL. Keep the iframe unmounted and surface the failure.
+        if (!cancelled) setIsolatedLivePreview({ requestKey, url: null, failed: true });
       });
     return () => {
       cancelled = true;
     };
-  }, [cid, previewPort, rawProxySrc, reloadKey]);
+  }, [cid, liveProxyRequestKey, liveProxyTarget, previewPort]);
+  const proxySrc =
+    isolatedLivePreview?.requestKey === liveProxyRequestKey
+      ? isolatedLivePreview.url
+      : null;
+  const proxyFailure =
+    isolatedLivePreview?.requestKey === liveProxyRequestKey && isolatedLivePreview.failed;
   const liveIframeRef = useRef<HTMLIFrameElement | null>(null);
   // H082 — Firefox-safe path previews must be capability bootstraps, never the
   // authenticated agent-server URL itself. Generated JavaScript opened on that
@@ -615,7 +639,9 @@ export function PreviewPane({
   const [mode, setMode] = useState<"rendered" | "live">(() =>
     proxyAvailable && isBundlerEntry ? "live" : "rendered",
   );
-  const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
+  const showLive =
+    proxyAvailable &&
+    (mode === "live" || (srcDoc == null && !committedStaticPreview));
 
   const selectedOwner =
     previewPort === 8000
@@ -688,6 +714,75 @@ export function PreviewPane({
                 : "Preparing isolated historical preview…"}
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (
+    committedStaticPreview &&
+    !showLive &&
+    srcDoc === null &&
+    staticPreviewSrc === null
+  ) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
+          <div className="flex items-center gap-inline">
+            {VersionControl}
+            {RefreshButton}
+            {proxyAvailable && (
+              <button
+                type="button"
+                onClick={() => setMode("live")}
+                className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                <MonitorPlay className="size-3" aria-hidden /> Live server
+              </button>
+            )}
+          </div>
+        </div>
+        {RestoreNotice}
+        <div
+          role={staticPreviewFailure ? "alert" : "status"}
+          className="flex min-h-0 flex-1 items-center justify-center px-body font-ui text-sm text-text-muted"
+        >
+          {staticPreviewFailure
+            ? "Committed preview unavailable: isolated preview access could not be established."
+            : "Preparing isolated committed preview…"}
+        </div>
+      </div>
+    );
+  }
+
+  if (showLive && proxySrc === null) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">live server</span>
+          <div className="flex items-center gap-inline">
+            {VersionControl}
+            {RefreshButton}
+            {srcDoc != null && (
+              <button
+                type="button"
+                onClick={() => setMode("rendered")}
+                className="font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                Rendered
+              </button>
+            )}
+          </div>
+        </div>
+        {RestoreNotice}
+        <div
+          role={proxyFailure ? "alert" : "status"}
+          className="flex min-h-0 flex-1 items-center justify-center px-body font-ui text-sm text-text-muted"
+        >
+          {proxyFailure
+            ? "Live preview unavailable: isolated preview access could not be established."
+            : "Preparing isolated live preview…"}
         </div>
       </div>
     );
@@ -789,7 +884,7 @@ export function PreviewPane({
   }
 
   // The renderable HTML artifact → show the real site now, no server needed.
-  if (srcDoc != null) {
+  if (srcDoc != null || (committedStaticPreview && staticPreviewSrc !== null)) {
     // A1.6 — Edit mode swaps the client-side `srcDoc` for the server-stamped,
     // selection-injected preview-edit route (`src=`). data-oid stamping needs the
     // line-aware server parser, so click-to-edit only works against that route.
@@ -869,7 +964,7 @@ export function PreviewPane({
               ? { src: editSrc }
               : showCommittedStatic
                 ? { src: staticPreviewSrc }
-                : { srcDoc })}
+                : { srcDoc: srcDoc ?? undefined })}
             // untrusted → empty sandbox (no scripts): a script here could reach this
             // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
             // No allow-same-origin in either mode → the frame reports origin "null"

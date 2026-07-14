@@ -25,10 +25,13 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 // never produces in fixture mode (no AGENT_BASE → getPreview returns
 // available:false). vi.hoisted runs before any imports, so the mock reference
 // is safe inside the vi.mock factory below.
-const { useBuildPreviewMock, pathPreviewBootstrapUrlMock } = vi.hoisted(() => ({
+const { useBuildPreviewMock, pathPreviewBootstrapUrlMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   pathPreviewBootstrapUrlMock: vi.fn((cid: string) =>
     Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
+  ),
+  previewBootstrapUrlMock: vi.fn((cid: string, port: number) =>
+    Promise.resolve(`http://${cid}-${port}.localhost:8000/__disco/preview-auth?signed=1`),
   ),
 }));
 
@@ -46,6 +49,7 @@ vi.mock("@/api/client", async () => {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
     pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
+    previewBootstrapUrl: previewBootstrapUrlMock,
   };
 });
 
@@ -65,6 +69,14 @@ describe("previewHostUrl (DC-01)", () => {
   it("prepends cid8-port to other hostnames", () => {
     expect(previewHostUrl("conv_11112222", 8000, "http://my-magic-dns.net")).toBe("http://11112222-8000.my-magic-dns.net");
     expect(previewHostUrl("conv_11112222", 8000, "https://my-magic-dns.net:443")).toBe("https://11112222-8000.my-magic-dns.net");
+  });
+
+  it("drops a relative API prefix from the wildcard preview origin", () => {
+    const expected = new URL("/", window.location.origin);
+    expected.hostname = "abcdef12-8000.localhost";
+    expect(previewHostUrl("conv_abcdef123456", 8000, "/svc/agent")).toBe(
+      expected.toString().replace(/\/+$/, ""),
+    );
   });
 });
 
@@ -229,6 +241,52 @@ describe("PreviewPane — selected handoff entry", () => {
     );
   });
 
+  it("loads the committed static origin when app bytes exist only in the workspace", async () => {
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+        ports: [
+          {
+            port: 8000,
+            owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+          },
+        ],
+      } as PreviewInfo,
+    });
+    render(
+      withClient(
+        <PreviewPane
+          events={[
+            // Shell-created files do not carry their bytes in the event stream.
+            // The deliverable and committed version are sufficient to prove the
+            // selected snapshot exists and must outrank any live-server fallback.
+            appDeliverable("release/index.html"),
+            {
+              id: "version-shell-created",
+              kind: "workspace_version",
+              version_seq: 1,
+              tree_digest: "shell-created-tree",
+              trigger: "finish",
+            } as AgentEvent,
+          ]}
+          status="FINISHED"
+          cid="conv_a1b2c3d4shell"
+        />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTitle("Static preview")).toHaveAttribute(
+        "src",
+        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4shell",
+      );
+    });
+    expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Artifact preview")).not.toBeInTheDocument();
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith("conv_a1b2c3d4shell", "/");
+  });
+
   it("never gives an untrusted imported site the isolated executable origin", () => {
     pathPreviewBootstrapUrlMock.mockClear();
     render(
@@ -276,7 +334,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
       ),
     );
     // The bundler entry is detected → live iframe is the default, NOT the srcdoc.
-    expect(screen.getByTitle("Live preview")).toBeInTheDocument();
+    expect(await screen.findByTitle("Live preview")).toBeInTheDocument();
     expect(screen.queryByTitle("Static preview")).not.toBeInTheDocument();
     // The header is the live-server header, not the preview header.
     expect(screen.getByText("live server")).toBeInTheDocument();
@@ -373,6 +431,30 @@ describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
     expect(document.body.innerHTML).not.toContain(
       "/conversations/conv_e2e3failclosed/preview-app/",
     );
+  });
+
+  it("never loads a raw wildcard URL when live capability minting fails", async () => {
+    previewBootstrapUrlMock.mockRejectedValueOnce(new Error("live capability unavailable"));
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 4242, cmdline: "vite --port 8000", session: "dev" },
+        ports: [
+          { port: 8000, owner: { pid: 4242, cmdline: "vite --port 8000", session: "dev" } },
+        ],
+      } as PreviewInfo,
+    });
+    render(
+      withClient(
+        <ExecutionCanvas events={[BUNDLER_HTML]} status="RUNNING" cid="conv_e2e3livefail" />,
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Live preview unavailable: isolated preview access could not be established.",
+    );
+    expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain("e2e3live-8000.localhost");
   });
 });
 

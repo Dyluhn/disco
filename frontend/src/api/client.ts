@@ -102,6 +102,13 @@ export function previewHostUrl(cid: string, port: number, base: string = AGENT_B
   } else {
     url.hostname = `${cid8}-${port}.${url.hostname}`;
   }
+  // The wildcard host is itself the preview transport. An API base may be a
+  // same-origin prefix such as `/svc/agent`, but carrying that prefix onto the
+  // wildcard origin asks the preview proxy for an application API route and
+  // produces an unauthenticated 401 before capability minting completes.
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
   return url.toString().replace(/\/+$/, "");
 }
 
