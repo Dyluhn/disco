@@ -145,57 +145,71 @@ afterEach(() => {
 });
 
 // Two MATERIALLY different bound releases the test knows the truth of — distinct
-// version_seq AND distinct spec_digest — run through the SAME assertions, so no single
-// hardcoded query value can satisfy both. `encoded` is the exact URL-ENCODED substring
-// the raw request URL must contain (`:` -> `%3A`), proving production ENCODES the value
-// rather than splicing it in raw.
-const boundCases: ReadonlyArray<{
-  label: string;
-  cid: string;
-  binding: ReleaseBinding;
-  encoded: string;
-}> = [
-  {
-    label: "v7 / g08a-0007",
-    cid: "conv_g08a",
-    binding: { version_seq: 7, spec_digest: "sha256:g08a-0007" },
-    encoded: "spec_digest=sha256%3Ag08a-0007",
-  },
-  {
-    label: "v42 / g08b-0042",
-    cid: "conv_g08b",
-    binding: { version_seq: 42, spec_digest: "sha256:g08b-0042" },
-    encoded: "spec_digest=sha256%3Ag08b-0042",
-  },
-];
+// version_seq AND distinct spec_digest — each driven through the SAME shared assertion
+// helper, so no single hardcoded query value can satisfy both. `encoded` is the exact
+// URL-ENCODED substring the raw request URL must contain (`:` -> `%3A`), proving
+// production ENCODES the value rather than splicing it in raw. Each case is a plain,
+// explicit case with a FULLY LITERAL title (no parameterized interpolation), so the
+// runtime leaf title equals the source-parsed title EXACTLY and the frozen inventory can
+// pin every load-bearing node.
+type BoundCase = { cid: string; binding: ReleaseBinding; encoded: string };
+
+const BOUND_G08A: BoundCase = {
+  cid: "conv_g08a",
+  binding: { version_seq: 7, spec_digest: "sha256:g08a-0007" },
+  encoded: "spec_digest=sha256%3Ag08a-0007",
+};
+const BOUND_G08B: BoundCase = {
+  cid: "conv_g08b",
+  binding: { version_seq: 42, spec_digest: "sha256:g08b-0042" },
+  encoded: "spec_digest=sha256%3Ag08b-0042",
+};
+
+/**
+ * The ONE shared bound-case assertion path. Reaches the REAL URL-construction boundary
+ * (no component render at all), SUPPLIES the binding through the R4 2-arg contract, and
+ * proves the SUPPLIED values ride the download URL with their EXACT values AND correct
+ * URL-encoding. Both bound cases run through THIS helper, so every expectation is DERIVED
+ * FROM THE SUPPLIED INPUT and two materially-different bindings cannot both be satisfied
+ * by any single hardcoded query value.
+ */
+async function assertSuppliedBindingRidesDownloadUrl(bound: BoundCase): Promise<void> {
+  const { cid, binding, encoded } = bound;
+
+  // Reach the REAL URL-construction boundary (no component render at all) and SUPPLY the
+  // binding through the R4 2-arg contract.
+  const boundDownload = await loadBoundDownload();
+  await boundDownload(cid, binding);
+
+  // The download must have reached the network boundary FIRST — so any failure below is
+  // the omitted binding, NOT an unreached or misconfigured seam.
+  expect(recordedUrl, "downloadProject must reach the network fetch boundary").toBeDefined();
+  const raw = recordedUrl as string;
+  const sp = new URL(raw).searchParams;
+
+  // THE TEETH — the SUPPLIED C2 binding must ride the download URL with its EXACT values
+  // (not mere presence). RED today: projects.ts builds `/api/projects/{cid}/download`
+  // with no query, ignoring the supplied binding, so both params are absent and
+  // `.get(...)` is null.
+  expect(sp.get("version_seq")).toBe(String(binding.version_seq));
+  expect(sp.get("spec_digest")).toBe(binding.spec_digest);
+
+  // …and the RAW request URL must carry the CORRECTLY URL-ENCODED param, so green demands
+  // real encoding (URLSearchParams / encodeURIComponent), not a raw splice.
+  expect(raw).toContain(encoded);
+}
 
 describe("WO-A (G08) — the download URL binds to the release's version_seq + spec_digest", () => {
-  it.each(boundCases)(
-    "carries the SUPPLIED binding [$label] on the download URL",
-    async ({ cid, binding, encoded }) => {
-      // Reach the REAL URL-construction boundary (no component render at all) and
-      // SUPPLY the binding through the R4 2-arg contract.
-      const boundDownload = await loadBoundDownload();
-      await boundDownload(cid, binding);
+  // Two explicit, LITERAL-titled cases (not parameterized) so each load-bearing bound
+  // node is individually named in the source AND the frozen inventory — both driven
+  // through the one shared helper above.
+  it("carries the SUPPLIED binding [v7 / g08a-0007] on the download URL", async () => {
+    await assertSuppliedBindingRidesDownloadUrl(BOUND_G08A);
+  });
 
-      // The download must have reached the network boundary FIRST — so any failure
-      // below is the omitted binding, NOT an unreached or misconfigured seam.
-      expect(recordedUrl, "downloadProject must reach the network fetch boundary").toBeDefined();
-      const raw = recordedUrl as string;
-      const sp = new URL(raw).searchParams;
-
-      // THE TEETH — the SUPPLIED C2 binding must ride the download URL with its EXACT
-      // values (not mere presence). RED today: projects.ts builds
-      // `/api/projects/{cid}/download` with no query, ignoring the supplied binding, so
-      // both params are absent and `.get(...)` is null.
-      expect(sp.get("version_seq")).toBe(String(binding.version_seq));
-      expect(sp.get("spec_digest")).toBe(binding.spec_digest);
-
-      // …and the RAW request URL must carry the CORRECTLY URL-ENCODED param, so green
-      // demands real encoding (URLSearchParams / encodeURIComponent), not a raw splice.
-      expect(raw).toContain(encoded);
-    },
-  );
+  it("carries the SUPPLIED binding [v42 / g08b-0042] on the download URL", async () => {
+    await assertSuppliedBindingRidesDownloadUrl(BOUND_G08B);
+  });
 
   it("G11: an unbound release (binding=null) must not fabricate a binding on the URL", async () => {
     const boundDownload = await loadBoundDownload();

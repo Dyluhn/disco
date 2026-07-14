@@ -12,7 +12,7 @@ is allowed by the anti-bypass contract (no ``unittest.mock`` / ``MagicMock`` / `
 / ``monkeypatch``; the filesystem and the G02 subprocess are real). These are GREEN
 regression tests: each asserts the gate behaves correctly, so they PASS.
 
-Six properties are pinned:
+Seven properties are pinned:
 
 1. Per-artifact mutation — for EACH text-artifact class the gate scans
    (``verify._HYGIENE_SCAN_FILES``, imported, never hardcoded), planting the registered
@@ -25,10 +25,17 @@ Six properties are pinned:
    ``_not_passed_reasons`` cites the hygiene failure only when it occurred.
 4. Clean evidence accepted — a marker-free evidence dir scans clean.
 5. The REAL G02 proving-red evidence is credential-clean — running the six G02 nodes as
-   a subprocess leaves ZERO marker/credential occurrences in the JUnit XML and stdout.
+   a subprocess leaves ZERO marker/credential occurrences on EVERY captured surface: the
+   JUnit XML, the captured stdout, AND the captured stderr (a leak to stderr never reaches
+   stdout under ``capture_output=True``). The three surfaces come from the shared
+   ``_evidence_surfaces`` helper — the single source of truth for what is scanned.
 6. This file never re-emits the credential — the marker and full sentinel are referenced
    ONLY through the imported constants; the literal never appears in this source or in
    any assertion message, and only the NON-secret marker is ever planted.
+7. The stderr lane is genuinely scanned — a marker planted ONLY in stderr (clean JUnit XML
+   and stdout), built through the SAME ``_evidence_surfaces`` helper, is detected as
+   leaking on EXACTLY the ``captured stderr`` surface; dropping stderr from that helper
+   fails this test, pinning stderr as an enforced credential-scanned lane.
 """
 
 from __future__ import annotations
@@ -62,6 +69,17 @@ pytestmark = pytest.mark.export_track1_closeout
 # of the planted token; the full credential lives only behind ``_FULL_SENTINEL``.
 _LABEL, _MARKER = next(iter(verify._EVIDENCE_HYGIENE_SENTINELS.items()))
 _FULL_SENTINEL = _g02._CRED_SENTINEL
+
+
+def _evidence_surfaces(junit_text: str, stdout: str, stderr: str) -> dict[str, str]:
+    """The SINGLE SOURCE OF TRUTH for the credential-scanned surfaces of a G02 subprocess
+    run. ``subprocess.run(..., capture_output=True)`` yields stdout and stderr as SEPARATE
+    streams, so a credential leaked to stderr (a traceback, a warning, a stderr logging
+    handler) never appears in stdout — scanning only stdout + the JUnit XML would miss it.
+    Returning all three as one mapping makes the stderr surface an enforceable,
+    independently-scanned lane: the real-G02 test iterates this mapping, and
+    ``test_stderr_surface_is_independently_scanned`` pins that the stderr lane is present."""
+    return {"JUnit XML": junit_text, "captured stdout": stdout, "captured stderr": stderr}
 
 
 @pytest.mark.parametrize("artifact", verify._HYGIENE_SCAN_FILES)
@@ -161,9 +179,12 @@ def test_clean_evidence_dir_passes_hygiene(tmp_path: Path) -> None:
 
 def test_real_g02_proving_reds_leave_no_credential_in_evidence(tmp_path: Path) -> None:
     """(5) The REAL G02 proving-red nodes, run as a subprocess exactly as the verifier's
-    closeout lane runs pytest, must leave ZERO marker/credential occurrences in the
-    produced JUnit XML AND the captured stdout — the hygiene property the gate enforces,
-    proven end-to-end against the actual planted credential rather than a stand-in."""
+    closeout lane runs pytest, must leave ZERO marker/credential occurrences on EVERY
+    captured surface — the produced JUnit XML, the captured stdout, AND the captured
+    stderr — the hygiene property the gate enforces, proven end-to-end against the actual
+    planted credential rather than a stand-in. The three surfaces come from the shared
+    ``_evidence_surfaces`` helper so stderr is scanned as its own independent lane (a leak
+    to stderr never reaches stdout under ``capture_output=True``)."""
     g02_file = _THIS_DIR / "test_g02_positional_credential.py"
     junit = tmp_path / "g02-junit.xml"
     proc = subprocess.run(
@@ -193,7 +214,11 @@ def test_real_g02_proving_reds_leave_no_credential_in_evidence(tmp_path: Path) -
         f"(pytest exit={proc.returncode})"
     )
 
-    for surface, blob in (("JUnit XML", junit_text), ("captured stdout", proc.stdout)):
+    # Scan ALL THREE captured surfaces INDEPENDENTLY (JUnit XML, stdout, stderr) via the
+    # shared single-source-of-truth helper. For each, assert ZERO occurrences of BOTH the
+    # registered marker and the full planted sentinel — printing only the COUNT, never the
+    # value, so no message can re-emit the credential.
+    for surface, blob in _evidence_surfaces(junit_text, proc.stdout, proc.stderr).items():
         assert blob.count(_MARKER) == 0, (
             f"the registered credential marker leaked into the G02 {surface} "
             f"({blob.count(_MARKER)} occurrences); acceptance evidence must be credential-clean"
@@ -202,3 +227,32 @@ def test_real_g02_proving_reds_leave_no_credential_in_evidence(tmp_path: Path) -
             f"the full planted credential leaked into the G02 {surface} "
             f"({blob.count(_FULL_SENTINEL)} occurrences); it must never reach evidence"
         )
+
+
+def test_stderr_surface_is_independently_scanned() -> None:
+    """(7) The captured-stderr lane is GENUINELY one of the independently-scanned surfaces:
+    a marker planted ONLY in stderr — with a clean JUnit XML and clean stdout — must be
+    detected as leaking on EXACTLY the ``captured stderr`` surface. Built through the SAME
+    ``_evidence_surfaces`` helper the real-G02 test uses, so if a future edit drops stderr
+    from that mapping this test fails: it pins stderr as an enforced, credential-scanned
+    lane rather than a stream the scan silently ignores. Only the non-secret marker is
+    planted — never the full sentinel."""
+    clean_junit = '<?xml version="1.0"?><testsuite tests="6" failures="0" errors="0"/>'
+    clean_stdout = "6 passed in 1.23s\nno credential material on this stream\n"
+    # A synthetic stderr blob standing in for a traceback / warning / stderr log handler
+    # that carried the registered marker — the exact leak the stdout-only scan would miss.
+    planted_stderr = f"Traceback (most recent call last):\n  RuntimeError: {_MARKER} slipped out\n"
+
+    surfaces = _evidence_surfaces(clean_junit, clean_stdout, planted_stderr)
+
+    assert "captured stderr" in surfaces, (
+        "the evidence-surface mapping must expose the captured stderr stream as its own "
+        "independently-scanned lane; it is absent, so a credential leaked only to stderr "
+        "would sail past the hygiene scan"
+    )
+    leaking = sorted(name for name, blob in surfaces.items() if _MARKER in blob)
+    assert leaking == ["captured stderr"], (
+        "a marker planted ONLY in stderr (JUnit XML and stdout clean) must be detected as "
+        f"leaking on exactly the captured-stderr surface; surfaces flagged as leaking were "
+        f"{leaking!r} — if stderr were dropped from the scanned surfaces this would be empty"
+    )

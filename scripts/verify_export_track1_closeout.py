@@ -17,7 +17,10 @@ Lanes (all wired; each is honestly recorded, none is ``not_wired_yet``):
   * ``frontend`` — from ``frontend/``: the frozen closeout vitest (``--reporter=json``),
     ``npm run typecheck:build``, and ``npx vite build`` (plan §3.3). Green iff vitest
     has zero failed/pending/todo AND both typecheck and build exit 0 AND the discovered
-    test-file set equals the frozen ``frontend_closeout_inventory``. The Playwright
+    test-file set equals the frozen ``frontend_closeout_inventory`` AND, per file, the
+    EXECUTED (passed|failed) leaf-title set equals that file's frozen ``tests`` list
+    (a dropped/renamed/skipped/unreported/extra title makes the lane non-green — filename
+    parity alone is insufficient). The Playwright
     candidate/needs_review/not_web e2e proofs cannot run offline; they are frozen and
     RECORDED honestly, never faked, and never block ``passed`` here (see LIMITATION).
   * ``live-docker`` — the live clean-room lane (plan §3.4). On a host WITHOUT a real
@@ -314,19 +317,30 @@ def _verify_frozen_manifest(
 # ---- frontend lane (plan §3.3) ------------------------------------------------
 
 
-def _parse_vitest(path: Path) -> tuple[dict[str, int], set[str], bool]:
-    """Return ((counts), test-file basenames, parsed-ok). Vitest ``--reporter=json``
-    is Jest-shaped: numTotalTests / numFailedTests / numPendingTests / numTodoTests and
-    testResults[].name (absolute file path)."""
+def _parse_vitest(
+    path: Path,
+) -> tuple[dict[str, int], set[str], dict[str, set[str]], bool]:
+    """Return ``(counts, test-file basenames, per-file executed leaf titles, parsed-ok)``.
+    Vitest ``--reporter=json`` is Jest-shaped: numTotalTests / numFailedTests /
+    numPendingTests / numTodoTests, and ``testResults[].name`` (absolute file path) with
+    ``testResults[].assertionResults[]`` leaf nodes (each ``.title`` + ``.status``).
+
+    The per-file title map records ONLY EXECUTED leaves — ``status`` in
+    {"passed", "failed"}. A skipped / pending / todo leaf is EXCLUDED, so it reads
+    downstream as an UNREPORTED (missing) title and cannot silently satisfy the frozen
+    inventory. The leaf ``.title`` (NOT ``.fullName``) is used so it matches the
+    source-parsed ``it(...)`` string in ``frontend_closeout_inventory``. A file that
+    reports any leaf gets a set entry even when that set ends up empty (all leaves
+    skipped), so a wholly-skipped file still surfaces as missing titles."""
     counts = {"total": -1, "passed": -1, "failed": -1, "pending": -1, "todo": -1}
     if not path.is_file():
-        return counts, set(), False
+        return counts, set(), {}, False
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return counts, set(), False
+        return counts, set(), {}, False
     if not isinstance(data, dict):
-        return counts, set(), False
+        return counts, set(), {}, False
     counts = {
         "total": int(data.get("numTotalTests", 0)),
         "passed": int(data.get("numPassedTests", 0)),
@@ -335,14 +349,65 @@ def _parse_vitest(path: Path) -> tuple[dict[str, int], set[str], bool]:
         "todo": int(data.get("numTodoTests", 0)),
     }
     files: set[str] = set()
+    titles: dict[str, set[str]] = {}
     results = data.get("testResults", [])
     if isinstance(results, list):
         for entry in results:
-            if isinstance(entry, dict):
-                name = entry.get("name")
-                if isinstance(name, str):
-                    files.add(Path(name).name)
-    return counts, files, True
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            if not isinstance(name, str):
+                continue
+            basename = Path(name).name
+            files.add(basename)
+            executed = titles.setdefault(basename, set())
+            assertions = entry.get("assertionResults", [])
+            if isinstance(assertions, list):
+                for assertion in assertions:
+                    if not isinstance(assertion, dict):
+                        continue
+                    title = assertion.get("title")
+                    status = assertion.get("status")
+                    if isinstance(title, str) and status in {"passed", "failed"}:
+                        executed.add(title)
+    return counts, files, titles, True
+
+
+def _diff_frontend_titles(
+    frozen_inventory: dict[str, object], observed_titles: dict[str, set[str]]
+) -> tuple[bool, dict[str, object]]:
+    """Compare the FROZEN per-file ``it(...)`` title inventory against the per-file set of
+    EXECUTED (passed|failed) leaf titles vitest reported. Returns ``(ok, detail)``:
+    ``ok`` is False if ANY frozen file has a missing / renamed / skipped / unreported
+    title, or reports an extra/unexpected executed title. This is the SINGLE SOURCE OF
+    TRUTH the frontend lane uses, and is pure/importable so the committed regression can
+    call it WITHOUT running vitest.
+
+    File-SET drift (a frozen file absent from vitest, or a surprise extra file) is the
+    caller's basename comparison; here titles are compared per frozen file (a missing
+    file yields an empty observed set, so its titles read as missing too — a belt-and-
+    braces overlap that only ever makes a lane HARDER to green). A frozen entry WITHOUT a
+    ``tests`` list carries NO title constraint: the real manifest always emits one, so
+    this only leaves a synthetic inventory that omits it (e.g. the G13 isolation mirror)
+    unconstrained. Titles are plain human-readable ``it(...)`` strings, never credential
+    material, so echoing mismatches is safe."""
+    per_file: dict[str, dict[str, list[str]]] = {}
+    ok = True
+    for basename, meta in frozen_inventory.items():
+        if not isinstance(meta, dict) or "tests" not in meta:
+            continue
+        raw_tests = meta.get("tests")
+        if not isinstance(raw_tests, list):
+            continue
+        expected = {str(title) for title in raw_tests}
+        observed = observed_titles.get(basename, set())
+        missing = sorted(expected - observed)
+        extra = sorted(observed - expected)
+        if missing or extra:
+            ok = False
+            per_file[basename] = {"missing": missing, "extra": extra}
+    detail: dict[str, object] = {"title_mismatches": per_file}
+    return ok, detail
 
 
 def _run_frontend_lane(
@@ -371,11 +436,15 @@ def _run_frontend_lane(
         ],
         cwd=frontend_dir,
     )
-    counts, discovered, parsed_ok = _parse_vitest(vitest_json)
+    counts, discovered, observed_titles, parsed_ok = _parse_vitest(vitest_json)
     frozen_files = set(frozen_inventory.keys())
     missing_files = sorted(frozen_files - discovered)
     extra_files = sorted(discovered - frozen_files)
     file_set_ok = parsed_ok and not missing_files and not extra_files
+    # Per-file EXECUTED-title comparison (single source of truth: _diff_frontend_titles).
+    # Filename-set equality is NOT sufficient — a renamed/dropped/skipped/extra title
+    # inside a frozen file must make the lane non-green even when the file set matches.
+    titles_ok, titles_detail = _diff_frontend_titles(frozen_inventory, observed_titles)
     vitest_ok = (
         parsed_ok
         and counts["failed"] == 0
@@ -391,6 +460,8 @@ def _run_frontend_lane(
         "file_set_ok": file_set_ok,
         "missing_files": missing_files,
         "extra_files": extra_files,
+        "titles_ok": titles_ok,
+        "title_mismatches": titles_detail["title_mismatches"],
     }
 
     tproc = _run(["npm", "run", "typecheck:build"], cwd=frontend_dir)
@@ -411,7 +482,9 @@ def _run_frontend_lane(
         "frozen_specs": e2e_specs,
     }
 
-    lane.green = bool(vitest_ok and file_set_ok and tproc.returncode == 0 and bproc.returncode == 0)
+    lane.green = bool(
+        vitest_ok and file_set_ok and titles_ok and tproc.returncode == 0 and bproc.returncode == 0
+    )
     return lane
 
 

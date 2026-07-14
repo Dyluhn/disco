@@ -197,9 +197,10 @@ Accurate facts, stated plainly to prevent false completion claims:
    hygiene scan fail; that violations report only artifact name, line number, and sentinel
    label (never surrounding text or the credential value); that a hygiene violation forces
    the final verifier verdict to `passed: false`; that clean evidence is accepted; and that
-   the real G02 proving-red console and JUnit outputs contain zero occurrences of both the
-   marker and the full planted sentinel. The regression test never writes the full credential
-   into its own output. The word “regression-proof” applies only because these committed
+   the real G02 proving-red JUnit XML, stdout, and stderr outputs each independently contain
+   zero occurrences of both the marker and the full planted sentinel (`capture_output=True`
+   splits stdout and stderr, so all three surfaces are scanned as separate lanes). The
+   regression test never writes the full credential into its own output. The word “regression-proof” applies only because these committed
    mutation tests exist and pass.
 
 ## 4. R1 — Close the command and credential boundary

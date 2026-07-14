@@ -588,11 +588,26 @@ REMEDIATION_R0: dict[str, object] = {
     "proving_reds_frontend": [
         "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
         "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
-        " > carries the SUPPLIED binding ['v7 / g08a-0007'] on the download URL",
+        " > carries the SUPPLIED binding [v7 / g08a-0007] on the download URL",
         "frontend/src/test/export-track1-closeout/g08-download-url-binding.test.tsx"
         "::WO-A (G08) — the download URL binds to the release's version_seq + spec_digest"
-        " > carries the SUPPLIED binding ['v42 / g08b-0042'] on the download URL",
+        " > carries the SUPPLIED binding [v42 / g08b-0042] on the download URL",
     ],
+    "frontend_inventory_enforcement": (
+        "The two load-bearing G08 bound nodes are now EXPLICIT it(...) cases with FULLY "
+        "LITERAL titles (not it.each(...), which the source-parsing regex silently omitted "
+        "from frontend_closeout_inventory), so the frozen inventory records exactly nine "
+        "frontend leaf titles: six existing C3/C6 tests + the two bound G08 tests + the one "
+        "unbound G08 test. The verifier no longer compares only test-FILE basenames: "
+        "_parse_vitest extracts, per file, the set of EXECUTED (passed|failed) leaf titles "
+        "(skipped/pending/todo are excluded, so a non-executed node reads as unreported) and "
+        "_diff_frontend_titles (the single source of truth _run_frontend_lane uses) diffs "
+        "them against the frozen `tests` list. Any missing, renamed, skipped, unreported, or "
+        "extra title makes the frontend inventory check and lane NON-green — filename-set "
+        "parity alone is insufficient. Proven regression-tight by the committed "
+        "test_frontend_inventory_enforcement_regression.py (drop / rename / same-count swap / "
+        "extra / skipped all rejected; exact match accepted; lane delegates to the helper)."
+    ),
     "proving_reds_compile": [
         {
             "contract": "frontend/src/test/export-track1-closeout/g11-nullable-binding.contract.ts",
@@ -619,8 +634,11 @@ REMEDIATION_R0: dict[str, object] = {
         "test_evidence_hygiene_regression.py proves per-artifact-class mutation trips the "
         "scan, the violation records only file/line/label (never the value), a hygiene "
         "violation forces the final verdict false, clean evidence is accepted, and the real "
-        "G02 proving-red JUnit + console contain zero marker and zero full-sentinel "
-        "occurrences — without the regression test writing the full credential itself."
+        "G02 proving-red JUnit XML, stdout, AND stderr each independently contain zero marker "
+        "and zero full-sentinel occurrences (capture_output=True splits stdout/stderr, so all "
+        "three surfaces are scanned separately via the committed _evidence_surfaces helper; a "
+        "planted-only-in-stderr regression pins the stderr lane) — without the regression "
+        "test writing the full credential itself."
     ),
     "r4_activated_deferred": {
         "G08_e2e": (
@@ -780,7 +798,11 @@ def build_manifest(root: Path) -> dict[str, object]:
         "'export_track1_closeout and not integration'); the verifier reads it back FROM "
         "THIS JSON and compares to a fresh collect-only so changing pytest discovery "
         "cannot hide a test. frontend_closeout_inventory lists the frozen vitest files "
-        "(+ titles) the frontend lane compares. red_tests names one representative "
+        "(+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier "
+        "diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, "
+        "so a dropped/renamed/skipped/extra title is non-green even when the filename set "
+        "matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one "
+        "representative "
         "failing public-boundary test per work order C1–C8 plus the frontend C3/C6 "
         "reds, AND (acceptance-v4 / R0) one per independent-audit gap "
         "G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and "
