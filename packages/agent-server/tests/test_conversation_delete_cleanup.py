@@ -11,6 +11,8 @@ leaked the per-conversation runtime caches — most importantly the kernel PIN
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
@@ -63,6 +65,24 @@ async def test_forget_conversation_is_idempotent_on_unknown_cid() -> None:
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     await rt.forget_conversation("never-existed")  # must not raise
+
+
+async def test_forget_conversation_reconciles_backend_after_runtime_restart() -> None:
+    """Deleting a finished conversation after Agent restart has no cached executor or
+    pending session to destroy.  The runtime must still ask the active backend to remove
+    exact-conversation resources; otherwise process-backend tmux preview sessions retain
+    listeners indefinitely and eventually exhaust the fixed preview-port pool."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    service = rt._injected_sandbox
+    assert isinstance(service, ProcessSandboxService)
+    service.destroy_by_conversation = AsyncMock()
+
+    assert CID not in rt._executors
+    assert CID not in rt._pending_sessions
+    await rt.forget_conversation(CID)
+
+    service.destroy_by_conversation.assert_awaited_once_with(CID)
 
 
 async def test_agent_delete_route_clears_pin_rows_and_audio_cache(

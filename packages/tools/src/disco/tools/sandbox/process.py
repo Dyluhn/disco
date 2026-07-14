@@ -124,6 +124,55 @@ def process_backend_signal_command_violation(command: str) -> str | None:
     return None
 
 
+async def cleanup_process_tmux_sessions(conversation_id: str) -> int:
+    """Kill only process-backend tmux sessions owned by ``conversation_id``.
+
+    Process sandboxes share the host tmux server, so their sessions outlive the Agent
+    process that created them.  Conversation ids are namespaced to their first eight
+    characters by ``ShellSessionManager``; support both the current ``disco-`` prefix
+    and the legacy ``pmx-`` prefix.  Argument-vector subprocesses avoid a shell and an
+    exact prefix check prevents one conversation's cleanup from touching another.
+
+    Best-effort and idempotent: tmux may be absent, have no server, or race with a
+    concurrent destroy.  Return the number of sessions successfully removed.
+    """
+    namespace = f"{conversation_id[:8]}-"
+    prefixes = (f"disco-{namespace}", f"pmx-{namespace}")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tmux",
+            "list-sessions",
+            "-F",
+            "#{session_name}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError:
+        return 0
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return 0
+
+    removed = 0
+    for session_name in stdout.decode("utf-8", errors="replace").splitlines():
+        if not session_name.startswith(prefixes):
+            continue
+        try:
+            kill = await asyncio.create_subprocess_exec(
+                "tmux",
+                "kill-session",
+                "-t",
+                session_name,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            continue
+        if await kill.wait() == 0:
+            removed += 1
+    return removed
+
+
 class ProcessSandboxInstance:
     """[CONTRACT boundary] An in-subprocess instance with a jailed workspace."""
 
@@ -501,27 +550,9 @@ class ProcessSandboxInstance:
             self._relay.server_close()
             self._relay = None
 
-        # Cleanup tmux sessions on destroy (BP-01).
-        # Container backends need nothing (container death kills the tmux server),
-        # but the process backend shares the host tmux server, so we must clean up explicitly.
-        ns = f"{self.conversation_id[:8]}-"
-        # Dual-read: kill sessions under the current `disco-{ns}` AND legacy
-        # `pmx-{ns}` prefix so a rename leaves no orphaned tmux session.
-        prefixes = (f"disco-{ns}", f"pmx-{ns}")
-
-        proc = await asyncio.create_subprocess_shell(
-            "tmux list-sessions -F '#{session_name}'",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, _ = await proc.communicate()
-        if proc.returncode == 0:
-            for line in out.decode("utf-8").splitlines():
-                if line.startswith(prefixes):
-                    kill_proc = await asyncio.create_subprocess_shell(
-                        f"tmux kill-session -t {shlex.quote(line)}"
-                    )
-                    await kill_proc.wait()
+        # Container backends die with their private tmux server.  The process backend
+        # shares the host server and must remove its exact current/legacy namespaces.
+        await cleanup_process_tmux_sessions(self.conversation_id)
 
         await self._terminate_workspace_processes()
 
@@ -670,7 +701,8 @@ class ProcessSandboxService:
         return []
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
-        """Process backend has no containers — no-op."""
+        """Remove process resources even when an Agent restart lost instance handles."""
+        await cleanup_process_tmux_sessions(conversation_id)
 
     async def sweep_stale_workspaces(self, max_age_s: float = 7 * 86400) -> int:
         """Delete per-instance workspace dirs under _root that haven't been touched in

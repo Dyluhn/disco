@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import uuid
+
 import pytest
 from disco.tools import (
     DefaultToolExecutor,
@@ -30,6 +34,49 @@ async def test_lifecycle_destroy_rejects_further_calls():
     await inst.destroy()
     with pytest.raises(SandboxError):
         await inst.read_file("a.txt")
+
+
+async def _tmux(*args: str) -> tuple[int, str]:
+    proc = await asyncio.create_subprocess_exec(
+        "tmux",
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    return proc.returncode or 0, stdout.decode("utf-8")
+
+
+@pytest.mark.integration
+async def test_process_delete_cleans_only_exact_conversation_tmux_sessions():
+    """A delete that arrives after runtime restart has only a conversation id.  Prove
+    the process service can recover both current and legacy session namespaces from that
+    id without killing another conversation's host-global tmux sessions."""
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is required for the real process-backend cleanup boundary")
+
+    cid = uuid.uuid4().hex
+    namespace = cid[:8]
+    current = f"disco-{namespace}-preview"
+    legacy = f"pmx-{namespace}-legacy"
+    unrelated = f"disco-{uuid.uuid4().hex[:8]}-keep"
+    names = (current, legacy, unrelated)
+    try:
+        for name in names:
+            code, _ = await _tmux("new-session", "-d", "-s", name)
+            assert code == 0
+
+        await ProcessSandboxService().destroy_by_conversation(cid)
+
+        code, output = await _tmux("list-sessions", "-F", "#{session_name}")
+        assert code == 0
+        remaining = set(output.splitlines())
+        assert current not in remaining
+        assert legacy not in remaining
+        assert unrelated in remaining
+    finally:
+        for name in names:
+            await _tmux("kill-session", "-t", name)
 
 
 async def test_file_round_trip_and_escape_rejection():

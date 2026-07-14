@@ -294,5 +294,9 @@ class SandboxService(Protocol):
         return []
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
-        """Destroy all containers (sandbox + egress sidecar) whose
-        pmx.conversation_id label matches. No-op on process backend."""
+        """Destroy all recoverable backend resources owned by a conversation.
+
+        Container backends remove labeled sandbox/egress containers. Process backends
+        remove exact conversation-namespaced host process sessions. The default remains
+        a no-op for services with no recoverable resource layer.
+        """

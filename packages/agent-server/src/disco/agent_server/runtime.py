@@ -3917,6 +3917,12 @@ class ConversationRuntime:
         if session is not None:
             with contextlib.suppress(Exception):
                 await session.destroy()
+        # A restarted Agent has no cached executor/session for an already-finished
+        # conversation, but backend resources can still exist.  Reconcile by cid even
+        # when both maps were empty.  This is deliberately backend-polymorphic: process
+        # removes exact tmux namespaces; container services remove labeled resources.
+        with contextlib.suppress(Exception):
+            await self._sandbox_service_now().destroy_by_conversation(conversation_id)
         # Pop every remaining per-conversation cache (no-op if absent).
         for cache in (
             self._run_generation,
