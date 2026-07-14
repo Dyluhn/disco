@@ -173,6 +173,40 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     assert f"Path=/conversations/{cid}/preview-app/" in set_cookie
     assert SESSION_COOKIE not in set_cookie
 
+    # H086: an embedded localhost preview remains third-party relative to a
+    # 127.0.0.1 top-level page even after the redemption document. Firefox
+    # reports Sec-Fetch-Site: cross-site for both navigations and will neither
+    # store nor send a Strict cookie. The iframe-only capability must therefore
+    # be Secure, SameSite=None, and partitioned by the top-level site. Top-level
+    # handoffs above retain their Strict cookie.
+    iframe_capability = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+        json={"port": 8000, "target_path": "/"},
+    )
+    assert iframe_capability.status_code == 200
+    iframe_isolated = TestClient(app, base_url="http://localhost:18240")
+    iframe_bootstrap = iframe_isolated.get(
+        iframe_capability.json()["path_bootstrap_url"],
+        headers={"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"},
+        follow_redirects=False,
+    )
+    iframe_redeem_match = re.search(
+        r"window\.location\.replace\((\"[^\"]+\")\)", iframe_bootstrap.text
+    )
+    assert iframe_redeem_match is not None
+    iframe_redeem = iframe_isolated.get(
+        json.loads(iframe_redeem_match.group(1)),
+        headers={"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"},
+        follow_redirects=False,
+    )
+    iframe_cookie = iframe_redeem.headers["set-cookie"]
+    assert "HttpOnly" in iframe_cookie
+    assert "; Secure" in iframe_cookie
+    assert "samesite=none" in iframe_cookie.lower()
+    assert "Partitioned" in iframe_cookie
+    assert "samesite=strict" not in iframe_cookie.lower()
+
     document = isolated.get(target)
     css = isolated.get(f"/conversations/{cid}/preview-app/assets/site.css")
     script = isolated.get(f"/conversations/{cid}/preview-app/assets/site.js")

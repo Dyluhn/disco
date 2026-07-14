@@ -485,18 +485,36 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             return Response("invalid preview stage", status_code=403, media_type="text/plain")
 
         response = _locked_preview_navigation(target)
-        forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[
-            0
-        ].strip()
-        response.set_cookie(
-            path_preview_cookie_name(cid8),
-            token,
-            max_age=preview_ttl_s(),
-            httponly=True,
-            secure=forwarded_scheme == "https" or request.url.scheme == "https",
-            samesite="strict",
-            path=expected_prefix,
+        cross_site_iframe = (
+            request.headers.get("sec-fetch-dest", "").strip().lower() == "iframe"
+            and request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
         )
+        cookie_name = path_preview_cookie_name(cid8)
+        if cross_site_iframe:
+            # H086: SameSite is evaluated against the top-level site for an
+            # embedded navigation. Firefox therefore continues to reject a
+            # Strict localhost cookie while the parent is 127.0.0.1, even on
+            # this second localhost document. CHIPS is the narrow exception:
+            # a Secure, partitioned, exact-path capability is usable only under
+            # this top-level site and cannot become a general third-party token.
+            response.headers.append(
+                "set-cookie",
+                f"{cookie_name}={token}; Max-Age={preview_ttl_s()}; "
+                f"Path={expected_prefix}; HttpOnly; Secure; SameSite=None; Partitioned",
+            )
+        else:
+            forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(
+                ","
+            )[0].strip()
+            response.set_cookie(
+                cookie_name,
+                token,
+                max_age=preview_ttl_s(),
+                httponly=True,
+                secure=forwarded_scheme == "https" or request.url.scheme == "https",
+                samesite="strict",
+                path=expected_prefix,
+            )
         return response
 
 
