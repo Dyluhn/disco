@@ -133,19 +133,24 @@ def create_app(
         # conversations — loops that died with a previous server process. Without
         # this they show 'RUNNING' forever in History / the Deep Research read-only
         # view (and may have leaked a sandbox).
+        mcp_start_task: asyncio.Task | None = None
         idle_sweep_task: asyncio.Task | None = None
         schedule_task: asyncio.Task | None = None
         if runtime is not None:
             _seed_builtin_workflows_for_runtime(runtime)
-            try:
-                await runtime._start_mcp_pool()
-            except Exception:
-                # D1: _start_mcp_pool handles ApprovalRequired internally;
-                # unexpected errors are logged but must not block boot.
-                import logging
 
-                _LOG = logging.getLogger(__name__)
-                _LOG.warning("MCP pool startup failed", exc_info=True)
+            async def _start_mcp_without_owning_readiness() -> None:
+                try:
+                    await runtime._start_mcp_pool()
+                except Exception:
+                    # Approval and per-server connection failures are handled by
+                    # McpManager. An unexpected aggregate error is still logged,
+                    # but an optional external service never owns Agent readiness.
+                    _LOG.warning("MCP pool startup failed", exc_info=True)
+
+            mcp_start_task = asyncio.create_task(
+                _start_mcp_without_owning_readiness(), name="mcp-startup"
+            )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await runtime.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
@@ -164,6 +169,10 @@ def create_app(
             idle_sweep_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_sweep_task
+        if mcp_start_task is not None and not mcp_start_task.done():
+            mcp_start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await mcp_start_task
         if runtime is not None:
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()

@@ -886,6 +886,10 @@ class ConversationRuntime:
         # separately from the stdio pool; tools are merged at compose time.
         self._mcp_http_clients: dict[str, Any] = {}  # server_name -> McpHttpClient
         self._mcp_http_tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
+        # Sanitized live state for HTTP MCP servers. Values contain only typed
+        # status/diagnostic metadata; URLs, headers, commands, and secrets never
+        # cross the status boundary.
+        self._mcp_http_status: dict[str, dict[str, Any]] = {}
         # RP-05 rung B: retrieval-tier MCP providers (search/extract Protocol wrappers).
         self._mcp_retrieval_searches: list = []
         self._mcp_retrieval_extractions: list = []

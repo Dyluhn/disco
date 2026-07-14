@@ -27,8 +27,18 @@ from typing import Any
 from disco.core.env import disco_env
 from disco.tools import ToolDef
 from disco.tools.mcp import McpPool, McpServerConfig
+from pydantic import ValidationError
 
 _LOG = logging.getLogger(__name__)
+
+# Connection recovery is deliberately small and deterministic: one immediate
+# attempt plus two bounded retries. App startup runs this work in a background
+# task, so a black-holed MCP endpoint never owns readiness. Settings reload may
+# await the same sequence and receives an honest degraded result within a fixed
+# upper bound (3 * init timeout + the declared backoff).
+_HTTP_CONNECT_ATTEMPTS = 3
+_HTTP_INIT_TIMEOUT_S = 3.0
+_HTTP_RETRY_DELAYS_S = (0.25, 1.0)
 
 
 class McpManager:
@@ -37,6 +47,38 @@ class McpManager:
     def __init__(self, rt: Any) -> None:
         self._rt = rt
         self._reload_lock = asyncio.Lock()
+        if not hasattr(rt, "_mcp_http_status"):
+            rt._mcp_http_status = {}
+
+    def _set_http_status(
+        self,
+        name: str,
+        status: str,
+        *,
+        code: str | None = None,
+        attempts: int | None = None,
+        exception_type: str | None = None,
+    ) -> None:
+        entry: dict[str, Any] = {"status": status}
+        if code is not None:
+            diagnostic: dict[str, Any] = {"code": code}
+            if attempts is not None:
+                diagnostic["attempts"] = attempts
+            if exception_type is not None:
+                diagnostic["exception_type"] = exception_type
+            entry["diagnostic"] = diagnostic
+        self._rt._mcp_http_status[name] = entry
+
+    @staticmethod
+    def _typed_server(name: str, raw: object) -> McpServerConfig:
+        """Normalize loose/typed persisted input at one redacted boundary."""
+
+        from disco.tools.mcp.config import McpServerConfig as TypedMcpServerConfig
+
+        payload = raw.model_dump() if isinstance(raw, TypedMcpServerConfig) else raw
+        if not isinstance(payload, dict):
+            raise TypeError("MCP server config must be an object")
+        return TypedMcpServerConfig.model_validate({**payload, "name": name})
 
     async def reload(self) -> dict[str, Any]:
         """Atomically apply the latest persisted MCP config and approvals.
@@ -53,9 +95,7 @@ class McpManager:
             await self._start_mcp_pool()
             servers = self._rt._config_store.load().mcp.servers
             pool_status = (
-                self._rt._mcp_pool.server_status()
-                if self._rt._mcp_pool is not None
-                else {}
+                self._rt._mcp_pool.server_status() if self._rt._mcp_pool is not None else {}
             )
             pool_tools = (
                 [tool.name for tool in self._rt._mcp_pool.snapshot()]
@@ -64,9 +104,19 @@ class McpManager:
             )
             connected = sorted(
                 {
-                    *self._rt._mcp_http_clients,
+                    *(
+                        name
+                        for name, state in self._rt._mcp_http_status.items()
+                        if state.get("status") == "connected"
+                    ),
                     *(name for name, status in pool_status.items() if status == "connected"),
                 }
+            )
+            server_statuses = {
+                name: dict(state) for name, state in self._rt._mcp_http_status.items()
+            }
+            server_statuses.update(
+                {name: {"status": status} for name, status in pool_status.items()}
             )
             return {
                 "ok": True,
@@ -79,6 +129,7 @@ class McpManager:
                     }
                 ),
                 "approval_required": sorted(self._rt._mcp_approval_pending),
+                "server_statuses": server_statuses,
             }
 
     def _compose_mcp_retrieval(self, deps: dict[str, Any]) -> tuple[Any, Any]:
@@ -154,17 +205,13 @@ class McpManager:
         Rung B: also starts streamable_http servers via McpHttpClient."""
         cfg = self._rt._config_store.load()
         mcp_cfg = cfg.mcp
+        self._rt._mcp_http_status.clear()
         if not mcp_cfg.enabled or not mcp_cfg.servers:
+            if not mcp_cfg.enabled:
+                for name in mcp_cfg.servers:
+                    self._set_http_status(name, "disabled")
             return
 
-        from disco.tools.mcp.approval import (
-            ApprovalRequired,
-            ConfigApprovalRequired,
-            compute_config_hash,
-        )
-        from disco.tools.mcp.config import (
-            McpServerConfig as TypedMcpServerConfig,
-        )
         from disco.tools.mcp.config import (
             McpSettings as TypedMcpSettings,
         )
@@ -196,7 +243,24 @@ class McpManager:
         http_servers: dict[str, McpServerConfig] = {}
         stdio_servers: dict[str, McpServerConfig] = {}
         for name, srv_raw in mcp_cfg.servers.items():
-            srv = TypedMcpServerConfig.model_validate({"name": name, **srv_raw})
+            try:
+                srv = self._typed_server(name, srv_raw)
+            except (TypeError, ValidationError) as exc:
+                # One malformed persisted row is a per-server diagnostic, never
+                # a server-wide startup failure. Do not log validation input:
+                # it may contain header/env secret references or commands.
+                self._set_http_status(
+                    name,
+                    "error",
+                    code="invalid_mcp_server_config",
+                    exception_type=type(exc).__name__,
+                )
+                _LOG.warning(
+                    "MCP server %r has invalid persisted configuration (%s)",
+                    name,
+                    type(exc).__name__,
+                )
+                continue
             if srv.transport == "streamable_http":
                 http_servers[name] = srv
             else:
@@ -266,12 +330,39 @@ class McpManager:
                                 exc_info=True,
                             )
 
-        # Start HTTP servers (rung B)
-        for name, srv in http_servers.items():
-            if not srv.enabled:
-                _LOG.debug("McpPool: HTTP server %r is disabled — skipping", name)
-                continue
+        # Start HTTP servers concurrently. One black-holed endpoint therefore
+        # cannot delay a healthy sibling, and each server owns a small bounded
+        # retry ladder rather than an unbounded global reconnect loop.
+        if http_servers:
+            await asyncio.gather(
+                *(
+                    self._start_http_server(name, srv, approvals, config_approvals)
+                    for name, srv in http_servers.items()
+                )
+            )
 
+        # Build retrieval-tier MCP providers from the tool list
+        await self._build_mcp_retrieval_providers()
+
+    async def _start_http_server(
+        self,
+        name: str,
+        srv: McpServerConfig,
+        approvals: dict[str, str],
+        config_approvals: dict[str, str],
+    ) -> None:
+        from disco.tools.mcp.approval import (
+            ApprovalRequired,
+            ConfigApprovalRequired,
+            compute_config_hash,
+        )
+
+        if not srv.enabled:
+            self._set_http_status(name, "disabled")
+            return
+
+        for attempt in range(1, _HTTP_CONNECT_ATTEMPTS + 1):
+            self._set_http_status(name, "connecting", attempts=attempt)
             try:
                 current_config_hash = compute_config_hash(srv)
                 stored_config_hash = config_approvals.get(name)
@@ -280,30 +371,22 @@ class McpManager:
                         name, stored_config_hash or "", current_config_hash
                     )
                 await self._connect_http(name, srv, approvals)
+                self._set_http_status(name, "connected", attempts=attempt)
+                return
             except ConfigApprovalRequired as exc:
-                _LOG.warning("MCP HTTP server %r requires config approval", name)
                 self._rt._mcp_approval_pending[name] = {
                     "kind": "config",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
+                self._set_http_status(name, "approval_required")
+                return
             except ApprovalRequired as exc:
-                _LOG.warning(
-                    "McpPool: HTTP server %r refused — description_hash changed "
-                    "(%s → %s) — re-approval required",
-                    name,
-                    exc.old_hash[:12],
-                    exc.new_hash[:12],
-                )
                 self._rt._mcp_approval_pending[name] = {
                     "kind": "tools",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
-                # E6: same drift-persistence path as the stdio branch — write
-                # the AUTHORITATIVE new_hash the live HTTP server advertised to
-                # the shared mcp_approval_pending table so the app-server's
-                # GET /api/mcp can surface it on the ApprovalDiff.
                 http_db_conn = getattr(self._rt._store, "_conn", None)
                 if http_db_conn is not None:
                     try:
@@ -319,25 +402,47 @@ class McpManager:
                         )
                     except Exception:
                         _LOG.warning(
-                            "McpPool: failed to persist pending approval for "
-                            "HTTP server %r (UI will fall back to stored hash)",
+                            "MCP HTTP approval drift persistence failed for %r",
                             name,
                             exc_info=True,
                         )
-                # Clean up the client
-                client = self._rt._mcp_http_clients.pop(name, None)
-                if client is not None:
-                    with contextlib.suppress(Exception):
-                        await client.close()
+                await self._discard_http_client(name)
+                self._set_http_status(name, "approval_required")
+                return
             except Exception as exc:
-                _LOG.warning("McpPool: HTTP server %r failed to start: %s", name, exc)
-                if name in self._rt._mcp_http_clients:
-                    client = self._rt._mcp_http_clients.pop(name)
-                    with contextlib.suppress(Exception):
-                        await client.close()
+                await self._discard_http_client(name)
+                if attempt < _HTTP_CONNECT_ATTEMPTS:
+                    delay = _HTTP_RETRY_DELAYS_S[attempt - 1]
+                    _LOG.warning(
+                        "MCP HTTP server %r connection attempt %d/%d failed (%s); "
+                        "retrying in %.2fs",
+                        name,
+                        attempt,
+                        _HTTP_CONNECT_ATTEMPTS,
+                        type(exc).__name__,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                self._set_http_status(
+                    name,
+                    "degraded",
+                    code="mcp_connection_failed",
+                    attempts=attempt,
+                    exception_type=type(exc).__name__,
+                )
+                _LOG.warning(
+                    "MCP HTTP server %r degraded after %d bounded attempts (%s)",
+                    name,
+                    attempt,
+                    type(exc).__name__,
+                )
 
-        # Build retrieval-tier MCP providers from the tool list
-        await self._build_mcp_retrieval_providers()
+    async def _discard_http_client(self, name: str) -> None:
+        client = self._rt._mcp_http_clients.pop(name, None)
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.close()
 
     async def _connect_http(
         self,
@@ -359,6 +464,7 @@ class McpManager:
         client = McpHttpClient(
             server=srv,
             secrets=self._rt._secret_store,
+            init_timeout_s=_HTTP_INIT_TIMEOUT_S,
             call_timeout_s=10.0,
         )
 
@@ -545,6 +651,10 @@ class McpManager:
         self._rt._mcp_http_tools.clear()
         self._rt._mcp_retrieval_searches.clear()
         self._rt._mcp_retrieval_extractions.clear()
+        for state in self._rt._mcp_http_status.values():
+            if state.get("status") in {"connecting", "connected"}:
+                state.clear()
+                state["status"] = "disconnected"
         self._rt._cap_handlers = None
 
     def mcp_approval_state(self) -> dict[str, dict]:

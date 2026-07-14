@@ -20,7 +20,10 @@ import { ProbeButton } from "./ProbeButton";
  * now wired for real.
  */
 const STATUS_META: Record<McpStatus, { label: string; dot: string }> = {
+  disabled: { label: "Disabled", dot: "bg-text-faint" },
+  connecting: { label: "Connecting", dot: "bg-accent" },
   connected: { label: "Connected", dot: "bg-supported" },
+  degraded: { label: "Degraded", dot: "bg-unsupported" },
   disconnected: { label: "Disconnected", dot: "bg-text-faint" },
   error: { label: "Error", dot: "bg-unsupported" },
   approval_required: { label: "Approval required", dot: "bg-unsupported" },

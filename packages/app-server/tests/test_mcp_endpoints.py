@@ -33,9 +33,7 @@ def config_store(tmp_path: Path) -> ConfigStore:
 
 
 @pytest.fixture
-def client(
-    store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore
-) -> TestClient:
+def client(store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore) -> TestClient:
     """Build the app with a shared DB connection so mcp_approvals table is
     reachable from ConfigState."""
     # Ensure mcp_approvals table exists in the in-memory DB.
@@ -172,6 +170,7 @@ def test_mcp_patch_toggle_enabled(client, config_store):
     # GET reflects the patch
     listed = client.get("/api/mcp").json()
     assert listed[0]["enabled"] is False
+    assert listed[0]["status"] == "disabled"
     assert listed[0]["transport"] == "streamable_http"
     assert listed[0]["risk_tier"] == "high"
     assert config_store.load().mcp.enabled is False
@@ -182,6 +181,27 @@ def test_mcp_patch_toggle_enabled(client, config_store):
     assert reenabled.status_code == 200
     assert reenabled.json()["enabled"] is True
     assert config_store.load().mcp.enabled is True
+
+
+def test_mcp_approval_blocks_while_server_is_disabled(client):
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "disabled",
+            "url": "https://example.com",
+            "transport": "streamable_http",
+            "enabled": False,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["status"] == "disabled"
+
+    response = client.post(
+        "/api/mcp/servers/disabled/approve",
+        json={"approval_kind": "config", "config_hash": created.json()["new_config_hash"]},
+    )
+    assert response.status_code == 409
+    assert "enable it before approving" in response.text
 
 
 def test_mcp_patch_nonexistent_is_404(client):

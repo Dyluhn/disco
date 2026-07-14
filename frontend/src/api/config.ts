@@ -1,7 +1,7 @@
 import { MCP_CONNECTIONS } from "@/fixtures/config";
 import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
 import type { ProbeResult } from "@/types/probe";
-import { agentLive, agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
+import { agentGet, agentLive, agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
  * Data-access for the skills + MCP surfaces. Components reach these only through
@@ -96,7 +96,21 @@ export async function setSkillEnabled(id: string, enabled: boolean): Promise<Ski
 const fixtureMcp: McpConnection[] = MCP_CONNECTIONS.map((c) => ({ ...c }));
 
 export async function listMcpConnections(): Promise<McpConnection[]> {
-  if (isLive()) return apiGet<McpConnection[]>("/api/mcp");
+  if (isLive()) {
+    const configured = await apiGet<McpConnection[]>("/api/mcp");
+    if (!agentLive()) return configured;
+    const runtime = await agentGet<{
+      enabled: boolean;
+      servers: Record<string, { status: McpConnection["status"] }>;
+    }>("/api/mcp/servers");
+    return configured.map((connection) => {
+      const live = runtime.servers[connection.id];
+      if (connection.enabled === false || !runtime.enabled) {
+        return { ...connection, status: "disabled" };
+      }
+      return live ? { ...connection, status: live.status } : connection;
+    });
+  }
   await fixtureDelay();
   return fixtureMcp.map((c) => ({ ...c }));
 }

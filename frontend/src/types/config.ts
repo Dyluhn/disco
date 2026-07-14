@@ -30,7 +30,14 @@ export interface SkillPatch {
   surfaces?: string[];
 }
 
-export type McpStatus = "connected" | "disconnected" | "error" | "approval_required";
+export type McpStatus =
+  | "disabled"
+  | "connecting"
+  | "connected"
+  | "degraded"
+  | "disconnected"
+  | "error"
+  | "approval_required";
 
 export interface McpConnection {
   id: string;

@@ -57,6 +57,26 @@ def _invalid_server_entry(name: str, diagnostic: dict[str, Any]) -> dict[str, An
     }
 
 
+def _http_runtime_state(runtime: ConversationRuntime, name: str) -> dict[str, Any]:
+    """Return only the manager's already-sanitized status projection."""
+
+    raw = getattr(runtime, "_mcp_http_status", {}).get(name, {})
+    if not isinstance(raw, Mapping):
+        return {}
+    state: dict[str, Any] = {}
+    status = raw.get("status")
+    if isinstance(status, str):
+        state["status"] = status
+    diagnostic = raw.get("diagnostic")
+    if isinstance(diagnostic, Mapping):
+        state["diagnostic"] = {
+            key: value
+            for key, value in diagnostic.items()
+            if key in {"code", "attempts", "exception_type"} and isinstance(value, (str, int))
+        }
+    return state
+
+
 def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
@@ -72,8 +92,6 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             return {"servers": {}}
         cfg = runtime._config_store.load()
         mcp_cfg = cfg.mcp
-        if not mcp_cfg.enabled:
-            return {"enabled": False, "servers": {}}
 
         servers: dict[str, dict] = {}
         srv_status = runtime._mcp_pool.server_status() if runtime._mcp_pool else {}
@@ -84,16 +102,19 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             if srv is None:
                 servers[name] = _invalid_server_entry(name, diagnostic or {})
                 continue
-            status = "disabled" if not srv.enabled else srv_status.get(name, "disconnected")
+            status = (
+                "disabled"
+                if not mcp_cfg.enabled or not srv.enabled
+                else srv_status.get(name, "disconnected")
+            )
             # HTTP servers: override status from our own tracking
-            if srv.enabled and srv.transport == "streamable_http":
-                if name in runtime._mcp_http_clients:
-                    status = "connected"
-                elif name in approval_pending:
+            live_http: dict[str, Any] = {}
+            if mcp_cfg.enabled and srv.enabled and srv.transport == "streamable_http":
+                live_http = _http_runtime_state(runtime, name)
+                if name in approval_pending:
                     status = "approval_required"
                 else:
-                    # Not yet started or failed
-                    status = status if status != "disconnected" else "disconnected"
+                    status = str(live_http.get("status") or "disconnected")
 
             entry: dict = {
                 "name": name,
@@ -107,10 +128,12 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
                 entry["old_description_hash"] = approval_pending[name].get("old_hash", "")
             else:
                 entry["approval_required"] = False
+            if "diagnostic" in live_http:
+                entry["diagnostic"] = live_http["diagnostic"]
 
             servers[name] = entry
 
-        return {"enabled": True, "servers": servers}
+        return {"enabled": mcp_cfg.enabled, "servers": servers}
 
     @router.post("/api/mcp/reload")
     async def reload_mcp_servers() -> dict:
@@ -132,13 +155,12 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
         if srv is None:
             return _invalid_server_entry(name, diagnostic or {})
 
-        status = "disabled" if not srv.enabled else "disconnected"
-        if srv.enabled and srv.transport == "streamable_http":
-            if name in runtime._mcp_http_clients:
-                status = "connected"
-            else:
-                status = "disconnected"
-        elif srv.enabled:
+        status = "disabled" if not cfg.mcp.enabled or not srv.enabled else "disconnected"
+        live_http: dict[str, Any] = {}
+        if cfg.mcp.enabled and srv.enabled and srv.transport == "streamable_http":
+            live_http = _http_runtime_state(runtime, name)
+            status = str(live_http.get("status") or "disconnected")
+        elif cfg.mcp.enabled and srv.enabled:
             if runtime._mcp_pool is not None:
                 status = runtime._mcp_pool.server_status().get(name, "disconnected")
 
@@ -153,8 +175,12 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             result["approval_required"] = True
             result["description_hash"] = approval_pending[name].get("new_hash", "")
             result["old_description_hash"] = approval_pending[name].get("old_hash", "")
+            if cfg.mcp.enabled and srv.enabled:
+                result["status"] = "approval_required"
         else:
             result["approval_required"] = False
+        if "diagnostic" in live_http:
+            result["diagnostic"] = live_http["diagnostic"]
 
         return result
 

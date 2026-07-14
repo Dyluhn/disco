@@ -126,9 +126,13 @@ class McpConfigService:
                     name=name,
                     url=url,
                     status=(
-                        "approval_required"
-                        if config_pending or pd is not None or ap is None
-                        else _mcp_live_status(ap)
+                        "disabled"
+                        if not cfg.enabled or not srv.get("enabled", True)
+                        else (
+                            "approval_required"
+                            if config_pending or pd is not None or ap is None
+                            else _mcp_live_status(ap)
+                        )
                     ),
                     transport=srv.get("transport"),
                     risk_tier=srv.get("risk_tier"),
@@ -176,7 +180,7 @@ class McpConfigService:
             id=body.name,
             name=body.name,
             url=body.url,
-            status="approval_required",
+            status="approval_required" if body.enabled else "disabled",
             transport=body.transport,
             risk_tier=body.risk_tier,
             enabled=body.enabled,
@@ -215,7 +219,11 @@ class McpConfigService:
             id=name,
             name=name,
             url=updated.get("url", ""),
-            status="approval_required" if config_pending else _mcp_live_status(ap),
+            status=(
+                "disabled"
+                if not new_cfg.enabled or not updated.get("enabled", True)
+                else ("approval_required" if config_pending else _mcp_live_status(ap))
+            ),
             transport=updated.get("transport"),
             risk_tier=updated.get("risk_tier"),
             description_hash=ap["description_hash"] if ap else None,
@@ -260,6 +268,8 @@ class McpConfigService:
         )
 
         srv = cfg.servers[name]
+        if not cfg.enabled or not srv.get("enabled", True):
+            raise ValueError(f"MCP server {name!r} is disabled; enable it before approving")
         if body.approval_kind == "config":
             expected = compute_config_hash({"name": name, **srv})
             if body.config_hash != expected:

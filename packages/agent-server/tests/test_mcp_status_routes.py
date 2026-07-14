@@ -26,6 +26,7 @@ def _runtime(
     enabled: bool = True,
     statuses: dict[str, str] | None = None,
     connected_http: set[str] | None = None,
+    http_states: dict[str, dict[str, object]] | None = None,
 ):
     mcp = SimpleNamespace(enabled=enabled, servers=servers)
     pool = SimpleNamespace(server_status=lambda: statuses or {})
@@ -33,6 +34,10 @@ def _runtime(
         _config_store=SimpleNamespace(load=lambda: SimpleNamespace(mcp=mcp)),
         _mcp_pool=pool,
         _mcp_http_clients={name: object() for name in connected_http or set()},
+        _mcp_http_status={
+            **{name: {"status": "connected"} for name in connected_http or set()},
+            **(http_states or {}),
+        },
         mcp_approval_state=lambda: {},
     )
     return runtime
@@ -53,6 +58,10 @@ def test_mcp_server_list_handles_zero_servers_and_global_disable() -> None:
         "enabled": False,
         "servers": {},
     }
+    globally_disabled = _client(
+        _runtime({"one": _typed_http("one")}, enabled=False, connected_http={"one"})
+    ).get("/api/mcp/servers")
+    assert globally_disabled.json()["servers"]["one"]["status"] == "disabled"
 
 
 def test_mcp_server_list_normalizes_raw_and_typed_entries_without_secrets() -> None:
@@ -153,3 +162,31 @@ def test_single_mcp_status_returns_redacted_typed_diagnostic() -> None:
     assert response.json()["diagnostic"]["code"] == "invalid_mcp_server_config"
     assert set(response.json()["diagnostic"]["fields"]) == {"risk_tier"}
     assert "secret-ref" not in response.text
+
+
+def test_http_connection_failure_is_typed_degraded_and_redacted() -> None:
+    response = _client(
+        _runtime(
+            {"one": _typed_http("one")},
+            http_states={
+                "one": {
+                    "status": "degraded",
+                    "diagnostic": {
+                        "code": "mcp_connection_failed",
+                        "attempts": 3,
+                        "exception_type": "ConnectError",
+                        "secret": "must-not-cross-boundary",
+                    },
+                }
+            },
+        )
+    ).get("/api/mcp/servers/one/status")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["diagnostic"] == {
+        "code": "mcp_connection_failed",
+        "attempts": 3,
+        "exception_type": "ConnectError",
+    }
+    assert "must-not-cross-boundary" not in response.text
