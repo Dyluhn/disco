@@ -263,6 +263,11 @@ async function openFromHandoff(
 ): Promise<void> {
   const open = page.locator('[data-disco-control="build.open-app"]').first();
   await expect(open).toBeVisible({ timeout: 120_000 });
+  // The handoff control renders from the durable DeliverableEvent before the
+  // isolated capability POST resolves. This is especially visible after a
+  // cold stack restart; synchronize on the signed attribute we consume rather
+  // than assuming control visibility implies async mint completion.
+  await expect(open).toHaveAttribute("data-app-url", /.+/, { timeout: 120_000 });
   const handoffUrl = await open.getAttribute("data-app-url");
   expect(handoffUrl, "handoff did not mint an isolated preview capability").toBeTruthy();
   const parsedHandoff = new URL(handoffUrl!);
