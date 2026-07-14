@@ -56,7 +56,9 @@ scenarios:
     prompt: >-
       Complete this hands-on task in the workspace. Create inventory.py containing
       a function named summarize_inventory that totals the quantities in a small
-      hard-coded inventory, prints exactly 'TOTAL ITEMS: 42', and exits cleanly.
+      hard-coded inventory and exits cleanly. The source file itself must include
+      the exact literal text 'TOTAL ITEMS: 42'; make the function print that exact
+      line rather than constructing the required output dynamically.
       Run the script and verify its actual output. Then create task-report.md with
       the heading exactly 'Agent Task Complete', state that the verified total was
       42, and briefly list what you did. Finish only after both files exist and the

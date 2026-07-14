@@ -3221,6 +3221,20 @@ def test_every_scenario_loads_with_a_valid_schema():
             )
 
 
+def test_agent_general_task_prompt_discloses_literal_source_assertion():
+    scenario = load_scenarios()["agent_general_task"]
+    prompt = scenario["prompt"]
+    inventory = next(
+        spec
+        for spec in scenario["assertions"]["workspace"]["files"]
+        if spec["path"] == "inventory.py"
+    )
+
+    assert "source file itself must include" in prompt
+    assert "rather than constructing the required output dynamically" in prompt
+    assert all(marker in prompt for marker in inventory["must_contain"])
+
+
 def test_rel6_draft_cancel_at_uses_followup_trigger_vocabulary():
     scen = load_scenarios(Path(__file__).resolve().parents[1] / "scenarios_rel6_draft.yaml")
     s = scen["disconnect_cancel_recovery"]
