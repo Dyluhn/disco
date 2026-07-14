@@ -105,7 +105,6 @@ _DEV_SERVER_PORT = 8787
 _DEV_INIT_SERVICE = "init"
 _DEV_INIT_SERVICE_FALLBACK = "release_init"
 _ENTRYPOINT_PATH = "/usr/local/bin/disco-entrypoint.sh"
-_ENTRYPOINT_HEREDOC = "DISCO_ENTRYPOINT"
 # The workerd dev-secrets file the entrypoint writes at container start. This is
 # the ONLY place the bundle references it — it is created at runtime inside the
 # container, never emitted into the exported tree.
@@ -994,7 +993,8 @@ def _first_sqlite_resource(spec: ReleaseSpec) -> ResourceDecl:
 
 
 def _dev_server_entrypoint_script(spec: ReleaseSpec) -> str:
-    """The container entrypoint body (heredoc'd into the Dockerfile).
+    """The container entrypoint body (materialized into the Dockerfile by a
+    heredoc-free ``RUN`` — see ``_entrypoint_install_line``).
 
     It writes the workerd dev-secrets file AT CONTAINER START from the
     host-injected, required secret env vars — each guarded with `${NAME:?...}` so a
@@ -1015,11 +1015,38 @@ def _dev_server_entrypoint_script(spec: ReleaseSpec) -> str:
     return "\n".join(lines)
 
 
+def _entrypoint_install_line(script: str) -> str:
+    """Materialize the entrypoint SCRIPT into the image at build time WITHOUT a
+    Dockerfile heredoc.
+
+    A heredoc ``COPY <<EOF`` (or ``RUN <<EOF``) is a BuildKit/Buildx-only Dockerfile
+    feature that the LEGACY Docker Engine builder rejects — yet the exported bundle
+    declares only "Docker Engine with the Compose v2 plugin" as its prerequisite (NOT
+    BuildKit/Buildx). So the (already secret-free, NAMES-only) script is written by a
+    single classic-builder-compatible ``RUN printf``: each script line is passed as an
+    inert single-quoted argument to ``printf '%s\\n'`` (a shell ``$NAME`` /
+    ``${NAME:?}`` therefore reaches the file LITERALLY, unexpanded at build time), the
+    output redirected to the entrypoint path, then made executable. The script is NOT
+    added to the build context / bundle as a discrete overlay file, so the emitted
+    self-host overlay path set is unchanged.
+
+    Each line is quoted with ``_shell_quote_literal`` (the same POSIX single-quote
+    discipline the compose command lowering uses), so an embedded single quote in a
+    line is closed/escaped/reopened and no metacharacter is interpreted."""
+    quoted = " ".join(_shell_quote_literal(line) for line in script.split("\n"))
+    return f"RUN printf '%s\\n' {quoted} > {_ENTRYPOINT_PATH} && chmod +x {_ENTRYPOINT_PATH}"
+
+
 def _dev_server_dockerfile(spec: ReleaseSpec) -> str:
     """The AppKit local-run image: install from the checked-in lockfile, build the
     Vite bundle, then hand off to an entrypoint that writes the dev-secrets file at
     start. Uses shell-form `RUN` for the install/build steps (a portable, readable
-    `npm ci` / `npm run build`)."""
+    `npm ci` / `npm run build`).
+
+    The entrypoint is materialized by a heredoc-free `RUN printf`
+    (`_entrypoint_install_line`) — a classic-builder instruction — NOT a heredoc
+    `COPY <<EOF`, so the image builds on exactly the declared prerequisite (Docker
+    Engine + Compose v2, no BuildKit/Buildx)."""
     script = _dev_server_entrypoint_script(spec)
     parts = [
         _DOCKERFILE_HEADER.rstrip("\n"),
@@ -1031,11 +1058,9 @@ def _dev_server_dockerfile(spec: ReleaseSpec) -> str:
         "RUN npm ci",
         "RUN npm run build",
         # The entrypoint writes the dev-secrets file at CONTAINER START from the
-        # host-injected secret env — the secret never lands in the bundle.
-        f"COPY <<'{_ENTRYPOINT_HEREDOC}' {_ENTRYPOINT_PATH}",
-        script,
-        _ENTRYPOINT_HEREDOC,
-        f"RUN chmod +x {_ENTRYPOINT_PATH}",
+        # host-injected secret env — the secret never lands in the bundle. It is
+        # materialized by a heredoc-free `RUN printf` (legacy-builder compatible).
+        _entrypoint_install_line(script),
         f"EXPOSE {_DEV_SERVER_PORT}",
         f'ENTRYPOINT ["{_ENTRYPOINT_PATH}"]',
     ]
@@ -1184,9 +1209,10 @@ def _dev_server_selfhost_doc(spec: ReleaseSpec) -> str:
 
 def _emit_dev_server_overlay(spec: ReleaseSpec, ingress: ReleaseService) -> dict[str, str]:
     """The complete AppKit interim local-run overlay: `compose.yaml`, the
-    `Dockerfile` (with the secret-writing entrypoint heredoc), `.dockerignore`, a
-    NAMES-ONLY `.env.example`, a strategy-specific `SELFHOST.md`, and `release.json`.
-    PURE + DETERMINISTIC and secret-free by construction."""
+    `Dockerfile` (which materializes the secret-writing entrypoint via a heredoc-free
+    `RUN printf`), `.dockerignore`, a NAMES-ONLY `.env.example`, a strategy-specific
+    `SELFHOST.md`, and `release.json`. PURE + DETERMINISTIC and secret-free by
+    construction."""
     overlay: dict[str, str] = {}
     overlay[COMPOSE_PATH] = _emit_yaml(_dev_server_compose_document(spec, ingress))
     overlay[DOCKERFILE_PATH] = _dev_server_dockerfile(spec)
