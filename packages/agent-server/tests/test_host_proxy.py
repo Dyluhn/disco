@@ -58,6 +58,7 @@ def upstream_http():
     yield f"http://127.0.0.1:{port}"
     server.shutdown()
     thread.join()
+    server.server_close()
 
 
 @pytest.fixture

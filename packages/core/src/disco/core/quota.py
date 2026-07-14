@@ -614,6 +614,13 @@ class SqliteQuotaStore:
                 self._conn.close()
                 self._conn = None
 
+    def __del__(self) -> None:
+        """Last-resort cleanup when an embedding never enters app lifespan."""
+        try:
+            self.close()
+        except (AttributeError, sqlite3.Error):
+            pass
+
     def _validate_app(self, owner_id: str, audience: str) -> tuple[str, str]:
         return _identity("owner id", owner_id), _identity("audience", audience)
 

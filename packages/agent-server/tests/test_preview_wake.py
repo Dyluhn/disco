@@ -24,6 +24,7 @@ from __future__ import annotations
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import pytest
 from disco.agent_server.routes.preview import make_preview_router
 from disco.core import SqliteEventStore
 from fastapi import FastAPI
@@ -33,6 +34,16 @@ from fastapi.testclient import TestClient
 # Fake runtime — tracks wake_for_preview calls; preview_upstream NOT present
 # (its absence would raise AttributeError if the old code ran, proving the fix)
 # ---------------------------------------------------------------------------
+
+
+_OWNED_STORES: list[SqliteEventStore] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_owned_stores():
+    yield
+    while _OWNED_STORES:
+        _OWNED_STORES.pop().close()
 
 
 class FakeRuntime:
@@ -53,6 +64,7 @@ class FakeRuntime:
 
 def _make_client(runtime: FakeRuntime) -> tuple[TestClient, FakeRuntime]:
     store = SqliteEventStore(":memory:")
+    _OWNED_STORES.append(store)
     app = FastAPI()
     # FakeRuntime satisfies the duck-type contract the routes require;
     # the type annotation is ConversationRuntime but only the methods above
@@ -68,8 +80,10 @@ def _make_client(runtime: FakeRuntime) -> tuple[TestClient, FakeRuntime]:
 
 class _FixedResponseHandler(BaseHTTPRequestHandler):
     body = b"hello from upstream"
+    seen_paths: list[str] = []
 
     def do_GET(self) -> None:
+        self.seen_paths.append(self.path)
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
@@ -80,6 +94,7 @@ class _FixedResponseHandler(BaseHTTPRequestHandler):
 
 
 def _start_upstream() -> tuple[str, HTTPServer]:
+    _FixedResponseHandler.seen_paths.clear()
     server = HTTPServer(("127.0.0.1", 0), _FixedResponseHandler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -126,6 +141,7 @@ def test_preview_app_proxies_when_upstream_is_live() -> None:
         assert rt.wake_calls[0][0] == "alive001"
     finally:
         server.shutdown()
+        server.server_close()
 
 
 def test_preview_app_proxies_subpath() -> None:
@@ -137,8 +153,25 @@ def test_preview_app_proxies_subpath() -> None:
         resp = client.get("/conversations/conv_sub00001/preview-app/index.html")
         assert resp.status_code == 200
         assert rt.wake_calls[0][0] == "sub00001"
+        assert _FixedResponseHandler.seen_paths == ["/index.html"]
     finally:
         server.shutdown()
+        server.server_close()
+
+
+def test_preview_app_normalizes_double_slash_and_forwards_query() -> None:
+    upstream_url, server = _start_upstream()
+    try:
+        rt = FakeRuntime(wake_result=upstream_url)
+        client, _ = _make_client(rt)
+        resp = client.get(
+            "/conversations/conv_query001/preview-app//assets/app.js?v=7&mode=full"
+        )
+        assert resp.status_code == 200
+        assert _FixedResponseHandler.seen_paths == ["/assets/app.js?v=7&mode=full"]
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_preview_app_502_when_upstream_unreachable() -> None:
@@ -153,6 +186,7 @@ def test_preview_app_502_when_upstream_unreachable() -> None:
 def test_preview_app_503_when_runtime_is_none() -> None:
     """runtime=None → 503 immediately (no AttributeError)."""
     store = SqliteEventStore(":memory:")
+    _OWNED_STORES.append(store)
     app = FastAPI()
     app.include_router(make_preview_router(store, None))
     client = TestClient(app)
@@ -199,3 +233,4 @@ def test_port_app_proxies_when_upstream_is_live() -> None:
         assert rt.wake_calls[0] == ("portlive", 5173)
     finally:
         server.shutdown()
+        server.server_close()

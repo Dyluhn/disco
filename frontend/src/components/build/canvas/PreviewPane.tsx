@@ -297,8 +297,14 @@ export function PreviewPane({
     () =>
       srcdocStaleAfterRestore
         ? null
-        : deriveSrcDoc(files, untrusted ? undefined : TRUSTED_SRCDOC_SCRIPT),
-    [files, untrusted, srcdocStaleAfterRestore],
+        : deriveSrcDoc(
+            files,
+            untrusted ? undefined : TRUSTED_SRCDOC_SCRIPT,
+            cid
+              ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
+              : undefined,
+          ),
+    [cid, files, untrusted, srcdocStaleAfterRestore],
   );
 
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.

@@ -75,6 +75,7 @@ def test_operator_probes_preview_when_live_port_detected() -> None:
         assert "shell served" in view["preview"]["html_head"].lower()
     finally:
         srv.shutdown()
+        srv.server_close()
 
 
 def test_operator_skips_probe_when_no_signal() -> None:
@@ -88,3 +89,4 @@ def test_operator_skips_probe_when_no_signal() -> None:
         assert "preview" not in view
     finally:
         srv.shutdown()
+        srv.server_close()

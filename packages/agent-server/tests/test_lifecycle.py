@@ -16,6 +16,7 @@ import pytest
 from disco.agent_server import ConversationRuntime
 from disco.core import (
     ConversationStatus,
+    DeliverableEvent,
     EventSource,
     LLMMessage,
     MessageEvent,
@@ -27,6 +28,23 @@ from disco.tools import ProcessSandboxService
 from disco.tools.projects import SnapshotResult, StorageStatus
 
 # ---- helpers -----------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _close_event_stores(monkeypatch):
+    """Lifecycle runtimes form reference cycles; close their stores deterministically."""
+    owned: list[SqliteEventStore] = []
+    original_init = SqliteEventStore.__init__
+
+    def tracked_init(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        original_init(self, *args, **kwargs)
+        owned.append(self)
+
+    monkeypatch.setattr(SqliteEventStore, "__init__", tracked_init)
+    yield
+    for event_store in owned:
+        event_store.close()
+
 
 def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     router = MagicMock()
@@ -118,6 +136,8 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     rt._executors[cid] = MagicMock(_sandbox=object())
 
     async def _snapshot(session, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "index.html").write_text("<h1>committed</h1>")
         return SnapshotResult(file_count=1, total_bytes=4, paths=["a.txt"])
 
     monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", _snapshot)
@@ -125,11 +145,13 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     await rt._maybe_snapshot(cid, trigger="finish")
 
     events = await store.get_events(cid)
-    assert len(events) == 1
-    assert isinstance(events[0], WorkspaceVersionEvent)
-    assert events[0].version_seq == 2
-    assert events[0].tree_digest == "tree-2"
-    assert events[0].trigger == "finish"
+    assert len(events) == 2
+    assert isinstance(events[0], DeliverableEvent)
+    assert events[0].path == "."
+    assert isinstance(events[1], WorkspaceVersionEvent)
+    assert events[1].version_seq == 2
+    assert events[1].tree_digest == "tree-2"
+    assert events[1].trigger == "finish"
 
 
 async def test_maybe_snapshot_survives_cut_version_failure(
@@ -471,11 +493,17 @@ async def test_http_state_route_overlays_sandbox_state():
     rt = _runtime(store)
     cid = await _make_conversation(store, ConversationStatus.FINISHED)
     rt._executors[cid] = MagicMock()  # live executor → sandbox_state == "active"
+    rt._start_mcp_pool = AsyncMock()
+    rt._close_mcp_pool = AsyncMock()
+    rt.reconcile_orphaned_runs = AsyncMock()
+    rt.prewarm_model_probe = AsyncMock()
+    rt.prewarm_vision_probe = AsyncMock()
 
     app = create_app(store, runtime=rt)
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/conversations/{cid}/state")
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/conversations/{cid}/state")
 
     assert resp.status_code == 200
     assert resp.json()["extras"]["sandbox"] == "active"

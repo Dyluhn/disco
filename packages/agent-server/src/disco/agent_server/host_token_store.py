@@ -562,6 +562,13 @@ class HostTokenStore:
                 self._conn.close()
                 self._conn = None
 
+    def __del__(self) -> None:
+        """Last-resort cleanup when an embedding never enters app lifespan."""
+        try:
+            self.close()
+        except (AttributeError, sqlite3.Error):
+            pass
+
     def __enter__(self) -> HostTokenStore:
         return self
 

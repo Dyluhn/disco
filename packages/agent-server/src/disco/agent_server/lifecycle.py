@@ -725,6 +725,15 @@ class LifecycleManager:
                 file_count=result.file_count,
                 total_bytes=result.total_bytes,
             )
+            # A shell-served/npm-built site can finish without an explicit
+            # `serve` event.  Select its entry before cutting the version so the
+            # WorkspaceVersionEvent commits both the bytes and their Open target
+            # as one ordered record.  Appending this after the marker made a
+            # restarted historical preview forget a nested entry and fall back
+            # to workspace/index.html.
+            await self._maybe_synthesize_app_deliverable(
+                conversation_id, store.path_for(conversation_id)
+            )
             try:
                 version = store.cut_version(conversation_id, trigger=trigger)
                 if version is not None:
@@ -749,17 +758,6 @@ class LifecycleManager:
                 f"snapshot failed: {exc}",
             )
             return
-        # Fix 2 (B-H.1): a shell-served / npm-built site emits NO app DeliverableEvent
-        # (handle_serve is the only emitter; `python3 -m http.server` / a `npm run
-        # build` write index.html with no serve tool-call) — so the user gets no
-        # "Open app" card and the snapshot serve path is never advertised. If the
-        # snapshot has an index.html and no app-deliverable was emitted, synthesize
-        # one THROUGH THE EVENT STORE. Idempotent: gated on no existing app-deliverable
-        # so a second snapshot / a real serve-emitted card never duplicates it.
-        await self._maybe_synthesize_app_deliverable(
-            conversation_id, store.path_for(conversation_id)
-        )
-
     async def _maybe_synthesize_app_deliverable(
         self, conversation_id: str, snapshot_dir: Path
     ) -> None:

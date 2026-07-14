@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from disco.agent_server.lifecycle import LifecycleManager
 from disco.core import DeliverableEvent, EventSource, SqliteEventStore
 
@@ -21,6 +22,21 @@ class _Rt:
 
     def __init__(self, store: SqliteEventStore) -> None:
         self._store = store
+
+
+@pytest.fixture(autouse=True)
+def _close_event_stores(monkeypatch):
+    owned: list[SqliteEventStore] = []
+    original_init = SqliteEventStore.__init__
+
+    def tracked_init(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        original_init(self, *args, **kwargs)
+        owned.append(self)
+
+    monkeypatch.setattr(SqliteEventStore, "__init__", tracked_init)
+    yield
+    for event_store in owned:
+        event_store.close()
 
 
 def _mgr(store: SqliteEventStore) -> LifecycleManager:

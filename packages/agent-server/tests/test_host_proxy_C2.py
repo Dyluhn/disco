@@ -155,6 +155,7 @@ def counting_server():
     yield f"http://127.0.0.1:{port}", server
     server.shutdown()
     thread.join()
+    server.server_close()
 
 
 @pytest.fixture
@@ -179,6 +180,7 @@ def real_server():
     yield f"http://127.0.0.1:{port}"
     server.shutdown()
     thread.join()
+    server.server_close()
 
 
 def _make_proxy_app(upstream_url: str) -> Starlette:

@@ -8,9 +8,11 @@ import json as _json
 import logging
 import mimetypes
 import urllib.parse
+from pathlib import PurePosixPath
 
 import httpx
 import websockets
+from disco.core import ConversationStatus, DeliverableEvent, StatusEvent, WorkspaceVersionEvent
 from disco.core.auth import PREVIEW_BOOTSTRAP_PATH, PreviewCapabilitySigner
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
@@ -36,12 +38,116 @@ class PreviewCapabilityBody(BaseModel):
     target_path: str = "/"
 
 
+def _safe_preview_path(raw: str, *, allow_leading_slash: bool) -> str | None:
+    """Normalize one URL/workspace path without ever decoding it a second time.
+
+    Starlette has already percent-decoded the route parameter.  A second unquote
+    here would turn a harmless literal ``%2e%2e`` filename into traversal.  Empty
+    and redundant slash components are allowed so ``preview-app//assets/x`` and
+    ``preview-app/assets/x`` address the same file; dot-dot, backslashes, NULs,
+    and an absolute manifest entry fail closed.
+    """
+    value = raw.strip()
+    if "\x00" in value or "\\" in value:
+        return None
+    if not allow_leading_slash and value.startswith("/"):
+        return None
+    parts = [part for part in PurePosixPath(value.strip("/")).parts if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def _snapshot_request_path(ws, requested_path: str, entry_path: str | None):  # noqa: ANN001
+    """Resolve a preview URL against the selected deliverable's directory.
+
+    A completed app is a graph rooted beside its declared HTML entry.  Browser
+    requests such as ``assets/app.js`` therefore resolve beside
+    ``dist/index.html`` rather than at the workspace root.  Returning ``None``
+    means the selected entry itself is unsafe or absent; callers must not then
+    fall back to a stale root index.
+    """
+    requested = _safe_preview_path(requested_path, allow_leading_slash=True)
+    if requested is None:
+        return None
+
+    if entry_path is None:
+        rel = requested or "index.html"
+        return (ws / rel).resolve()
+
+    normalized_entry = strip_redundant_workspace_prefix(entry_path.strip())
+    entry = _safe_preview_path(normalized_entry, allow_leading_slash=False)
+    if entry is None:
+        return None
+    if entry in {"", "."}:
+        entry = "index.html"
+
+    selected = (ws / entry).resolve()
+    if not selected.is_relative_to(ws):
+        return None
+    if selected.is_dir():
+        base = PurePosixPath(entry)
+        selected = (selected / "index.html").resolve()
+    else:
+        base = PurePosixPath(entry).parent
+
+    if not selected.is_file():
+        return None
+    if not requested:
+        return selected
+
+    base_text = "" if str(base) == "." else str(base)
+    # Accept both the canonical route-relative asset path and an already-prefixed
+    # workspace path.  This makes links authored as either ``assets/x`` or
+    # ``dist/assets/x`` converge without ever accepting traversal.
+    if base_text and (requested == base_text or requested.startswith(f"{base_text}/")):
+        rel = requested
+    else:
+        rel = f"{base_text}/{requested}" if base_text else requested
+    return (ws / rel).resolve()
+
+
+def _selected_app_entry(events: list, *, version: int | None) -> str | None:  # noqa: ANN001
+    selected: str | None = None
+    for event in events:
+        if isinstance(event, DeliverableEvent) and event.artifact_kind == "app":
+            selected = event.path
+        if (
+            version is not None
+            and isinstance(event, WorkspaceVersionEvent)
+            and event.version_seq == version
+        ):
+            return selected
+    return selected if version is None else None
+
+
+def _finished_snapshot_is_committed(events: list) -> bool:  # noqa: ANN001
+    latest_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
+    if latest_status is None or latest_status.status != ConversationStatus.FINISHED:
+        return False
+    status_seq = latest_status.seq or -1
+    return any(
+        isinstance(event, WorkspaceVersionEvent) and (event.seq or -1) > status_seq
+        for event in events
+    )
+
+
+def _forwarded_preview_query(request: Request) -> str:
+    pairs = urllib.parse.parse_qsl(request.url.query, keep_blank_values=True)
+    # ``version`` belongs to the host snapshot selector and must never leak to a
+    # user's dev server.  All other query fields retain their semantic values.
+    return urllib.parse.urlencode(
+        [(key, value) for key, value in pairs if key != "version"], doseq=True
+    )
+
+
 def _serve_static_from_snapshot(
     runtime: ConversationRuntime,
     conversation_id: str,
     rel_path: str,
     *,
     version: int | None = None,
+    entry_path: str | None = None,
 ) -> Response | None:
     """runthru-v2: serve a FINISHED build's static site DIRECTLY from the host
     ProjectStore snapshot when the sandbox can't be woken (build finished + reaped,
@@ -65,11 +171,20 @@ def _serve_static_from_snapshot(
         return None
     except Exception:  # noqa: BLE001 — no snapshot → caller falls back to 503
         return None
-    rel = strip_redundant_workspace_prefix(rel_path or "").strip("/") or "index.html"
-    target = (ws / rel).resolve()
+    target = _snapshot_request_path(ws, rel_path, entry_path)
+    if target is None:
+        if entry_path is not None:
+            return Response("preview target not found", status_code=404, media_type="text/plain")
+        return None
     if target.is_dir():
         target = (target / "index.html").resolve()
-    if not (target.is_relative_to(ws) and target.is_file()):
+    if (
+        not target.is_relative_to(ws)
+        or is_runtime_secret_path(target.relative_to(ws).as_posix())
+        or not target.is_file()
+    ):
+        if entry_path is not None:
+            return Response("preview asset not found", status_code=404, media_type="text/plain")
         return None
     ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
     body = inject_element_mention_picker(target.read_bytes(), ctype)
@@ -474,29 +589,78 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             return Response("preview not available", status_code=503, media_type="text/plain")
         owner_id = current_session(request).owner_id
         cid8 = conversation_id.removeprefix("conv_")[:8]
+        safe_path = _safe_preview_path(path, allow_leading_slash=True)
+        if safe_path is None or is_runtime_secret_path(safe_path):
+            return Response("preview path not found", status_code=404, media_type="text/plain")
+        try:
+            events = await store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — selected-target metadata is security relevant
+            _LOG.warning(
+                "preview target metadata unavailable for %s", conversation_id, exc_info=True
+            )
+            return Response(
+                "preview metadata unavailable", status_code=503, media_type="text/plain"
+            )
+        entry_path = _selected_app_entry(events, version=version)
         # Historical preview is static-only AND must NEVER fall through to the live
         # proxy: a ?version request answered by the live sandbox would show current
         # bytes under a "viewing vN" banner — a false affordance. Version requests
         # serve from the version snapshot or 404, full stop.
         if version is not None:
-            served = _serve_static_from_snapshot(runtime, conversation_id, path, version=version)
+            served = _serve_static_from_snapshot(
+                runtime,
+                conversation_id,
+                safe_path,
+                version=version,
+                entry_path=entry_path,
+            )
             if served is not None:
                 return served
+            if entry_path is not None:
+                return Response(
+                    "committed preview unavailable", status_code=503, media_type="text/plain"
+                )
             return Response("version not found", status_code=404, media_type="text/plain")
+        # Once the FINISHED workspace has a durable commit marker, its selected
+        # deliverable is authoritative.  Serving it before waking/proxying avoids
+        # a still-running stale scaffold at `/` winning over the completed app.
+        if _finished_snapshot_is_committed(events):
+            served = _serve_static_from_snapshot(
+                runtime,
+                conversation_id,
+                safe_path,
+                entry_path=entry_path,
+            )
+            if served is not None:
+                return served
+            if entry_path is not None:
+                return Response(
+                    "committed preview unavailable", status_code=503, media_type="text/plain"
+                )
         upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=owner_id)
+        query = _forwarded_preview_query(request)
+        upstream_path = f"{safe_path}?{query}" if query else safe_path
         if upstream is None:
             # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
             # `wake_for_preview` resolves None even with a live dev server. Before
             # falling back to the (stale mid-run) snapshot, try a liveness proxy that
             # curls the server from INSIDE the sandbox — genuinely liveness-gated and
             # backend-agnostic. Only succeeds when something IS listening on the port.
-            served = await _fetch_inside_response(runtime, conversation_id, PREVIEW_PORT, path)
+            served = await _fetch_inside_response(
+                runtime, conversation_id, PREVIEW_PORT, upstream_path
+            )
             if served is not None:
                 return served
             # runthru-v2: the sandbox can't be woken (finished build / backend
             # unavailable), but the built static site may already be on the host
             # snapshot — serve it directly instead of a 503 for a file we have.
-            served = _serve_static_from_snapshot(runtime, conversation_id, path, version=version)
+            served = _serve_static_from_snapshot(
+                runtime,
+                conversation_id,
+                safe_path,
+                version=version,
+                entry_path=entry_path,
+            )
             if served is not None:
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")
@@ -504,12 +668,17 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             async with httpx.AsyncClient(
                 timeout=15, follow_redirects=False, trust_env=False
             ) as client:
-                r = await client.get(f"{upstream}/{path}")
+                target_url = f"{upstream.rstrip('/')}/{safe_path}"
+                if query:
+                    target_url = f"{target_url}?{query}"
+                r = await client.get(target_url)
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
             # Fix 2 safety net: a RESOLVED-but-unreachable upstream (host port mapped but
             # nothing answers) bypassed the None-fallback above; try the in-sandbox
             # liveness proxy before giving up so a live server is still served.
-            served = await _fetch_inside_response(runtime, conversation_id, PREVIEW_PORT, path)
+            served = await _fetch_inside_response(
+                runtime, conversation_id, PREVIEW_PORT, upstream_path
+            )
             if served is not None:
                 return served
             return Response(

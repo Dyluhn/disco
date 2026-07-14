@@ -119,6 +119,60 @@ describe("deriveSrcDoc", () => {
     expect(doc).toContain('src="https://cdn.example.com/lib.js"');
   });
 
+  it("adds a preview base URL for every non-inlined relative asset class", () => {
+    const base = "http://agent.test/conversations/conv_multi/preview-app/";
+    const doc = deriveSrcDoc(
+      [
+        f(
+          "release/index.html",
+          '<html><head></head><body><img src="media/hero image.svg"><a href="docs/?mode=full#part">Docs</a></body></html>',
+        ),
+      ],
+      undefined,
+      base,
+    );
+    expect(doc).toContain(`<base href="${base}">`);
+    expect(new URL("media/hero image.svg", base).pathname).toBe(
+      "/conversations/conv_multi/preview-app/media/hero%20image.svg",
+    );
+    expect(new URL("docs/?mode=full#part", base).href).toBe(
+      `${base}docs/?mode=full#part`,
+    );
+  });
+
+  it("keeps CSS and JavaScript external when a real base route is available", () => {
+    const base = "http://agent.test/conversations/conv_multi/preview-app/";
+    const doc = deriveSrcDoc(
+      [
+        f(
+          "release/index.html",
+          '<link rel="stylesheet" href="assets/theme.css"><script src="scripts/app.js"></script>',
+        ),
+        f("release/assets/theme.css", '@font-face{src:url("../fonts/app.woff2")}'),
+        f("release/scripts/app.js", "globalThis.loaded = true"),
+      ],
+      undefined,
+      base,
+    );
+    expect(doc).toContain('href="assets/theme.css"');
+    expect(doc).toContain('src="scripts/app.js"');
+    expect(doc).not.toContain("<style>");
+    expect(new URL("../fonts/app.woff2", new URL("assets/theme.css", base)).pathname).toBe(
+      "/conversations/conv_multi/preview-app/fonts/app.woff2",
+    );
+  });
+
+  it("escapes a preview base URL before inserting it into HTML", () => {
+    const doc = deriveSrcDoc(
+      [f("index.html", "<h1>safe</h1>")],
+      undefined,
+      'https://agent.test/preview/?a=1&b="unsafe"',
+    );
+    expect(doc).toContain(
+      '<base href="https://agent.test/preview/?a=1&amp;b=&quot;unsafe&quot;">',
+    );
+  });
+
   it("falls back to any *.html when there's no index.html", () => {
     const doc = deriveSrcDoc([f("about.html", "<p>about</p>")]);
     expect(doc).toBe("<p>about</p>");

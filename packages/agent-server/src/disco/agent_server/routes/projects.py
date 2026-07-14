@@ -248,20 +248,27 @@ async def _parse_import_source(request: Request) -> _ImportSource:
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
-        uploads = [value for _key, value in form.multi_items() if isinstance(value, UploadFile)]
-        if len(uploads) != 1:
-            _reject_import(400, "invalid_request", "multipart import requires exactly one zip file")
-        upload = uploads[0]
-        filename = upload.filename or "project.zip"
-        if not filename.lower().endswith(".zip"):
-            _reject_import(400, "invalid_zip", "uploaded project must be a .zip file")
-        data = await upload.read()
-        return _ImportSource(
-            kind="zip",
-            label=filename,
-            title_seed=Path(filename).stem or filename,
-            zip_bytes=data,
-        )
+        try:
+            uploads = [
+                value for _key, value in form.multi_items() if isinstance(value, UploadFile)
+            ]
+            if len(uploads) != 1:
+                _reject_import(
+                    400, "invalid_request", "multipart import requires exactly one zip file"
+                )
+            upload = uploads[0]
+            filename = upload.filename or "project.zip"
+            if not filename.lower().endswith(".zip"):
+                _reject_import(400, "invalid_zip", "uploaded project must be a .zip file")
+            data = await upload.read()
+            return _ImportSource(
+                kind="zip",
+                label=filename,
+                title_seed=Path(filename).stem or filename,
+                zip_bytes=data,
+            )
+        finally:
+            await form.close()
 
     try:
         body: Any = await request.json()

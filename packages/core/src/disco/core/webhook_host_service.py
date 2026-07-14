@@ -232,6 +232,13 @@ class WebhookAppConfigStore:
                 self._conn.close()
                 self._conn = None
 
+    def __del__(self) -> None:
+        """Last-resort cleanup when an embedding never enters app lifespan."""
+        try:
+            self.close()
+        except (AttributeError, sqlite3.Error):
+            pass
+
 
 class WebhookEmitPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
