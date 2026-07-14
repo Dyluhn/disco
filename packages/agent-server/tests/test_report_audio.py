@@ -462,10 +462,49 @@ def test_endpoint_repeated_length_stop_is_bounded_and_actionable(
 
     assert response.status_code == 502
     detail = response.json()["detail"]
-    assert detail["reason"] == "tts_backend"
+    assert detail["reason"] == "turn_script"
     assert "finish_reason='length'" in detail["detail"]
     assert "no partial artifact" in detail["detail"]
     assert calls == 3
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_reason"),
+    [
+        pytest.param(report_audio_mod.TurnScriptError, "turn_script", id="turn-script"),
+        pytest.param(report_audio_mod.TtsBackendError, "tts_backend", id="tts-backend"),
+    ],
+)
+def test_endpoint_classifies_audio_generation_failure(
+    client: TestClient,
+    store: SqliteEventStore,
+    configure_tts,
+    tts_enabled,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
+    expected_reason: str,
+) -> None:
+    """HTTP 502 responses distinguish script generation from TTS failures."""
+    import disco.agent_server.routes.report as report_routes
+
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+
+    async def _fail(*_args: object, **_kwargs: object) -> None:
+        raise failure_type("classified audio failure")
+
+    monkeypatch.setattr(report_routes, "generate_report_audio", _fail)
+    response = client.post(f"/conversations/{cid}/report/audio")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": {
+            "ok": False,
+            "reason": expected_reason,
+            "detail": "classified audio failure",
+        }
+    }
 
 
 def test_endpoint_idempotent(
@@ -1067,6 +1106,51 @@ def test_audio_stream_endpoint_emits_sse(
     assert '"mp3_url"' in body
     # No false download note when the model is present.
     assert "downloading_model" not in body
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected_reason"),
+    [
+        pytest.param(report_audio_mod.TurnScriptError, "turn_script", id="turn-script"),
+        pytest.param(report_audio_mod.TtsBackendError, "tts_backend", id="tts-backend"),
+    ],
+)
+def test_audio_stream_classifies_audio_generation_failure(
+    client: TestClient,
+    store: SqliteEventStore,
+    configure_tts,
+    tts_enabled,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[Exception],
+    expected_reason: str,
+) -> None:
+    """SSE terminal errors preserve the same typed failure contract as HTTP."""
+    import disco.agent_server.routes.report as report_routes
+
+    configure_tts(tts_enabled)
+    cid = _create_conv(client)
+    _seed_report(store, cid)
+
+    async def _fail(*_args: object, **_kwargs: object) -> None:
+        raise failure_type("classified audio failure")
+
+    monkeypatch.setattr(report_routes, "generate_report_audio", _fail)
+    response = client.post(f"/conversations/{cid}/report/audio/stream")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert events == [
+        {
+            "stage": "error",
+            "reason": expected_reason,
+            "detail": "classified audio failure",
+        }
+    ]
 
 
 def test_audio_stream_endpoint_no_report_404(client) -> None:

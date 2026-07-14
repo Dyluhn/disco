@@ -58,6 +58,14 @@ class AudioBody(BaseModel):
 # ── Helper: gather follow-up pairs from the event log ─────────────────────────
 
 
+def _audio_generation_failure(
+    exc: TtsBackendError | TurnScriptError,
+) -> dict[str, str]:
+    """Return the stable wire payload for a known audio-generation failure."""
+    reason = "turn_script" if isinstance(exc, TurnScriptError) else "tts_backend"
+    return {"reason": reason, "detail": str(exc)}
+
+
 def _gather_follow_up_pairs(
     events: list[Any],
     report: ReportEvent,
@@ -339,7 +347,7 @@ def make_report_router(
         except (TtsBackendError, TurnScriptError) as exc:
             raise HTTPException(
                 status_code=502,
-                detail={"ok": False, "reason": "tts_backend", "detail": str(exc)},
+                detail={"ok": False, **_audio_generation_failure(exc)},
             ) from exc
 
         return {
@@ -409,7 +417,7 @@ def make_report_router(
                 await queue.put({"stage": "error", "reason": "tts_disabled"})
             except (TtsBackendError, TurnScriptError) as exc:
                 await queue.put(
-                    {"stage": "error", "reason": "tts_backend", "detail": str(exc)}
+                    {"stage": "error", **_audio_generation_failure(exc)}
                 )
             except Exception as exc:  # never hang the stream on an unexpected error
                 await queue.put(
