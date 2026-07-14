@@ -138,7 +138,6 @@ def _prior_plan_and_productive_action_between(
     return prior_plan, False
 
 
-
 def _rewrite_directive_marker_active(events: list[Event], path: str) -> bool:
     marker_detail = f"rewrite_directive:{path}"
     marker_index: int | None = None
@@ -152,10 +151,7 @@ def _rewrite_directive_marker_active(events: list[Event], path: str) -> bool:
     for event in events[marker_index + 1 :]:
         if isinstance(event, ActionEvent):
             tc = event.tool_call
-            if (
-                tc.tool_name in F6_FILE_MUTATING_TOOLS
-                and tc.arguments.get("path") == path
-            ):
+            if tc.tool_name in F6_FILE_MUTATING_TOOLS and tc.arguments.get("path") == path:
                 matching_actions.add(event.id)
         elif (
             isinstance(event, ObservationEvent)
@@ -278,6 +274,7 @@ _NO_PROGRESS_REMINDER = (
     "</system-reminder>"
 )
 
+
 async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
     """CD-TOOLS-5 OUTPUT-TRUTH: True iff the deliverable path is VERIFIABLY absent in the
     workspace. Fail-OPEN (return False) when there's no sandbox or the existence check errors —
@@ -337,6 +334,106 @@ async def _serve_path_verified_present(loop, path: str) -> bool:  # noqa: ANN001
         return False
 
 
+async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # noqa: ANN001
+    """Validate and record one finished-artifact handoff."""
+    assert step.tool_call is not None
+    raw_early_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
+    early_path, _, _ = await _coerce_serve_entry_path(loop, raw_early_path)
+    if signals.actions_since_last_resume(events) == 0 and not (
+        early_path and await _serve_path_verified_present(loop, early_path)
+    ):
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: no real work has happened yet in "
+            "this session — the sandbox is fresh and nothing "
+            "is running. Execute the next plan step with real "
+            "tool calls (write files, run commands, start your "
+            "server), then serve the result.",
+        )
+
+    arguments = step.tool_call.arguments or {}
+    if not arguments:
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: provide both required string fields `title` and "
+            "`path`; optionally set `kind` to exactly `app` or `files`.",
+        )
+    title = str(arguments.get("title") or "").strip()
+    raw_path = str(arguments.get("path") or "").strip()
+    path, root_like, coerced_to_index = await _coerce_serve_entry_path(loop, raw_path)
+    kind = str(arguments.get("kind") or "app").strip()
+    url = _canonical_deployment_url(str(arguments.get("url") or ""))
+    if not title:
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: `title` is required and must be a non-empty human-readable label.",
+        )
+    if not raw_path:
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: `path` is required and must be a non-empty "
+            "workspace-relative entry path.",
+        )
+    if kind not in ("app", "files"):
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: `kind` must be exactly `app` or `files`; omit it "
+            "only when the documented `app` default is intended.",
+        )
+    if root_like and not coerced_to_index:
+        return await loop._valve.refuse_fresh_session(step, _serve_root_refusal())
+    if not path:
+        return await loop._valve.refuse_fresh_session(
+            step,
+            "serve refused: normalized `path` is empty; provide a workspace-relative "
+            "entry file path.",
+        )
+
+    duplicate = any(
+        isinstance(event, DeliverableEvent) and event.path == path and event.artifact_kind == kind
+        for event in events
+    )
+    if duplicate:
+        _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
+        loop._invisible_steps += 1
+        await loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_SERVE_DUPLICATE_GUIDANCE),
+                meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC},
+            )
+        )
+    elif await _serve_path_missing(loop, path):
+        return await loop._valve.refuse_fresh_session(
+            step,
+            f"serve refused: checked normalized deliverable path {path!r}, "
+            "but it does not exist in the workspace. Serve takes the entry "
+            "FILE path; for a site that is usually 'index.html'. If the file "
+            "is elsewhere, pass that workspace-relative entry path; otherwise "
+            "build or write the intended entry file first, then serve that file.",
+        )
+    else:
+        await loop._emit(
+            DeliverableEvent(
+                source=EventSource.AGENT,
+                title=title,
+                path=path,
+                artifact_kind=kind,  # type: ignore[arg-type]
+                deployment_url=url,
+            )
+        )
+        await loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_SERVE_HANDOFF_GUIDANCE),
+                meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC},
+            )
+        )
+    if await loop._post_noop_valve() is Disp.HALT:
+        return Disp.HALT
+    return Disp.CONTINUE
+
+
 _BLOCKED_LANDING_META_KEY = "blocked_landing"
 _BLOCKED_DETAIL_PREFIX = "blocked:"
 _ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
@@ -346,10 +443,7 @@ _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
 def _last_verify_web_app_passed(events: list[Event]) -> bool:
     """True iff the most recent verify_web_app observation is a PASS."""
     for e in reversed(events):
-        if not (
-            isinstance(e, ObservationEvent)
-            and e.tool_result.tool_name == "verify_web_app"
-        ):
+        if not (isinstance(e, ObservationEvent) and e.tool_result.tool_name == "verify_web_app"):
             continue
         structured = e.tool_result.structured
         if isinstance(structured, dict) and "passed" in structured:
@@ -374,6 +468,18 @@ def _plan_done_and_verified(events: list[Event]) -> bool:
     if _last_verify_web_app_passed(events):
         return True
     return False
+
+
+def _ensure_question(content: str, fallback: str) -> str:
+    """Keep a blocked landing actionable even when the model omits a question."""
+    text = content.strip()
+    if not text:
+        return fallback
+    if "?" in text:
+        return text
+    if len(text.split()) < 8:
+        return fallback
+    return f"{text}\n\nWhat should I do next?"
 
 
 def _no_progress_finish_hinted(events: list[Event], marker_seq: int) -> bool:
@@ -477,26 +583,13 @@ class Valve:
 
     def _fallback_blocked_message(self, *, reason: str, guidance: str) -> str:
         where = (
-            guidance.strip()
-            or "the run stopped before it could safely complete the current task."
+            guidance.strip() or "the run stopped before it could safely complete the current task."
         )
         return (
             f"I'm blocked because {reason}. Where it stands: {where} "
             "What I tried: I continued the current plan until the loop breaker "
             "stopped the run. What should I do next?"
         )
-
-    @staticmethod
-    def _ensure_question(content: str, fallback: str) -> str:
-        text = content.strip()
-        if not text:
-            return fallback
-        if "?" in text:
-            return text
-        if len(text.split()) < 8:
-            return fallback
-        question = "What should I do next?"
-        return f"{text}\n\n{question}"
 
     async def _blocked_model_message(self, *, reason: str, guidance: str) -> str:
         fallback = self._fallback_blocked_message(reason=reason, guidance=guidance)
@@ -523,8 +616,8 @@ class Valve:
             if step.tool_call.tool_name != "ask_user":
                 return fallback
             question = str(step.tool_call.arguments.get("question") or "").strip()
-            return self._ensure_question(question or step.thought, fallback)
-        return self._ensure_question(step.thought, fallback)
+            return _ensure_question(question or step.thought, fallback)
+        return _ensure_question(step.thought, fallback)
 
     async def land_blocked(
         self,
@@ -668,9 +761,7 @@ class Valve:
                 meta=landing_meta,
             )
         )
-        await self._loop._emit(
-            StatusEvent(status=status, detail=detail, meta=landing_meta)
-        )
+        await self._loop._emit(StatusEvent(status=status, detail=detail, meta=landing_meta))
 
     @staticmethod
     def _actionless_auto_resume_total(events: list[Event]) -> int:
@@ -686,8 +777,7 @@ class Valve:
     @staticmethod
     def _has_plan_approval(events: list[Event]) -> bool:
         return any(
-            isinstance(event, StatusEvent) and event.detail == "plan_approved"
-            for event in events
+            isinstance(event, StatusEvent) and event.detail == "plan_approved" for event in events
         )
 
     def _actionless_ladder_still_front(self, events: list[Event]) -> bool:
@@ -696,10 +786,7 @@ class Valve:
             return False
         if not self._has_plan_approval(events):
             return False
-        if (
-            self._actionless_auto_resume_total(events)
-            >= _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP
-        ):
+        if self._actionless_auto_resume_total(events) >= _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP:
             return False
         pause_count = signals.actionless_pause_count_current_execution_segment(events)
         if pause_count == 0:
@@ -733,9 +820,7 @@ class Valve:
                 message=LLMMessage(role="user", content=content),
             )
         )
-        await self._loop._emit(
-            StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
-        )
+        await self._loop._emit(StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
         return True
 
     async def actionless_valve(self, events: list[Event], noops: int) -> bool:
@@ -779,8 +864,7 @@ class Valve:
         # approved (then planning_turns_since_replan == 0 again).
         if (
             pending_revision
-            and signals.planning_turns_since_replan(events)
-            >= self._loop._max_consecutive_noops
+            and signals.planning_turns_since_replan(events) >= self._loop._max_consecutive_noops
         ):
             await self.land_blocked(
                 reason="actionless",
@@ -893,8 +977,7 @@ class Valve:
                 await self.land_blocked(
                     reason="noop_limit",
                     guidance=(
-                        "Plan steps remain undone and no real work happened in "
-                        "this run segment."
+                        "Plan steps remain undone and no real work happened in this run segment."
                     ),
                     legacy_status=ConversationStatus.PAUSED,
                     legacy_detail="noop_limit",
@@ -1070,12 +1153,8 @@ class Valve:
             and signals.actions_since_last_resume(events) == 0
         ):
             _sbx = getattr(self._loop.executor, "sandbox", None)
-            _workspace = (
-                getattr(_sbx, "workspace_path", None) if _sbx is not None else None
-            )
-            _bootstrap = (
-                _detect_project_bootstrap(_workspace) if _workspace else None
-            )
+            _workspace = getattr(_sbx, "workspace_path", None) if _sbx is not None else None
+            _bootstrap = _detect_project_bootstrap(_workspace) if _workspace else None
             if _bootstrap:
                 await self._loop._emit(
                     MessageEvent(
@@ -1100,14 +1179,11 @@ class Valve:
         # transient rut doesn't dead-end a run the model could escape.
         escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
-            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
-            for e in events
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq for e in events
         )
         stuck_result = self._loop._stuck.evaluate(self._loop._recent(events))
         directive = stuck_result.rewrite_directive
-        if directive is not None and not _rewrite_directive_marker_active(
-            events, directive.path
-        ):
+        if directive is not None and not _rewrite_directive_marker_active(events, directive.path):
             await self._loop._emit(
                 StatusEvent(
                     status=ConversationStatus.RUNNING,
@@ -1170,9 +1246,9 @@ class Valve:
                 # recovery (submit_plan-only narrowed turn) instead of halting;
                 # a model that still won't submit halts via that path's own
                 # controlled terminal.
-                if signals.in_planning_for_revision(
+                if signals.in_planning_for_revision(events) and not signals.revision_force_submit(
                     events
-                ) and not signals.revision_force_submit(events):
+                ):
                     harvested = await harvest_revision_plan_after_refusal(self._loop)
                     if harvested is not None:
                         return harvested
@@ -1184,8 +1260,7 @@ class Valve:
                 await self.land_blocked(
                     reason=detail,
                     guidance=(
-                        "The stuck detector fired again after the one allowed "
-                        "stuck-escape retry."
+                        "The stuck detector fired again after the one allowed stuck-escape retry."
                     ),
                     legacy_status=ConversationStatus.STUCK,
                     legacy_detail=detail,
@@ -1216,9 +1291,7 @@ class Valve:
         # Durable semantic sentinel (NOT volatile ActionEvent.meta): one auto-read per
         # path/revision.
         await self._loop._emit(
-            StatusEvent(
-                status=ConversationStatus.RUNNING, detail=f"auto_ground_read:{target}"
-            )
+            StatusEvent(status=ConversationStatus.RUNNING, detail=f"auto_ground_read:{target}")
         )
         # Emit the ActionEvent FIRST (execute_and_observe requires it already on the log for strict
         # action/observation tool-pairing), then run the REAL file_read → it emits the paired Obs.
@@ -1243,9 +1316,9 @@ class Valve:
         # it halts at AWAITING_USER_DECISION with a summary of what failed.
         # The user's next message resets the streak (see _count_recent_failures).
         fails = signals.count_recent_failures(events)
-        recent_errors = [
-            e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)
-        ][:fails]
+        recent_errors = [e.error for e in reversed(events) if isinstance(e, AgentErrorEvent)][
+            :fails
+        ]
         recovery_requested = signals.recovery_requested_since_reset(events)
         if fails >= self._loop._circuit_breaker_threshold and not recovery_requested:
             # D2 — FIRST time we hit the wall: don't dump a dead-end message.
@@ -1295,9 +1368,7 @@ class Valve:
                 )
             )
             await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING, detail="recovery_requested"
-                )
+                StatusEvent(status=ConversationStatus.RUNNING, detail="recovery_requested")
             )
             return Disp.CONTINUE
         if fails > self._loop._circuit_breaker_threshold:
@@ -1382,8 +1453,7 @@ class Valve:
             )
             return Disp.CONTINUE
         acted_since = any(
-            isinstance(e, ActionEvent) and e.seq is not None and e.seq > marker_seq
-            for e in events
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > marker_seq for e in events
         )
         if acted_since:
             # DONE-NOT-STUCK (dt3 autopsy): an UNCHANGED verify outcome is not
@@ -1543,12 +1613,14 @@ class MetaToolHandlers:
         fact = str(step.tool_call.arguments.get("fact") or "").strip()
         if fact:
             import hashlib
+
             scope = str(step.tool_call.arguments.get("scope") or "").strip()
             normalized = fact
             fact_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
             seen = {
                 (e.scope, hashlib.sha256(e.snippet.strip().encode("utf-8")).hexdigest())
-                for e in events if isinstance(e, KnowledgeEvent)
+                for e in events
+                if isinstance(e, KnowledgeEvent)
             }
             if (scope, fact_hash) in seen:
                 action = ActionEvent(
@@ -1584,6 +1656,7 @@ class MetaToolHandlers:
                     await self._loop._write_pmx_memory_fact(scope, fact)
                 except Exception:  # noqa: BLE001 — mirror is best-effort
                     import logging as _logging
+
                     _logging.getLogger(__name__).warning(
                         "pmx MEMORY write-through failed (in-View fact survives)",
                         exc_info=True,
@@ -1597,136 +1670,7 @@ class MetaToolHandlers:
         return Disp.CONTINUE
 
     async def handle_serve(self, step: AgentStep, events: list[Event]) -> Disp:
-        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
-        # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
-        # as Open-the-app / Download-the-files. Non-blocking — the agent
-        # serves, verifies, then finishes. A missing path/title or a
-        # re-serve of an already-handed-off artifact is ignored (no-op)
-        # rather than emitting a useless handoff — and every ignored
-        # form is COUNTED, because each is invisible in the event log
-        # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
-        #
-        # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): a zero-work
-        # serve on a fresh session is the spam vector — refuse with actionable
-        # feedback. EXCEPTION (dtsite autopsy): a re-planned conversation whose
-        # FINISHED build already sits in the rehydrated workspace must hand off
-        # without busywork, so a VERIFIED-present path passes. Fail-CLOSED here
-        # (unverifiable → still refuse); the output-truth gate below stays
-        # fail-open — different stakes.
-        _early_raw_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
-        _early_path, _, _ = await _coerce_serve_entry_path(
-            self._loop, _early_raw_path
-        )
-        if signals.actions_since_last_resume(events) == 0 and not (
-            _early_path and await _serve_path_verified_present(self._loop, _early_path)
-        ):
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: no real work has happened yet in "
-                "this session — the sandbox is fresh and nothing "
-                "is running. Execute the next plan step with real "
-                "tool calls (write files, run commands, start your "
-                "server), then serve the result.",
-            )
-        arguments = step.tool_call.arguments or {}
-        if not arguments:
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: provide both required string fields `title` and "
-                "`path`; optionally set `kind` to exactly `app` or `files`.",
-            )
-
-        title = str(arguments.get("title") or "").strip()
-        raw_path = str(arguments.get("path") or "").strip()
-        path, root_like, coerced_to_index = await _coerce_serve_entry_path(
-            self._loop, raw_path
-        )
-        kind = str(arguments.get("kind") or "app").strip()
-        # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
-        # NOT reachable from the host — drop it so consumers fall back to the
-        # host-reachable preview-app proxy instead of a false "Deployed" link.
-        url = _canonical_deployment_url(str(arguments.get("url") or ""))
-        if not title:
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: `title` is required and must be a non-empty "
-                "human-readable label.",
-            )
-        if not raw_path:
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: `path` is required and must be a non-empty "
-                "workspace-relative entry path.",
-            )
-        if kind not in ("app", "files"):
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: `kind` must be exactly `app` or `files`; omit it "
-                "only when the documented `app` default is intended.",
-            )
-        if root_like and not coerced_to_index:
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                _serve_root_refusal(),
-            )
-        if not path:
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                "serve refused: normalized `path` is empty; provide a workspace-relative "
-                "entry file path.",
-            )
-        if any(
-            isinstance(e, DeliverableEvent)
-            and e.path == path
-            and e.artifact_kind == kind
-            for e in events
-        ):
-            # Same artifact already handed off — an identical card adds
-            # nothing for the user. Keep counting the duplicate toward the
-            # historical anti-spam valve, but make the result visible to the
-            # model so it can recover by calling finish.
-            _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
-            self._loop._invisible_steps += 1
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_SERVE_DUPLICATE_GUIDANCE),
-                    meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC},
-                )
-            )
-        elif await _serve_path_missing(self._loop, path):
-            # CD-TOOLS-5 OUTPUT-TRUTH: never hand off a deliverable whose path does not exist
-            # in the workspace — that is a false "Open / Download" card for nothing. Refuse with
-            # actionable feedback (counted + valve-routed) instead of emitting a fake handoff.
-            # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
-            return await self._loop._valve.refuse_fresh_session(
-                step,
-                f"serve refused: checked normalized deliverable path {path!r}, "
-                "but it does not exist in the workspace. Serve takes the entry "
-                "FILE path; for a site that is usually 'index.html'. If the file "
-                "is elsewhere, pass that workspace-relative entry path; otherwise "
-                "build or write the intended entry file first, then serve that file.",
-            )
-        else:
-            await self._loop._emit(
-                DeliverableEvent(
-                    source=EventSource.AGENT,
-                    title=title,
-                    path=path,
-                    artifact_kind=kind,  # type: ignore[arg-type]
-                    deployment_url=url,
-                )
-            )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_SERVE_HANDOFF_GUIDANCE),
-                    meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC},
-                )
-            )
-        if await self._loop._post_noop_valve() is Disp.HALT:
-            return Disp.HALT
-        return Disp.CONTINUE
+        return await _handle_serve(self._loop, step, events)
 
     async def handle_delegate_explore(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
@@ -1788,9 +1732,7 @@ class MetaToolHandlers:
                         "</system-reminder>"
                     ),
                     action_id=action.id,
-                    tool_call_id=(
-                        action.tool_call.call_id if action.tool_call else None
-                    ),
+                    tool_call_id=(action.tool_call.call_id if action.tool_call else None),
                 )
             )
             return Disp.CONTINUE
@@ -1821,19 +1763,14 @@ class MetaToolHandlers:
             _v = str(_fanout_args.get(_k) or "")
             if len(_v) > _FANOUT_INPUT_MAX_CHARS:
                 _fanout_args[_k] = (
-                    _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)]
-                    + _trunc_marker
+                    _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)] + _trunc_marker
                 )
         result = await self._loop._run_fanout(
             _fanout_args,
             events,
-            call_id=(
-                action.tool_call.call_id if action.tool_call else ""
-            ),
+            call_id=(action.tool_call.call_id if action.tool_call else ""),
         )
-        await self._loop._emit(
-            ObservationEvent(tool_result=result, action_id=action.id)
-        )
+        await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
         # Fan-out is non-blocking — the driver keeps working
         # right after. The actionless valve still applies if
         # the helper returned empty (a degenerate fan-out is
@@ -1976,9 +1913,9 @@ class MetaToolHandlers:
             and step.tool_call is not None
             and step.tool_call.tool_name in ("ask_user", "questions_v2", "clarify")
         ):
-            asked = str(
-                step.tool_call.arguments.get("question") or ""
-            ).strip() or step.thought.strip()
+            asked = (
+                str(step.tool_call.arguments.get("question") or "").strip() or step.thought.strip()
+            )
             stall_action = ActionEvent(
                 thought=step.thought,
                 tool_call=step.tool_call,
@@ -2001,9 +1938,7 @@ class MetaToolHandlers:
                     ),
                     action_id=stall_action.id,
                     tool_call_id=(
-                        stall_action.tool_call.call_id
-                        if stall_action.tool_call
-                        else None
+                        stall_action.tool_call.call_id if stall_action.tool_call else None
                     ),
                 )
             )
@@ -2048,10 +1983,7 @@ class MetaToolHandlers:
                     self._loop._identical_plan_revisions += 1
             else:
                 self._loop._identical_plan_revisions = 0
-            if (
-                self._loop._identical_plan_revisions
-                >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
-            ):
+            if self._loop._identical_plan_revisions >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP:
                 # Reuse the existing bookkeeping-stuck valve: same
                 # bookkeeping breaker reason through the shared blocked lander.
                 await self._loop._valve.land_blocked(
@@ -2064,10 +1996,7 @@ class MetaToolHandlers:
                     legacy_detail="bookkeeping_only",
                 )
                 return Disp.HALT
-            if (
-                self._loop._identical_plan_revisions
-                == _PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1
-            ):
+            if self._loop._identical_plan_revisions == _PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1:
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -2077,9 +2006,7 @@ class MetaToolHandlers:
                 )
             self._loop.mode = self._loop._execution_mode
             await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING, detail="plan_approved"
-                )
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
             )
             # 2026-07-09 overnight-soak fix (steer scenario → identical-revision
             # churn → bookkeeping_only STUCK): the auto-approval above was
@@ -2175,15 +2102,16 @@ class MetaToolHandlers:
             )
             return Disp.CONTINUE
 
-        question = str(
-            step.tool_call.arguments.get("question")
-            or step.tool_call.arguments.get("summary")
-            or ""
-        ).strip() or step.thought.strip()
+        question = (
+            str(
+                step.tool_call.arguments.get("question")
+                or step.tool_call.arguments.get("summary")
+                or ""
+            ).strip()
+            or step.thought.strip()
+        )
         raw_items = (
-            step.tool_call.arguments.get("questions")
-            or step.tool_call.arguments.get("items")
-            or []
+            step.tool_call.arguments.get("questions") or step.tool_call.arguments.get("items") or []
         )
         source_items = raw_items if isinstance(raw_items, list) else []
         items: list[QuestionsV2Item] = []
@@ -2214,9 +2142,7 @@ class MetaToolHandlers:
                 source=EventSource.AGENT,
                 message=LLMMessage(
                     role="assistant",
-                    content=(
-                        question or "The agent needs clarification before planning."
-                    ),
+                    content=(question or "The agent needs clarification before planning."),
                 ),
             )
             await self._loop._emit(q_event)
@@ -2253,9 +2179,9 @@ class MetaToolHandlers:
         from ..events import ClarifyEvent as _ClarifyEvent
         from ..events import ClarifyQuestionItem
 
-        question = str(
-            step.tool_call.arguments.get("question") or ""
-        ).strip() or step.thought.strip()
+        question = (
+            str(step.tool_call.arguments.get("question") or "").strip() or step.thought.strip()
+        )
         raw_items = step.tool_call.arguments.get("questions") or []
         items: list[ClarifyQuestionItem] = []
         for it in raw_items:
@@ -2279,20 +2205,14 @@ class MetaToolHandlers:
             if qtype == "choice" and len(qopts) < 2:
                 qtype = "short_text"
                 qopts = []
-            items.append(
-                ClarifyQuestionItem(
-                    id=qid, question=qtext, type=qtype, options=qopts
-                )
-            )
+            items.append(ClarifyQuestionItem(id=qid, question=qtext, type=qtype, options=qopts))
         if not items:
             # No valid questions → fall back to free-form ask_user
             q_event = MessageEvent(
                 source=EventSource.AGENT,
                 message=LLMMessage(
                     role="assistant",
-                    content=(
-                        question or "The agent needs clarification before planning."
-                    ),
+                    content=(question or "The agent needs clarification before planning."),
                 ),
             )
             await self._loop._emit(q_event)
@@ -2337,9 +2257,9 @@ class MetaToolHandlers:
         # status's detail carries the question message's id so the
         # surface can resolve it. The user's reply (send_message /
         # steer) IS the resume signal.
-        question = str(
-            step.tool_call.arguments.get("question") or ""
-        ).strip() or step.thought.strip()
+        question = (
+            str(step.tool_call.arguments.get("question") or "").strip() or step.thought.strip()
+        )
         question_id: str | None = None
         if question:
             q_event = MessageEvent(
