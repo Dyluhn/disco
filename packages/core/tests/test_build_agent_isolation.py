@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 from disco.core.llm.prompts import (
-    _MENTIONED_ELEMENT_GUIDANCE,
     _AGENT_PLANNING_CAPABILITY_BLOCK,
     _EXECUTION_DRIVER_PROMPT,
+    _MENTIONED_ELEMENT_GUIDANCE,
     _PLANNING_DRIVER_PROMPT,
 )
 from disco.tools.registry import AGENT_TOOLS
@@ -74,7 +74,7 @@ def test_default_planning_prompt_equals_constant():
 
 
 def test_build_execution_prompt_equals_constant():
-    """flavor='build', assist=False execution output == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE."""
+    """Build execution is the base constant plus shared mention/evidence guidance."""
     dp = DriverPrompts(flavor="build")
     got = dp.system_prompt(
         model_family="qwen",
@@ -86,7 +86,7 @@ def test_build_execution_prompt_equals_constant():
 
 
 def test_default_execution_prompt_equals_constant():
-    """No-arg DriverPrompts(), no assist kwarg == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE."""
+    """The default execution prompt is the base plus shared mention/evidence guidance."""
     dp = DriverPrompts()
     got = dp.system_prompt(
         model_family="qwen",
@@ -221,6 +221,7 @@ _EXPECTED_AGENT_TOOLS = [
     "file_read",
     "file_replace_lines",
     "file_write",
+    "hardware_identity",  # F07: provenance-bearing numeric PCI lookup
     "image_generate",
     # EPIC F: platform-owned preview surface — supersedes the old `deploy_preview`.
     "preview_logs",

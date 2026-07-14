@@ -548,6 +548,13 @@ _MENTIONED_ELEMENT_GUIDANCE = (
     "in the preview. Use its dom/react path, data screen label, text, and rect to "
     "locate the corresponding element in the source files, read those files, and "
     "scope the requested change to that element instead of guessing from nearby copy."
+    "\n\nHARDWARE IDENTITY EVIDENCE: A numeric PCI vendor/device ID is an identifier, "
+    "not a hardware marketing name. Call `hardware_identity` with the exact IDs and "
+    "use its structured provenance. State a marketing name only when the result has "
+    "status=recognized and an exact device_name plus mapping_source. When the result "
+    "has status=unknown, lookup_error, or no authoritative mapping, report the numeric PCI "
+    "IDs or unknown with that provenance. Never infer or guess a marketing name from "
+    "an ID, specifications, or nearby product families."
 )
 
 

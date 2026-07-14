@@ -33,6 +33,7 @@ from .files import (
     SafeWriteFileTool,
 )
 from .find_and_edit import FindAndEditTool
+from .hardware_identity import HardwareIdentityTool
 from .image_gen import ImageGenTool, select_image_backend
 from .plan import PlanStepTool, SubmitPlanTool, UpdatePlanProgressTool
 from .preview import (
@@ -81,6 +82,7 @@ __all__ = [
     "FileStrReplaceTool",
     "FileWriteTool",
     "FindAndEditTool",
+    "HardwareIdentityTool",
     "RunProjectScriptTool",
     "SafeWriteFileTool",
     "ImageGenTool",
@@ -133,6 +135,7 @@ def build_default_registry() -> ToolRegistry:
         SafeWriteFileTool(),  # CD-TOOLS-3: guarded whole-file writer (shrink/governed/atomic)
         RunProjectScriptTool(),  # CD-TOOLS-7: buffered transactional batch of file transforms
         FileListTool(),
+        HardwareIdentityTool(),  # F07: sourced PCI identity; unknown stays numeric
         ShellTool(),
         ShellExecTool(),
         ShellViewTool(),

@@ -80,6 +80,8 @@ AGENT_TOOLS = frozenset(
         # CD-TOOLS-7 — buffered transactional batch of deterministic file transforms.
         "run_project_script",
         "file_list",
+        # F07 — structured PCI ID lookup; never infer a marketing name from numbers.
+        "hardware_identity",
         "shell",
         "shell_exec",
         "shell_view",
