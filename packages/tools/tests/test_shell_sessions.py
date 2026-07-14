@@ -1,5 +1,6 @@
 import asyncio
 import urllib.request
+import uuid
 
 import pytest
 from disco.tools.sandbox.base import ExecResult
@@ -157,6 +158,43 @@ async def test_session_lost_after_recreate():
     assert "Session not found or error" in view2.output
 
 
+@pytest.mark.asyncio
+async def test_process_session_creation_binds_capability_environment():
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/disco-conversation-a"
+    inst.canned_outputs["has-session"] = (1, "")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv-a-")
+    await manager.ensure("main")
+
+    create = next(cmd for cmd in inst.cmd_log if "tmux new-session" in cmd)
+    assert "-e PATH=/usr/local/bin:/usr/bin:/bin" in create
+    for key in ("HOME", "TMPDIR", "DISCO_WORKSPACE"):
+        assert f"-e {key}=/tmp/disco-conversation-a" in create
+
+
+@pytest.mark.asyncio
+async def test_existing_process_session_refreshes_tmux_environment():
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/disco-conversation-b"
+    inst.canned_outputs["has-session"] = (0, "")
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv-b-")
+    await manager.ensure("main")
+
+    refresh = "\n".join(cmd for cmd in inst.cmd_log if "set-environment" in cmd)
+    assert "DISCO_WORKSPACE /tmp/disco-conversation-b" in refresh
+    assert "HOME /tmp/disco-conversation-b" in refresh
+    assert "TMPDIR /tmp/disco-conversation-b" in refresh
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_integration_scenarios():
@@ -214,6 +252,68 @@ async def test_integration_scenarios():
             
     finally:
         await inst.destroy()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_shared_tmux_server_cannot_cross_bind_process_workspaces():
+    """A stale host-global tmux env never overrides per-conversation capability."""
+    service = ProcessSandboxService()
+    conv_a = "enva" + uuid.uuid4().hex
+    conv_b = "envb" + uuid.uuid4().hex
+    inst_a = await service.create(spec=None, owner_id="test", conversation_id=conv_a)
+    inst_b = await service.create(spec=None, owner_id="test", conversation_id=conv_b)
+    socket_name = "disco-env-" + uuid.uuid4().hex
+
+    class IsolatedTmuxManager(ShellSessionManager):
+        async def _run_tmux(self, cmd: str) -> str:
+            inst = await self._get_instance()
+            res = await inst.exec_shell(
+                f"tmux -L {socket_name} {cmd}", timeout_s=10
+            )
+            if res.exit_code != 0:
+                raise RuntimeError(res.stderr)
+            return res.stdout
+
+        async def _run_tmux_safe(self, cmd: str) -> tuple[int, str]:
+            inst = await self._get_instance()
+            res = await inst.exec_shell(
+                f"tmux -L {socket_name} {cmd}", timeout_s=10
+            )
+            return res.exit_code, res.stdout
+
+    async def get_a():
+        return inst_a
+
+    async def get_b():
+        return inst_b
+
+    try:
+        stale = await inst_a.exec_shell(
+            "env HOME=/tmp/stale-home TMPDIR=/tmp/stale-tmp "
+            "DISCO_WORKSPACE=/tmp/stale-workspace "
+            f"tmux -L {socket_name} new-session -d -s stale-keeper",
+            timeout_s=10,
+        )
+        assert stale.exit_code == 0, stale.stderr
+
+        manager_a = IsolatedTmuxManager(get_a, namespace=f"{conv_a[:8]}-")
+        manager_b = IsolatedTmuxManager(get_b, namespace=f"{conv_b[:8]}-")
+        command = "printf '%s|%s|%s\\n' \"$HOME\" \"$TMPDIR\" \"$DISCO_WORKSPACE\""
+        out_a = await manager_a.exec("main", command, None)
+        out_b = await manager_b.exec("main", command, None)
+
+        expected_a = "|".join([inst_a.workspace_path] * 3)
+        expected_b = "|".join([inst_b.workspace_path] * 3)
+        assert expected_a in out_a.output
+        assert expected_b in out_b.output
+        assert expected_b not in out_a.output
+        assert expected_a not in out_b.output
+        assert "/tmp/stale-" not in out_a.output + out_b.output
+    finally:
+        await inst_a.exec_shell(f"tmux -L {socket_name} kill-server", timeout_s=10)
+        await inst_a.destroy()
+        await inst_b.destroy()
 
 
 # ---- Bug 16: reserved-port preview-serve remap at the CLEAN-command point ----

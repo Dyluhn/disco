@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import hashlib
@@ -82,6 +83,67 @@ _KERNEL_STREAM_TAIL = 48 * 1024
 _KERNEL_STREAM_CAP = _KERNEL_STREAM_HEAD + _KERNEL_STREAM_TAIL
 _KERNEL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 _KERNEL_WS_MAX_FRAME_BYTES = 1024 * 1024
+
+
+def _rewrite_process_workspace_literals(code: str, workspace: Path) -> str:
+    """Translate Python string literals rooted at the guest ``/workspace`` path.
+
+    Container kernels have a real ``/workspace`` mount.  The dev-only process
+    kernel instead runs directly in its per-conversation host directory, so a
+    literal path that is valid in every sibling tool otherwise raises
+    ``FileNotFoundError``.  Rewrite only Python string constants whose complete
+    prefix is exactly ``/workspace``; relative paths and strings containing the
+    word elsewhere are untouched.
+
+    The resolved target is jailed before it is inserted.  This does not turn the
+    process backend into an isolation boundary (model code already executes as a
+    host process), but the compatibility layer must never manufacture an escape
+    path such as ``/workspace/../../etc`` itself.
+
+    Cells using IPython-only syntax are left byte-for-byte unchanged when Python's
+    AST parser cannot parse them.  Normal Python cells -- including f-strings --
+    take the strict translated path.
+    """
+    if "/workspace" not in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    root = workspace.resolve()
+
+    def rewrite(value: str) -> str:
+        if value == "/workspace":
+            suffix = ""
+        elif value.startswith("/workspace/"):
+            suffix = value[len("/workspace/") :]
+        else:
+            return value
+        target = (root / suffix).resolve()
+        if target != root and root not in target.parents:
+            raise SandboxError(
+                f"process-kernel /workspace path escapes workspace: {value!r}"
+            )
+        rendered = str(target)
+        # In an f-string the literal segment often ends at `/workspace/` and
+        # the next segment is a formatted value. Preserve that separator;
+        # pathlib resolution intentionally removes it from the root path.
+        if value.endswith("/") and not rendered.endswith("/"):
+            rendered += "/"
+        return rendered
+
+    class _WorkspaceLiteralTransformer(ast.NodeTransformer):
+        def visit_Constant(self, node: ast.Constant) -> ast.AST:  # noqa: N802
+            if isinstance(node.value, str):
+                translated = rewrite(node.value)
+                if translated != node.value:
+                    return ast.copy_location(ast.Constant(value=translated), node)
+            return node
+
+    rewritten = _WorkspaceLiteralTransformer().visit(tree)
+    ast.fix_missing_locations(rewritten)
+    return ast.unparse(rewritten)
 
 
 class _BoundedTextCapture:
@@ -231,6 +293,16 @@ class ProcessKernel(KernelSession):
             await self.start()
         assert self._kc is not None  # start() always populates both _km and _kc
         kc = self._kc
+
+        try:
+            code = _rewrite_process_workspace_literals(code, self._workspace)
+        except SandboxError as exc:
+            return KernelResult(
+                ok=False,
+                stdout="",
+                stderr="",
+                error_traceback=f"SandboxError: {exc}",
+            )
 
         msg_id = kc.execute(code)
 

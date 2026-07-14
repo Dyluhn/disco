@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import signal
@@ -25,7 +26,14 @@ except ImportError:
 _live_headed: bool = False
 
 # Configuration
-PORT = 8901
+try:
+    PORT = int(os.environ.get("DISCO_BROWSER_PORT", "8901"))
+except ValueError:
+    PORT = 8901
+if not 0 <= PORT <= 65535:
+    PORT = 8901
+PORT_FILE = os.path.join(WORKSPACE_ROOT, ".pmx/browser-port")
+INSTANCE_ID = hashlib.sha256(WORKSPACE_ROOT.encode()).hexdigest()
 SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
 # B7: bound the captured network-failure ring the same way the console is bounded,
@@ -89,6 +97,9 @@ class BrowserState:
         # not reliably inherit HTTP_PROXY into Chromium, so wire it explicitly.
         proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
         launch_kwargs = {}
+        executable_path = os.environ.get("DISCO_BROWSER_EXECUTABLE")
+        if executable_path:
+            launch_kwargs["executable_path"] = executable_path
         if proxy_url:
             launch_kwargs["proxy"] = {
                 "server": proxy_url,
@@ -215,7 +226,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             if state.page:
                 self.send_response(200)
                 self.end_headers()
-                self.wfile.write(b"OK")
+                self.wfile.write(INSTANCE_ID.encode("ascii"))
             else:
                 self.send_response(503)
                 self.end_headers()
@@ -489,6 +500,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
 
 def run():
     server = None
+    bound_port = None
 
     def _stop(_signum, _frame):
         raise KeyboardInterrupt
@@ -498,13 +510,28 @@ def run():
     try:
         state.start()
         server = HTTPServer(("127.0.0.1", PORT), BrowserHandler)
-        print(f"Browser daemon listening on 127.0.0.1:{PORT}")
+        bound_port = int(server.server_port)
+        os.makedirs(os.path.dirname(PORT_FILE), mode=0o700, exist_ok=True)
+        tmp_port_file = f"{PORT_FILE}.{os.getpid()}.tmp"
+        with open(tmp_port_file, "w", encoding="ascii") as handle:
+            handle.write(f"{bound_port}\n")
+        os.chmod(tmp_port_file, 0o600)
+        os.replace(tmp_port_file, PORT_FILE)
+        print(f"Browser daemon listening on 127.0.0.1:{bound_port}")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         if server is not None:
             server.server_close()
+        if bound_port is not None:
+            try:
+                with open(PORT_FILE, encoding="ascii") as handle:
+                    recorded_port = int(handle.read().strip())
+                if recorded_port == bound_port:
+                    os.unlink(PORT_FILE)
+            except (FileNotFoundError, OSError, ValueError):
+                pass
         state.stop()
 
 

@@ -4,9 +4,11 @@ import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from disco.tools.anatomy import ToolContext
-from disco.tools.builtin.browser import BrowserTool
+from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin.browser import BrowserArgs, BrowserTool
 from disco.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.process import ProcessSandboxService
+from disco.tools.sandbox.shell_sessions import ShellSessionManager
 
 
 @pytest.mark.asyncio
@@ -696,3 +698,87 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
             except ProcessLookupError:
                 pass
             daemon_proc.wait(timeout=10)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_process_browser_uses_workspace_owned_ephemeral_port():
+    """Real BrowserTool path: tmux env, dynamic daemon port, and screenshot jail."""
+    import socket
+    import uuid
+
+    conversation_id = "brws" + uuid.uuid4().hex
+    service = ProcessSandboxService()
+    inst = await service.create(
+        spec=None,
+        owner_id="browser-integration",
+        conversation_id=conversation_id,
+    )
+
+    async def get_inst():
+        return inst
+
+    sessions = ShellSessionManager(get_inst, namespace=f"{conversation_id[:8]}-")
+    try:
+        await inst.write_file(
+            "/workspace/index.html",
+            b"<html><body><h1>workspace-owned browser</h1></body></html>",
+        )
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            fixture_port = int(probe.getsockname()[1])
+        started = await sessions.exec(
+            "fixture",
+            f"python3 -m http.server {fixture_port}",
+            None,
+        )
+        assert started.running
+        for _ in range(20):
+            health = await inst.exec_shell(
+                f"curl -sf http://127.0.0.1:{fixture_port}/", timeout_s=2
+            )
+            if health.exit_code == 0:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("fixture server did not become healthy")
+
+        ctx = ToolContext(
+            sandbox=inst,
+            sessions=sessions,
+            workspace_path=inst.workspace_path or "",
+            timeout_s=30,
+            capabilities={
+                Capability.NETWORK,
+                Capability.DISPLAY,
+                Capability.FILESYSTEM,
+                Capability.SHELL,
+            },
+            owner_id="browser-integration",
+            conversation_id=conversation_id,
+        )
+        outcome = await BrowserTool().run(
+            BrowserArgs(
+                action="navigate",
+                url=f"http://127.0.0.1:{fixture_port}/",
+            ),
+            ctx,
+        )
+        if not outcome.success:
+            daemon_view = await sessions.view("__browser")
+            pytest.fail(
+                f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}"
+            )
+        assert outcome.structured is not None
+        assert "workspace-owned browser" in str(outcome.structured.get("text"))
+
+        daemon_port = int(
+            (await inst.read_file("/workspace/.pmx/browser-port")).decode().strip()
+        )
+        assert 1 <= daemon_port <= 65535
+        assert daemon_port != 8901
+        screenshot = str(outcome.structured["screenshot_path"])
+        assert inst.workspace_path is not None
+        assert (pathlib.Path(inst.workspace_path) / screenshot).is_file()
+    finally:
+        await inst.destroy()

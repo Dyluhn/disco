@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import statistics
@@ -6,13 +7,16 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from disco.tools.sandbox.base import SandboxError
 from disco.tools.sandbox.kernel import (
     _KERNEL_STREAM_CAP,
     KernelResult,
     ProcessKernel,
     _BoundedTextCapture,
     _cap_kernel_traceback,
+    _rewrite_process_workspace_literals,
 )
+from disco.tools.sandbox.process import ProcessSandboxService
 
 
 def test_sw5_kernel_stream_and_traceback_accumulators_are_bounded():
@@ -39,6 +43,35 @@ def test_kernel_result_rendering():
 
     res = KernelResult(ok=True, stdout="", stderr="", images=[".pmx/plots/0001.png"])
     assert str(res) == "plot saved: .pmx/plots/0001.png"
+
+
+def test_process_workspace_literal_rewrite_is_exact_and_jailed(tmp_path):
+    code = """
+from pathlib import Path
+root = Path('/workspace')
+child = Path('/workspace/release/fonts/proof.woff2')
+label = '/workspaces/not-the-guest-root'
+embedded = 'prefix /workspace/release'
+dynamic = f'/workspace/{root.name}'
+"""
+
+    rewritten = _rewrite_process_workspace_literals(code, tmp_path)
+
+    assert repr(str(tmp_path.resolve())) in rewritten
+    assert repr(str(tmp_path.resolve() / "release/fonts/proof.woff2")) in rewritten
+    assert "/workspaces/not-the-guest-root" in rewritten
+    assert "prefix /workspace/release" in rewritten
+    assert f"f'{tmp_path.resolve()}/" in rewritten
+
+    with pytest.raises(SandboxError, match="escapes workspace"):
+        _rewrite_process_workspace_literals(
+            "open('/workspace/../../etc/passwd').read()", tmp_path
+        )
+
+
+def test_process_workspace_literal_rewrite_preserves_ipython_only_cells(tmp_path):
+    code = "%run /workspace/scripts/task.py"
+    assert _rewrite_process_workspace_literals(code, tmp_path) == code
 
 
 @pytest.mark.asyncio
@@ -137,6 +170,82 @@ async def test_kernel_integration_state():
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kernel_integration_workspace_contract(tmp_path):
+    """Process code_exec and sibling tools share the documented guest path."""
+    pk = ProcessKernel(str(tmp_path))
+    try:
+        await pk.start()
+        write = await pk.execute(
+            "from pathlib import Path; "
+            "Path('/workspace/release').mkdir(); "
+            "Path('/workspace/release/proof.txt').write_text('proof')",
+            timeout_s=10,
+        )
+        assert write.ok, str(write)
+        assert (tmp_path / "release/proof.txt").read_text() == "proof"
+
+        (tmp_path / "from-shell.txt").write_text("shared")
+        read = await pk.execute(
+            "from pathlib import Path; "
+            "print(Path('/workspace/from-shell.txt').read_text())",
+            timeout_s=10,
+        )
+        assert read.ok, str(read)
+        assert read.stdout.strip() == "shared"
+
+        refused = await pk.execute(
+            "open('/workspace/../../etc/passwd').read()", timeout_s=10
+        )
+        assert not refused.ok
+        assert "escapes workspace" in str(refused)
+    finally:
+        await pk.shutdown()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_process_sandbox_destroy_terminates_detached_kernel_descendant():
+    service = ProcessSandboxService()
+    inst = await service.create(
+        spec=None,
+        owner_id="kernel-cleanup",
+        conversation_id="kernel-cleanup-detached",
+    )
+    pk = ProcessKernel(inst.workspace_path or "")
+    child_pid: int | None = None
+    try:
+        await pk.start()
+        spawned = await pk.execute(
+            "import subprocess, sys; "
+            "child = subprocess.Popen("  # noqa: S603 — deliberate cleanup fixture
+            "[sys.executable, '-c', 'import time; time.sleep(300)'], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL, start_new_session=True); "
+            "print(child.pid)",
+            timeout_s=10,
+        )
+        assert spawned.ok, str(spawned)
+        child_pid = int(spawned.stdout.strip())
+        assert Path(f"/proc/{child_pid}").exists()
+
+        await pk.shutdown()
+        assert Path(f"/proc/{child_pid}").exists(), "fixture did not detach"
+        await inst.destroy()
+        for _ in range(40):
+            if not Path(f"/proc/{child_pid}").exists():
+                break
+            await asyncio.sleep(0.05)
+        assert not Path(f"/proc/{child_pid}").exists()
+    finally:
+        await pk.shutdown()
+        if child_pid is not None and Path(f"/proc/{child_pid}").exists():
+            os.kill(child_pid, 9)
+        if Path(inst.workspace_path or "/nonexistent").exists():
+            await inst.destroy()
 
 
 @pytest.mark.integration

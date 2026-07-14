@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -522,7 +523,78 @@ class ProcessSandboxInstance:
                     )
                     await kill_proc.wait()
 
+        await self._terminate_workspace_processes()
+
         shutil.rmtree(self._workspace, ignore_errors=True)
+
+    def _workspace_process_pids(self) -> set[int]:
+        """Best-effort descendants owned by this dev process sandbox.
+
+        Model code can detach/reparent a subprocess from its Jupyter kernel.  Its
+        scrubbed environment still carries the exact per-conversation
+        ``DISCO_WORKSPACE`` capability, and ordinary workspace servers retain a
+        cwd below that root.  Use both signals before deleting the workspace.
+
+        Never select tmux itself: the process backend intentionally shares one
+        host tmux server, whose original environment can predate this sandbox.
+        This cleanup is defense in depth, not production containment; the process
+        backend still has no PID namespace and remains invalid for production.
+        """
+        proc_root = Path("/proc")
+        if not proc_root.is_dir():
+            return set()
+        marker = b"DISCO_WORKSPACE=" + str(self._workspace).encode()
+        selected: set[int] = set()
+        for entry in proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == os.getpid():
+                continue
+            try:
+                comm = (entry / "comm").read_text().strip().lower()
+            except OSError:
+                continue
+            if comm.startswith("tmux"):
+                continue
+            belongs = False
+            try:
+                environ = (entry / "environ").read_bytes().split(b"\0")
+                belongs = marker in environ
+            except OSError:
+                pass
+            if not belongs:
+                try:
+                    cwd = Path(os.readlink(entry / "cwd"))
+                    belongs = cwd == self._workspace or self._workspace in cwd.parents
+                except (OSError, RuntimeError):
+                    pass
+            if belongs:
+                selected.add(pid)
+        return selected
+
+    async def _terminate_workspace_processes(self) -> None:
+        """Terminate detached process-kernel/shell descendants before rmtree."""
+        pids = self._workspace_process_pids()
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        deadline = asyncio.get_running_loop().time() + 2.0
+        survivors = pids
+        while survivors and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            survivors &= self._workspace_process_pids()
+        for pid in survivors:
+            # Re-identify immediately before SIGKILL so PID reuse cannot target an
+            # unrelated process after the grace period.
+            if pid not in self._workspace_process_pids():
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 class ProcessSandboxService:

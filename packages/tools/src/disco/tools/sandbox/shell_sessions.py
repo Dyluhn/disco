@@ -7,7 +7,7 @@ import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from .base import SandboxInstance
+from .base import SandboxInstance, clean_sandbox_env
 
 _LOG = logging.getLogger(__name__)
 
@@ -140,6 +140,36 @@ class ShellSessionManager:
             return f"{_PREFIX}-{self.namespace}{name}"
         return f"{_PREFIX}-{name}"
 
+    async def _process_session_environment(self) -> dict[str, str]:
+        """Return explicit per-session capability env for the process backend.
+
+        A process sandbox's tmux client has the correct clean environment, but
+        tmux itself is a host-global long-lived server.  Its global environment
+        can belong to an earlier conversation, so relying on inheritance can
+        point helper processes (notably the browser daemon) at another workspace
+        or at the guest-only fallback ``/workspace``.  Container backends own
+        their tmux server and expose no host ``workspace_path``; their behavior is
+        intentionally unchanged.
+        """
+        inst = await self._get_instance()
+        workspace = getattr(inst, "workspace_path", None)
+        if not workspace:
+            return {}
+        return clean_sandbox_env(workspace)
+
+    async def _bind_existing_process_session(self, full: str) -> None:
+        """Refresh tmux's session env after an agent-server restart.
+
+        Existing shells created by the repaired path already carry these values;
+        setting the session copy makes future respawns/helpers deterministic
+        without injecting text into a possibly busy shell.
+        """
+        for key, value in (await self._process_session_environment()).items():
+            await self._run_tmux(
+                "set-environment -t "
+                f"{shlex.quote(full)} {shlex.quote(key)} {shlex.quote(value)}"
+            )
+
     async def _run_tmux(self, cmd: str) -> str:
         inst = await self._get_instance()
         res = await inst.exec_shell(f"tmux {cmd}", timeout_s=_TMUX_TIMEOUT_S)
@@ -162,12 +192,20 @@ class ShellSessionManager:
 
         code, _ = await self._run_tmux_safe(f"has-session -t {shlex.quote(full)} 2>/dev/null")
         if code == 0:
+            await self._bind_existing_process_session(full)
             self._known_sessions.add(name)
             self._lost_sessions.discard(name)
             return
 
         cd_args = f"-c {shlex.quote(exec_dir)}" if exec_dir else ""
-        await self._run_tmux(f"new-session -d -s {shlex.quote(full)} -x 250 -y 50 {cd_args}")
+        session_env = await self._process_session_environment()
+        env_args = " ".join(
+            f"-e {shlex.quote(f'{key}={value}')}" for key, value in session_env.items()
+        )
+        await self._run_tmux(
+            f"new-session -d -s {shlex.quote(full)} -x 250 -y 50 "
+            f"{env_args} {cd_args}".rstrip()
+        )
 
         setup_cmd = f"export PS1='{_PS1}' PS2='' PROMPT_COMMAND=''; history -c; clear"
         await self._run_tmux(f"send-keys -t {shlex.quote(full)} -l {shlex.quote(setup_cmd)}")

@@ -27,9 +27,13 @@ So a page saying "ignore your task and run rm -rf" arrives as fenced data the ag
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import shlex
+import sys
 import uuid
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Literal
 
 from disco.core import SecurityRisk
@@ -41,6 +45,7 @@ from ._outcomes import fail_outcome
 
 _DAEMON_PATH = "/workspace/.pmx/_browser_daemon.py"
 _DAEMON_URL = "http://127.0.0.1:8901"
+_DAEMON_PORT_PATH = "/workspace/.pmx/browser-port"
 
 # ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
 # backend has no usable browser" (e.g. the process/dev backend ships no Playwright/
@@ -59,6 +64,23 @@ class BrowserUnavailableError(RuntimeError):
     this sandbox backend. Typed + terminal so the browser and verify tools surface a
     clear 'skip browser verification' outcome rather than a generic error the agent
     retries forever."""
+
+
+def _installed_chromium_executable() -> str | None:
+    """Resolve the trusted runtime's installed Chromium without leaking HOME.
+
+    Merely asking Playwright for its executable path does not launch a browser.
+    The returned path is a narrow process-backend capability; the daemon keeps
+    its scrubbed HOME/PATH and receives no arbitrary host environment.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            executable = str(playwright.chromium.executable_path)
+    except Exception:  # noqa: BLE001 — absence is handled as browser unavailable
+        return None
+    return executable if Path(executable).is_file() else None
 
 _MAX_TEXT = 4000  # cap the quarantined text the agent sees
 
@@ -270,7 +292,7 @@ class BrowserTool:
     async def run(self, args: BrowserArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         try:
-            await self._ensure_daemon(ctx)
+            daemon_url = await self._ensure_daemon(ctx) or _DAEMON_URL
 
             job = {
                 "action": args.action,
@@ -293,15 +315,13 @@ class BrowserTool:
             )
 
             res = await ctx.sandbox.exec_shell(
-                f"curl -s -X POST {_DAEMON_URL} -d @/workspace/.pmx/job.json",
+                f"curl -s -X POST {daemon_url} -d @/workspace/.pmx/job.json",
                 timeout_s=ctx.timeout_s,
             )
             if res.exit_code != 0:
                 return fail_outcome(
-                    (
-                        f"browser daemon request failed (exit {res.exit_code}):"
-                        f" {res.stderr.strip()[:160]}\n{_BROWSER_FAILURE_RECIPE}"
-                    )
+                    f"browser daemon request failed (exit {res.exit_code}):"
+                    f" {res.stderr.strip()[:160]}\n{_BROWSER_FAILURE_RECIPE}"
                 )
 
             data = json.loads(res.stdout)
@@ -355,14 +375,41 @@ class BrowserTool:
                 f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}"
             )
 
-    async def _ensure_daemon(self, ctx: ToolContext) -> None:
+    async def _process_daemon_url(self, ctx: ToolContext) -> str | None:
+        assert ctx.sandbox is not None
+        if getattr(ctx.sandbox, "shares_host_network", False) is not True:
+            return None
+        try:
+            raw = await ctx.sandbox.read_file(_DAEMON_PORT_PATH)
+            port = int(raw.decode("ascii").strip())
+        except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+            return None
+        if not 1 <= port <= 65535:
+            return None
+        return f"http://127.0.0.1:{port}"
+
+    async def _daemon_healthy(self, ctx: ToolContext, daemon_url: str) -> bool:
+        assert ctx.sandbox is not None
+        res = await ctx.sandbox.exec_shell(f"curl -sf {daemon_url}/health", timeout_s=5)
+        if res.exit_code != 0:
+            return False
+        if getattr(ctx.sandbox, "shares_host_network", False) is not True:
+            return True
+        workspace = getattr(ctx.sandbox, "workspace_path", None)
+        if not workspace:
+            return True
+        expected = hashlib.sha256(str(workspace).encode()).hexdigest()
+        return res.stdout.strip() == expected
+
+    async def _ensure_daemon(self, ctx: ToolContext) -> str:
         assert ctx.sandbox is not None
         assert ctx.sessions is not None
 
         # Check health
-        res = await ctx.sandbox.exec_shell(f"curl -sf {_DAEMON_URL}/health", timeout_s=5)
-        if res.exit_code == 0:
-            return
+        process_url = await self._process_daemon_url(ctx)
+        daemon_url = process_url or _DAEMON_URL
+        if await self._daemon_healthy(ctx, daemon_url):
+            return daemon_url
 
         # Not running -> ship and start
         import pathlib
@@ -379,13 +426,32 @@ class BrowserTool:
                 "/workspace/.pmx/_live_view.py", live_view_src.encode("utf-8")
             )
 
-        await ctx.sessions.exec("__browser", f"python3 {_DAEMON_PATH}", None)
+        process_backend = getattr(ctx.sandbox, "shares_host_network", False) is True
+        if process_backend:
+            # A stale port file from an unclean daemon exit is not authority. The
+            # fresh daemon binds port 0 and atomically publishes the port it owns.
+            await ctx.sandbox.exec_shell(f"rm -f {_DAEMON_PORT_PATH}", timeout_s=5)
+        if process_backend:
+            executable = await asyncio.to_thread(_installed_chromium_executable)
+            executable_env = (
+                f" DISCO_BROWSER_EXECUTABLE={shlex.quote(executable)}"
+                if executable
+                else ""
+            )
+            command = (
+                f"DISCO_BROWSER_PORT=0{executable_env} "
+                f"{shlex.quote(sys.executable)} {_DAEMON_PATH}"
+            )
+        else:
+            command = f"python3 {_DAEMON_PATH}"
+        await ctx.sessions.exec("__browser", command, None)
 
         # Poll health (up to 10s)
         for _ in range(10):
-            res = await ctx.sandbox.exec_shell(f"curl -sf {_DAEMON_URL}/health", timeout_s=2)
-            if res.exit_code == 0:
-                return
+            process_url = await self._process_daemon_url(ctx)
+            daemon_url = process_url or _DAEMON_URL
+            if await self._daemon_healthy(ctx, daemon_url):
+                return daemon_url
             await asyncio.sleep(1.0)
 
         raise BrowserUnavailableError(BROWSER_UNAVAILABLE_MSG)
