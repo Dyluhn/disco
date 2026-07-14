@@ -874,11 +874,7 @@ class AgentLoop:
         # unlike cancel() which must take the lock to emit IDLE); the run() loop
         # observes it at its next step boundary, emits PAUSED, and returns.
         self._pause_requested = asyncio.Event()
-        # F12 — cancel/steer/pause can wake the driver's otherwise idle
-        # 10/30/90-second provider backoff without aborting an in-flight model
-        # response or tool side effect. Control methods set this before waiting
-        # on `_lock`; the driver releases the lock at the next safe checkpoint.
-        self._retry_interrupt = asyncio.Event()
+        self._retry_interrupt = _new_retry_interrupt()
         # Watch-it-write sink (optional). The runtime wires this to the store's
         # ephemeral broadcast; when set, the driver's streamed tool-call arg
         # fragments are decoded into growing file-content frames and published
@@ -1250,139 +1246,7 @@ class AgentLoop:
             ):
                 return Disp.FALLTHROUGH
             if tc is not None and tc.tool_name == self._plan_tool:
-                self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
-                plan = self._plan_from_args(tc.arguments, events)
-                condition_errors = validate_raw_plan_done_conditions(tc.arguments)
-                condition_errors.extend(validate_plan_done_conditions(plan))
-                if condition_errors:
-                    # Do not persist or approve a plan whose machine conditions
-                    # become impossible/unsupported immutable finish gates.  The
-                    # transient C18 map was populated while parsing, so explicitly
-                    # discard this rejected revision before the model retries.
-                    self._planner.discard_plan_predicates(plan.revision)
-                    start_seq = signals.current_planning_segment_start_seq(events)
-                    prior = sum(
-                        1
-                        for event in events
-                        if isinstance(event, StatusEvent)
-                        and event.detail == "invalid_plan_done_conditions"
-                        and (start_seq is None or (event.seq or 0) > start_seq)
-                    )
-                    attempt = prior + 1
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.RUNNING,
-                            detail="invalid_plan_done_conditions",
-                        )
-                    )
-                    rendered = "\n".join(f"- {error}" for error in condition_errors)
-                    if attempt >= _INVALID_PLAN_DONE_CONDITION_CAP:
-                        await self._land_blocked(
-                            reason="invalid_plan_done_conditions",
-                            guidance=(
-                                "The planner repeatedly submitted unsafe Definition-of-Done "
-                                f"conditions ({attempt}/{_INVALID_PLAN_DONE_CONDITION_CAP}). "
-                                "No plan was approved and no execution began. Correct these "
-                                f"conditions before retrying:\n{rendered}"
-                            ),
-                            legacy_status=ConversationStatus.STUCK,
-                            legacy_detail="invalid_plan_done_conditions",
-                        )
-                        return Disp.HALT
-                    await self._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\n"
-                                    "Your proposed plan was NOT accepted because its "
-                                    "done_condition values would become immutable external "
-                                    "finish gates and are unsafe or internally inconsistent:\n"
-                                    f"{rendered}\n\n"
-                                    "Submit a corrected plan. Do not replace a required "
-                                    "directory with a file and do not guess a local preview "
-                                    "port or a future/placeholder host. Use http_ok only "
-                                    "with a concrete already-known FQDN/IP. Omit a condition "
-                                    "when there is no safe, exact machine-checkable predicate. "
-                                    f"Invalid plan attempt {attempt}/"
-                                    f"{_INVALID_PLAN_DONE_CONDITION_CAP}.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                            meta={"blocking": "invalid_plan_done_conditions"},
-                        )
-                    )
-                    return Disp.CONTINUE
-                await self._emit(plan)
-                # [REL-RC A1] A ZERO-STEP REVISION plan must NOT auto-approve. MiniMax-M3
-                # frequently submits a revision plan with no parseable steps; auto-approving it
-                # drops the model into execution with NO tracker → the actionless/monologue
-                # breaker → STUCK (the 2/3 revise_after_finish soak failure). Route a zero-step
-                # revision into the SAME force-submit recovery used for the prose-no-tool path:
-                # escalate ONCE to force_submit_plan (next step's tools narrowed to submit_plan-
-                # only + a hard directive demanding concrete steps); if it STILL submits zero
-                # steps under force, emit a CONTROLLED, adjudicable terminal (STUCK detail=
-                # "revision_no_concrete_steps") — NEVER accept the empty revision plan into
-                # stranded execution, never fake an approval. An INITIAL zero-step plan (not a
-                # revision) still auto-approves (summary-only is a legitimate simple-build state).
-                if (
-                    not plan.steps
-                    and self._revision_force_submit_enabled
-                    and signals.in_planning_for_revision(events)
-                ):
-                    if not signals.revision_force_submit(events):  # escalate once
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.RUNNING,
-                                detail="force_submit_plan",
-                            )
-                        )
-                        await self._emit(
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
-                            )
-                        )
-                        self._plan_nudges = 0
-                        return Disp.CONTINUE
-                    # [REL-RC-F] Already forced + STILL zero steps. LAST-RESORT recovery: rather
-                    # than STUCK, synthesize ONE concrete step from the USER's own revision
-                    # instruction and proceed. This is NOT a faked approval — the step is the
-                    # user's literal, adjudicable ask, and the DoD/finish gate still judges the real
-                    # deliverable — and it is NOT a stranded execution — emitting a real 1-step
-                    # PlanEvent means the approve path below arms the DoD tracker + seeds context
-                    # from it (via _latest_plan), so the actionless/monologue breaker has a concrete
-                    # target (the A1 hazard this replaces). Only if the instruction is unrecoverable
-                    # do we keep the original controlled STUCK terminal.
-                    instruction = signals.current_revision_instruction(events)
-                    if instruction:
-                        # Construct a FRESH PlanEvent (new id) — NOT plan.model_copy,
-                        # which preserves the already-emitted empty plan's id, so
-                        # _emit would dedup it (idempotent on (conversation_id, id))
-                        # and _latest_plan would still return the EMPTY plan →
-                        # stranded execution (Codex code-gate catch).
-                        synth = PlanEvent(
-                            summary=plan.summary or instruction[:120],
-                            steps=[PlanStep(title=instruction[:200])],
-                            revision=plan.revision + 1,
-                            context=plan.context,
-                        )
-                        await self._emit(synth)
-                        plan = synth  # fall through to the approve path with the 1-step plan
-                    else:
-                        await self._land_blocked(
-                            reason="revision_no_concrete_steps",
-                            guidance=(
-                                "The planner submitted an empty revision plan after "
-                                "the force-submit recovery, and there was no current "
-                                "revision instruction to synthesize a concrete step from."
-                            ),
-                            legacy_status=ConversationStatus.STUCK,
-                            legacy_detail="revision_no_concrete_steps",
-                        )
-                        return Disp.HALT
-                return await self._route_plan_approval_gate(plan)
+                return await _handle_submitted_plan(self, tc, events)
             if tc is None:
                 # The planner spoke without calling a tool. PRESERVE the
                 # prose first — this is how the agent acknowledges the
@@ -2729,3 +2593,113 @@ class AgentLoop:
             return await self.get_state()
         finally:
             self._retry_interrupt.clear()
+
+
+def _new_retry_interrupt() -> asyncio.Event:
+    """Create the event shared by provider backoff and cooperative controls."""
+    return asyncio.Event()
+
+
+async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: list[Event]) -> Disp:
+    """Validate, persist, and route one structured plan submission."""
+    loop._plan_explore_reads = 0
+    plan = loop._plan_from_args(tool_call.arguments, events)
+    condition_errors = validate_raw_plan_done_conditions(tool_call.arguments)
+    condition_errors.extend(validate_plan_done_conditions(plan))
+    if condition_errors:
+        loop._planner.discard_plan_predicates(plan.revision)
+        start_seq = signals.current_planning_segment_start_seq(events)
+        prior = sum(
+            1
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.detail == "invalid_plan_done_conditions"
+            and (start_seq is None or (event.seq or 0) > start_seq)
+        )
+        attempt = prior + 1
+        await loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="invalid_plan_done_conditions",
+            )
+        )
+        rendered = "\n".join(f"- {error}" for error in condition_errors)
+        if attempt >= _INVALID_PLAN_DONE_CONDITION_CAP:
+            await loop._land_blocked(
+                reason="invalid_plan_done_conditions",
+                guidance=(
+                    "The planner repeatedly submitted unsafe Definition-of-Done "
+                    f"conditions ({attempt}/{_INVALID_PLAN_DONE_CONDITION_CAP}). "
+                    "No plan was approved and no execution began. Correct these "
+                    f"conditions before retrying:\n{rendered}"
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="invalid_plan_done_conditions",
+            )
+            return Disp.HALT
+        await loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "Your proposed plan was NOT accepted because its done_condition "
+                        "values would become immutable external finish gates and are "
+                        f"unsafe or internally inconsistent:\n{rendered}\n\n"
+                        "Submit a corrected plan. Do not replace a required directory "
+                        "with a file and do not guess a local preview port or a future/"
+                        "placeholder host. Use http_ok only with a concrete already-known "
+                        "FQDN/IP. Omit a condition when there is no safe, exact machine-"
+                        f"checkable predicate. Invalid plan attempt {attempt}/"
+                        f"{_INVALID_PLAN_DONE_CONDITION_CAP}.\n</system-reminder>"
+                    ),
+                ),
+                meta={"blocking": "invalid_plan_done_conditions"},
+            )
+        )
+        return Disp.CONTINUE
+
+    await loop._emit(plan)
+    if (
+        not plan.steps
+        and loop._revision_force_submit_enabled
+        and signals.in_planning_for_revision(events)
+    ):
+        if not signals.revision_force_submit(events):
+            await loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="force_submit_plan",
+                )
+            )
+            await loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
+                )
+            )
+            loop._plan_nudges = 0
+            return Disp.CONTINUE
+        instruction = signals.current_revision_instruction(events)
+        if instruction:
+            plan = PlanEvent(
+                summary=plan.summary or instruction[:120],
+                steps=[PlanStep(title=instruction[:200])],
+                revision=plan.revision + 1,
+                context=plan.context,
+            )
+            await loop._emit(plan)
+        else:
+            await loop._land_blocked(
+                reason="revision_no_concrete_steps",
+                guidance=(
+                    "The planner submitted an empty revision plan after the force-submit "
+                    "recovery, and there was no current revision instruction to "
+                    "synthesize a concrete step from."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="revision_no_concrete_steps",
+            )
+            return Disp.HALT
+    return await loop._route_plan_approval_gate(plan)

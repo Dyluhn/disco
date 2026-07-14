@@ -784,69 +784,19 @@ class Driver:
                     # The requery applies ONLY to names absent from the
                     # FULL tool registry (truly unknown), never to
                     # known-but-currently-withheld tools.
-                    all_known_names = self.known_tool_names_for_requery()
-
-                    if step.tool_call and step.tool_call.tool_name not in all_known_names:
-                        # A tool whose NAME alone trips the confirm policy's
-                        # security gate (publish/deploy/release — it leaves the
-                        # blast radius) must NOT be bounced back to the model by
-                        # the unknown-tool requery: an unregistered publish-class
-                        # name is a real publish intent that has to reach the
-                        # human confirm gate, not a hallucination to retry.
-                        # Without this the requery swallowed `deploy_site` before
-                        # BlastRadiusConfirm's publish guard could pause for
-                        # confirmation — then the plan read "done" with nothing
-                        # executed and the execution-finish gate spun forever
-                        # (the confirm/reject livelock root cause).
-                        _gbn = getattr(self._loop.policy, "gates_by_name", None)
-                        _name_gated = callable(_gbn) and _gbn(step.tool_call.tool_name)
-                        if not _name_gated and requery_count < 2:
-                            requery_count += 1
-                            self._record_model_repair(
-                                "unknown_tool",
-                                attempt=requery_count,
-                                tool_name=step.tool_call.tool_name,
-                            )
-                            _LOG.info(f"Unknown tool {step.tool_call.tool_name}, requerying...")
-                            offered_tools = self.tools_for_step(
-                                suppress_meta_tools=fresh_session,
-                                force_submit_only=force_submit_only,
-                                force_read_tools=force_read_tools,
-                                mode=mode,
-                            )
-                            offered_names = {t.name for t in offered_tools}
-                            # Mirror the assistant's turn so the next call's
-                            # messages list stays balanced for pairing.
-                            transient_messages.append(
-                                LLMMessage(
-                                    role="assistant",
-                                    content=step.thought,
-                                    tool_calls=[
-                                        {
-                                            "id": step.tool_call.call_id,
-                                            "name": step.tool_call.tool_name,
-                                            "arguments": step.tool_call.arguments,
-                                        }
-                                    ],
-                                )
-                            )
-                            # F2 / T9 (assist-gated): when self._assist is on, append
-                            # a "did you mean <name>?" suggestion computed by
-                            # Levenshtein distance over the offered tool names.
-                            # The existing Rung-7 hint and requery bound (cap=2)
-                            # are reused — no new reroute path, no new cap.
-                            # Assist OFF (capable-model default) leaves the hint
-                            # byte-identical to today.
-                            _hint = self.unknown_tool_requery_hint(
-                                step.tool_call.tool_name, offered_names
-                            )
-                            transient_messages.append(
-                                LLMMessage(
-                                    role="user",
-                                    content=_hint,
-                                )
-                            )
-                            continue
+                    next_requery_count = _prepare_unknown_tool_requery(
+                        self,
+                        step,
+                        requery_count,
+                        transient_messages,
+                        fresh_session=fresh_session,
+                        force_submit_only=force_submit_only,
+                        force_read_tools=force_read_tools,
+                        mode=mode,
+                    )
+                    if next_requery_count is not None:
+                        requery_count = next_requery_count
+                        continue
 
                     break  # Step is valid or requeries exhausted
                 except LLMContextWindowExceeded:
@@ -874,12 +824,8 @@ class Driver:
                     return await self._pause_driver_unavailable()
                 except LLMTransientError:
                     if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
-                        self._record_model_repair(
-                            "driver_transient_backoff", attempt=attempts + 1
-                        )
-                        if not await self._wait_retry_backoff(
-                            _DRIVER_RETRY_BACKOFFS_S[attempts]
-                        ):
+                        self._record_model_repair("driver_transient_backoff", attempt=attempts + 1)
+                        if not await self._wait_retry_backoff(_DRIVER_RETRY_BACKOFFS_S[attempts]):
                             self._record_model_repair(
                                 "driver_transient_interrupted", attempt=attempts + 1
                             )
@@ -961,3 +907,62 @@ class Driver:
             await self._loop._emit(ErrorEvent(code=code, detail=_describe_llm_error(e)))
             return None, Disp.HALT
         return step, Disp.FALLTHROUGH
+
+
+def _prepare_unknown_tool_requery(
+    driver: Driver,
+    step: AgentStep,
+    requery_count: int,
+    transient_messages: list[LLMMessage],
+    *,
+    fresh_session: bool,
+    force_submit_only: bool,
+    force_read_tools: frozenset[str] | None,
+    mode: OperatingMode,
+) -> int | None:
+    """Append one balanced unknown-tool repair turn, if rerouting is safe."""
+    tool_call = step.tool_call
+    if tool_call is None or tool_call.tool_name in driver.known_tool_names_for_requery():
+        return None
+    gates_by_name = getattr(driver._loop.policy, "gates_by_name", None)
+    if callable(gates_by_name) and gates_by_name(tool_call.tool_name):
+        return None
+    if requery_count >= 2:
+        return None
+
+    requery_count += 1
+    driver._record_model_repair(
+        "unknown_tool",
+        attempt=requery_count,
+        tool_name=tool_call.tool_name,
+    )
+    _LOG.info("Unknown tool %s, requerying...", tool_call.tool_name)
+    offered_names = {
+        tool.name
+        for tool in driver.tools_for_step(
+            suppress_meta_tools=fresh_session,
+            force_submit_only=force_submit_only,
+            force_read_tools=force_read_tools,
+            mode=mode,
+        )
+    }
+    transient_messages.append(
+        LLMMessage(
+            role="assistant",
+            content=step.thought,
+            tool_calls=[
+                {
+                    "id": tool_call.call_id,
+                    "name": tool_call.tool_name,
+                    "arguments": tool_call.arguments,
+                }
+            ],
+        )
+    )
+    transient_messages.append(
+        LLMMessage(
+            role="user",
+            content=driver.unknown_tool_requery_hint(tool_call.tool_name, offered_names),
+        )
+    )
+    return requery_count
