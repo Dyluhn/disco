@@ -7,8 +7,9 @@ Pipeline stages:
   4. Lower:        lower_deck(AuthoredDeck) → Deck via C1.
   5. Render:       Deck → .pptx + .html via C3.
 
-Defensive parse: JSON failure → ONE retry with "return ONLY valid JSON" →
-second failure → fall back to the Marp/fallback path.
+Defensive parse: a completed but malformed response gets ONE correction retry;
+a second completed malformed response falls back to the Marp path. Provider-truncated
+responses fail explicitly and never enter that malformed-output fallback.
 
 Tier-aware:
   ctx.assist == False (capable): compact schema instructions.
@@ -51,6 +52,40 @@ if TYPE_CHECKING:
     from disco.tools.builtin.image_gen import ImageBackend
 
 _LOG = logging.getLogger("disco.tools.slides_pipeline")
+
+
+@dataclass(frozen=True)
+class LLMResponse:
+    """Provider fields needed to distinguish complete output from truncation."""
+
+    content: str
+    finish_reason: str | None
+
+
+type LLMResponseLike = str | LLMResponse
+
+
+class SlidesGenerationIncompleteError(RuntimeError):
+    """The provider explicitly reported that a slide-author response was incomplete."""
+
+    def __init__(self, stage: str, finish_reason: str) -> None:
+        if finish_reason == "length":
+            detail = "truncated"
+            code = "SLIDES_PROVIDER_OUTPUT_TRUNCATED"
+        else:
+            detail = "did not complete"
+            code = "SLIDES_PROVIDER_OUTPUT_INCOMPLETE"
+        super().__init__(
+            f"{code}: Provider {detail} the slide {stage} response "
+            f"(finish_reason={finish_reason!r}); the incomplete response was not "
+            "retried at the same output cap, no partial deck was written, and no "
+            "plain-renderer fallback was substituted. Reduce the requested slide "
+            "count or goal scope, or select a model that can return the complete "
+            "authored-deck JSON, then regenerate"
+        )
+        self.code = code
+        self.stage = stage
+        self.finish_reason = finish_reason
 
 # Prompt templates below intentionally preserve JSON examples and schema alternations.
 # ruff: noqa: E501
@@ -381,8 +416,8 @@ async def _call_llm(
     api_key: str | None = None,
     temperature: float = 0.7,
     max_tokens: int = 24576,
-) -> str:
-    """Call the OpenAI-compatible /chat/completions endpoint.  Returns raw text.
+) -> LLMResponse:
+    """Call the endpoint without discarding its completion status.
 
     Sends a Bearer Authorization header when `api_key` is provided so a remote
     driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
@@ -426,8 +461,33 @@ async def _call_llm(
         ) from e
     from disco.core.think import strip_think_spans
 
-    content = data["choices"][0]["message"]["content"] or ""
-    return strip_think_spans(content)
+    choice = data["choices"][0]
+    content = choice["message"].get("content") or ""
+    return LLMResponse(
+        content=strip_think_spans(content),
+        finish_reason=choice.get("finish_reason"),
+    )
+
+
+def _complete_response_content(response: LLMResponseLike, *, stage: str) -> str:
+    """Return content only when the provider did not report an incomplete stop.
+
+    Plain strings remain accepted for test and legacy adapters whose completion
+    status is unknown. The production HTTP adapter always returns ``LLMResponse``.
+    """
+    if isinstance(response, str):
+        return response
+    if not isinstance(response, LLMResponse):
+        raise TypeError(
+            f"Slide LLM adapter returned unsupported response type "
+            f"{type(response).__name__}"
+        )
+    finish_reason = (response.finish_reason or "").strip().lower()
+    if finish_reason == "length":
+        raise SlidesGenerationIncompleteError(stage, finish_reason)
+    if finish_reason not in ("", "stop", "end_turn", "eos", "eos_token"):
+        raise SlidesGenerationIncompleteError(stage, finish_reason)
+    return response.content
 
 
 # ---------------------------------------------------------------------------
@@ -797,9 +857,10 @@ async def _stage_outline(
         )},
     ]
     try:
-        raw = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, "", f"LLM outline call failed: {type(e).__name__}: {e}"
+    raw = _complete_response_content(response, stage="outline")
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
@@ -810,9 +871,10 @@ async def _stage_outline(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _retry_msg(err)})
     try:
-        raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, raw, f"Outline retry failed: {e}"
+    raw2 = _complete_response_content(response2, stage="outline correction")
 
     deck2, err2 = _parse_authored_deck(raw2)
     if deck2 is not None:
@@ -842,9 +904,10 @@ async def _stage_fill(
         {"role": "user", "content": _FILL_USER_TMPL.format(outline_json=outline_json)},
     ]
     try:
-        raw = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, f"LLM fill call failed: {type(e).__name__}: {e}"
+    raw = _complete_response_content(response, stage="fill")
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
@@ -855,9 +918,10 @@ async def _stage_fill(
     messages.append({"role": "assistant", "content": raw})
     messages.append({"role": "user", "content": _retry_msg(err)})
     try:
-        raw2 = await _call_llm(messages, llm_url, model, api_key=api_key)
+        response2 = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
         return None, f"Fill retry failed: {e}"
+    raw2 = _complete_response_content(response2, stage="fill correction")
 
     deck2, err2 = _parse_authored_deck(raw2)
     if deck2 is not None:
@@ -1076,18 +1140,29 @@ async def generate_deck(
         return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
-    # Stage 1: Outline
-    outline, _raw_outline, outline_err = await _stage_outline(
-        goal, slide_count, system, llm_url, model, api_key
-    )
+    # Stage 1: Outline. A provider-declared incomplete response is not ordinary
+    # malformed JSON: do not replay it at the same cap and do not substitute a
+    # plain deck that could be mistaken for the requested authored deliverable.
+    try:
+        outline, _raw_outline, outline_err = await _stage_outline(
+            goal, slide_count, system, llm_url, model, api_key
+        )
+    except SlidesGenerationIncompleteError as exc:
+        _LOG.error("Slide generation stopped explicitly: %s", exc)
+        return None, None, str(exc), None, None
 
     if outline is None:
         _LOG.warning("Outline stage failed: %s", outline_err)
         fallback_md = _outline_to_markdown(None, goal)
         return None, fallback_md, outline_err, None, None
 
-    # Stage 2: Fill
-    filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
+    # Stage 2: Fill uses the same explicit classification. The valid outline is
+    # kept in memory only; no sidecar or rendered artifact is written.
+    try:
+        filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
+    except SlidesGenerationIncompleteError as exc:
+        _LOG.error("Slide generation stopped explicitly: %s", exc)
+        return None, None, str(exc), None, None
 
     if filled is None:
         _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)

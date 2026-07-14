@@ -5,9 +5,12 @@ Primary path (C2): when a ``goal`` is supplied, the staged C2 pipeline
 (outline → fill → assets → lower_deck → C3 render) generates a structured
 AuthoredDeck and renders it to native editable .pptx / brand HTML.  On parse
 failure after one retry the Marp fallback is taken automatically — no crash.
+Provider-declared truncation is different: it fails explicitly without rendering
+an incomplete or plain substitute deck.
 
-Marp fallback: when only ``markdown`` is supplied, or when C2 fails, the
-tool falls back to Marp CLI (or the pure-HTML fallback when Marp is absent).
+Marp fallback: when only ``markdown`` is supplied, or when a completed C2
+response is malformed after correction, the tool falls back to Marp CLI (or
+the pure-HTML fallback when Marp is absent).
 
 Format support:
   - html: always works (C3 brand HTML, or Marp CLI, or self-contained fallback).
@@ -83,7 +86,10 @@ class SlidesGenerateArgs(BaseModel):
         default=5,
         ge=2,
         le=30,
-        description="Approximate number of slides (used by the C2 pipeline; ignored for markdown path).",
+        description=(
+            "Approximate number of slides (used by the C2 pipeline; ignored for "
+            "markdown path)."
+        ),
     )
     mode: Literal["deck", "markdown"] = Field(
         default="deck",
@@ -360,10 +366,12 @@ class SlidesTool:
             "Primary path (recommended): supply ``goal`` (e.g. 'A 6-slide investor "
             "pitch for an EV battery startup') and the C2 pipeline generates a "
             "structured, brand-themed deck automatically (native editable PPTX + "
-            "brand HTML).  On failure, automatically falls back to Marp.\n\n"
+            "brand HTML). Completed malformed output falls back to Marp after one "
+            "correction attempt.\n\n"
             "Markdown path (backward-compat): supply ``markdown`` with '---' slide "
             "separators; rendered via Marp CLI (image-based PPTX) or the HTML "
-            "fallback.\n\n"
+            "fallback. Provider-truncated output fails explicitly instead of being "
+            "misclassified as malformed JSON.\n\n"
             "HTML always works.  PDF and native PPTX require the sandbox toolchain."
         ),
         args_model=SlidesGenerateArgs,
@@ -541,7 +549,7 @@ class SlidesTool:
     async def _run_c2_pipeline(
         self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
     ) -> ToolOutcome:
-        """Run the C2 staged generation pipeline.  Falls back to Marp on failure."""
+        """Run C2; only completed malformed output may fall back to Marp."""
         from disco.tools.builtin._slides_pipeline import generate_deck
 
         assert args.goal is not None  # caller-checked
@@ -635,7 +643,10 @@ class SlidesTool:
         from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
 
         if ctx.sandbox is None:
-            return ToolOutcome(success=False, content="No sandbox available to write the slide deck.")
+            return ToolOutcome(
+                success=False,
+                content="No sandbox available to write the slide deck.",
+            )
         sbx = ctx.sandbox
         out_filename = f"{args.filename}.{fmt}"
 
