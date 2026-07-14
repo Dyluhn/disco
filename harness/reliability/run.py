@@ -23,10 +23,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from harness.build_soak.resources import GIB, read_host_resources
+# Keep the documented direct-script entrypoint hermetic. When Python executes
+# ``harness/reliability/run.py`` it adds only that file's directory to sys.path,
+# so absolute ``harness.*`` imports otherwise fail before argparse can handle
+# even ``--list`` or ``--help``.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-from .matrix import PROOFS, ReliabilityMatrix, Suite, load_matrix
-from .state import (
+from harness.build_soak.resources import GIB, read_host_resources
+from harness.reliability.matrix import PROOFS, ReliabilityMatrix, Suite, load_matrix
+from harness.reliability.state import (
     FAIL,
     INFRA,
     INVALID,
@@ -472,6 +479,17 @@ async def _amain(args: argparse.Namespace) -> int:
         if unknown:
             print(f"unknown proof type(s): {sorted(unknown)}", file=sys.stderr)
             return 2
+    if surfaces:
+        known_surfaces = {claim.surface for claim in matrix.claims.values()} | {"all"}
+        unknown = surfaces - known_surfaces
+        if unknown:
+            print(f"unknown surface(s): {sorted(unknown)}", file=sys.stderr)
+            return 2
+        # The public CLI documents ``all`` as the wildcard. Do not pass it to
+        # matrix intersection as a literal claim surface: that silently selects
+        # only suites carrying an ``all`` claim and can produce a false full gate.
+        if "all" in surfaces:
+            surfaces = None
     if suite_ids:
         unknown = suite_ids - set(matrix.suites)
         if unknown:
