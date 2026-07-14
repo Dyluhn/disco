@@ -425,6 +425,28 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
     assert "skip browser-based verification" in out.content
 
 
+@pytest.mark.asyncio
+async def test_run_browser_failure_is_not_fabricated_as_blank_page(monkeypatch):
+    """A failed render probe is infrastructure evidence, not an empty DOM."""
+
+    async def fake_browser_run(self, args, ctx):
+        return ToolOutcome(
+            success=False,
+            content="browser error: screenshot workspace is read-only",
+            error="browser error: screenshot workspace is read-only",
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/"), _ctx(FakeSandbox("200"))
+    )
+    assert out.success is False
+    assert out.structured["render_probe_failed"] is True
+    assert out.structured["verdict"] == "unverifiable"
+    assert "render probe failed" in out.content
+    assert "blank page" not in out.content
+
+
 # ---- Bug 7: process-backend auto-detect targets the conversation's served port,
 #      never the agent-server's control port (8000) -----------------------------
 

@@ -402,10 +402,21 @@ class ProcessKernel(KernelSession):
             await self.execute(setup_cell, timeout_s=10)
 
     async def shutdown(self) -> None:
-        if self._km:
-            await self._km.shutdown_kernel()
-            self._km = None
-            self._kc = None
+        km, kc = self._km, self._kc
+        self._km = None
+        self._kc = None
+        try:
+            if kc is not None:
+                # jupyter_client does not close DEALER/SUB channel sockets when the
+                # Python reference is discarded.  The client owns those channels,
+                # so close them explicitly before asking the manager to terminate
+                # the kernel process.
+                kc.stop_channels()
+        finally:
+            # A broken channel close must not strand the independently-owned
+            # kernel process. Preserve the channel exception after this attempt.
+            if km is not None:
+                await km.shutdown_kernel()
 
 
 class GatewayKernel(KernelSession):

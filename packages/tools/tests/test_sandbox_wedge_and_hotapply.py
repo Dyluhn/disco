@@ -402,6 +402,12 @@ def test_docker_client_constructed_with_bounded_timeout(monkeypatch):
             return True
 
     monkeypatch.setattr(docker, "DockerClient", _FakeClient)
+    # This unit owns only DockerClient construction. Reachability is covered by
+    # dedicated probe tests and must not make this assertion host-dependent.
+    monkeypatch.setattr(
+        "disco.tools.sandbox.gvisor._probe_local_socket_reachable",
+        lambda *_args, **_kwargs: None,
+    )
     cfg = SandboxConfig(client_timeout_s=7, docker_socket="unix:///var/run/docker.sock")
     svc = GvisorSandboxService(cfg)
     svc._client()

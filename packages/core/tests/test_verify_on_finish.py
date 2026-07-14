@@ -8,7 +8,6 @@ action.
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -264,6 +263,9 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
         assert b"OK" in ok.stdout
     finally:
         srv.shutdown()
+        srv.server_close()
+        t.join(timeout=5)
+        assert not t.is_alive()
 
     # nothing serving on that port now → the verify fails (nonzero)
     bad = subprocess.run(

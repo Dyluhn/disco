@@ -69,6 +69,43 @@ def _fresh_state():
     return daemon_mod.BrowserState()
 
 
+def test_daemon_stop_reports_failures_and_attempts_every_owner(capsys):
+    """Partial teardown is bounded and visible, never a silent fallback."""
+
+    class _BrokenResource:
+        def __init__(self, label):
+            self.label = label
+            self.called = False
+
+        def close(self):
+            self.called = True
+            raise RuntimeError(self.label)
+
+    class _BrokenPlaywright:
+        called = False
+
+        def stop(self):
+            self.called = True
+            raise ValueError("playwright")
+
+    state = _fresh_state()
+    page = state.page = _BrokenResource("sensitive-page-detail")
+    context = state.context = _BrokenResource("sensitive-context-detail")
+    browser = state.browser = _BrokenResource("sensitive-browser-detail")
+    playwright = state.playwright = _BrokenPlaywright()
+
+    state.stop()
+
+    assert page.called and context.called and browser.called and playwright.called
+    assert state.page is state.context is state.browser is state.playwright is None
+    diagnostic = capsys.readouterr().err
+    assert "page:RuntimeError" in diagnostic
+    assert "context:RuntimeError" in diagnostic
+    assert "browser:RuntimeError" in diagnostic
+    assert "playwright:ValueError" in diagnostic
+    assert "sensitive-" not in diagnostic
+
+
 def test_daemon_add_console_keeps_location():
     state = _fresh_state()
     state._add_console(
@@ -148,7 +185,11 @@ def test_render_observation_surfaces_stack_source_network_and_logs():
             },
         ],
         "network": [
-            {"method": "GET", "url": "http://localhost:5173/api/data", "failure": "net::ERR_FAILED"},
+            {
+                "method": "GET",
+                "url": "http://localhost:5173/api/data",
+                "failure": "net::ERR_FAILED",
+            },
             {"method": "POST", "url": "http://localhost:5173/api/save", "status": 500},
         ],
         "elements": [],
@@ -206,7 +247,11 @@ def test_render_observation_stack_truncated_to_cap():
     rendered = tool._render_observation(data)
     # Only the first _MAX_STACK_LINES frames are kept, then a truncation marker.
     assert "at frame0 (app.js:0:1)" in rendered
-    assert f"at frame{browser_mod._MAX_STACK_LINES} (app.js:{browser_mod._MAX_STACK_LINES}:1)" not in rendered
+    omitted_frame = (
+        f"at frame{browser_mod._MAX_STACK_LINES} "
+        f"(app.js:{browser_mod._MAX_STACK_LINES}:1)"
+    )
+    assert omitted_frame not in rendered
     assert "stack truncated" in rendered
 
 
@@ -511,6 +556,7 @@ async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
 @pytest.mark.asyncio
 async def test_browser_daemon_integration_real_chromium(tmp_path):
     # This test needs a real browser and local daemon
+    import signal
     import subprocess
     import sys
     import threading
@@ -567,8 +613,10 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
             "PYTHONPATH": str(pathlib.Path(daemon_mod.__file__).parents[5]),
             "PMX_WORKSPACE": str(tmp_path)
         },
-        cwd=str(tmp_path)
+        cwd=str(tmp_path),
+        start_new_session=True,
     )
+    client = None
 
     try:
         # Wait for daemon
@@ -634,5 +682,17 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         assert base64.b64decode(data["screenshot_b64"]) == on_disk
 
     finally:
-        daemon_proc.terminate()
+        if client is not None:
+            await client.aclose()
         fixture_server.shutdown()
+        fixture_server.server_close()
+        fixture_thread.join(timeout=5)
+        daemon_proc.terminate()
+        try:
+            daemon_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(daemon_proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            daemon_proc.wait(timeout=10)

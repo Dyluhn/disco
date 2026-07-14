@@ -24,6 +24,7 @@ from disco.core.appkit.webhook_primitive import (
     webhook_verify,
 )
 from disco.core.host_services import get_host_service
+from disco.core.webhook_host_service import WEBHOOK_EMIT_SERVICE
 from pydantic import ValidationError
 
 
@@ -225,10 +226,14 @@ def test_records_generation_emits_trusted_inbound_outbound_schema_and_bus_shim()
     schema = tree["schema.sql"]
     assert "webhook_events" in schema and "webhook_effects" in schema
     db = sqlite3.connect(":memory:")
-    db.executescript(schema)
-    assert {"webhook_events", "webhook_effects"} <= {
-        str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    }
+    try:
+        db.executescript(schema)
+        assert {"webhook_events", "webhook_effects"} <= {
+            str(row[0])
+            for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        db.close()
     emitted = "\n".join(tree.values()).lower()
     assert "webhook_secret_" not in emitted
     assert "whsec_" not in emitted
@@ -254,7 +259,7 @@ def test_registration_requires_real_static_and_live_verification() -> None:
         "secret_absence",
     )
     assert primitive.security_metadata_field == "webhooks"
-    assert get_host_service(WEBHOOK_EMIT_SERVICE_NAME) is not None
+    assert get_host_service(WEBHOOK_EMIT_SERVICE_NAME) is WEBHOOK_EMIT_SERVICE
 
 
 def test_static_verifier_accepts_only_canonical_provenanced_tree() -> None:

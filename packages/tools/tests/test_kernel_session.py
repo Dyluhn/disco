@@ -42,6 +42,24 @@ def test_kernel_result_rendering():
 
 
 @pytest.mark.asyncio
+async def test_process_kernel_shutdown_closes_client_channels():
+    """ProcessKernel owns both the manager process and client ZMQ channels."""
+    pk = ProcessKernel("/tmp/test_kernel_shutdown")
+    manager = MagicMock()
+    manager.shutdown_kernel = AsyncMock()
+    client = MagicMock()
+    pk._km = manager
+    pk._kc = client
+
+    await pk.shutdown()
+
+    client.stop_channels.assert_called_once_with()
+    manager.shutdown_kernel.assert_awaited_once_with()
+    assert pk._kc is None
+    assert pk._km is None
+
+
+@pytest.mark.asyncio
 async def test_timeout_protocol_state_machine():
     """Test timeout protocol: interrupt-succeeds -> intact; interrupt-hangs -> restart path."""
     workspace = "/tmp/test_timeout_mock"

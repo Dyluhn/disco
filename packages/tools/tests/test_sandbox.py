@@ -79,6 +79,66 @@ async def test_process_shell_resolves_workspace_prefix():
     await inst.destroy()
 
 
+async def test_process_shell_resolves_workspace_path_with_escaped_space():
+    """A shell-escaped space remains part of one jailed /workspace token."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c-space")
+    await inst.write_file("media/hero image.svg", b"SVG")
+
+    res = await inst.exec_shell(r"cat /workspace/media/hero\ image.svg", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout == "SVG"
+    await inst.destroy()
+
+
+async def test_process_child_receives_real_workspace_capability_path():
+    """Browser helpers write artifacts inside the jail, not literal /workspace."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c-browser-env")
+    command = (
+        "python3 -c 'import os,pathlib; "
+        "pathlib.Path(os.environ[\"DISCO_WORKSPACE\"], \".pmx\", \"browser-probe\")"
+        ".parent.mkdir(parents=True, exist_ok=True); "
+        "pathlib.Path(os.environ[\"DISCO_WORKSPACE\"], \".pmx\", \"browser-probe\")"
+        ".write_text(\"ok\")'"
+    )
+    res = await inst.exec_shell(command, timeout_s=10)
+    assert res.exit_code == 0, res.stderr
+    assert await inst.read_file(".pmx/browser-probe") == b"ok"
+    await inst.destroy()
+
+
+async def test_process_exec_shell_cancellation_reaps_command_group():
+    """Cancelling a sandbox command leaves no helper/shell descendants."""
+    import asyncio
+    import os
+
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c-cancel")
+    task = asyncio.create_task(
+        inst.exec_shell("echo $$ > worker.pid; sleep 60", timeout_s=60)
+    )
+    for _ in range(100):
+        if await inst.file_exists("worker.pid"):
+            break
+        await asyncio.sleep(0.01)
+    assert await inst.file_exists("worker.pid")
+    worker_pid = int((await inst.read_file("worker.pid")).decode().strip())
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(100):
+        try:
+            os.kill(worker_pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail(f"cancelled sandbox worker {worker_pid} is still alive")
+    await inst.destroy()
+
+
 async def test_process_shell_workspace_rewrite_rejects_traversal_escape():
     """ROOT-1 P1 (security): the /workspace shell rewrite must NOT be the thing that
     grants a path-traversal escape. A `/workspace/..`-rooted token that resolves
@@ -133,6 +193,27 @@ async def test_session_file_exists_delegates_to_instance():
     assert await session.file_exists("made.txt") is True
     assert await session.file_exists("nope.txt") is False
     await session.destroy()
+
+
+async def test_session_destroy_shuts_down_cached_kernel():
+    """The session owns and closes its persistent CodeAct kernel."""
+
+    class _Kernel:
+        shutdown_called = False
+
+        async def shutdown(self) -> None:
+            self.shutdown_called = True
+
+    session = SandboxSession(
+        ProcessSandboxService(), owner_id="local", conversation_id="c-kernel-close"
+    )
+    kernel = _Kernel()
+    session._kernel = kernel
+
+    await session.destroy()
+
+    assert kernel.shutdown_called is True
+    assert session._kernel is None
 
 
 async def test_backend_swap_identical_results_process_vs_fake():

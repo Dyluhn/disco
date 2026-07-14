@@ -494,12 +494,17 @@ def test_role_grants_are_source_aware_and_revocation_is_stripe_scoped() -> None:
     assert 'event.type === "checkout.session.async_payment_failed"' in worker
     # The emitted migration is executable SQLite, not just plausible text.
     db = sqlite3.connect(":memory:")
-    db.executescript(schema)
-    assert {
-        "stripe_events",
-        "stripe_fulfillments",
-        "user_role_grants",
-    } <= {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    try:
+        db.executescript(schema)
+        assert {
+            "stripe_events",
+            "stripe_fulfillments",
+            "user_role_grants",
+        } <= {
+            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        db.close()
 
 
 def test_success_ui_depends_on_server_observed_entitlement_not_redirect() -> None:

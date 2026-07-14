@@ -250,6 +250,29 @@ def test_check_schema_sql_rejects_broken_sql():
     assert not res.passed
 
 
+def test_check_schema_sql_closes_connection_when_schema_application_fails(monkeypatch):
+    """The connection is helper-owned until a valid schema has been applied."""
+
+    class _BrokenConnection:
+        closed = False
+
+        def executescript(self, _schema_sql: str) -> None:
+            raise ValueError("synthetic schema failure")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = _BrokenConnection()
+    monkeypatch.setattr(
+        "disco.core.appkit.local_verify.sqlite3.connect", lambda _path: connection
+    )
+
+    with pytest.raises(ValueError, match="synthetic schema failure"):
+        check_schema_sql("broken", _lead())
+
+    assert connection.closed is True
+
+
 def test_check_schema_sql_flags_missing_not_null():
     # a schema whose required column lacks NOT NULL must be caught
     bad = (

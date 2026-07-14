@@ -223,6 +223,32 @@ class VerifyWebAppTool:
                         ),
                         structured=unverifiable,
                     )
+                else:
+                    # The HTTP server answered, but the render infrastructure did
+                    # not produce browser evidence.  ``structured=None`` is not an
+                    # empty DOM: feeding it to compute_verdict fabricated a
+                    # DEGRADED "blank page" finding and sent the model chasing its
+                    # healthy app.  Preserve the infrastructure failure as a failed
+                    # tool outcome, with an explicit machine-readable distinction.
+                    detail = (
+                        browser_outcome.error
+                        or browser_outcome.content
+                        or "browser returned no diagnostic"
+                    )
+                    return fail_outcome(
+                        (
+                            f"verify_web_app render probe failed after HTTP {http_status}: "
+                            f"{detail}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
+                        ),
+                        structured={
+                            "verdict": "unverifiable",
+                            "passed": False,
+                            "url": url,
+                            "http_status": http_status,
+                            "render_probe_failed": True,
+                            "browser_error": detail,
+                        },
+                    )
 
             meaningful = self._meaningful(structured)
             if args.medium == "game":

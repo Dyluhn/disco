@@ -763,6 +763,17 @@ class SandboxSession:
         past the sandbox it supervised.
         """
         self._closed = True
+        # The process backend's managed Jupyter kernel owns a child process and
+        # multiple ZMQ channel sockets.  Tear it down while its sandbox still
+        # exists; simply dropping the reference leaves the kernel and sockets
+        # alive until interpreter shutdown (where ResourceWarning is too late to
+        # recover them).  Container-backed kernels use the same ownership path.
+        kernel, self._kernel = self._kernel, None
+        if kernel is not None:
+            try:
+                await kernel.shutdown()
+            except Exception:  # noqa: BLE001 — teardown remains best-effort
+                _LOG.debug("kernel shutdown on session destroy failed", exc_info=True)
         # Close a cached PreviewManager so its supervisor task can't outlive the sandbox.
         mgr, self._preview_manager = getattr(self, "_preview_manager", None), None
         if mgr is not None:

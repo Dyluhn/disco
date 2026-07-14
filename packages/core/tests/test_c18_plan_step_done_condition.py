@@ -210,6 +210,52 @@ async def test_c18_satisfied_predicate_emits_met_note(tmp_path):
     assert "<system-reminder>" not in note.message.content
 
 
+@pytest.mark.parametrize("guest_path", ["workspace/artifact.txt", "/workspace/artifact.txt"])
+@pytest.mark.asyncio
+async def test_c18_workspace_prefixed_file_exists_uses_process_jail(tmp_path, guest_path):
+    """Guest /workspace spellings resolve inside the known host workspace.
+
+    pathlib must not interpret the absolute guest spelling as a host absolute
+    path, while genuine ../ and /etc escapes remain covered by the negative test.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "artifact.txt").write_text("ok")
+    sbx = _FakeSandbox(str(workspace))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        {
+                            "title": "write artifact",
+                            "done_condition": {"kind": "file_exists", "path": guest_path},
+                        }
+                    ],
+                },
+            ),
+            action_step("shell", {"command": "echo done"}),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+
+    notes = _advisory_notes(await store.get_events(CID))
+    assert len(notes) == 1
+    assert "met" in notes[0].message.content
+    assert "NOT met" not in notes[0].message.content
+    assert notes[0].meta.get("passed") is True
+
+
 # ---------------------------------------------------------------------------
 # Test 2 — step with an UNSATISFIED predicate → visible "NOT met" note
 # ---------------------------------------------------------------------------
@@ -794,7 +840,10 @@ async def test_c18_update_plan_progress_no_respam_on_repeat_snapshot(tmp_path):
             action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
             # repeat snapshot re-lists step 1 done — must NOT re-emit its advisory
             action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}]}),
-            action_step("update_plan_progress", {"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "done"}]}),
+            action_step(
+                "update_plan_progress",
+                {"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "done"}]},
+            ),
             finish_step(),
         ]
     )

@@ -5,7 +5,7 @@ Before the fix, `ProcessKernel.start()` called `start_kernel(cwd=...)` with no
 `env=`, so jupyter_client defaulted the child env to `os.environ` — and untrusted
 model `code_exec` on this backend could read `os.environ['DISCO_SECRET_KEY']` and
 the OpenRouter key straight out. This pins that the launcher passes only the
-allowlisted PATH/HOME/TMPDIR (shared with the shell path via
+allowlisted PATH/HOME/TMPDIR/DISCO_WORKSPACE (shared with the shell path via
 `base.clean_sandbox_env`).
 """
 
@@ -59,3 +59,4 @@ async def test_process_kernel_launches_with_scrubbed_env(monkeypatch):
     # …but the minimal allowlist IS present so the kernel still runs.
     assert env["PATH"]
     assert env["HOME"] == "/tmp/disco-ws-test"
+    assert env["DISCO_WORKSPACE"] == "/tmp/disco-ws-test"

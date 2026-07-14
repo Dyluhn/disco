@@ -1,16 +1,21 @@
 import base64
 import json
 import os
+import signal
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from playwright.sync_api import sync_playwright
 
+# Process sandboxes export the real jailed workspace path; container backends
+# use the common /workspace guest path.
+WORKSPACE_ROOT = os.environ.get("DISCO_WORKSPACE", os.environ.get("PMX_WORKSPACE", "/workspace"))
+
 # _live_view is shipped alongside the daemon by browser.py as
 # /workspace/.pmx/_live_view.py.  The sys.path insert makes it importable
 # without a package install; the try/except keeps unit tests that don't
 # have the sandbox image from failing on import.
-sys.path.insert(0, "/workspace/.pmx")
+sys.path.insert(0, os.path.join(WORKSPACE_ROOT, ".pmx"))
 try:
     import _live_view  # type: ignore[import]  # shipped alongside by browser.py
 except ImportError:
@@ -21,7 +26,6 @@ _live_headed: bool = False
 
 # Configuration
 PORT = 8901
-WORKSPACE_ROOT = os.environ.get("DISCO_WORKSPACE", os.environ.get("PMX_WORKSPACE", "/workspace"))
 SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
 # B7: bound the captured network-failure ring the same way the console is bounded,
@@ -122,6 +126,28 @@ class BrowserState:
         # so the agent can see *why* a page it is debugging is broken.
         self.page.on("requestfailed", self._add_request_failed)
         self.page.on("response", self._add_response)
+
+    def stop(self):
+        """Close Playwright in ownership order; safe after partial startup."""
+        errors = []
+        for resource_name in ("page", "context", "browser"):
+            resource = getattr(self, resource_name, None)
+            if resource is not None:
+                try:
+                    resource.close()
+                except Exception as exc:
+                    errors.append(f"{resource_name}:{type(exc).__name__}")
+                setattr(self, resource_name, None)
+        playwright, self.playwright = self.playwright, None
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception as exc:
+                errors.append(f"playwright:{type(exc).__name__}")
+        if errors:
+            # Teardown must continue through every owner, but it must not silently
+            # hide partial cleanup. Keep the diagnostic bounded and data-free.
+            print("Browser daemon cleanup errors: " + ", ".join(errors), file=sys.stderr)
 
     def _add_console(self, msg):
         # B7: keep msg.location ({url, lineNumber, columnNumber}) so the agent gets a
@@ -462,10 +488,24 @@ class BrowserHandler(BaseHTTPRequestHandler):
 
 
 def run():
-    state.start()
-    server = HTTPServer(("127.0.0.1", PORT), BrowserHandler)
-    print(f"Browser daemon listening on 127.0.0.1:{PORT}")
-    server.serve_forever()
+    server = None
+
+    def _stop(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        state.start()
+        server = HTTPServer(("127.0.0.1", PORT), BrowserHandler)
+        print(f"Browser daemon listening on 127.0.0.1:{PORT}")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if server is not None:
+            server.server_close()
+        state.stop()
 
 
 if __name__ == "__main__":

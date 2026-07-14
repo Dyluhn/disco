@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import NoReturn, Protocol, runtime_checkable
 
+from disco.core.workspace_paths import (
+    strip_redundant_workspace_prefix as strip_redundant_workspace_prefix,
+)
 from pydantic import BaseModel, ConfigDict
-
-from disco.core.workspace_paths import strip_redundant_workspace_prefix
 
 from ..anatomy import Capability
 
@@ -32,6 +33,10 @@ def clean_sandbox_env(workspace: object) -> dict[str, str]:
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": ws,
         "TMPDIR": ws,
+        # Browser/helper subprocesses use the same guest contract as container
+        # backends, but their real process-backend workspace is a host path.
+        # This is capability metadata, not inherited host configuration.
+        "DISCO_WORKSPACE": ws,
     }
 
 

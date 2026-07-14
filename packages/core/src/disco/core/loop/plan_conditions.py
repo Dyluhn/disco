@@ -16,13 +16,13 @@ import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from ..context import ArtifactMemoryStore, context_mark_resolved, context_write_summary
 from ..dod import (
     CommandExitPredicate,
     DoDPredicate,
     FileExistsPredicate,
     HTTPOkPredicate,
 )
-from ..context import ArtifactMemoryStore, context_mark_resolved, context_write_summary
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -37,6 +37,7 @@ from ..events import (
 )
 from ..selection_edit import is_scoped_edit_directive
 from ..view import effective_plan_progress
+from ..workspace_paths import strip_redundant_workspace_prefix
 from .context_live import context_pack_enabled, unresolved_failure_seqs
 
 if TYPE_CHECKING:
@@ -659,13 +660,18 @@ class PlanStepConditions:
         sbx = getattr(self._loop.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         path_str = predicate.path
+        # The model-facing namespace is /workspace on every backend.  A process
+        # backend exposes the corresponding host directory through workspace_path,
+        # so normalize the guest prefix before joining; pathlib discards ``root``
+        # entirely when the right operand is absolute.
+        normalized_path = strip_redundant_workspace_prefix(path_str)
         # Path-escape hard-FAIL when a real host-side workspace root is known.
         # (Container backends expose workspace_path=None and rely on their own
         # in-box jail; this branch is the process/session backend's discipline.)
         if workspace:
             try:
                 root = Path(workspace).resolve()
-                candidate = (root / path_str).resolve()
+                candidate = (root / normalized_path).resolve()
                 root_str = str(root)
                 candidate_str = str(candidate)
                 # On Windows the resolved strings may differ in case;
@@ -689,7 +695,7 @@ class PlanStepConditions:
         # "missing" advisory.
         if sbx is not None and hasattr(sbx, "file_exists"):
             try:
-                exists = await sbx.file_exists(path_str)
+                exists = await sbx.file_exists(normalized_path)
             except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
                 return (False, f"file_exists({path_str}): check error ({exc})")
             if exists:

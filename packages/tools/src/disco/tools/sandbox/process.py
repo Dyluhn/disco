@@ -49,7 +49,7 @@ from .config import SandboxConfig
 
 # ROOT-1 (slides spiral): a genuine `/workspace`-rooted path token in a shell
 # command — the leading `/workspace` AND the rest of the path up to the next token
-# boundary (whitespace / quote / shell operator / end). Capturing the WHOLE token
+# boundary (unescaped whitespace / quote / shell operator / end). Capturing the WHOLE token
 # (not just the `/workspace` prefix) lets the rewrite RESOLVE + JAIL it via the same
 # helper the file tools use, so a `..` traversal can't escape the jail.
 # The lookbehind keeps it from matching a mid-path occurrence ('/foo/workspace') or a
@@ -57,7 +57,8 @@ from .config import SandboxConfig
 # matching a longer name ('/workspaces') — it only fires when `/workspace` is followed
 # by a path separator, a token boundary, or end-of-string.
 _WORKSPACE_TOKEN_RE = re.compile(
-    r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])(?:/[^\s'\";|&<>()`]*)?"
+    r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])"
+    r"(?:/(?:\\[^\n]|[^\s\\'\";|&<>()`])*)?"
 )
 
 # Bug 19 (P0): BEST-EFFORT, DEV-ONLY host-process-SIGNAL refusal for the PROCESS backend
@@ -209,7 +210,20 @@ class ProcessSandboxInstance:
         def _sub(m: re.Match[str]) -> str:
             # _resolve strips the redundant /workspace prefix, joins onto the real
             # workspace root, resolves, and raises SandboxPermissionError on escape.
-            return shlex.quote(str(self._resolve(m.group(0))))
+            # Parse shell escapes in this ONE matched token first.  In particular,
+            # ``hero\ image.svg`` is one path; treating its space as a boundary
+            # rewrote only ``hero\`` and silently manufactured a second argv token.
+            try:
+                parsed = shlex.split(m.group(0), posix=True)
+            except ValueError as exc:
+                raise SandboxPermissionError(
+                    f"invalid /workspace path token: {m.group(0)!r}"
+                ) from exc
+            if len(parsed) != 1:
+                raise SandboxPermissionError(
+                    f"invalid /workspace path token: {m.group(0)!r}"
+                )
+            return shlex.quote(str(self._resolve(parsed[0])))
 
         return _WORKSPACE_TOKEN_RE.sub(_sub, cmd)
 
@@ -266,9 +280,26 @@ class ProcessSandboxInstance:
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 15)
+        except asyncio.CancelledError:
+            # Cancelling an auto-preview/tool task must not discard a live
+            # bounded-exec helper. SIGTERM lets the helper forward termination
+            # to its command process group and drain/close both pipes.
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.shield(asyncio.wait_for(proc.communicate(), timeout=5))
+                except TimeoutError:
+                    proc.kill()
+                    await asyncio.shield(proc.wait())
+            raise
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            if proc.returncode is None:
+                proc.terminate()
+                try:
+                    await asyncio.wait_for(proc.communicate(), timeout=5)
+                except TimeoutError:
+                    proc.kill()
+                    await proc.wait()
             # Report timed-out (not raised), consistent with the gVisor sibling: the
             # caller gets the flag + exit code rather than losing it to an exception.
             return ExecResult(
@@ -486,9 +517,10 @@ class ProcessSandboxInstance:
         if proc.returncode == 0:
             for line in out.decode("utf-8").splitlines():
                 if line.startswith(prefixes):
-                    await asyncio.create_subprocess_shell(
+                    kill_proc = await asyncio.create_subprocess_shell(
                         f"tmux kill-session -t {shlex.quote(line)}"
                     )
+                    await kill_proc.wait()
 
         shutil.rmtree(self._workspace, ignore_errors=True)
 

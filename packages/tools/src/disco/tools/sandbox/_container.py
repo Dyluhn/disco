@@ -254,6 +254,20 @@ proc = subprocess.Popen(
     stderr=subprocess.PIPE,
     start_new_session=True,
 )
+
+
+def forward_termination(signum, _frame):
+    # The process-backend wrapper can be cancelled while this helper is waiting.
+    # Forward its TERM/INT to the command's separate process group so neither the
+    # shell nor its descendants outlive the sandbox task.
+    try:
+        os.killpg(proc.pid, signum)
+    except OSError:
+        pass
+
+
+signal.signal(signal.SIGTERM, forward_termination)
+signal.signal(signal.SIGINT, forward_termination)
 t_out = threading.Thread(target=drain, args=(proc.stdout, out), daemon=True)
 t_err = threading.Thread(target=drain, args=(proc.stderr, err), daemon=True)
 t_out.start()

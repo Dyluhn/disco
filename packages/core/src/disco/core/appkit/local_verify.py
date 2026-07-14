@@ -91,7 +91,13 @@ class CheckResult:
 def _connect(schema_sql: str) -> sqlite3.Connection:
     """An in-memory sqlite db with the generated schema applied."""
     conn = sqlite3.connect(":memory:")
-    conn.executescript(schema_sql)
+    try:
+        conn.executescript(schema_sql)
+    except Exception:
+        # The connection has not escaped to a caller yet, so this helper owns
+        # cleanup on every schema-application failure (including malformed SQL).
+        conn.close()
+        raise
     return conn
 
 
