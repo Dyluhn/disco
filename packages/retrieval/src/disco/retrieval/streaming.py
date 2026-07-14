@@ -113,7 +113,6 @@ def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
     return [LLMMessage(role="system", content=system), LLMMessage(role="user", content=user)]
 
 
-
 # Canonical strip lives in disco.core.think — one rule, no per-site regexes.
 _strip_think_spans = strip_think_spans
 
@@ -189,9 +188,7 @@ def _to_blocks(text: str) -> list[dict]:
                         continue
                 except Exception:  # noqa: BLE001
                     pass  # fall back to code block
-            blocks.append(
-                {"kind": "code", "id": f"b{n}", "language": lang, "code": code_str}
-            )
+            blocks.append({"kind": "code", "id": f"b{n}", "language": lang, "code": code_str})
             n += 1
             continue
         # 2. GFM Table
@@ -428,6 +425,84 @@ def _unreadable_sources_message(hits: Sequence[SearchHit], docs: Sequence[Extrac
     )
 
 
+async def _generate_visible_answer(
+    router: LLMRouter,
+    query: str,
+    passages: Sequence[Passage],
+    *,
+    think: bool,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Generate one visible answer, with one bounded empty-content repair."""
+    base_tokens = 4096 if think else 1200
+    base_messages = _answer_prompt(query, passages)
+    for generation_attempt in (1, 2):
+        token_frames: list[dict[str, Any]] = []
+        raw_answer = ""
+        in_think = False
+        carry = ""
+        messages = base_messages
+        if generation_attempt == 2:
+            messages = [
+                *base_messages,
+                LLMMessage(
+                    role="user",
+                    content=(
+                        "The previous completion returned no visible answer. "
+                        "Return the final grounded answer now, with the required "
+                        "source ids; do not return only reasoning."
+                    ),
+                ),
+            ]
+        async for chunk in router.stream_complete(
+            CompletionRequest(
+                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                messages=messages,
+                temperature=0.0,
+                enable_thinking=think if generation_attempt == 1 else False,
+                max_tokens=(base_tokens if generation_attempt == 1 else max(4096, base_tokens * 2)),
+                attempt=generation_attempt,
+                stream=True,
+            )
+        ):
+            if not chunk.delta_text:
+                continue
+            raw_answer += chunk.delta_text
+            carry += chunk.delta_text
+            emit = ""
+            while carry:
+                if in_think:
+                    end = carry.lower().find("</think>")
+                    if end == -1:
+                        carry = carry[-16:]
+                        break
+                    carry = carry[end + len("</think>") :]
+                    in_think = False
+                    continue
+                start = carry.lower().find("<think>")
+                if start == -1:
+                    keep = max(0, len(carry) - 8)
+                    emit += carry[:keep]
+                    carry = carry[keep:]
+                    break
+                emit += carry[:start]
+                carry = carry[start + len("<think>") :]
+                in_think = True
+            if emit:
+                token_frames.append({"type": "token", "token": emit, "block_id": "answer"})
+
+        answer_text = _strip_think_spans(raw_answer).strip()
+        if answer_text:
+            streamed = "".join(frame["token"] for frame in token_frames)
+            if answer_text.startswith(streamed):
+                tail = answer_text[len(streamed) :]
+                if tail:
+                    token_frames.append({"type": "token", "token": tail, "block_id": "answer"})
+            return answer_text, token_frames
+        if generation_attempt == 1:
+            _LOG.warning("Research answerer returned no visible text; running one bounded repair")
+    return "", []
+
+
 async def stream_research_answer(
     query: str,
     *,
@@ -492,9 +567,7 @@ async def stream_research_answer(
             # On re-search rounds, skip URLs already extracted in prior rounds so we
             # fetch fresh sources.
             candidate_hits = [h for h in hits if h.url not in exclude_urls] or hits
-            docs = await extract_discovered_hits(
-                extraction, candidate_hits[:extract_cap]
-            )
+            docs = await extract_discovered_hits(extraction, candidate_hits[:extract_cap])
             passages = [p for d in docs if d.fetched_ok for p in d.passages]
             if not passages and len(candidate_hits) > extract_cap:
                 extra = await extract_discovered_hits(
@@ -533,98 +606,11 @@ async def stream_research_answer(
             # 4. constrained generation — buffer tokens; only emit on the accepted round.
             # This keeps a doomed first draft off the wire while still letting the final
             # accepted answer stream token-by-token to the frontend.
-            token_frames: list[dict[str, Any]] = []
-            answer_text = ""
-            base_tokens = 4096 if think else 1200
-            base_messages = _answer_prompt(current_query, top)
-            for generation_attempt in (1, 2):
-                token_frames = []
-                raw_answer = ""
-                in_think = False
-                carry = ""
-                messages = base_messages
-                if generation_attempt == 2:
-                    messages = [
-                        *base_messages,
-                        LLMMessage(
-                            role="user",
-                            content=(
-                                "The previous completion returned no visible answer. "
-                                "Return the final grounded answer now, with the required "
-                                "source ids; do not return only reasoning."
-                            ),
-                        ),
-                    ]
-                async for chunk in router.stream_complete(
-                    CompletionRequest(
-                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                        messages=messages,
-                        temperature=0.0,
-                        # `think=False` (default) turns reasoning off on servers that
-                        # support the control. Some OpenAI-compatible gateways ignore
-                        # that knob and can spend the whole short budget in
-                        # `reasoning_content`; one bounded repair gets enough room to
-                        # finish but still requires visible, citable answer text.
-                        enable_thinking=think if generation_attempt == 1 else False,
-                        max_tokens=(
-                            base_tokens
-                            if generation_attempt == 1
-                            else max(4096, base_tokens * 2)
-                        ),
-                        attempt=generation_attempt,
-                        stream=True,
-                    )
-                ):
-                    if chunk.delta_text:
-                        raw_answer += chunk.delta_text
-                        # Streaming think-guard: withhold <think>…</think> spans from the
-                        # wire (a leaked reasoning preamble must never paint as answer).
-                        carry += chunk.delta_text
-                        emit = ""
-                        while carry:
-                            if in_think:
-                                end = carry.lower().find("</think>")
-                                if end == -1:
-                                    carry = carry[-16:]  # tail for a split closing tag
-                                    break
-                                carry = carry[end + len("</think>"):]
-                                in_think = False
-                                continue
-                            start = carry.lower().find("<think>")
-                            if start == -1:
-                                # Hold a tail in case "<think>" straddles chunks.
-                                keep = max(0, len(carry) - 8)
-                                emit += carry[:keep]
-                                carry = carry[keep:]
-                                break
-                            emit += carry[:start]
-                            carry = carry[start + len("<think>"):]
-                            in_think = True
-                        if emit:
-                            token_frames.append(
-                                {"type": "token", "token": emit, "block_id": "answer"}
-                            )
-
-                answer_text = _strip_think_spans(raw_answer).strip()
-                if answer_text:
-                    # Flush the deliberately-held split-tag tail now that the full
-                    # response has proved it is visible answer text.
-                    streamed = "".join(frame["token"] for frame in token_frames)
-                    if answer_text.startswith(streamed):
-                        tail = answer_text[len(streamed):]
-                        if tail:
-                            token_frames.append(
-                                {"type": "token", "token": tail, "block_id": "answer"}
-                            )
-                    break
-                if generation_attempt == 1:
-                    _LOG.warning(
-                        "Research answerer returned no visible text; running one bounded repair"
-                    )
+            answer_text, token_frames = await _generate_visible_answer(
+                router, current_query, top, think=think
+            )
             if not answer_text:
-                _LOG.error(
-                    "Research answerer returned no visible text after bounded repair"
-                )
+                _LOG.error("Research answerer returned no visible text after bounded repair")
                 yield {
                     "type": "error",
                     "message": (

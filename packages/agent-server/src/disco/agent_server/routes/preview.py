@@ -292,10 +292,10 @@ def _locked_preview_navigation(destination: str) -> Response:
         .replace("&", "\\u0026")
     )
     document = (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
-        "<meta name=\"referrer\" content=\"no-referrer\">"
+        '<!doctype html><html><head><meta charset="utf-8">'
+        '<meta name="referrer" content="no-referrer">'
         "<title>Opening isolated preview</title></head><body>"
-        f"<script nonce=\"{nonce}\">window.location.replace({safe_destination_json})</script>"
+        f'<script nonce="{nonce}">window.location.replace({safe_destination_json})</script>'
         "<noscript>JavaScript is required to open this isolated preview.</noscript>"
         "</body></html>"
     )
@@ -435,9 +435,7 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 target_path=path_target,
                 path_prefix=path_prefix,
             )
-            path_bootstrap = _path_preview_bootstrap_url(
-                request, cid8, body.port, path_intent
-            )
+            path_bootstrap = _path_preview_bootstrap_url(request, cid8, body.port, path_intent)
         return {
             "bootstrap_url": bootstrap,
             "path_bootstrap_url": path_bootstrap,
@@ -503,9 +501,9 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 f"Path={expected_prefix}; HttpOnly; Secure; SameSite=None; Partitioned",
             )
         else:
-            forwarded_scheme = (request.headers.get("x-forwarded-proto") or "").split(
-                ","
-            )[0].strip()
+            forwarded_scheme = (
+                (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+            )
             response.set_cookie(
                 cookie_name,
                 token,
@@ -708,11 +706,92 @@ def _register_live_browser_status_routes(
         return JSONResponse({"ok": True})
 
 
+def _register_port_preview_routes(
+    router: APIRouter,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> None:
+    """Register the curated per-port HTTP and WebSocket proxies."""
+
+    @router.get("/conversations/{conversation_id}/port/{port}/{path:path}")
+    @router.get("/conversations/{conversation_id}/port/{port}/")
+    async def port_app(
+        request: Request, conversation_id: str, port: int, path: str = ""
+    ) -> Response:
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        if port not in USER_PORTS:
+            return Response("unknown port", status_code=404, media_type="text/plain")
+        if runtime is None:
+            return Response("preview not available", status_code=503, media_type="text/plain")
+        owner_id = current_session(request).owner_id
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=owner_id)
+        if upstream is None:
+            served = await _fetch_inside_response(runtime, conversation_id, port, path)
+            if served is not None:
+                return served
+            return Response("preview not available", status_code=503, media_type="text/plain")
+        try:
+            async with httpx.AsyncClient(
+                timeout=15, follow_redirects=False, trust_env=False
+            ) as client:
+                response = await client.get(f"{upstream}/{path}")
+        except Exception:  # noqa: BLE001 — upstream may not be ready
+            served = await _fetch_inside_response(runtime, conversation_id, port, path)
+            if served is not None:
+                return served
+            return Response(
+                "preview upstream unreachable", status_code=502, media_type="text/plain"
+            )
+        media_type = response.headers.get("content-type", "text/html")
+        return Response(
+            content=inject_element_mention_picker(response.content, media_type),
+            status_code=response.status_code,
+            media_type=media_type,
+        )
+
+    @router.websocket("/conversations/{conversation_id}/port/{port}/{path:path}")
+    @router.websocket("/conversations/{conversation_id}/port/{port}/")
+    async def port_app_websocket(
+        websocket: WebSocket,
+        conversation_id: str,
+        port: int,
+        path: str = "",
+    ) -> None:
+        session = websocket_session(websocket)
+        if session is None:
+            await _close_ws(websocket, 1008, "auth required")
+            return
+        try:
+            conversation_id = await require_owned_conversation_for_owner(
+                store,
+                conversation_id,
+                session.owner_id,
+                owner_bypass=session.session_id == "test-session",
+            )
+        except HTTPException:
+            await _close_ws(websocket, 1008, "conversation forbidden")
+            return
+        if port not in USER_PORTS:
+            await _close_ws(websocket, 1008, "unknown port")
+            return
+        if runtime is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=session.owner_id)
+        if upstream is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        await _proxy_websocket_to_upstream(websocket, upstream, path)
+
+
 def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
     _register_preview_capability_route(router, store)
     _register_live_browser_start_route(router, store, runtime)
     _register_live_browser_status_routes(router, store, runtime)
+    _register_port_preview_routes(router, store, runtime)
 
     @router.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str, request: Request) -> dict:
@@ -897,90 +976,6 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             return
         cid8 = conversation_id.removeprefix("conv_")[:8]
         upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=session.owner_id)
-        if upstream is None:
-            await _close_ws(websocket, 1008, "preview not available")
-            return
-        await _proxy_websocket_to_upstream(websocket, upstream, path)
-
-    @router.get("/conversations/{conversation_id}/port/{port}/{path:path}")
-    @router.get("/conversations/{conversation_id}/port/{port}/")
-    # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
-    # WALK-10: now wakes suspended sandboxes via wake_for_preview — same fix as preview_app.
-    async def port_app(
-        request: Request, conversation_id: str, port: int, path: str = ""
-    ) -> Response:
-        """Per-port proxy (BP-10): same single-origin forwarding as preview-app for
-        the curated USER port set. Arbitrary ints and INTERNAL plumbing ports are
-        never proxied (404 — not 503: the port does not exist as a surface).
-
-        Uses wake_for_preview so a suspended sandbox is rematerialised on demand."""
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
-        if port not in USER_PORTS:
-            return Response("unknown port", status_code=404, media_type="text/plain")
-        if runtime is None:
-            return Response("preview not available", status_code=503, media_type="text/plain")
-        owner_id = current_session(request).owner_id
-        cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=owner_id)
-        if upstream is None:
-            # Fix 2 (B-E): liveness proxy into the sandbox when no host port is
-            # published (sealed/filtered boxes). Honest 503 if nothing is listening.
-            served = await _fetch_inside_response(runtime, conversation_id, port, path)
-            if served is not None:
-                return served
-            return Response("preview not available", status_code=503, media_type="text/plain")
-        try:
-            async with httpx.AsyncClient(
-                timeout=15, follow_redirects=False, trust_env=False
-            ) as client:
-                r = await client.get(f"{upstream}/{path}")
-        except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
-            # Fix 2 safety net: resolved-but-unreachable upstream → try the in-sandbox
-            # liveness proxy before the 502 (same as preview_app).
-            served = await _fetch_inside_response(runtime, conversation_id, port, path)
-            if served is not None:
-                return served
-            return Response(
-                "preview upstream unreachable", status_code=502, media_type="text/plain"
-            )  # noqa: E501
-        media_type = r.headers.get("content-type", "text/html")
-        return Response(
-            content=inject_element_mention_picker(r.content, media_type),
-            status_code=r.status_code,
-            media_type=media_type,
-        )
-
-    @router.websocket("/conversations/{conversation_id}/port/{port}/{path:path}")
-    @router.websocket("/conversations/{conversation_id}/port/{port}/")
-    async def port_app_websocket(
-        websocket: WebSocket,
-        conversation_id: str,
-        port: int,
-        path: str = "",
-    ) -> None:
-        """Proxy live curated-port WebSockets (including Vite HMR)."""
-        session = websocket_session(websocket)
-        if session is None:
-            await _close_ws(websocket, 1008, "auth required")
-            return
-        try:
-            conversation_id = await require_owned_conversation_for_owner(
-                store,
-                conversation_id,
-                session.owner_id,
-                owner_bypass=session.session_id == "test-session",
-            )
-        except HTTPException:
-            await _close_ws(websocket, 1008, "conversation forbidden")
-            return
-        if port not in USER_PORTS:
-            await _close_ws(websocket, 1008, "unknown port")
-            return
-        if runtime is None:
-            await _close_ws(websocket, 1008, "preview not available")
-            return
-        cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=session.owner_id)
         if upstream is None:
             await _close_ws(websocket, 1008, "preview not available")
             return

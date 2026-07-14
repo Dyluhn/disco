@@ -210,12 +210,62 @@ async def _create_conversation_response(
     }
 
 
+def _register_workspace_version_routes(
+    router: APIRouter,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> None:
+    """Register workspace-version read and restore endpoints."""
+
+    @router.get("/conversations/{conversation_id}/versions")
+    async def list_workspace_versions(conversation_id: str, request: Request) -> dict:
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        if runtime is None:
+            return {"versions": []}
+        try:
+            project_store = runtime.project_store()
+            if project_store is None or project_store.status() != StorageStatus.OK:
+                return {"versions": []}
+            return {
+                "versions": [
+                    asdict(version) for version in project_store.list_versions(conversation_id)
+                ]
+            }
+        except Exception:  # noqa: BLE001 — version history is additive/read-only
+            return {"versions": []}
+
+    @router.post("/conversations/{conversation_id}/versions/{seq}/restore")
+    async def restore_workspace_version(conversation_id: str, seq: int, request: Request) -> dict:
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "runtime_unavailable"})
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        _reject_if_imported(store, conversation_id)
+        try:
+            return await runtime.restore_workspace_version(conversation_id, seq)
+        except WorkspaceRestoreConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "conversation_running", "message": str(exc)},
+            ) from exc
+        except WorkspaceVersionNotFound as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "version_not_found", "message": str(exc)},
+            ) from exc
+        except WorkspaceRestoreStorageError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "storage_error", "message": str(exc)},
+            ) from exc
+
+
 def make_conversations_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
     host_token_store: HostTokenStore | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    _register_workspace_version_routes(router, store, runtime)
 
     @router.post("/conversations")
     async def create_conversation(
@@ -476,45 +526,6 @@ def make_conversations_router(
         if not result["ok"]:
             raise HTTPException(status_code=409, detail=result)
         return result
-
-    @router.get("/conversations/{conversation_id}/versions")
-    async def list_workspace_versions(conversation_id: str, request: Request) -> dict:
-        """List saved workspace versions, newest first. Storage problems degrade
-        to an empty list like the Projects list instead of breaking the page."""
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
-        if runtime is None:
-            return {"versions": []}
-        try:
-            ps = runtime.project_store()
-            if ps is None or ps.status() != StorageStatus.OK:
-                return {"versions": []}
-            return {"versions": [asdict(v) for v in ps.list_versions(conversation_id)]}
-        except Exception:  # noqa: BLE001 — version history is additive/read-only
-            return {"versions": []}
-
-    @router.post("/conversations/{conversation_id}/versions/{seq}/restore")
-    async def restore_workspace_version(conversation_id: str, seq: int, request: Request) -> dict:
-        if runtime is None:
-            raise HTTPException(status_code=503, detail={"reason": "runtime_unavailable"})
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
-        _reject_if_imported(store, conversation_id)
-        try:
-            return await runtime.restore_workspace_version(conversation_id, seq)
-        except WorkspaceRestoreConflict as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={"reason": "conversation_running", "message": str(exc)},
-            ) from exc
-        except WorkspaceVersionNotFound as exc:
-            raise HTTPException(
-                status_code=404,
-                detail={"reason": "version_not_found", "message": str(exc)},
-            ) from exc
-        except WorkspaceRestoreStorageError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"reason": "storage_error", "message": str(exc)},
-            ) from exc
 
     @router.get("/conversations")
     async def list_conversations(

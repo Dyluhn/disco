@@ -71,6 +71,7 @@ class _RouterWithCtx(Protocol):
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse: ...
 
+
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # W-11: a SMALL temperature bump for the section-synthesis PROSE only, so every
@@ -153,7 +154,7 @@ def _validate_charts(markdown: str) -> str:
                             ]
                             for d in data
                         ]
-                    
+
                     if not rows:
                         continue
 
@@ -161,8 +162,8 @@ def _validate_charts(markdown: str) -> str:
                     for r in rows:
                         table += f"| {' | '.join(r)} |\n"
                     out.append(f"\n{table}\n")
-                except Exception: # noqa: BLE001
-                    continue # just drop the broken chart
+                except Exception:  # noqa: BLE001
+                    continue  # just drop the broken chart
         else:
             out.append(block)
     return "".join(out)
@@ -375,12 +376,12 @@ _SECTION_PROMPT = (
     "there, write prose instead. Charts use this exact format:\n"
     "```chart\n"
     "{{\n"
-    "  \"chart_type\": \"bar\" | \"line\" | \"pie\" | \"scatter\",\n"
-    "  \"title\": \"Chart Title\",\n"
-    "  \"x_label\": \"Label for X axis\",\n"
-    "  \"y_label\": \"Label for Y axis\",\n"
-    "  \"data\": [{{\"label\": \"A\", \"value\": 10}}, {{\"label\": \"B\", \"value\": 20}}] \n"
-    "  // OR for scatter: \"data\": [{{\"x\": 1, \"y\": 2, \"group\": \"A\"}}]\n"
+    '  "chart_type": "bar" | "line" | "pie" | "scatter",\n'
+    '  "title": "Chart Title",\n'
+    '  "x_label": "Label for X axis",\n'
+    '  "y_label": "Label for Y axis",\n'
+    '  "data": [{{"label": "A", "value": 10}}, {{"label": "B", "value": 20}}] \n'
+    '  // OR for scatter: "data": [{{"x": 1, "y": 2, "group": "A"}}]\n'
     "}}\n"
     "```\n\n"
     "FORMAT: roughly 3–7 short paragraphs of markdown, but VARY the structure "
@@ -481,11 +482,9 @@ def _extract_disputed_notes(markdown: str) -> list[str]:
         re.IGNORECASE,
     )
     citation = re.compile(r"\[\[[\w-]+\]\]")
-    return [
-        s.strip()
-        for s in sentences
-        if cue.search(s) and citation.search(s) and len(s) > 40
-    ][:3]
+    return [s.strip() for s in sentences if cue.search(s) and citation.search(s) and len(s) > 40][
+        :3
+    ]
 
 
 async def _retrieve_for_section(
@@ -510,6 +509,55 @@ async def _retrieve_for_section(
         return await vector_store.query(namespace, vecs[0], top_k=top_k)
     except Exception:  # noqa: BLE001 — fall back to the sub-q passages
         return fallback_passages[:top_k]
+
+
+async def _normalize_section_markup(
+    markdown: str,
+    *,
+    router: LLMRouter,
+    instruction: str,
+    leg_context: GatherLegContext,
+    passage_ids: set[str],
+) -> str:
+    """Repair invalid chart output, citations, and partial GFM tables."""
+    chart_matches = re.findall(r"```chart\n(.*?)\n```", markdown, re.DOTALL)
+    invalid_errors: list[str] = []
+    for match in chart_matches:
+        try:
+            payload = json.loads(match.strip())
+            jsonschema.validate(instance=payload, schema=CHART_SCHEMA)
+        except Exception as exc:  # noqa: BLE001 — fed back to the model once
+            invalid_errors.append(str(exc))
+
+    if invalid_errors:
+        retry_msg = (
+            "Your previous output contained invalid chart JSON:\n"
+            f"{' ; '.join(invalid_errors)}\n\n"
+            "Please rewrite the section, ensuring all ```chart blocks "
+            "strictly follow the schema provided in rule 6. If you cannot "
+            "fix the chart, use a standard markdown table instead."
+        )
+        try:
+            response = await cast(_RouterWithCtx, router).complete(
+                CompletionRequest(
+                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                    messages=[
+                        LLMMessage(role="user", content=instruction),
+                        LLMMessage(role="assistant", content=markdown),
+                        LLMMessage(role="user", content=retry_msg),
+                    ],
+                    temperature=0.0,
+                    max_tokens=1400,
+                ),
+                context=leg_context.call_context,
+            )
+            markdown = strip_think_spans(response.text)
+        except Exception:  # noqa: BLE001 — preserve the original section
+            pass
+
+    markdown = _validate_charts(markdown)
+    markdown = _normalize_citations(markdown, passage_ids)
+    return _repair_tables(markdown)
 
 
 async def synthesize_section(
@@ -690,53 +738,13 @@ async def synthesize_section(
                 markdown = markdown + stripped_extra
         markdown = markdown.strip()
 
-        # CHART VALIDATION & RETRY
-        chart_matches = re.findall(r"```chart\n(.*?)\n```", markdown, re.DOTALL)
-        if chart_matches:
-            invalid_errors = []
-            for m in chart_matches:
-                try:
-                    p = json.loads(m.strip())
-                    jsonschema.validate(instance=p, schema=CHART_SCHEMA)
-                except Exception as e:
-                    invalid_errors.append(str(e))
-
-            if invalid_errors:
-                # One retry with error trace. The retry's message list is also
-                # built FRESH (per-leg, not shared with another leg) and is
-                # scoped to this leg's CallContext. The retry sequence stays
-                # inside this leg — it never crosses a sibling's leg_context.
-                retry_msg = (
-                    "Your previous output contained invalid chart JSON:\n"
-                    f"{' ; '.join(invalid_errors)}\n\n"
-                    "Please rewrite the section, ensuring all ```chart blocks "
-                    "strictly follow the schema provided in rule 6. If you cannot "
-                    "fix the chart, use a standard markdown table instead."
-                )
-                try:
-                    resp = await cast(_RouterWithCtx, router).complete(
-                        CompletionRequest(
-                            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                            messages=[
-                                LLMMessage(role="user", content=instruction),
-                                LLMMessage(role="assistant", content=markdown),
-                                LLMMessage(role="user", content=retry_msg),
-                            ],
-                            temperature=0.0,
-                            max_tokens=1400,
-                        ),
-                        context=leg_context.call_context,
-                    )
-                    markdown = strip_think_spans(resp.text)
-                except Exception:  # noqa: BLE001
-                    pass  # Keep the first version if retry fails
-
-        # Final safety validation (degrade invalid charts to tables)
-        markdown = _validate_charts(markdown)
-        # BW-05 — promote bare [id] citations to [[id]] so they render + track.
-        markdown = _normalize_citations(markdown, {p.id for p in passages})
-        # BW-07 (1) — repair malformed/half tables so remark-gfm never sees one.
-        markdown = _repair_tables(markdown)
+        markdown = await _normalize_section_markup(
+            markdown,
+            router=router,
+            instruction=instruction,
+            leg_context=leg_context,
+            passage_ids={passage.id for passage in passages},
+        )
 
     except Exception as exc:  # noqa: BLE001 — preserve gathered evidence below
         markdown = _grounded_extractive_fallback(passages)
