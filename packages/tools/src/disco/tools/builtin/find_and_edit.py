@@ -44,6 +44,7 @@ _DEFAULT_MAX_MATCHES = 200
 _CONCURRENCY = 5
 _CONTEXT_RADIUS_LINES = 20
 _MAX_LLM_TOKENS = 4096
+_MAX_TRUNCATION_RETRIES = 1
 _GLOB_MAGIC = frozenset("*?[")
 
 
@@ -103,6 +104,15 @@ class _ReadFile:
     result: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _LLMResponse:
+    content: str
+    finish_reason: str | None
+
+
+type _LLMResponseLike = _LLMResponse | str
+
+
 async def _call_llm(
     messages: list[dict[str, str]],
     llm_url: str,
@@ -111,8 +121,8 @@ async def _call_llm(
     api_key: str | None = None,
     temperature: float = 0.0,
     max_tokens: int = _MAX_LLM_TOKENS,
-) -> str:
-    """Call an OpenAI-compatible chat completions endpoint and return raw text."""
+) -> _LLMResponse:
+    """Call an OpenAI-compatible endpoint without discarding completion status."""
     payload = {
         "model": model,
         "messages": messages,
@@ -132,7 +142,11 @@ async def _call_llm(
         )
         resp.raise_for_status()
         data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    choice = data["choices"][0]
+    return _LLMResponse(
+        content=choice["message"]["content"],
+        finish_reason=choice.get("finish_reason"),
+    )
 
 
 def _normalize_path(path: str) -> str:
@@ -237,9 +251,7 @@ async def _select_paths(args: FindAndEditArgs, ctx: ToolContext) -> tuple[list[s
             add(pattern)
 
     if len(selected) > args.max_files:
-        warnings.append(
-            f"selected {len(selected)} files, exceeding max_files={args.max_files}"
-        )
+        warnings.append(f"selected {len(selected)} files, exceeding max_files={args.max_files}")
     return selected, warnings
 
 
@@ -314,6 +326,32 @@ def _decision_messages(args: FindAndEditArgs, match: _Match) -> list[dict[str, s
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def _coerce_llm_response(value: _LLMResponseLike) -> _LLMResponse:
+    """Keep legacy string-returning adapters honest about their unknown status."""
+
+    if isinstance(value, _LLMResponse):
+        return value
+    if isinstance(value, str):
+        return _LLMResponse(content=value, finish_reason=None)
+    raise TypeError(f"LLM adapter returned unsupported response type {type(value).__name__}")
+
+
+def _truncation_retry_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Request one fresh, complete decision without trusting cut JSON fragments."""
+
+    return [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "The previous response was provider-truncated. Re-evaluate this exact "
+                "match and return the complete JSON decision from the beginning. Return "
+                "ONLY one complete JSON object; do not continue the cut fragment."
+            ),
+        },
+    ]
+
+
 def _parse_decision(raw: str, matched_text: str) -> tuple[str, str | None, str]:
     stripped = strip_think_spans(raw)
     if not stripped:
@@ -349,29 +387,85 @@ async def _decide_match(
     api_key: str | None,
     sem: asyncio.Semaphore,
 ) -> tuple[int, dict[str, Any]]:
+    messages = _decision_messages(args, match)
+    saw_truncation = False
     async with sem:
-        try:
-            raw = await _call_llm(
-                _decision_messages(args, match),
-                llm_url,
-                model,
-                api_key=api_key,
-                temperature=0.0,
-                max_tokens=_MAX_LLM_TOKENS,
-            )
-        except Exception as exc:  # noqa: BLE001 - safe default is a per-match no-op.
-            return match.global_index, {
-                "status": "skipped",
-                "reason": f"llm_error:{type(exc).__name__}",
-            }
-    action, replacement, reason = _parse_decision(raw, match.text)
-    if action != "edit" or replacement is None:
-        return match.global_index, {"status": "skipped", "reason": reason}
-    return match.global_index, {
-        "status": "accepted",
-        "reason": reason,
-        "replacement": replacement,
-    }
+        for attempt in range(_MAX_TRUNCATION_RETRIES + 1):
+            try:
+                response = _coerce_llm_response(
+                    await _call_llm(
+                        messages,
+                        llm_url,
+                        model,
+                        api_key=api_key,
+                        temperature=0.0,
+                        max_tokens=_MAX_LLM_TOKENS,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - safe default is a per-match no-op.
+                if saw_truncation:
+                    return match.global_index, {
+                        "status": "failed",
+                        "reason": f"provider_truncation_retry_error:{type(exc).__name__}",
+                        "finish_reason": "length",
+                        "provider_calls": attempt + 1,
+                        "retry_count": attempt,
+                    }
+                return match.global_index, {
+                    "status": "skipped",
+                    "reason": f"llm_error:{type(exc).__name__}",
+                }
+
+            finish_reason = (response.finish_reason or "").strip().lower()
+            if finish_reason == "length":
+                saw_truncation = True
+                if attempt < _MAX_TRUNCATION_RETRIES:
+                    messages = _truncation_retry_messages(messages)
+                    continue
+                return match.global_index, {
+                    "status": "failed",
+                    "reason": "provider_truncated",
+                    "finish_reason": "length",
+                    "provider_calls": attempt + 1,
+                    "retry_count": attempt,
+                }
+            if finish_reason not in ("", "stop", "end_turn", "eos", "eos_token"):
+                return match.global_index, {
+                    "status": "failed",
+                    "reason": f"provider_incomplete:{finish_reason}",
+                    "finish_reason": finish_reason,
+                    "provider_calls": attempt + 1,
+                    "retry_count": attempt,
+                }
+
+            action, replacement, reason = _parse_decision(response.content, match.text)
+            if saw_truncation and action != "edit" and reason != "action_skip":
+                return match.global_index, {
+                    "status": "failed",
+                    "reason": f"provider_truncation_recovery_invalid:{reason}",
+                    "finish_reason": finish_reason or None,
+                    "provider_calls": attempt + 1,
+                    "retry_count": attempt,
+                }
+            if action != "edit" or replacement is None:
+                decision: dict[str, Any] = {"status": "skipped", "reason": reason}
+            else:
+                decision = {
+                    "status": "accepted",
+                    "reason": reason,
+                    "replacement": replacement,
+                }
+            if saw_truncation:
+                decision.update(
+                    {
+                        "recovered_from_truncation": True,
+                        "provider_calls": attempt + 1,
+                        "retry_count": attempt,
+                    }
+                )
+            return match.global_index, decision
+
+    raise AssertionError("bounded decision loop exhausted without a result")
 
 
 def _mark_skipped(match_result: dict[str, Any], reason: str) -> None:
@@ -397,12 +491,18 @@ def _prepare_exact_edits(
         if decision.get("status") == "accepted":
             edits_by_old.setdefault(match.text, []).append(match)
 
+    # A provider-truncated decision makes the requested edit set incomplete. Keep
+    # the whole file byte-identical instead of applying a silently partial subset.
+    if any(match_result.get("status") == "failed" for match_result in file.result["matches"]):
+        for match_result in file.result["matches"]:
+            if match_result.get("status") == "accepted":
+                _mark_skipped(match_result, "file_decision_failed")
+        return [], False
+
     edits: list[ExactReplaceEdit] = []
     multi = False
     for old_string, accepted_matches in edits_by_old.items():
-        replacements = {
-            str(decisions[m.global_index].get("replacement")) for m in accepted_matches
-        }
+        replacements = {str(decisions[m.global_index].get("replacement")) for m in accepted_matches}
         occurrences = len(_all_occurrences(file.text, old_string))
         all_regex_matches = matches_by_old.get(old_string, [])
         if (
@@ -430,7 +530,11 @@ async def _apply_file_edits(
 ) -> int:
     edits, multi = _prepare_exact_edits(file, decisions)
     if not edits:
-        file.result["status"] = "unchanged"
+        if any(match.get("status") == "failed" for match in file.result["matches"]):
+            file.result["status"] = "failed"
+            file.result["reason"] = "decision_failed"
+        else:
+            file.result["status"] = "unchanged"
         return 0
 
     exact_args = ExactReplaceArgs(
@@ -440,9 +544,7 @@ async def _apply_file_edits(
         multi=multi,
     )
     outcome = await ExactReplaceTool().run(exact_args, ctx)
-    accepted_results = [
-        m for m in file.result["matches"] if m.get("status") == "accepted"
-    ]
+    accepted_results = [m for m in file.result["matches"] if m.get("status") == "accepted"]
     if not outcome.success:
         reason = f"exact_replace_failed:{outcome.error or 'unknown'}"
         file.result["status"] = "skipped"
@@ -466,7 +568,8 @@ class FindAndEditTool:
         description=(
             "Find regex matches across selected workspace files and ask the driver LLM "
             "whether to replace each exact matched span. Ambiguous or unparsable decisions "
-            "are safe no-ops; accepted edits are applied atomically per file."
+            "are safe no-ops; provider truncation is retried once and surfaced explicitly; "
+            "accepted edits are applied atomically per file."
         ),
         args_model=FindAndEditArgs,
         needs=_FS,
@@ -637,20 +740,29 @@ class FindAndEditTool:
             for match in file.get("matches", [])
             if match.get("status") == "skipped"
         )
+        failed = sum(
+            1
+            for file in file_results
+            for match in file.get("matches", [])
+            if match.get("status") == "failed"
+        )
+        failure_label = "decision failure" if failed == 1 else "decision failures"
         content = (
             f"find_and_edit: scanned {len(selected)} files, {len(global_matches)} matches, "
-            f"{edited} edited, {skipped} skipped."
+            f"{edited} edited, {skipped} skipped, {failed} {failure_label}."
         )
         return ToolOutcome(
             success=True,
             content=content,
             artifacts=artifacts,
             structured={
+                "kind": "completed_with_decision_failures" if failed else "completed",
                 "scanned_files": len(selected),
                 "read_files": len(files),
                 "matches": len(global_matches),
                 "edited": edited,
                 "skipped": skipped,
+                "decision_failures": failed,
                 "files": file_results,
                 "warnings": warnings,
             },
