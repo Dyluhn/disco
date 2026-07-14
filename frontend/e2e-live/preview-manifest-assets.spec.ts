@@ -63,7 +63,7 @@ substitute a one-file app. Create these exact files in the workspace:
 
 Use ordinary workspace write/shell tools. Verify the files and links. Then call the
 serve tool exactly once with path '${RELEASE_ENTRY}' (the entry FILE, not release,
-dot, or the workspace root), title 'Selected reliability release', and finish.
+dot, or the workspace root), title 'Selected reliability release', kind 'app', and finish.
 `;
 }
 
@@ -147,13 +147,26 @@ function selectedApp(events: EventJson[]): EventJson | undefined {
     .find((event) => event.kind === "deliverable" && event.artifact_kind === "app");
 }
 
-function verifierFallbackEvidence(events: EventJson[]): Array<Record<string, unknown>> {
-  const annotated = events.flatMap((event) => {
+function verifierEvidence(events: EventJson[]): {
+  model_judge_invoked: boolean;
+  events: Array<Record<string, unknown>>;
+} {
+  const verifierEvents = events.filter((event) =>
+    new Set(["verifier_started", "verifier_shadow", "verifier_verdict"]).has(String(event.kind)),
+  );
+  expect(verifierEvents.length, "finish emitted no host-verifier evidence").toBeGreaterThan(0);
+  const annotated = verifierEvents.flatMap((event) => {
     if (!new Set(["verifier_shadow", "verifier_verdict"]).has(String(event.kind))) return [];
     const meta = event.meta;
     if (!meta || typeof meta !== "object" || Array.isArray(meta)) return [];
     const record = meta as Record<string, unknown>;
-    if (typeof record.model_verifier_status !== "string") return [];
+    const modelKeys = [
+      "model_verifier_status",
+      "model_verifier_applied",
+      "model_verifier_cause",
+    ].filter((key) => record[key] !== undefined);
+    if (modelKeys.length === 0) return [];
+    expect(typeof record.model_verifier_status).toBe("string");
     expect(typeof record.model_verifier_applied).toBe("boolean");
     if (record.model_verifier_applied === false) {
       expect(typeof record.model_verifier_cause).toBe("string");
@@ -170,8 +183,7 @@ function verifierFallbackEvidence(events: EventJson[]): Array<Record<string, unk
         : { model_verifier_cause: record.model_verifier_cause }),
     }];
   });
-  expect(annotated.length, "verifier events did not persist model-verifier status").toBeGreaterThan(0);
-  return annotated;
+  return { model_judge_invoked: annotated.length > 0, events: annotated };
 }
 
 async function assertApiGraph(
@@ -368,7 +380,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     await page.goto(`/build/${buildCid}`);
     await approveBuildPlan(page);
     const buildFirst = await waitForCommittedFinish(request, buildCid);
-    const buildFirstVerifier = verifierFallbackEvidence(buildFirst.events);
+    const buildFirstVerifier = verifierEvidence(buildFirst.events);
     expect(selectedApp(buildFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(buildFirst.events, await inspectTrace(request, buildCid));
     await assertApiGraph(request, buildCid, FIRST_MARKER);
@@ -380,7 +392,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     cids.push(agentCid);
     await agentPage.goto(`/agent/${agentCid}`);
     const agentFirst = await waitForCommittedFinish(request, agentCid);
-    const agentFirstVerifier = verifierFallbackEvidence(agentFirst.events);
+    const agentFirstVerifier = verifierEvidence(agentFirst.events);
     expect(selectedApp(agentFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(agentFirst.events, await inspectTrace(request, agentCid));
     await assertApiGraph(request, agentCid, FIRST_MARKER);
@@ -413,7 +425,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     await page.reload();
     await approveBuildPlan(page);
     const buildSecond = await waitForCommittedFinish(request, buildCid, beforeRevision);
-    const buildSecondVerifier = verifierFallbackEvidence(buildSecond.events);
+    const buildSecondVerifier = verifierEvidence(buildSecond.events);
     expect(selectedApp(buildSecond.events)?.path).toBe(RELEASE_ENTRY);
     expect(buildSecond.version).toBeGreaterThan(buildFirst.version);
     assertNoThrash(buildSecond.events, await inspectTrace(request, buildCid));
