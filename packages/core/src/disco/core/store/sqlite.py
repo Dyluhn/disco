@@ -226,7 +226,32 @@ def _row_to_event(payload: str) -> Event:
     return EventAdapter.validate_python(migrate_event(json.loads(payload)))
 
 
-class SqliteEventStore:
+class _ClosableSqliteStore:
+    """Idempotent connection ownership shared by the concrete event store."""
+
+    _closed: bool
+    _conn: sqlite3.Connection
+
+    def close(self) -> None:
+        """Release the connection; safe to call more than once."""
+        if self._closed:
+            return
+        self._conn.close()
+        self._closed = True
+
+    def __del__(self) -> None:
+        """Defensively release a connection whose owner omitted ``close``."""
+        if getattr(self, "_closed", True):
+            return
+        try:
+            self.close()
+        except sqlite3.Error:
+            # Destructors cannot safely surface cleanup exceptions. Normal
+            # ownership paths remain explicit and observable through close().
+            pass
+
+
+class SqliteEventStore(_ClosableSqliteStore):
     """An `EventStore` (store/base.py) backed by a single SQLite file.
 
     Pass a filesystem path for durability across reopens (the G2 restart path),
@@ -312,30 +337,6 @@ class SqliteEventStore:
         # only; a late joiner simply misses in-flight deltas and gets the final
         # persisted ActionEvent instead.
         self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
-
-    def close(self) -> None:
-        """Release the connection; safe to call more than once."""
-        if self._closed:
-            return
-        self._conn.close()
-        self._closed = True
-
-    def __del__(self) -> None:
-        """Defensive last-resort cleanup for an owner that omitted ``close``.
-
-        Long-lived services still close stores explicitly.  This finalizer keeps
-        short-lived/error-path owners from leaking the underlying sqlite handle
-        until interpreter shutdown, where Python 3.13 reports ResourceWarning.
-        """
-        if getattr(self, "_closed", True):
-            return
-        try:
-            self.close()
-        except sqlite3.Error:
-            # Destructors cannot safely surface cleanup exceptions.  Restrict the
-            # fallback to SQLite's own close errors; all normal ownership paths
-            # remain explicit and observable through close().
-            pass
 
     # ---- conversation metadata (extends the protocol; used by app-server) ----
 

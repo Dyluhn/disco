@@ -109,7 +109,49 @@ class ConfigValidationError(Exception):
 # ---- the session-scoped config state ----------------------------------------
 
 
-class ConfigState:
+class _McpConfigStateMixin:
+    """MCP configuration facade kept separate from the settings coordinator."""
+
+    _mcp_service: McpConfigService
+
+    def _mcp_config(self) -> McpSettings:
+        return self._mcp_service._mcp_config()
+
+    def _mcp_approvals(self) -> dict[str, dict]:
+        return self._mcp_service._mcp_approvals()
+
+    def _mcp_approval_pending(self) -> dict[str, dict]:
+        return self._mcp_service._mcp_approval_pending()
+
+    def _mcp_config_approvals(self) -> dict[str, dict]:
+        return self._mcp_service._mcp_config_approvals()
+
+    def mcp_connections(self) -> list[McpConnectionDTO]:
+        return self._mcp_service.mcp_connections()
+
+    def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
+        return self._mcp_service.create_mcp_server(body)
+
+    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
+        return self._mcp_service.update_mcp_server(name, patch)
+
+    def delete_mcp_server(self, name: str) -> bool:
+        return self._mcp_service.delete_mcp_server(name)
+
+    def revoke_mcp_server(self, name: str) -> McpConnectionDTO | None:
+        return self._mcp_service.revoke_mcp_server(name)
+
+    def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
+        return self._mcp_service.approve_mcp_server(name, body)
+
+    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]:
+        return self._mcp_service._mcp_secret_refs(srv)
+
+    def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
+        return self._mcp_service.mcp_approval_diff(name, new_hash)
+
+
+class ConfigState(_McpConfigStateMixin):
     """Holds the live config the settings surface reads/writes. The catalogue
     (add/edit/remove a model) AND the per-role assignments are mutable and PERSISTED
     via a shared ConfigStore so the agent-server runtime actually honors them.
@@ -992,44 +1034,6 @@ class ConfigState:
 
     def delete_skill(self, skill_id: str) -> bool:
         return self._skills_store.delete(skill_id)
-
-    # mcp (live, persistent CRUD) — rung B ----------------------------------
-
-    def _mcp_config(self) -> McpSettings:
-        return self._mcp_service._mcp_config()
-
-    def _mcp_approvals(self) -> dict[str, dict]:
-        return self._mcp_service._mcp_approvals()
-
-    def _mcp_approval_pending(self) -> dict[str, dict]:
-        return self._mcp_service._mcp_approval_pending()
-
-    def _mcp_config_approvals(self) -> dict[str, dict]:
-        return self._mcp_service._mcp_config_approvals()
-
-    def mcp_connections(self) -> list[McpConnectionDTO]:
-        return self._mcp_service.mcp_connections()
-
-    def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
-        return self._mcp_service.create_mcp_server(body)
-
-    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
-        return self._mcp_service.update_mcp_server(name, patch)
-
-    def delete_mcp_server(self, name: str) -> bool:
-        return self._mcp_service.delete_mcp_server(name)
-
-    def revoke_mcp_server(self, name: str) -> McpConnectionDTO | None:
-        return self._mcp_service.revoke_mcp_server(name)
-
-    def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
-        return self._mcp_service.approve_mcp_server(name, body)
-
-    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]:
-        return self._mcp_service._mcp_secret_refs(srv)
-
-    def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
-        return self._mcp_service.mcp_approval_diff(name, new_hash)
 
 
 def app_quota_store(state: ConfigState) -> SqliteQuotaStore:

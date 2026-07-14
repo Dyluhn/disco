@@ -658,6 +658,12 @@ class ConversationRuntime:
     def _host_verify_flags_enabled(self) -> bool:
         return host_verify_canary_enabled() or host_verify_authoritative_enabled()
 
+    def _init_mcp_http_state(self) -> None:
+        """Initialize remote-MCP caches and their sanitized status boundary."""
+        self._mcp_http_clients: dict[str, Any] = {}
+        self._mcp_http_tools: dict[str, ToolDef] = {}
+        self._mcp_http_status: dict[str, dict[str, Any]] = {}
+
     def __init__(
         self,
         store: SqliteEventStore,
@@ -882,14 +888,8 @@ class ConversationRuntime:
         # Servers that need re-approval (ApprovalRequired at startup). Emitted to
         # WS clients as mcp_approval_required frames.
         self._mcp_approval_pending: dict[str, dict] = {}
-        # RP-05 rung B: MCP HTTP clients (streamable_http transport). Managed
-        # separately from the stdio pool; tools are merged at compose time.
-        self._mcp_http_clients: dict[str, Any] = {}  # server_name -> McpHttpClient
-        self._mcp_http_tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
-        # Sanitized live state for HTTP MCP servers. Values contain only typed
-        # status/diagnostic metadata; URLs, headers, commands, and secrets never
-        # cross the status boundary.
-        self._mcp_http_status: dict[str, dict[str, Any]] = {}
+        # Remote MCP lifecycle/cache state is separate from the stdio pool.
+        self._init_mcp_http_state()
         # RP-05 rung B: retrieval-tier MCP providers (search/extract Protocol wrappers).
         self._mcp_retrieval_searches: list = []
         self._mcp_retrieval_extractions: list = []
