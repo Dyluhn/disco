@@ -260,6 +260,32 @@ def test_serve_argument_literals_are_metadata_not_dictated_content():
     ) == ["Selected reliability release"]
 
 
+def test_serve_file_path_dot_does_not_turn_following_title_into_visible_copy():
+    """H069 live-8: punctuation inside the path argument is not a sentence break."""
+    text = (
+        "Build a normal HTML document with visible h1 text 'SELECTED RELEASE ONE'. "
+        "Use ordinary workspace write/shell tools. Verify the files and links. "
+        "Then call the\nserve tool exactly once with path 'release/index.html' "
+        "(the entry FILE, not release,\ndot, or the workspace root), title "
+        "'Selected reliability release', and finish."
+    )
+    assert extract_dictated_content_literals(text) == ["SELECTED RELEASE ONE"]
+    conditions = dictated_content_conditions_from_events(
+        [_user(text, 1), _plan(1, 2), _status("plan_approved", 3)]
+    )
+    assert [condition.literal for condition in conditions] == ["SELECTED RELEASE ONE"]
+
+    # An actual sentence boundary still ends serve metadata scope. The later
+    # page title is visible content and must remain a hard finish condition.
+    visible_copy = (
+        "Call serve with path 'release/index.html'. "
+        "Then make the page title 'Selected reliability release'."
+    )
+    assert extract_dictated_content_literals(visible_copy) == [
+        "Selected reliability release"
+    ]
+
+
 def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
     assert _safe_deliverable_file_path("/workspace/release/index.html") == (
         "release/index.html"

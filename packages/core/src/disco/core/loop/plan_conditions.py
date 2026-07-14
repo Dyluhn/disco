@@ -169,7 +169,18 @@ def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
     """
 
     prefix = instruction[max(0, quote_start - 480) : quote_start]
-    return _SERVE_METADATA_PREFIX_RE.search(prefix) is not None
+    # Sentence punctuation delimits the serve instruction, but punctuation
+    # inside an earlier quoted tool argument does not. In particular, live-8's
+    # path 'release/index.html' put a dot between ``serve`` and its following
+    # ``title`` argument and escaped the original boundary-aware regex. Preserve
+    # string length while masking only complete quoted spans, so dots after the
+    # path (real sentence boundaries) continue to terminate metadata scope.
+    boundary_view = re.sub(
+        r"'[^'\n]*'|\"[^\"\n]*\"",
+        lambda match: " " * len(match.group(0)),
+        prefix,
+    )
+    return _SERVE_METADATA_PREFIX_RE.search(boundary_view) is not None
 
 
 def extract_dictated_content_literals(text: str) -> list[str]:
