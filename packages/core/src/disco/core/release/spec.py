@@ -538,27 +538,36 @@ def _strip_file_scheme(url: str) -> str:
 
 
 def local_mount_target(resource: ResourceDecl) -> str:
-    """The container directory a resource's named volume mounts at — the PARENT
-    directory of its local path.
+    """The container directory a resource's named volume mounts at — the REAL PARENT
+    directory of its local path, so the emitted mount always BACKS the persistent path
+    exactly.
 
-    The SINGLE source of truth (WO-C7) shared by two consumers so they can never
-    drift: the `ReleaseSpec` schema validator (no two distinct resources may claim
-    the same mount target) and the local-compose emitter (each resource mounts its
-    volume here). Derived from the LOCAL url (a sqlite `file:/data/app.db` →
-    `/data`); the C5 url⊕persistent_path consistency guard makes the two agree, and
-    the `/data` fallback matches a bare-root path so the emitter's historical output
-    is byte-preserved."""
+    The SINGLE source of truth (WO-C7 / R3 G07) shared by two consumers so they can never
+    drift: the `ReleaseSpec` schema validator (no two distinct resources may claim the
+    same mount target, and a root parent is rejected as unbackable) and the local-compose
+    emitter (each resource mounts its volume here). Derived from the LOCAL url (a sqlite
+    `file:/data/app.db` → `/data`; `file:/var/lib/app/db.sqlite` → `/var/lib/app`); the C5
+    url⊕persistent_path consistency guard makes the two agree.
+
+    A filesystem-ROOT file (its only path separator is the leading one, e.g. `/app.db`)
+    resolves to `/` — its TRUE parent — NOT a blind `/data` (R3 G07). The historical
+    `/data` fallback named a mount that does NOT contain a root-level file, so a
+    `self_host:true` bundle promised persistence its volume did not back. Detection now
+    fails such a layout closed (`persistent_path_unbackable`) BEFORE it can become a
+    candidate — and the schema validator refuses it too — because a volume mounted at `/`
+    would shadow the container root. Returning the honest `/` here keeps this function
+    TRUTHFUL (the mount target it names is the real parent) rather than papering over the
+    gap with a directory that does not cover the file."""
     path = _strip_file_scheme(resource.profiles.local.url) or resource.persistent_path
     path = path.rstrip("/")
     slash = path.rfind("/")
-    # O1 (carried, out of C7 scope — a C8 live-persistence concern): a ROOT-level
-    # path like `/app.db` falls back to `/data`, which does not actually cover it, so
-    # its data would not persist. Low reachability — the detector only ever emits
-    # `/data/app.db` / `/data/state`, and the duplicate-mount-target validator still
-    # prevents any two-resource clobber even if a root-level path were hand-declared.
-    if slash <= 0:
-        return "/data"
-    return path[:slash]
+    if slash > 0:
+        return path[:slash]
+    # A filesystem-ROOT path: its true parent is the root `/`. A `/` mount would shadow
+    # the container root, so this layout is rejected up front (detection's
+    # `persistent_path_unbackable` blocker + the schema's mount-target validator) and a
+    # candidate never emits it; naming the honest parent keeps the target truthful.
+    return "/"
 
 
 # ---- detector provenance ------------------------------------------------------
@@ -957,6 +966,22 @@ class ReleaseSpec(BaseModel):
                 )
             seen_paths[path] = resource.id
             target = local_mount_target(resource)
+            # R3 (G07): a FILESYSTEM-ROOT persistent path (parent dir `/`) is UNBACKABLE — a
+            # named volume that backed it would have to mount at `/` and shadow the whole
+            # container root, so no portable volume can persist it. Detection already fails
+            # such a layout closed (`persistent_path_unbackable`); this is the AUTHORITATIVE
+            # emit-boundary belt (like the emitter's `_revalidated` gate) so a spec built
+            # through a NON-detecting path (`model_construct` / a future producer) can never
+            # be lowered into a `<volume>:/` mount that silently does not persist. Reject it
+            # here — declare the path under a subdirectory (e.g. `/data/app.db`). Names the
+            # resource id only, never the path value.
+            if target == "/":
+                raise ValueError(
+                    f"resource {resource.id!r} persists at a filesystem-root path whose "
+                    "parent directory is '/'; a named volume cannot back it without mounting "
+                    "at the container root, so it cannot be represented portably — declare "
+                    "the persistent path under a subdirectory (e.g. '/data/app.db')"
+                )
             if target in seen_targets:
                 raise ValueError(
                     f"resources {seen_targets[target]!r} and {resource.id!r} mount at the same "

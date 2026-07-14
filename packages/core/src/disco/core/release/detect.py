@@ -79,6 +79,7 @@ from disco.core.release.spec import (
     RuntimeStrategy,
     SecretClass,
     ServiceRole,
+    local_mount_target,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -433,7 +434,8 @@ class DetectionBlocker(BaseModel):
     `code` is a stable, machine-readable code the release API returns verbatim on
     the blocker's `code` field (`required_env_unresolved`, `port_contract_unresolved`,
     `entrypoint_unresolved`, `toolchain_unsupported`, `output_dir_unresolved`,
-    `health_path_unresolved`, `runtime_conflict`); `field` optionally names the
+    `health_path_unresolved`, `runtime_conflict`, `persistent_path_unbackable`); `field`
+    optionally names the
     release-contract field an owner must declare; `path` optionally names a
     workspace path the finding is about. Distinct from `MissingField`: a
     `DetectionBlocker` carries the EXACT typed code (not the coarse
@@ -1682,6 +1684,44 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     return None
 
 
+def _resource_topology_blocker(resources: tuple[ResourceDecl, ...]) -> _DetectBlocker | None:
+    """A `persistent_path_unbackable` fail-closed outcome (R3 / G07) when a declared
+    resource persists at a FILESYSTEM-ROOT path — its parent directory is `/` (e.g.
+    `/app.db`). A named volume can back a persistent path only by mounting the path's
+    containing directory; for a root-level file that directory is `/` itself, and a volume
+    mounted at `/` would shadow the whole container root. Such a layout cannot be
+    represented portably — the emitter historically fell back to a `/data` mount that does
+    NOT contain the file, so the data would live on the container's EPHEMERAL layer while a
+    `self_host:true` bundle promised it survives a restart. Fail closed instead,
+    instructing the caller to declare the path under a subdirectory (e.g. `/data/app.db`)
+    so a volume backs it exactly. `None` when every resource's persistent path sits under a
+    real subdirectory. Deterministic: the first offending resource (in declared order)
+    names the blocker. Value-free: the message names the RULE, never the offending path."""
+    for resource in resources:
+        # `local_mount_target` returns the resource's REAL parent directory; a root-level
+        # path resolves to `/` — the single unbackable case. Deriving the check from the
+        # SAME source of truth the emitter mounts at keeps the two from ever drifting: if a
+        # restored `/data` fallback ever made a root path resolve to `/data` again, this
+        # would stop firing and the emitted mount would once more not back the file.
+        if local_mount_target(resource) == "/":
+            return _DetectBlocker(
+                code="persistent_path_unbackable",
+                message=(
+                    "a declared resource persists at a filesystem-root path whose parent "
+                    "directory is '/'; a named volume cannot back it without mounting at the "
+                    "container root, so its data would not survive a restart. Declare the "
+                    "persistent path under a subdirectory (for example '/data/app.db') so a "
+                    "volume can back it exactly."
+                ),
+                field="persistent_path",
+                evidence=(
+                    "persistence evidence: a resource persists at an unbackable "
+                    "filesystem-root path",
+                ),
+            )
+    return None
+
+
 def _classify_secret(name: str) -> SecretClass:
     """Classify a declared env-var NAME as `secret` or `public` by its shape.
 
@@ -1826,6 +1866,11 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
     grammar = _command_grammar_blocker(intent)
     if grammar is not None:
         return _fail_closed(grammar)
+    # R3 (G07): a static intent may still declare a stateful resource; a filesystem-ROOT
+    # persistent path is unbackable (its mount dir is `/`), so fail closed here too.
+    topology = _resource_topology_blocker(intent.resources)
+    if topology is not None:
+        return _fail_closed(topology)
     # A build ALWAYS installs first, so derive an install even for a no-dependency
     # package.json (force_node); a prebuilt static serve (no build_cmd) installs nothing.
     install_outcome = _intent_install(
@@ -1896,6 +1941,12 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
     grammar = _command_grammar_blocker(intent)
     if grammar is not None:
         return _fail_closed(grammar)
+    # R3 (G07): a declared resource whose persistent_path is a filesystem-ROOT file cannot
+    # be volume-backed (its mount dir is `/`, which would shadow the container root), so
+    # fail closed rather than emit a self-host bundle whose state silently does not persist.
+    topology = _resource_topology_blocker(intent.resources)
+    if topology is not None:
+        return _fail_closed(topology)
     # A declared CONVENTIONAL health probe (`/healthz`, `/health`, …) must correspond
     # to a real route WHEN the workspace ships a concrete node/python service we can
     # scan: claiming a standard probe the source never registers is a broken contract.
