@@ -59,9 +59,6 @@ function buildZeroSpecs(
     if (eid.startsWith(prefix) && EDITABLE_KINDS.has(entry.kind)) {
       specs.push({
         element_id: eid,
-        json_pointer: entry.json_pointer,
-        kind: entry.kind,
-        content: entry.content,
         rect: { left: 0, top: 0, width: 0, height: 0 },
       });
     }
@@ -136,9 +133,6 @@ export function SlideCanvas({
       const r = el.getBoundingClientRect();
       newSpecs.push({
         element_id: eid,
-        json_pointer: entry.json_pointer,
-        kind: entry.kind,
-        content: entry.content,
         rect: { left: r.left, top: r.top, width: r.width, height: r.height },
       });
     });
@@ -255,19 +249,35 @@ export function SlideCanvas({
           pointerEvents: "none", // clicks on empty areas fall through to the iframe
         }}
       >
-        {overlaySpecs.map((spec) => (
-          <ElementBox
-            key={spec.element_id}
-            elementId={spec.element_id}
-            jsonPointer={spec.json_pointer}
-            kind={spec.kind}
-            content={spec.content}
-            rect={spec.rect}
-            selected={selectedElementId === spec.element_id}
-            onSelect={onSelectElement}
-            onPatch={onPatch}
-          />
-        ))}
+        {overlaySpecs.map((spec) => {
+          // Measurement state owns geometry only. Text, kind, and write-back pointer
+          // belong to the latest server-authoritative element map. Reading the mutable
+          // fields from `spec` would expose the prior title for one committed render
+          // (until the passive re-measure effect ran), leaving screen readers and
+          // automation behind the already-updated deck. It could also pair a reused
+          // element id with an obsolete pointer after reorder/duplicate operations.
+          const entry = elementMap.get(spec.element_id);
+          if (
+            !entry ||
+            !spec.element_id.startsWith(`${activeSlideId}:`) ||
+            !EDITABLE_KINDS.has(entry.kind)
+          ) {
+            return null;
+          }
+          return (
+            <ElementBox
+              key={spec.element_id}
+              elementId={spec.element_id}
+              jsonPointer={entry.json_pointer}
+              kind={entry.kind}
+              content={entry.content}
+              rect={spec.rect}
+              selected={selectedElementId === spec.element_id}
+              onSelect={onSelectElement}
+              onPatch={onPatch}
+            />
+          );
+        })}
       </div>
     </div>
   );

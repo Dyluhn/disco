@@ -44,18 +44,14 @@ export interface LoweredDeck {
 }
 
 /**
- * One measured overlay spec — derived by querying `[data-element-id]` rects inside
- * the WYSIWYG iframe and joining against the lowered-deck element map for the
- * json_pointer. Positions are in px relative to the iframe container.
+ * One measured overlay spec. This state deliberately contains geometry and identity
+ * only; mutable semantics (content, kind, json_pointer) must always come from the
+ * latest lowered-deck element map so committed edits cannot expose stale labels or
+ * write through obsolete pointers.
  */
 export interface OverlaySpec {
   /** e.g. "slide-0:title" — the iframe's data-element-id value */
   element_id: string;
-  /** RFC-6901 path into the AuthoredDeck for this element */
-  json_pointer: string;
-  kind: LoweredElement["kind"];
-  /** Current text content (from the LoweredDeck, NOT the iframe DOM) */
-  content: string;
   /** Measured position relative to the iframe container (px). Zero-rect before first measurement. */
   rect: { left: number; top: number; width: number; height: number };
 }

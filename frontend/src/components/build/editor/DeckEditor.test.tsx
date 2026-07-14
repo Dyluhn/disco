@@ -26,6 +26,7 @@
  * 14. Selected element info bar shows kind + double-click-to-edit hint.
  */
 
+import { useLayoutEffect, useRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { DeckEditor } from "@/components/build/editor/DeckEditor";
@@ -154,6 +155,45 @@ function chartDeck(): LoweredDeck {
       },
     ],
   };
+}
+
+function deckWithFirstTitle(title: string): LoweredDeck {
+  const deck = makeDeck();
+  return {
+    ...deck,
+    slides: deck.slides.map((slide, index) =>
+      index === 0
+        ? {
+            ...slide,
+            elements: slide.elements.map((element) =>
+              element.kind === "title" ? { ...element, content: title } : element,
+            ),
+          }
+        : slide,
+    ),
+  };
+}
+
+function LayoutAriaProbe({
+  deck,
+  onLayout,
+}: {
+  deck: LoweredDeck;
+  onLayout: (label: string | null) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    onLayout(
+      rootRef.current
+        ?.querySelector('[data-disco-control="build.deck-element"]')
+        ?.getAttribute("aria-label") ?? null,
+    );
+  }, [deck, onLayout]);
+  return (
+    <div ref={rootRef}>
+      <DeckEditor deck={deck} renderHtml={FIXTURE_HTML} onPatch={vi.fn()} />
+    </div>
+  );
 }
 
 // ─── BW-13 P1: continuation/overflow render↔pointer identity ──────────────────
@@ -386,6 +426,24 @@ describe("DeckEditor — iframe substrate", () => {
 // ─── 2 + 3: Overlay nodes from the elementMap ────────────────────────────────
 
 describe("DeckEditor — overlay nodes (wiring)", () => {
+  it("updates the element accessible name in the same commit as server-authoritative content", () => {
+    const labels: Array<string | null> = [];
+    const onLayout = (label: string | null) => labels.push(label);
+    const { rerender } = render(
+      <LayoutAriaProbe deck={deckWithFirstTitle("Before commit")} onLayout={onLayout} />,
+    );
+    expect(labels.at(-1)).toBe("title: Before commit");
+
+    rerender(
+      <LayoutAriaProbe deck={deckWithFirstTitle("After commit")} onLayout={onLayout} />,
+    );
+
+    // A screen reader or browser automation query made in the commit's layout phase
+    // must never observe the old title. Waiting for SlideCanvas's passive measurement
+    // effect is too late: the visible/server-authoritative deck has already changed.
+    expect(labels.at(-1)).toBe("title: After commit");
+  });
+
   it("renders an overlay for the title element (data-element-id stamped)", () => {
     const { container } = render(
       <DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={vi.fn()} />,
