@@ -14,7 +14,7 @@ describe("Main surface — empty state + reactive provider errors", () => {
   it("offers suggestion chips that fill the composer", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const input = screen.getByPlaceholderText(/ask anything/i);
+    const input = await screen.findByPlaceholderText(/ask anything/i);
     const pills = screen
       .getAllByRole("button")
       .filter((button) => button.dataset.discoControl === "search.suggestion");
@@ -30,29 +30,29 @@ describe("Main surface — empty state + reactive provider errors", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
-    expect(screen.getByText("Sourced answers on anything.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
+    expect(await screen.findByText("Sourced answers on anything.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "build" }));
+    expect(await screen.findByText("Real software, live preview.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
-    expect(screen.getByText("Real software, live preview.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "agent" }));
-    expect(screen.getByText("Hands-on tasks and workflows.")).toBeInTheDocument();
+    expect(await screen.findByText("Hands-on tasks and workflows.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "search" }));
-    await user.click(screen.getByRole("button", { name: /Scope: Standard/i }));
+    await user.click(await screen.findByRole("button", { name: /Scope: Standard/i }));
     await user.click(screen.getByRole("menuitem", { name: /Deep Research/i }));
-    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
     expect(
-      screen.getByText("Deep Research — Multi-step reports with cited evidence."),
+      await screen.findByText("Deep Research — Multi-step reports with cited evidence."),
     ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
   });
 
   it("surfaces a provider error with its REAL content, not a generic failure", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.type(screen.getByPlaceholderText(/ask anything/i), "provider-error please");
+    await user.type(await screen.findByPlaceholderText(/ask anything/i), "provider-error please");
     await user.keyboard("{Enter}");
 
     const alert = await screen.findByRole("alert", {}, { timeout: 3000 });

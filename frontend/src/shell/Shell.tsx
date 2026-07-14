@@ -1,5 +1,5 @@
 import { Menu } from "lucide-react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { DemoDataBadge } from "@/components/DemoDataBadge";
 import { SandboxHealthBanner } from "@/components/SandboxHealthBanner";
@@ -78,7 +78,15 @@ export function Shell() {
         <SandboxHealthBanner />
 
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <Outlet />
+          <Suspense
+            fallback={
+              <div role="status" className="p-body text-sm text-text-muted">
+                Loading view…
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

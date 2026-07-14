@@ -31,7 +31,7 @@ describe("Research surface (integration + streaming reconcile)", () => {
     // empty state (wordmark appears in header + hero)
     expect(screen.getAllByText("Disco").length).toBeGreaterThan(0);
 
-    await user.type(screen.getByPlaceholderText(/ask anything/i), "How does RRF work?");
+    await user.type(await screen.findByPlaceholderText(/ask anything/i), "How does RRF work?");
     await user.keyboard("{Enter}");
 
     // Wait for the FINISHED signal: follow-up pills render only once the run
@@ -53,7 +53,7 @@ describe("Research surface (integration + streaming reconcile)", () => {
   it("renders verification verdicts as citations (the unsupported claim is marked)", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.type(screen.getByPlaceholderText(/ask anything/i), "RRF?");
+    await user.type(await screen.findByPlaceholderText(/ask anything/i), "RRF?");
     await user.keyboard("{Enter}");
     // wait for finished (citations resolve only once the final answer is set)
     await waitFor(

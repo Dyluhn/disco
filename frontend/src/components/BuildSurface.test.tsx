@@ -33,7 +33,14 @@ async function enterBuildAndSubmit() {
   const user = userEvent.setup();
   render(<App />);
   await user.click(screen.getByRole("radio", { name: "build" }));
-  await user.type(screen.getByPlaceholderText(/describe what you want/i), "make fizzbuzz");
+  await user.type(
+    await screen.findByPlaceholderText(
+      /describe what you want/i,
+      {},
+      { timeout: 5000 },
+    ),
+    "make fizzbuzz",
+  );
   await user.keyboard("{Enter}");
   return user;
 }
@@ -107,7 +114,13 @@ describe("Build surface (plan gate → build → action gate)", () => {
     render(<App />);
     await user.click(screen.getByRole("radio", { name: "build" }));
     // the picker trigger is present and shows the default model from the catalogue
-    expect(screen.getByRole("button", { name: /choose the model/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: /choose the model/i },
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Qwen3.6-27B")).toBeInTheDocument(), {
       timeout: 5000,
     });
@@ -127,7 +140,14 @@ describe("Build surface (plan gate → build → action gate)", () => {
     render(<App />);
     await user.click(screen.getByRole("radio", { name: "build" }));
     // a task that makes the agent ask a clarifying question (offline demo branch)
-    await user.type(screen.getByPlaceholderText(/describe what you want/i), "ask me about the output format");
+    await user.type(
+      await screen.findByPlaceholderText(
+        /describe what you want/i,
+        {},
+        { timeout: 5000 },
+      ),
+      "ask me about the output format",
+    );
     await user.keyboard("{Enter}");
 
     // the Ask-gate panel appears with the question + a focused answer box

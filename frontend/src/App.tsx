@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { lazy, useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Navigate,
@@ -12,23 +12,52 @@ import {
 import { installE2EBridge, type DiscoE2EState, type Surface } from "@/lib/e2eBridge";
 import { getPublishedRunStatus } from "@/lib/runStatusBridge";
 import { clearFreshMode } from "@/lib/sessionResume";
-import { BuildSurface } from "@/components/BuildSurface";
-import { AgentSurface } from "@/components/AgentSurface";
-import { ResearchSurface } from "@/components/ResearchSurface";
-import { DeepResearchSurface } from "@/components/research/DeepResearchSurface";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { PairingGate } from "@/components/PairingGate";
 import { ToastProvider } from "@/components/Toast";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
-import { ActivityView } from "@/views/ActivityView";
-import { HistoryView } from "@/views/HistoryView";
-import { ImportedRunView } from "@/views/ImportedRunView";
-import { ProjectsView } from "@/views/ProjectsView";
-import { SettingsView } from "@/views/SettingsView";
-import { ShareView } from "@/views/ShareView";
-import { SpacesView } from "@/views/SpacesView";
-import { WorkflowReviewPanel } from "@/views/WorkflowReviewPanel";
+
+const BuildSurface = lazy(() =>
+  import("@/components/BuildSurface").then((module) => ({ default: module.BuildSurface })),
+);
+const AgentSurface = lazy(() =>
+  import("@/components/AgentSurface").then((module) => ({ default: module.AgentSurface })),
+);
+const ResearchSurface = lazy(() =>
+  import("@/components/ResearchSurface").then((module) => ({ default: module.ResearchSurface })),
+);
+const DeepResearchSurface = lazy(() =>
+  import("@/components/research/DeepResearchSurface").then((module) => ({
+    default: module.DeepResearchSurface,
+  })),
+);
+const ActivityView = lazy(() =>
+  import("@/views/ActivityView").then((module) => ({ default: module.ActivityView })),
+);
+const HistoryView = lazy(() =>
+  import("@/views/HistoryView").then((module) => ({ default: module.HistoryView })),
+);
+const ImportedRunView = lazy(() =>
+  import("@/views/ImportedRunView").then((module) => ({ default: module.ImportedRunView })),
+);
+const ProjectsView = lazy(() =>
+  import("@/views/ProjectsView").then((module) => ({ default: module.ProjectsView })),
+);
+const SettingsView = lazy(() =>
+  import("@/views/SettingsView").then((module) => ({ default: module.SettingsView })),
+);
+const ShareView = lazy(() =>
+  import("@/views/ShareView").then((module) => ({ default: module.ShareView })),
+);
+const SpacesView = lazy(() =>
+  import("@/views/SpacesView").then((module) => ({ default: module.SpacesView })),
+);
+const WorkflowReviewPanel = lazy(() =>
+  import("@/views/WorkflowReviewPanel").then((module) => ({
+    default: module.WorkflowReviewPanel,
+  })),
+);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },

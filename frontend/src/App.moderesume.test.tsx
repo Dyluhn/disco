@@ -64,19 +64,21 @@ describe("W-24 — mode slider syncs on route resume", () => {
   it("/agent/:cid → the slider reflects Agent", async () => {
     window.history.pushState({}, "", "/agent/cid_test");
     render(<App />);
-    expect(screen.getByTestId("agent-surface-stub")).toBeInTheDocument();
+    expect(await screen.findByTestId("agent-surface-stub")).toBeInTheDocument();
     await expectModeChecked("agent");
   });
 
   it("/build/:cid → the slider reflects Build", async () => {
     window.history.pushState({}, "", "/build/cid_test");
     render(<App />);
+    expect(await screen.findByTestId("build-surface-stub")).toBeInTheDocument();
     await expectModeChecked("build");
   });
 
   it("/deep/:cid → the slider reflects Search", async () => {
     window.history.pushState({}, "", "/deep/cid_test");
     render(<App />);
+    expect(await screen.findByTestId("deep-surface-stub")).toBeInTheDocument();
     await expectModeChecked("search");
   });
 });
@@ -96,6 +98,7 @@ describe("A2 — fresh sessions and resume targets", () => {
     ]);
     window.history.pushState({}, "", "/agent/agent_old");
     render(<App />);
+    expect(await screen.findByTestId("agent-surface-stub")).toBeInTheDocument();
     await expectModeChecked("agent");
 
     await user.click(screen.getByRole("link", { name: "New" }));
@@ -127,6 +130,7 @@ describe("A2 — fresh sessions and resume targets", () => {
     ]);
     window.history.pushState({}, "", "/build/build_history");
     render(<App />);
+    expect(await screen.findByTestId("build-surface-stub")).toBeInTheDocument();
     await expectModeChecked("build");
 
     await user.click(screen.getByRole("radio", { name: "search" }));
@@ -157,6 +161,7 @@ describe("A2 — fresh sessions and resume targets", () => {
     ]);
     window.history.pushState({}, "", "/");
     render(<App />);
+    expect(await screen.findByTestId("research-surface-stub")).toBeInTheDocument();
     await expectModeChecked("search");
 
     await user.click(screen.getByRole("radio", { name: "build" }));

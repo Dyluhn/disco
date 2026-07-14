@@ -25,7 +25,14 @@ async function submitAndApprovePlan() {
   const user = userEvent.setup();
   render(<App />);
   await user.click(screen.getByRole("radio", { name: "build" }));
-  await user.type(screen.getByPlaceholderText(/describe what you want/i), "make fizzbuzz");
+  await user.type(
+    await screen.findByPlaceholderText(
+      /describe what you want/i,
+      {},
+      { timeout: 5000 },
+    ),
+    "make fizzbuzz",
+  );
   await user.keyboard("{Enter}");
   await waitFor(() => screen.getByRole("button", { name: /approve & build/i }), { timeout: 5000 });
   await user.click(screen.getByRole("button", { name: /approve & build/i }));

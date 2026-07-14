@@ -6,7 +6,7 @@
   "description": "Research Answer UI — the Research surface front-end (BoD §13.3).",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck:build && vite build",
+    "build": "npm run typecheck:build && vite build && node scripts/check-bundle-budget.mjs",
     "typecheck:build": "tsc -p tsconfig.build.json --noEmit",
     "preview": "vite preview",
     "lint": "eslint .",
