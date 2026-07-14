@@ -7,7 +7,12 @@ from disco.agent_server.auth import AgentAuthMiddleware
 from disco.app_server import auth as app_auth
 from disco.app_server.app import create_app as create_app_server
 from disco.app_server.auth import _ADMIN_PREFIXES, AppAuthMiddleware, _is_admin_path
-from disco.core.auth import CSRF_HEADER, SESSION_COOKIE, SessionSigner
+from disco.core.auth import (
+    CSRF_HEADER,
+    PATH_PREVIEW_BOOTSTRAP_PATH,
+    SESSION_COOKIE,
+    SessionSigner,
+)
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute, APIWebSocketRoute
@@ -50,6 +55,12 @@ def _agent_public(path: str, methods: set[str]) -> bool:
         return True
     if path.startswith("/api/appkit/cloudflare/"):
         return True
+    # Token-public, not anonymous access: the isolated preview origin cannot
+    # carry the application session. The route exchanges a signed one-use
+    # intent for a narrowly scoped preview cookie and rejects missing/invalid
+    # intents. Its capability enforcement is asserted explicitly below.
+    if "GET" in methods and path == f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}":
+        return True
     return False
 
 
@@ -61,6 +72,12 @@ def _app_public(path: str) -> bool:
         "/api/auth/origins",
         "/api/auth/pairing-token",
     }
+
+
+def _agent_capability_or_session(path: str, methods: set[str]) -> bool:
+    return "GET" in methods and path.startswith(
+        "/conversations/{conversation_id}/preview-app/"
+    )
 
 
 def _route_class(path: str, methods: set[str]) -> str:
@@ -164,7 +181,12 @@ def test_agent_route_inventory_actual_enforcement(monkeypatch) -> None:
             continue
 
         unauth_resp = _request(unauth, method, concrete)
-        assert unauth_resp.status_code == 401, (method, path, unauth_resp.status_code)
+        expected_unauth = 403 if _agent_capability_or_session(path, methods) else 401
+        assert unauth_resp.status_code == expected_unauth, (
+            method,
+            path,
+            unauth_resp.status_code,
+        )
 
         bad_origin = _request(unauth, method, concrete, headers={"Origin": EVIL_ORIGIN})
         assert bad_origin.status_code == 403, (method, path, bad_origin.status_code)
@@ -191,6 +213,16 @@ def test_agent_route_inventory_actual_enforcement(monkeypatch) -> None:
     assert host_proxy.status_code == 403
     raw_prefix = owner_b.get("/conversations/abcdef12/preview-app/")
     assert raw_prefix.status_code == 404
+
+    # Public in the session inventory does not mean open: without a valid
+    # signed intent, the alternate-origin bootstrap must fail closed and must
+    # not set either an app session or preview capability cookie.
+    invalid_bootstrap = unauth.get(
+        f"{PATH_PREVIEW_BOOTSTRAP_PATH}/deadbeef", follow_redirects=False
+    )
+    assert invalid_bootstrap.status_code == 403
+    assert "location" not in invalid_bootstrap.headers
+    assert "set-cookie" not in invalid_bootstrap.headers
 
 
 def test_agent_websocket_inventory_has_handshake_auth() -> None:
