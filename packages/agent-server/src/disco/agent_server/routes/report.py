@@ -327,6 +327,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         try:
             mp3_path, transcript_path = await generate_report_audio(
                 report,
+                conversation_id=conversation_id,
                 tts_settings=tts,
                 out_dir=out_dir,
                 mode=mode,
@@ -390,6 +391,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
             try:
                 mp3_path, transcript_path = await generate_report_audio(
                     report,
+                    conversation_id=conversation_id,
                     tts_settings=tts,
                     out_dir=out_dir,
                     mode=mode,

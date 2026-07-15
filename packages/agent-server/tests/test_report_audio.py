@@ -195,7 +195,10 @@ def test_generate_report_audio_in_process(
     out_dir = tmp_path / "conv_abc" / "audio"
     mp3_path, transcript_path = asyncio.run(
         report_audio_mod.generate_report_audio(
-            _make_report(), tts_settings=tts_enabled, out_dir=out_dir
+            _make_report(),
+            conversation_id="conv_abc",
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
         )
     )
     assert mp3_path.exists() and mp3_path.stat().st_size > 0
@@ -217,7 +220,10 @@ def test_generate_report_audio_disabled(configure_tts, tts_disabled, tmp_path) -
     with pytest.raises(report_audio_mod.TtsDisabled):
         asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_disabled, out_dir=out_dir
+                _make_report(),
+                conversation_id="conv_disabled",
+                tts_settings=tts_disabled,
+                out_dir=out_dir,
             )
         )
     # No files should be written.
@@ -241,7 +247,10 @@ def test_generate_report_audio_synth_failure(configure_tts, tmp_path, monkeypatc
     with pytest.raises(report_audio_mod.TtsBackendError):
         asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts, out_dir=out_dir
+                _make_report(),
+                conversation_id="conv_synth_failure",
+                tts_settings=tts,
+                out_dir=out_dir,
             )
         )
 
@@ -431,6 +440,9 @@ def test_report_http_adapter_preserves_provider_finish_reason(monkeypatch) -> No
             "http://provider.invalid/v1",
             api_key_env=None,
             purpose="model:test",
+            conversation_id="conv_finish_reason",
+            model="test-model",
+            ledger_purpose="report_audio.podcast",
         )
     )
     assert isinstance(result, report_audio_mod.audio_overview.LLMResponse)
@@ -535,6 +547,7 @@ def test_endpoint_classifies_audio_generation_failure(
     _seed_report(store, cid)
 
     async def _fail(*_args: object, **_kwargs: object) -> None:
+        assert _kwargs["conversation_id"] == cid
         raise failure_type("classified audio failure")
 
     monkeypatch.setattr(report_routes, "generate_report_audio", _fail)
@@ -655,12 +668,20 @@ def test_mode_aware_cache_key_no_collision(configure_tts, tts_enabled, tmp_path)
     try:
         mp3_podcast, tr_podcast = asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="podcast"
+                _make_report(),
+                conversation_id="conv_modes",
+                tts_settings=tts_enabled,
+                out_dir=out_dir,
+                mode="podcast",
             )
         )
         mp3_single, tr_single = asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="single"
+                _make_report(),
+                conversation_id="conv_modes",
+                tts_settings=tts_enabled,
+                out_dir=out_dir,
+                mode="single",
             )
         )
     finally:
@@ -701,7 +722,11 @@ def test_single_mode_transcript_no_host_labels(configure_tts, tts_enabled, tmp_p
     try:
         _, tr_path = asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_enabled, out_dir=out_dir, mode="single"
+                _make_report(),
+                conversation_id="conv_single_tr",
+                tts_settings=tts_enabled,
+                out_dir=out_dir,
+                mode="single",
             )
         )
     finally:
@@ -832,6 +857,7 @@ def test_generate_report_audio_with_follow_ups(
     mp3_path, transcript_path = asyncio.run(
         report_audio_mod.generate_report_audio(
             _make_report(),
+            conversation_id="conv_fu",
             tts_settings=tts_enabled,
             out_dir=out_dir,
             follow_ups=follow_ups,
@@ -865,11 +891,20 @@ def test_generate_report_audio_follow_ups_separate_cache(
     out_dir = tmp_path / "conv_sep" / "audio"
 
     base_mp3, _ = asyncio.run(
-        report_audio_mod.generate_report_audio(report, tts_settings=tts_enabled, out_dir=out_dir)
+        report_audio_mod.generate_report_audio(
+            report,
+            conversation_id="conv_sep",
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+        )
     )
     fu_mp3, _ = asyncio.run(
         report_audio_mod.generate_report_audio(
-            report, tts_settings=tts_enabled, out_dir=out_dir, follow_ups=follow_ups
+            report,
+            conversation_id="conv_sep",
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
+            follow_ups=follow_ups,
         )
     )
     # B3: content-hash cache key — follow-up content changes the hash so the two
@@ -928,7 +963,10 @@ def test_normalize_empty_turn_falls_back_to_raw_text(
         out_dir = tmp_path / "conv_code_only" / "audio"
         mp3_path, _ = asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_enabled, out_dir=out_dir
+                _make_report(),
+                conversation_id="conv_code_only",
+                tts_settings=tts_enabled,
+                out_dir=out_dir,
             )
         )
     finally:
@@ -986,7 +1024,10 @@ def test_all_empty_turns_skipped_gracefully(
         # All turns skip → mix_pcm([]) → encode_mp3(empty) → valid silent MP3
         mp3_path, _ = asyncio.run(
             report_audio_mod.generate_report_audio(
-                _make_report(), tts_settings=tts_enabled, out_dir=out_dir
+                _make_report(),
+                conversation_id="conv_all_skipped",
+                tts_settings=tts_enabled,
+                out_dir=out_dir,
             )
         )
     finally:
@@ -1024,6 +1065,7 @@ def test_progress_emits_real_stages_no_download(
     asyncio.run(
         report_audio_mod.generate_report_audio(
             _make_report(),
+            conversation_id="conv_prog",
             tts_settings=tts_enabled,
             out_dir=out_dir,
             on_progress=_on_progress,
@@ -1077,6 +1119,7 @@ def test_progress_emits_download_only_when_missing(
     asyncio.run(
         report_audio_mod.generate_report_audio(
             _make_report(),
+            conversation_id="conv_dl",
             tts_settings=tts_enabled,
             out_dir=out_dir,
             on_progress=_on_progress,
@@ -1100,7 +1143,10 @@ def test_progress_cache_hit_no_download(configure_tts, tts_enabled, tmp_path, mo
     # First run populates the cache.
     asyncio.run(
         report_audio_mod.generate_report_audio(
-            _make_report(), tts_settings=tts_enabled, out_dir=out_dir
+            _make_report(),
+            conversation_id="conv_cache_progress",
+            tts_settings=tts_enabled,
+            out_dir=out_dir,
         )
     )
     # Second run with the model 'missing' — should still skip the download.
@@ -1112,6 +1158,7 @@ def test_progress_cache_hit_no_download(configure_tts, tts_enabled, tmp_path, mo
     asyncio.run(
         report_audio_mod.generate_report_audio(
             _make_report(),
+            conversation_id="conv_cache_progress",
             tts_settings=tts_enabled,
             out_dir=out_dir,
             on_progress=_on_progress,
@@ -1170,6 +1217,7 @@ def test_audio_stream_classifies_audio_generation_failure(
     _seed_report(store, cid)
 
     async def _fail(*_args: object, **_kwargs: object) -> None:
+        assert _kwargs["conversation_id"] == cid
         raise failure_type("classified audio failure")
 
     monkeypatch.setattr(report_routes, "generate_report_audio", _fail)

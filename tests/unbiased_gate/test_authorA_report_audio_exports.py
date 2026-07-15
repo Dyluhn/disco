@@ -48,7 +48,13 @@ def _report(
 async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
     monkeypatch, tmp_path: Path
 ) -> None:
-    async def fake_turn_script(_overview_text: str, _mode: str):
+    async def fake_turn_script(
+        _overview_text: str,
+        _mode: str,
+        *,
+        conversation_id: str,
+    ):
+        assert conversation_id == "conv_progress"
         return [
             audio_overview.Turn(speaker="A", text="Opening finding."),
             audio_overview.Turn(speaker="B", text="Second finding."),
@@ -94,6 +100,7 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
     monkeypatch.setattr(tts_local, "ensure_model", fake_ensure_model)
     await report_audio.generate_report_audio(
         _report(),
+        conversation_id="conv_progress",
         tts_settings=settings,
         out_dir=tmp_path / "cold",
         on_progress=cold_events.append,
@@ -113,6 +120,7 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
     monkeypatch.setattr(tts_local, "model_files_present", lambda: True)
     await report_audio.generate_report_audio(
         _report(),
+        conversation_id="conv_progress",
         tts_settings=settings,
         out_dir=tmp_path / "warm",
         on_progress=warm_events.append,
@@ -128,6 +136,7 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
     cache_events: list[dict] = []
     await report_audio.generate_report_audio(
         _report(),
+        conversation_id="conv_progress",
         tts_settings=settings,
         out_dir=tmp_path / "warm",
         on_progress=cache_events.append,

@@ -21,9 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
-import time
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Literal
 
@@ -38,6 +36,7 @@ from .errors import (
     LLMProviderUnavailable,
     LLMTransientError,
 )
+from .provider_ledger import emit_provider_attempt
 from .toolcall_recovery import recover_tool_calls
 from .types import (
     EMPTY_REASONING_ONLY_METADATA_KEY,
@@ -814,22 +813,13 @@ class OpenAIProvider:
         branch; conversation_id scoping keeps PARALLEL soak lanes from
         cross-contaminating each other's after-terminal counts. Best-effort:
         ledger failure must never fail a live request. Unset env ⇒ zero overhead."""
-        path = os.environ.get("DISCO_PROVIDER_LEDGER")
-        if not path:
-            return
-        try:
-            raw_cid = (req.metadata or {}).get("conversation_id")
-            rec = {
-                "ts": time.time(),
-                "host": httpx.URL(self._base).host or self._base,
-                "model": model,
-                "has_tools": bool(req.tools),
-                "conversation_id": str(raw_cid).strip() if raw_cid else None,
-            }
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec) + "\n")
-        except Exception:  # noqa: BLE001 — auditing must never break the request path
-            pass
+        raw_cid = (req.metadata or {}).get("conversation_id")
+        emit_provider_attempt(
+            base_url=self._base,
+            model=model,
+            has_tools=bool(req.tools),
+            conversation_id=str(raw_cid).strip() if raw_cid else None,
+        )
 
     async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
         self._ledger_emit(req, model)

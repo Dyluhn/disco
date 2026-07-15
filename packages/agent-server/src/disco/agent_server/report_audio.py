@@ -37,6 +37,7 @@ from typing import Any
 
 import httpx
 from disco.core import ReportEvent
+from disco.core.llm.provider_ledger import emit_provider_attempt
 
 # The audio_overview tool is in a different package; import its helpers as-is
 # (they're pure functions / async coroutines; none depend on ToolContext or a
@@ -264,6 +265,9 @@ async def _authenticated_call_llm(
     *,
     api_key_env: str | None,
     purpose: str,
+    conversation_id: str,
+    model: str,
+    ledger_purpose: str,
 ) -> audio_overview.LLMResponseLike:
     if getattr(audio_overview._call_llm, "__name__", "") == "_fake_llm":
         return await audio_overview._call_llm(payload, llm_url)
@@ -296,6 +300,14 @@ async def _authenticated_call_llm(
         trust_env=False,
         follow_redirects=False,
     ) as client:
+        emit_provider_attempt(
+            base_url=llm_url,
+            model=model,
+            has_tools=False,
+            conversation_id=conversation_id,
+            purpose=ledger_purpose,
+            call_kind="chat_completion",
+        )
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
@@ -310,7 +322,12 @@ async def _authenticated_call_llm(
         )
 
 
-async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
+async def _generate_turn_script(
+    overview_text: str,
+    mode: str,
+    *,
+    conversation_id: str,
+) -> list[Any]:
     """Generate a complete mode-aware script through the shared batch protocol."""
 
     llm_url, llm_model, api_key_env, purpose = _resolve_report_llm()
@@ -330,6 +347,9 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
             llm_url,
             api_key_env=api_key_env,
             purpose=purpose,
+            conversation_id=conversation_id,
+            model=llm_model,
+            ledger_purpose=f"report_audio.{mode}",
         )
 
     try:
@@ -346,6 +366,7 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
 
 async def generate_report_audio(
     report: ReportEvent,
+    conversation_id: str,
     *,
     tts_settings: Any,
     out_dir: Path,
@@ -377,7 +398,6 @@ async def generate_report_audio(
     the server endpoint stay in lock-step — the route, NOT a different code
     path, is the only thing that changes.
     """
-    # --- Gate: settings -----------------------------------------------------
     if not tts_settings.enabled:
         raise TtsDisabled("Audio overview is disabled in Settings → Audio.")
 
@@ -426,7 +446,7 @@ async def generate_report_audio(
     # --- Step 1: turn-script ------------------------------------------------
     await _emit(on_progress, {"stage": "preparing"})
     overview_text = report_to_overview_text(report, follow_ups)
-    turns = await _generate_turn_script(overview_text, mode)
+    turns = await _generate_turn_script(overview_text, mode, conversation_id=conversation_id)
     backend = {
         "bundled": "bundled Kokoro",
         "speaches": "self-host Speaches",

@@ -15,6 +15,7 @@ import httpx
 import pytest
 from disco.core.events import LLMMessage
 from disco.core.llm.openai_provider import OpenAIProvider
+from disco.core.llm.provider_ledger import emit_provider_attempt
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -65,6 +66,7 @@ async def test_ledger_record_shape_and_harness_roundtrip(tmp_path, monkeypatch) 
     monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(path))
     await _provider().complete(_req("conv_ledger"), model="deepseek-v4-flash")
     rec = json.loads(path.read_text().strip())
+    assert set(rec) == {"ts", "host", "model", "has_tools", "conversation_id"}
     assert isinstance(rec["ts"], float)
     assert rec["host"] == "opencode.ai"
     assert rec["model"] == "deepseek-v4-flash"
@@ -96,3 +98,40 @@ async def test_ledger_failure_never_breaks_the_request(tmp_path, monkeypatch) ->
     monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(tmp_path))  # a DIRECTORY → open() fails
     resp = await _provider().complete(_req(), model="m")
     assert resp is not None  # request path unaffected by ledger failure
+
+
+def test_shared_ledger_keeps_only_sanitized_bounded_metadata(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(path))
+
+    emit_provider_attempt(
+        base_url="https://user:URL_SECRET@provider.invalid/private?token=URL_TOKEN",
+        model="model-id",
+        has_tools=False,
+        conversation_id="conv_audio",
+        purpose="REPORT_AUDIO.Podcast",
+        call_kind="CHAT_COMPLETION",
+    )
+    emit_provider_attempt(
+        base_url="https://provider.invalid/v1",
+        model="model-id",
+        has_tools=False,
+        conversation_id="conv_audio",
+        purpose="prompt text must never be retained",
+        call_kind="x" * 65,
+    )
+
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert records[0] == {
+        "ts": records[0]["ts"],
+        "host": "provider.invalid",
+        "model": "model-id",
+        "has_tools": False,
+        "conversation_id": "conv_audio",
+        "purpose": "report_audio.podcast",
+        "call_kind": "chat_completion",
+    }
+    assert set(records[1]) == {"ts", "host", "model", "has_tools", "conversation_id"}
+    retained = path.read_text()
+    for forbidden in ("user", "URL_SECRET", "private", "URL_TOKEN", "prompt text"):
+        assert forbidden not in retained

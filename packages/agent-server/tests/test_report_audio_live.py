@@ -523,7 +523,13 @@ def test_small_report_podcast_mode_real_kokoro(monkeypatch, tmp_path) -> None:
     from disco.agent_server import report_audio as _ra
 
     mp3_path, tr_path = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_podcast",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
 
     # MP3 must exist and be non-zero
@@ -582,7 +588,13 @@ def test_small_report_single_mode_real_kokoro(monkeypatch, tmp_path) -> None:
     from disco.agent_server import report_audio as _ra
 
     mp3_path, tr_path = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="single")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_single",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="single",
+        )
     )
 
     assert mp3_path.exists()
@@ -619,7 +631,13 @@ def test_minimal_1_section_report_real_kokoro(monkeypatch, tmp_path) -> None:
     from disco.agent_server import report_audio as _ra
 
     mp3_path, tr_path = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_remote",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
 
     assert mp3_path.exists()
@@ -652,7 +670,13 @@ def test_medium_report_with_empty_sections_real_kokoro(monkeypatch, tmp_path) ->
     from disco.agent_server import report_audio as _ra
 
     mp3_path, tr_path = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_bundled",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
 
     assert mp3_path.exists()
@@ -685,7 +709,13 @@ def test_cache_idempotency_real_kokoro(monkeypatch, tmp_path) -> None:
 
     # First call — real Kokoro
     mp3_path_1, _ = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_cache",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
     first_bytes = mp3_path_1.read_bytes()
     assert len(first_bytes) > 0
@@ -698,7 +728,13 @@ def test_cache_idempotency_real_kokoro(monkeypatch, tmp_path) -> None:
 
     # Second call — must be a cache hit
     mp3_path_2, _ = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_cache",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
     second_bytes = mp3_path_2.read_bytes()
     assert mp3_path_1 == mp3_path_2, "Cache hit returned a different path"
@@ -730,10 +766,22 @@ def test_podcast_vs_single_mode_separate_files_real_kokoro(monkeypatch, tmp_path
     monkeypatch.setattr(_ao, "_call_llm", _fake_llm)
 
     mp3_podcast, _ = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_modes",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="podcast",
+        )
     )
     mp3_single, _ = asyncio.run(
-        _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="single")
+        _ra.generate_report_audio(
+            report,
+            conversation_id="conv_live_modes",
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode="single",
+        )
     )
 
     assert mp3_podcast != mp3_single, "Podcast and single modes must use different cache files"
