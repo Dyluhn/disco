@@ -19,8 +19,8 @@ routes/conversations.py; the plan gate + steer are WS-ONLY, verified in routes/w
   collect_state              GET /conversations/{cid}/state
   collect_workspace          read the host ProjectStore SNAPSHOT directly (authoritative;
                              Bug 9 fix — NOT the dev-server preview proxy, which 404s when
-                             the served app isn't up). Falls back to the preview proxy.
-  collect_preview            GET /conversations/{cid}/preview + preview-app root
+                             the served app isn't up). No generated-content fallback.
+  collect_preview            GET /conversations/{cid}/preview + isolated path capability
 
 approve_plan / request_plan are WS-ONLY (there is no REST approval route — verified
 in routes/conversations.py: only create/messages/followup/events/state/kill/resume
@@ -55,6 +55,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
+from disco.core.auth import SESSION_COOKIE, validated_isolated_path_preview_url
+from disco.tools.sandbox._container import PREVIEW_PORT
 
 from ..events import NormalizationError, normalize_events
 from ..oracles.thrash import ThrashOracle
@@ -225,15 +227,6 @@ _FILE_READ_FULL_HEADER_RE = re.compile(r"^\[lines 1-(\d+) of (\d+)\]$")
 # decline the sha gate for that file and fall back to stability (defensive: a SUCCESSFUL
 # file_write already carries full bytes, so this is belt-and-suspenders).
 _ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
-# Internal dirs the served-root index detection must skip — mirrors the product's
-# lifecycle._find_snapshot_index / SandboxSession._detect_serve_dir skip set exactly, so a
-# .pmx/.disco/node_modules index.html is NEVER mistaken for the build's served root.
-_SERVE_SKIP_DIRS = frozenset({".pmx", ".disco", "node_modules"})
-# Reserved control ports the durable serve+probe must NEVER bind (defense in depth — the
-# probe binds port 0 so the OS assigns a free EPHEMERAL high port, never these): the
-# agent-server (8000), the app-server (8800), and the conventional vite dev port (5173).
-_RESERVED_CONTROL_PORTS = frozenset({8000, 8800, 5173})
-
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
 _NON_MUTATING_TOOLS = frozenset(
@@ -311,6 +304,10 @@ class Transport(Protocol):
 
     async def get_text(self, path: str) -> tuple[int, str, dict[str, str]]: ...
 
+    async def fetch_isolated_preview(
+        self, conversation_id: str
+    ) -> tuple[int, str, dict[str, str]]: ...
+
     async def ws_control(self, conversation_id: str, frame: dict[str, Any]) -> None: ...
 
     async def health(self) -> tuple[int, dict[str, Any]]:
@@ -363,10 +360,9 @@ class DiscoApiClient:
         self._db_path = db_path
         self._poll = poll_interval_s
         # ProjectStore root for the authoritative workspace SNAPSHOT read (Bug 9 fix).
-        # None ⇒ snapshot read DISABLED (deterministic fake-transport tests keep the
-        # pure preview-proxy path, byte-identical to before). The live CLI passes ""
-        # so it mirrors the agent-server's OWN default root resolution (same env), and
-        # the snapshot unit test injects a tmp root.
+        # None ⇒ authoritative snapshot read DISABLED and workspace collection fails
+        # closed. The live CLI passes "" so it mirrors the agent-server's OWN default
+        # root resolution (same env); deterministic tests inject a temporary ProjectStore.
         self._projects_root = projects_root
         # How long to wait for the snapshot to flush after the run reaches a terminal
         # state — the build appends FINISHED INSIDE loop.run(), then `_maybe_snapshot`
@@ -1147,13 +1143,10 @@ class DiscoApiClient:
         text (so must_contain substring checks run on the real file); a binary / oversized
         file keeps present+size+sha256 with empty content.
 
-        Fallback: ONLY when there is NO snapshot at all (no projects_root configured, or
-        the conversation's snapshot workspace dir never materialized), each declared path
-        is fetched via the preview proxy — so a no-storage deployment is never WORSE than
-        before. When the snapshot IS authoritative (its workspace dir exists), the proxy
-        is NEVER consulted: a declared file absent from the snapshot is genuinely missing
-        and is OMITTED, so the proxy can't mask a missing required deliverable with a
-        served/stale copy (anti-false-PASS hole #1).
+        There is deliberately NO generated-preview fallback. The capability-isolated
+        preview serves an app, not an authoritative arbitrary-source filesystem, and the
+        authenticated legacy preview-app route is security-forbidden. With no ProjectStore
+        snapshot, the honest manifest is empty and the evidence contract fails closed.
         """
         declared = list(file_paths)
         manifest: dict[str, Any] = {}
@@ -1167,18 +1160,8 @@ class DiscoApiClient:
         if snapshot_dir is not None:
             return manifest
 
-        # No snapshot at all → legacy preview-proxy fallback (no-storage deployments only).
-        for path in declared:
-            if path in manifest:
-                continue
-            rel = path.lstrip("/")
-            status, text, _hdrs = await self._t.get_text(
-                f"/conversations/{conversation_id}/preview-app/{rel}"
-            )
-            if status < 400:
-                entry = _file_entry(text.encode("utf-8"))
-                entry["source"] = "preview_proxy"
-                manifest[path] = entry
+        # No authoritative snapshot means no workspace truth. Never substitute
+        # generated/served bytes for source evidence or cross the preview auth boundary.
         return manifest
 
     async def _await_ready_snapshot(
@@ -1359,208 +1342,25 @@ class DiscoApiClient:
         return ws if ws.is_dir() else None
 
     async def collect_preview(self, conversation_id: str) -> dict[str, Any]:
-        """Capture preview truth: availability + the served ROOT html + its HTTP
-        health status. Shape consumed by OutputTruthOracle:
-        {"health": {"status": <code>}, "content": <html>, "available": <bool>}.
+        """Capture post-finish preview truth through the public isolated boundary.
 
-        Bug 10 (same ephemeral-proxy fragility as Bug 9): post-FINISH the live preview
-        proxy 404s because the model's served preview (a backgrounded ``python -m
-        http.server``) is torn down when the run ends — false `FALSE_FINISH_PREVIEW_BROKEN`.
-
-        TRUTH HIERARCHY (no forged 200 — every preview-OK carries GENUINE POSITIVE evidence
-        the deliverable actually serves the required content):
-          1. The LIVE proxy serves (status < 400 AND non-empty) → that IS the truth, used as-is.
-          2. Proxy down + a STATIC served-root (``index.html``) is durable in the snapshot →
-             the runner SERVES that snapshot dir itself on an OS-assigned FREE high port (never
-             a reserved control port) and HTTP-PROBES it, then tears the server down. The REAL
-             probe (status + body) is the evidence — independent of whether the agent ran an
-             in-run verify. A non-serving / unreadable / wrong-content snapshot → the probe
-             genuinely fails / lacks the needle → the preview FAILs (NOT masked). Absence of an
-             in-run verify is NOT treated as a pass; the serve+probe supplies the positive proof.
-          3. The build's OWN in-run web-app verification ENDED in failure (`_in_run_verify_failed`)
-             → believe the agent's broken-verdict; do NOT claim OK even if the static shell serves.
-          4. No static served-root (dynamic-only app, or no deliverable) → honest 404
-             (FALSE_FINISH_PREVIEW_BROKEN). Live dynamic-app preview verification is the
-             documented follow-up — never a forged pass.
+        The application session may mint a one-time path capability, but generated
+        content is fetched only after body-only redemption in a clean cookie jar.
+        ``fetch_isolated_preview`` validates the server-minted p3s origin and never
+        sends the app session to it.  Its final HTTP status/body are authoritative:
+        a mint, redemption, or product preview failure is retained as a failure and
+        is never hidden by serving the host snapshot inside the harness.
         """
         avail_status, avail = await self._t.get_json(f"/conversations/{conversation_id}/preview")
-        status, text, _hdrs = await self._t.get_text(
-            f"/conversations/{conversation_id}/preview-app/"
-        )
-        live = {
+        status, text, _hdrs = await self._t.fetch_isolated_preview(conversation_id)
+        return {
             "health": {"status": status},
             "content": text,
-            "available": bool(avail.get("available")) if avail_status < 400 else False,
+            "available": status < 400,
+            "runtime_available": (bool(avail.get("available")) if avail_status < 400 else False),
+            "runtime_availability_status": avail_status,
+            "source": "isolated_path_capability",
         }
-        # (1) The live preview proxy actually served → that IS the truth.
-        if status < 400 and text:
-            return live
-        # (3) The agent's own in-run verify ended in failure → believe it; no durable claim.
-        if self._projects_root is None or self._in_run_verify_failed(conversation_id):
-            return live
-        # (4) No static served-root → honest 404 (dynamic-only / no deliverable).
-        served_index = self._snapshot_served_index(conversation_id)
-        if served_index is None:
-            return live
-        # (2) Serve the snapshot static content ourselves + PROBE it for GENUINE evidence.
-        probe = self._serve_probe_snapshot(served_index.parent)
-        if probe is None:
-            return live  # couldn't serve/probe → no positive evidence → honest 404
-        probe_status, probe_body = probe
-        return {
-            "health": {"status": probe_status},
-            "content": probe_body,
-            "available": probe_status < 400,
-            "source": "snapshot_serve_probe",
-        }
-
-    def _serve_probe_snapshot(self, served_dir: Path) -> tuple[int, str] | None:
-        """Serve `served_dir` on an OS-assigned FREE loopback port (NEVER a reserved control
-        port — port 0 lets the OS pick an ephemeral high port, guarded defensively) and
-        HTTP-probe ``GET /`` for GENUINE evidence the static deliverable serves + with what
-        content. Returns (status, body) or None if it could not be served/probed. The server
-        is ALWAYS torn down (finally). Loopback-only bind (127.0.0.1)."""
-        import functools
-        import http.server
-        import threading
-        import urllib.error
-        import urllib.request
-
-        served_root = served_dir.resolve()
-
-        def static_index_fallback() -> tuple[int, str] | None:
-            """Equivalent GET / evidence when loopback clients are forbidden.
-
-            The caller already selected a static served root. Re-jail the file
-            here so this fallback can never follow an index symlink outside it.
-            """
-
-            try:
-                index = (served_root / "index.html").resolve()
-                if not index.is_relative_to(served_root) or not index.is_file():
-                    return None
-                return 200, index.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                return None
-
-        class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-            # silence per-request stderr noise; signature matches BaseHTTPRequestHandler
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-                return
-
-        handler = functools.partial(_QuietHandler, directory=str(served_dir))
-        try:
-            httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        except OSError:
-            return None  # probe unavailable is the HONEST answer — never fabricate a 200
-        # From here `httpd` owns a bound socket — it must be closed on EVERY path, including
-        # a failure to create/start the serving thread (else the socket/server leaks).
-        thread: threading.Thread | None = None
-        try:
-            port = httpd.server_address[1]
-            if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
-                return static_index_fallback()
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
-                    body = resp.read().decode("utf-8", "replace")
-                    return int(resp.status), body
-            except urllib.error.HTTPError as exc:  # a real HTTP error status IS evidence
-                try:
-                    body = exc.read().decode("utf-8", "replace")
-                except Exception:  # noqa: BLE001
-                    body = ""
-                return int(exc.code), body
-            except (urllib.error.URLError, OSError, ValueError):
-                # Some CI/sandbox profiles disallow loopback client connections even though
-                # the static root is already selected and jailed. For GET /, reading that
-                # index file is equivalent to SimpleHTTPRequestHandler's success response.
-                return static_index_fallback()
-        finally:
-            # shutdown() only makes sense once serve_forever is actually running; server_close()
-            # is ALWAYS safe and is what frees the socket if the thread never started.
-            if thread is not None and thread.is_alive():
-                httpd.shutdown()
-            httpd.server_close()
-            if thread is not None:
-                thread.join(timeout=2)
-
-    def _snapshot_served_index(self, conversation_id: str) -> Path | None:
-        """The durable served-root ``index.html`` Path for a STATIC build: at the snapshot
-        workspace root (preferred), else the shallowest ``index.html`` in the tree —
-        MIRRORING the product's ``lifecycle._find_snapshot_index`` skip set
-        (``.pmx`` / ``.disco`` / ``node_modules``) so an internal ``index.html`` is never
-        picked as the served root. Symlink-jailed (resolved path must stay inside the
-        workspace). None ⇒ no static served-root (so the caller does NOT claim a preview)."""
-        ws = self._snapshot_workspace_dir(conversation_id)
-        if ws is None:
-            return None
-        candidates: list[Path] = []
-        root_index = ws / "index.html"
-        if root_index.is_file():
-            candidates = [root_index]
-        else:
-            try:
-                candidates = sorted(
-                    (
-                        p
-                        for p in ws.rglob("index.html")
-                        if p.is_file() and not (_SERVE_SKIP_DIRS & set(p.relative_to(ws).parts))
-                    ),
-                    key=lambda p: (len(p.relative_to(ws).parts), str(p)),
-                )
-            except OSError:
-                return None
-        for cand in candidates:
-            try:
-                resolved = cand.resolve()
-                if resolved.is_relative_to(ws) and resolved.is_file():
-                    return resolved
-            except OSError:
-                continue
-        return None
-
-    def _snapshot_served_root(self, conversation_id: str) -> str | None:
-        """The served-root ``index.html`` CONTENT (decoded) — thin wrapper over
-        :meth:`_snapshot_served_index` (which handles root-preference, the
-        ``.pmx``/``.disco``/``node_modules`` skip set, and the symlink jail). None ⇒ no
-        static served-root."""
-        p = self._snapshot_served_index(conversation_id)
-        if p is None:
-            return None
-        try:
-            return p.read_bytes().decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            return None
-
-    def _in_run_verify_failed(self, conversation_id: str) -> bool:
-        """True iff the build's LAST in-run ``verify_web_app`` FAILED — where FAILED means
-        ANY of: ``structured.passed`` is False; the tool FAILED TO EXECUTE
-        (``tool_result.success`` is False, which produces NO verdict — hole #2); or it ran
-        but the verdict/error signals failure. Only a verify that genuinely PASSED (ran
-        successfully AND ``passed`` truthy) leaves this False, so the durable-preview
-        substitution never fires off a verify that errored or failed. No verify at all ⇒
-        False (a static deliverable that finished with no serve-check is not a PROVEN
-        failure; the served-root presence + content truth still gate the substitution)."""
-        last: dict[str, Any] | None = None
-        for e in self._read_events(conversation_id):
-            if e.get("kind") != "observation":
-                continue
-            tr = _payload(e).get("tool_result") or {}
-            if tr.get("tool_name") == "verify_web_app":
-                last = tr
-        if last is None:
-            return False
-        if not last.get("success", True):
-            return True  # verifier EXECUTION failure — no verdict produced (hole #2)
-        raw_structured = last.get("structured")
-        structured: dict[str, Any] = raw_structured if isinstance(raw_structured, dict) else {}
-        if structured.get("passed") is False:
-            return True
-        if str(structured.get("verdict", "")).lower() in {"fail", "failed", "error", "broken"}:
-            return True
-        return bool(structured.get("error"))
 
     # -- internal: race-free DB read ------------------------------------------
 
@@ -2103,9 +1903,11 @@ class HttpTransport:
         base_url: str = "http://127.0.0.1:8000",
         *,
         timeout_s: float = 120.0,
+        _transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout_s
+        self._transport = _transport
         self._cookie: str | None = None  # "disco_session=<value>"
         self._csrf: str | None = None
 
@@ -2118,7 +1920,7 @@ class HttpTransport:
         token = os.environ.get("DISCO_SOAK_PAIRING_TOKEN")
         if token:
             body["pairing_token"] = token
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             r = await client.post(
                 f"{self.base_url}/api/auth/mint",
                 json=body,
@@ -2151,7 +1953,7 @@ class HttpTransport:
         import httpx
 
         await self._ensure_session()
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             r = await client.post(
                 f"{self.base_url}{path}", json=body, headers=self._headers(unsafe=True)
             )
@@ -2161,7 +1963,7 @@ class HttpTransport:
         import httpx
 
         await self._ensure_session()
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
             return r.status_code, _safe_json(r)
 
@@ -2169,9 +1971,83 @@ class HttpTransport:
         import httpx
 
         await self._ensure_session()
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout,
+            follow_redirects=True,
+            transport=self._transport,
+        ) as client:
             r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
             return r.status_code, r.text, dict(r.headers)
+
+    async def fetch_isolated_preview(self, conversation_id: str) -> tuple[int, str, dict[str, str]]:
+        """Mint/redeem a path capability without crossing the app session.
+
+        Capability response fields and the isolated origin are validated before
+        the one-time bearer is redeemed.  Redemption and generated-content fetch
+        use a fresh cookie jar, redirects and environment proxies are disabled,
+        and an application session cookie in that jar fails closed.
+        """
+
+        await self._ensure_session()
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=False,
+                trust_env=False,
+                transport=self._transport,
+            ) as app_client:
+                minted = await app_client.post(
+                    f"{self.base_url}/conversations/{conversation_id}/preview/capability",
+                    json={
+                        "port": PREVIEW_PORT,
+                        "target_path": "/",
+                        "transport": "path",
+                    },
+                    headers=self._headers(unsafe=True),
+                )
+            if minted.status_code != 200:
+                return minted.status_code, minted.text, dict(minted.headers)
+            body = _safe_json(minted)
+            if (
+                body.get("transport") != "path"
+                or body.get("target_path") != "/"
+                or body.get("port") != PREVIEW_PORT
+            ):
+                return 502, "invalid preview capability response", {}
+            bootstrap_url = str(body.get("bootstrap_url") or "")
+            intent = str(body.get("bootstrap_intent") or "")
+            isolated_url = validated_isolated_path_preview_url(
+                self.base_url,
+                conversation_id,
+                PREVIEW_PORT,
+                bootstrap_url,
+            )
+            if not intent or isolated_url is None:
+                return 502, "invalid preview capability response", {}
+
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                follow_redirects=False,
+                trust_env=False,
+                transport=self._transport,
+            ) as preview_client:
+                redeemed = await preview_client.post(
+                    bootstrap_url,
+                    data={"intent": intent},
+                    headers={"Origin": self.base_url},
+                )
+                if redeemed.status_code != 200:
+                    # A malformed/hostile bootstrap must not reflect the one-use
+                    # bearer into retained preview evidence.
+                    return redeemed.status_code, "preview capability redemption failed", {}
+                if any(cookie.name == SESSION_COOKIE for cookie in preview_client.cookies.jar):
+                    return 502, "preview bootstrap crossed application session", {}
+                preview = await preview_client.get(isolated_url)
+                return preview.status_code, preview.text, dict(preview.headers)
+        except (httpx.HTTPError, OSError, ValueError):
+            # Post-create boundary failure: retain a non-success status for the
+            # output oracle, never a local snapshot PASS and never the bearer.
+            return 599, "isolated preview request failed", {}
 
     async def ws_control(self, conversation_id: str, frame: dict[str, Any]) -> None:
         import websockets
@@ -2196,7 +2072,7 @@ class HttpTransport:
     async def health(self) -> tuple[int, dict[str, Any]]:
         import httpx
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             r = await client.get(f"{self.base_url}/health")
             return r.status_code, _safe_json(r)
 

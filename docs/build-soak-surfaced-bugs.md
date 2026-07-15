@@ -424,19 +424,19 @@ A genuinely-missing declared file is OMITTED (never a `present:false` key — th
 `FALSE_FINISH_NO_OUTPUT` into `ARTIFACT_TRUTH_MISMATCH`), so a real missing deliverable still FAILs.
 A bounded re-read (`--snapshot-wait`, default 15s) absorbs the snapshot-vs-`FINISHED` flush race
 (the build appends `FINISHED` inside `loop.run()`, then `_maybe_snapshot` writes the workspace).
-**Snapshot is AUTHORITATIVE — no proxy mask (anti-false-PASS hardening).** The preview-proxy
-fallback fires ONLY when there is NO snapshot at all (no `projects_root`, or the conversation's
-snapshot workspace dir never materialized within `--snapshot-wait`). When the snapshot workspace dir
-exists, the proxy is NEVER consulted: a declared file absent from the snapshot is genuinely missing
-and is OMITTED — the proxy can't substitute a served/stale copy to mask a missing required deliverable
-(`FALSE_FINISH_NO_OUTPUT` preserved). **LIVE-PROVEN:** re-running `static_html_minimal` populates the
-manifest from the snapshot (`index.html` present, content "Build Smoke OK", real sha256/size,
-`source≠preview_proxy`) → workspace truth checks PASS. Pinned:
+**Snapshot is AUTHORITATIVE — no proxy mask (anti-false-PASS hardening).** The preview proxy is
+NEVER a workspace-source fallback. Generated preview bytes are not arbitrary source truth, and the
+authenticated legacy preview-app route is forbidden by the isolated capability boundary. With no
+ProjectStore snapshot the honest manifest is empty, so the evidence contract fails closed. A declared
+file absent from an existing snapshot is likewise omitted; no served/stale copy can mask
+`FALSE_FINISH_NO_OUTPUT`. **LIVE-PROVEN:** re-running `static_html_minimal` populates the manifest from
+the snapshot (`index.html` present, content "Build Smoke OK", real sha256/size) → workspace truth
+checks PASS. Pinned:
 `test_api_runner.test_collect_workspace_{reads_snapshot_when_preview_proxy_404s,
-genuinely_missing_file_is_omitted,falls_back_to_proxy_without_projects_root}`,
+genuinely_missing_file_is_omitted,without_projects_root_fails_closed_without_preview_fallback}`,
 `test_snapshot_authoritative_does_not_proxy_mask_missing_required_file`.
 
-### Bug 10 — runner PREVIEW-collection has the SAME ephemeral-proxy fragility (HARNESS) — FIXED
+### Bug 10 / H175-H177 — canonical capability preview truth + provenance (HARNESS) — FIXED
 
 Surfaced by the Bug 9 live re-run: with the workspace manifest now correct, the SAME
 `static_html_minimal` smoke fails one step later with **`FALSE_FINISH_PREVIEW_BROKEN`**
@@ -447,41 +447,21 @@ run ends. This is NOT a bad build and NOT Bug 9: the event log PROVES the previe
 DURING the run (`verify_web_app` on :8080 → passed; `shell curl …8080 | grep 'Build Smoke OK'` →
 exit 0); `…/preview-edit/index.html` (snapshot-backed) returns 200, so the deliverable is durable.
 
-**Fix (HARNESS-only `adapters/disco_api.py` `collect_preview`).** When the LIVE proxy serves
-(status < 400 AND non-empty), that IS the truth and is used unchanged. When it is down, the runner
-produces a preview health/content ONLY from GENUINE POSITIVE EVIDENCE — never a forged 200:
+**Current fix.** Preview hardening made the old authenticated `GET …/preview-app/` path correctly
+return 403 `preview capability required`, surfacing H175. The transport now mints
+`POST /conversations/{cid}/preview/capability`, strictly validates the returned p3s bootstrap origin,
+redeems the one-use intent in a clean cookie jar, rejects any application-session crossover, and
+fetches `/__disco/isolated-preview/{cid}/`. The final status/body are authoritative. A mint,
+redemption, or product-preview error remains a real failure even when a host snapshot exists; the
+harness never converts it into a local snapshot PASS. This also eliminates H176's false verifier
+veto coupling: preview truth comes from the product boundary, while an `unverifiable` browser verdict
+remains independently visible in events and terminal-warning enforcement.
 
-- **Serve + probe (Option A — positive evidence, the residual-gap fix).** When a STATIC served-root
-  (`index.html`, root-preferred then shallowest) is durable in the snapshot — `_snapshot_served_index`,
-  which MIRRORS the product's `lifecycle._find_snapshot_index` skip set (`.pmx` / `.disco` /
-  `node_modules`) so an internal tool `index.html` is never the served root (hole #3) — the runner
-  SERVES that snapshot dir itself on an OS-assigned FREE loopback port (port 0 → ephemeral high port;
-  NEVER a reserved control port 8000/8800/5173; always torn down in `finally`) and HTTP-PROBES `GET /`.
-  The REAL probe (status + served body) is the evidence — INDEPENDENT of whether the agent ran an
-  in-run verify, which closes the residual hole: a build that NEVER verified no longer gets a 200 from
-  mere absence-of-failure; it gets a 200 only if the deliverable ACTUALLY serves the required content.
-  A non-serving / unreadable / wrong-content snapshot → the probe genuinely fails / the body lacks the
-  needle → preview FAILs (never masked; the body is the REAL served bytes, so a wrong-content snapshot
-  can't forge the needle).
-- **Verifier-failure veto (hole #2).** If the build's own LAST in-run `verify_web_app` FAILED —
-  `_in_run_verify_failed`, where FAILURE = `structured.passed is False`, the verifier FAILED TO EXECUTE
-  (`tool_result.success is False`, no verdict), or a verdict/error signalling failure — the runner
-  believes that broken-verdict and does NOT claim OK even if the static shell would serve.
-- **No static served-root** (dynamic-only app, or no deliverable) → honest 404 →
-  `FALSE_FINISH_PREVIEW_BROKEN`. Live dynamic-app preview verification is the documented follow-up —
-  never a forged pass.
-
-**INVARIANT:** the runner NEVER reports preview-health-200 without genuine positive evidence the
-deliverable serves the required content. **LIVE-PROVEN PASS** (`static_html_minimal`, `conv_75881694…`
-→ `conv_e29cc4a2…` → `conv_c33248cc…`): proxy down post-FINISH, the runner served+probed the snapshot
-(health 200, `served.html` = the real probed body), OutputTruthOracle PASS, overall **PASS**.
-Anti-false-PASS pins: `test_api_runner.test_collect_preview_{no_verify_serves_and_probes_for_genuine_evidence,
-no_verify_probe_carries_real_wrong_body,does_not_substitute_on_verifier_execution_failure}`,
-`test_snapshot_served_root_skips_internal_dirs`, `test_durable_preview_does_not_mask_wrong_content`.
-Pinned: `test_api_runner.test_collect_preview_{uses_durable_snapshot_when_proxy_404s,
-does_not_mask_failing_in_run_verify,no_durable_deliverable_stays_broken,live_proxy_wins_over_snapshot}`,
-`test_static_build_classifies_pass_with_dead_proxy_via_durable_sources`,
-`test_durable_preview_does_not_mask_wrong_content`.
+H177 provenance is persisted as `preview/metadata.json` beside health/body and included in the
+evidence hash lock. Frozen-folder classification reloads workspace, preview health/body, and metadata,
+so retained output truth can be independently replayed. Pinned by capability clean-cookie/origin and
+fail-closed tests, exact H175 `browser_unavailable` coverage, canonical failure/wrong-body coverage,
+metadata tamper detection, and PASS/403/wrong-body frozen-dossier replay.
 
 ### Bug 11 — runner crashes the whole drive on a normal PAUSE→resume (HARNESS) — FIXED
 

@@ -30,16 +30,13 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import disco.tools.verify.artifact_validators as _av
 import httpx
 from disco.core.auth import (
     CSRF_HEADER,
-    ISOLATED_PATH_PREVIEW_PREFIX,
-    PATH_PREVIEW_BOOTSTRAP_PATH,
     SESSION_COOKIE,
-    path_preview_host_label,
+    validated_isolated_path_preview_url,
 )
 from disco.core.evidence.schema import redact
 from disco.tools.sandbox._container import PREVIEW_PORT
@@ -516,35 +513,11 @@ class HttpVerifyClient(AbstractVerifyClient):
 
     def _validated_isolated_preview_url(self, cid: str, bootstrap_url: str) -> str | None:
         """Validate the server-minted p3s origin before the verifier fetches it."""
-
-        base = urlsplit(self._base_url)
-        bootstrap = urlsplit(bootstrap_url)
-        cid8 = cid.removeprefix("conv_")[:8]
-        base_hostname = (base.hostname or "").lower()
-        preview_base_hostname = (
-            "localhost" if base_hostname in {"127.0.0.1", "::1", "localhost"} else base_hostname
-        )
-        expected_hostname = f"{path_preview_host_label(cid, PREVIEW_PORT)}.{preview_base_hostname}"
-        if (
-            not cid8
-            or bootstrap.scheme != base.scheme
-            or (bootstrap.hostname or "").lower() != expected_hostname
-            or bootstrap.port != base.port
-            or bootstrap.path != f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
-            or bootstrap.query
-            or bootstrap.fragment
-            or bootstrap.username is not None
-            or bootstrap.password is not None
-        ):
-            return None
-        return urlunsplit(
-            (
-                bootstrap.scheme,
-                bootstrap.netloc,
-                f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/",
-                "",
-                "",
-            )
+        return validated_isolated_path_preview_url(
+            self._base_url,
+            cid,
+            PREVIEW_PORT,
+            bootstrap_url,
         )
 
 

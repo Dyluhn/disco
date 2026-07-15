@@ -22,6 +22,7 @@ from disco.core.auth import (
     local_preview_origin_crosses_host,
     path_preview_cookie_name,
     path_preview_host_label,
+    validated_isolated_path_preview_url,
 )
 from disco.core.store.sqlite import SqliteEventStore
 
@@ -204,6 +205,42 @@ def test_path_preview_host_label_rejects_invalid_identity_or_port(
 ) -> None:
     with pytest.raises(ValueError):
         path_preview_host_label(conversation_id, port)
+
+
+def test_validated_isolated_path_preview_url_derives_only_bound_content_origin() -> None:
+    cid = "conv_a1b2c3d4owner"
+    label = path_preview_host_label(cid, 8000)
+    bootstrap = f"http://{label}.localhost:8000/__disco/path-preview-auth/a1b2c3d4"
+
+    assert (
+        validated_isolated_path_preview_url("http://127.0.0.1:8000", cid, 8000, bootstrap)
+        == f"http://{label}.localhost:8000/__disco/isolated-preview/{cid}/"
+    )
+
+
+@pytest.mark.parametrize(
+    "bootstrap",
+    [
+        "https://p3s-a1b2c3d4-wrong-8000.localhost:8000/__disco/path-preview-auth/a1b2c3d4",
+        "http://evil.example:8000/__disco/path-preview-auth/a1b2c3d4",
+        "http://user:pass@evil.example:8000/__disco/path-preview-auth/a1b2c3d4",
+        "http://evil.example:8000/__disco/path-preview-auth/a1b2c3d4?intent=leak",
+        "http://evil.example:8000/__disco/path-preview-auth/a1b2c3d4#intent",
+        "not a url",
+    ],
+)
+def test_validated_isolated_path_preview_url_rejects_untrusted_bootstrap(
+    bootstrap: str,
+) -> None:
+    assert (
+        validated_isolated_path_preview_url(
+            "http://127.0.0.1:8000",
+            "conv_a1b2c3d4owner",
+            8000,
+            bootstrap,
+        )
+        is None
+    )
 
 
 def test_preview_intent_survives_restart_and_wrong_route_does_not_burn_it(

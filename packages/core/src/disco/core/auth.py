@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from .env import disco_env
 from .store.sqlite import DEFAULT_OWNER_ID
@@ -151,6 +152,56 @@ def path_preview_host_label(conversation_id: str, port: int) -> str:
         :PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS
     ]
     return f"{PATH_PREVIEW_HOST_PREFIX}-{cid8}-{digest}-{port}"
+
+
+def validated_isolated_path_preview_url(
+    base_url: str,
+    conversation_id: str,
+    port: int,
+    bootstrap_url: str,
+) -> str | None:
+    """Validate a server-minted path-preview bootstrap and derive its content URL.
+
+    Capability consumers must never follow an arbitrary server response while holding
+    a one-time preview intent.  The bootstrap has to stay on the exact scheme/port and
+    full-conversation-bound p3s host derived from the trusted agent-server base URL.
+    Userinfo, query, and fragment data are forbidden so the intent remains body-only.
+    """
+
+    try:
+        base = urlsplit(base_url)
+        bootstrap = urlsplit(bootstrap_url)
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        label = path_preview_host_label(conversation_id, port)
+        base_hostname = (base.hostname or "").lower()
+        preview_base_hostname = (
+            "localhost" if base_hostname in {"127.0.0.1", "::1", "localhost"} else base_hostname
+        )
+        expected_hostname = f"{label}.{preview_base_hostname}"
+        if (
+            not cid8
+            or not base_hostname
+            or bootstrap.scheme != base.scheme
+            or (bootstrap.hostname or "").lower() != expected_hostname
+            or bootstrap.port != base.port
+            or bootstrap.path != f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
+            or bootstrap.query
+            or bootstrap.fragment
+            or bootstrap.username is not None
+            or bootstrap.password is not None
+        ):
+            return None
+    except (ValueError, UnicodeError):
+        return None
+    return urlunsplit(
+        (
+            bootstrap.scheme,
+            bootstrap.netloc,
+            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/",
+            "",
+            "",
+        )
+    )
 
 
 def allowed_frontend_origins() -> tuple[str, ...]:

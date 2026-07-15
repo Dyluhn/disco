@@ -779,6 +779,19 @@ def assemble_dossier(
         (preview_dir / "served.html").write_text(
             str(run.preview.get("content") or ""), encoding="utf-8"
         )
+        (preview_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "available": bool(run.preview.get("available")),
+                    "runtime_available": bool(run.preview.get("runtime_available")),
+                    "runtime_availability_status": run.preview.get("runtime_availability_status"),
+                    "source": str(run.preview.get("source") or "unrecorded"),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
     if run.inspect_trace is not None:
         (conv / "inspect-trace.json").write_text(
             json.dumps(run.inspect_trace, indent=2, sort_keys=True), encoding="utf-8"
@@ -811,10 +824,11 @@ def assemble_dossier(
     evidence_files["thrash-monitor.json"] = f"{conv_rel}/thrash-monitor.json"
     # P1 (codex): the PREVIEW dossier is preview TRUTH the oracle adjudicates on — it
     # MUST be under the hash lock too, else a preview-health/served-html tamper would
-    # not trip the §6 INVALID_RUN. Hash both preview files when a preview was captured.
+    # not trip the §6 INVALID_RUN. Hash body, health, and provenance metadata when captured.
     if run.preview is not None:
         evidence_files["preview/health.json"] = f"{conv_rel}/preview/health.json"
         evidence_files["preview/served.html"] = f"{conv_rel}/preview/served.html"
+        evidence_files["preview/metadata.json"] = f"{conv_rel}/preview/metadata.json"
     manifest = EvidenceManifest(
         run_id=run_id,
         scenario_id=str(scenario.get("id")),

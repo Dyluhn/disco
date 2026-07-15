@@ -111,7 +111,10 @@ def classify(
     present.add("events")
     if workspace_manifest is not None:
         present.add("workspace")
-    if preview is not None:
+    # Current preview evidence is admissible only when it came through the
+    # product's capability-isolated boundary. Historical/unrecorded or harness-
+    # local fallback bytes cannot satisfy a preview-required contract.
+    if preview is not None and preview.get("source") == "isolated_path_capability":
         present.add("preview")
     if tool_scope is not None:
         present.add("tool_scope")
@@ -252,6 +255,52 @@ def classify_run_folder(
     if events_path.name == "events.jsonl" and events_path.parent.parent.name == "conversations":
         folder_conversation_id = events_path.parent.name
 
+    # H179: replay output truth from the same locked artifacts used by the live
+    # in-memory classification. Integrity-only checking is insufficient: without
+    # reloading these files, a frozen preview/workspace verdict cannot be reproduced.
+    workspace_manifest: dict[str, Any] | None = None
+    preview: dict[str, Any] | None = None
+    if manifest is not None:
+        workspace_rel = manifest.evidence_files.get("workspace-manifest.json")
+        if workspace_rel:
+            try:
+                loaded_workspace = json.loads((base / workspace_rel).read_text(encoding="utf-8"))
+                if not isinstance(loaded_workspace, dict):
+                    raise ValueError("workspace manifest is not an object")
+                workspace_manifest = loaded_workspace
+            except (OSError, json.JSONDecodeError, ValueError):
+                evidence_intact = False
+
+        preview_health_rel = manifest.evidence_files.get("preview/health.json")
+        preview_body_rel = manifest.evidence_files.get("preview/served.html")
+        preview_meta_rel = manifest.evidence_files.get("preview/metadata.json")
+        if preview_health_rel or preview_body_rel or preview_meta_rel:
+            try:
+                if not preview_health_rel or not preview_body_rel:
+                    raise ValueError("preview evidence set is incomplete")
+                loaded_health = json.loads((base / preview_health_rel).read_text(encoding="utf-8"))
+                if not isinstance(loaded_health, dict):
+                    raise ValueError("preview health is not an object")
+                metadata: dict[str, Any] = {
+                    "available": False,
+                    "source": "legacy_unrecorded",
+                }
+                if preview_meta_rel:
+                    loaded_metadata = json.loads(
+                        (base / preview_meta_rel).read_text(encoding="utf-8")
+                    )
+                    if not isinstance(loaded_metadata, dict):
+                        raise ValueError("preview metadata is not an object")
+                    metadata = loaded_metadata
+                preview = {
+                    **metadata,
+                    "health": loaded_health,
+                    "content": (base / preview_body_rel).read_text(encoding="utf-8"),
+                }
+            except (OSError, json.JSONDecodeError, ValueError):
+                evidence_intact = False
+                preview = None
+
     # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
     # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
     # fails closed if the scenario requires it). A malformed line is NOT silently
@@ -300,6 +349,8 @@ def classify_run_folder(
         provider_ledger=provider_ledger,
         inspect_trace=inspect_trace,
         product_evidence=product_evidence,
+        workspace_manifest=workspace_manifest,
+        preview=preview,
     )
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"

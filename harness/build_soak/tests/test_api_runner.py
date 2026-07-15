@@ -15,6 +15,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from _eventlog import action, clean_smoke_log, msg, plan, status
+from disco.core.auth import path_preview_host_label
 
 import harness.build_soak.adapters.disco_api as _disco_mod
 from harness.build_soak import run as _run_mod
@@ -25,8 +26,10 @@ from harness.build_soak.adapters.disco_api import (
     LIVE_THRASH_STOP,
     CollectedRun,
     DiscoApiClient,
+    HttpTransport,
     SnapshotNotReadyError,
 )
+from harness.build_soak.classify import classify_run_folder
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
@@ -135,6 +138,9 @@ class FakeTransport:
                 return 200, html, {}
         return 404, "", {}
 
+    async def fetch_isolated_preview(self, conversation_id):
+        return 200, self.preview_html, {"cache-control": "private, no-store"}
+
     async def ws_control(self, conversation_id, frame):
         self.ws_frames.append(frame)
 
@@ -185,7 +191,15 @@ def _smoke_log_with_file_write(path, content):
 
 
 def _client(transport, tmp_path):
-    return DiscoApiClient(transport, db_path=str(tmp_path / "disco.db"), poll_interval_s=0.0)
+    projects_root = tmp_path / "projects"
+    if transport.workspace:
+        _plant_snapshot(projects_root, transport.cid, transport.workspace)
+    return DiscoApiClient(
+        transport,
+        db_path=str(tmp_path / "disco.db"),
+        poll_interval_s=0.0,
+        projects_root=str(projects_root),
+    )
 
 
 # ---- scenarios.yaml loads + shapes -----------------------------------------
@@ -304,6 +318,7 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     assert (conv / "state.final.json").is_file()
     assert (conv / "workspace-manifest.json").is_file()
     assert (conv / "preview" / "health.json").is_file()
+    assert (conv / "preview" / "metadata.json").is_file()
 
 
 @pytest.mark.asyncio
@@ -447,20 +462,26 @@ async def test_collect_workspace_genuinely_missing_file_is_omitted(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_collect_workspace_falls_back_to_proxy_without_projects_root(tmp_path):
-    # No projects_root (snapshot disabled) ⇒ byte-identical to the old behavior: the
-    # preview proxy serves the file; the manifest carries it tagged source=preview_proxy.
+async def test_collect_workspace_without_projects_root_fails_closed_without_preview_fallback(
+    tmp_path,
+):
+    # Generated preview bytes are not authoritative workspace source, and the
+    # authenticated preview-app route is now capability-forbidden. No ProjectStore
+    # therefore means no workspace truth, never a hidden served-copy substitution.
     db = tmp_path / "disco.db"
-    transport = FakeTransport(
-        db, states=["FINISHED"], workspace={"index.html": "<h1>Build Smoke OK</h1>"}
-    )
+
+    class _ForbiddenLegacyWorkspacePreview(FakeTransport):
+        async def get_text(self, path):
+            if "/preview-app/" in path:
+                raise AssertionError("workspace collector crossed preview capability boundary")
+            return await super().get_text(path)
+
+    transport = _ForbiddenLegacyWorkspacePreview(db, states=["FINISHED"])
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)  # projects_root=None
 
     manifest = await client.collect_workspace(_CID, ["index.html"])
 
-    assert manifest["index.html"]["present"] is True
-    assert manifest["index.html"]["source"] == "preview_proxy"
-    assert "Build Smoke OK" in manifest["index.html"]["content"]
+    assert manifest == {}
 
 
 @pytest.mark.asyncio
@@ -1096,21 +1117,27 @@ async def test_snapshot_churning_unproven_stamps_content_stable_false(tmp_path, 
     assert manifest["index.html"]["content_stable"] is False
 
 
-# ---- Bug 10: durable PREVIEW collection (no ephemeral-proxy false-fail) ------
+# ---- H175/H176: canonical capability-isolated PREVIEW collection ------------
 
 
-class _DeadPreviewTransport(FakeTransport):
-    """The post-FINISH reality: the model's ephemeral static server is torn down, so the
-    preview proxy 404s for the root AND every path (while /preview still says available)."""
+class _CanonicalPreviewTransport(FakeTransport):
+    def __init__(self, *args, preview_status=200, preview_body="", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.preview_status = preview_status
+        self.preview_body = preview_body
+        self.preview_fetches = 0
+
+    async def fetch_isolated_preview(self, conversation_id):
+        self.preview_fetches += 1
+        return self.preview_status, self.preview_body, {"cache-control": "private, no-store"}
 
     async def get_text(self, path):
         if "/preview-app/" in path:
-            return 404, "", {}
+            raise AssertionError("legacy authenticated preview-app route must not be called")
         return await super().get_text(path)
 
 
-def _verify_obs(seq, passed):
-    """A verify_web_app observation carrying the in-run pass/fail in structured.passed."""
+def _unverifiable_browser_observation(seq):
     return {
         "id": f"evt_{seq}",
         "seq": seq,
@@ -1119,222 +1146,295 @@ def _verify_obs(seq, passed):
         "tool_result": {
             "tool_name": "verify_web_app",
             "success": True,
-            "structured": {"passed": passed, "url": "http://127.0.0.1:8080/"},
-        },
-    }
-
-
-def _verify_exec_fail(seq):
-    """A verify_web_app observation where the VERIFIER ITSELF failed to execute:
-    tool_result.success is False with NO structured verdict (the hole #2 case)."""
-    return {
-        "id": f"evt_{seq}",
-        "seq": seq,
-        "kind": "observation",
-        "source": "environment",
-        "tool_result": {
-            "tool_name": "verify_web_app",
-            "success": False,
-            "error": "verifier crashed",
+            "structured": {
+                "passed": False,
+                "verdict": "unverifiable",
+                "browser_unavailable": True,
+                "http_status": 200,
+            },
         },
     }
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_uses_durable_snapshot_when_proxy_404s(tmp_path):
-    # Bug 10: the proxy 404s post-FINISH, but the build genuinely served + verified during
-    # the run and the served-root file is durable in the snapshot → use it, classify alive.
+async def test_collect_preview_uses_canonical_capability_for_h175_unverifiable_case(tmp_path):
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
-    _seed_db(db, _CID, [_verify_obs(1, True)])  # in-run verify PASSED
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE LOCAL SNAPSHOT</h1>"})
+    _seed_db(db, _CID, [_unverifiable_browser_observation(1)])
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["FINISHED"],
+        preview_body="<h1>Build Smoke OK</h1>",
+    )
     client = DiscoApiClient(
         transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
     )
 
     preview = await client.collect_preview(_CID)
 
-    assert preview["health"]["status"] == 200
-    assert "Build Smoke OK" in preview["content"]
-    assert preview["source"] == "snapshot_serve_probe"
+    assert preview == {
+        "health": {"status": 200},
+        "content": "<h1>Build Smoke OK</h1>",
+        "available": True,
+        "runtime_available": True,
+        "runtime_availability_status": 200,
+        "source": "isolated_path_capability",
+    }
+    assert transport.preview_fetches == 1
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_no_verify_serves_and_probes_for_genuine_evidence(tmp_path):
-    # Residual hole #2: a build that NEVER ran an in-run verify must NOT get a forged 200 from
-    # mere absence-of-failure. Option A — the runner SERVES the snapshot static content itself
-    # and PROBES it: a 200 here is GENUINE positive evidence the deliverable actually serves the
-    # required content (no in-run verify needed). The probe body is the REAL served bytes.
+async def test_collect_preview_never_masks_canonical_failure_with_snapshot(tmp_path):
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
     _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
-    _seed_db(db, _CID, [])  # NO in-run verify at all
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
+    _seed_db(db, _CID, [])
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["FINISHED"],
+        preview_status=403,
+        preview_body="preview capability required",
+    )
     client = DiscoApiClient(
         transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
     )
 
     preview = await client.collect_preview(_CID)
 
-    assert preview["source"] == "snapshot_serve_probe"  # REAL serve+probe, not a forged 200
-    assert preview["health"]["status"] == 200
-    assert "Build Smoke OK" in preview["content"]
-
-
-def test_snapshot_probe_fallback_reads_jailed_index_when_loopback_is_blocked(tmp_path, monkeypatch):
-    served = tmp_path / "served"
-    served.mkdir()
-    (served / "index.html").write_text("<h1>JAILED FALLBACK</h1>", encoding="utf-8")
-    transport = FakeTransport(tmp_path / "disco.db", states=["FINISHED"])
-    client = _client(transport, tmp_path)
-
-    def _blocked(*_args, **_kwargs):
-        raise OSError("loopback denied by sandbox profile")
-
-    monkeypatch.setattr("urllib.request.urlopen", _blocked)
-
-    assert client._serve_probe_snapshot(served) == (200, "<h1>JAILED FALLBACK</h1>")
+    assert preview["health"]["status"] == 403
+    assert preview["content"] == "preview capability required"
+    assert preview["available"] is False
+    assert preview["source"] == "isolated_path_capability"
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_no_verify_probe_carries_real_wrong_body(tmp_path):
-    # The serve+probe returns the REAL served bytes — so a wrong-content snapshot cannot be
-    # forged into a pass: the probe body genuinely lacks the required needle (the oracle's
-    # must_contain then FAILs on it). No fabricated content.
+async def test_collect_preview_carries_canonical_wrong_body_without_forgery(tmp_path):
     db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"index.html": "<h1>WRONG CONTENT</h1>"})
-    _seed_db(db, _CID, [])  # NO in-run verify
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
-    client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    _seed_db(db, _CID, [])
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["FINISHED"],
+        preview_body="<h1>WRONG CONTENT</h1>",
     )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
 
     preview = await client.collect_preview(_CID)
 
-    assert "Build Smoke OK" not in preview["content"]  # real body — cannot forge the needle
+    assert "Build Smoke OK" not in preview["content"]
     assert "WRONG CONTENT" in preview["content"]
+    assert preview["source"] == "isolated_path_capability"
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_does_not_mask_failing_in_run_verify(tmp_path):
-    # A genuinely-broken preview is NOT masked: the build's LAST in-run verify FAILED, so
-    # the durable snapshot is NOT substituted — the live 404 stands → FALSE_FINISH_PREVIEW_BROKEN.
-    db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
-    _seed_db(db, _CID, [_verify_obs(1, True), _verify_obs(2, False)])  # last verify FAILED
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
-    client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+async def test_http_transport_redeems_preview_capability_without_app_session():
+    cid = "conv_a1b2c3d4proof"
+    path_host = path_preview_host_label(cid, 8000)
+    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
+    isolated_path = f"/__disco/isolated-preview/{cid}/"
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == f"/conversations/{cid}/preview/capability":
+            assert request.headers["origin"] == "http://127.0.0.1:8000"
+            assert request.headers["cookie"] == "disco_session=app-session-proof"
+            assert request.headers["x-disco-csrf"] == "csrf-proof"
+            assert json.loads(request.content) == {
+                "port": 8000,
+                "target_path": "/",
+                "transport": "path",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "path",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            assert request.url.host == f"{path_host}.localhost"
+            assert request.headers["origin"] == "http://127.0.0.1:8000"
+            assert "cookie" not in request.headers
+            assert "authorization" not in request.headers
+            assert "one-use-intent" not in str(request.url)
+            assert request.content == b"intent=one-use-intent"
+            return httpx.Response(
+                200,
+                headers={
+                    "set-cookie": (
+                        "disco_path_preview_a1b2c3d4=preview-proof; "
+                        f"Path={isolated_path}; HttpOnly; SameSite=Strict"
+                    )
+                },
+            )
+        if request.url.path == isolated_path:
+            cookie = request.headers.get("cookie", "")
+            assert request.url.host == f"{path_host}.localhost"
+            assert "disco_path_preview_a1b2c3d4=preview-proof" in cookie
+            assert "disco_session" not in cookie
+            assert "one-use-intent" not in cookie
+            assert "origin" not in request.headers
+            return httpx.Response(200, text="<h1>Build Smoke OK</h1>")
+        if "/preview-app/" in request.url.path:
+            raise AssertionError("legacy authenticated preview route was called")
+        return httpx.Response(404)
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
     )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
 
-    preview = await client.collect_preview(_CID)
+    status, body, _headers = await transport.fetch_isolated_preview(cid)
 
-    assert preview["health"]["status"] == 404
-    assert preview.get("source") != "snapshot_serve_probe"
+    assert status == 200
+    assert body == "<h1>Build Smoke OK</h1>"
+    assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path, isolated_path]
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_does_not_substitute_on_verifier_execution_failure(tmp_path):
-    # Anti-false-PASS hole #2: the last in-run verify FAILED TO EXECUTE (success=False, no
-    # structured verdict). That is a real failure — the durable snapshot must NOT be
-    # substituted even though a served-root index.html exists; the dead-proxy 404 stands →
-    # FALSE_FINISH_PREVIEW_BROKEN.
-    db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
-    _seed_db(db, _CID, [_verify_obs(1, True), _verify_exec_fail(2)])  # last verify ERRORED
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
-    client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+@pytest.mark.parametrize(
+    "bootstrap_url",
+    [
+        "http://evil.example:8000/__disco/path-preview-auth/a1b2c3d4",
+        "http://user:pass@p3s-a1b2c3d4-invalid-8000.localhost:8000/"
+        "__disco/path-preview-auth/a1b2c3d4",
+        "http://p3s-a1b2c3d4-invalid-8000.localhost:8000/"
+        "__disco/path-preview-auth/a1b2c3d4?intent=leak",
+    ],
+)
+async def test_http_transport_rejects_malformed_preview_bootstrap_before_redemption(
+    bootstrap_url,
+):
+    cid = "conv_a1b2c3d4proof"
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "bootstrap_url": bootstrap_url,
+                "bootstrap_intent": "must-not-be-redeemed",
+                "target_path": "/",
+                "port": 8000,
+                "transport": "path",
+            },
+        )
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
     )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
 
-    preview = await client.collect_preview(_CID)
+    status, body, _headers = await transport.fetch_isolated_preview(cid)
 
-    assert preview["health"]["status"] == 404  # NOT substituted — execution failure respected
-    assert preview.get("source") != "snapshot_serve_probe"
+    assert status == 502
+    assert body == "invalid preview capability response"
+    assert seen == [f"/conversations/{cid}/preview/capability"]
 
 
 @pytest.mark.asyncio
-async def test_snapshot_served_root_skips_internal_dirs(tmp_path):
-    # Anti-false-PASS hole #3: a .pmx/.disco/node_modules index.html must NEVER be picked as
-    # the served root — mirror the product's _find_snapshot_index skip set.
-    db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    # (a) a real top-level index.html alongside a .pmx one → the REAL root wins.
-    _plant_snapshot(
-        proj, _CID, {"index.html": "<h1>REAL ROOT</h1>", ".pmx/index.html": "<h1>PMX JUNK</h1>"}
-    )
-    client = DiscoApiClient(
-        FakeTransport(db, states=["FINISHED"]),
-        db_path=str(db),
-        poll_interval_s=0.0,
-        projects_root=str(proj),
-    )
-    served = client._snapshot_served_root(_CID)
-    assert served is not None and "REAL ROOT" in served and "PMX JUNK" not in served
+async def test_http_transport_rejects_preview_bootstrap_that_sets_app_session():
+    cid = "conv_a1b2c3d4proof"
+    path_host = path_preview_host_label(cid, 8000)
+    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
+    seen: list[str] = []
 
-    # (b) NO root index, only .pmx/index.html + a real subdir index → the subdir wins (the
-    #     .pmx one is skipped, exercising the skip filter past the root short-circuit).
-    cid2 = "conv_skipdir2"
-    _plant_snapshot(
-        proj, cid2, {".pmx/index.html": "<h1>PMX JUNK</h1>", "app/index.html": "<h1>REAL APP</h1>"}
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.endswith("/preview/capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "path",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            return httpx.Response(
+                200,
+                headers=[
+                    ("set-cookie", "disco_path_preview_a1b2c3d4=preview-proof; Path=/"),
+                    ("set-cookie", "disco_session=must-not-cross; Path=/"),
+                ],
+            )
+        raise AssertionError("generated content loaded after app-session crossover")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
     )
-    served2 = client._snapshot_served_root(cid2)
-    assert served2 is not None and "REAL APP" in served2 and "PMX JUNK" not in served2
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, _headers = await transport.fetch_isolated_preview(cid)
+
+    assert status == 502
+    assert body == "preview bootstrap crossed application session"
+    assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path]
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_no_durable_deliverable_stays_broken(tmp_path):
-    # No served-root file in the snapshot (no static deliverable) → no substitution; the
-    # honest 404 stands so a no-output preview still FAILs.
-    db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"notes.txt": "no served root here"})  # no index.html
-    _seed_db(db, _CID, [_verify_obs(1, True)])
-    transport = _DeadPreviewTransport(db, states=["FINISHED"])
-    client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+async def test_http_transport_never_retains_intent_reflected_by_failed_redemption():
+    cid = "conv_a1b2c3d4proof"
+    path_host = path_preview_host_label(cid, 8000)
+    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
+    intent = "one-use-intent-must-not-be-retained"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/preview/capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_intent": intent,
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "path",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            return httpx.Response(403, text=f"hostile reflection {intent}")
+        raise AssertionError("content fetch ran after failed redemption")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
     )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
 
-    preview = await client.collect_preview(_CID)
+    status, body, headers = await transport.fetch_isolated_preview(cid)
 
-    assert preview["health"]["status"] == 404
+    assert status == 403
+    assert body == "preview capability redemption failed"
+    assert intent not in body
+    assert headers == {}
 
 
 @pytest.mark.asyncio
-async def test_collect_preview_live_proxy_wins_over_snapshot(tmp_path):
-    # When the live proxy IS up, it is the truth — the (possibly stale) snapshot is NOT used.
-    db = tmp_path / "disco.db"
-    proj = tmp_path / "projects"
-    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE SNAPSHOT</h1>"})
-    _seed_db(db, _CID, [_verify_obs(1, True)])
-    transport = FakeTransport(db, states=["FINISHED"], preview_html="<h1>LIVE Build Smoke OK</h1>")
-    client = DiscoApiClient(
-        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
-    )
-
-    preview = await client.collect_preview(_CID)
-
-    assert preview["health"]["status"] == 200
-    assert "LIVE" in preview["content"]
-    assert preview.get("source") != "snapshot_serve_probe"
-
-
-@pytest.mark.asyncio
-async def test_static_build_classifies_pass_with_dead_proxy_via_durable_sources(tmp_path):
-    # End-to-end mirror of the live PASS: with the post-FINISH preview proxy DOWN, the
-    # workspace (Bug 9) reads the snapshot and the preview (Bug 10) is the runner's own
-    # serve+PROBE of the snapshot static content (clean_smoke_log has NO in-run verify, so
-    # the 200 is GENUINE probe evidence, never a forged absence-of-failure) → PASS.
+async def test_static_build_classifies_pass_with_canonical_preview_and_snapshot_workspace(tmp_path):
+    # Workspace truth remains the durable ProjectStore snapshot. Preview truth is
+    # independently fetched through the product's isolated capability boundary.
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
     _seed_db(db, _CID, clean_smoke_log())
     _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
-    transport = _DeadPreviewTransport(
-        db, states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"]
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"],
+        preview_body="<h1>Build Smoke OK</h1>",
     )
     client = DiscoApiClient(
         transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
@@ -1349,12 +1449,36 @@ async def test_static_build_classifies_pass_with_dead_proxy_via_durable_sources(
 
 
 @pytest.mark.asyncio
-async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
-    # The durable substitution uses the REAL snapshot html (never a fabricated 200/blank),
-    # so a wrong-content static deliverable still FAILs on truth — it is NOT masked into a
-    # PASS. (Workspace + preview read the same index.html, so the workspace oracle catches
-    # the missing needle first with ARTIFACT_TRUTH_MISMATCH — either truth-mismatch is fine;
-    # the point is no false PASS.)
+async def test_preview_required_contract_rejects_unrecorded_or_local_fallback_provenance(tmp_path):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _seed_db(db, _CID, clean_smoke_log())
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"],
+        preview_body="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(
+        transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
+    )
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+    assert run.preview is not None
+    run.preview["source"] = "snapshot_serve_probe"
+    base = assemble_dossier(
+        tmp_path / "out", "run_untrusted_preview_source", scenario, run, model="m", autonomous=False
+    )
+
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+
+    assert classification["status"] == "INVALID_RUN"
+    assert classification["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+    assert classification["first_broken_link"] == "scenario_contract -> required_evidence"
+
+
+@pytest.mark.asyncio
+async def test_canonical_preview_does_not_mask_wrong_content(tmp_path):
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
     # The agent actually WROTE the wrong content (a file_write of "<h1>WRONG</h1>"), so the
@@ -1362,8 +1486,10 @@ async def test_durable_preview_does_not_mask_wrong_content(tmp_path):
     # under the Part A proof-fold — it is NOT downgraded to an unverified-snapshot INVALID_RUN.
     _seed_db(db, _CID, _smoke_log_with_file_write("index.html", "<h1>WRONG</h1>"))
     _plant_snapshot(proj, _CID, {"index.html": "<h1>WRONG</h1>"})  # missing the needle
-    transport = _DeadPreviewTransport(
-        db, states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"]
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"],
+        preview_body="<h1>WRONG</h1>",
     )
     client = DiscoApiClient(
         transport, db_path=str(db), poll_interval_s=0.0, projects_root=str(proj)
@@ -1829,7 +1955,7 @@ async def test_paused_then_finished_resumes_to_terminal(tmp_path):
         workspace={"index.html": "<h1>Build Smoke OK</h1>"},
         preview_html="<h1>Build Smoke OK</h1>",
     )
-    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    client = _client(transport, tmp_path)
     scenario = _smoke_scenario()
     run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
     # it issued a resume (POST /resume)
@@ -1947,7 +2073,7 @@ async def test_clarify_question_answered_then_build_proceeds(tmp_path):
         workspace={"index.html": "<h1>Build Smoke OK</h1>"},
         preview_html="<h1>Build Smoke OK</h1>",
     )
-    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    client = _client(transport, tmp_path)
     scenario = _smoke_scenario()
     run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
     # the runner sent the GENERIC clarification answer over the send_message path
@@ -1994,7 +2120,7 @@ async def test_confirmation_gate_confirmed_then_build_proceeds(tmp_path):
         workspace={"index.html": "<h1>Build Smoke OK</h1>"},
         preview_html="<h1>Build Smoke OK</h1>",
     )
-    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    client = _client(transport, tmp_path)
     scenario = _smoke_scenario()
     run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=2)
     # the runner cleared the gate with the REAL confirm frame — NOT a no-op send_message
@@ -2548,20 +2674,19 @@ class _CancelAtRecoveryTransport(FakeTransport):
                     self.pickup_log.append(self._state_reads)
                 elif self._recovery_reads == 4 and not self._recovery_terminal_inserted:
                     seq = self._next_seq()
-                    self._append(
-                        action(
-                            seq,
-                            "file_write",
-                            args={
-                                "path": "index.html",
-                                "content": (
-                                    "<h1>Beacon Status</h1>"
-                                    "<table><td>All systems nominal</td></table>"
-                                ),
-                            },
-                            action_id=f"act{seq}",
-                        )
+                    write = action(
+                        seq,
+                        "file_write",
+                        args={
+                            "path": "index.html",
+                            "content": (
+                                "<h1>Beacon Status</h1><table><td>All systems nominal</td></table>"
+                            ),
+                        },
+                        action_id=f"act{seq}",
                     )
+                    self._append(write)
+                    self._append(_observation_for_action(self._next_seq(), write))
                     self._append(status(self._next_seq(), "FINISHED"))
                     self._recovery_terminal_inserted = True
                     self.terminal_log.append(self._state_reads)
@@ -2675,7 +2800,7 @@ async def test_cancel_at_after_first_file_write_kills_then_followup_recovers(tmp
         ],
     )
     transport = _CancelAtRecoveryTransport(db)
-    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    client = _client(transport, tmp_path)
     scenario = {
         "id": "disconnect_cancel_recovery",
         "mode": "api",
@@ -2866,7 +2991,7 @@ async def test_followup_pickup_env_override_bounds_the_wait(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_preview_dossier_is_evidence_locked(tmp_path):
     # codex P1#1: the PREVIEW dossier is adjudicated truth — it MUST be under the §6
-    # hash lock, so a tampered served.html / health.json trips INVALID_RUN.
+    # hash lock, so tampered content, health, or provenance trips INVALID_RUN.
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log())
     transport = FakeTransport(
@@ -2885,14 +3010,71 @@ async def test_preview_dossier_is_evidence_locked(tmp_path):
     # the preview files ARE in the locked set
     assert "preview/served.html" in manifest.evidence_hashes
     assert "preview/health.json" in manifest.evidence_hashes
+    assert "preview/metadata.json" in manifest.evidence_hashes
     assert verify_evidence_unchanged(base, manifest).intact
-    # tamper the served preview -> lock trips
-    (base / "conversations" / _CID / "preview" / "served.html").write_text(
-        "<h1>TAMPERED</h1>", encoding="utf-8"
+    metadata_path = base / "conversations" / _CID / "preview" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["source"] == "isolated_path_capability"
+    # A hidden-fallback provenance rewrite is evidence tampering and trips the lock.
+    metadata["source"] = "snapshot_serve_probe"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
     integrity = verify_evidence_unchanged(base, manifest)
     assert not integrity.intact
-    assert "preview/served.html" in integrity.mismatches
+    assert "preview/metadata.json" in integrity.mismatches
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("preview_status", "preview_body", "expected_status", "expected_code"),
+    [
+        (200, "<h1>Build Smoke OK</h1>", "PASS", None),
+        (403, "preview capability required", "FAIL", "FALSE_FINISH_PREVIEW_BROKEN"),
+        (200, "<h1>WRONG</h1>", "FAIL", "PREVIEW_TRUTH_MISMATCH"),
+    ],
+)
+async def test_frozen_dossier_replays_workspace_preview_and_provenance(
+    tmp_path,
+    preview_status,
+    preview_body,
+    expected_status,
+    expected_code,
+):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _seed_db(db, _CID, clean_smoke_log())
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>Build Smoke OK</h1>"})
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED", "FINISHED"],
+        preview_status=preview_status,
+        preview_body=preview_body,
+    )
+    client = DiscoApiClient(
+        transport,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+    )
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+    base = assemble_dossier(
+        tmp_path / "out",
+        f"replay-{preview_status}-{expected_status}",
+        scenario,
+        run,
+        model="m",
+        autonomous=False,
+    )
+
+    original = classify_dossier(base, scenario, run, autonomous=False)
+    replayed = classify_run_folder(base, scenario=scenario)
+
+    assert original["status"] == expected_status
+    assert replayed["status"] == expected_status
+    assert replayed.get("code") == expected_code
 
 
 # ---- evidence lock (events) --------------------------------------------------
