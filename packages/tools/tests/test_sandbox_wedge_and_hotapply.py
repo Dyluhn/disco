@@ -294,7 +294,10 @@ async def test_hot_apply_settings_picked_up_without_recreate(tmp_path):
     `default_memory_mb` falls behind a pre-existing `spec.memory_mb or
     cfg.default_memory_mb` short-circuit where the spec's own default of
     2048 always wins. The hot-apply story is the same — we just need a
-    field that the test can observe end-to-end.
+    field that the test can observe end-to-end. Each sealed create also
+    provisions a control sidecar, so identify the actual sandbox by the
+    fake client's explicit `last` handle instead of assuming a position in
+    the mixed sidecar+sandbox `runs` history.
     """
     from test_gvisor import FakeDockerClient  # the shared fake
 
@@ -303,9 +306,16 @@ async def test_hot_apply_settings_picked_up_without_recreate(tmp_path):
     assert cfg.image == "disco-sandbox:base"  # the starting value
     svc = GvisorSandboxService(cfg, client=client)
 
-    # 1) First container: default image (the unchanged config value).
+    # 1) First sandbox and its mandatory control sidecar use the unchanged config.
     inst1 = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c1")
-    assert client.runs[0].run_kwargs["image"] == "disco-sandbox:base"
+    first_sandbox = client.last
+    assert first_sandbox is not None
+    first_resources = tuple(client.runs)
+    assert len(first_resources) == 2
+    first_sidecar = next(resource for resource in first_resources if resource is not first_sandbox)
+    for resource in (first_sandbox, first_sidecar):
+        assert resource.run_kwargs["image"] == "disco-sandbox:base"
+        assert resource.run_kwargs["runtime"] == "runsc"
     inst1_id = inst1.id
 
     # 2) Hot-apply: mutate the LIVE config. NO service restart, NO recreate
@@ -316,14 +326,28 @@ async def test_hot_apply_settings_picked_up_without_recreate(tmp_path):
     cfg.runtime = "runc"  # swap the runtime too — proves it's not just `image`
     cfg.workspace_root = "/tmp/other-workspaces"
 
-    # 3) Second container: now uses the hot-applied image + runtime.
+    # 3) The next sandbox and sidecar use the hot-applied image + runtime.
     inst2 = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c2")
-    assert client.runs[1].run_kwargs["image"] == "disco-sandbox:hot"
-    assert client.runs[1].run_kwargs["runtime"] == "runc"
+    second_sandbox = client.last
+    assert second_sandbox is not None and second_sandbox is not first_sandbox
+    second_resources = tuple(
+        resource for resource in client.runs if resource not in first_resources
+    )
+    assert len(second_resources) == 2
+    second_sidecar = next(
+        resource for resource in second_resources if resource is not second_sandbox
+    )
+    for resource in (second_sandbox, second_sidecar):
+        assert resource.run_kwargs["image"] == "disco-sandbox:hot"
+        assert resource.run_kwargs["runtime"] == "runc"
 
     # 4) The first container was NOT recreated (it's still in the service's
     # instance map, still alive, still has its original config snapshot).
     assert inst1.id == inst1_id
+    assert tuple(client.runs[:2]) == first_resources
+    for resource in first_resources:
+        assert resource.run_kwargs["image"] == "disco-sandbox:base"
+        assert resource.run_kwargs["runtime"] == "runsc"
     assert svc._instances[inst1.id] is inst1
     assert svc._instances[inst2.id] is inst2
 
