@@ -125,6 +125,14 @@ def test_reserved_control_ports_default_8000_8800_and_frontend_5173():
     assert reserved_control_ports() == frozenset({8000, 8800, 5173})
 
 
+def test_reserved_control_ports_protect_defaults_and_isolated_stack_alternates(monkeypatch):
+    monkeypatch.setenv("DISCO_AGENT_PORT", "18101")
+    monkeypatch.setenv("DISCO_APP_PORT", "18901")
+    monkeypatch.setenv("DISCO_UI_PORT", "5291")
+
+    assert reserved_control_ports() == frozenset({8000, 8800, 5173, 18101, 18901, 5291})
+
+
 # ---- explicit-url validation (Bug 7 explicit-url bypass) --------------------
 
 

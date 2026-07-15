@@ -44,6 +44,8 @@ def _int_env(suffix: str, default: int) -> int:
 # reserved control/infra port like 8000/8800: a build's verify must never be pointed
 # at it (that would verify the UI / an unrelated app — a FALSE PASS) and the build
 # should not squat it.
+_DEFAULT_AGENT_PORT = 8000
+_DEFAULT_APP_PORT = 8800
 _FRONTEND_DEV_PORT = 5173
 
 
@@ -56,7 +58,21 @@ def reserved_control_ports() -> frozenset[int]:
     servers read so a non-default deployment stays consistent. (Inside an isolated
     container these are the box's own loopback and are NOT reserved — see
     `host_shared`.)"""
-    return frozenset({_int_env("AGENT_PORT", 8000), _int_env("APP_PORT", 8800), _FRONTEND_DEV_PORT})
+    # Keep the conventional ports protected even when a disposable stack runs on
+    # alternates. A shared-host process sandbox can otherwise collide with the
+    # operator's active default stack while the campaign itself listens on 181xx.
+    # Also reserve the effective UI port; the old fixed-5173-only rule could target
+    # another suite's Vite server when LIVE_PORT/UI_PORT selected an alternate.
+    return frozenset(
+        {
+            _DEFAULT_AGENT_PORT,
+            _DEFAULT_APP_PORT,
+            _FRONTEND_DEV_PORT,
+            _int_env("AGENT_PORT", _DEFAULT_AGENT_PORT),
+            _int_env("APP_PORT", _DEFAULT_APP_PORT),
+            _int_env("UI_PORT", _FRONTEND_DEV_PORT),
+        }
+    )
 
 
 def backend_shares_host_network(sandbox: object) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -84,6 +85,11 @@ def test_stack_copies_all_signed_model_state(monkeypatch, tmp_path: Path) -> Non
     assert manager.env["DISCO_CONFIG"] == str(manager.config_path)
     assert manager.env["DISCO_SECRETS"] == str(manager.secrets_path)
     assert manager.env["DISCO_APPROVALS"] == str(manager.approvals_path)
+    assert manager.env["DISCO_AGENT_PORT"] == "18000"
+    assert manager.env["DISCO_APP_PORT"] == "18800"
+    assert manager.env["DISCO_UI_PORT"] == "5274"
+    assert "DISCO_SANDBOX" not in manager.env
+    assert manager.env["DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV"] == "1"
 
 
 def test_stack_close_removes_secret_artifacts_but_preserves_diagnostics(
@@ -115,7 +121,8 @@ def test_stack_close_removes_secret_artifacts_but_preserves_diagnostics(
     assert not temporary_secrets.exists()
     assert manager.config_path.read_bytes() == config.read_bytes()
     assert manager.approvals_path.read_bytes() == approvals.read_bytes()
-    assert (manager.root / "stack.json").is_file()
+    manifest = json.loads((manager.root / "stack.json").read_text(encoding="utf-8"))
+    assert manifest["sandbox_backend"] == "process"
 
 
 def test_stack_removes_copied_secrets_when_initialization_fails(
@@ -252,3 +259,68 @@ def test_gvisor_lane_can_preserve_seeded_sandbox(monkeypatch, tmp_path: Path) ->
     assert persisted.backend == "gvisor"
     assert persisted.runtime == "runsc"
     assert persisted.docker_socket == "ssh://sandbox@100.64.0.10"
+    assert "DISCO_SANDBOX" not in manager.env
+    assert "DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV" not in manager.env
+    manager._write_manifest()
+    manifest = json.loads((manager.root / "stack.json").read_text(encoding="utf-8"))
+    assert manifest["sandbox_backend"] == "gvisor"
+
+
+def test_build_lane_can_select_namespaced_podman_without_process_fallback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """H170: literal container port 8000 must never occupy host port 8000."""
+
+    from disco.agent_server.sandbox_runtime_service import build_sandbox_service
+
+    repo = Path(__file__).resolve().parents[3]
+    seed = tmp_path / "seed-config.json"
+    ConfigStore(seed).save(default_config())
+    monkeypatch.setenv("DISCO_RELIABILITY_SEED_SECRET_KEY", "x" * 64)
+    # Ambient overrides are hostile input: the disposable config must still win.
+    monkeypatch.setenv("DISCO_SANDBOX", "process")
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
+
+    manager = StackManager(
+        repo=repo,
+        root=tmp_path / "stack-podman",
+        agent_port=18101,
+        app_port=18901,
+        ui_port=5291,
+        seed_config=seed,
+        seed_secrets=None,
+        seed_approvals=None,
+        sandbox_backend="podman",
+    )
+
+    with _temporary_environment(
+        manager.env,
+        ("DISCO_CONFIG", "DISCO_SECRETS", "DISCO_APPROVALS", "DISCO_SECRET_KEY"),
+    ):
+        persisted = ConfigStore(manager.config_path).load().sandbox
+    service = build_sandbox_service(persisted)
+    assert persisted.backend == "podman"
+    assert persisted.runtime == "crun"
+    assert service.name == "podman"
+    assert service.is_production_valid is True
+    assert "DISCO_SANDBOX" not in manager.env
+    assert "DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV" not in manager.env
+    manager._write_manifest()
+    manifest = json.loads((manager.root / "stack.json").read_text(encoding="utf-8"))
+    assert manifest["sandbox_backend"] == "podman"
+
+
+def test_stack_rejects_conflicting_preserved_and_explicit_sandbox(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        StackManager(
+            repo=tmp_path,
+            root=tmp_path / "stack-conflict",
+            agent_port=18000,
+            app_port=18800,
+            ui_port=5274,
+            seed_config=None,
+            seed_secrets=None,
+            seed_approvals=None,
+            preserve_seed_sandbox=True,
+            sandbox_backend="podman",
+        )

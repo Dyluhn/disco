@@ -57,6 +57,34 @@ def test_all_model_driven_live_suites_require_provider_evidence() -> None:
     }
 
 
+def test_live_build_lanes_use_namespaced_podman_not_shared_host_process() -> None:
+    """H170: generated port 8000 is private to the Build sandbox namespace."""
+
+    from disco.tools.sandbox._container import loopback_port_bindings
+
+    matrix = load_matrix(MATRIX)
+    suites = matrix.select_suites(proofs={"live"}, surfaces={"build"})
+    assert {suite.id for suite in suites} == {
+        "live-build-shapes",
+        "live-build-revisions",
+        "live-build-lifecycle",
+    }
+    for suite in suites:
+        command = list(suite.command)
+        assert "--sandbox-backend" in command, suite.id
+        assert command[command.index("--sandbox-backend") + 1] == "podman", suite.id
+        assert "--preserve-seed-sandbox" not in command, suite.id
+
+    shapes = matrix.suites["live-build-shapes"]
+    assert "diag_devserver" in shapes.command[shapes.command.index("--scenario") + 1].split(",")
+    # diag_devserver intentionally exercises container port 8000. Podman's host
+    # publication is loopback-only with NO requested host port, so the engine assigns
+    # an ephemeral campaign-private host port instead of binding protected host :8000.
+    binding = loopback_port_bindings(podman=True)["8000/tcp"]
+    assert binding == {"ip": "127.0.0.1"}
+    assert "host_port" not in binding
+
+
 def test_matrix_rejects_uncovered_claim(tmp_path: Path) -> None:
     path = tmp_path / "matrix.yaml"
     path.write_text(

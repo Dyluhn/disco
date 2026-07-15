@@ -97,7 +97,12 @@ class StackManager:
         seed_secrets: Path | None,
         seed_approvals: Path | None,
         preserve_seed_sandbox: bool = False,
+        sandbox_backend: str | None = None,
     ) -> None:
+        if preserve_seed_sandbox and sandbox_backend is not None:
+            raise ValueError("preserve_seed_sandbox and sandbox_backend are mutually exclusive")
+        if sandbox_backend not in (None, "process", "podman"):
+            raise ValueError(f"unsupported disposable sandbox backend: {sandbox_backend!r}")
         self.repo = repo
         self.root = root
         self.agent_port = agent_port
@@ -109,6 +114,10 @@ class StackManager:
         self._lock = threading.Lock()
         self._generation = 0
         self.preserve_seed_sandbox = preserve_seed_sandbox
+        self.sandbox_backend = sandbox_backend
+        self.effective_sandbox_backend = (
+            "seed" if preserve_seed_sandbox else (sandbox_backend or "process")
+        )
         self.root.mkdir(parents=True, exist_ok=False)
         (self.root / "projects").mkdir()
         (self.root / "skills").mkdir()
@@ -139,6 +148,16 @@ class StackManager:
 
     def _environment(self) -> dict[str, str]:
         env = os.environ.copy()
+        # The copied ConfigStore below is the one source of truth for the disposable
+        # stack's sandbox topology. Never inherit or inject DISCO_SANDBOX here: the
+        # agent entrypoint treats it as a stronger startup override, which previously
+        # downgraded even --preserve-seed-sandbox (including gVisor) to the shared-host
+        # process backend. Clear the legacy alias too so an ambient operator setting
+        # cannot change campaign topology.
+        env.pop("DISCO_SANDBOX", None)
+        env.pop("PMX_SANDBOX", None)
+        env.pop("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", None)
+        env.pop("PMX_ALLOW_PROCESS_SANDBOX_FOR_DEV", None)
         env.update(
             {
                 "DISCO_DATA_DIR": str(self.root),
@@ -153,13 +172,14 @@ class StackManager:
                 "DISCO_AUTH_DEV_AUTO_PAIR": "1",
                 "DISCO_BIND": "127.0.0.1",
                 "DISCO_PUBLIC_UI_URL": f"http://127.0.0.1:{self.ui_port}",
+                # preview_target reserves both the conventional protected ports and
+                # these effective alternate ports for shared-host dev sandboxes.
+                "DISCO_AGENT_PORT": str(self.agent_port),
+                "DISCO_APP_PORT": str(self.app_port),
+                "DISCO_UI_PORT": str(self.ui_port),
                 "DISCO_INSPECT": "1",
                 "DISCO_LOG_JSON": "1",
                 "DISCO_LOG_LEVEL": os.environ.get("DISCO_RELIABILITY_LOG_LEVEL", "INFO"),
-                # Settings/workflow tests need a safe local workspace, not a
-                # dependency on the operator's container socket.
-                "DISCO_SANDBOX": "process",
-                "DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV": "1",
                 # Do not inherit an ambient production/dev override and do not
                 # silently widen the product default. A campaign that explicitly
                 # needs another posture must name it through the reliability-only
@@ -167,6 +187,12 @@ class StackManager:
                 "DISCO_BUILD_EGRESS": os.environ.get("DISCO_RELIABILITY_BUILD_EGRESS", "filtered"),
             }
         )
+        # Process remains the lightweight default for non-Build UI/settings lanes,
+        # but its production-validity opt-out is present only when the copied config
+        # deliberately selects it. Namespaced Podman and preserved seed backends do
+        # not inherit the dev escape hatch.
+        if not self.preserve_seed_sandbox and (self.sandbox_backend or "process") == "process":
+            env["DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV"] = "1"
         return env
 
     def _prepare_config(self) -> None:
@@ -189,14 +215,18 @@ class StackManager:
             config = store.load()
             sandbox = config.sandbox
             if not self.preserve_seed_sandbox:
-                sandbox = sandbox.model_copy(
-                    update={
-                        "backend": "process",
-                        "docker_socket": "",
-                        "runtime": "runc",
-                        "workspace_root": str(self.root / "sandbox-workspaces"),
-                    }
-                )
+                selected_backend = self.sandbox_backend or "process"
+                sandbox_updates = {
+                    "backend": selected_backend,
+                    "runtime": "crun" if selected_backend == "podman" else "runc",
+                    "workspace_root": str(self.root / "sandbox-workspaces"),
+                }
+                if selected_backend == "process":
+                    # Process needs no container endpoint. Podman keeps the signed
+                    # seed's explicit podman_url/image and owns a private named volume.
+                    sandbox_updates["docker_socket"] = ""
+                sandbox = sandbox.model_copy(update=sandbox_updates)
+            self.effective_sandbox_backend = sandbox.backend
             config = config.model_copy(
                 update={
                     "projects": ProjectStorageSettings(projects_root=str(self.root / "projects")),
@@ -279,6 +309,7 @@ class StackManager:
             "approvals": str(self.approvals_path),
             "db": str(self.db_path),
             "projects": str(self.root / "projects"),
+            "sandbox_backend": self.effective_sandbox_backend,
         }
         target = self.root / "stack.json"
         temporary = target.with_suffix(".json.tmp")
@@ -289,8 +320,8 @@ class StackManager:
 class _ControlHandler(BaseHTTPRequestHandler):
     server_version = "DiscoReliabilityControl/1.0"
 
-    def log_message(self, _format: str, *_args: object) -> None:
-        return
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        del format, args
 
     @property
     def manager(self) -> StackManager:
@@ -369,6 +400,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="retain the seeded sandbox backend (required for real gVisor proof)",
     )
+    parser.add_argument(
+        "--sandbox-backend",
+        choices=("process", "podman"),
+        help=(
+            "explicit disposable sandbox topology; Podman is required for live Build "
+            "lanes so generated listeners stay in a private network namespace"
+        ),
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = list(args.command)
@@ -376,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
         command = command[1:]
     if not command:
         parser.error("a command is required after --")
+    if args.preserve_seed_sandbox and args.sandbox_backend is not None:
+        parser.error("--preserve-seed-sandbox and --sandbox-backend are mutually exclusive")
 
     repo = Path(__file__).resolve().parents[2]
     root = Path(args.root).expanduser().resolve()
@@ -389,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
         seed_secrets=None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_SECRETS"),
         seed_approvals=(None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_APPROVALS")),
         preserve_seed_sandbox=args.preserve_seed_sandbox,
+        sandbox_backend=args.sandbox_backend,
     )
     control: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
