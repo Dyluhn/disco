@@ -59,6 +59,7 @@ class _Stub(BaseHTTPRequestHandler):
     # Per-process knobs the tests set before each run.
     preview_available = False
     serve_page = True
+    conversation_status = "RUNNING"
     unauthenticated_private_calls = 0
 
     def _send(
@@ -98,8 +99,13 @@ class _Stub(BaseHTTPRequestHandler):
         if not self._authenticated():
             type(self).unauthenticated_private_calls += 1
             self._send(401, b"{}")
+        elif path == "/conversations":
+            self._send(200, json.dumps({"conversation_ids": ["conv_operatorproof"]}).encode())
         elif path.endswith("/state"):
-            self._send(200, json.dumps({"execution_status": "RUNNING"}).encode())
+            self._send(
+                200,
+                json.dumps({"execution_status": self.conversation_status}).encode(),
+            )
         elif path.endswith("/events"):
             # No file_write/index.html observation and no app-deliverable — exactly
             # the shell-served blind spot.
@@ -147,9 +153,7 @@ def test_operator_probes_preview_when_live_port_detected() -> None:
     _Stub.serve_page = True
     base, srv = _serve()
     try:
-        preview = _CapabilityPreviewClient(
-            (200, b"<html><title>Shell Served</title></html>")
-        )
+        preview = _CapabilityPreviewClient((200, b"<html><title>Shell Served</title></html>"))
         op = OperatorClient(base, _preview_client=preview)
         view = asyncio.run(op.view("conv_shellserved"))
         assert "preview" in view, "operator should have probed the live preview"
@@ -176,6 +180,34 @@ def test_operator_skips_probe_when_no_signal() -> None:
         assert preview.calls == []
         assert _Stub.unauthenticated_private_calls == 0
     finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_operator_cli_list_and_wait_any_authenticate_every_get(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The exact list and ``wait --any`` CLI paths must pair before their private
+    GET /conversations, state, and events requests."""
+    _Stub.conversation_status = "FINISHED"
+    base, srv = _serve()
+    try:
+        assert operator_module.main(["--agent-base", base, "list"]) == 0
+        listed = json.loads(capsys.readouterr().out)
+        assert listed == {
+            "count": 1,
+            "active": 0,
+            "conversations": [{"cid": "conv_operatorproof", "status": "FINISHED"}],
+        }
+
+        assert operator_module.main(["--agent-base", base, "wait", "--any", "--timeout", "0"]) == 0
+        waited = json.loads(capsys.readouterr().out)
+        assert waited["cid"] == "conv_operatorproof"
+        assert waited["status"] == "FINISHED"
+        assert waited["terminal"] is True
+        assert _Stub.unauthenticated_private_calls == 0
+    finally:
+        _Stub.conversation_status = "RUNNING"
         srv.shutdown()
         srv.server_close()
 
@@ -227,9 +259,7 @@ async def test_operator_authenticates_http_mutations_and_websocket_control(
         yield ws
 
     monkeypatch.setattr(operator_module, "_ws_connect", fake_connect)
-    auth = HttpVerifyClient(
-        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
-    )
+    auth = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
     operator = OperatorClient("http://127.0.0.1:8000", _auth_client=auth)
 
     started = await operator.start("build", "Build the selected app")
@@ -245,7 +275,5 @@ async def test_operator_authenticates_http_mutations_and_websocket_control(
     for url, kwargs in connects:
         assert url == "ws://127.0.0.1:8000/ws/conversations/conv_operatorproof"
         assert kwargs["origin"] == "http://127.0.0.1:8000"
-        assert kwargs["additional_headers"] == {
-            "Cookie": "disco_session=operator-proof"
-        }
+        assert kwargs["additional_headers"] == {"Cookie": "disco_session=operator-proof"}
     assert ("POST", "/conversations") in seen
