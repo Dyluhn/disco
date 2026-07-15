@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,7 +17,9 @@ from disco.tools.builtin import audio_overview
 from fastapi import FastAPI
 
 
-def _report(query: str = "Raw user question that should not become the export title") -> ReportEvent:
+def _report(
+    query: str = "Raw user question that should not become the export title",
+) -> ReportEvent:
     return ReportEvent(
         source=EventSource.AGENT,
         query=query,
@@ -75,6 +76,22 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
 
     cold_events: list[dict] = []
     monkeypatch.setattr(tts_local, "model_files_present", lambda: False)
+
+    async def fake_ensure_model(on_progress=None) -> None:
+        if on_progress is not None:
+            on_progress(
+                {
+                    "stage": "downloading_model",
+                    "file": "kokoro-v1.0.onnx",
+                    "downloaded": 10,
+                    "total": 10,
+                    "pct": 100,
+                    "file_index": 1,
+                    "file_total": 1,
+                }
+            )
+
+    monkeypatch.setattr(tts_local, "ensure_model", fake_ensure_model)
     await report_audio.generate_report_audio(
         _report(),
         tts_settings=settings,
@@ -90,6 +107,7 @@ async def test_w08_w09_audio_progress_is_staged_and_download_only_when_needed(
     ]
     assert cold_events[2] == {"stage": "synthesizing", "current": 1, "total": 2}
     assert cold_events[3] == {"stage": "synthesizing", "current": 2, "total": 2}
+    assert cold_events[1]["pct"] == 100
 
     warm_events: list[dict] = []
     monkeypatch.setattr(tts_local, "model_files_present", lambda: True)
@@ -131,9 +149,7 @@ async def test_w10_markdown_export_route_uses_generated_title_not_raw_question()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.post(
-            f"/api/conversations/{cid}/report/export?fmt=md", json={}
-        )
+        response = await client.post(f"/api/conversations/{cid}/report/export?fmt=md", json={})
     assert response.status_code == 200, response.text
     first_line = response.text.splitlines()[0]
     assert first_line == f"# Deep Research: {generated_title}"
