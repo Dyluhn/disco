@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import stat
@@ -11,6 +12,7 @@ import pytest
 from disco.tools.sandbox.base import SandboxError
 from disco.tools.sandbox.kernel import (
     _KERNEL_STREAM_CAP,
+    GatewayKernel,
     KernelResult,
     ProcessKernel,
     _BoundedTextCapture,
@@ -44,6 +46,91 @@ def test_kernel_result_rendering():
 
     res = KernelResult(ok=True, stdout="", stderr="", images=[".pmx/plots/0001.png"])
     assert str(res) == "plot saved: .pmx/plots/0001.png"
+
+
+class _OrderedGatewayWebSocket:
+    """Minimal multiplexed Jupyter WebSocket with caller-selected channel order."""
+
+    def __init__(self, message_kinds: list[str]) -> None:
+        self._message_kinds = message_kinds
+        self._parent_id = ""
+        self.sent: list[dict] = []
+
+    async def send(self, payload: str) -> None:
+        message = json.loads(payload)
+        self.sent.append(message)
+        self._parent_id = message["header"]["msg_id"]
+
+    async def recv(self) -> str:
+        kind = self._message_kinds.pop(0)
+        content: dict[str, object]
+        if kind == "result":
+            msg_type = "execute_result"
+            content = {"data": {"text/plain": "42"}}
+        elif kind == "reply":
+            msg_type = "execute_reply"
+            content = {"status": "ok"}
+        elif kind == "error_reply":
+            msg_type = "execute_reply"
+            content = {"status": "error"}
+        elif kind == "error":
+            msg_type = "error"
+            content = {"traceback": ["ValueError: boom"]}
+        else:
+            assert kind == "idle"
+            msg_type = "status"
+            content = {"execution_state": "idle"}
+        return json.dumps(
+            {
+                "header": {"msg_type": msg_type},
+                "parent_header": {"msg_id": self._parent_id},
+                "content": content,
+            }
+        )
+
+
+class _GatewaySandbox:
+    id = "sbx_h222_ordering"
+
+    async def write_file(self, _path: str, _data: bytes) -> None:
+        raise AssertionError("ordering fixtures must not spill output")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message_kinds",
+    [
+        ["result", "idle", "reply"],
+        ["reply", "result", "idle"],
+    ],
+    ids=["idle-before-reply", "reply-before-idle"],
+)
+async def test_gateway_requires_execute_reply_and_idle_in_either_order(message_kinds):
+    """H222: cross-channel ordering cannot turn a successful cell into failure."""
+    kernel = GatewayKernel(_GatewaySandbox(), sessions=None)
+    socket = _OrderedGatewayWebSocket(message_kinds)
+    kernel._ws = socket
+
+    result = await kernel.execute("6 * 7", timeout_s=1)
+
+    assert result.ok is True
+    assert result.result_repr == "42"
+    assert socket._message_kinds == []
+    assert len(socket.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_idle_before_error_reply_preserves_failure_status():
+    """H222: waiting for the reply must preserve a real error, not force success."""
+    kernel = GatewayKernel(_GatewaySandbox(), sessions=None)
+    socket = _OrderedGatewayWebSocket(["error", "idle", "error_reply"])
+    kernel._ws = socket
+
+    result = await kernel.execute("raise ValueError('boom')", timeout_s=1)
+
+    assert result.ok is False
+    assert result.error_traceback == "ValueError: boom"
+    assert socket._message_kinds == []
 
 
 def test_process_workspace_literal_rewrite_is_exact_and_jailed(tmp_path):

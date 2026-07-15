@@ -818,10 +818,15 @@ class GatewayKernel(KernelSession):
         result_repr = None
         error_traceback = None
         images = []
-        # `ok` is only assigned when an `execute_reply` arrives; initialize so
-        # the idle-status branch is well-defined even if we go straight from
-        # busy to idle (no explicit reply).
+        # Shell ``execute_reply`` carries the authoritative success/error status,
+        # while IOPub ``idle`` says output publication has drained. Kernel Gateway
+        # multiplexes those channels onto one WebSocket but does not guarantee
+        # their cross-channel order, so completion requires BOTH signals. Returning
+        # on idle alone can falsely report a successful first cell as ``ok=False``
+        # when its execute_reply is the next frame (H222).
         ok = False
+        reply_received = False
+        idle_received = False
 
         try:
             while True:
@@ -887,9 +892,11 @@ class GatewayKernel(KernelSession):
                     error_traceback = _cap_kernel_traceback(traceback)
                 elif msg_type == "execute_reply":
                     ok = content.get("status") == "ok"
-                    # Wait for idle status after reply
-                    continue
+                    reply_received = True
                 elif msg_type == "status" and content.get("execution_state") == "idle":
+                    idle_received = True
+
+                if reply_received and idle_received:
                     res = KernelResult(
                         ok=ok,
                         stdout="".join(stdout),
