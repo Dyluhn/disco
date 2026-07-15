@@ -137,6 +137,38 @@ def _driver_catalog_contains(payload: dict[str, Any], model: str) -> bool:
     )
 
 
+def _is_terminal_driver_preflight_trace(
+    run: CollectedRun,
+    trace: dict[str, Any],
+    routing: object,
+    agent_spans: list[dict[str, Any]],
+) -> bool:
+    """Whether a trace proves the driver failed before the agent loop could start.
+
+    Driver readiness calls are deliberately outside ``agent.step``.  Requiring a
+    loop span after a named terminal routing failure launders a genuine product /
+    provider failure into missing-evidence INVALID_RUN.  The exception is narrow:
+    terminal ERROR, non-empty all-terminal routing decisions, no tool-scope event,
+    and no agent span.  Once the loop starts it records a tool scope before its
+    model request, so a missing span after that boundary still fails closed.
+    """
+
+    tool_scopes = trace.get("tool_scopes")
+    return (
+        DiscoApiClient._status_of(run.state_final) == "ERROR"
+        and not agent_spans
+        and isinstance(routing, list)
+        and bool(routing)
+        and all(
+            isinstance(decision, dict)
+            and str(decision.get("reason") or "").startswith("terminal failure:")
+            for decision in routing
+        )
+        and isinstance(tool_scopes, list)
+        and not tool_scopes
+    )
+
+
 def _declared_workspace_paths(scenario: dict[str, Any]) -> list[str]:
     files = ((scenario.get("assertions") or {}).get("workspace") or {}).get("files") or []
     return [str(f["path"]) for f in files if f.get("path")]
@@ -1608,11 +1640,14 @@ async def run_once(
                 if isinstance(spans, list)
                 else []
             )
+            terminal_driver_preflight = _is_terminal_driver_preflight_trace(
+                run, trace, routing, agent_spans
+            )
             missing_trace_parts = [
                 name
                 for name, present in (
                     ("routing_decisions", isinstance(routing, list) and bool(routing)),
-                    ("agent.step spans", bool(agent_spans)),
+                    ("agent.step spans", bool(agent_spans) or terminal_driver_preflight),
                 )
                 if not present
             ]
@@ -1625,6 +1660,11 @@ async def run_once(
                     code=fc.MISSING_REQUIRED_EVIDENCE,
                     first_broken_link="model_request -> inspect_trace",
                     facts={"missing_trace_parts": missing_trace_parts},
+                )
+            if terminal_driver_preflight:
+                run.timeline.append(
+                    "inspect trace proved a terminal driver preflight failure before "
+                    "the agent loop; no agent.step span was expected"
                 )
 
         # [REL-5] Measure terminal cleanup + release BEFORE freezing the dossier, so the

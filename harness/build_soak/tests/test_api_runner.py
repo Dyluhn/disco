@@ -2826,6 +2826,128 @@ async def test_post_create_error_status_is_product_not_infra(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_span(tmp_path):
+    err_log = [
+        {
+            "id": "e1",
+            "seq": 1,
+            "kind": "message",
+            "source": "user",
+            "message": {"role": "user", "content": "build"},
+        },
+        {
+            "id": "e2",
+            "seq": 2,
+            "kind": "status",
+            "source": "system",
+            "status": "ERROR",
+            "detail": "Driver configured-model unreachable",
+        },
+    ]
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, err_log)
+
+    class _PreflightFailureTransport(FakeTransport):
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                decision = {
+                    "chosen_model": "configured-model",
+                    "provider": "configured-provider",
+                    "path": "manual",
+                    "reason": "terminal failure: LLMTransientError (config)",
+                }
+                return 200, {
+                    "conversation_id": self.cid,
+                    "event_count": 1,
+                    "dropped_event_count": 0,
+                    "routing_decisions": [decision],
+                    "spans": [],
+                    "tool_scopes": [],
+                    "events": [{"seq": 1, "kind": "routing", **decision}],
+                }
+            return await super().get_json(path)
+
+    transport = _PreflightFailureTransport(db, states=["ERROR", "ERROR"])
+    scenario = _smoke_scenario()
+    record = await run_once(
+        _client(transport, tmp_path),
+        scenario,
+        run_id="run_driver_preflight_error_001",
+        out_root=tmp_path / "out",
+        model="configured-model",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "FAIL"
+    assert record["code"] != "MISSING_REQUIRED_EVIDENCE"
+    assert record["conversation_id"] == _CID
+
+
+@pytest.mark.asyncio
+async def test_nonterminal_routing_trace_still_requires_agent_span(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            status(2, "ERROR", detail="loop failed after starting"),
+        ],
+    )
+
+    class _MissingLoopSpanTransport(FakeTransport):
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                decision = {
+                    "chosen_model": "configured-model",
+                    "provider": "configured-provider",
+                    "path": "manual",
+                    "reason": "config",
+                }
+                scope = {
+                    "mode": "planning",
+                    "attempt": 1,
+                    "complete": True,
+                    "offered_tools": ["submit_plan"],
+                    "allowed_tools": ["submit_plan"],
+                    "offered_count": 1,
+                    "allowed_count": 1,
+                }
+                return 200, {
+                    "conversation_id": self.cid,
+                    "event_count": 2,
+                    "dropped_event_count": 0,
+                    "routing_decisions": [decision],
+                    "spans": [],
+                    "tool_scopes": [scope],
+                    "events": [
+                        {"seq": 1, "kind": "tool_scope", **scope},
+                        {"seq": 2, "kind": "routing", **decision},
+                    ],
+                }
+            return await super().get_json(path)
+
+    transport = _MissingLoopSpanTransport(db, states=["ERROR", "ERROR"])
+    record = await run_once(
+        _client(transport, tmp_path),
+        _smoke_scenario(),
+        run_id="run_missing_loop_span_001",
+        out_root=tmp_path / "out",
+        model="configured-model",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+
+
+@pytest.mark.asyncio
 async def test_mid_run_transport_loss_is_invalid_run(tmp_path):
     # LIVE-SURFACED: the shared agent-server can crash / become unreachable AFTER
     # conversation creation (a raw httpx.ConnectError mid-drive). That is NOT
