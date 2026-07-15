@@ -209,7 +209,7 @@ async def test_real_change_intent_post_finish_still_replans() -> None:
 
     rt._loop_for.assert_called_once_with(CID)
     rt._loop_for.return_value.enter_planning.assert_awaited_once_with("add a dark mode toggle")
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=1)
 
 
 async def test_publish_to_netlify_post_finish_still_replans() -> None:
@@ -221,7 +221,7 @@ async def test_publish_to_netlify_post_finish_still_replans() -> None:
 
     await ops.request_plan(CID, "publish to Netlify")
 
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=1)
     rt._loop_for.return_value.enter_planning.assert_awaited_once()
 
 
@@ -234,7 +234,7 @@ async def test_bare_publish_post_finish_still_replans() -> None:
 
     await ops.request_plan(CID, "publish it")
 
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=1)
 
 
 # ---- request_plan: guard only applies when FINISHED -------------------------

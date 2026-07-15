@@ -94,7 +94,7 @@ async def test_send_user_turn_appends_and_kicks_and_returns_stored(
     ctx, user = events
     assert ctx.source == EventSource.ENVIRONMENT and ctx.message.content == "big ctx"
     assert user.source == EventSource.USER and user.message.content == "build a site"
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=user.seq)
     assert stored.id == user.id and stored.seq == user.seq
     assert rt._pinned_kernels[CID] is rt._disco_kernel
 
@@ -217,6 +217,7 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
 
     fake._maybe_auto_resume_actionless_pause = _no_auto_resume
     fake._post_terminal_rekick_seq = {}
+    fake._run_claimed_user_seq = {}
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
     fake._emit_toolscope_audit_summary = MagicMock()

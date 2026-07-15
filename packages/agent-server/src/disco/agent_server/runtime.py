@@ -974,6 +974,7 @@ class ConversationRuntime:
         # finish never re-kicks. SEPARATE from `_nonterminal_rekicks` (the W11
         # RUNNING-stall budget) — this guards the terminal-conclusion path only.
         self._post_terminal_rekick_seq: dict[str, int] = {}
+        self._run_claimed_user_seq: dict[str, int] = {}
         # REL-2a: shadow artifact-manifest fold guard. Keyed by the latest FINISHED
         # StatusEvent seq so duplicate terminal observers fold once, while a later
         # resumed segment that emits a new FINISHED folds once for that finish too.
@@ -2196,7 +2197,7 @@ class ConversationRuntime:
             sources=sources,
         )
 
-    def kick(self, conversation_id: str) -> None:
+    def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> None:
         """Schedule the loop to run (idempotent: a no-op if already running). The
         loop itself decides if there's unprocessed work and streams events.
 
@@ -2218,7 +2219,11 @@ class ConversationRuntime:
         # fresh sandbox on the new backend (best-effort destroy of the old box).
         self._evict_stale_backend(conversation_id)
         loop = self._loop_for(conversation_id)
-        task, generation = self._create_run_task(conversation_id, loop)
+        task, generation = self._create_run_task(
+            conversation_id,
+            loop,
+            claimed_user_seq=claimed_user_seq,
+        )
         # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
         # callback an exception escaping loop.run() killed the task silently and left the
         # conversation at RUNNING forever (the silent hang Dylan hit).
@@ -2227,7 +2232,11 @@ class ConversationRuntime:
         )
 
     def _create_run_task(
-        self, conversation_id: str, loop: AgentLoop
+        self,
+        conversation_id: str,
+        loop: AgentLoop,
+        *,
+        claimed_user_seq: int | None = None,
     ) -> tuple[asyncio.Task[Any], int]:
         """Create and synchronously register a loop run task.
 
@@ -2235,6 +2244,16 @@ class ConversationRuntime:
         ``_tasks`` before the loop can reach tool/file operations, so suspend/idle
         sweepers see active work and cannot tear down the sandbox mid-run.
         """
+        # Atomically bind the NEW run task to the user turn that launched it. Callers
+        # pass the seq returned by the durable USER append. This happens at the shared
+        # task-creation chokepoint with no await before registration. A user turn that
+        # lands while a prior task is still live never reaches this function (kick's
+        # early return), so it remains eligible for stranded-follow-up recovery.
+        if claimed_user_seq is not None:
+            self._run_claimed_user_seq[conversation_id] = max(
+                claimed_user_seq,
+                self._run_claimed_user_seq.get(conversation_id, -1),
+            )
         # finding #3: this is a NEW run task → bump the conversation's run-generation
         # and bind it into the done-callback/finalizer, so the finalizer for THIS run
         # can tell whether a newer run has since reused the pin.
@@ -2357,6 +2376,13 @@ class ConversationRuntime:
         )
         if latest_user_seq is None:
             return
+        claimed = self._run_claimed_user_seq.get(conversation_id)
+        if claimed is not None and latest_user_seq <= claimed:
+            # The current run already claimed this turn. This includes fail-fast
+            # preflight conclusions where no agent/action event can mark the turn as
+            # processed in the durable log. Only a genuinely newer user turn can be
+            # stranded during finalization and require a re-kick.
+            return
         last = self._post_terminal_rekick_seq.get(conversation_id)
         if last is not None and latest_user_seq <= last:
             # Same (or older) follow-up already triggered a re-kick that made no real
@@ -2369,7 +2395,7 @@ class ConversationRuntime:
             conversation_id,
             latest_user_seq,
         )
-        self.kick(conversation_id)
+        self.kick(conversation_id, claimed_user_seq=latest_user_seq)
 
     @staticmethod
     def _latest_status_event(events: list[Event]) -> StatusEvent | None:
@@ -3929,6 +3955,8 @@ class ConversationRuntime:
             self._loops,
             self._nonterminal_rekicks,
             self._last_rekick_progress_seq,
+            self._post_terminal_rekick_seq,
+            self._run_claimed_user_seq,
             self._last_status,
             self._cancel_flags,
             self._model_override,
@@ -4220,7 +4248,20 @@ class ConversationRuntime:
         )
         self._loops[conversation_id] = loop
 
-        task, generation = self._create_run_task(conversation_id, loop)
+        events_at_start = await self._store.get_events(conversation_id)
+        claimed_user_seq = max(
+            (
+                event.seq or 0
+                for event in events_at_start
+                if isinstance(event, MessageEvent) and event.source is EventSource.USER
+            ),
+            default=None,
+        )
+        task, generation = self._create_run_task(
+            conversation_id,
+            loop,
+            claimed_user_seq=claimed_user_seq,
+        )
         try:
             state = cast(ConversationState, await task)
         except Exception as exc:

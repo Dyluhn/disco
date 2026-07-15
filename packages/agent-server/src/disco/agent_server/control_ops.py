@@ -146,7 +146,22 @@ class ControlOps:
             return
         loop = self._rt._loop_for(conversation_id)
         await loop.enter_planning(text)
-        self._rt.kick(conversation_id)  # produce the (revised) plan
+        events = await self._rt._store.get_events(conversation_id)
+        claimed_user_seq = max(
+            (
+                event.seq or 0
+                for event in events
+                if isinstance(event, MessageEvent) and event.source is EventSource.USER
+            ),
+            default=None,
+        )
+        if claimed_user_seq is None:
+            self._rt.kick(conversation_id)
+        else:
+            self._rt.kick(
+                conversation_id,
+                claimed_user_seq=claimed_user_seq,
+            )
 
     async def pause(self, conversation_id: str) -> None:
         """WALK-18 cooperative pause: set the loop's pause flag so it lands PAUSED

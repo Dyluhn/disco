@@ -50,6 +50,8 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     # Seed per-conversation runtime state the way a live run would.
     rt._pinned_kernels[CID] = rt._disco_kernel
     rt._run_generation[CID] = 3
+    rt._post_terminal_rekick_seq[CID] = 7
+    rt._run_claimed_user_seq[CID] = 7
     rt.set_surface(CID, "build")
     rt.set_autonomous(CID, True)
 
@@ -57,6 +59,8 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
 
     assert CID not in rt._pinned_kernels  # the leak the finding cites
     assert CID not in rt._run_generation
+    assert CID not in rt._post_terminal_rekick_seq
+    assert CID not in rt._run_claimed_user_seq
     assert CID not in rt._surface
     assert CID not in rt._autonomous
 

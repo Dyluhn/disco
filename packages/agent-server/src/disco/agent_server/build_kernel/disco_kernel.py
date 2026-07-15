@@ -98,7 +98,7 @@ class DiscoKernel:
                         detail="revision_steer_pending",
                     ),
                 )
-        self._rt.kick(conversation_id)
+        self._rt.kick(conversation_id, claimed_user_seq=stored.seq)
         return cast("MessageEvent", stored)
 
     # -- plan gate ------------------------------------------------------------

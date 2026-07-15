@@ -188,7 +188,7 @@ async def test_disco_kernel_send_user_turn_event_sequence(store: SqliteEventStor
     assert user.source == EventSource.USER == expected_user.source
     assert user.message.content == "hello there"
     assert user.meta == expected_user.meta == {"steer": True}
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=user.seq)
 
 
 async def test_disco_kernel_send_user_turn_no_context(store: SqliteEventStore) -> None:
@@ -198,7 +198,7 @@ async def test_disco_kernel_send_user_turn_no_context(store: SqliteEventStore) -
     assert len(msgs) == 1
     assert msgs[0].source == EventSource.USER
     assert msgs[0].meta == {}
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=msgs[0].seq)
 
 
 # ---- runtime public ops route THROUGH the kernel ----------------------------

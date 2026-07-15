@@ -12,6 +12,7 @@ the work-gate is open, guarded so it fires ONCE per new follow-up.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -29,6 +30,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.core.llm.errors import NoEligibleModel
 
 CID = "conv_strand"
 
@@ -83,8 +85,33 @@ async def test_clean_finalize_rekicks_stranded_followup(tmp_path, monkeypatch):
 
     await rt._finalize_clean_return(CID)
 
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=5)
     # The follow-up's seq is recorded so a stalled same-seq segment can't loop.
+    assert rt._post_terminal_rekick_seq[CID] == 5
+
+
+@pytest.mark.asyncio
+async def test_newer_user_turn_after_run_claim_is_rekicked_exactly_once(tmp_path, monkeypatch):
+    rt = _rt(tmp_path, monkeypatch)
+    await _seed_build(rt, terminal=ConversationStatus.FINISHED)
+    # The run claimed its original user turn (seq 1) synchronously when its task
+    # started. A genuinely newer follow-up lands while that task is finalizing.
+    rt._run_claimed_user_seq[CID] = 1
+    await rt._store.append(CID, _user("now also add a footer"))  # seq 5
+    blocker = asyncio.create_task(asyncio.Event().wait())
+    rt._tasks[CID] = blocker
+    rt.kick(CID, claimed_user_seq=5)
+    assert rt._run_claimed_user_seq[CID] == 1  # live task must not claim the follow-up
+    rt._tasks.pop(CID)
+    blocker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await blocker
+    rt.kick = MagicMock()  # type: ignore[method-assign]
+
+    await rt._finalize_clean_return(CID)
+    await rt._finalize_clean_return(CID)
+
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=5)
     assert rt._post_terminal_rekick_seq[CID] == 5
 
 
@@ -103,7 +130,56 @@ async def test_crash_terminalize_rekicks_stranded_followup(tmp_path, monkeypatch
     # ERROR was appended by the terminalizer, then the stranded follow-up re-kicked.
     state = await rt._store.get_state(CID)
     assert state.execution_status is ConversationStatus.ERROR
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=4)
+
+
+@pytest.mark.asyncio
+async def test_deterministic_preflight_error_does_not_retry_original_user_turn(
+    tmp_path, monkeypatch
+):
+    """A terminal configuration verdict claims the turn; it is not a follow-up."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt.set_surface(CID, "agent")
+    rt._store.create_conversation(CID, owner_id="local")
+    initial = await rt._store.append(CID, _user("complete the task"))
+
+    class _Loop:
+        async def run(self):  # pragma: no cover - preflight must stop before the loop
+            raise AssertionError("misconfigured driver must not enter the agent loop")
+
+    class _MisconfiguredRouter:
+        calls = 0
+
+        async def complete(self, request, *, context=None):
+            self.calls += 1
+            raise NoEligibleModel(
+                "role agent_driver is assigned to an unknown model; fix the assignment"
+            )
+
+    router = _MisconfiguredRouter()
+    rt._loops[CID] = _Loop()  # type: ignore[assignment]
+    rt._router_now = lambda **_kwargs: router  # type: ignore[method-assign]
+
+    rt.kick(CID, claimed_user_seq=initial.seq)
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    events = await rt._store.get_events(CID)
+    errors = [
+        event
+        for event in events
+        if isinstance(event, StatusEvent) and event.status is ConversationStatus.ERROR
+    ]
+    reminders = [
+        event
+        for event in events
+        if isinstance(event, MessageEvent) and event.source is EventSource.ENVIRONMENT
+    ]
+    assert router.calls == 1
+    assert len(errors) == 1
+    assert "misconfigured" in (errors[0].detail or "")
+    assert len(reminders) == 1
+    assert "fix the assignment" in (reminders[0].message.content or "")
 
 
 # ── strand repro: STUCK (RUNNING → max-attempts wedge) ──────────────────────────
@@ -129,7 +205,7 @@ async def test_stuck_wedge_rekicks_stranded_followup(tmp_path, monkeypatch):
 
     state = await rt._store.get_state(CID)
     assert state.execution_status is ConversationStatus.STUCK
-    rt.kick.assert_called_once_with(CID)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=4)
 
 
 # ── progress-reset: a WORKING iteration never falsely STUCKs ────────────────────
