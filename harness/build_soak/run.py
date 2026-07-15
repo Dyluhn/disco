@@ -54,6 +54,7 @@ from .adapters.disco_api import (
     validate_browser_evidence_relpath,
 )
 from .classify import CLASSIFICATION_NAME, classify
+from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
 from .product_evidence import (
     PRODUCT_EVIDENCE_NAME,
@@ -156,16 +157,152 @@ def _is_terminal_driver_preflight_trace(
     tool_scopes = trace.get("tool_scopes")
     return (
         DiscoApiClient._status_of(run.state_final) == "ERROR"
+        and trace.get("dropped_event_count") == 0
         and not agent_spans
         and isinstance(routing, list)
         and bool(routing)
         and all(
             isinstance(decision, dict)
+            and str(decision.get("role") or "") == "agent_driver"
+            and bool(str(decision.get("chosen_model") or ""))
+            and bool(str(decision.get("provider") or ""))
             and str(decision.get("reason") or "").startswith("terminal failure:")
             for decision in routing
         )
         and isinstance(tool_scopes, list)
         and not tool_scopes
+    )
+
+
+def _latest_durable_status(run: CollectedRun) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Return the latest normalized status plus the corroborating durable log."""
+
+    try:
+        events = normalize_events(run.events)
+    except NormalizationError:
+        return None, []
+    statuses = [event for event in events if event.get("kind") == "status"]
+    return (statuses[-1] if statuses else None), events
+
+
+def _named_sandbox_preflight_detail(detail: str) -> bool:
+    """Match only reason strings produced by ``runtime._preflight_sandbox``."""
+
+    if detail.startswith("sandbox backend is misconfigured:"):
+        return bool(detail.removeprefix("sandbox backend is misconfigured:").strip())
+    for prefix in (
+        "gvisor sandbox host ",
+        "local sandbox host ",
+        "podman sandbox host ",
+    ):
+        if not detail.startswith(prefix):
+            continue
+        rest = detail.removeprefix(prefix)
+        for marker in (" unreachable:", " error:"):
+            endpoint, found, cause = rest.partition(marker)
+            if found and endpoint.strip() and cause.strip():
+                return True
+        return False
+    return any(
+        detail.startswith(prefix) and bool(detail.removeprefix(prefix).strip())
+        for prefix in ("process sandbox unreachable:", "process sandbox error:")
+    )
+
+
+def _is_terminal_sandbox_preflight_trace(
+    run: CollectedRun,
+    trace: dict[str, Any],
+    routing: object,
+    agent_spans: list[dict[str, Any]],
+    scenario: dict[str, Any],
+) -> bool:
+    """Whether exact evidence proves sandbox readiness failed before the loop.
+
+    Driver readiness succeeds first and records the exact chosen model/provider;
+    sandbox readiness then runs before loop composition and therefore has no
+    ``agent.step`` or tool scope.  Only the runtime's named, fail-closed sandbox
+    error shapes are admitted.  A generic loop ERROR remains missing evidence.
+    """
+
+    latest_status, durable_events = _latest_durable_status(run)
+    if latest_status is None:
+        return False
+    detail = str(latest_status.get("detail") or "")
+    named_sandbox_failure = (
+        str(latest_status.get("source") or "") == "system"
+        and str(latest_status.get("status") or "").upper() == "ERROR"
+        and _named_sandbox_preflight_detail(detail)
+    )
+    tool_scopes = trace.get("tool_scopes")
+    spans = trace.get("spans")
+    trace_events = trace.get("events")
+    dropped = trace.get("dropped_event_count")
+    expected_model = str(
+        (((scenario.get("assertions") or {}).get("provider") or {}).get("model")) or ""
+    )
+    route: dict[str, Any] | None = (
+        routing[0]
+        if isinstance(routing, list) and len(routing) == 1 and isinstance(routing[0], dict)
+        else None
+    )
+    if route is None:
+        return False
+    reason = str(route.get("reason") or "")
+    overflow = route.get("overflow_triggers")
+    successful_route = (
+        str(route.get("role") or "") == "agent_driver"
+        and str(route.get("path") or "") in {"manual", "pinned"}
+        and bool(str(route.get("chosen_model") or ""))
+        and bool(str(route.get("provider") or ""))
+        and isinstance(route.get("attempt"), int)
+        and int(route["attempt"]) >= 1
+        and (
+            (reason == "config" and overflow == [])
+            or (
+                reason in {"shared driver preflight success", "cached driver preflight success"}
+                and overflow == ["driver_preflight"]
+            )
+        )
+        and (not expected_model or route.get("chosen_model") == expected_model)
+    )
+    only_trace_event: dict[str, Any] | None = (
+        trace_events[0]
+        if isinstance(trace_events, list)
+        and len(trace_events) == 1
+        and isinstance(trace_events[0], dict)
+        else None
+    )
+    trace_consistent = (
+        dropped == 0
+        and isinstance(trace_events, list)
+        and trace.get("event_count") == len(trace_events)
+        and only_trace_event is not None
+        and only_trace_event.get("kind") == "routing"
+        and all(
+            only_trace_event.get(field) == route.get(field)
+            for field in (
+                "role",
+                "chosen_model",
+                "provider",
+                "path",
+                "reason",
+                "attempt",
+                "overflow_triggers",
+            )
+        )
+        and all(event.get("kind") not in {"tool_scope", "span"} for event in trace_events)
+    )
+    loop_event_kinds = {"plan", "action", "observation", "agent_error", "report"}
+    return (
+        DiscoApiClient._status_of(run.state_final) == "ERROR"
+        and named_sandbox_failure
+        and not agent_spans
+        and spans == []
+        and successful_route
+        and trace_consistent
+        and isinstance(tool_scopes, list)
+        and not tool_scopes
+        and not any(event.get("kind") in loop_event_kinds for event in durable_events)
     )
 
 
@@ -1646,11 +1783,15 @@ async def run_once(
             terminal_driver_preflight = _is_terminal_driver_preflight_trace(
                 run, trace, routing, agent_spans
             )
+            terminal_sandbox_preflight = _is_terminal_sandbox_preflight_trace(
+                run, trace, routing, agent_spans, scenario
+            )
+            terminal_preloop = terminal_driver_preflight or terminal_sandbox_preflight
             missing_trace_parts = [
                 name
                 for name, present in (
                     ("routing_decisions", isinstance(routing, list) and bool(routing)),
-                    ("agent.step spans", bool(agent_spans) or terminal_driver_preflight),
+                    ("agent.step spans", bool(agent_spans) or terminal_preloop),
                 )
                 if not present
             ]
@@ -1694,6 +1835,11 @@ async def run_once(
                 run.timeline.append(
                     "inspect trace proved a terminal driver preflight failure before "
                     "the agent loop; no agent.step span was expected"
+                )
+            elif terminal_sandbox_preflight:
+                run.timeline.append(
+                    "inspect trace and durable status proved a terminal sandbox preflight "
+                    "failure before the agent loop; no agent.step span was expected"
                 )
 
         # [REL-5] Measure terminal cleanup + release BEFORE freezing the dossier, so the

@@ -115,9 +115,13 @@ async def test_preflight_driver_blocks_on_connect_error():
     assert reason is not None and "unreachable" in reason
 
 
-async def test_preflight_driver_passes_and_caches_success():
+async def test_preflight_driver_passes_and_caches_success(monkeypatch):
     """A healthy driver passes; a SUCCESS is cached so back-to-back kicks don't
     each pay a live round-trip."""
+    from disco.core.inspect import registry
+
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
 
@@ -133,11 +137,19 @@ async def test_preflight_driver_passes_and_caches_success():
     assert await rt._preflight_driver("c1") is None
     assert await rt._preflight_driver("c1") is None
     assert ok.calls == 1  # second call served from the short-TTL success cache
+    trace = registry().snapshot("c1")
+    assert trace is not None
+    assert [decision["reason"] for decision in trace["routing_decisions"]] == [
+        "cached driver preflight success"
+    ]
 
 
-async def test_concurrent_cold_preflights_singleflight_per_model():
+async def test_concurrent_cold_preflights_singleflight_per_model(monkeypatch):
     """A parallel Build wave must not stampede one cold provider endpoint."""
+    from disco.core.inspect import registry
 
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
 
@@ -157,6 +169,18 @@ async def test_concurrent_cold_preflights_singleflight_per_model():
     assert results == [None] * 6
     assert router.calls == 1
     assert {key[0] for key in rt._driver_proven} == {f"c{i}" for i in range(6)}
+    # The creator's real DefaultLLMRouter records its own successful route in
+    # production (this fake router has no sink). Every waiter receives one exact
+    # synthetic record for the shared readiness verdict it consumed.
+    assert registry().snapshot("c0") is None
+    for index in range(1, 6):
+        trace = registry().snapshot(f"c{index}")
+        assert trace is not None
+        assert trace["spans"] == []
+        assert trace["tool_scopes"] == []
+        assert [decision["reason"] for decision in trace["routing_decisions"]] == [
+            "shared driver preflight success"
+        ]
 
 
 async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_term(monkeypatch):

@@ -36,6 +36,7 @@ from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
     _driver_catalog_contains,
+    _is_terminal_sandbox_preflight_trace,
     assemble_dossier,
     classify_dossier,
     drive_scenario,
@@ -2851,10 +2852,13 @@ async def test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_
         async def get_json(self, path):
             if path == f"/api/debug/trace/{self.cid}":
                 decision = {
+                    "role": "agent_driver",
                     "chosen_model": "configured-model",
                     "provider": "configured-provider",
                     "path": "manual",
                     "reason": "terminal failure: LLMTransientError (config)",
+                    "attempt": 1,
+                    "overflow_triggers": [],
                 }
                 return 200, {
                     "conversation_id": self.cid,
@@ -2884,6 +2888,240 @@ async def test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_
     assert record["status"] == "FAIL"
     assert record["code"] != "MISSING_REQUIRED_EVIDENCE"
     assert record["conversation_id"] == _CID
+
+
+@pytest.mark.asyncio
+async def test_terminal_sandbox_preflight_failure_is_not_masked_by_missing_agent_span(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            status(
+                2,
+                "ERROR",
+                detail=(
+                    "podman sandbox host unix:///run/user/1000/podman/podman.sock "
+                    "unreachable: no response within 12s (sandbox pre-flight timed out)"
+                ),
+            ),
+        ],
+    )
+
+    class _SandboxPreflightFailureTransport(FakeTransport):
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                decision = {
+                    "role": "agent_driver",
+                    "chosen_model": "configured-model",
+                    "provider": "configured-provider",
+                    "path": "manual",
+                    "reason": "shared driver preflight success",
+                    "attempt": 1,
+                    "overflow_triggers": ["driver_preflight"],
+                }
+                return 200, {
+                    "conversation_id": self.cid,
+                    "event_count": 1,
+                    "dropped_event_count": 0,
+                    "routing_decisions": [decision],
+                    "spans": [],
+                    "tool_scopes": [],
+                    "events": [{"seq": 1, "kind": "routing", **decision}],
+                }
+            return await super().get_json(path)
+
+    scenario = _smoke_scenario()
+    scenario["assertions"]["provider"] = {"model": "configured-model"}
+    record = await run_once(
+        _client(_SandboxPreflightFailureTransport(db, states=["ERROR", "ERROR"]), tmp_path),
+        scenario,
+        run_id="run_sandbox_preflight_error_001",
+        out_root=tmp_path / "out",
+        model="configured-model",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "FAIL"
+    assert record["code"] != "MISSING_REQUIRED_EVIDENCE"
+    assert record["conversation_id"] == _CID
+
+
+def _sandbox_preflight_helper_fixture(detail: str) -> tuple[CollectedRun, dict, dict]:
+    events = [msg(1, "user", "build"), status(2, "ERROR", detail=detail)]
+    decision = {
+        "role": "agent_driver",
+        "chosen_model": "configured-model",
+        "provider": "configured-provider",
+        "path": "manual",
+        "reason": "shared driver preflight success",
+        "attempt": 1,
+        "overflow_triggers": ["driver_preflight"],
+    }
+    trace = {
+        "conversation_id": _CID,
+        "event_count": 1,
+        "dropped_event_count": 0,
+        "routing_decisions": [decision],
+        "spans": [],
+        "tool_scopes": [],
+        "events": [{"seq": 1, "kind": "routing", **decision}],
+    }
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "ERROR"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=trace,
+    )
+    scenario = {"assertions": {"provider": {"model": "configured-model"}}}
+    return run, trace, scenario
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "sandbox backend is misconfigured: unsupported backend",
+        "gvisor sandbox host unix:///socket unreachable: refused",
+        "local sandbox host unix:///socket error: probe failed",
+        "podman sandbox host unix:///socket unreachable: timed out",
+        "process sandbox unreachable: workspace missing",
+        "process sandbox error: permission denied",
+    ],
+)
+def test_terminal_sandbox_preflight_helper_accepts_only_named_preloop_shapes(detail):
+    run, trace, scenario = _sandbox_preflight_helper_fixture(detail)
+    assert _is_terminal_sandbox_preflight_trace(
+        run, trace, trace["routing_decisions"], [], scenario
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "generic_detail",
+        "embedded_detail",
+        "user_status",
+        "later_generic_error",
+        "final_not_error",
+        "wrong_role",
+        "fallback_path",
+        "wrong_model",
+        "dropped_trace",
+        "tool_scope",
+        "agent_span",
+        "malformed_route",
+        "trace_projection_mismatch",
+    ],
+)
+def test_terminal_sandbox_preflight_helper_rejects_tainted_or_postloop_evidence(mutation):
+    run, trace, scenario = _sandbox_preflight_helper_fixture(
+        "podman sandbox host unix:///socket unreachable: timed out"
+    )
+    route = trace["routing_decisions"][0]
+    if mutation == "generic_detail":
+        run.events[-1]["detail"] = "loop failed after starting"
+    elif mutation == "embedded_detail":
+        run.events[-1]["detail"] = "note: podman sandbox host local unreachable: timed out"
+    elif mutation == "user_status":
+        run.events[-1]["source"] = "user"
+    elif mutation == "later_generic_error":
+        run.events.append(status(3, "ERROR", detail="later loop error"))
+    elif mutation == "final_not_error":
+        run.state_final = {"execution_status": "FINISHED"}
+    elif mutation == "wrong_role":
+        route["role"] = "title_generator"
+    elif mutation == "fallback_path":
+        route["path"] = "role_fallback"
+    elif mutation == "wrong_model":
+        route["chosen_model"] = "other-model"
+    elif mutation == "dropped_trace":
+        trace["dropped_event_count"] = 1
+    elif mutation == "tool_scope":
+        trace["tool_scopes"] = [{"mode": "planning"}]
+    elif mutation == "agent_span":
+        trace["spans"] = [{"span": "agent.step"}]
+    elif mutation == "malformed_route":
+        trace["routing_decisions"] = ["not-a-route"]
+    elif mutation == "trace_projection_mismatch":
+        trace["events"] = [{"seq": 1, "kind": "tool_scope"}]
+
+    agent_spans = [
+        span
+        for span in trace["spans"]
+        if isinstance(span, dict) and span.get("span") == "agent.step"
+    ]
+    assert not _is_terminal_sandbox_preflight_trace(
+        run, trace, trace["routing_decisions"], agent_spans, scenario
+    )
+
+
+@pytest.mark.asyncio
+async def test_sandbox_shaped_error_after_tool_scope_still_requires_agent_span(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            status(
+                2,
+                "ERROR",
+                detail="podman sandbox host local error: loop failed after tool scope",
+            ),
+        ],
+    )
+
+    class _PostLoopFailureTransport(FakeTransport):
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                decision = {
+                    "chosen_model": "configured-model",
+                    "provider": "configured-provider",
+                    "path": "manual",
+                    "reason": "config",
+                }
+                scope = {
+                    "mode": "planning",
+                    "attempt": 1,
+                    "complete": True,
+                    "offered_tools": ["submit_plan"],
+                    "allowed_tools": ["submit_plan"],
+                }
+                return 200, {
+                    "conversation_id": self.cid,
+                    "event_count": 2,
+                    "dropped_event_count": 0,
+                    "routing_decisions": [decision],
+                    "spans": [],
+                    "tool_scopes": [scope],
+                    "events": [
+                        {"seq": 1, "kind": "routing", **decision},
+                        {"seq": 2, "kind": "tool_scope", **scope},
+                    ],
+                }
+            return await super().get_json(path)
+
+    record = await run_once(
+        _client(_PostLoopFailureTransport(db, states=["ERROR", "ERROR"]), tmp_path),
+        _smoke_scenario(),
+        run_id="run_sandbox_shaped_post_loop_error_001",
+        out_root=tmp_path / "out",
+        model="configured-model",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
 
 
 @pytest.mark.asyncio

@@ -2880,9 +2880,11 @@ class ConversationRuntime:
         cached = self._driver_preflight_ok.get(key)
         if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
             self._driver_proven.add(proven_key)
+            self._record_shared_driver_preflight_success(cid, cfg, key, override, role, "cached")
             return None
         now = time.monotonic()
         slot = self._driver_preflight_inflight.get(key)
+        created_probe = False
         if slot is not None:
             task, completed_at = slot
             if (
@@ -2893,6 +2895,7 @@ class ConversationRuntime:
                 self._driver_preflight_inflight.pop(key, None)
                 slot = None
         if slot is None:
+            created_probe = True
             task = asyncio.create_task(
                 self._probe_driver(cid, key=key, override=override, role=role),
                 name=f"driver-preflight:{key}",
@@ -2927,6 +2930,14 @@ class ConversationRuntime:
             if current is not None and current[0] is task:
                 self._driver_preflight_inflight.pop(key, None)
             self._driver_proven.add(proven_key)
+            # The provider request is intentionally shared, but every caller
+            # consumes the successful readiness verdict.  Record that fact per
+            # conversation so a later pre-loop sandbox failure still has exact
+            # model/provider routing evidence instead of an absent trace.
+            if not created_probe:
+                self._record_shared_driver_preflight_success(
+                    cid, cfg, key, override, role, "shared"
+                )
             return None
 
         # Ensure the completion callback's write-once timestamp/eviction has run
@@ -3065,6 +3076,32 @@ class ConversationRuntime:
             return transient_reason, True
         self._driver_preflight_ok[key] = time.monotonic()
         return None, False
+
+    @staticmethod
+    def _record_shared_driver_preflight_success(
+        conversation_id: str,
+        cfg: Any,
+        key: str,
+        override: str | None,
+        role: ModelRole,
+        source: str,
+    ) -> None:
+        """Attach the model/provider readiness proof consumed by this caller."""
+
+        sink = routing_sink_for(conversation_id)
+        if sink is None:
+            return
+        entry = getattr(cfg, "models", {}).get(key)
+        sink.record(
+            RoutingDecision(
+                profile=CapabilityProfile(role=role),
+                chosen_model=str(getattr(entry, "model_id", key)),
+                provider=str(getattr(entry, "provider", "")),
+                path="manual" if override is not None else "pinned",
+                reason=f"{source} driver preflight success",
+                overflow_triggers=["driver_preflight"],
+            )
+        )
 
     @staticmethod
     def _record_shared_driver_preflight_failure(
