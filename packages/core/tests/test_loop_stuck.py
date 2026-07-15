@@ -6,11 +6,26 @@ event_content_eq) + loop integration (STUCK then resume on a new message).
 
 from __future__ import annotations
 
-from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent
+import pytest
+from disco.core import (
+    ConversationStatus,
+    Event,
+    EventSource,
+    MessageEvent,
+    ObservationEvent,
+    StatusEvent,
+    ToolResult,
+)
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop import StuckDetector, StuckThresholds, signals
 from disco.core.loop.control import Disp
-from disco.core.loop.stuck import barren_streak_no_progress, repeated_verify_no_progress
+from disco.core.loop.stuck import (
+    VerifierEvidenceInvalid,
+    VerifierFailureNoProgress,
+    barren_streak_no_progress,
+    repeated_failed_verifier_no_progress,
+    repeated_verify_no_progress,
+)
 from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from loop_fakes import (
     ScriptedAgent,
@@ -1138,12 +1153,330 @@ def _probe(content: str = "HTTP 200, no console errors"):
 def _verify_pass_probe():
     """A verify_web_app PASS probe that also participates in no-progress detection."""
     a = action(thought="verify the app", tool="verify_web_app", args={})
-    o = observation(
+    o = ObservationEvent(
+        tool_result=ToolResult(
+            call_id="c",
+            tool_name="verify_web_app",
+            success=True,
+            content="VERIFY_WEB_APP: PASS (app renders)",
+            structured={"passed": True, "verdict": "pass"},
+        ),
         action_id=a.id,
-        content="VERIFY_WEB_APP: PASS (app renders)",
-        tool="verify_web_app",
     )
     return [a, o]
+
+
+def _structured_verifier_probe(
+    *, fp: object = "SAME", passed: bool = False, tool: str = "verify_appkit_app"
+):
+    a = action(thought="verify the app", tool=tool, args={})
+    o = ObservationEvent(
+        tool_result=ToolResult(
+            call_id="c",
+            tool_name=tool,
+            success=True,
+            content="verifier executed",
+            structured={
+                "passed": passed,
+                "verdict": "pass" if passed else "fail",
+                "failure_fingerprint": fp,
+                "summary": "all checks passed" if passed else "worker contract failed",
+                "next_action": "" if passed else "repair the worker route",
+            },
+        ),
+        action_id=a.id,
+    )
+    return [a, o]
+
+
+def _mutation_observation(
+    *, tool: str, structured: dict | None, success: bool = True
+) -> list[Event]:
+    a = action(thought="repair", tool=tool, args={})
+    return [
+        a,
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id="c",
+                tool_name=tool,
+                success=success,
+                content="mutation executed",
+                structured=structured,
+            ),
+            action_id=a.id,
+        ),
+    ]
+
+
+def test_failed_verifier_fingerprint_trips_across_varied_diagnostics():
+    events = [user_msg("build the app")]
+    events += _structured_verifier_probe(fp="SAME")
+    events += _probe("server is running")
+    read = action(thought="inspect", tool="file_read", args={"path": "src/App.tsx"})
+    events += [read, observation(action_id=read.id, tool="file_read", content="source")]
+    events += _structured_verifier_probe(fp="SAME")
+
+    finding = repeated_failed_verifier_no_progress(events)
+    assert finding is not None
+    assert finding.tool_name == "verify_appkit_app"
+    assert finding.failure_fingerprint == "SAME"
+    assert finding.repeats == 2
+
+
+def test_failed_verifier_fingerprint_resets_on_effective_mutation_change_or_pass():
+    events = [user_msg("build the app")]
+    events += _structured_verifier_probe(fp="SAME")
+    events += _structured_verifier_probe(fp="SAME")
+    assert repeated_failed_verifier_no_progress(events) is not None
+
+    events += _mutation_observation(
+        tool="app_update_content", structured={"files_written": ["src/content.ts"]}
+    )
+    events += _structured_verifier_probe(fp="SAME")
+    assert repeated_failed_verifier_no_progress(events) is None
+
+    events += _structured_verifier_probe(fp="BETTER")
+    assert repeated_failed_verifier_no_progress(events) is None
+
+
+@pytest.mark.parametrize(
+    ("tool", "structured", "success"),
+    [
+        ("run_project_script", {"applied": []}, True),
+        ("app_update_content", {"files_written": []}, True),
+        ("safe_write_file", {"path": "src/App.tsx", "sha256": "a" * 64}, True),
+        ("file_str_replace", {"path": "src/App.tsx", "sha256": "a" * 64}, True),
+        ("file_write", None, True),
+        ("file_write", {"path": "src/App.tsx", "sha256": "a" * 64}, False),
+    ],
+)
+def test_failed_verifier_noop_or_receipt_empty_mutation_does_not_reset(
+    tool: str, structured: dict | None, success: bool
+):
+    events = [user_msg("build the app")]
+    events += _structured_verifier_probe(fp="SAME")
+    events += _mutation_observation(tool=tool, structured=structured, success=success)
+    events += _structured_verifier_probe(fp="SAME")
+    assert isinstance(repeated_failed_verifier_no_progress(events), VerifierFailureNoProgress)
+
+
+@pytest.mark.parametrize(
+    ("tool", "structured"),
+    [
+        ("run_project_script", {"applied": ["src/App.tsx"]}),
+        ("app_update_content", {"files_written": ["src/content.ts"]}),
+        ("file_write", {"path": "src/App.tsx", "sha256": "a" * 64}),
+        ("custom_mutator", {"state_changed": True}),
+    ],
+)
+def test_failed_verifier_concrete_mutation_receipt_resets(tool: str, structured: dict):
+    events = [user_msg("build the app")]
+    events += _structured_verifier_probe(fp="SAME")
+    events += _mutation_observation(tool=tool, structured=structured)
+    events += _structured_verifier_probe(fp="SAME")
+    assert repeated_failed_verifier_no_progress(events) is None
+    events += _structured_verifier_probe(fp="BETTER", passed=True)
+    events += _structured_verifier_probe(fp="BETTER")
+    assert repeated_failed_verifier_no_progress(events) is None
+
+
+async def test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic():
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    for event in _structured_verifier_probe(fp="SAME"):
+        await store.append(CID, event)
+    for event in _probe("server is running"):
+        await store.append(CID, event)
+    for event in _structured_verifier_probe(fp="SAME"):
+        await store.append(CID, event)
+
+    disp = await loop._valve.gate_no_progress(await store.get_events(CID))
+    assert disp is Disp.CONTINUE
+    nudged = await store.get_events(CID)
+    assert any(
+        isinstance(event, StatusEvent)
+        and (event.detail or "").startswith("verifier_no_progress:verify_appkit_app:")
+        for event in nudged
+    )
+    reminder = next(
+        event
+        for event in nudged
+        if isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and "same failed verification fingerprint" in (event.message.content or "").lower()
+    )
+    assert "do not call `finish`" in (reminder.message.content or "").lower()
+    assert "repair the worker route" in (reminder.message.content or "").lower()
+
+    read = action(thought="inspect another file", tool="file_read", args={"path": "worker.ts"})
+    await store.append(CID, read)
+    await store.append(CID, observation(action_id=read.id, tool="file_read", content="source"))
+    disp = await loop._valve.gate_no_progress(await store.get_events(CID))
+    assert disp is Disp.HALT
+    events = await store.get_events(CID)
+    assert_blocked_question_landing(
+        events,
+        legacy_detail="verifier_no_progress",
+        flavor="terminal",
+    )
+    assert not any(
+        isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+        for event in events
+    )
+    assert agent.calls == 0, "host-owned convergence terminal must not spend another model call"
+
+
+async def test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak():
+    """Sanitized RUN-548: another verifier diagnostic cannot hide web failure A."""
+
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    for event in _structured_verifier_probe(fp="WEB-A", tool="verify_web_app"):
+        await store.append(CID, event)
+    for event in _mutation_observation(
+        tool="file_write",
+        structured={"path": "index.html", "sha256": "b" * 64},
+    ):
+        await store.append(CID, event)
+    for _ in range(2):
+        for event in _structured_verifier_probe(fp="WEB-A", tool="verify_web_app"):
+            await store.append(CID, event)
+
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
+
+    # The one bounded diagnostic is a different verifier and a different
+    # fingerprint. It is not evidence that the unresolved web verdict improved.
+    for event in _structured_verifier_probe(fp="APPKIT-B", tool="verify_appkit_app"):
+        await store.append(CID, event)
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.HALT
+
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.detail == "verifier_no_progress"
+        for event in events
+    )
+    assert not any(
+        isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+        for event in events
+    )
+    assert agent.calls == 0
+
+
+async def test_failed_verifier_old_marker_does_not_survive_new_mutation_streak():
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    for _ in range(2):
+        for event in _structured_verifier_probe(fp="SAME", tool="verify_web_app"):
+            await store.append(CID, event)
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
+
+    for event in _mutation_observation(
+        tool="file_write",
+        structured={"path": "index.html", "sha256": "c" * 64},
+    ):
+        await store.append(CID, event)
+    for _ in range(2):
+        for event in _structured_verifier_probe(fp="SAME", tool="verify_web_app"):
+            await store.append(CID, event)
+
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
+    markers = [
+        event
+        for event in await store.get_events(CID)
+        if isinstance(event, StatusEvent)
+        and (event.detail or "").startswith("verifier_no_progress:verify_web_app:")
+    ]
+    assert len(markers) == 2
+    assert agent.calls == 0
+
+
+async def test_failed_verifier_marker_metadata_cannot_substitute_for_semantic_detail():
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    for _ in range(2):
+        for event in _structured_verifier_probe(fp="SAME", tool="verify_web_app"):
+            await store.append(CID, event)
+    await store.append(
+        CID,
+        StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail="verifier_no_progress",
+            meta={
+                "verifier_tool": "verify_web_app",
+                "failure_fingerprint": "SAME",
+                "streak_start_seq": 1,
+            },
+        ),
+    )
+
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
+    assert any(
+        isinstance(event, StatusEvent)
+        and (event.detail or "").startswith("verifier_no_progress:verify_web_app:")
+        for event in await store.get_events(CID)
+    )
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("fingerprint", [None, "", 7])
+async def test_failed_verifier_malformed_fingerprint_halts_evidence_invalid(
+    fingerprint: object,
+):
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    for event in _structured_verifier_probe(fp=fingerprint):
+        await store.append(CID, event)
+
+    finding = repeated_failed_verifier_no_progress(await store.get_events(CID))
+    assert isinstance(finding, VerifierEvidenceInvalid)
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.HALT
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.detail == "verifier_evidence_invalid"
+        for event in await store.get_events(CID)
+    )
+    assert agent.calls == 0
+
+
+@pytest.mark.parametrize("structured", [None, {}, {"passed": "false"}])
+async def test_failed_verifier_malformed_verdict_schema_halts_evidence_invalid(
+    structured: dict | None,
+):
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, autonomous=True)
+    await store.append(CID, user_msg("build the app"))
+    verify = action(thought="verify", tool="verify_appkit_app", args={})
+    await store.append(CID, verify)
+    await store.append(
+        CID,
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id="c",
+                tool_name="verify_appkit_app",
+                success=True,
+                content="verifier executed",
+                structured=structured,
+            ),
+            action_id=verify.id,
+        ),
+    )
+
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.HALT
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.detail == "verifier_evidence_invalid"
+        for event in await store.get_events(CID)
+    )
+    assert agent.calls == 0
 
 
 def test_no_progress_trips_on_varied_edits_same_symptom():

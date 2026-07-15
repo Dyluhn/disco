@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles.thrash import ThrashOracle
 from harness.build_soak.tests._eventlog import action, agent_error, observation, status
@@ -223,9 +225,10 @@ def test_actionless_pause_is_a_failure_even_if_run_later_finishes() -> None:
     assert result.code == fc.ACTIONLESS_THRASH
 
 
-def test_product_stuck_marker_is_classified_as_thrash() -> None:
+@pytest.mark.parametrize("detail", ["repeated_action_observation", "verifier_no_progress"])
+def test_product_stuck_marker_is_classified_as_thrash(detail: str) -> None:
     result = ThrashOracle().check(
-        [status(1, "STUCK", detail="repeated_action_observation")],
+        [status(1, "STUCK", detail=detail)],
         scenario=_scenario(),
     )[0]
     assert result.code == fc.TOOL_CALL_THRASH

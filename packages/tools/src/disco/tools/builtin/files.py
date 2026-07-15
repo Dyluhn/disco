@@ -1798,6 +1798,17 @@ class FileReplaceLinesTool:
         out = "\n".join(result)
         if text.endswith("\n"):
             out += "\n"
+        if out.encode("utf-8") == _raw:
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
+                    "file_replace_lines refused: the replacement is byte-identical to "
+                    f"the current lines in {args.path}; nothing changed."
+                ),
+                current_bytes=_raw,
+                attempted_lines=(args.start_line, min(args.end_line, max(n, 1))),
+            )
         # W3 — syntax gate: write result; auto-revert to text if errors introduced.
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:
@@ -1887,6 +1898,17 @@ class FileInsertLinesTool:
         out = "\n".join(result)
         if text.endswith("\n"):
             out += "\n"
+        if out.encode("utf-8") == _raw:
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
+                    "file_insert_lines refused: the insertion leaves "
+                    f"{args.path} byte-identical; nothing changed."
+                ),
+                current_bytes=_raw,
+                attempted_lines=(max(args.after_line, 1), max(args.after_line, 1)),
+            )
         # W3 — syntax gate: write result; auto-revert to text if errors introduced.
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:

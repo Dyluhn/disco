@@ -85,6 +85,10 @@ class VerifyExecutor(FakeExecutor):
         tools = [
             ToolSpec(name="file_write", description="write", parameters_schema={}),
             ToolSpec(name="browser", description="browse", parameters_schema={}),
+            ToolSpec(name="preview_start", description="preview", parameters_schema={}),
+            ToolSpec(name="preview_status", description="preview", parameters_schema={}),
+            ToolSpec(name="preview_logs", description="preview", parameters_schema={}),
+            ToolSpec(name="preview_stop", description="preview", parameters_schema={}),
             ToolSpec(name="submit_plan", description="plan", parameters_schema={}),
         ]
         if has_verify:
@@ -116,6 +120,15 @@ class VerifyExecutor(FakeExecutor):
                 success=True,
                 content="browsed",
                 structured={"url": "http://127.0.0.1:8000/", "console": []},
+            )
+        if call.tool_name.startswith("preview_"):
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content="preview lifecycle updated",
+                structured={"url": "http://127.0.0.1:8000/"},
             )
         return await super().execute(call)
 
@@ -349,6 +362,34 @@ async def test_fail_same_fp_with_navigate_between_halts_stuck():
     )
     env = _env(events)
     assert any("same failure" in m.lower() for m in env), env
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "preview_tool", ["preview_start", "preview_status", "preview_logs", "preview_stop"]
+)
+async def test_preview_control_does_not_invalidate_cached_failed_verifier_marker(
+    preview_tool: str,
+):
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "broken"}),
+            finish_step(),
+            action_step(tool=preview_tool, args={}),
+            finish_step(),
+        ]
+    )
+    execu = VerifyExecutor(
+        [_verdict(passed=False, fp="SAME", summary="still broken", next_action="fix it")]
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.verify_calls == 1, "preview lifecycle must not invalidate cached verdict"
+    assert_blocked_question_landing(events)
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
 
 
 # ---- (g) non-web deliverable: gate inert ------------------------------------

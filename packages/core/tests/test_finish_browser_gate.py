@@ -50,6 +50,10 @@ def test_last_productive_seq():
     # Only actions not in _NON_PRODUCTIVE_TOOLS count
     failed = action(tool="file_edit", args={"path": "x"})
     write = action(tool="file_write", args={"path": "x"})
+    preview_controls = [
+        action(tool=name)
+        for name in ("preview_start", "preview_status", "preview_logs", "preview_stop")
+    ]
     events = with_seqs(
         [
             action(tool="file_read"),  # non-productive
@@ -59,6 +63,14 @@ def test_last_productive_seq():
             observation(action_id=write.id, tool="file_write"),
             action(tool="browser"),  # non-productive
             action(tool="server_status"),  # non-productive
+            *[
+                event
+                for preview in preview_controls
+                for event in (
+                    preview,
+                    observation(action_id=preview.id, tool=preview.tool_call.tool_name),
+                )
+            ],
         ]
     )
     assert _last_productive_seq(events) == 4

@@ -63,6 +63,7 @@ class AppKitVerifyExecutor(FakeExecutor):
         super().__init__(
             tools=[
                 ToolSpec(name="app_create", description="scaffold", parameters_schema={}),
+                ToolSpec(name="file_read", description="read", parameters_schema={}),
                 ToolSpec(name="submit_plan", description="plan", parameters_schema={}),
                 ToolSpec(name="verify_appkit_app", description="verify", parameters_schema={}),
             ]
@@ -279,6 +280,35 @@ async def test_appkit_build_refuses_on_appkit_fail_verdict() -> None:
     assert execu.appkit_calls >= 1
     assert execu.web_calls == 0
     assert any("verify_appkit_app did not pass" in m for m in _env(events)), _env(events)
+
+
+@pytest.mark.asyncio
+async def test_appkit_direct_failed_verifier_diagnostics_halt_autonomous_no_progress() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            action_step(tool="verify_appkit_app"),
+            action_step(tool="file_read", args={"path": "src/App.tsx"}),
+            action_step(tool="verify_appkit_app"),
+            action_step(tool="file_read", args={"path": "worker.ts"}),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=False, fp="UNCHANGED")])
+    loop, store = _gate_loop(agent, execu, autonomous=True)
+
+    await loop.send_message("build me a lead-gen app")
+    state = await loop.run()
+
+    events = await store.get_events("conv")
+    statuses = _statuses(events)
+    assert state.execution_status.value == "STUCK"
+    assert execu.appkit_calls == 2
+    assert not any(status == "FINISHED" for status, _detail in statuses)
+    assert any(
+        detail == "verifier_no_progress"
+        or (detail or "").startswith("verifier_no_progress:verify_appkit_app:")
+        for _status, detail in statuses
+    )
 
 
 @pytest.mark.asyncio

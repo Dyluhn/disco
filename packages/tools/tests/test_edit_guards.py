@@ -16,6 +16,8 @@ from disco.tools.builtin.files import (
     FileAppendTool,
     FileEditArgs,
     FileEditTool,
+    FileInsertLinesArgs,
+    FileInsertLinesTool,
     FileReadArgs,
     FileReadTool,
     FileReplaceLinesArgs,
@@ -90,6 +92,30 @@ async def test_replace_lines_still_works_with_real_text():
     assert out.success is True
     assert sbx.writes and b"B = 20" in sbx.writes[-1]
     assert b"A = 1" in sbx.writes[-1] and b"C = 3" in sbx.writes[-1]  # rest intact
+
+
+@pytest.mark.asyncio
+async def test_replace_lines_refuses_byte_identical_replacement():
+    sbx = _FakeSandbox("A = 1\nB = 2\n")
+    out = await FileReplaceLinesTool().run(
+        FileReplaceLinesArgs(path="config.py", start_line=2, end_line=2, new_text="B = 2"),
+        _Ctx(sbx),
+    )
+    assert out.success is False
+    assert out.error == "no_op_edit"
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_insert_lines_refuses_empty_byte_identical_insertion():
+    sbx = _FakeSandbox("")
+    out = await FileInsertLinesTool().run(
+        FileInsertLinesArgs(path="empty.txt", after_line=0, text=""),
+        _Ctx(sbx),
+    )
+    assert out.success is False
+    assert out.error == "no_op_edit"
+    assert sbx.writes == []
 
 
 @pytest.mark.asyncio

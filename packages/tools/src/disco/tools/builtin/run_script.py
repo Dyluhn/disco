@@ -282,6 +282,22 @@ class RunProjectScriptTool:
                 "run_project_script: inspection only — no files changed.", [], len(ops), reads_out
             )
 
+        # A requested mutation is not an effective mutation merely because it
+        # matched and entered the buffer. Keep only byte-changing paths (a new
+        # empty file still changes filesystem state because its original is None).
+        effective_mutated = {
+            canon
+            for canon in mutated
+            if original.get(canon) is None or buffer[canon] != original[canon]
+        }
+        if not effective_mutated:
+            return _fail(
+                len(ops) - 1,
+                "SCRIPT_NO_CHANGES",
+                "all requested mutations were byte-identical to current files.",
+            )
+        mutated = effective_mutated
+
         # (2) caps + syntax pre-check IN MEMORY — a syntax-introducing batch writes nothing.
         total = sum(len(buffer[c].encode("utf-8")) for c in mutated)
         if total > _MAX_TOTAL_WRITE_BYTES:

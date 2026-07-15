@@ -40,6 +40,7 @@ _THRASH_STUCK_DETAILS = {
     "repeated_action_observation",
     "repeated_noop",
     "verify_no_progress",
+    "verifier_no_progress",
     "identical_plan_streak",
 }
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})

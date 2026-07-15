@@ -49,7 +49,13 @@ from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
 from .planning_harvest import harvest_revision_plan_after_refusal
-from .stuck import F6_FILE_MUTATING_TOOLS, no_progress_detected
+from .stuck import (
+    F6_FILE_MUTATING_TOOLS,
+    VerifierEvidenceInvalid,
+    VerifierFailureNoProgress,
+    no_progress_detected,
+    repeated_failed_verifier_no_progress,
+)
 from .tool_specs import _ask_user_tool_singleton
 
 if TYPE_CHECKING:
@@ -273,6 +279,30 @@ _NO_PROGRESS_REMINDER = (
     "blocked.\n"
     "</system-reminder>"
 )
+_VERIFIER_NO_PROGRESS_DETAIL = "verifier_no_progress"
+_VERIFIER_EVIDENCE_INVALID_DETAIL = "verifier_evidence_invalid"
+
+
+def _verifier_no_progress_marker_seq(
+    events: list[Event], finding: VerifierFailureNoProgress
+) -> int | None:
+    """Semantic marker for this exact verifier/fingerprint streak.
+
+    ``Event.meta`` is advisory and may be dropped during persistence/projection,
+    so marker identity and ordering live entirely in ``detail`` + ``seq``.
+    """
+    for event in reversed(events):
+        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+            return None
+        if not (
+            isinstance(event, StatusEvent)
+            and event.detail == finding.marker_detail
+            and event.seq is not None
+            and event.seq > finding.streak_start_seq
+        ):
+            continue
+        return event.seq
+    return None
 
 
 async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
@@ -627,6 +657,7 @@ class Valve:
         legacy_status: ConversationStatus = ConversationStatus.STUCK,
         legacy_detail: str | None = None,
         required_explanation: str = "",
+        deterministic: bool = False,
     ) -> None:
         """Explain a breaker halt and park at the free-form user-question gate.
 
@@ -677,7 +708,7 @@ class Valve:
         # afford the model-authored explanation for the run log.
         content = (
             await self._blocked_model_message(reason=clean_reason, guidance=guidance)
-            if autonomous
+            if autonomous and not deterministic
             else self._fallback_blocked_message(reason=clean_reason, guidance=guidance)
         )
         required = required_explanation.strip()
@@ -1438,6 +1469,89 @@ class Valve:
         # to max_iterations. Escalate-then-halt like gate_stuck: a corrective
         # nudge first, then — if the SAME outcome persists after the model acted
         # on the nudge — halt STUCK rather than burn the rest of the budget.
+        verifier_finding = repeated_failed_verifier_no_progress(events)
+        if isinstance(verifier_finding, VerifierEvidenceInvalid):
+            guidance = (
+                f"{verifier_finding.tool_name} executed but returned unusable structured "
+                f"verification evidence ({verifier_finding.reason}) at event "
+                f"{verifier_finding.verdict_seq}. A product verdict cannot be trusted "
+                "without an explicit boolean `passed` value and, for a failure, a "
+                "non-empty failure fingerprint."
+            )
+            await self.land_blocked(
+                reason=_VERIFIER_EVIDENCE_INVALID_DETAIL,
+                guidance=guidance,
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail=_VERIFIER_EVIDENCE_INVALID_DETAIL,
+                deterministic=True,
+            )
+            return Disp.HALT
+        if isinstance(verifier_finding, VerifierFailureNoProgress):
+            verifier_streak = verifier_finding
+            marker_seq = _verifier_no_progress_marker_seq(events, verifier_streak)
+            if marker_seq is None:
+                meta = {
+                    "verifier_tool": verifier_streak.tool_name,
+                    "failure_fingerprint_sha256": verifier_streak.failure_fingerprint_sha256,
+                    "streak_start_seq": verifier_streak.streak_start_seq,
+                    "repeat_count": verifier_streak.repeats,
+                }
+                guidance = (
+                    f"{verifier_streak.tool_name} returned the same failed verification "
+                    f"fingerprint {verifier_streak.repeats} times without a successful "
+                    "deliverable mutation. Repeated reads, lists, status checks, and "
+                    "verification calls are diagnostics, not progress. Do not call `finish` "
+                    "while the overall verifier verdict is failing. Make one concrete "
+                    "semantic/file mutation that addresses the failed check, then verify once."
+                )
+                if verifier_streak.summary:
+                    guidance += f" Failure: {verifier_streak.summary}"
+                if verifier_streak.next_action:
+                    guidance += f" Required repair: {verifier_streak.next_action}"
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=f"<system-reminder>\n{guidance}\n</system-reminder>",
+                        ),
+                        meta={"diagnostic": _VERIFIER_NO_PROGRESS_DETAIL, **meta},
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail=verifier_streak.marker_detail,
+                        meta=meta,
+                    )
+                )
+                return Disp.CONTINUE
+            acted_since = any(
+                isinstance(event, ActionEvent) and event.seq is not None and event.seq > marker_seq
+                for event in events
+            )
+            if acted_since:
+                guidance = (
+                    f"{verifier_streak.tool_name} kept the same failed verification "
+                    "fingerprint after the bounded repair nudge, and no successful "
+                    "deliverable mutation or changed/pass verdict followed."
+                )
+                if verifier_streak.summary:
+                    guidance += f" Failure: {verifier_streak.summary}"
+                if verifier_streak.next_action:
+                    guidance += f" Required repair: {verifier_streak.next_action}"
+                await self.land_blocked(
+                    reason=_VERIFIER_NO_PROGRESS_DETAIL,
+                    guidance=guidance,
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail=_VERIFIER_NO_PROGRESS_DETAIL,
+                    deterministic=True,
+                )
+                return Disp.HALT
+            # Marker is durable, but the model has not taken its one bounded
+            # repair/diagnostic action yet. Let the normal driver take that turn.
+            return Disp.FALLTHROUGH
+
         if not no_progress_detected(self._loop._recent(events)):
             return Disp.FALLTHROUGH
         marker_seq = _no_progress_marker_seq(events)

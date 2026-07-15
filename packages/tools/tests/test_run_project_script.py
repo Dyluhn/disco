@@ -169,6 +169,58 @@ async def test_read_and_ls_do_not_mutate():
     await inst.destroy()
 
 
+@pytest.mark.parametrize("op", ["replace_text", "save"])
+async def test_byte_identical_mutation_is_refused_and_not_receipted(op: str):
+    ctx, inst = await _ctx()
+    body = "current content\n"
+    await inst.write_file("same.txt", body.encode())
+    operations = [{"op": "read", "path": "same.txt"}]
+    operations.append(
+        {
+            "op": op,
+            "path": "same.txt",
+            **({"old": body, "new": body} if op == "replace_text" else {"content": body}),
+        }
+    )
+
+    res = await _go(ctx, operations)
+
+    assert not res.success
+    assert res.error == "SCRIPT_NO_CHANGES"
+    assert await _read(inst, "same.txt") == body
+    await inst.destroy()
+
+
+async def test_mixed_batch_receipts_include_only_byte_changed_paths():
+    ctx, inst = await _ctx()
+    await inst.write_file("same.txt", b"same\n")
+    await inst.write_file("changed.txt", b"before\n")
+    res = await _go(
+        ctx,
+        [
+            {"op": "read", "path": "same.txt"},
+            {"op": "save", "path": "same.txt", "content": "same\n"},
+            {"op": "replace_text", "path": "changed.txt", "old": "before", "new": "after"},
+        ],
+    )
+
+    assert res.success, res.content
+    assert res.structured["applied"] == ["changed.txt"]
+    assert await _read(inst, "same.txt") == "same\n"
+    assert await _read(inst, "changed.txt") == "after\n"
+    await inst.destroy()
+
+
+async def test_new_empty_file_is_an_effective_mutation():
+    ctx, inst = await _ctx()
+    res = await _go(ctx, [{"op": "save", "path": "empty.txt", "content": ""}])
+
+    assert res.success, res.content
+    assert res.structured["applied"] == ["empty.txt"]
+    assert await inst.file_exists("empty.txt")
+    await inst.destroy()
+
+
 async def test_save_over_unread_existing_requires_grounding():
     ctx, inst = await _ctx()
     await inst.write_file("f.txt", b"existing content that is fine\n")

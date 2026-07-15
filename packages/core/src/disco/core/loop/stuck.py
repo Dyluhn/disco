@@ -18,7 +18,10 @@ directive is always None, and the bool facade is unchanged.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections import Counter
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from pydantic import BaseModel
@@ -98,6 +101,60 @@ _PROBE_SPIN_TOOLS = _NO_PROGRESS_PROBE_TOOLS | frozenset(
         "deploy_status",
     }
 )
+
+# H275 — structured verifier outcomes are semantic progress signals, not ordinary
+# successful tool executions.  The live AppKit run varied reads/lists/status calls
+# between identical failed verifier fingerprints, evading exact-action and raw-output
+# loop detectors.  These tools return ``ToolResult.success=True`` when the verifier
+# itself executed even when ``structured.passed=False``; judge the structured verdict.
+_STRUCTURED_VERIFIER_TOOLS = frozenset({"verify_web_app", "verify_appkit_app"})
+FAILED_VERIFIER_REPEAT_LIMIT = 2
+
+# A repeated failed verdict is re-armed only by a confirmed deliverable mutation.
+# Tool name + ``success=True`` is deliberately insufficient: several mutators can
+# hollow-succeed after applying zero edits.  These sets select the receipt schema;
+# ``_effective_verifier_mutation`` validates the receipt itself.
+_VERIFIER_FILE_RECEIPT_TOOLS = F6_FILE_MUTATING_TOOLS
+_VERIFIER_APPKIT_RECEIPT_TOOLS = frozenset(
+    {
+        "app_create",
+        "app_add_section",
+        "app_update_content",
+        "app_set_design",
+        "app_add_primitive",
+    }
+)
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
+
+
+@dataclass(frozen=True)
+class VerifierFailureNoProgress:
+    """Stable failed-verifier streak after the latest effective mutation."""
+
+    tool_name: str
+    failure_fingerprint: str
+    failure_fingerprint_sha256: str
+    repeats: int
+    streak_start_seq: int
+    latest_verdict_seq: int
+    summary: str
+    next_action: str
+
+    @property
+    def marker_detail(self) -> str:
+        """Semantic durable marker; event metadata is never load-bearing."""
+
+        return f"verifier_no_progress:{self.tool_name}:{self.failure_fingerprint_sha256[:16]}"
+
+
+@dataclass(frozen=True)
+class VerifierEvidenceInvalid:
+    """A successful verifier execution emitted unusable structured evidence."""
+
+    tool_name: str
+    verdict_seq: int
+    reason: str
+
 
 # W1 — wait/poll tools exempted from patterns 1 and 4 (but NOT 2): a legit
 # "poll until server up" loop must not be flagged as stuck (OpenHands #5355 FP
@@ -568,6 +625,159 @@ class StuckDetector:
 # server returns 200 — so the circuit breaker's failure count stays 0), and it
 # grinds to max_iterations. The semantic signal it misses: the same probe/verify
 # OUTCOME recurring across many varied edits = no real progress.
+
+
+def _verifier_fingerprint(structured: dict) -> tuple[str, str] | None:
+    raw = structured.get("failure_fingerprint")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return (raw if len(raw) <= 256 else f"sha256:{digest}", digest)
+
+
+def _effective_verifier_mutation(event: ObservationEvent, action: ActionEvent | None) -> bool:
+    """True only for a successful mutation carrying a concrete changed-state receipt."""
+
+    result = event.tool_result
+    if not result.success or action is None or action.tool_call is None:
+        return False
+    tool_name = action.tool_call.tool_name
+    if result.tool_name != tool_name or not isinstance(result.structured, dict):
+        return False
+    structured = result.structured
+    if structured.get("state_changed") is True:
+        return True
+    if tool_name == "run_project_script":
+        applied = structured.get("applied")
+        return isinstance(applied, list) and bool(applied)
+    if tool_name in _VERIFIER_APPKIT_RECEIPT_TOOLS:
+        written = structured.get("files_written")
+        return isinstance(written, list) and bool(written)
+    if tool_name in _VERIFIER_FILE_RECEIPT_TOOLS:
+        path = structured.get("path")
+        sha256 = structured.get("sha256")
+        return (
+            isinstance(path, str)
+            and bool(path.strip())
+            and isinstance(sha256, str)
+            and _SHA256_HEX.fullmatch(sha256) is not None
+        )
+    return False
+
+
+@dataclass
+class _VerifierStreak:
+    fingerprint: str
+    fingerprint_sha256: str
+    repeats: int
+    streak_start_seq: int
+    latest_verdict_seq: int
+    summary: str
+    next_action: str
+
+
+def repeated_failed_verifier_no_progress(
+    events: list[Event],
+    *,
+    repeats: int = FAILED_VERIFIER_REPEAT_LIMIT,
+) -> VerifierFailureNoProgress | VerifierEvidenceInvalid | None:
+    """Return the trailing unchanged failed-verifier streak, if bounded progress failed.
+
+    Unlike exact-action detectors, this consumes the structured verifier verdict:
+    ``ToolResult.success`` means the probe executed, while ``structured.passed`` is
+    the product verdict.  Varied diagnostics between two identical failures are
+    transparent.  A new user turn, a successful deliverable mutation, a changed
+    fingerprint, or a passing verdict resets that verifier's streak. A confirmed
+    deliverable mutation resets all verifier streaks; failed, receipt-empty, and no-op
+    mutations do not. Different verifier tools retain independent unresolved streaks.
+    The full post-user event history is inspected so a long diagnostic sequence cannot
+    fall out of the engine's small recent-event window.
+    """
+    if repeats <= 0:
+        return None
+    window = _after_last_user_message(events)
+    action_by_id = {
+        event.id: event
+        for event in window
+        if isinstance(event, ActionEvent) and event.tool_call is not None
+    }
+    streaks: dict[str, _VerifierStreak] = {}
+
+    for index, event in enumerate(window, start=1):
+        seq = event.seq if event.seq is not None else index
+        if not isinstance(event, ObservationEvent):
+            continue
+        action = action_by_id.get(event.action_id)
+        if _effective_verifier_mutation(event, action):
+            streaks.clear()
+            continue
+
+        tool_name = event.tool_result.tool_name
+        if tool_name not in _STRUCTURED_VERIFIER_TOOLS:
+            continue
+        if not event.tool_result.success:
+            continue
+        structured = event.tool_result.structured
+        if not isinstance(structured, dict):
+            return VerifierEvidenceInvalid(
+                tool_name=tool_name,
+                verdict_seq=seq,
+                reason="missing_structured_verdict",
+            )
+        passed = structured.get("passed")
+        if not isinstance(passed, bool):
+            return VerifierEvidenceInvalid(
+                tool_name=tool_name,
+                verdict_seq=seq,
+                reason="missing_or_malformed_passed",
+            )
+        if passed:
+            streaks.pop(tool_name, None)
+            continue
+
+        fingerprint = _verifier_fingerprint(structured)
+        if fingerprint is None:
+            raw = structured.get("failure_fingerprint")
+            reason = (
+                "missing_failure_fingerprint" if raw is None else "malformed_failure_fingerprint"
+            )
+            return VerifierEvidenceInvalid(tool_name=tool_name, verdict_seq=seq, reason=reason)
+        normalized, digest = fingerprint
+        prior = streaks.get(tool_name)
+        streaks[tool_name] = _VerifierStreak(
+            fingerprint=normalized,
+            fingerprint_sha256=digest,
+            repeats=prior.repeats + 1
+            if prior is not None and prior.fingerprint == normalized
+            else 1,
+            streak_start_seq=(
+                prior.streak_start_seq
+                if prior is not None and prior.fingerprint == normalized
+                else seq
+            ),
+            latest_verdict_seq=seq,
+            summary=str(structured.get("summary") or "")[:500],
+            next_action=str(structured.get("next_action") or "")[:500],
+        )
+
+    candidates = [item for item in streaks.items() if item[1].repeats >= repeats]
+    if not candidates:
+        return None
+    tool_name, current = min(
+        candidates,
+        key=lambda item: (item[1].streak_start_seq, item[0]),
+    )
+    return VerifierFailureNoProgress(
+        tool_name=tool_name,
+        failure_fingerprint=current.fingerprint,
+        failure_fingerprint_sha256=current.fingerprint_sha256,
+        repeats=current.repeats,
+        streak_start_seq=current.streak_start_seq,
+        latest_verdict_seq=current.latest_verdict_seq,
+        summary=current.summary,
+        next_action=current.next_action,
+    )
 
 
 def repeated_verify_no_progress(
