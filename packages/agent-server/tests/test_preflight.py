@@ -12,6 +12,7 @@ import asyncio
 import time
 
 import httpx
+import pytest
 from disco.agent_server import ConversationRuntime
 from disco.core import (
     ConversationStatus,
@@ -134,6 +135,125 @@ async def test_preflight_driver_passes_and_caches_success():
     assert ok.calls == 1  # second call served from the short-TTL success cache
 
 
+async def test_concurrent_cold_preflights_singleflight_per_model():
+    """A parallel Build wave must not stampede one cold provider endpoint."""
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _SlowOkRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            await asyncio.sleep(0.05)
+
+    router = _SlowOkRouter()
+    rt._router_now = lambda **kw: router
+
+    results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
+
+    assert results == [None] * 6
+    assert router.calls == 1
+    assert {key[0] for key in rt._driver_proven} == {f"c{i}" for i in range(6)}
+
+
+async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_term(monkeypatch):
+    from disco.core.inspect import registry
+
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _DeadRouter:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            await asyncio.sleep(0.05)
+            raise LLMAuthError("invalid api key", provider="x")
+
+    router = _DeadRouter()
+    rt._router_now = lambda **kw: router
+    rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 0.01
+
+    results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
+
+    assert all(result is not None and "rejected the API key" in result for result in results)
+    assert router.calls == 1
+    for index in range(6):
+        trace = registry().snapshot(f"c{index}")
+        assert trace is not None
+        assert trace["tool_scopes"] == []
+        assert trace["spans"] == []
+        assert trace["routing_decisions"]
+        assert all(
+            decision["reason"].startswith("terminal failure:")
+            for decision in trace["routing_decisions"]
+        )
+
+    # The probe itself took longer than the sharing TTL, but the TTL begins at
+    # completion: a trailing caller still consumes the just-finished verdict.
+    model_key = next(iter(rt._driver_preflight_inflight))
+    completed_task, completed_at = rt._driver_preflight_inflight[model_key]
+    assert completed_at is not None
+    assert await rt._preflight_driver("trailing") is not None
+    assert router.calls == 1
+    assert rt._driver_preflight_inflight[model_key] == (completed_task, completed_at)
+
+    # The shared failure is a burst result, not a sticky outage cache.
+    rt._driver_preflight_inflight[model_key] = (
+        completed_task,
+        completed_at - rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S - 1,
+    )
+    assert await rt._preflight_driver("later") is not None
+    assert router.calls == 2
+
+
+async def test_shared_preflight_failure_expires_without_a_later_caller():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 0.01
+
+    class _DeadRouter:
+        async def complete(self, req, *, context=None):
+            raise LLMAuthError("invalid api key", provider="x")
+
+    rt._router_now = lambda **kw: _DeadRouter()
+    assert await rt._preflight_driver("c1") is not None
+    assert rt._driver_preflight_inflight
+
+    await asyncio.sleep(0.03)
+    assert rt._driver_preflight_inflight == {}
+
+
+async def test_aclose_cancels_and_drains_orphaned_shared_preflight():
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    started = asyncio.Event()
+
+    class _SlowRouter:
+        async def complete(self, req, *, context=None):
+            started.set()
+            await asyncio.sleep(60)
+
+    rt._router_now = lambda **kw: _SlowRouter()
+    waiter = asyncio.create_task(rt._preflight_driver("c1"))
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    shared_task = next(iter(rt._driver_preflight_inflight.values()))[0]
+    assert not shared_task.done()
+    await rt.aclose()
+    assert shared_task.done() and shared_task.cancelled()
+    assert rt._driver_preflight_inflight == {}
+
+
 async def test_preflight_driver_is_wall_bounded_on_black_hole():
     """P1-1: a black-holed driver (a call that NEVER returns) must FAIL FAST at
     the pre-flight deadline — NOT inherit the router's 5 transient retries × the
@@ -217,6 +337,32 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
     # Soft-degrade: a proven conversation PROCEEDS despite the transient timeout.
     assert await rt._preflight_driver("c1") is None
     assert router.timeout_calls >= 1  # the real re-probe WAS attempted
+
+
+async def test_preflight_driver_never_soft_degrades_hard_auth_failure_after_success():
+    """A prior success may mask only a transient blip, never bad credentials."""
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _SwitchRouter:
+        def __init__(self):
+            self.reject = False
+
+        async def complete(self, req, *, context=None):
+            if self.reject:
+                raise LLMAuthError("invalid api key", provider="x")
+
+    router = _SwitchRouter()
+    rt._router_now = lambda **kw: router
+    assert await rt._preflight_driver("c1") is None
+
+    rt._driver_preflight_ok.clear()
+    router.reject = True
+    reason = await rt._preflight_driver("c1")
+
+    assert reason is not None
+    assert "rejected the API key" in reason
 
 
 async def test_preflight_driver_still_terminal_when_genuinely_unreachable():

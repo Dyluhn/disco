@@ -88,6 +88,7 @@ from disco.core.llm import (
     NoEligibleModel,
     OperatingMode,
     RouterSummarizer,
+    RoutingDecision,
     SandboxSettings,
     SecretStore,
 )
@@ -787,6 +788,14 @@ class ConversationRuntime:
         # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
         # back-to-back kicks don't each pay a live round-trip.
         self._driver_preflight_ok: dict[str, float] = {}
+        # Concurrent cold-start kicks for the same model share one readiness call.
+        # Without this single-flight slot, a six-worker Build wave sends six
+        # simultaneous 1-token probes before any can populate the success cache;
+        # a subscription endpoint may queue them past the hard timeout even though
+        # the exact same probe succeeds immediately when serialized.
+        self._driver_preflight_inflight: dict[
+            str, tuple[asyncio.Task[tuple[str | None, bool]], float | None]
+        ] = {}
         # W-35 (resilience): (conversation_id, role, resolved_model_key) tuples whose
         # driver has ALREADY answered a pre-flight successfully in THIS process. An
         # established run that has proven THAT SPECIFIC driver reachable must NOT be
@@ -2826,6 +2835,10 @@ class ConversationRuntime:
     # are retried; a hard verdict (auth / misconfig / unavailable) fails immediately.
     _DRIVER_PREFLIGHT_ATTEMPTS = 3
     _DRIVER_PREFLIGHT_BACKOFF_S = 0.5
+    # A completed failure remains shareable just long enough for callers that
+    # arrived in the same cold-start burst to receive the same bounded verdict.
+    # A later independent kick re-probes rather than caching an outage.
+    _DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 2.0
 
     async def _preflight_driver(
         self,
@@ -2868,6 +2881,134 @@ class ConversationRuntime:
         if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
             self._driver_proven.add(proven_key)
             return None
+        now = time.monotonic()
+        slot = self._driver_preflight_inflight.get(key)
+        if slot is not None:
+            task, completed_at = slot
+            if (
+                task.done()
+                and completed_at is not None
+                and now - completed_at >= self._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S
+            ):
+                self._driver_preflight_inflight.pop(key, None)
+                slot = None
+        if slot is None:
+            task = asyncio.create_task(
+                self._probe_driver(cid, key=key, override=override, role=role),
+                name=f"driver-preflight:{key}",
+            )
+            # None means the task is still running or its completion has not yet
+            # been observed.  The first observer stamps completion exactly once.
+            self._driver_preflight_inflight[key] = (task, None)
+            task.add_done_callback(
+                lambda completed, model_key=key: self._complete_driver_preflight_slot(
+                    model_key, completed
+                )
+            )
+        else:
+            task = slot[0]
+        try:
+            result, transient = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Cancelling one waiter must not cancel the shared provider probe.  If
+            # the shared task itself was cancelled during shutdown, discard it so
+            # a later kick cannot inherit a permanently-cancelled slot.
+            current = self._driver_preflight_inflight.get(key)
+            if current is not None and current[0] is task and task.cancelled():
+                self._driver_preflight_inflight.pop(key, None)
+            raise
+        except Exception:
+            current = self._driver_preflight_inflight.get(key)
+            if current is not None and current[0] is task:
+                self._driver_preflight_inflight.pop(key, None)
+            raise
+        if result is None:
+            current = self._driver_preflight_inflight.get(key)
+            if current is not None and current[0] is task:
+                self._driver_preflight_inflight.pop(key, None)
+            self._driver_proven.add(proven_key)
+            return None
+
+        # Ensure the completion callback's write-once timestamp/eviction has run
+        # before this caller returns.  The helper is idempotent when the callback
+        # already ran.
+        self._complete_driver_preflight_slot(key, task)
+
+        # Only transient failures may soft-degrade after this exact conversation,
+        # role, and model previously succeeded.  Auth, configuration, provider
+        # unavailable, and generic model errors remain hard terminal verdicts.
+        if transient and proven_key in self._driver_proven:
+            logger.warning(
+                "driver pre-flight for %r (role=%s) failed transiently (%s) but it "
+                "already succeeded in conversation %s — proceeding (soft-degrade)",
+                key,
+                role,
+                result,
+                cid or "<none>",
+            )
+            return None
+
+        # Every terminal caller needs attributable routing evidence even though
+        # only the single-flight leader touched the provider.
+        self._record_shared_driver_preflight_failure(cid, cfg, key, override, role)
+        return result
+
+    def _complete_driver_preflight_slot(
+        self,
+        key: str,
+        task: asyncio.Task[tuple[str | None, bool]],
+    ) -> None:
+        """Timestamp and schedule eviction for one completed shared failure."""
+
+        current = self._driver_preflight_inflight.get(key)
+        if current is None or current[0] is not task or current[1] is not None:
+            return
+        if task.cancelled():
+            self._driver_preflight_inflight.pop(key, None)
+            return
+        try:
+            result, _transient = task.result()
+        except BaseException:
+            # Never retain an unexpected exception/traceback: transport exception
+            # strings can contain request headers or other credential material.
+            self._driver_preflight_inflight.pop(key, None)
+            return
+        if result is None:
+            self._driver_preflight_inflight.pop(key, None)
+            return
+        completed_at = time.monotonic()
+        self._driver_preflight_inflight[key] = (task, completed_at)
+        task.get_loop().call_later(
+            self._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S,
+            self._expire_driver_preflight_slot,
+            key,
+            task,
+            completed_at,
+        )
+
+    def _expire_driver_preflight_slot(
+        self,
+        key: str,
+        task: asyncio.Task[tuple[str | None, bool]],
+        completed_at: float,
+    ) -> None:
+        """Evict exactly the failure generation whose short share window ended."""
+
+        current = self._driver_preflight_inflight.get(key)
+        if current is not None and current == (task, completed_at):
+            self._driver_preflight_inflight.pop(key, None)
+
+    async def _probe_driver(
+        self,
+        conversation_id: str,
+        *,
+        key: str,
+        override: str | None,
+        role: ModelRole,
+    ) -> tuple[str | None, bool]:
+        """Run one bounded probe and preserve whether its failure is transient."""
+
+        cid = conversation_id
         router = self._router_now(pick=override, conversation_id=cid)
         req = CompletionRequest(
             profile=CapabilityProfile(role=role),
@@ -2904,44 +3045,51 @@ class ConversationRuntime:
                 transient_reason = None
                 break  # the endpoint answered → reachable
             except NoEligibleModel as exc:
-                return f"Driver '{key}' is misconfigured: {exc}"
+                return f"Driver '{key}' is misconfigured: {exc}", False
             except LLMAuthError as exc:
-                return f"Driver '{key}' rejected the API key: {exc}"
+                return f"Driver '{key}' rejected the API key: {exc}", False
             except LLMProviderUnavailable as exc:
-                return f"Driver '{key}' is unavailable: {exc}"
+                return f"Driver '{key}' is unavailable: {exc}", False
             except LLMTransientError as exc:
                 transient_reason = f"Driver '{key}' unreachable: {exc}"
             except LLMError as exc:
-                return f"Driver '{key}' error: {exc}"
+                return f"Driver '{key}' error: {exc}", False
+            except Exception as exc:  # noqa: BLE001 — terminalize without leaking details
+                return f"Driver '{key}' pre-flight failed ({type(exc).__name__})", False
             # transient verdict: brief escalating backoff, then re-probe (unless
             # this was the final attempt).
             if attempt + 1 < self._DRIVER_PREFLIGHT_ATTEMPTS:
                 await asyncio.sleep(self._DRIVER_PREFLIGHT_BACKOFF_S * (attempt + 1))
 
         if transient_reason is not None:
-            # Every probe failed with a TRANSIENT verdict. If THIS SAME driver
-            # (conversation + role + model) has ALREADY proven itself (e.g. a build
-            # that ran for many turns), a momentary slow remote model must NOT
-            # terminate the run: soft-degrade to a warning and PROCEED — the real
-            # generation will surface a genuine error if the driver is actually down.
-            # A driver that has NEVER answered for this (conversation, role, model) is
-            # more legitimately terminal, so we keep the named terminal reason —
-            # crucially, a DIFFERENT proven driver in the same conversation (e.g. a
-            # build AGENT_DRIVER) does NOT mask a genuinely-dead DR RAG_ANSWERER.
-            if proven_key in self._driver_proven:
-                logger.warning(
-                    "driver pre-flight for %r (role=%s) failed transiently (%s) but it "
-                    "already succeeded in conversation %s — proceeding (soft-degrade)",
-                    key,
-                    role,
-                    transient_reason,
-                    cid or "<none>",
-                )
-                return None
-            return transient_reason
+            return transient_reason, True
         self._driver_preflight_ok[key] = time.monotonic()
-        self._driver_proven.add(proven_key)
-        return None
+        return None, False
+
+    @staticmethod
+    def _record_shared_driver_preflight_failure(
+        conversation_id: str,
+        cfg: Any,
+        key: str,
+        override: str | None,
+        role: ModelRole,
+    ) -> None:
+        """Attach fail-closed routing proof to every single-flight waiter."""
+
+        sink = routing_sink_for(conversation_id)
+        if sink is None:
+            return
+        entry = getattr(cfg, "models", {}).get(key)
+        sink.record(
+            RoutingDecision(
+                profile=CapabilityProfile(role=role),
+                chosen_model=str(getattr(entry, "model_id", key)),
+                provider=str(getattr(entry, "provider", "")),
+                path="manual" if override is not None else "pinned",
+                reason="terminal failure: shared driver preflight",
+                overflow_triggers=["driver_preflight"],
+            )
+        )
 
     # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like
     # the driver pre-flight, the WHOLE point is to FAIL FAST — a gVisor host that's
@@ -3965,7 +4113,6 @@ class ConversationRuntime:
             self._artifact_mode,
             self._appkit_mode,
             self._depth,
-            self._driver_preflight_ok,
             self._dr_steer,
             self._dr_injected_sources,
             self._upload_passages,
@@ -3981,10 +4128,19 @@ class ConversationRuntime:
             cache.pop(conversation_id, None)
         # CONTRACT-DURABILITY: sets, not dicts — same per-cid leak rule applies.
         self._contract_fold_attempted.discard(conversation_id)
+        self._driver_proven = {
+            proven for proven in self._driver_proven if proven[0] != conversation_id
+        }
 
     async def aclose(self) -> None:
         for task in self._tasks.values():
             task.cancel()
+        preflight_tasks = {slot[0] for slot in self._driver_preflight_inflight.values()}
+        for task in preflight_tasks:
+            task.cancel()
+        if preflight_tasks:
+            await asyncio.gather(*preflight_tasks, return_exceptions=True)
+        self._driver_preflight_inflight.clear()
         for executor in self._executors.values():
             with contextlib.suppress(Exception):
                 await executor.kill()

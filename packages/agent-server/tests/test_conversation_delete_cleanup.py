@@ -24,7 +24,7 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
 )
-from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
+from disco.core.llm import DefaultLLMRouter, ModelEntry, ModelRole, RouterConfig
 from disco.tools import ProcessSandboxService
 
 CID = "conv_delete_cleanup"
@@ -54,6 +54,9 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     rt._run_claimed_user_seq[CID] = 7
     rt.set_surface(CID, "build")
     rt.set_autonomous(CID, True)
+    rt._driver_proven.add((CID, ModelRole.AGENT_DRIVER, "m"))
+    rt._driver_proven.add(("another-conversation", ModelRole.AGENT_DRIVER, "m"))
+    rt._driver_preflight_ok["m"] = 123.0
 
     await rt.forget_conversation(CID)
 
@@ -63,6 +66,10 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     assert CID not in rt._run_claimed_user_seq
     assert CID not in rt._surface
     assert CID not in rt._autonomous
+    assert not any(proven[0] == CID for proven in rt._driver_proven)
+    assert ("another-conversation", ModelRole.AGENT_DRIVER, "m") in rt._driver_proven
+    # The success TTL is model-scoped and remains reusable by other conversations.
+    assert rt._driver_preflight_ok["m"] == 123.0
 
 
 async def test_forget_conversation_is_idempotent_on_unknown_cid() -> None:
