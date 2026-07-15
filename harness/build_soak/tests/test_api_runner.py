@@ -688,10 +688,10 @@ def _install_clock(monkeypatch, clock):
     monkeypatch.setattr(_mod.asyncio, "sleep", clock.sleep)
 
 
-def _file_write_log(path, content, *, call="c1", first_seq=1):
+def _file_write_log(path, content, *, call="c1", first_seq=1, structured=None):
     """A minimal user → file_write(action) → SUCCESSFUL observation → FINISHED log. The action
     and observation share `call` so the readiness gate correlates the write as successful."""
-    return [
+    events = [
         {
             "id": "u1",
             "seq": first_seq,
@@ -730,6 +730,9 @@ def _file_write_log(path, content, *, call="c1", first_seq=1):
             "status": "FINISHED",
         },
     ]
+    if structured is not None:
+        events[2]["tool_result"]["structured"] = structured
+    return events
 
 
 @pytest.mark.asyncio
@@ -936,6 +939,134 @@ async def test_snapshot_already_consistent_accepts_promptly(tmp_path, monkeypatc
     assert manifest["index.html"]["proof"] == "raw_sha"
     assert manifest["index.html"]["content_stable"] is False
     assert clock.polls == 0  # already consistent → no needless wait
+
+
+@pytest.mark.asyncio
+async def test_snapshot_absolute_workspace_write_uses_product_resolved_receipt(
+    tmp_path, monkeypatch
+):
+    """H187: guest-absolute actions join the relative snapshot through the product receipt."""
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<html><h1>Build Smoke OK</h1></html>\n"
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    _plant_snapshot(proj, _CID, {"index.html": content})
+    _seed_db(
+        db,
+        _CID,
+        _file_write_log(
+            "/workspace/index.html",
+            content,
+            structured={"path": "index.html", "sha256": sha},
+        ),
+    )
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["sha256"] == sha
+    assert manifest["index.html"]["proof"] == "raw_sha"
+    assert manifest["index.html"]["content_stable"] is False
+    assert clock.polls == 0
+
+
+@pytest.mark.parametrize(
+    ("receipt_case", "action_path"),
+    [
+        ("path-mismatch", "/workspace/index.html"),
+        ("sha-mismatch", "/workspace/index.html"),
+        ("missing-sha", "/workspace/index.html"),
+        ("missing-structured", "/workspace/index.html"),
+        ("valid", "/workspace/../../index.html"),
+        ("valid", "/tmp/../index.html"),
+    ],
+    ids=[
+        "path-mismatch",
+        "sha-mismatch",
+        "missing-sha",
+        "missing-structured",
+        "workspace-traversal",
+        "external-absolute-traversal",
+    ],
+)
+def test_absolute_write_receipt_inconsistency_fails_closed(receipt_case, action_path):
+    """H187 guards: ambiguous receipts can prove mutation, never final byte identity."""
+    content = "final bytes\n"
+    sha = hashlib.sha256(content.encode()).hexdigest()
+    receipt: dict[str, str] | None = {
+        "path": "other.html" if receipt_case == "path-mismatch" else "index.html",
+        "sha256": "0" * 64 if receipt_case == "sha-mismatch" else sha,
+    }
+    if receipt_case == "missing-sha":
+        receipt.pop("sha256")
+    elif receipt_case == "missing-structured":
+        receipt = None
+    log = _file_write_log(action_path, content, structured=receipt)
+
+    durable_rows = [{**event, "payload": event} for event in log]
+    expected = _disco_mod._agent_declared_expected(durable_rows, ["index.html"])
+
+    assert expected == {"index.html": ("present_unproven",)}
+
+
+@pytest.mark.parametrize("content_state", ["missing", "elided"])
+def test_absolute_write_receipt_requires_full_action_bytes(content_state):
+    """H187: a receipt alone cannot prove bytes absent from the durable action payload."""
+    content = "final bytes\n"
+    log = _file_write_log(
+        "/workspace/index.html",
+        content,
+        structured={"path": "index.html", "sha256": hashlib.sha256(content.encode()).hexdigest()},
+    )
+    arguments = log[1]["tool_call"]["arguments"]
+    if content_state == "missing":
+        arguments.pop("content")
+    else:
+        arguments["content"] = "<1,234 chars elided; full content remains in event payload>"
+    durable_rows = [{**event, "payload": event} for event in log]
+
+    expected = _disco_mod._agent_declared_expected(durable_rows, ["index.html"])
+
+    assert expected == {"index.html": ("present_unproven",)}
+
+
+def test_bad_later_write_receipt_cannot_leave_an_earlier_sha_current():
+    """H187 ordering guard: a later mutation always supersedes an older valid receipt."""
+    first = "first bytes\n"
+    later = "later bytes\n"
+    log = _file_write_log(
+        "/workspace/index.html",
+        first,
+        call="first",
+        structured={
+            "path": "index.html",
+            "sha256": hashlib.sha256(first.encode()).hexdigest(),
+        },
+    )
+    log.pop()  # append the later mutation before the terminal status
+    log.extend(
+        _file_write_log(
+            "/workspace/index.html",
+            later,
+            call="later",
+            first_seq=10,
+            structured={"path": "index.html", "sha256": "f" * 64},
+        )[1:]
+    )
+
+    durable_rows = [{**event, "payload": event} for event in log]
+    expected = _disco_mod._agent_declared_expected(durable_rows, ["index.html"])
+
+    assert expected == {"index.html": ("present_unproven",)}
 
 
 @pytest.mark.asyncio

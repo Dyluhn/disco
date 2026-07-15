@@ -56,6 +56,7 @@ from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
 from disco.core.auth import SESSION_COOKIE, validated_isolated_path_preview_url
+from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.sandbox._container import PREVIEW_PORT
 
 from ..events import NormalizationError, normalize_events
@@ -227,6 +228,7 @@ _FILE_READ_FULL_HEADER_RE = re.compile(r"^\[lines 1-(\d+) of (\d+)\]$")
 # decline the sha gate for that file and fall back to stability (defensive: a SUCCESSFUL
 # file_write already carries full bytes, so this is belt-and-suspenders).
 _ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
+_RAW_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
 _NON_MUTATING_TOOLS = frozenset(
@@ -1458,13 +1460,31 @@ def _last_terminal(rows: list[dict[str, Any]]) -> str | None:
 
 
 def _norm_rel(path: str) -> str:
-    """Canonical workspace-relative key: drop a leading ``./`` then any leading ``/`` so a
-    scenario-declared ``/index.html`` / ``./index.html`` and an event-log ``index.html``
-    compare equal."""
-    s = str(path)
+    """Canonical workspace-relative key using the product's workspace-prefix contract.
+
+    The agent is explicitly taught that the guest root is ``/workspace``, so actions often
+    spell ``/workspace/index.html`` while successful tool observations report the product-
+    resolved ``index.html``.  These are the same jailed path.  Reuse the product's prefix
+    rule, then retain the adapter's narrow legacy normalization.  Deliberately do NOT
+    collapse dot segments here: a traversal-shaped action and a clean observation must
+    disagree and fail closed instead of being joined by the evidence collector.
+    """
+    s = strip_redundant_workspace_prefix(str(path))
     if s.startswith("./"):
         s = s[2:]
     return s.lstrip("/")
+
+
+def _needs_resolved_write_proof(path: str) -> bool:
+    """Whether ``path`` relies on the guest-only workspace alias.
+
+    A relative action path is already in the snapshot namespace, so historical event logs
+    without structured mutator output can retain the action-content SHA fallback.  A
+    ``workspace/``-prefixed path is ambiguous outside the product resolver; require the
+    successful observation's canonical path and digest before calling it content-proven.
+    """
+    s = str(path)
+    return s in {"workspace", "/workspace"} or s.startswith(("workspace/", "/workspace/"))
 
 
 def _choose_alternative(
@@ -1834,6 +1854,7 @@ def _agent_declared_expected(
 
     obs_success: dict[str, bool] = {}
     obs_content: dict[str, Any] = {}
+    obs_structured: dict[str, Any] = {}
     err_call_ids: set[str] = set()
     for e in events:
         kind = e.get("kind")
@@ -1843,6 +1864,7 @@ def _agent_declared_expected(
             if cid is not None:
                 obs_success[str(cid)] = bool(tr.get("success", True))
                 obs_content[str(cid)] = tr.get("content")
+                obs_structured[str(cid)] = tr.get("structured")
         elif kind == "agent_error":
             tcid = _payload(e).get("tool_call_id")
             if tcid is not None:
@@ -1866,14 +1888,58 @@ def _agent_declared_expected(
         if cid in err_call_ids or not obs_success.get(cid, False):
             continue  # only a SUCCESSFUL, un-errored op is the agent's real state
         if name in _FILE_WRITE_FULL_TOOLS:
-            np = _norm_rel(str(args.get("path", "")))
+            raw_path = str(args.get("path", ""))
+            np = _norm_rel(raw_path)
+            content = args.get("content")
+            structured = obs_structured.get(cid)
+            observed_path: str | None = None
+            observed_sha: str | None = None
+            if isinstance(structured, dict):
+                spath = structured.get("path")
+                ssha = structured.get("sha256")
+                if isinstance(spath, str) and spath:
+                    observed_path = _norm_rel(spath)
+                if isinstance(ssha, str) and _RAW_SHA256_RE.fullmatch(ssha):
+                    observed_sha = ssha.lower()
+
+            # A structured result is the product's post-resolution write receipt.  It may
+            # legitimately canonicalize `/workspace/x` to `x`, but it must never redirect
+            # the action to another declared path or contradict the bytes in the action.
+            # Any contradiction records BOTH implicated declared paths as mutated-but-
+            # unproven so an older precise SHA cannot survive the bad receipt.
+            if isinstance(structured, dict):
+                implicated = {p for p in (np, observed_path) if p in want}
+                action_sha = (
+                    hashlib.sha256(content.encode("utf-8")).hexdigest()
+                    if isinstance(content, str) and not _ELISION_MARKER_RE.search(content)
+                    else None
+                )
+                receipt_valid = (
+                    observed_path is not None
+                    and observed_path == np
+                    and observed_sha is not None
+                    and action_sha is not None
+                    and action_sha == observed_sha
+                )
+                if receipt_valid and np in want:
+                    last_mut[np] = (seq, "sha", observed_sha)
+                elif implicated:
+                    for implicated_path in implicated:
+                        last_mut[implicated_path] = (seq, "present", None)
+                continue
+
             if np not in want:
                 continue
-            content = args.get("content")
-            if isinstance(content, str) and not _ELISION_MARKER_RE.search(content):
+            if (
+                not _needs_resolved_write_proof(raw_path)
+                and isinstance(content, str)
+                and not _ELISION_MARKER_RE.search(content)
+            ):
+                # Backward compatibility for older relative-path events recorded before
+                # successful mutators emitted structured path/SHA receipts.
                 sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
                 last_mut[np] = (seq, "sha", sha)
-            else:  # elided/unknown bytes → a content-unprovable mutation
+            else:  # missing receipt for an alias, elided bytes, or unknown bytes
                 last_mut[np] = (seq, "present", None)
         elif name in _FILE_WRITE_PARTIAL_TOOLS:
             np = _norm_rel(str(args.get("path", "")))
