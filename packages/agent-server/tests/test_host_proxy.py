@@ -4,6 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import disco.agent_server.host_proxy as host_proxy_module
 import httpx
 import pytest
 import uvicorn
@@ -83,6 +84,28 @@ class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(
             json.dumps({"path": self.path, "method": "POST", "body": body.decode()}).encode()
         )
+
+
+class FailingPublishedClient:
+    """httpx-compatible client whose outbound transport always fails."""
+
+    def __init__(
+        self,
+        *,
+        message: str = "synthetic published transport failure",
+        error_type: type[httpx.RequestError] = httpx.ConnectError,
+    ) -> None:
+        self.calls = 0
+        self.message = message
+        self.error_type = error_type
+
+    def build_request(self, method, url, *, headers, content):
+        return httpx.Request(method, url, headers=headers, content=content)
+
+    async def send(self, request, *, stream):
+        assert stream is True
+        self.calls += 1
+        raise self.error_type(self.message, request=request)
 
 
 @pytest.fixture(scope="module")
@@ -367,11 +390,6 @@ async def test_proxy_disconnect_never_forwards_a_truncated_mutation() -> None:
 
 @pytest.mark.asyncio
 async def test_connect_retry_never_replays_mutations(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def downstream(scope, receive, send):
-        raise AssertionError((scope, receive, send))
-
-    proxy = HostPreviewProxyMiddleware(downstream, upstream_resolver=lambda *_args: None)
-
     async def no_sleep(_seconds: float) -> None:
         return None
 
@@ -394,18 +412,23 @@ async def test_connect_retry_never_replays_mutations(monkeypatch: pytest.MonkeyP
             sent.append(message)
 
         request = httpx.Request(method, "http://127.0.0.1:1/action")
-        result = await proxy._send_with_connect_retry(client, request, send)  # noqa: SLF001
+        result, error, attempts = await host_proxy_module._send_with_connect_retry(  # noqa: SLF001
+            client, request
+        )
         assert result is None
+        assert isinstance(error, httpx.ConnectError)
+        assert attempts == client.calls
+        assert sent == []
         return client.calls, sent
 
     for method in ("POST", "PUT", "PATCH", "DELETE"):
         calls, sent = await run(method)
         assert calls == 1
-        assert sent[0]["status"] == 502
+        assert sent == []
 
     calls, sent = await run("GET")
     assert calls == 5
-    assert sent[0]["status"] == 502
+    assert sent == []
 
 
 @pytest.mark.asyncio
@@ -500,6 +523,249 @@ async def test_in_sandbox_get_fallback_never_converts_a_mutation_to_get() -> Non
         assert get.status_code == 200
         assert get.text == "inside GET"
         assert session.calls == [(8000, "asset.js")]
+
+
+@pytest.mark.asyncio
+async def test_published_get_exhaustion_uses_authenticated_session_fallback_once(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, str]] = []
+
+        async def fetch_inside(self, port: int, path: str):
+            self.calls.append((port, path))
+            return 200, b"authenticated fallback", "text/plain"
+
+    failing_client = FailingPublishedClient(
+        message=(
+            "https://private.invalid/asset.js?token=super-secret "
+            "Authorization: Bearer super-secret"
+        )
+    )
+    monkeypatch.setattr(host_proxy_module, "_get_client", lambda: failing_client)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    caplog.set_level("WARNING", logger="disco.agent_server.host_proxy")
+
+    session = Session()
+    resolver_calls: list[tuple[str, str | None]] = []
+
+    def session_resolver(cid8: str, owner_id: str | None):
+        resolver_calls.append((cid8, owner_id))
+        return session
+
+    store = SqliteEventStore(":memory:")
+    inner = Starlette()
+    app = HostPreviewProxyMiddleware(
+        inner,
+        upstream_resolver=lambda *_args: "http://published.invalid:8000",
+        session_resolver=session_resolver,
+        require_capability=True,
+        redemption_store=store,
+    )
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    auth_session = AuthSession(
+        owner_id="owner-fallback",
+        csrf_token="csrf",
+        session_id="session",
+        expires_at=2**31,
+    )
+    intent = signer.mint_intent(
+        session=auth_session,
+        conversation_id="conv_aaaaaaaafull",
+        port=8000,
+        target_path="/asset.js?mode=proof",
+        allow_websocket=False,
+        http_methods=("GET",),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://p2-aaaaaaaa-8000.localhost",
+    ) as client:
+        redemption = await client.post(PREVIEW_BOOTSTRAP_PATH, data={"intent": intent})
+        assert redemption.status_code == 200
+        capability_cookie = redemption.headers["set-cookie"].split(";", 1)[0]
+        response = await client.get(
+            "/asset.js?mode=proof",
+            headers={"Cookie": capability_cookie},
+        )
+
+    assert response.status_code == 200
+    assert response.text == "authenticated fallback"
+    assert failing_client.calls == 5
+    assert resolver_calls == [("aaaaaaaa", "owner-fallback")]
+    assert session.calls == [(8000, "asset.js?mode=proof")]
+    published_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if "published upstream transport exhausted" in record.getMessage()
+    ]
+    assert published_logs == [
+        "preview published upstream transport exhausted attempts=5 "
+        "category=connect class=ConnectError in_session_fallback=success"
+    ]
+    assert "super-secret" not in "\n".join(record.getMessage() for record in caplog.records)
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_published_and_session_failure_emit_one_sanitized_502(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    long_connect_error = type("C" * 100, (httpx.ConnectError,), {})
+    failing_client = FailingPublishedClient(
+        message=(
+            "https://private.invalid/?token=super-secret "
+            "Cookie: disco_preview_cap=super-secret"
+        ),
+        error_type=long_connect_error,
+    )
+    monkeypatch.setattr(host_proxy_module, "_get_client", lambda: failing_client)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    caplog.set_level("WARNING", logger="disco.agent_server.host_proxy")
+
+    class BrokenSession:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_inside(self, _port: int, _path: str):
+            self.calls += 1
+            raise RuntimeError(
+                "Authorization: Bearer fallback-secret https://inside.invalid/private"
+            )
+
+    session = BrokenSession()
+    proxy = HostPreviewProxyMiddleware(
+        Starlette(),
+        upstream_resolver=lambda *_args: "http://published.invalid:8000",
+        session_resolver=lambda *_args: session,
+    )
+    response_statuses: list[int] = []
+
+    async def observed_app(scope, receive, send):
+        async def observed_send(message):
+            if message.get("type") == "http.response.start":
+                response_statuses.append(message["status"])
+            await send(message)
+
+        await proxy(scope, receive, observed_send)
+
+    transport = httpx.ASGITransport(app=observed_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://p2-aaaaaaaa-8000.localhost",
+    ) as client:
+        response = await client.get("/private?token=request-secret")
+
+    assert response.status_code == 502
+    assert response.text == "preview upstream unreachable"
+    assert response_statuses == [502]
+    assert failing_client.calls == 5
+    assert session.calls == 1
+
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert (
+        "preview in-session fallback failed category=internal class=RuntimeError" in logs
+    )
+    assert (
+        "preview published upstream transport exhausted attempts=5 category=connect "
+        f"class={'C' * 64} in_session_fallback=unavailable" in logs
+    )
+    assert "C" * 65 not in logs
+    for secret_fragment in (
+        "super-secret",
+        "fallback-secret",
+        "request-secret",
+        "Authorization",
+        "Cookie",
+        "https://",
+    ):
+        assert secret_fragment not in logs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def test_published_non_get_failure_never_uses_session_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    failing_client = FailingPublishedClient()
+    monkeypatch.setattr(host_proxy_module, "_get_client", lambda: failing_client)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    session_resolver_calls: list[str] = []
+
+    def session_resolver(cid8: str):
+        session_resolver_calls.append(cid8)
+        raise AssertionError("non-GET fallback must stay fail-closed")
+
+    app = HostPreviewProxyMiddleware(
+        Starlette(),
+        upstream_resolver=lambda *_args: "http://published.invalid:8000",
+        session_resolver=session_resolver,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://p2-aaaaaaaa-8000.localhost",
+    ) as client:
+        response = await client.request(method, "/action", content=b"must not be replayed")
+
+    assert response.status_code == 502
+    assert session_resolver_calls == []
+    expected_attempts = 5 if method in {"HEAD", "OPTIONS"} else 1
+    assert failing_client.calls == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_published_novnc_failure_does_not_bypass_in_session_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from disco.tools.sandbox._container import NOVNC_PORT
+
+    failing_client = FailingPublishedClient()
+    monkeypatch.setattr(host_proxy_module, "_get_client", lambda: failing_client)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    resolver_calls: list[str] = []
+
+    def session_resolver(cid8: str):
+        resolver_calls.append(cid8)
+        raise AssertionError("noVNC must never reach the in-session fallback")
+
+    app = HostPreviewProxyMiddleware(
+        Starlette(),
+        upstream_resolver=lambda *_args: f"http://published.invalid:{NOVNC_PORT}",
+        session_resolver=session_resolver,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=f"http://p2-aaaaaaaa-{NOVNC_PORT}.localhost",
+    ) as client:
+        response = await client.get("/vnc.html")
+
+    assert response.status_code == 502
+    assert failing_client.calls == 5
+    assert resolver_calls == []
 
 
 @pytest.mark.asyncio

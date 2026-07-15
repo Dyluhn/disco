@@ -66,6 +66,7 @@ _CONNECT_BACKOFF_BASE = 0.05  # 50ms
 _CONNECT_BACKOFF_FACTOR = 2.0
 _CONNECT_BACKOFF_CAP = 0.4  # 400ms
 MAX_PREVIEW_REQUEST_BODY_BYTES = 1024 * 1024
+_EXCEPTION_CLASS_MAX_CHARS = 64
 # Total backoff across all failed attempts: 50+100+200+400 = 750ms (well under 2s).
 
 _client: httpx.AsyncClient | None = None
@@ -80,6 +81,59 @@ def _get_client() -> httpx.AsyncClient:
             trust_env=False,
         )
     return _client
+
+
+async def _send_with_connect_retry(
+    client: httpx.AsyncClient,
+    req: httpx.Request,
+) -> tuple[httpx.Response | None, httpx.RequestError | None, int]:
+    """Send one request with bounded retries for transport failures only.
+
+    A real HTTP response, including 5xx, is returned immediately. Mutations are
+    never replayed. The caller owns final error emission so the host middleware
+    can try its authenticated in-session GET path before producing one 502.
+    """
+
+    last_err: httpx.RequestError | None = None
+    attempts = _CONNECT_RETRY_ATTEMPTS if req.method.upper() in {"GET", "HEAD", "OPTIONS"} else 1
+    for attempt in range(attempts):
+        try:
+            return await client.send(req, stream=True), None, attempt + 1
+        except httpx.RequestError as error:
+            last_err = error
+            if attempt < attempts - 1:
+                wait = min(
+                    _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR**attempt),
+                    _CONNECT_BACKOFF_CAP,
+                )
+                await asyncio.sleep(wait)
+    return None, last_err, attempts
+
+
+def _sanitized_exception_class(error: BaseException | None) -> str:
+    """Return a bounded identifier, never the exception message or request data."""
+
+    if error is None:
+        return "UnknownError"
+    raw_name = type(error).__name__
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", raw_name)
+    return (safe_name or "UnknownError")[:_EXCEPTION_CLASS_MAX_CHARS]
+
+
+def _exception_category(error: BaseException | None) -> str:
+    """Classify failures without serializing potentially sensitive exceptions."""
+
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
+        return "timeout"
+    if isinstance(error, httpx.ConnectError):
+        return "connect"
+    if isinstance(error, httpx.ProtocolError):
+        return "protocol"
+    if isinstance(error, httpx.RequestError):
+        return "request"
+    if isinstance(error, (ConnectionError, OSError)):
+        return "io"
+    return "internal"
 
 
 def _cookie_values(scope: Scope, name: str) -> tuple[str, ...]:
@@ -234,10 +288,10 @@ class HostPreviewProxyMiddleware:
         self.require_capability = require_capability
         # Fix 2 (codex P1): cid8 -> live SandboxSession (or None). On sealed/filtered
         # backends the hostname proxy gets NO host upstream even while the dev server
-        # is up, so the canonical in-app iframe 503s "available-then-broken". When a
-        # live session exists we fall back to a liveness proxy (curl INSIDE the box)
-        # so the iframe shows the built result on every backend. None ⇒ no fallback
-        # (behaviour byte-identical to before this fix).
+        # is up, so the canonical in-app iframe 503s "available-then-broken". The same
+        # authenticated liveness proxy (curl INSIDE the box) is also the final GET
+        # path after a published upstream exhausts its bounded transport retries.
+        # None ⇒ no fallback (behaviour byte-identical to before this fix).
         self.session_resolver = session_resolver
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -429,7 +483,15 @@ class HostPreviewProxyMiddleware:
             return
 
         if scope["type"] == "http":
-            await self._proxy_http(scope, receive, send, upstream)
+            await self._proxy_http(
+                scope,
+                receive,
+                send,
+                upstream,
+                cid8=cid8,
+                port=port,
+                owner_id=cap_owner_id,
+            )
         elif scope["type"] == "websocket":
             await self._proxy_websocket(scope, receive, send, upstream)
 
@@ -548,53 +610,6 @@ class HostPreviewProxyMiddleware:
         )
         await send({"type": "http.response.body", "body": response_body})
 
-    async def _send_with_connect_retry(
-        self,
-        client: httpx.AsyncClient,
-        req: httpx.Request,
-        send: Send,
-    ) -> httpx.Response | None:
-        """Send `req`, retrying on connect/transport errors (httpx.RequestError).
-
-        A successful HTTP response — even one with a 5xx status — is returned
-        on the first attempt that produces one, so the proxy adds ZERO extra
-        latency to a healthy upstream and does NOT retry on a legitimate
-        upstream error. Only transport-level failures (connect refused, RST,
-        read timeout mid-handshake) trigger the bounded backoff loop.
-
-        Returns the response on success, or None after sending a final 502 to
-        the client when all attempts are exhausted.
-        """
-        last_err: Exception | None = None
-        attempts = (
-            _CONNECT_RETRY_ATTEMPTS if req.method.upper() in {"GET", "HEAD", "OPTIONS"} else 1
-        )
-        for attempt in range(attempts):
-            try:
-                return await client.send(req, stream=True)
-            except httpx.RequestError as e:
-                last_err = e
-                if attempt < attempts - 1:
-                    wait = min(
-                        _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR**attempt),
-                        _CONNECT_BACKOFF_CAP,
-                    )
-                    await asyncio.sleep(wait)
-        _LOG.warning(
-            "upstream connect failed after %d attempts: %s",
-            attempts,
-            last_err,
-        )
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 502,
-                "headers": [(b"content-type", b"text/plain")],
-            }
-        )
-        await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
-        return None
-
     async def _proxy_http_via_session(
         self,
         scope: Scope,
@@ -603,9 +618,11 @@ class HostPreviewProxyMiddleware:
         port: int,
         owner_id: str | None,
     ) -> bool:
-        """Fix 2 (codex P1) — fall back to the in-sandbox liveness proxy when there's
-        no published host upstream. Returns True iff the live in-box server answered
-        (response already sent); False to let the caller emit the honest 503. GET only."""
+        """Use the in-sandbox liveness proxy when the published path is unavailable.
+
+        Returns True iff the live in-box server answered (response already sent),
+        otherwise False so the caller can emit its honest 502/503. GET only.
+        """
         # SECURITY (noVNC gate-bypass fix): NOVNC_PORT is in USER_PORTS, so a hostname
         # like p2-{cid8}-6080.localhost reaches here when the upstream resolver returns
         # None. For 6080 that None is the live-browser GATE (port_upstream refuses
@@ -621,10 +638,18 @@ class HostPreviewProxyMiddleware:
         if resolver is None:
             return False
         try:
-            try:
+            if owner_id is not None:
+                # A capability-gated fallback must preserve the authenticated
+                # owner lookup. Never downgrade a resolver failure to an
+                # unowned cid-prefix lookup.
                 session_res = resolver(cid8, owner_id)
-            except TypeError:
-                session_res = resolver(cid8)
+            else:
+                try:
+                    inspect.signature(resolver).bind(cid8, owner_id)
+                except (TypeError, ValueError):
+                    session_res = resolver(cid8)
+                else:
+                    session_res = resolver(cid8, owner_id)
             session = await session_res if inspect.isawaitable(session_res) else session_res
             if session is None:
                 return False
@@ -634,7 +659,12 @@ class HostPreviewProxyMiddleware:
             if query_string:
                 rel = f"{rel}?{query_string}"
             got = await session.fetch_inside(port, rel)  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001 — a liveness probe must never 500 the iframe
+        except Exception as error:  # noqa: BLE001 — a liveness probe must never 500 the iframe
+            _LOG.warning(
+                "preview in-session fallback failed category=%s class=%s",
+                _exception_category(error),
+                _sanitized_exception_class(error),
+            )
             return False
         if got is None:
             return False
@@ -815,7 +845,17 @@ class HostPreviewProxyMiddleware:
             }
         )
 
-    async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
+    async def _proxy_http(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        upstream: str,
+        *,
+        cid8: str,
+        port: int,
+        owner_id: str | None,
+    ) -> None:
         client = _get_client()
 
         path = scope.get("path", "")
@@ -876,9 +916,38 @@ class HostPreviewProxyMiddleware:
             return
 
         req = client.build_request(method, url, headers=headers, content=body)
-        res = await self._send_with_connect_retry(client, req, send)
+        res, transport_error, attempts = await _send_with_connect_retry(client, req)
         if res is None:
-            # All connect attempts failed; 502 already sent.
+            fallback_result = "not_attempted"
+            if str(method).upper() == "GET":
+                fallback_succeeded = await self._proxy_http_via_session(
+                    scope,
+                    send,
+                    cid8,
+                    port,
+                    owner_id,
+                )
+                fallback_result = "success" if fallback_succeeded else "unavailable"
+            _LOG.warning(
+                "preview published upstream transport exhausted attempts=%d "
+                "category=%s class=%s in_session_fallback=%s",
+                attempts,
+                _exception_category(transport_error),
+                _sanitized_exception_class(transport_error),
+                fallback_result,
+            )
+            if fallback_result == "success":
+                return
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 502,
+                    "headers": [(b"content-type", b"text/plain")],
+                }
+            )
+            await send(
+                {"type": "http.response.body", "body": b"preview upstream unreachable"}
+            )
             return
 
         # aclose in finally: a client disconnect mid-stream raises out of send()

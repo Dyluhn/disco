@@ -23,6 +23,10 @@ import {
   restartReliabilityStack,
   type EventJson,
 } from "./reliability-helpers";
+import {
+  ISOLATED_PREVIEW_PREFIX,
+  isIsolatedPreviewUrl,
+} from "@/lib/harness/previewUrlOracle";
 import { latestStoppedStatus } from "@/lib/harness/terminalConversationStatus";
 
 type Surface = "build" | "agent";
@@ -39,7 +43,6 @@ const SECOND_MARKER = "SELECTED RELEASE TWO";
 const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
 const SERVICE_WORKER_MARKER = "RELIABILITY SERVICE WORKER";
 const NESTED_MARKER = "NESTED ROUTE LOADED";
-const ISOLATED_PREVIEW_PREFIX = "/__disco/isolated-preview";
 const PROVIDER_CONVERSATION_MANIFEST_ENV =
   "DISCO_RELIABILITY_PROVIDER_CONVERSATION_MANIFEST";
 const BACKGROUND = "rgb(12, 34, 56)";
@@ -835,14 +838,20 @@ test("Build and Agent open the selected multi-file manifest across restart and r
 
   const consoleErrors: string[] = [];
   const failedPreviewRequests: string[] = [];
+  const isolatedPreviewHttpFailures: string[] = [];
   const previewBearers: string[] = [];
   const observe = (candidate: Page) => {
     candidate.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
     candidate.on("requestfailed", (failed) => {
-      if (failed.url().includes(`${ISOLATED_PREVIEW_PREFIX}/`)) {
+      if (isIsolatedPreviewUrl(failed.url())) {
         failedPreviewRequests.push(`${failed.url()}: ${failed.failure()?.errorText ?? "unknown"}`);
+      }
+    });
+    candidate.on("response", (response) => {
+      if (isIsolatedPreviewUrl(response.url()) && response.status() >= 500) {
+        isolatedPreviewHttpFailures.push(`${response.status()} ${response.url()}`);
       }
     });
   };
@@ -933,10 +942,17 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     const safeFailedPreviewRequests = failedPreviewRequests.map((message) =>
       redactPreviewBearers(message, previewBearers),
     );
+    const safeIsolatedPreviewHttpFailures = isolatedPreviewHttpFailures.map((message) =>
+      redactPreviewBearers(message, previewBearers),
+    );
     expect(safeConsoleErrors, `browser console errors: ${JSON.stringify(safeConsoleErrors)}`).toEqual([]);
     expect(
       safeFailedPreviewRequests,
       `failed preview requests: ${JSON.stringify(safeFailedPreviewRequests)}`,
+    ).toEqual([]);
+    expect(
+      safeIsolatedPreviewHttpFailures,
+      `isolated preview HTTP 5xx responses: ${JSON.stringify(safeIsolatedPreviewHttpFailures)}`,
     ).toEqual([]);
 
     const evidence = {
@@ -960,6 +976,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
       iframe_responses: iframeResponses,
       console_errors: safeConsoleErrors,
       failed_preview_requests: safeFailedPreviewRequests,
+      isolated_preview_http_failures: safeIsolatedPreviewHttpFailures,
     };
     fs.writeFileSync(
       testInfo.outputPath("preview-manifest-assets-evidence.json"),
