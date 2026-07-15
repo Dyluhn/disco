@@ -31,7 +31,6 @@ The host running this backend needs the `podman` CLI + system `ssh` on PATH.
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 import io
 import logging
@@ -417,19 +416,27 @@ class PodmanSandboxService:
         return self._client_cache
 
     def _sidecar_cli_run(
-        self, sidecar_name: str, argv: list[str], timeout: float
+        self,
+        sidecar_name: str,
+        argv: list[str],
+        timeout: float,
+        *,
+        detach: bool = False,
     ) -> tuple[int, bytes, bytes]:
-        """[E8] One-shot CLI exec on the proxy SIDECAR. Reuses the same CLI runner
+        """CLI exec on the proxy sidecar, optionally using Podman's native detach.
+
+        Reuses the same CLI runner
         as the sandbox (`self._cli_runner`) so the sidecar goes through the proven
         `podman --url ssh://…//socket exec` path — podman-py's native `exec_run`
-        is broken over the remote API (per the backend's transport-split note in
-        its module docstring), so the CLI is the only correct way to do one-shot
-        commands on a remote podman container. The sandbox instance has a
-        `self._exec` helper; the sidecar lives one container over, so we just
-        call the runner directly with the sidecar's name."""
-        return self._cli_runner(
-            ["podman", "--url", self._cli_url, "exec", sidecar_name, *argv], timeout
-        )
+        is broken over the remote API. Long-lived daemons MUST use native
+        ``exec --detach``: shell ``&`` returns after spawning a child whose
+        lifetime is not owned by the Podman exec session and can be reaped.
+        """
+        command = ["podman", "--url", self._cli_url, "exec"]
+        if detach:
+            command.append("--detach")
+        command.extend([sidecar_name, *argv])
+        return self._cli_runner(command, timeout)
 
     @staticmethod
     def _best_effort_cleanup(*, egress_network: Any, egress_sidecar: Any) -> None:
@@ -559,8 +566,9 @@ class PodmanSandboxService:
                 15,
             )
             # Inject the proxy script (put_archive works over the podman remote, per
-            # the backend docstring). Launch it in the background via the CLI runner
-            # — podman-py's `exec_run` is broken, the CLI is the correct path.
+            # the backend docstring). Native detached exec owns the long-lived
+            # process; the shell is replaced by Python instead of abandoning an
+            # ``&`` child that Podman may reap.
             script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w") as tar:
@@ -585,8 +593,14 @@ class PodmanSandboxService:
             )
             self._sidecar_cli_run(
                 sidecar.name,
-                ["sh", "-c", f"{shlex.join(argv)} >/var/log/egress.log 2>&1 &"],
+                [
+                    "sh",
+                    "-c",
+                    f"exec {shlex.join(argv)} >/var/log/egress.log "
+                    "2>/var/log/egress.err.log",
+                ],
                 10,
+                detach=True,
             )
             ready_rc, _ready_out, _ready_err = self._sidecar_cli_run(
                 sidecar.name, proxy_readiness_argv(EGRESS_PROXY_PORT), 10
@@ -630,8 +644,9 @@ class PodmanSandboxService:
         argv = relay_run_argv(self._cfg.host_service_upstream, authority)
         self._sidecar_cli_run(
             sidecar.name,
-            ["sh", "-c", f"{shlex.join(argv)} >/dev/null 2>&1 &"],
+            ["sh", "-c", f"exec {shlex.join(argv)} >/dev/null 2>/dev/null"],
             10,
+            detach=True,
         )
         ready_rc, _out, _err = self._sidecar_cli_run(
             sidecar.name, relay_readiness_argv(sidecar_ip), 10
@@ -651,17 +666,18 @@ class PodmanSandboxService:
         `host:PORT -> <sandbox_ip>:PORT`. Transparent byte pipe → websockets / Vite HMR
         pass through; the sandbox keeps zero direct egress.
 
-        Best-effort: on ANY failure the preview is unreachable but the box still works
-        (the agent-server surfaces the honest no-URL state), so we never raise here and
-        leak the just-started sandbox.
+        Fail closed: a published sidecar binding without this forwarder is a false
+        availability signal for both preview and the internal kernel transport.  The
+        caller owns complete sandbox/sidecar/network/volume cleanup on any exception.
 
-        Delivery mirrors gVisor's FIX6 (base64 ONE-SHELL — write + run share a process,
-        so there is no cross-exec gofer-visibility gap), but launched via the CLI runner
-        (`_sidecar_cli_run`): podman-py's `exec_run` is broken over the remote API, so the
-        `podman --url … exec` path is the only correct one-shot. It is backgrounded with
-        `&` (the podman exec returns, the forwarder keeps running) — the same launch
-        pattern the egress proxy uses above; gVisor instead relies on docker's
-        `exec_run(detach=True)`."""
+        Podman's archive API is the proven binary-safe injection path used by the
+        egress proxy.  Use it here too: a live Podman remote accepted a 7.4-KiB
+        inline-base64 detached exec and returned an exec id while silently never
+        starting the command.  The subsequent short native ``exec --detach`` is
+        bounded by an active listener-readiness probe.  A dead published transport
+        fails sandbox creation instead of returning a knowingly broken preview/kernel
+        path.  gVisor retains its separate docker ``exec_run(detach=True)`` delivery.
+        """
         try:
             container.reload()
             sbx_ip = (
@@ -671,29 +687,70 @@ class PodmanSandboxService:
                 .get("IPAddress", "")
             )
             if not sbx_ip:
-                _LOG.warning(
-                    "filtered sandbox has no internal IP on %s; preview unreachable", net_name
+                raise SandboxUnavailableError(
+                    "filtered sandbox has no internal address; refusing dead inbound transport"
                 )
-                return
             script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
-            b64 = base64.b64encode(script).decode("ascii")
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                info = tarfile.TarInfo(name="inbound_forward.py")
+                info.size = len(script)
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(script))
+            if not sidecar.put_archive("/", buf.getvalue()):
+                raise SandboxUnavailableError(
+                    "failed to inject inbound transport forwarder; refusing sandbox start"
+                )
             ports_arg = " ".join(str(p) for p in sorted(PUBLISHED_PORTS))
-            self._sidecar_cli_run(
+            launch_rc, _launch_out, _launch_err = self._sidecar_cli_run(
                 sidecar.name,
                 [
                     "sh",
                     "-c",
-                    f"echo {b64} | base64 -d > /inbound_forward.py && "
-                    f"python3 /inbound_forward.py {sbx_ip} {ports_arg} "
-                    f">/var/log/inbound.log 2>&1 &",
+                    f"exec python3 /inbound_forward.py {sbx_ip} {ports_arg} "
+                    ">/var/log/inbound.log 2>/var/log/inbound.err.log",
                 ],
                 15,
+                detach=True,
             )
-        except Exception:  # noqa: BLE001 — best-effort; preview unreachable, box still works
-            _LOG.warning(
-                "failed to launch the inbound preview forwarder on the egress sidecar",
-                exc_info=True,
+            if launch_rc != 0:
+                raise SandboxUnavailableError(
+                    "inbound transport forwarder launch failed; refusing sandbox start"
+                )
+
+            # Native detached exec returns before the service binds.  Prove every
+            # published listener inside the sidecar with one bounded guest probe;
+            # loopback connects do not grant the sandbox any egress capability.
+            readiness_code = (
+                "import socket,sys,time\n"
+                f"ports={list(sorted(PUBLISHED_PORTS))!r}\n"
+                "deadline=time.monotonic()+5\n"
+                "def ready():\n"
+                "    for port in ports:\n"
+                "        with socket.socket() as sock:\n"
+                "            sock.settimeout(0.2)\n"
+                "            if sock.connect_ex(('127.0.0.1', port)) != 0:\n"
+                "                return False\n"
+                "    return True\n"
+                "while time.monotonic() < deadline:\n"
+                "    if ready():\n"
+                "        sys.exit(0)\n"
+                "    time.sleep(0.1)\n"
+                "sys.exit(1)\n"
             )
+            ready_rc, _ready_out, _ready_err = self._sidecar_cli_run(
+                sidecar.name, ["python3", "-c", readiness_code], 7
+            )
+            if ready_rc != 0:
+                raise SandboxUnavailableError(
+                    "inbound transport forwarder failed readiness; refusing sandbox start"
+                )
+        except SandboxUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — fixed diagnostic, cleanup owned by caller
+            raise SandboxUnavailableError(
+                "inbound transport forwarder setup failed; refusing sandbox start"
+            ) from exc
 
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
@@ -800,9 +857,9 @@ class PodmanSandboxService:
                 detach=True,
             )
             container.start()
-            # [FIX6 parity] sandbox is up + on the internal net — launch the inbound
-            # preview forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT).
-            # Best-effort: never raises, so it can't leak the just-started box.
+            # [FIX6 parity] sandbox is up + on the internal net — launch and prove
+            # the inbound forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT).
+            # A failure raises into this block's complete resource cleanup.
             if mode in {"filtered", "public"} and egress_sidecar is not None:
                 self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
             return (

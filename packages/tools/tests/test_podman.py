@@ -164,8 +164,7 @@ class FakePodmanClient:
 
 
 class FakeCli:
-    """Stands in for `podman --url … exec …`. cat/ls/mkdir against the shared FS;
-    queued results for shell (timeout-wrapped) commands."""
+    """Stands in for native Podman exec, including ``exec --detach NAME``."""
 
     def __init__(self, fs: dict[str, bytes]) -> None:
         self.fs = fs
@@ -174,7 +173,8 @@ class FakeCli:
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
-        rest = argv[5:]  # after ["podman","--url",url,"exec",name]
+        container_index = 5 if argv[4] == "--detach" else 4
+        rest = argv[container_index + 1 :]
         if rest[0] == "realpath":
             return (0, f"{rest[-1]}\n".encode(), b"")
         if rest[0] == "python3" and "DISCO_READ_" in rest[2]:
@@ -232,13 +232,17 @@ class FakeCli:
         return (0, b"ok\n", b"")
 
 
-def _svc(has_image: bool = True) -> tuple[PodmanSandboxService, FakePodmanClient, FakeCli]:
+def _svc(
+    has_image: bool = True, *, with_sandbox_ip: bool = True
+) -> tuple[PodmanSandboxService, FakePodmanClient, FakeCli]:
     fs: dict[str, bytes] = {}
     client = FakePodmanClient(has_image=has_image, fs=fs)
     cli = FakeCli(fs)
     svc = PodmanSandboxService(
         SandboxConfig(backend="podman", runtime="crun"), client=client, cli_runner=cli
     )
+    if with_sandbox_ip:
+        _wire_sandbox_ip(client, "10.89.0.7")
     return svc, client, cli
 
 
@@ -464,7 +468,9 @@ def _wire_sandbox_ip(client: FakePodmanClient, ip: str) -> None:
     def _create(**kwargs):
         c = orig(**kwargs)
         if kwargs.get("name", "").startswith("disco-sbx-"):
-            egr = next(x for x in client.created if x.name.startswith("disco-egr-"))
+            egr = next((x for x in client.created if x.name.startswith("disco-egr-")), None)
+            if egr is None:  # sealed sandbox: deliberately no sidecar/network
+                return c
             c.attrs = {"NetworkSettings": {"Networks": {egr.name: {"IPAddress": ip}}}}
         return c
 
@@ -487,6 +493,29 @@ async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
     assert "ports" not in client.last.create_kwargs
 
 
+async def test_podman_egress_proxy_uses_native_detached_exec_without_background_child():
+    svc, client, cli = _svc()
+    await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    sidecar = client.created[0]
+    launches = [call for call in cli.calls if "/egress_proxy.py" in " ".join(call)]
+    assert len(launches) == 1
+    argv = launches[0]
+    assert argv[:8] == [
+        "podman",
+        "--url",
+        svc._cli_url,
+        "exec",
+        "--detach",
+        sidecar.name,
+        "sh",
+        "-c",
+    ]
+    assert argv.count("--detach") == 1
+    shell_command = argv[8]
+    assert shell_command.startswith("exec python3 /egress_proxy.py ")
+    assert "&" not in shell_command
+
+
 async def test_podman_sealed_host_service_box_has_capability_only_relay():
     fs: dict[str, bytes] = {}
     client = FakePodmanClient(fs=fs)
@@ -505,6 +534,22 @@ async def test_podman_sealed_host_service_box_has_capability_only_relay():
     assert sandbox.create_kwargs["networks"] == {net.name: {}}
     assert "/capability_relay.py" in fs
     assert inst.host_service_relay_url == f"http://{net.name}:3211"
+    relay_launches = [call for call in cli.calls if "/capability_relay.py" in " ".join(call)]
+    assert len(relay_launches) == 1
+    relay_argv = relay_launches[0]
+    assert relay_argv[:8] == [
+        "podman",
+        "--url",
+        svc._cli_url,
+        "exec",
+        "--detach",
+        sidecar.name,
+        "sh",
+        "-c",
+    ]
+    assert relay_argv.count("--detach") == 1
+    assert relay_argv[8].startswith("exec python3 /capability_relay.py ")
+    assert "&" not in relay_argv[8]
     await inst.destroy()
     assert sidecar.removed and net.removed
 
@@ -533,39 +578,53 @@ async def test_podman_relay_failure_fails_creation_and_cleans_sidecar():
     assert len(client.created) == 1
 
 
-async def test_inbound_forwarder_launched_on_sidecar_via_cli_one_shell():
+async def test_inbound_forwarder_uses_native_detached_exec_without_background_child():
     from disco.tools.sandbox._container import PUBLISHED_PORTS
 
     svc, client, cli = _svc()
     _wire_sandbox_ip(client, "10.89.0.7")
     await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
-    # The forwarder is launched on the SIDECAR via the CLI native remote
-    # (`podman --url … exec <sidecar> sh -c …`) — podman-py exec_run is broken over
-    # the remote API. The command shape mirrors gVisor's FIX6 base64 ONE-SHELL.
+    assert "/inbound_forward.py" in client.fs
+    assert client.fs["/inbound_forward.py"], "the forwarder must be archive-injected"
+    # The forwarder is launched on the SIDECAR via native detached CLI exec.
+    # Podman's archive API carries the script; detached exec stays short enough
+    # for the native remote instead of silently dropping a 7-KiB inline payload.
     launched = [c for c in cli.calls if any("inbound_forward.py" in str(a) for a in c)]
     assert launched, "inbound forwarder was not launched on the sidecar"
     argv = launched[0]
     # Targets the SIDECAR (egress net name), via the proven CLI exec path.
-    assert argv[:4] == ["podman", "--url", svc._cli_url, "exec"]
-    assert argv[4].startswith("disco-egr-")
-    joined = " ".join(argv)
-    # base64 one-shell: write + run share one process (no cross-exec gofer gap).
-    assert "base64 -d > /inbound_forward.py" in joined, joined
-    assert "python3 /inbound_forward.py" in joined, joined
-    # backgrounded so the `podman exec` returns (the egress-proxy launch pattern).
-    assert joined.rstrip().endswith("&"), joined
+    assert argv[:8] == [
+        "podman",
+        "--url",
+        svc._cli_url,
+        "exec",
+        "--detach",
+        client.created[0].name,
+        "sh",
+        "-c",
+    ]
+    assert argv.count("--detach") == 1
+    assert argv[5].startswith("disco-egr-")
+    shell_command = argv[8]
+    assert shell_command.startswith("exec python3 /inbound_forward.py "), shell_command
+    assert "base64" not in shell_command
+    assert len(shell_command) < 512
+    assert "&" not in shell_command
     # targets the SANDBOX's internal IP + every published port.
-    assert "10.89.0.7" in joined, joined
+    assert "10.89.0.7" in shell_command, shell_command
     for port in sorted(PUBLISHED_PORTS):
-        assert str(port) in joined, f"port {port} missing: {joined}"
+        assert str(port) in shell_command, f"port {port} missing: {shell_command}"
 
 
 async def test_no_forwarder_without_sandbox_ip():
-    # No internal IP (reload returned nothing) → forwarder is NOT launched (it would
-    # forward to nowhere); best-effort, never raises.
-    svc, client, cli = _svc()  # sandbox attrs stay {} → no IP
-    await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
+    # No internal IP is a typed refusal, not a silently returned sandbox whose
+    # published transport can only reset connections. Partial resources are cleaned.
+    svc, client, cli = _svc(with_sandbox_ip=False)
+    with pytest.raises(SandboxUnavailableError, match="no internal address"):
+        await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
     assert not any("inbound_forward.py" in str(a) for c in cli.calls for a in c)
+    assert all(container.removed for container in client.created)
+    assert client.networks.created[0].removed
 
 
 async def test_expose_port_inherits_base_impl_no_stub():
