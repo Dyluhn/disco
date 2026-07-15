@@ -9,15 +9,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import codecs
 import contextlib
+import errno
+import hashlib
 import importlib
 import json
 import math
 import os
 import re
 import signal
+import stat
 import sys
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from collections import Counter
 from contextlib import asynccontextmanager
@@ -274,6 +279,7 @@ def _provider_evidence_result(
     expected_model: str,
     units: int,
     conversation_manifest_path: Path | None = None,
+    expected_conversations: int | None = None,
 ) -> tuple[str, int, str]:
     """Fail closed on absent, malformed, or fallback provider-call evidence."""
 
@@ -285,18 +291,23 @@ def _provider_evidence_result(
         if manifest_status != PASS:
             return manifest_status, 0, manifest_reason
 
-    if not path.is_file():
-        return INVALID, 0, "provider ledger was not produced"
+    ledger_data, ledger_file_reason = _read_private_regular_evidence_file(
+        path,
+        "provider ledger",
+    )
+    if ledger_file_reason is not None:
+        return INVALID, 0, ledger_file_reason
+    assert ledger_data is not None
     records: list[dict[str, Any]] = []
     try:
-        for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for line_number, raw in enumerate(ledger_data.decode("utf-8").splitlines(), 1):
             if not raw.strip():
                 continue
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 return INVALID, 0, f"provider ledger line {line_number} is not an object"
             records.append(parsed)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return INVALID, 0, f"provider ledger is unreadable: {type(exc).__name__}"
     if not records:
         return INVALID, 0, "provider ledger contains no calls"
@@ -345,22 +356,29 @@ def _provider_evidence_result(
         if has_tools:
             tool_conversations.add(conversation_id)
     if manifest_conversations is not None and conversations != manifest_conversations:
-        missing = sorted(manifest_conversations - conversations)
-        extra = sorted(conversations - manifest_conversations)
+        missing = len(manifest_conversations - conversations)
+        extra = len(conversations - manifest_conversations)
         details: list[str] = []
         if missing:
-            details.append(f"missing manifest conversation ID(s): {missing}")
+            details.append(f"missing {missing} manifest conversation ID(s)")
         if extra:
-            details.append(f"extra provider-ledger conversation ID(s): {extra}")
+            details.append(f"extra {extra} provider-ledger conversation ID(s)")
         return INVALID, 0, "; ".join(details)
     if manifest_conversations is not None:
-        without_tools = sorted(manifest_conversations - tool_conversations)
+        without_tools = len(manifest_conversations - tool_conversations)
         if without_tools:
             return (
                 INVALID,
                 0,
-                f"manifest conversation ID(s) have no tool-bearing provider call: {without_tools}",
+                f"{without_tools} manifest conversation ID(s) have no tool-bearing provider call",
             )
+    if expected_conversations is not None and len(conversations) != expected_conversations:
+        return (
+            INVALID,
+            0,
+            f"provider ledger covers {len(conversations)}/{expected_conversations} "
+            "required successful-suite conversation(s)",
+        )
     if len(conversations) < units:
         return (
             INVALID,
@@ -430,11 +448,16 @@ def _provider_conversation_manifest_result(
     empty: frozenset[str] = frozenset()
     if not path.is_absolute():
         return INVALID, empty, "provider conversation manifest path is not absolute"
-    if not path.is_file():
-        return INVALID, empty, "provider conversation manifest was not produced"
+    manifest_data, manifest_file_reason = _read_private_regular_evidence_file(
+        path,
+        "provider conversation manifest",
+    )
+    if manifest_file_reason is not None:
+        return INVALID, empty, manifest_file_reason
+    assert manifest_data is not None
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = json.loads(manifest_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return (
             INVALID,
             empty,
@@ -475,6 +498,41 @@ def _provider_conversation_manifest_result(
     return PASS, parsed, f"provider conversation manifest declares {len(parsed)} ID(s)"
 
 
+def _read_private_regular_evidence_file(
+    path: Path,
+    label: str,
+) -> tuple[bytes | None, str | None]:
+    """Open once with no-follow, validate that descriptor, and read from it."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+    except FileNotFoundError:
+        return None, f"{label} was not produced"
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENXIO}:
+            return None, f"{label} must be a regular non-symlink file"
+        return None, f"{label} metadata is unreadable: {type(exc).__name__}"
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return None, f"{label} must be a regular non-symlink file"
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            return None, f"{label} permissions must be 0600"
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 64 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks), None
+    except OSError as exc:
+        return None, f"{label} is unreadable: {type(exc).__name__}"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:
     if not path.is_file():
         return INFRA, 0, "fresh-device harness produced no result evidence"
@@ -509,19 +567,55 @@ def _fresh_device_fingerprint(path: Path) -> str | None:
     return None
 
 
+async def _wait_for_process_leader(process: asyncio.subprocess.Process) -> int:
+    """Wait for the leader only; pipe EOF may depend on longer-lived descendants."""
+
+    while process.returncode is None:
+        await asyncio.sleep(0.05)
+    return process.returncode
+
+
 async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
-        return
+    """Boundedly terminate the entire session, even if its leader already exited."""
+
     with contextlib.suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGTERM)
+    if process.returncode is None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(_wait_for_process_leader(process), timeout=10)
+
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+
+    if process.returncode is None:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(_wait_for_process_leader(process), timeout=2)
+
+
+def _close_subprocess_reader(reader: asyncio.StreamReader) -> None:
+    """Close the pipe transport so a detached descriptor holder cannot wedge drain."""
+
+    transport = getattr(reader, "_transport", None)
+    if transport is not None:
+        transport.close()
+
+
+def _process_group_exists(process: asyncio.subprocess.Process) -> bool:
     try:
-        await asyncio.wait_for(process.wait(), timeout=10)
-        return
-    except TimeoutError:
-        pass
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGKILL)
-    await process.wait()
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _suite_subprocess_environment(kind: str) -> dict[str, str]:
@@ -532,6 +626,133 @@ def _suite_subprocess_environment(kind: str) -> dict[str, str]:
         # process, so let Playwright own color policy for Playwright suites.
         env.pop("NO_COLOR", None)
     return env
+
+
+class _SuiteLogRenderer:
+    """Incrementally render UTF-8 evidence without active control characters."""
+
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="surrogateescape")
+        self._pending_cr = False
+
+    @staticmethod
+    def _render_character(character: str) -> bytes:
+        value = ord(character)
+        if character in {"\t", "\n"}:
+            return character.encode("ascii")
+        if 0xDC80 <= value <= 0xDCFF:
+            return f"\\x{value - 0xDC00:02x}".encode("ascii")
+        if unicodedata.category(character).startswith("C"):
+            if value <= 0xFF:
+                return f"\\x{value:02x}".encode("ascii")
+            if value <= 0xFFFF:
+                return f"\\u{value:04x}".encode("ascii")
+            return f"\\U{value:08x}".encode("ascii")
+        return character.encode("utf-8")
+
+    def feed(self, chunk: bytes, *, final: bool = False) -> bytes:
+        text = self._decoder.decode(chunk, final=final)
+        rendered = bytearray()
+        for character in text:
+            if self._pending_cr:
+                if character == "\n":
+                    rendered.extend(b"\r\n")
+                    self._pending_cr = False
+                    continue
+                rendered.extend(b"\\x0d")
+                self._pending_cr = False
+            if character == "\r":
+                self._pending_cr = True
+                continue
+            rendered.extend(self._render_character(character))
+        if final and self._pending_cr:
+            rendered.extend(b"\\x0d")
+            self._pending_cr = False
+        return bytes(rendered)
+
+
+def _sanitize_suite_log(path: Path) -> None:
+    """Atomically canonicalize an existing log using the streaming renderer."""
+
+    if not path.exists():
+        return
+    temporary = path.with_name(f".{path.name}.sanitize-{os.getpid()}")
+    try:
+        with path.open("rb") as source, temporary.open("xb") as target:
+            os.fchmod(target.fileno(), 0o600)
+            renderer = _SuiteLogRenderer()
+            while chunk := source.read(64 * 1024):
+                target.write(renderer.feed(chunk))
+            target.write(renderer.feed(b"", final=True))
+            target.flush()
+            os.fsync(target.fileno())
+        temporary.replace(path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+async def _stream_sanitized_suite_log(
+    reader: asyncio.StreamReader,
+    path: Path,
+) -> tuple[int, int, str]:
+    """Write only render-safe bytes, including while the child is still running."""
+
+    renderer = _SuiteLogRenderer()
+    digest = hashlib.sha256()
+    with path.open("xb") as target:
+        os.fchmod(target.fileno(), 0o600)
+        while chunk := await reader.read(64 * 1024):
+            rendered = renderer.feed(chunk)
+            target.write(rendered)
+            digest.update(rendered)
+            target.flush()
+        rendered = renderer.feed(b"", final=True)
+        target.write(rendered)
+        digest.update(rendered)
+        target.flush()
+        os.fsync(target.fileno())
+        metadata = os.fstat(target.fileno())
+        return metadata.st_dev, metadata.st_ino, digest.hexdigest()
+
+
+def _suite_log_integrity_reason(
+    path: Path,
+    expected: tuple[int, int, str],
+) -> str | None:
+    """Validate the exact streamed log inode after all suite processes are gone."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+    except FileNotFoundError:
+        return "suite log disappeared before evidence finalization"
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENXIO}:
+            return "suite log was replaced by a non-regular or aliased path"
+        return f"suite log metadata is unreadable: {type(exc).__name__}"
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return "suite log is not a regular file"
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            return "suite log permissions are not 0600"
+        if (metadata.st_dev, metadata.st_ino) != expected[:2]:
+            return "suite log pathname no longer names the streamed evidence inode"
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 64 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != expected[2]:
+            return "suite log content changed after streaming"
+        return None
+    except OSError as exc:
+        return f"suite log is unreadable: {type(exc).__name__}"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _structured_command(
@@ -639,20 +860,63 @@ async def _run_suite(
     try:
         async with pool.slot(int(suite.memory_gib * GIB)):
             print(f"[reliability] START {suite.id}: {' '.join(command)}")
-            with log_path.open("wb") as log:
-                process = await asyncio.create_subprocess_exec(
-                    *command,
-                    cwd=cwd,
-                    env=env,
-                    stdout=log,
-                    stderr=asyncio.subprocess.STDOUT,
-                    start_new_session=True,
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            if process.stdout is None:
+                raise RuntimeError("suite subprocess has no output stream")
+            wait_task = asyncio.create_task(_wait_for_process_leader(process))
+            log_task = asyncio.create_task(_stream_sanitized_suite_log(process.stdout, log_path))
+            log_identity: tuple[int, int, str] | None = None
+            try:
+                await asyncio.wait_for(asyncio.shield(wait_task), timeout=suite.timeout_s)
+            except TimeoutError:
+                timed_out = True
+                await _terminate_process_group(process)
+            except BaseException:
+                await _terminate_process_group(process)
+                _close_subprocess_reader(process.stdout)
+                log_task.cancel()
+                wait_task.cancel()
+                await asyncio.gather(wait_task, log_task, return_exceptions=True)
+                raise
+            try:
+                log_identity = await asyncio.wait_for(asyncio.shield(log_task), timeout=2)
+            except TimeoutError as exc:
+                await _terminate_process_group(process)
+                _close_subprocess_reader(process.stdout)
+                log_task.cancel()
+                await asyncio.gather(log_task, return_exceptions=True)
+                if not timed_out:
+                    raise RuntimeError(
+                        "suite leader exited but a descendant retained the output pipe"
+                    ) from exc
+            except BaseException:
+                await _terminate_process_group(process)
+                _close_subprocess_reader(process.stdout)
+                log_task.cancel()
+                wait_task.cancel()
+                await asyncio.gather(wait_task, log_task, return_exceptions=True)
+                raise
+            if not wait_task.done():
+                wait_task.cancel()
+                await asyncio.gather(wait_task, return_exceptions=True)
+            if _process_group_exists(process):
+                await _terminate_process_group(process)
+                raise RuntimeError(
+                    "suite leader exited while a descendant process group remained alive"
                 )
-                try:
-                    exit_code = await asyncio.wait_for(process.wait(), timeout=suite.timeout_s)
-                except TimeoutError:
-                    timed_out = True
-                    await _terminate_process_group(process)
+            if log_identity is None:
+                raise RuntimeError("suite log did not finalize after process termination")
+            log_reason = _suite_log_integrity_reason(log_path, log_identity)
+            if log_reason is not None:
+                raise RuntimeError(log_reason)
+            exit_code = process.returncode if process.returncode is not None else -1
     except (OSError, RuntimeError, TimeoutError) as exc:
         result = {
             **base,
@@ -704,6 +968,7 @@ async def _run_suite(
             expected_model=os.environ.get(_EXPECTED_PROVIDER_MODEL_ENV, ""),
             units=suite.units,
             conversation_manifest_path=provider_conversation_manifest_path,
+            expected_conversations=(suite.provider_conversation_count if status == PASS else None),
         )
         provider_evidence = {
             "status": provider_status,

@@ -3,6 +3,8 @@
 # ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
+import asyncio
+
 from .common import *
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
@@ -58,6 +60,30 @@ _DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
         ".zip",
     }
 )
+_DICTATED_CONTENT_BUNDLE_SKIP_DIRS = frozenset(
+    {
+        ".disco",
+        ".git",
+        ".pmx",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "venv",
+        "vendor",
+    }
+)
+_DICTATED_CONTENT_BUNDLE_MAX_DIRS = 64
+_DICTATED_CONTENT_BUNDLE_MAX_FILES = 512
+_DICTATED_CONTENT_BUNDLE_MAX_DEPTH = 8
+_DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR = 256
+_DICTATED_CONTENT_BUNDLE_MAX_ENTRIES = 1024
+_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S = 60.0
+_DICTATED_CONTENT_MAX_FILE_BYTES = 32 * 1024 * 1024
+_DICTATED_CONTENT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+
+
+class _DictatedContentInspectionIncomplete(RuntimeError):
+    """The gate could not inspect the declared app scope completely and safely."""
 
 
 def _dictated_content_text_candidate(path: str, data: bytes) -> bool:
@@ -114,25 +140,45 @@ class _ContentGateMixin(_FinishGateProto):
     async def _dictated_content_deliverable_paths(self, events: list[Event]) -> list[str]:
         """Primary deliverable files for dictated-content checking.
 
-        Sources are deliberately narrow: files named by Plan/DoD/contract
-        deliverable declarations, explicit handoff events, plus the existing web
-        finish-gate convention that an index.html write makes a static web
-        deliverable. This avoids scanning arbitrary workspace files.
+        Sources are files named by Plan/DoD/contract declarations, explicit handoff
+        events, the existing web convention, and a strictly bounded resolved traversal
+        of an explicitly handed-off app root. Arbitrary workspace trees remain out of
+        scope.
         """
 
         paths: list[str] = []
-        paths.extend(_plan_file_exists_paths(events))
-        paths.extend(_deliverable_event_paths(events))
-        spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
-        if spec is not None:
-            for pred in spec.predicates:
-                if isinstance(pred, FileExistsPredicate):
-                    p = _safe_deliverable_file_path(pred.path)
-                    if p is not None:
-                        paths.append(p)
-        paths.extend(self._contract_required_deliverable_paths())
-        if _is_web_deliverable(events):
-            paths.append("index.html")
+        latest_app = next(
+            (
+                event
+                for event in reversed(events)
+                if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
+            ),
+            None,
+        )
+        if latest_app is not None:
+            selected_entry = _safe_deliverable_file_path(latest_app.path, app_root=True)
+            if selected_entry is None:
+                raise _DictatedContentInspectionIncomplete(
+                    "the selected app handoff path is unsafe or invalid"
+                )
+            paths.append(selected_entry)
+            # Once an app is explicitly selected, its resolved bundle is authoritative.
+            # Stale handoffs, scratch artifacts, and unrelated plan files cannot satisfy
+            # content requirements for the current selected app.
+            paths.extend(await self._dictated_content_app_bundle_paths(events))
+        else:
+            paths.extend(_plan_file_exists_paths(events))
+            paths.extend(_deliverable_event_paths(events))
+            spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
+            if spec is not None:
+                for pred in spec.predicates:
+                    if isinstance(pred, FileExistsPredicate):
+                        p = _safe_deliverable_file_path(pred.path)
+                        if p is not None:
+                            paths.append(p)
+            paths.extend(self._contract_required_deliverable_paths())
+            if _is_web_deliverable(events):
+                paths.append("index.html")
 
         out: list[str] = []
         seen: set[str] = set()
@@ -143,6 +189,133 @@ class _ContentGateMixin(_FinishGateProto):
             seen.add(norm)
             out.append(norm)
         return out
+
+    async def _dictated_content_app_bundle_paths(self, events: list[Event]) -> list[str]:
+        try:
+            async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
+                return await self._dictated_content_app_bundle_paths_within_deadline(events)
+        except TimeoutError as exc:
+            raise _DictatedContentInspectionIncomplete(
+                "the app-bundle inspection exceeded its wall-clock limit"
+            ) from exc
+
+    async def _dictated_content_app_bundle_paths_within_deadline(
+        self,
+        events: list[Event],
+    ) -> list[str]:
+        """Boundedly enumerate text candidates belonging to handed-off app roots.
+
+        A multi-file app's explicit handoff names its entry file, not every external
+        CSS/JS/SVG/service-worker sibling. Treat that entry's directory as the bundle
+        root while excluding dependency, VCS, runtime-state, hidden, and known-binary
+        paths. The hard limits keep a large project from turning a finish check into an
+        unbounded workspace crawl.
+        """
+
+        roots: list[str] = []
+        latest_app = next(
+            (
+                event
+                for event in reversed(events)
+                if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
+            ),
+            None,
+        )
+        if latest_app is not None:
+            entry = _safe_deliverable_file_path(latest_app.path, app_root=True)
+            if entry is not None:
+                roots.append(posixpath.dirname(entry) or ".")
+        if not roots:
+            return []
+
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        required = ("list_dir_bounded", "resolve_relpath")
+        if sbx is None or any(not hasattr(sbx, method) for method in required):
+            raise _DictatedContentInspectionIncomplete(
+                "the sandbox lacks bounded app-bundle inspection APIs"
+            )
+
+        for root in roots:
+            try:
+                resolved_root = posixpath.normpath(str(await sbx.resolve_relpath(root)))
+            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
+                raise _DictatedContentInspectionIncomplete(
+                    "the selected app root could not be resolved safely"
+                ) from exc
+            if resolved_root != posixpath.normpath(root):
+                raise _DictatedContentInspectionIncomplete(
+                    "the selected app root resolves through an alias"
+                )
+
+        files: list[str] = []
+        visited_dirs: set[str] = set()
+        stack = [(root, 0) for root in reversed(roots)]
+        entries_seen = 0
+        while stack:
+            directory, depth = stack.pop()
+            if directory in visited_dirs:
+                continue
+            if len(visited_dirs) >= _DICTATED_CONTENT_BUNDLE_MAX_DIRS:
+                raise _DictatedContentInspectionIncomplete(
+                    "the app bundle exceeds the directory inspection limit"
+                )
+            visited_dirs.add(directory)
+            try:
+                entries, truncated = await sbx.list_dir_bounded(
+                    directory,
+                    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR,
+                )
+            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
+                raise _DictatedContentInspectionIncomplete(
+                    "an app-bundle directory could not be listed safely"
+                ) from exc
+            if truncated:
+                raise _DictatedContentInspectionIncomplete(
+                    "an app-bundle directory exceeds the entry inspection limit"
+                )
+            entries_seen += len(entries)
+            if entries_seen > _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES:
+                raise _DictatedContentInspectionIncomplete(
+                    "the app bundle exceeds the total entry inspection limit"
+                )
+            for raw_name, entry_kind in entries:
+                name = str(raw_name)
+                if (
+                    not name
+                    or name in {".", ".."}
+                    or name.startswith(".")
+                    or name in _DICTATED_CONTENT_BUNDLE_SKIP_DIRS
+                    or "/" in name
+                    or "\x00" in name
+                    or any(ord(character) < 32 or ord(character) == 127 for character in name)
+                ):
+                    continue
+                child = posixpath.normpath(posixpath.join(directory, name))
+                safe = _safe_deliverable_file_path(child)
+                if safe is None:
+                    continue
+                if entry_kind == "other":
+                    continue
+                if entry_kind == "file":
+                    if posixpath.splitext(safe)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
+                        continue
+                    if safe not in files:
+                        files.append(safe)
+                    if len(files) > _DICTATED_CONTENT_BUNDLE_MAX_FILES:
+                        raise _DictatedContentInspectionIncomplete(
+                            "the app bundle exceeds the file inspection limit"
+                        )
+                elif entry_kind != "directory":
+                    raise _DictatedContentInspectionIncomplete(
+                        "an app-bundle entry has an invalid type classification"
+                    )
+                elif depth >= _DICTATED_CONTENT_BUNDLE_MAX_DEPTH:
+                    raise _DictatedContentInspectionIncomplete(
+                        "the app bundle exceeds the depth inspection limit"
+                    )
+                else:
+                    stack.append((safe, depth + 1))
+        return files
 
     async def _read_deliverable_bytes(self, path: str) -> bytes | None:
         """Read one deliverable file, returning None only when no host/sandbox
@@ -155,14 +328,10 @@ class _ContentGateMixin(_FinishGateProto):
                 data = await sbx.read_file(path)
             except FileNotFoundError:
                 return b""
-            except Exception as exc:  # noqa: BLE001 — gate is best-effort if read infra breaks
-                _LOG.warning(
-                    "dictated-content read failed for %s:%s via sandbox: %s",
-                    self._loop.conversation_id,
-                    path,
-                    exc,
-                )
-                return b""
+            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
+                raise _DictatedContentInspectionIncomplete(
+                    "a declared deliverable could not be read safely"
+                ) from exc
             if isinstance(data, bytes):
                 return data
             return str(data).encode("utf-8", "surrogatepass")
@@ -181,46 +350,54 @@ class _ContentGateMixin(_FinishGateProto):
                 return b""
             if not candidate.is_file():
                 return b""
+            if candidate.stat().st_size > _DICTATED_CONTENT_MAX_FILE_BYTES:
+                raise _DictatedContentInspectionIncomplete(
+                    "a text deliverable exceeds the per-file inspection budget"
+                )
             return candidate.read_bytes()
         except OSError as exc:
-            _LOG.warning(
-                "dictated-content read failed for %s:%s from workspace: %s",
-                self._loop.conversation_id,
-                path,
-                exc,
-            )
-            return b""
+            raise _DictatedContentInspectionIncomplete(
+                "a declared deliverable could not be read from the workspace"
+            ) from exc
 
     async def _first_dictated_content_miss(
         self,
         conditions: list[DictatedContentCondition],
         paths: list[str],
     ) -> tuple[DictatedContentCondition, list[str]] | None:
-        readable = False
-        contents: list[tuple[str, bytes]] = []
+        unresolved = list(conditions)
+        checked: list[str] = []
+        total_bytes = 0
         for path in paths:
+            if posixpath.splitext(path)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
+                continue
             data = await self._read_deliverable_bytes(path)
             if data is None:
                 continue
+            if len(data) > _DICTATED_CONTENT_MAX_FILE_BYTES:
+                raise _DictatedContentInspectionIncomplete(
+                    "a text deliverable exceeds the per-file inspection budget"
+                )
+            total_bytes += len(data)
+            if total_bytes > _DICTATED_CONTENT_MAX_TOTAL_BYTES:
+                raise _DictatedContentInspectionIncomplete(
+                    "the app bundle exceeds the total byte inspection budget"
+                )
             if not _dictated_content_text_candidate(path, data):
                 continue
-            readable = True
-            contents.append((path, data))
-        if not readable:
-            _LOG.warning(
-                "dictated-content conditions present for %s, but no readable "
-                "deliverable file surface is available; skipping gate.",
-                self._loop.conversation_id,
+            checked.append(path)
+            unresolved = [
+                condition
+                for condition in unresolved
+                if condition.literal.encode("utf-8", "surrogatepass") not in data
+            ]
+            if not unresolved:
+                return None
+        if not checked:
+            raise _DictatedContentInspectionIncomplete(
+                "no readable text deliverable surface was available"
             )
-            return None
-
-        for cond in conditions:
-            needle = cond.literal.encode("utf-8", "surrogatepass")
-            if any(needle in data for _, data in contents):
-                continue
-            checked = [path for path, _ in contents] or paths
-            return cond, checked
-        return None
+        return (unresolved[0], checked) if unresolved else None
 
     async def dictated_content_gate_passed(self, events: list[Event]) -> bool:
         """REL-RC-O finish gate: quoted user literals must be present verbatim.
@@ -246,11 +423,45 @@ class _ContentGateMixin(_FinishGateProto):
         if not conditions:
             self._loop._dictated_content_refusals = 0
             return True
-        paths = await self._dictated_content_deliverable_paths(events)
-        if not paths:
-            return True
-
-        miss = await self._first_dictated_content_miss(conditions, paths)
+        inspection_error: _DictatedContentInspectionIncomplete | None = None
+        miss: tuple[DictatedContentCondition, list[str]] | None = None
+        try:
+            async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
+                paths = await self._dictated_content_deliverable_paths(events)
+                if not paths:
+                    return True
+                miss = await self._first_dictated_content_miss(conditions, paths)
+        except TimeoutError:
+            inspection_error = _DictatedContentInspectionIncomplete(
+                "the complete app-content inspection exceeded its wall-clock limit"
+            )
+        except _DictatedContentInspectionIncomplete as exc:
+            inspection_error = exc
+        if inspection_error is not None:
+            _LOG.warning("dictated-content inspection incomplete: %s", inspection_error)
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="dictated_content_inspection_incomplete",
+                )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\nThe dictated-content finish check could not "
+                            "inspect the selected app completely: "
+                            f"{inspection_error}. The task is NOT "
+                            "complete and has been paused fail-closed; repair the workspace "
+                            "or sandbox evidence surface before finishing.\n</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+            self._loop._pause_requested.set()
+            return False
         if miss is None:
             self._loop._dictated_content_refusals = 0
             return True

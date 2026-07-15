@@ -59,6 +59,8 @@ from ._container import (
     _remove_container,
     _remove_volume,
     bounded_exec_argv,
+    bounded_list_argv,
+    bounded_list_result,
     bounded_read_argv,
     bounded_read_result,
     bounded_sidecar_cap,
@@ -339,6 +341,17 @@ class PodmanSandboxInstance(ContainerInstance):
             self._raise_if_dead(rc, err)
             raise_read_error(path, err, op="list_dir")  # W1: typed missing-dir error
         return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
+
+    async def list_dir_bounded(self, path: str, limit: int) -> tuple[list[tuple[str, str]], bool]:
+        self._alive()
+        target = await asyncio.to_thread(self._resolve_guest_path, path)
+        rc, out, err = await asyncio.to_thread(
+            self._exec,
+            bounded_list_argv(target, limit),
+            30,
+        )
+        self._raise_if_dead(rc, err)
+        return bounded_list_result(path, rc, out, err)
 
     async def write_file(self, path: str, data: bytes) -> None:
         """Binary-safe write through the inherited staged atomic path.

@@ -478,6 +478,9 @@ class SandboxSession:
     async def list_dir(self, path: str) -> list[str]:
         return await self._resilient(lambda i: i.list_dir(path))
 
+    async def list_dir_bounded(self, path: str, limit: int) -> tuple[list[tuple[str, str]], bool]:
+        return await self._resilient(lambda i: i.list_dir_bounded(path, limit))
+
     async def file_exists(self, path: str) -> bool:
         """[B4] Delegate the existence check to the live instance (which resolves
         in its OWN namespace — host FS for process, inside-the-box for container).

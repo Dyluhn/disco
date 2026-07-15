@@ -7,6 +7,7 @@ prior revisions forward, and releases loudly at the shared cap discipline.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from disco.core import (
     ConversationStatus,
+    DeliverableEvent,
     EventSource,
     LLMMessage,
     MessageEvent,
@@ -23,6 +25,7 @@ from disco.core import (
 )
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP
+from disco.core.loop.finish import content_gates as content_gates_module
 from disco.core.loop.finish.common import _safe_deliverable_file_path
 from disco.core.loop.plan_conditions import (
     dictated_content_conditions_from_events,
@@ -36,6 +39,8 @@ class _Sandbox:
     def __init__(self, root: Path) -> None:
         self.workspace_path = str(root)
         self._root = root
+        self.read_paths: list[str] = []
+        self.list_paths: list[str] = []
 
     def _target(self, path: str) -> Path:
         relative = path.removeprefix("/workspace/") if path.startswith("/workspace/") else path
@@ -45,6 +50,7 @@ class _Sandbox:
         return self._target(path).is_file()
 
     async def read_file(self, path: str) -> bytes:
+        self.read_paths.append(path)
         return self._target(path).read_bytes()
 
     async def write_file(self, path: str, data: bytes) -> None:
@@ -53,11 +59,33 @@ class _Sandbox:
         target.write_bytes(data)
 
     async def list_dir(self, path: str) -> list[str]:
+        self.list_paths.append(path)
         target = self._target(path)
         return [p.name for p in target.iterdir()]
 
+    async def list_dir_bounded(
+        self,
+        path: str,
+        limit: int,
+    ) -> tuple[list[tuple[str, str]], bool]:
+        names = await self.list_dir(path)
+        entries: list[tuple[str, str]] = []
+        for name in sorted(names)[:limit]:
+            target = self._target(f"{path}/{name}")
+            kind = (
+                "other"
+                if target.is_symlink()
+                else "file"
+                if target.is_file()
+                else "directory"
+                if target.is_dir()
+                else "other"
+            )
+            entries.append((name, kind))
+        return entries, len(names) > limit
+
     async def resolve_relpath(self, path: str) -> str:
-        return self._target(path).relative_to(self._root).as_posix()
+        return self._target(path).resolve().relative_to(self._root.resolve()).as_posix()
 
     async def exec_shell(self, command: str, timeout_s: int = 5):  # noqa: ANN201, ARG002
         """Implement the DoD sandbox's non-empty-file evidence probe."""
@@ -347,6 +375,338 @@ async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
     assert (tmp_path / "release/index.html").read_text(
         encoding="utf-8"
     ) == "<h1>SELECTED RELEASE ONE</h1>"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handoff_path", ["release/index.html", "release"])
+async def test_app_handoff_expands_bounded_multifile_text_bundle(
+    tmp_path: Path,
+    handoff_path: str,
+):
+    files: dict[str, str | bytes] = {
+        "artifact.txt": "bundle handoff",
+        "release/index.html": "<h1>SELECTED RELEASE ONE</h1>",
+        "release/assets/theme.css": "body { background: rgb(12, 34, 56); }",
+        "release/scripts/app.js": "document.body.dataset.scriptLoaded = 'true';",
+        "release/media/hero.svg": "<text>SVG ASSET</text>",
+        "release/sw.js": "/* RELIABILITY SERVICE WORKER */",
+        "release/fonts/proof.woff2": b"wOF2\x00\x01binary-font",
+        "release/node_modules/decoy.js": "DECOY MUST NOT SATISFY",
+        "release/.pmx/internal.txt": "INTERNAL MUST NOT SATISFY",
+    }
+    for relative, content in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-app-bundle",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "Build an app with 'SELECTED RELEASE ONE', CSS 'rgb(12, 34, 56)', JS 'true', "
+        "SVG text 'SVG ASSET', and worker comment 'RELIABILITY SERVICE WORKER'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-app-bundle",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path=handoff_path,
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-app-bundle")
+
+    assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
+    assert not any("quoted user literal is missing" in msg for msg in _env_messages(events))
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_release"
+        for event in events
+    )
+    assert not any(
+        path.endswith("proof.woff2") or "/node_modules/" in f"/{path}" or "/.pmx/" in f"/{path}"
+        for path in executor.sandbox.read_paths
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_bundle_excludes_binary_internal_dependency_and_alias_paths(tmp_path: Path):
+    files: dict[str, str | bytes] = {
+        "artifact.txt": "bundle handoff",
+        "release/index.html": "<h1>ordinary app</h1>",
+        "release/fonts/proof.woff2": b"BINARY ONLY",
+        "release/node_modules/decoy.js": "DEPENDENCY ONLY",
+        "release/.pmx/internal.txt": "INTERNAL ONLY",
+        "stale/index.html": "BINARY ONLY DEPENDENCY ONLY INTERNAL ONLY ALIAS ONLY",
+        "unrelated/decoy.txt": "ALIAS ONLY",
+    }
+    for relative, content in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content, encoding="utf-8")
+    (tmp_path / "release/assets").mkdir(parents=True)
+    (tmp_path / "release/assets/alias").symlink_to(tmp_path / "unrelated", target_is_directory=True)
+
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-app-bundle-exclusions",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        'Build an app containing "BINARY ONLY", "DEPENDENCY ONLY", "INTERNAL ONLY", '
+        'and "ALIAS ONLY".'
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-app-bundle-exclusions",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="stale",
+            path="stale/index.html",
+            artifact_kind="app",
+        ),
+    )
+    await store.append(
+        "dictated-app-bundle-exclusions",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="release/index.html",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent(
+        [
+            _write("bundle handoff"),
+            _finish(),
+            action_step(
+                "file_write",
+                {
+                    "path": "release/index.html",
+                    "content": ("<h1>BINARY ONLY DEPENDENCY ONLY INTERNAL ONLY ALIAS ONLY</h1>"),
+                },
+            ),
+            _finish(),
+        ]
+    )
+    state = await loop.run()
+    events = await store.get_events("dictated-app-bundle-exclusions")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert sum("quoted user literal is missing" in msg for msg in _env_messages(events)) == 1
+    assert not any(
+        path.endswith("proof.woff2")
+        or "/node_modules/" in f"/{path}"
+        or "/.pmx/" in f"/{path}"
+        or "unrelated" in path
+        or "alias" in path
+        or path.startswith("stale/")
+        for path in executor.sandbox.read_paths
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_bundle_truncation_pauses_as_visible_unverifiable(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("bundle handoff", encoding="utf-8")
+    (tmp_path / "release/crowded").mkdir(parents=True)
+    (tmp_path / "release/index.html").write_text("<h1>ordinary app</h1>", encoding="utf-8")
+    for index in range(257):
+        (tmp_path / "release/crowded" / f"asset-{index:03}.txt").write_text(
+            "ordinary",
+            encoding="utf-8",
+        )
+
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-app-bundle-truncated",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build an app containing "NEVER SILENTLY OMIT".')
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-app-bundle-truncated",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="release/index.html",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-app-bundle-truncated")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )
+    assert any("paused fail-closed" in msg for msg in _env_messages(events))
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_release"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_selected_app_path_pauses_fail_closed(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("ordinary handoff", encoding="utf-8")
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-invalid-selected-app",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build an app containing "INVALID PATH MUST NOT BYPASS".')
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-invalid-selected-app",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="unsafe",
+            path="/etc/passwd",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("ordinary handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-invalid-selected-app")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )
+    assert any("selected app handoff path is unsafe" in msg for msg in _env_messages(events))
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_release"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_app_bundle_inspection_deadline_pauses_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    (tmp_path / "artifact.txt").write_text("bundle handoff", encoding="utf-8")
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release/index.html").write_text("<h1>ordinary app</h1>", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+
+    async def _slow_listing(path: str, limit: int):  # noqa: ANN202, ARG001
+        await asyncio.sleep(1)
+        return [], False
+
+    executor.sandbox.list_dir_bounded = _slow_listing  # type: ignore[method-assign]
+    monkeypatch.setattr(content_gates_module, "_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S", 0.01)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-app-bundle-deadline",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build an app containing "DEADLINE MUST BE VISIBLE".')
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-app-bundle-deadline",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="release",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-app-bundle-deadline")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )
+    assert any("wall-clock limit" in message for message in _env_messages(events))
+
+
+@pytest.mark.asyncio
+async def test_app_bundle_read_deadline_pauses_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    (tmp_path / "artifact.txt").write_text("bundle handoff", encoding="utf-8")
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release/index.html").write_text("<h1>ordinary app</h1>", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+    real_read = executor.sandbox.read_file
+
+    async def _slow_read(path: str) -> bytes:
+        await asyncio.sleep(1)
+        return await real_read(path)
+
+    executor.sandbox.read_file = _slow_read  # type: ignore[method-assign]
+    monkeypatch.setattr(content_gates_module, "_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S", 0.01)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-app-bundle-read-deadline",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build an app containing "READ DEADLINE MUST BE VISIBLE".')
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-app-bundle-read-deadline",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="release/index.html",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-app-bundle-read-deadline")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )
+    assert any("complete app-content inspection" in msg for msg in _env_messages(events))
 
 
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():

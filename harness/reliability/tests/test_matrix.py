@@ -97,6 +97,7 @@ def test_preview_manifest_assets_suite_is_exact_single_wave_provider_proof() -> 
     assert suite.kind == "playwright"
     assert suite.provider_evidence is True
     assert suite.provider_conversation_manifest is True
+    assert suite.provider_conversation_count == 2
     assert suite.environment == {"LIVE_WORKERS": "1"}
     assert "--sandbox-backend" in command
     assert command[command.index("--sandbox-backend") + 1] == "podman"
@@ -172,6 +173,7 @@ suites:
     memory_gib: 1
     units: 1
     provider_conversation_manifest: true
+    provider_conversation_count: 2
     command: ["true"]
     claims: [x]
 """,
@@ -181,5 +183,39 @@ suites:
     with pytest.raises(
         ValueError,
         match="provider_conversation_manifest requires provider_evidence",
+    ):
+        load_matrix(path)
+
+
+def test_matrix_rejects_provider_manifest_without_expected_count(tmp_path: Path) -> None:
+    path = tmp_path / "matrix.yaml"
+    path.write_text(
+        """
+schema_version: 1
+claims:
+  - id: x
+    surface: build
+    proof: live
+    target: 1
+    description: exact provider scope
+suites:
+  - id: y
+    proof: live
+    kind: playwright
+    cwd: .
+    timeout_s: 1
+    memory_gib: 1
+    units: 1
+    provider_evidence: true
+    provider_conversation_manifest: true
+    command: ["true"]
+    claims: [x]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="provider_conversation_manifest requires provider_conversation_count",
     ):
         load_matrix(path)

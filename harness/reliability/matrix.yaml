@@ -490,6 +490,7 @@ suites:
     units: 1
     provider_evidence: true
     provider_conversation_manifest: true
+    provider_conversation_count: 2
     requires_env: *provider_seed
     environment: {LIVE_WORKERS: "1"}
     command:

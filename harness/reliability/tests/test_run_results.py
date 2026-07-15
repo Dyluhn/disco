@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -15,9 +19,37 @@ from harness.reliability.run import (
     _provider_conversation_manifest_result,
     _provider_evidence_result,
     _pytest_result,
+    _run_suite,
+    _sanitize_suite_log,
+    _stream_sanitized_suite_log,
     _suite_subprocess_environment,
 )
 from harness.reliability.state import FAIL, INVALID, PASS
+
+
+class _ImmediatePool:
+    @asynccontextmanager
+    async def slot(self, _memory_bytes: int):
+        yield None
+
+
+def _generic_suite(suite_id: str, command: tuple[str, ...], cwd: Path) -> Suite:
+    return Suite(
+        id=suite_id,
+        proof="hermetic",
+        kind="generic",
+        cwd=str(cwd),
+        timeout_s=30,
+        memory_gib=1,
+        units=1,
+        command=command,
+        claims=("claim",),
+        requires_env=(),
+        environment={},
+        provider_evidence=False,
+        provider_conversation_manifest=False,
+        provider_conversation_count=None,
+    )
 
 
 def test_playwright_environment_drops_conflicting_no_color(
@@ -27,6 +59,181 @@ def test_playwright_environment_drops_conflicting_no_color(
 
     assert "NO_COLOR" not in _suite_subprocess_environment("playwright")
     assert _suite_subprocess_environment("generic")["NO_COLOR"] == "1"
+
+
+def test_suite_log_canonicalizes_terminal_and_binary_controls_atomically(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "suite.log"
+    prefix = b"a" * (64 * 1024 - 1)
+    path.write_bytes(
+        prefix
+        + "Ж🙂".encode()
+        + b" plain\x1b[31mred\x1b[0m\x00tail\tkept\r\n"
+        + b"bare\roverwrite\x7f\x9b\xc2\x9b\xff"
+        + "\u202espoof".encode()
+    )
+
+    _sanitize_suite_log(path)
+
+    rendered = path.read_bytes()
+    assert rendered.startswith(prefix + "Ж🙂".encode())
+    assert b"plain\\x1b[31mred\\x1b[0m\\x00tail\tkept\r\n" in rendered
+    assert b"bare\\x0doverwrite\\x7f\\x9b\\x9b\\xff\\u202espoof" in rendered
+    assert rendered.decode("utf-8")
+    assert b"\x1b" not in rendered
+    assert b"\x00" not in rendered
+    assert b"\x7f" not in rendered
+    assert b"\x9b" not in rendered
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.glob(".suite.log.sanitize-*")) == []
+
+
+@pytest.mark.asyncio
+async def test_suite_log_is_sanitized_before_the_child_stream_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "suite.log"
+    reader = asyncio.StreamReader()
+
+    def _forbid_path_chmod(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("suite log permissions must be bound to the open descriptor")
+
+    monkeypatch.setattr(os, "chmod", _forbid_path_chmod)
+    task = asyncio.create_task(_stream_sanitized_suite_log(reader, path))
+
+    reader.feed_data(b"running\x1b[31m\rrewrite")
+    await asyncio.sleep(0)
+
+    assert path.read_bytes() == b"running\\x1b[31m\\x0drewrite"
+    reader.feed_eof()
+    await task
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_suite_log_descendant_pipe_holder_is_bounded_and_killed(tmp_path: Path) -> None:
+    child_pid = tmp_path / "child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'], "
+        "stdout=sys.stdout,stderr=sys.stderr); "
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid)); "
+        "print('leader exited')"
+    )
+    campaign_out = tmp_path / "campaign"
+    campaign_out.mkdir()
+
+    result = await _run_suite(
+        _generic_suite("pipe-holder", (sys.executable, "-c", code), tmp_path),
+        context={},
+        campaign_out=campaign_out,
+        pool=_ImmediatePool(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "INFRA"
+    assert "descendant retained the output pipe" in result["reason"]
+    pid = int(child_pid.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_suite_log_path_replacement_is_infra_not_retained_evidence(tmp_path: Path) -> None:
+    replacement = tmp_path / "replacement.log"
+    replacement.write_text("untrusted replacement", encoding="utf-8")
+    code = (
+        "import os,pathlib,time\n"
+        "log=pathlib.Path(os.environ['DISCO_RELIABILITY_SUITE_OUT'])/'suite.log'\n"
+        "deadline=time.monotonic()+2\n"
+        "while not log.exists() and time.monotonic()<deadline:\n"
+        "    time.sleep(0.01)\n"
+        "if not log.exists():\n"
+        "    raise RuntimeError('suite log was never created')\n"
+        "log.unlink()\n"
+        f"log.symlink_to({str(replacement)!r})\n"
+        "print('leader exited')\n"
+    )
+    campaign_out = tmp_path / "campaign"
+    campaign_out.mkdir()
+
+    result = await _run_suite(
+        _generic_suite("log-swap", (sys.executable, "-c", code), tmp_path),
+        context={},
+        campaign_out=campaign_out,
+        pool=_ImmediatePool(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "INFRA"
+    assert "suite log" in result["reason"]
+    assert "streamed evidence inode" in result["reason"] or "aliased path" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_suite_success_with_silent_background_descendant_is_infra_and_killed(
+    tmp_path: Path,
+) -> None:
+    child_pid = tmp_path / "silent-child.pid"
+    code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'], "
+        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid)); "
+        "print('leader exited')"
+    )
+    campaign_out = tmp_path / "campaign"
+    campaign_out.mkdir()
+
+    result = await _run_suite(
+        _generic_suite("silent-descendant", (sys.executable, "-c", code), tmp_path),
+        context={},
+        campaign_out=campaign_out,
+        pool=_ImmediatePool(),  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "INFRA"
+    assert "descendant process group remained alive" in result["reason"]
+    pid = int(child_pid.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.asyncio
+async def test_suite_cancellation_kills_process_group_and_keeps_safe_log(tmp_path: Path) -> None:
+    child_pid = tmp_path / "leader.pid"
+    code = (
+        "import os,pathlib,time; "
+        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); "
+        "print('running\\x1b[31m', flush=True); time.sleep(30)"
+    )
+    campaign_out = tmp_path / "campaign"
+    campaign_out.mkdir()
+    task = asyncio.create_task(
+        _run_suite(
+            _generic_suite("cancelled", (sys.executable, "-c", code), tmp_path),
+            context={},
+            campaign_out=campaign_out,
+            pool=_ImmediatePool(),  # type: ignore[arg-type]
+        )
+    )
+    for _ in range(200):
+        retained = campaign_out / "cancelled" / "suite.log"
+        if child_pid.exists() and retained.exists() and b"\\x1b" in retained.read_bytes():
+            break
+        await asyncio.sleep(0.01)
+    assert child_pid.exists()
+    assert b"\\x1b" in retained.read_bytes()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    pid = int(child_pid.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    assert b"\x1b" not in retained.read_bytes()
+    assert b"\\x1b" in retained.read_bytes()
 
 
 def test_playwright_skip_is_invalid_not_pass(tmp_path: Path) -> None:
@@ -93,6 +300,7 @@ def _write_provider_ledger(path: Path, records: list[dict[str, object]]) -> None
         for index, record in enumerate(records)
     ]
     path.write_text("".join(json.dumps(record) + "\n" for record in complete), encoding="utf-8")
+    path.chmod(0o600)
 
 
 def _write_provider_manifest(path: Path, conversation_ids: list[object]) -> None:
@@ -100,6 +308,7 @@ def _write_provider_manifest(path: Path, conversation_ids: list[object]) -> None
         json.dumps({"schema_version": 1, "conversation_ids": conversation_ids}),
         encoding="utf-8",
     )
+    path.chmod(0o600)
 
 
 def _provider_suite(*, conversation_manifest: bool, provider_evidence: bool = True) -> Suite:
@@ -117,6 +326,7 @@ def _provider_suite(*, conversation_manifest: bool, provider_evidence: bool = Tr
         environment={},
         provider_evidence=provider_evidence,
         provider_conversation_manifest=conversation_manifest,
+        provider_conversation_count=2 if conversation_manifest else None,
     )
 
 
@@ -140,6 +350,79 @@ def test_provider_evidence_requires_exact_host_model_and_trial_coverage(tmp_path
         expected_model="deepseek-v4-flash",
         units=3,
     )[:2] == (PASS, 3)
+
+
+def test_provider_ledger_requires_private_regular_file(tmp_path: Path) -> None:
+    path = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_1",
+            }
+        ],
+    )
+    path.chmod(0o644)
+
+    status, units, reason = _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )
+
+    assert (status, units) == (INVALID, 0)
+    assert "permissions must be 0600" in reason
+
+
+def test_provider_ledger_reads_the_validated_descriptor_across_path_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = tmp_path / "provider.jsonl"
+    replacement = tmp_path / "replacement.jsonl"
+    _write_provider_ledger(
+        ledger,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_1",
+            }
+        ],
+    )
+    _write_provider_ledger(
+        replacement,
+        [
+            {
+                "host": "fallback.example",
+                "model": "other",
+                "conversation_id": "conv_1",
+            }
+        ],
+    )
+    real_open = os.open
+    swapped = False
+
+    def _open_and_swap(file: os.PathLike[str] | str, flags: int, *args: int) -> int:
+        nonlocal swapped
+        descriptor = real_open(file, flags, *args)
+        if not swapped and Path(file) == ledger:
+            swapped = True
+            ledger.unlink()
+            ledger.symlink_to(replacement)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", _open_and_swap)
+
+    assert _provider_evidence_result(
+        ledger,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )[:2] == (PASS, 1)
 
 
 def test_provider_evidence_fails_hidden_fallback(tmp_path: Path) -> None:
@@ -339,6 +622,7 @@ def test_provider_evidence_rejects_malformed_record_schema(
 ) -> None:
     ledger = tmp_path / "provider.jsonl"
     ledger.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    ledger.chmod(0o600)
 
     assert _provider_evidence_result(
         ledger,
@@ -392,6 +676,7 @@ def test_provider_manifest_malformed_is_invalid(
 ) -> None:
     manifest = tmp_path / "provider-conversations.json"
     manifest.write_text(content, encoding="utf-8")
+    manifest.chmod(0o600)
 
     status, conversation_ids, reason = _provider_conversation_manifest_result(manifest)
 
@@ -408,6 +693,53 @@ def test_provider_manifest_duplicate_id_is_invalid(tmp_path: Path) -> None:
 
     assert status == INVALID
     assert "duplicate IDs" in reason
+
+
+def test_provider_manifest_requires_private_regular_file(tmp_path: Path) -> None:
+    manifest = tmp_path / "provider-conversations.json"
+    _write_provider_manifest(manifest, ["conv_1"])
+    manifest.chmod(0o644)
+
+    status, _, reason = _provider_conversation_manifest_result(manifest)
+    assert status == INVALID
+    assert "permissions must be 0600" in reason
+
+    manifest.unlink()
+    target = tmp_path / "target.json"
+    _write_provider_manifest(target, ["conv_1"])
+    manifest.symlink_to(target)
+    status, _, reason = _provider_conversation_manifest_result(manifest)
+    assert status == INVALID
+    assert "regular non-symlink" in reason
+
+
+def test_provider_manifest_reads_the_validated_descriptor_across_path_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "provider-conversations.json"
+    replacement = tmp_path / "replacement.json"
+    _write_provider_manifest(manifest, ["conv_1"])
+    replacement.write_text("not valid manifest JSON", encoding="utf-8")
+    replacement.chmod(0o600)
+    real_open = os.open
+    swapped = False
+
+    def _open_and_swap(file: os.PathLike[str] | str, flags: int, *args: int) -> int:
+        nonlocal swapped
+        descriptor = real_open(file, flags, *args)
+        if not swapped and Path(file) == manifest:
+            swapped = True
+            manifest.unlink()
+            manifest.symlink_to(replacement)
+        return descriptor
+
+    monkeypatch.setattr(os, "open", _open_and_swap)
+
+    status, conversation_ids, _ = _provider_conversation_manifest_result(manifest)
+
+    assert status == PASS
+    assert conversation_ids == frozenset({"conv_1"})
 
 
 def test_provider_manifest_missing_ledger_id_is_invalid(tmp_path: Path) -> None:
@@ -434,8 +766,8 @@ def test_provider_manifest_missing_ledger_id_is_invalid(tmp_path: Path) -> None:
     )
 
     assert (status, units) == (INVALID, 0)
-    assert "missing manifest conversation ID" in reason
-    assert "conv_agent" in reason
+    assert "missing 1 manifest conversation ID" in reason
+    assert "conv_agent" not in reason
 
 
 def test_provider_manifest_extra_ledger_id_is_invalid(tmp_path: Path) -> None:
@@ -463,8 +795,8 @@ def test_provider_manifest_extra_ledger_id_is_invalid(tmp_path: Path) -> None:
     )
 
     assert (status, units) == (INVALID, 0)
-    assert "extra provider-ledger conversation ID" in reason
-    assert "conv_unclaimed" in reason
+    assert "extra 1 provider-ledger conversation ID" in reason
+    assert "conv_unclaimed" not in reason
 
 
 def test_provider_manifest_requires_tool_bearing_call_for_every_exact_id(
@@ -501,7 +833,37 @@ def test_provider_manifest_requires_tool_bearing_call_for_every_exact_id(
 
     assert (status, units) == (INVALID, 0)
     assert "no tool-bearing provider call" in reason
-    assert "conv_agent" in reason
+    assert "conv_agent" not in reason
+
+
+def test_provider_manifest_success_requires_declared_conversation_count(tmp_path: Path) -> None:
+    ledger = tmp_path / "provider.jsonl"
+    manifest = tmp_path / "provider-conversations.json"
+    _write_provider_manifest(manifest, ["conv_build"])
+    _write_provider_ledger(
+        ledger,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_build",
+                "has_tools": True,
+            }
+        ],
+    )
+
+    status, units, reason = _provider_evidence_result(
+        ledger,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+        conversation_manifest_path=manifest,
+        expected_conversations=2,
+    )
+
+    assert (status, units) == (INVALID, 0)
+    assert "1/2 required successful-suite conversation" in reason
+    assert "conv_build" not in reason
 
 
 def test_provider_evidence_rejects_unscoped_tool_calls(tmp_path: Path) -> None:

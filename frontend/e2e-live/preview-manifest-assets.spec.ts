@@ -24,6 +24,16 @@ import {
   type EventJson,
 } from "./reliability-helpers";
 import {
+  attemptAllCleanup,
+  createRegisteredTarget,
+  rethrowAfterBestEffortReport,
+} from "@/lib/harness/cleanupOracle";
+import {
+  redactFailureStringsInPlace,
+  redactKnownIdentifiers,
+} from "@/lib/harness/evidenceRedaction";
+import { updateProviderConversationManifest } from "@/lib/harness/providerManifest";
+import {
   ISOLATED_PREVIEW_PREFIX,
   isIsolatedPreviewUrl,
 } from "@/lib/harness/previewUrlOracle";
@@ -43,47 +53,12 @@ const SECOND_MARKER = "SELECTED RELEASE TWO";
 const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
 const SERVICE_WORKER_MARKER = "RELIABILITY SERVICE WORKER";
 const NESTED_MARKER = "NESTED ROUTE LOADED";
-const PROVIDER_CONVERSATION_MANIFEST_ENV =
-  "DISCO_RELIABILITY_PROVIDER_CONVERSATION_MANIFEST";
 const BACKGROUND = "rgb(12, 34, 56)";
 const FONT_PATH = path.resolve(
   process.cwd(),
   "node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-cyrillic-ext-wght-normal.woff2",
 );
 const FONT_BASE64 = fs.readFileSync(FONT_PATH).toString("base64");
-
-function writeProviderConversationManifest(conversationIds: string[]): void {
-  expect(conversationIds.length, "provider manifest must contain Build and Agent IDs").toBe(2);
-  expect(new Set(conversationIds).size, "provider manifest conversation IDs must be unique").toBe(
-    2,
-  );
-  expect(
-    conversationIds.every((cid) => cid.length > 0 && cid === cid.trim()),
-    "provider manifest conversation IDs must be exact nonempty strings",
-  ).toBe(true);
-
-  const configuredPath = process.env[PROVIDER_CONVERSATION_MANIFEST_ENV]?.trim() ?? "";
-  expect(
-    configuredPath,
-    `${PROVIDER_CONVERSATION_MANIFEST_ENV} must be provided by the reliability runner`,
-  ).toBeTruthy();
-  expect(path.isAbsolute(configuredPath), "provider manifest path must be absolute").toBe(true);
-
-  const suiteOut = process.env.DISCO_RELIABILITY_SUITE_OUT?.trim() ?? "";
-  expect(suiteOut, "DISCO_RELIABILITY_SUITE_OUT must be runner-provided").toBeTruthy();
-  const resolvedSuiteOut = path.resolve(suiteOut);
-  const resolvedManifest = path.resolve(configuredPath);
-  expect(
-    path.dirname(resolvedManifest),
-    "provider manifest must be suite-private",
-  ).toBe(resolvedSuiteOut);
-
-  fs.writeFileSync(
-    resolvedManifest,
-    `${JSON.stringify({ schema_version: 1, conversation_ids: conversationIds }, null, 2)}\n`,
-    { encoding: "utf-8", flag: "wx", mode: 0o600 },
-  );
-}
 
 function buildPrompt(surface: Surface): string {
   return `
@@ -118,7 +93,7 @@ dot, or the workspace root), title 'Selected reliability release', kind 'app', a
 `;
 }
 
-async function createRun(
+async function createConversation(
   request: APIRequestContext,
   surface: Surface,
 ): Promise<string> {
@@ -131,14 +106,20 @@ async function createRun(
     },
   });
   expect(create.ok(), await create.text()).toBe(true);
-  const cid = String((await create.json()).conversation_id);
+  return String((await create.json()).conversation_id);
+}
+
+async function kickRun(
+  request: APIRequestContext,
+  surface: Surface,
+  cid: string,
+): Promise<void> {
   const kick = await authenticatedMutation(
     request,
     `${AGENT_API}/conversations/${cid}/messages`,
     { data: { content: buildPrompt(surface) }, timeout: 30_000 },
   );
   expect(kick.ok(), await kick.text()).toBe(true);
-  return cid;
 }
 
 async function approveBuildPlan(page: Page): Promise<void> {
@@ -164,7 +145,7 @@ async function waitForCommittedFinish(
     latest = await allEvents(request, cid);
     const terminal = latestStoppedStatus(latest, afterSeq);
     if (terminal) {
-      throw new Error(`conversation ${cid} reached ${terminal.status}: ${String(terminal.detail ?? "")}`);
+      throw new Error(`conversation reached ${terminal.status}: ${String(terminal.detail ?? "")}`);
     }
     const finished = [...latest]
       .reverse()
@@ -184,7 +165,7 @@ async function waitForCommittedFinish(
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error(`conversation ${cid} did not finish with a durable version after seq ${afterSeq}`);
+  throw new Error(`conversation did not finish with a durable version after seq ${afterSeq}`);
 }
 
 function selectedApp(events: EventJson[]): EventJson | undefined {
@@ -859,9 +840,18 @@ test("Build and Agent open the selected multi-file manifest across restart and r
   context.on("page", observe);
 
   const cids: string[] = [];
+  let evidence: Record<string, unknown> | undefined;
+  let primaryFailed = false;
+  let primaryError: unknown;
   try {
-    const buildCid = await createRun(request, "build");
-    cids.push(buildCid);
+    const buildCid = await createRegisteredTarget(
+      () => createConversation(request, "build"),
+      (cid) => {
+        cids.push(cid);
+        updateProviderConversationManifest(cids);
+      },
+      (cid) => kickRun(request, "build", cid),
+    );
     await page.goto(`/build/${buildCid}`);
     await approveBuildPlan(page);
     const buildFirst = await waitForCommittedFinish(request, buildCid);
@@ -873,9 +863,14 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     const iframeResponses = await assertBuildIframe(page, buildCid, FIRST_MARKER);
 
     const agentPage = await context.newPage();
-    const agentCid = await createRun(request, "agent");
-    cids.push(agentCid);
-    writeProviderConversationManifest([buildCid, agentCid]);
+    const agentCid = await createRegisteredTarget(
+      () => createConversation(request, "agent"),
+      (cid) => {
+        cids.push(cid);
+        updateProviderConversationManifest(cids);
+      },
+      (cid) => kickRun(request, "agent", cid),
+    );
     await agentPage.goto(`/agent/${agentCid}`);
     const agentFirst = await waitForCommittedFinish(request, agentCid);
     const agentFirstVerifier = verifierEvidence(agentFirst.events);
@@ -936,15 +931,11 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     );
     await openFromHandoff(context, page, buildCid, SECOND_MARKER, previewBearers);
 
-    const safeConsoleErrors = consoleErrors.map((message) =>
-      redactPreviewBearers(message, previewBearers),
-    );
-    const safeFailedPreviewRequests = failedPreviewRequests.map((message) =>
-      redactPreviewBearers(message, previewBearers),
-    );
-    const safeIsolatedPreviewHttpFailures = isolatedPreviewHttpFailures.map((message) =>
-      redactPreviewBearers(message, previewBearers),
-    );
+    const sanitizeEvidence = (message: string) =>
+      redactKnownIdentifiers(redactPreviewBearers(message, previewBearers), cids);
+    const safeConsoleErrors = consoleErrors.map(sanitizeEvidence);
+    const safeFailedPreviewRequests = failedPreviewRequests.map(sanitizeEvidence);
+    const safeIsolatedPreviewHttpFailures = isolatedPreviewHttpFailures.map(sanitizeEvidence);
     expect(safeConsoleErrors, `browser console errors: ${JSON.stringify(safeConsoleErrors)}`).toEqual([]);
     expect(
       safeFailedPreviewRequests,
@@ -955,10 +946,9 @@ test("Build and Agent open the selected multi-file manifest across restart and r
       `isolated preview HTTP 5xx responses: ${JSON.stringify(safeIsolatedPreviewHttpFailures)}`,
     ).toEqual([]);
 
-    const evidence = {
+    evidence = {
       revision: process.env.DISCO_RELIABILITY_REVISION ?? null,
       build: {
-        cid: buildCid,
         first_version: buildFirst.version,
         second_version: buildSecond.version,
         selected_entry: selectedApp(buildSecond.events)?.path,
@@ -967,24 +957,48 @@ test("Build and Agent open the selected multi-file manifest across restart and r
         second_verifier: buildSecondVerifier,
       },
       agent: {
-        cid: agentCid,
         version: agentFirst.version,
         selected_entry: selectedApp(agentFirst.events)?.path,
         event_count: agentFirst.events.length,
         verifier: agentFirstVerifier,
       },
-      iframe_responses: iframeResponses,
+      iframe_responses: iframeResponses.map(sanitizeEvidence),
       console_errors: safeConsoleErrors,
       failed_preview_requests: safeFailedPreviewRequests,
       isolated_preview_http_failures: safeIsolatedPreviewHttpFailures,
     };
-    fs.writeFileSync(
-      testInfo.outputPath("preview-manifest-assets-evidence.json"),
-      JSON.stringify(evidence, null, 2),
-      "utf-8",
+  } catch (error) {
+    primaryFailed = true;
+    primaryError = redactFailureStringsInPlace(error, (value) =>
+      redactKnownIdentifiers(redactPreviewBearers(value, previewBearers), cids),
     );
   } finally {
     context.removeAllListeners("page");
-    for (const cid of cids.reverse()) await deleteConversation(request, cid).catch(() => undefined);
   }
+  const cleanup = await attemptAllCleanup(cids, (cid) => deleteConversation(request, cid));
+  if (cleanup.failed > 0) {
+    if (primaryFailed) {
+      testInfo.annotations.push({
+        type: "conversation-cleanup-failure",
+        description: `${cleanup.failed} of ${cleanup.attempted} cleanup targets failed`,
+      });
+      await rethrowAfterBestEffortReport(primaryError, () =>
+        testInfo.attach("conversation-cleanup-failure.json", {
+          body: Buffer.from(JSON.stringify(cleanup), "utf-8"),
+          contentType: "application/json",
+        }),
+      );
+    } else {
+      throw new Error(
+        `conversation cleanup failed for ${cleanup.failed} of ${cleanup.attempted} targets`,
+      );
+    }
+  }
+  if (primaryFailed) throw primaryError;
+  if (evidence === undefined) throw new Error("preview success evidence was not assembled");
+  fs.writeFileSync(
+    testInfo.outputPath("preview-manifest-assets-evidence.json"),
+    JSON.stringify({ ...evidence, cleanup }, null, 2),
+    "utf-8",
+  );
 });

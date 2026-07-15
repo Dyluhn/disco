@@ -529,6 +529,56 @@ class PreviewManager:
         except Exception:  # noqa: BLE001 — best-effort default
             return None
 
+    async def _launch_workspace(self, explicit_cwd: str | None) -> str | None:
+        """Resolve the command cwd independently from ``serve_dir``.
+
+        Container sandboxes deliberately expose no host ``workspace_path`` even though
+        their in-guest workspace is ``/workspace``.  Falling back to a relative
+        ``serve_dir`` made that directory both the shell cwd and ``http.server -d``
+        argument (``release/release``).  Ask the sandbox for its actual cwd instead;
+        leaving it unset is safer than ever reusing the content path as a cwd.
+        """
+
+        if explicit_cwd:
+            return explicit_cwd
+        workspace = self._sandbox_workspace()
+        if workspace:
+            return workspace
+        try:
+            result = await self._sandbox.exec_shell("pwd", timeout_s=5)
+            if getattr(result, "exit_code", 1) == 0:
+                discovered = str(getattr(result, "stdout", "")).strip()
+                if discovered:
+                    return discovered
+        except Exception:  # noqa: BLE001 — shell manager can use its own safe default
+            _LOG.debug("preview workspace discovery failed", exc_info=True)
+        return None
+
+    @staticmethod
+    def _requires_successful_root(session: PreviewSession) -> bool:
+        """Static directory intent is ready only when its selected root is successful."""
+
+        return session.intent.get("launch_kind") == "static"
+
+    @staticmethod
+    def _launch_kind(*, command: str | None, framework: str | None) -> str:
+        """Mirror command resolution so root-health policy matches the actual launcher."""
+
+        if command:
+            return "custom"
+        normalized = (framework or "").strip().lower()
+        if (
+            normalized
+            and normalized in _FRAMEWORK_COMMANDS
+            and normalized
+            not in {
+                "static",
+                "http",
+            }
+        ):
+            return "framework"
+        return "static"
+
     def _default_name(self, serve_dir: str | None, framework: str | None) -> str:
         if framework:
             return f"preview-{framework.strip().lower()}"
@@ -666,7 +716,7 @@ class PreviewManager:
             # P1 #3: run the server FROM the workspace (not serve_dir) so the static
             # `-d <serve_dir>` resolves to workspace/<serve_dir> — running from serve_dir
             # with `-d <serve_dir>` served `<serve_dir>/<serve_dir>` (404 / wrong tree).
-            exec_dir = cwd or self._sandbox_workspace() or serve_dir
+            exec_dir = await self._launch_workspace(cwd)
             session = PreviewSession(
                 name=key,
                 port=port,
@@ -676,6 +726,7 @@ class PreviewManager:
                     "serve_dir": serve_dir,
                     "command": command,
                     "framework": framework,
+                    "launch_kind": self._launch_kind(command=command, framework=framework),
                 },
                 _supervise=supervise,
             )
@@ -701,7 +752,10 @@ class PreviewManager:
 
     async def _poll_until_healthy(self, session: PreviewSession) -> None:
         for _ in range(self._health_attempts):
-            if await self._probe_health(session.port):
+            if await self._probe_health(
+                session.port,
+                require_success=self._requires_successful_root(session),
+            ):
                 # Health alone is not enough — confirm OUR process owns the port before
                 # RUNNING (a foreign server answering ⇒ CRASHED, not a false success).
                 if not await self._confirm_and_mark_running(session):
@@ -710,12 +764,16 @@ class PreviewManager:
             await asyncio.sleep(self._health_interval_s)
         # Never answered in time. Distinguish "process is up but no URL" from a crash:
         # if the shell session is still running, it's just slow/headless → STARTING.
-        if await self._session_alive(session.name):
+        if await self._session_alive(session.name) and not self._requires_successful_root(session):
             session.status = PreviewStatus.STARTING
             session.detail = "process running; not yet answering health checks"
         else:
             session.status = PreviewStatus.CRASHED
-            session.detail = "process exited before serving"
+            session.detail = (
+                "static preview root did not return a successful HTTP response"
+                if self._requires_successful_root(session)
+                else "process exited before serving"
+            )
 
     def _mark_running(self, session: PreviewSession) -> None:
         """Healthy on the platform port — expose the URL, or degrade gracefully."""
@@ -741,15 +799,24 @@ class PreviewManager:
         except Exception:  # noqa: BLE001 — a URL probe must never raise
             return None
 
-    async def _probe_health(self, port: int) -> bool:
+    async def _probe_health(self, port: int, *, require_success: bool = False) -> bool:
         """Backend-agnostic liveness: curl the server from INSIDE the sandbox (the one
-        place it's reachable on every backend, sealed-network included). True iff it
-        answers with any HTTP status."""
+        place it's reachable on every backend, sealed-network included). Any HTTP
+        response proves a port is occupied; static-directory readiness additionally
+        requires a successful root so a 404 cannot be advertised as health-verified."""
         try:
             res = await self._sandbox.fetch_inside(port, "/", timeout_s=5)
         except Exception:  # noqa: BLE001 — a probe must never raise into supervision
             return False
-        return res is not None
+        if res is None:
+            return False
+        if not require_success:
+            return True
+        try:
+            status = int(res[0])
+        except (IndexError, TypeError, ValueError):
+            return False
+        return 200 <= status < 400
 
     async def _session_alive(self, name: str) -> bool:
         try:
@@ -796,7 +863,10 @@ class PreviewManager:
                     and session.restart_count >= self.MAX_RESTARTS
                 ):
                     continue
-                if await self._probe_health(session.port):
+                if await self._probe_health(
+                    session.port,
+                    require_success=self._requires_successful_root(session),
+                ):
                     # Recovered or steady — make sure the URL/status reflect health, but
                     # only after confirming the responder is OUR process (P1 #2).
                     if session.status in (PreviewStatus.STARTING, PreviewStatus.RESTARTING):
@@ -845,7 +915,10 @@ class PreviewManager:
         """Re-probe health for one session and update its status/URL (no restart)."""
         if session.status is PreviewStatus.STOPPED:
             return
-        if await self._probe_health(session.port):
+        if await self._probe_health(
+            session.port,
+            require_success=self._requires_successful_root(session),
+        ):
             await self._confirm_and_mark_running(session)
         elif session.status is PreviewStatus.RUNNING:
             if await self._session_alive(session.name):

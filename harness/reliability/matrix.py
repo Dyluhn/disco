@@ -65,6 +65,7 @@ class Suite:
     environment: dict[str, str]
     provider_evidence: bool
     provider_conversation_manifest: bool
+    provider_conversation_count: int | None
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
         environment = item.get("environment") or {}
         provider_evidence = item.get("provider_evidence", False)
         provider_conversation_manifest = item.get("provider_conversation_manifest", False)
+        provider_conversation_count = item.get("provider_conversation_count")
         if not isinstance(required_env, list) or not all(
             isinstance(name, str) and name for name in required_env
         ):
@@ -196,6 +198,20 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             raise ValueError(
                 f"{suite_id}.provider_conversation_manifest requires provider_evidence"
             )
+        if provider_conversation_count is not None and (
+            not isinstance(provider_conversation_count, int)
+            or isinstance(provider_conversation_count, bool)
+            or provider_conversation_count <= 0
+        ):
+            raise ValueError(f"{suite_id}.provider_conversation_count must be a positive integer")
+        if provider_conversation_count is not None and not provider_conversation_manifest:
+            raise ValueError(
+                f"{suite_id}.provider_conversation_count requires provider_conversation_manifest"
+            )
+        if provider_conversation_manifest and provider_conversation_count is None:
+            raise ValueError(
+                f"{suite_id}.provider_conversation_manifest requires provider_conversation_count"
+            )
 
         suites[suite_id] = Suite(
             id=suite_id,
@@ -211,6 +227,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             environment=dict(environment),
             provider_evidence=provider_evidence,
             provider_conversation_manifest=provider_conversation_manifest,
+            provider_conversation_count=provider_conversation_count,
         )
 
     if not claims:

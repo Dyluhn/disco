@@ -54,6 +54,110 @@ describe("assessAgentErrorThrash", () => {
     expect(result.violations).toEqual(["agent_error total 6 exceeds 5"]);
   });
 
+  it("does not merge different shell actions that share a generic exit code", () => {
+    const result = assessAgentErrorThrash([
+      {
+        id: "act-one",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: { command: "curl /health" },
+        },
+      },
+      { kind: "agent_error", action_id: "act-one", error: "command exited 1" },
+      {
+        id: "act-two",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: { command: "grep marker index.html" },
+        },
+      },
+      { kind: "agent_error", action_id: "act-two", error: "command exited 1" },
+    ]);
+
+    expect(result).toEqual({ total: 2, repeated: [], violations: [] });
+  });
+
+  it("rejects the same normalized action failing under different action ids", () => {
+    const result = assessAgentErrorThrash([
+      {
+        id: "act-one",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: { timeout: 5, command: "curl /health" },
+        },
+      },
+      { kind: "agent_error", action_id: "act-one", error: "command exited 1" },
+      {
+        id: "act-two",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: { command: "curl /health", timeout: 5 },
+        },
+      },
+      { kind: "agent_error", action_id: "act-two", error: "command exited 1" },
+    ]);
+
+    expect(result.repeated).toEqual([{ error: "command exited 1", count: 2 }]);
+    expect(result.violations).toEqual([
+      "agent_error repeated 2 times: command exited 1",
+    ]);
+  });
+
+  it("normalizes volatile workspace and call ids inside paired action arguments", () => {
+    const result = assessAgentErrorThrash([
+      {
+        id: "action-one",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: {
+            command: "cat /tmp/disco-sbx-root/sbx_first/output-call_alpha.txt",
+          },
+        },
+      },
+      { kind: "agent_error", action_id: "action-one", error: "command exited 1" },
+      {
+        id: "action-two",
+        kind: "action",
+        tool_call: {
+          tool_name: "shell",
+          arguments: {
+            command: "cat /tmp/disco-sbx-root/sbx_second/output-call_beta.txt",
+          },
+        },
+      },
+      { kind: "agent_error", action_id: "action-two", error: "command exited 1" },
+    ]);
+
+    expect(result.repeated).toEqual([{ error: "command exited 1", count: 2 }]);
+    expect(result.violations).toEqual([
+      "agent_error repeated 2 times: command exited 1",
+    ]);
+  });
+
+  it("keeps missing action correlation fail-closed", () => {
+    const result = assessAgentErrorThrash([
+      {
+        kind: "agent_error",
+        action_id: "missing-one",
+        error: "command exited 1",
+      },
+      {
+        kind: "agent_error",
+        action_id: "missing-two",
+        error: "command exited 1",
+      },
+    ]);
+
+    expect(result.violations).toEqual([
+      "agent_error repeated 2 times: command exited 1",
+    ]);
+  });
+
   it("ignores other event kinds", () => {
     expect(
       assessAgentErrorThrash([

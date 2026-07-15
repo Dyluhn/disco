@@ -169,6 +169,7 @@ EXEC_CAPTURE_TAIL_BYTES = 64 * 1024
 EXEC_CAPTURE_RETURN_BYTES = EXEC_CAPTURE_HEAD_BYTES + EXEC_CAPTURE_TAIL_BYTES
 EXEC_CAPTURE_SPILL_BYTES = 1024 * 1024
 MAX_SANDBOX_READ_BYTES = 32 * 1024 * 1024
+MAX_SANDBOX_LIST_ENTRIES = 4096
 SANDBOX_READ_TIMEOUT_S = 20
 
 _BOUNDED_EXEC_HELPER = r"""
@@ -415,6 +416,77 @@ def bounded_read_result(path: str, rc: int, out: bytes, err: bytes) -> bytes:
             f"read_file {path!r} exceeds the {MAX_SANDBOX_READ_BYTES}-byte transfer cap",
         )
     raise OSError(f"read_file {path!r} failed safely: {detail or f'exit {rc}'}")
+
+
+_BOUNDED_LIST_HELPER = r"""
+import json
+import os
+import sys
+
+target = sys.argv[1]
+limit = int(sys.argv[2])
+entries_out = []
+try:
+    with os.scandir(target) as entries:
+        for entry in entries:
+            if entry.is_symlink():
+                kind = "other"
+            elif entry.is_file(follow_symlinks=False):
+                kind = "file"
+            elif entry.is_dir(follow_symlinks=False):
+                kind = "directory"
+            else:
+                kind = "other"
+            entries_out.append((entry.name, kind))
+            if len(entries_out) > limit:
+                break
+    payload = {
+        "entries": sorted(entries_out[:limit]),
+        "truncated": len(entries_out) > limit,
+    }
+    sys.stdout.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+except OSError as exc:
+    sys.stderr.write(f"DISCO_LIST_ERROR:{type(exc).__name__}")
+    raise SystemExit(48)
+"""
+
+
+def bounded_list_argv(path: str, limit: int, *, python: str = "python3") -> list[str]:
+    """Inspect at most ``limit`` entries in the guest without materializing the directory."""
+
+    if limit <= 0 or limit > MAX_SANDBOX_LIST_ENTRIES:
+        raise ValueError(f"list limit must be between 1 and {MAX_SANDBOX_LIST_ENTRIES}")
+    return [python, "-c", _BOUNDED_LIST_HELPER, path, str(limit)]
+
+
+def bounded_list_result(
+    path: str,
+    rc: int,
+    out: bytes,
+    err: bytes,
+) -> tuple[list[tuple[str, str]], bool]:
+    if rc != 0:
+        detail = err.decode("utf-8", "replace")
+        raise OSError(f"list_dir_bounded {path!r} failed safely: {detail or f'exit {rc}'}")
+    try:
+        payload = json.loads(out.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OSError(f"list_dir_bounded {path!r} returned malformed evidence") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"entries", "truncated"}
+        or not isinstance(payload["entries"], list)
+        or not all(
+            isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and entry[1] in {"file", "directory", "other"}
+            for entry in payload["entries"]
+        )
+        or not isinstance(payload["truncated"], bool)
+    ):
+        raise OSError(f"list_dir_bounded {path!r} returned invalid evidence")
+    return [tuple(entry) for entry in payload["entries"]], payload["truncated"]
 
 
 # Default upper bound on a docker-py / podman-py `reload()` call (Dispo #25 wedge-guard).
@@ -1313,6 +1385,20 @@ class ContainerInstance:
                 raise_read_error(path, err, op="list_dir")  # W1: typed missing-dir error
             out = (res[1][0] if res[1] else b"") or b""
             return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
+
+        return await self._guarded(_list)
+
+    async def list_dir_bounded(self, path: str, limit: int) -> tuple[list[tuple[str, str]], bool]:
+        """List a bounded directory prefix entirely inside the guest."""
+
+        self._alive()
+
+        def _list() -> tuple[list[tuple[str, str]], bool]:
+            target = self._resolve_guest_path(path)
+            res = self._container.exec_run(bounded_list_argv(target, limit), demux=True)
+            out = (res[1][0] if res[1] else b"") or b""
+            err = (res[1][1] if res[1] else b"") or b""
+            return bounded_list_result(path, int(res[0] or 0), out, err)
 
         return await self._guarded(_list)
 

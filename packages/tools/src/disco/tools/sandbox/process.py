@@ -32,6 +32,7 @@ import uuid
 from pathlib import Path
 
 from ._container import (
+    MAX_SANDBOX_LIST_ENTRIES,
     MAX_SANDBOX_READ_BYTES,
     SANDBOX_READ_TIMEOUT_S,
     bounded_exec_argv,
@@ -486,6 +487,28 @@ class ProcessSandboxInstance:
     async def list_dir(self, path: str) -> list[str]:
         self._alive()
         return sorted(p.name for p in self._resolve(path).iterdir())
+
+    async def list_dir_bounded(self, path: str, limit: int) -> tuple[list[tuple[str, str]], bool]:
+        """List without retaining more than ``limit + 1`` directory entries."""
+
+        self._alive()
+        if limit <= 0 or limit > MAX_SANDBOX_LIST_ENTRIES:
+            raise ValueError(f"list limit must be between 1 and {MAX_SANDBOX_LIST_ENTRIES}")
+        found: list[tuple[str, str]] = []
+        with os.scandir(self._resolve(path)) as entries:
+            for entry in entries:
+                if entry.is_symlink():
+                    kind = "other"
+                elif entry.is_file(follow_symlinks=False):
+                    kind = "file"
+                elif entry.is_dir(follow_symlinks=False):
+                    kind = "directory"
+                else:
+                    kind = "other"
+                found.append((entry.name, kind))
+                if len(found) > limit:
+                    return sorted(found[:limit]), True
+        return sorted(found), False
 
     async def file_exists(self, path: str) -> bool:
         """[B4] Workspace-jailed existence check. The process workspace lives on

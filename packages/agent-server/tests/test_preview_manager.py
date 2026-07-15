@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 from disco.agent_server.preview_manager import (
@@ -90,6 +91,10 @@ class _FakeSandbox:
         if port in self._serving:
             return (200, b"<html></html>", "text/html")
         return None
+
+    async def exec_shell(self, command: str, *, timeout_s: int = 5):
+        assert command == "pwd"
+        return SimpleNamespace(exit_code=0, stdout="/workspace\n", stderr="")
 
 
 def _mgr(sandbox: _FakeSandbox, **kw) -> PreviewManager:
@@ -880,3 +885,75 @@ async def test_static_serve_dir_serves_the_directory_not_dist_dist() -> None:
     assert sandbox.sessions.port_root[3000] == "/workspace/dist"  # not /workspace/dist/dist
     status, _body, _ctype = await sandbox.fetch_inside(3000, "/")
     assert status == 200  # the index is really served (not a 404 on the wrong tree)
+
+
+@pytest.mark.asyncio
+async def test_container_without_host_workspace_discovers_guest_cwd_for_relative_static_dir() -> (
+    None
+):
+    """Production containers intentionally report workspace_path=None.
+
+    A relative serve_dir must still run from the guest workspace, never from that
+    same relative directory (which produces release/release).
+    """
+
+    sandbox = _StaticServingSandbox(files={"/workspace/release/index.html"})
+    sandbox.workspace_path = None  # type: ignore[assignment]
+
+    async def _pwd(command: str, *, timeout_s: int = 5):  # noqa: ANN202, ARG001
+        assert command == "pwd"
+        return SimpleNamespace(exit_code=0, stdout="/workspace\n", stderr="")
+
+    sandbox.exec_shell = _pwd  # type: ignore[attr-defined,method-assign]
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="release", name="app", supervise=False)
+
+    assert session.status is PreviewStatus.RUNNING
+    assert session.exec_dir == "/workspace"
+    assert sandbox.sessions.port_root[3000] == "/workspace/release"
+
+
+@pytest.mark.asyncio
+async def test_static_preview_root_404_is_never_marked_health_verified() -> None:
+    sandbox = _StaticServingSandbox(files=set())
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(serve_dir="release", name="app", supervise=False)
+
+    assert session.status is PreviewStatus.CRASHED
+    assert session.url is None
+    assert session.detail == "static preview root did not return a successful HTTP response"
+
+
+@pytest.mark.asyncio
+async def test_default_static_root_404_is_never_marked_health_verified() -> None:
+    sandbox = _StaticServingSandbox(files=set())
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(name="app", supervise=False)
+
+    assert session.status is PreviewStatus.CRASHED
+    assert session.intent["launch_kind"] == "static"
+
+
+@pytest.mark.asyncio
+async def test_known_dev_framework_uses_liveness_not_static_root_success() -> None:
+    sandbox = _FakeSandbox()
+
+    async def _not_found(port: int, path: str, *, timeout_s: int = 5):  # noqa: ARG001
+        if port in sandbox._serving:
+            return (404, b"framework fallback", "text/plain")
+        return None
+
+    sandbox.fetch_inside = _not_found  # type: ignore[method-assign]
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(
+        serve_dir="release",
+        framework="vite",
+        name="app",
+        supervise=False,
+    )
+
+    assert session.status is PreviewStatus.RUNNING
+    assert session.intent["launch_kind"] == "framework"
