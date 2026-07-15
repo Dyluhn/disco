@@ -28,47 +28,50 @@ def test_view_append_stability():
             # 4: observation (seq 5)
             content = "Result " + str(i) + ("A" * 1000 if i % 6 == 2 else "")
             events.append(observation(content=content))
-    
+
     events = with_seqs(events)
-    
+
     for k in range(30, 60):
         view_prev = View.of(events[:k])
-        view_next = View.of(events[:k+1])
-        
+        view_next = View.of(events[: k + 1])
+
         fp_prev = view_prev.fingerprint()
         fp_next = view_next.fingerprint()
-        
+
         # Strip tail recitation from both if present
         if fp_prev and view_prev.messages[-1].content.startswith("<current-objective>"):
             fp_prev = fp_prev[:-1]
         if fp_next and view_next.messages[-1].content.startswith("<current-objective>"):
             fp_next = fp_next[:-1]
-            
+
         # fp_prev should be a prefix of fp_next, EXCEPT for at most 1 changed element (masking flip)
         common_len = min(len(fp_prev), len(fp_next))
         changes = 0
         for i in range(common_len):
             if fp_prev[i] != fp_next[i]:
                 changes += 1
-        
+
         assert changes <= 1, (
             f"Too many changes at k={k}: {changes}. "
             f"Prev len: {len(fp_prev)}, Next len: {len(fp_next)}"
         )
 
+
 def test_view_subprocess_roundtrip():
     # Test that View.fingerprint is stable across processes
-    events = with_seqs([
-        user_msg("Start"), 
-        PlanEvent(summary="Goal", steps=[PlanStep(title="Step 1")], revision=1),
-        observation(content="A"*1000)
-    ])
-    
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            PlanEvent(summary="Goal", steps=[PlanStep(title="Step 1")], revision=1),
+            observation(content="A" * 1000),
+        ]
+    )
+
     fp_parent = View.of(events).fingerprint()
-    
+
     # Serialize events to JSON using model_dump(mode="json")
     events_json = json.dumps([e.model_dump(mode="json") for e in events])
-    
+
     # The subprocess needs to be able to import disco.
     # We'll assume the environment is set up such that it's in sys.path.
     code = f"""
@@ -128,13 +131,15 @@ def test_latest_image_only(monkeypatch):
     """Only the LATEST screenshot-bearing browser observation renders an image;
     older ones render as path text only (images=None)."""
     monkeypatch.setenv("PMX_DRIVER_VISION", "1")
-    events = with_seqs([
-        user_msg("Start"),
-        action(thought="browse 1", tool="browser", args={"action": "navigate"}),
-        _browser_obs("AAA", 1),
-        action(thought="browse 2", tool="browser", args={"action": "navigate"}),
-        _browser_obs("BBB", 2),
-    ])
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(thought="browse 1", tool="browser", args={"action": "navigate"}),
+            _browser_obs("AAA", 1),
+            action(thought="browse 2", tool="browser", args={"action": "navigate"}),
+            _browser_obs("BBB", 2),
+        ]
+    )
     view = View.of(events)
     imaged = _image_messages(view)
     assert len(imaged) == 1, f"expected exactly one image-bearing message, got {len(imaged)}"
@@ -147,11 +152,13 @@ def test_latest_image_only(monkeypatch):
 def test_no_images_when_gate_off(monkeypatch):
     """With the vision gate off, no rendered message carries images."""
     monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
-    events = with_seqs([
-        user_msg("Start"),
-        action(thought="browse", tool="browser", args={"action": "navigate"}),
-        _browser_obs("AAA", 1),
-    ])
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(thought="browse", tool="browser", args={"action": "navigate"}),
+            _browser_obs("AAA", 1),
+        ]
+    )
     assert _image_messages(View.of(events)) == []
 
 
@@ -182,11 +189,13 @@ def test_verify_web_app_screenshot_attached_under_vision(monkeypatch):
     """H1: a verify_web_app observation carrying screenshot_b64 attaches an image on
     the model's next turn when DRIVER_VISION==1 — exactly like a browser screenshot."""
     monkeypatch.setenv("PMX_DRIVER_VISION", "1")
-    events = with_seqs([
-        user_msg("Start"),
-        action(thought="verify", tool="verify_web_app", args={}),
-        _verify_web_app_obs("VVV", 1),
-    ])
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(thought="verify", tool="verify_web_app", args={}),
+            _verify_web_app_obs("VVV", 1),
+        ]
+    )
     imaged = _image_messages(View.of(events))
     assert len(imaged) == 1
     assert imaged[0].images == ["data:image/png;base64,VVV"]
@@ -196,11 +205,13 @@ def test_verify_web_app_no_image_when_gate_off(monkeypatch):
     """H1: with the vision gate off, a verify_web_app screenshot attaches NOTHING —
     graceful fallback, no behavior change for a no-vision model."""
     monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
-    events = with_seqs([
-        user_msg("Start"),
-        action(thought="verify", tool="verify_web_app", args={}),
-        _verify_web_app_obs("VVV", 1),
-    ])
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(thought="verify", tool="verify_web_app", args={}),
+            _verify_web_app_obs("VVV", 1),
+        ]
+    )
     assert _image_messages(View.of(events)) == []
 
 
@@ -218,7 +229,7 @@ def test_image_flip_fingerprint_stability(monkeypatch):
 
     for k in range(3, len(events)):
         fp_prev = View.of(events[:k]).fingerprint()
-        fp_next = View.of(events[:k + 1]).fingerprint()
+        fp_next = View.of(events[: k + 1]).fingerprint()
         common = min(len(fp_prev), len(fp_next))
         changes = sum(1 for i in range(common) if fp_prev[i] != fp_next[i])
         assert changes <= 1, (

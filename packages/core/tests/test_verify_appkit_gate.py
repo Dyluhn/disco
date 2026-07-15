@@ -258,9 +258,7 @@ async def test_appkit_finish_verify_arg_defers_to_appkit_verifier_without_shell(
     events = await store.get_events("conv")
     assert execu.appkit_calls >= 1
     assert all(call.tool_name != "shell" for call in execu.calls)
-    assert not any(
-        isinstance(e, ActionEvent) and e.tool_call.tool_name == "shell" for e in events
-    )
+    assert not any(isinstance(e, ActionEvent) and e.tool_call.tool_name == "shell" for e in events)
     assert ("FINISHED", None) in _statuses(events)
 
 

@@ -101,6 +101,7 @@ async def test_vision_escalation_routes_to_escalation_model():
         ),
     }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+
     sink = InMemoryRoutingSink()
     router = DefaultLLMRouter(cfg, providers, sink=sink)
 
@@ -126,6 +127,7 @@ async def test_vision_escalation_does_not_affect_text_only_requests():
         "openrouter": FakeModelProvider("openrouter", text="should-not-be-called", cost_usd=0.01),
     }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+
     sink = InMemoryRoutingSink()
     router = DefaultLLMRouter(cfg, providers, sink=sink)
 
@@ -148,6 +150,7 @@ async def test_escalation_model_receives_provider_and_model_id_correctly():
         "openrouter": openrouter_provider,
     }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
     await router.complete(_img_req())
@@ -168,6 +171,7 @@ async def test_guard_preserved_when_escalation_unset():
     NoEligibleModel — we did NOT weaken the safety guard."""
     cfg = _cfg_with_escalation(None)
     from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -180,6 +184,7 @@ async def test_guard_preserved_when_escalation_not_in_catalogue():
     the guard raises NoEligibleModel."""
     cfg = _cfg_with_escalation("nonexistent-model")
     from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -193,6 +198,7 @@ async def test_guard_preserved_when_escalation_model_lacks_vision():
     to a non-vision model."""
     cfg = _cfg_with_escalation("vision-model", escalation_vision=False)
     from disco.core.llm.routing import CallContext, DefaultLLMRouter, InMemoryRoutingSink
+
     router = DefaultLLMRouter(cfg, {}, sink=InMemoryRoutingSink())
 
     with pytest.raises(NoEligibleModel) as excinfo:
@@ -315,6 +321,7 @@ async def test_no_escalation_when_primary_has_vision():
         "openrouter": FakeModelProvider("openrouter", text="should-not-be-called"),
     }
     from disco.core.llm.routing import DefaultLLMRouter, InMemoryRoutingSink
+
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
     resp = await router.complete(_img_req())

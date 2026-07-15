@@ -108,7 +108,7 @@ def test_auth_records_emits_auth_schema_worker_and_approval_rbac() -> None:
     assert "fixedWorkStringEqual" not in worker
     assert "rawPathname(request.url, url.origin)" in worker
     assert "decodedPathname(rawPath)" in worker
-    assert "decodedPath.startsWith(\"/api/\")" in worker
+    assert 'decodedPath.startsWith("/api/")' in worker
     assert 'return json({ error: "not found" }, 404)' in worker
     assert "deriveBits" in worker
     assert "crypto.getRandomValues" in worker
@@ -126,10 +126,13 @@ def test_auth_records_emits_auth_schema_worker_and_approval_rbac() -> None:
 
 
 def test_auth_records_worker_and_schema_outputs_stay_stable() -> None:
-    assert _digest_paths(
-        _auth_tree(),
-        ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
-    ) == _AUTH_RECORDS_WORKER_SCHEMA_DIGEST
+    assert (
+        _digest_paths(
+            _auth_tree(),
+            ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
+        )
+        == _AUTH_RECORDS_WORKER_SCHEMA_DIGEST
+    )
 
 
 def test_auth_records_schema_sql_round_trips_with_fk_enforcement() -> None:
@@ -160,8 +163,7 @@ def test_auth_records_schema_sql_round_trips_with_fk_enforcement() -> None:
         )
         with pytest.raises(sqlite3.IntegrityError):
             con.execute(
-                'INSERT INTO "sessions" ("token_hash", "user_id", "expires_at") '
-                "VALUES (?, ?, ?)",
+                'INSERT INTO "sessions" ("token_hash", "user_id", "expires_at") VALUES (?, ?, ?)',
                 ("badtokenhash", 999, "2026-07-13T00:00:00.000Z"),
             )
         with pytest.raises(sqlite3.IntegrityError):
@@ -273,9 +275,7 @@ def test_rbac_approver_only_and_survives_restart() -> None:
             port,
             "POST",
             "/api/login",
-            body=json.dumps(
-                {"email": member_email, "password": member_password}
-            ).encode("utf-8"),
+            body=json.dumps({"email": member_email, "password": member_password}).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
                 "Origin": "https://evil.example",
@@ -303,15 +303,10 @@ def test_rbac_approver_only_and_survives_restart() -> None:
             port,
             "POST",
             "/api/login",
-            body=json.dumps({"email": member_email, "password": "x" * 1025}).encode(
-                "utf-8"
-            ),
+            body=json.dumps({"email": member_email, "password": "x" * 1025}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
-        print(
-            "long password POST /api/login -> "
-            f"{long_password_status} {long_password_body}"
-        )
+        print(f"long password POST /api/login -> {long_password_status} {long_password_body}")
         assert long_password_status == 401
         assert json.loads(long_password_body) == {"error": "invalid credentials"}
 
@@ -445,9 +440,7 @@ def _raw_request(
     headers: dict[str, str] | None = None,
 ) -> tuple[int, str]:
     url = f"http://127.0.0.1:{port}{path}"
-    req = urllib.request.Request(
-        url, data=body, headers=dict(headers or {}), method=method
-    )
+    req = urllib.request.Request(url, data=body, headers=dict(headers or {}), method=method)
     try:
         with urllib.request.urlopen(req, timeout=10.0) as res:
             return res.status, res.read().decode("utf-8", errors="replace")

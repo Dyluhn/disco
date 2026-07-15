@@ -186,10 +186,12 @@ async def _no_sleep(_seconds: float) -> None:
 
 async def test_initial_synthesis_retries_one_transient_failure(monkeypatch: Any) -> None:
     monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
-    router = _ScriptedRouter([
-        LLMTransientError("rate limited", provider="fake"),
-        ("Recovered synthesis [[p1]].", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            LLMTransientError("rate limited", provider="fake"),
+            ("Recovered synthesis [[p1]].", "stop"),
+        ]
+    )
 
     md = await _run_synth(router)
 
@@ -199,11 +201,13 @@ async def test_initial_synthesis_retries_one_transient_failure(monkeypatch: Any)
 
 async def test_empty_retry_retries_one_transient_failure(monkeypatch: Any) -> None:
     monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
-    router = _ScriptedRouter([
-        ("", "stop"),
-        LLMTransientError("connection reset", provider="fake"),
-        ("Recovered after empty retry [[p1]].", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            ("", "stop"),
+            LLMTransientError("connection reset", provider="fake"),
+            ("Recovered after empty retry [[p1]].", "stop"),
+        ]
+    )
 
     md = await _run_synth(router)
 
@@ -216,14 +220,15 @@ async def test_truncation_continues_mid_table_row_without_loss() -> None:
     the exact cut point and glued WITHOUT a spurious separator: the half-written
     cell completes (``| Alpha | 9`` + ``0 |`` -> ``| Alpha | 90 |``) — no merged
     rows, no lost or duplicated content."""
-    router = _ScriptedRouter([
-        (
-            "## Findings\n\nResults [[p1]]:\n\n"
-            "| Model | Score |\n| --- | --- |\n| Alpha | 9",
-            "length",
-        ),
-        ("0 |\n| Beta | 85 |", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            (
+                "## Findings\n\nResults [[p1]]:\n\n| Model | Score |\n| --- | --- |\n| Alpha | 9",
+                "length",
+            ),
+            ("0 |\n| Beta | 85 |", "stop"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 2  # exactly one continuation call
@@ -244,14 +249,15 @@ async def test_truncation_at_row_boundary_starts_a_fresh_line() -> None:
     newline), the continuation begins on a FRESH line — a new row never merges
     into the previous one. This is the case the pre-fix strip()-then-glue logic
     broke (it produced ``| Alpha | 90 || Beta | 85 |``)."""
-    router = _ScriptedRouter([
-        (
-            "Intro [[p1]].\n\n"
-            "| Model | Score |\n| --- | --- |\n| Alpha | 90 |\n",
-            "length",
-        ),
-        ("| Beta | 85 |", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            (
+                "Intro [[p1]].\n\n| Model | Score |\n| --- | --- |\n| Alpha | 90 |\n",
+                "length",
+            ),
+            ("| Beta | 85 |", "stop"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 2
@@ -270,14 +276,16 @@ async def test_truncation_after_complete_row_without_newline_joins_fresh_line() 
     leading pipe (``| Beta | 85 |``). A direct glue would fuse them into one row
     (``| Alpha | 90 || Beta | 85 |``); the adjacent ``||`` is the tell. The join
     must insert a newline so each row stays distinct."""
-    router = _ScriptedRouter([
-        (
-            "Intro [[p1]].\n\n"
-            "| Model | Score |\n| --- | --- |\n| Alpha | 90 |",  # NO trailing \n
-            "length",
-        ),
-        ("| Beta | 85 |", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            (
+                "Intro [[p1]].\n\n"
+                "| Model | Score |\n| --- | --- |\n| Alpha | 90 |",  # NO trailing \n
+                "length",
+            ),
+            ("| Beta | 85 |", "stop"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 2
@@ -295,9 +303,11 @@ async def test_truncation_after_complete_row_without_newline_joins_fresh_line() 
 async def test_no_continuation_when_first_response_completes() -> None:
     """A normal (`finish_reason=="stop"`) section makes exactly one call — the
     truncation guard never fires."""
-    router = _ScriptedRouter([
-        ("A complete section about Alpha [[p1]].", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            ("A complete section about Alpha [[p1]].", "stop"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 1
@@ -309,10 +319,12 @@ async def test_empty_response_retries_then_uses_retry_content() -> None:
     comes back with EMPTY text. synthesize_section must retry once and use the
     retry's content — never store the empty body that the UI renders as a titled
     card with no content."""
-    router = _ScriptedRouter([
-        ("", "stop"),  # first call: empty, successful — the bug trigger
-        ("A real section about Alpha [[p1]].", "stop"),  # retry produces content
-    ])
+    router = _ScriptedRouter(
+        [
+            ("", "stop"),  # first call: empty, successful — the bug trigger
+            ("A real section about Alpha [[p1]].", "stop"),  # retry produces content
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 2  # exactly one empty-response retry
@@ -340,10 +352,12 @@ async def test_empty_length_response_retries_with_wider_budget() -> None:
             else:
                 text, finish = "Recovered prose about Alpha [[p1]].", "stop"
             return CompletionResponse(
-                text=text, tool_calls=[],
+                text=text,
+                tool_calls=[],
                 usage=TokenUsage(input_tokens=1, output_tokens=1),
                 finish_reason=finish,  # type: ignore[arg-type]
-                model_used="fake", routing=None,
+                model_used="fake",
+                routing=None,
             )
 
     router = _RecordingRouter()
@@ -360,10 +374,12 @@ async def test_think_only_response_counts_as_empty_and_retries() -> None:
     <think> — raw text is non-empty, so the empty-retry was skipped, then the
     think-strip emptied it and 5/6 sections degraded to the honest placeholder.
     Emptiness must be judged post-strip so the widened retry fires."""
-    router = _ScriptedRouter([
-        ("<think>reasoning that ate the whole budget", "length"),
-        ("Recovered prose about Alpha [[p1]].", "stop"),
-    ])
+    router = _ScriptedRouter(
+        [
+            ("<think>reasoning that ate the whole budget", "length"),
+            ("Recovered prose about Alpha [[p1]].", "stop"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 2  # think-only first response triggered the retry
@@ -374,10 +390,12 @@ async def test_think_only_response_counts_as_empty_and_retries() -> None:
 async def test_empty_response_after_retry_preserves_cited_evidence() -> None:
     """If the section is STILL empty after the retry, preserve source excerpts
     with real citation ids instead of finishing with an uncited placeholder."""
-    router = _ScriptedRouter([
-        ("   ", "stop"),  # whitespace-only
-        ("\n\n", "stop"),  # retry: also empty
-    ])
+    router = _ScriptedRouter(
+        [
+            ("   ", "stop"),  # whitespace-only
+            ("\n\n", "stop"),  # retry: also empty
+        ]
+    )
     sub = SubQuestionResult(
         subq=SubQuestion(title="Historical context?"),
         passages=[_passage()],
@@ -458,12 +476,14 @@ async def test_synthesis_exception_preserves_cited_evidence() -> None:
 async def test_truncation_guard_is_bounded() -> None:
     """A model that keeps returning `length` is bounded: the guard continues at
     most twice (3 router calls total), then stops with the accumulated text."""
-    router = _ScriptedRouter([
-        ("part-1 [[p1]]", "length"),
-        (" part-2", "length"),
-        (" part-3", "length"),
-        (" part-4", "length"),
-    ])
+    router = _ScriptedRouter(
+        [
+            ("part-1 [[p1]]", "length"),
+            (" part-2", "length"),
+            (" part-3", "length"),
+            (" part-4", "length"),
+        ]
+    )
     md = await _run_synth(router)
 
     assert router.calls == 3  # initial + 2 bounded continuations

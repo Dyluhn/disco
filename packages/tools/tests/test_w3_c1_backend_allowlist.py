@@ -55,8 +55,13 @@ def test_wire_dto_rejects_unknown_backend():
 
     with pytest.raises(ValidationError):
         SandboxConfigDTO(
-            backend="garbage", docker_socket="", podman_url="", runtime="",
-            image="", workspace_root="/tmp/x", connections={},
+            backend="garbage",
+            docker_socket="",
+            podman_url="",
+            runtime="",
+            image="",
+            workspace_root="/tmp/x",
+            connections={},
         )
 
 

@@ -106,9 +106,7 @@ async def test_file_write_refuses_text_into_existing_binary_deliverable():
     # Simulate a generated, delivered deck on disk.
     await inst.write_file("local_llms_2026.pptx", b"PK\x03\x04 binary pptx bytes")
     out = await FileWriteTool().run(
-        FileWriteTool().definition.args_model(
-            path="local_llms_2026.pptx", content="placeholder"
-        ),
+        FileWriteTool().definition.args_model(path="local_llms_2026.pptx", content="placeholder"),
         ctx,
     )
     assert out.success is False

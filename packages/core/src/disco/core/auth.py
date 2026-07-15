@@ -338,9 +338,7 @@ class SignedTokenCodec:
     def unsign(self, token: str) -> dict[str, Any] | None:
         try:
             body_b64, sig_b64 = token.split(".", 1)
-            expected = hmac.new(
-                self._secret, body_b64.encode("ascii"), hashlib.sha256
-            ).digest()
+            expected = hmac.new(self._secret, body_b64.encode("ascii"), hashlib.sha256).digest()
             if not hmac.compare_digest(expected, _unb64(sig_b64)):
                 return None
             payload = json.loads(_unb64(body_b64).decode("utf-8"))
@@ -410,10 +408,7 @@ class SessionSigner:
 
     @staticmethod
     def csrf_valid(session: AuthSession, presented: str | None) -> bool:
-        return bool(
-            presented
-            and hmac.compare_digest(session.csrf_token, presented.strip())
-        )
+        return bool(presented and hmac.compare_digest(session.csrf_token, presented.strip()))
 
 
 class PreviewCapabilitySigner:

@@ -150,12 +150,15 @@ class BuildContract(BaseModel):
     def _kind_coherent(self) -> BuildContract:
         if self.kind != self.artifact.kind:
             raise ValueError(
-                f"BuildContract.kind ({self.kind.value}) != artifact.kind ({self.artifact.kind.value})"
+                f"BuildContract.kind ({self.kind.value}) != artifact.kind "
+                f"({self.artifact.kind.value})"
             )
         return self
 
     @classmethod
-    def minimal(cls, kind: ContractKind, *, finalizer: str = "ready_for_artifact_verification") -> BuildContract:
+    def minimal(
+        cls, kind: ContractKind, *, finalizer: str = "ready_for_artifact_verification"
+    ) -> BuildContract:
         """A minimal well-formed contract for ``kind`` (no required files, empty packs).
         Real contracts come from the BuildContractRegistry (CONTRACT-2)."""
         return cls(

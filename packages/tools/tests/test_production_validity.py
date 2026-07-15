@@ -93,9 +93,7 @@ def test_local_podman_socket_routes_to_cli_native_service():
     assert podman_local._cfg.podman_url == "unix:///run/user/1000/podman/podman.sock"
 
     docker_local = service_from_config(
-        SandboxConfig(
-            backend="local", runtime="runc", docker_socket="unix:///var/run/docker.sock"
-        )
+        SandboxConfig(backend="local", runtime="runc", docker_socket="unix:///var/run/docker.sock")
     )
     assert isinstance(docker_local, LocalSandboxService)  # real docker → docker-py path, unchanged
 

@@ -40,11 +40,8 @@ from disco.core.llm import (
 )
 from disco.core.loop import AgentLoop, BuildAgent, NeverConfirm, NullSecurityAnalyzer
 
-
 CID = "blocked-answer-resume"
-PLANNING_TOOLS = frozenset(
-    {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
-)
+PLANNING_TOOLS = frozenset({"submit_plan", "file_list", "file_read", "search", "extract", "think"})
 
 
 class _SequenceProvider:
@@ -250,9 +247,7 @@ async def test_blocked_landing_answer_resumes_execution_with_answer_in_context()
     before = await store.get_events(cid)
     blocked_seq = _statuses(before, status=ConversationStatus.AWAITING_USER_QUESTION)[-1].seq
     plan_count = len(_plans(before))
-    approval_gate_count = len(
-        _statuses(before, status=ConversationStatus.AWAITING_PLAN_APPROVAL)
-    )
+    approval_gate_count = len(_statuses(before, status=ConversationStatus.AWAITING_PLAN_APPROVAL))
 
     await _answer_with_kernel(store, cid, answer)
     after_answer = await store.get_events(cid)

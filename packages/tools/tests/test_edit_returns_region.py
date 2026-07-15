@@ -81,9 +81,7 @@ async def test_edit_success_returns_plus_minus_10_numbered_region_and_grounds_it
     assert (await FileReadTool().run(FileReadArgs(path="big.txt"), ctx)).success
 
     first = await FileReplaceLinesTool().run(
-        FileReplaceLinesArgs(
-            path="big.txt", start_line=15, end_line=15, new_text="line 15 edited"
-        ),
+        FileReplaceLinesArgs(path="big.txt", start_line=15, end_line=15, new_text="line 15 edited"),
         ctx,
     )
 
@@ -96,9 +94,7 @@ async def test_edit_success_returns_plus_minus_10_numbered_region_and_grounds_it
     assert "\tline 26 " not in first.content
 
     second = await FileReplaceLinesTool().run(
-        FileReplaceLinesArgs(
-            path="big.txt", start_line=16, end_line=16, new_text="line 16 edited"
-        ),
+        FileReplaceLinesArgs(path="big.txt", start_line=16, end_line=16, new_text="line 16 edited"),
         ctx,
     )
     assert second.success, second.content

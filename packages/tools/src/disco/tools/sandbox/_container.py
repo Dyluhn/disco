@@ -1136,9 +1136,7 @@ class ContainerInstance:
                     # take this branch because write_file now uses this staged
                     # path and receives a workspace-compatible label.
                     if not target_was_file:
-                        raise SandboxError(
-                            f"atomic_write {path!r} rename failed (rc={rc})"
-                        )
+                        raise SandboxError(f"atomic_write {path!r} rename failed (rc={rc})")
                     fallback = io.BytesIO()
                     with tarfile.open(fileobj=fallback, mode="w") as tar:
                         info = tarfile.TarInfo(name=posixpath.basename(target))
@@ -1147,16 +1145,10 @@ class ContainerInstance:
                         info.mtime = int(time.time())
                         tar.addfile(info, io.BytesIO(data))
                     if not self._container.put_archive(parent, fallback.getvalue()):
-                        raise SandboxError(
-                            f"atomic_write {path!r} legacy overwrite failed"
-                        )
-                    digest_rc, digest_out = self._guest_run(
-                        ["sha256sum", "--", target]
-                    )
+                        raise SandboxError(f"atomic_write {path!r} legacy overwrite failed")
+                    digest_rc, digest_out = self._guest_run(["sha256sum", "--", target])
                     expected_digest = hashlib.sha256(data).hexdigest()
-                    digest_parts = digest_out.decode("ascii", "replace").split(
-                        maxsplit=1
-                    )
+                    digest_parts = digest_out.decode("ascii", "replace").split(maxsplit=1)
                     observed_digest = digest_parts[0] if digest_parts else ""
                     if digest_rc != 0 or observed_digest != expected_digest:
                         raise SandboxError(

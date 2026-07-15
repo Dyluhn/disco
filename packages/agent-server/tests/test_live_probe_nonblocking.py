@@ -54,9 +54,7 @@ async def test_probe_does_not_block_running_loop(monkeypatch):
 
 def test_probe_off_loop_blocks_and_returns(monkeypatch):
     rt._LIVE_MODEL_PROBE_CACHE.clear()
-    monkeypatch.setattr(
-        rt, "_do_live_model_probe", lambda b, k: {"model_id": "x", "n_ctx": 4096}
-    )
+    monkeypatch.setattr(rt, "_do_live_model_probe", lambda b, k: {"model_id": "x", "n_ctx": 4096})
     # No running loop in this plain sync test → the probe blocks directly and
     # returns the live value (the CLI / `disco verify` path).
     assert rt._probe_live_model("http://fake:1234/v1", None) == {

@@ -1,4 +1,5 @@
 """P2 tests: daemon headed/headless selection logic and live_view ensure_live."""
+
 from unittest.mock import MagicMock, patch
 
 
@@ -50,10 +51,12 @@ def test_live_view_ensure_live_calls_all_three():
     """ensure_live() calls ensure_xvfb, ensure_x11vnc, and ensure_websockify."""
     import disco.tools.builtin.live_view as lv_mod
 
-    with patch.object(lv_mod, "ensure_xvfb", return_value=True) as mock_xvfb, \
-         patch.object(lv_mod, "ensure_x11vnc", return_value=True) as mock_vnc, \
-         patch.object(lv_mod, "ensure_websockify", return_value=True) as mock_ws, \
-         patch.object(lv_mod, "_start_watchdog"):
+    with (
+        patch.object(lv_mod, "ensure_xvfb", return_value=True) as mock_xvfb,
+        patch.object(lv_mod, "ensure_x11vnc", return_value=True) as mock_vnc,
+        patch.object(lv_mod, "ensure_websockify", return_value=True) as mock_ws,
+        patch.object(lv_mod, "_start_watchdog"),
+    ):
         result = lv_mod.ensure_live()
         assert result is True
         mock_xvfb.assert_called_once()
@@ -79,15 +82,17 @@ def test_ensure_live_tears_down_on_partial_failure():
     import disco.tools.builtin.live_view as lv_mod
 
     _reset_state()
-    with patch.object(lv_mod, "ensure_xvfb", return_value=True), \
-         patch.object(lv_mod, "ensure_x11vnc", return_value=True), \
-         patch.object(lv_mod, "ensure_websockify", return_value=False), \
-         patch.object(lv_mod, "teardown") as mock_teardown, \
-         patch.object(lv_mod, "_start_watchdog") as mock_wd:
+    with (
+        patch.object(lv_mod, "ensure_xvfb", return_value=True),
+        patch.object(lv_mod, "ensure_x11vnc", return_value=True),
+        patch.object(lv_mod, "ensure_websockify", return_value=False),
+        patch.object(lv_mod, "teardown") as mock_teardown,
+        patch.object(lv_mod, "_start_watchdog") as mock_wd,
+    ):
         result = lv_mod.ensure_live()
         assert result is False
-        mock_teardown.assert_called_once()   # never leave Xvfb-only up
-        mock_wd.assert_not_called()           # no watchdog for a stack that didn't come up
+        mock_teardown.assert_called_once()  # never leave Xvfb-only up
+        mock_wd.assert_not_called()  # no watchdog for a stack that didn't come up
 
 
 def test_port_listening_detects_real_listener_including_loopback_only():
@@ -118,10 +123,13 @@ def test_port_listening_uses_no_external_binary():
     shell out at all, so image drift can never neuter it again."""
     import disco.tools.builtin.live_view as lv_mod
 
-    with patch.object(
-        lv_mod.subprocess, "run", side_effect=AssertionError("probe must not shell out")
-    ), patch.object(
-        lv_mod.subprocess, "Popen", side_effect=AssertionError("probe must not shell out")
+    with (
+        patch.object(
+            lv_mod.subprocess, "run", side_effect=AssertionError("probe must not shell out")
+        ),
+        patch.object(
+            lv_mod.subprocess, "Popen", side_effect=AssertionError("probe must not shell out")
+        ),
     ):
         # Port 1 is privileged: the bind fails (not with EADDRINUSE) and the probe
         # must report OCCUPIED — the fail-closed direction — without any subprocess.
@@ -134,8 +142,10 @@ def test_x11vnc_fails_closed_on_foreign_listener():
 
     _reset_state()
     # No tracked handle, but the port is occupied → foreign → fail closed.
-    with patch.object(lv_mod, "_port_listening", return_value=True), \
-         patch.object(lv_mod, "_spawn") as mock_spawn:
+    with (
+        patch.object(lv_mod, "_port_listening", return_value=True),
+        patch.object(lv_mod, "_spawn") as mock_spawn,
+    ):
         assert lv_mod.ensure_x11vnc() is False
         mock_spawn.assert_not_called()  # must NOT start/adopt anything
 
@@ -145,8 +155,10 @@ def test_websockify_fails_closed_on_foreign_listener():
     import disco.tools.builtin.live_view as lv_mod
 
     _reset_state()
-    with patch.object(lv_mod, "_port_listening", return_value=True), \
-         patch.object(lv_mod, "_spawn") as mock_spawn:
+    with (
+        patch.object(lv_mod, "_port_listening", return_value=True),
+        patch.object(lv_mod, "_spawn") as mock_spawn,
+    ):
         assert lv_mod.ensure_websockify() is False
         mock_spawn.assert_not_called()
 
@@ -159,9 +171,11 @@ def test_x11vnc_argv_is_loopback_and_viewonly_no_selfdaemon():
     _reset_state()
     fake = MagicMock()
     fake.poll.return_value = None  # alive
-    with patch.object(lv_mod, "_port_listening", return_value=False), \
-         patch.object(lv_mod, "_spawn", return_value=fake) as mock_spawn, \
-         patch.object(lv_mod.time, "sleep"):
+    with (
+        patch.object(lv_mod, "_port_listening", return_value=False),
+        patch.object(lv_mod, "_spawn", return_value=fake) as mock_spawn,
+        patch.object(lv_mod.time, "sleep"),
+    ):
         assert lv_mod.ensure_x11vnc() is True
     argv = mock_spawn.call_args.args[0]
     assert "-localhost" in argv
@@ -179,13 +193,15 @@ def test_websockify_argv_binds_container_iface_not_loopback():
     _reset_state()
     fake = MagicMock()
     fake.poll.return_value = None
-    with patch.object(lv_mod, "_port_listening", return_value=False), \
-         patch.object(lv_mod, "_spawn", return_value=fake) as mock_spawn, \
-         patch.object(lv_mod.time, "sleep"):
+    with (
+        patch.object(lv_mod, "_port_listening", return_value=False),
+        patch.object(lv_mod, "_spawn", return_value=fake) as mock_spawn,
+        patch.object(lv_mod.time, "sleep"),
+    ):
         assert lv_mod.ensure_websockify() is True
     argv = mock_spawn.call_args.args[0]
-    assert f"0.0.0.0:{lv_mod.NOVNC_PORT}" in argv          # container iface, not 127.0.0.1
-    assert f"127.0.0.1:{lv_mod.VNC_PORT}" in argv          # bridges to the loopback x11vnc
+    assert f"0.0.0.0:{lv_mod.NOVNC_PORT}" in argv  # container iface, not 127.0.0.1
+    assert f"127.0.0.1:{lv_mod.VNC_PORT}" in argv  # bridges to the loopback x11vnc
     assert "--daemon" not in argv
     assert "--web" in argv
 
@@ -207,8 +223,10 @@ def test_watchdog_tears_down_on_partial_death():
     lv_mod._state["websockify"] = dead
     lv_mod._watchdog_stop.clear()
 
-    with patch.object(lv_mod, "_WATCHDOG_TICK_S", 0.01), \
-         patch.object(lv_mod, "teardown") as mock_teardown:
+    with (
+        patch.object(lv_mod, "_WATCHDOG_TICK_S", 0.01),
+        patch.object(lv_mod, "teardown") as mock_teardown,
+    ):
         lv_mod._watchdog_loop()  # one tick → sees not-is-live + a survivor → teardown
     mock_teardown.assert_called_once()
     _reset_state()
@@ -226,8 +244,10 @@ def test_watchdog_no_teardown_when_all_dead():
         lv_mod._state[k] = p
     lv_mod._watchdog_stop.clear()
 
-    with patch.object(lv_mod, "_WATCHDOG_TICK_S", 0.01), \
-         patch.object(lv_mod, "teardown") as mock_teardown:
+    with (
+        patch.object(lv_mod, "_WATCHDOG_TICK_S", 0.01),
+        patch.object(lv_mod, "teardown") as mock_teardown,
+    ):
         lv_mod._watchdog_loop()
     mock_teardown.assert_not_called()
     _reset_state()
@@ -289,11 +309,13 @@ def test_teardown_kills_process_groups():
         lv_mod._state[k] = p
         procs[k] = p
 
-    with patch.object(lv_mod.os, "getpgid", side_effect=lambda pid: pid) as mock_pgid, \
-         patch.object(lv_mod.os, "killpg") as mock_killpg:
+    with (
+        patch.object(lv_mod.os, "getpgid", side_effect=lambda pid: pid) as mock_pgid,
+        patch.object(lv_mod.os, "killpg") as mock_killpg,
+    ):
         lv_mod.teardown()
 
-    assert mock_killpg.call_count == 3          # all three groups signalled
+    assert mock_killpg.call_count == 3  # all three groups signalled
     assert mock_pgid.call_count == 3
     # Each child is reaped (wait) — otherwise a SIGTERM'd process lingers as a zombie.
     for p in procs.values():

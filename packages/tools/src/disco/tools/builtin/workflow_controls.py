@@ -61,13 +61,14 @@ class WorkflowNeedsInputTool:
     )
 
     async def run(
-        self, args: WorkflowNeedsInputArgs, ctx: ToolContext  # noqa: ARG002
+        self,
+        args: WorkflowNeedsInputArgs,
+        ctx: ToolContext,  # noqa: ARG002
     ) -> ToolOutcome:
         return ToolOutcome(
             success=True,
             content=(
-                f"workflow needs input: {args.reason}\n"
-                f"required action: {args.required_action}"
+                f"workflow needs input: {args.reason}\nrequired action: {args.required_action}"
             ),
             structured={
                 "reason": args.reason,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -144,10 +143,7 @@ async def test_prose_plan_harvest_flow_halts_at_normal_approval_gate() -> None:
         and "REL-RC-N HARVEST" in (e.message.content or "")
         for e in events
     )
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested"
-        for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested" for e in events)
 
 
 @pytest.mark.asyncio

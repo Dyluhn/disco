@@ -100,9 +100,7 @@ def test_ttl_boundary_exactly_at_limit_is_still_fresh(monkeypatch):
     rt._LIVE_MODEL_PROBE_CACHE[base_url] = (cached, seed_ts)
 
     monkeypatch.setattr(rt.time, "monotonic", lambda: seed_ts + 60.0)
-    monkeypatch.setattr(
-        rt, "_do_live_model_probe", lambda u, k: pytest.fail("should not probe")
-    )
+    monkeypatch.setattr(rt, "_do_live_model_probe", lambda u, k: pytest.fail("should not probe"))
     assert rt._probe_live_model(base_url, None) == cached
 
     seen = []

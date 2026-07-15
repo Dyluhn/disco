@@ -15,7 +15,6 @@ secret instead of showing a false green.
 
 from __future__ import annotations
 
-import pytest
 from disco.app_server.config.dtos import ModelUpsert
 from disco.app_server.config_state import ConfigState
 from disco.core import SkillStore

@@ -110,9 +110,7 @@ class EventStore(Protocol):
     # The C1b evaluator will use `get_dod_spec` to gate `finish`; the C1c
     # wire-up will capture the spec from the user request / `submit_plan`.
 
-    async def set_dod_spec(
-        self, conversation_id: str, spec: Any, *, set_by: str = "system"
-    ) -> Any:
+    async def set_dod_spec(self, conversation_id: str, spec: Any, *, set_by: str = "system") -> Any:
         """Persist the DoD spec for a conversation. WRITE-ONCE: a second call
         with the same `conversation_id` raises `DoDSpecAlreadySet`. The agent
         has no tool that reaches this method — see `core/dod.py` for the
@@ -165,8 +163,6 @@ class EventStore(Protocol):
         space_id: str | None = None,
     ) -> list[ConversationSummary]: ...
 
-    async def set_conversation_space(
-        self, conversation_id: str, space_id: str | None
-    ) -> None: ...
+    async def set_conversation_space(self, conversation_id: str, space_id: str | None) -> None: ...
 
     async def clear_space_members(self, space_id: str, *, owner_id: str | None = None) -> None: ...

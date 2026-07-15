@@ -135,8 +135,7 @@ class SectionVariantPreference(BaseModel):
             raise ValueError(f"unknown section variant id: {self.variant_id!r}")
         if variant.kind != self.kind:
             raise ValueError(
-                f"variant {self.variant_id!r} is a {variant.kind!r} layout, "
-                f"not {self.kind!r}"
+                f"variant {self.variant_id!r} is a {variant.kind!r} layout, not {self.kind!r}"
             )
         return self
 

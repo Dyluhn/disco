@@ -63,9 +63,7 @@ def _bounded_integer(label: str, value: int | None, maximum: int) -> None:
 
 def _token_count(label: str, value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKEN_LIMIT:
-        raise QuotaConfigurationError(
-            f"{label} must be an integer from 0 to {MAX_TOKEN_LIMIT}"
-        )
+        raise QuotaConfigurationError(f"{label} must be an integer from 0 to {MAX_TOKEN_LIMIT}")
     return value
 
 
@@ -386,10 +384,15 @@ class SqliteQuotaStore:
         owner, app = self._validate_app(owner_id, audience)
         exact = "" if service is None else _service(service)
         with self._lock:
-            row = self._check_open().execute(
-                "SELECT * FROM quota_configs WHERE owner_id = ? AND audience = ? AND service = ?",
-                (owner, app, exact),
-            ).fetchone()
+            row = (
+                self._check_open()
+                .execute(
+                    "SELECT * FROM quota_configs WHERE owner_id = ? AND audience = ? "
+                    "AND service = ?",
+                    (owner, app, exact),
+                )
+                .fetchone()
+            )
         return None if row is None else self._config_from_row(row)
 
     def effective_app_config(self, owner_id: str, audience: str) -> QuotaConfig:
@@ -397,9 +400,7 @@ class SqliteQuotaStore:
         stored = self.get_config(owner_id, audience)
         return self.default_config if stored is None else stored.limits
 
-    def delete_config(
-        self, owner_id: str, audience: str, *, service: str | None = None
-    ) -> bool:
+    def delete_config(self, owner_id: str, audience: str, *, service: str | None = None) -> bool:
         owner, app = self._validate_app(owner_id, audience)
         exact = "" if service is None else _service(service)
         with self._write_transaction() as conn:
@@ -629,9 +630,7 @@ class SqliteQuotaStore:
             raise RuntimeError("quota store is closed")
         return self._conn
 
-    def _sweep_stale(
-        self, conn: sqlite3.Connection, owner: str, app: str, now_us: int
-    ) -> None:
+    def _sweep_stale(self, conn: sqlite3.Connection, owner: str, app: str, now_us: int) -> None:
         """Settle expired leases without erasing their admitted request count."""
         cutoff_us = now_us - self.reservation_ttl_seconds * 1_000_000
         conn.execute(
@@ -748,9 +747,7 @@ class SqliteQuotaStore:
                 None if row["actual_input_tokens"] is None else int(row["actual_input_tokens"])
             ),
             actual_output_tokens=(
-                None
-                if row["actual_output_tokens"] is None
-                else int(row["actual_output_tokens"])
+                None if row["actual_output_tokens"] is None else int(row["actual_output_tokens"])
             ),
             created_at=_from_epoch_us(int(row["created_at_us"])),
             completed_at=(

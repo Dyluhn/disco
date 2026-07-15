@@ -489,9 +489,7 @@ def test_redact_sk_key_embedded_in_nested_structure() -> None:
     """sk- key inside a neutral-key string nested deep in a dict/list is scrubbed."""
     secret = "sk-ant-api03-ZzYyXxWwVvUuTtSsRrQqPpOo"
     data = {
-        "events": [
-            {"type": "message", "content": f"Response contained key {secret} in output"}
-        ]
+        "events": [{"type": "message", "content": f"Response contained key {secret} in output"}]
     }
     result = redact(data)
     content = result["events"][0]["content"]

@@ -9,6 +9,7 @@ add zero extra latency to a healthy upstream.
 
 These tests live in a separate file so the C2 evidence is self-contained.
 """
+
 import json
 import socket
 import threading
@@ -72,9 +73,7 @@ class FlakyHTTPServer:
                     pass
             else:
                 # From now on, serve real HTTP requests.
-                threading.Thread(
-                    target=self._handle_http, args=(conn,), daemon=True
-                ).start()
+                threading.Thread(target=self._handle_http, args=(conn,), daemon=True).start()
 
     def _handle_http(self, conn: socket.socket) -> None:
         try:
@@ -104,9 +103,7 @@ class FlakyHTTPServer:
                 if not chunk:
                     break
                 body_part += chunk
-            body = json.dumps(
-                {"method": method, "path": path, "body": body_part.decode()}
-            ).encode()
+            body = json.dumps({"method": method, "path": path, "body": body_part.decode()}).encode()
             response = (
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n"
@@ -161,6 +158,7 @@ def counting_server():
 @pytest.fixture
 def real_server():
     """Healthy upstream that echoes the request."""
+
     class Echo(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             body = json.dumps({"path": self.path, "method": "GET"}).encode()
@@ -256,7 +254,7 @@ async def test_connect_retry_bounded_failure():
     # Sanity: must have spent at least the backoff budget.
     expected_backoff = sum(
         min(
-            _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR ** i),
+            _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR**i),
             _CONNECT_BACKOFF_CAP,
         )
         for i in range(_CONNECT_RETRY_ATTEMPTS - 1)
@@ -287,9 +285,7 @@ async def test_5xx_passthrough_no_retry(counting_server):
         resp = await client.get("/")
         elapsed = time.perf_counter() - t0
 
-    assert resp.status_code == 503, (
-        f"expected upstream 503 to pass through, got {resp.status_code}"
-    )
+    assert resp.status_code == 503, f"expected upstream 503 to pass through, got {resp.status_code}"
     # The retry loop only fires on RequestError. A 5xx is a real response.
     # The upstream must have been hit exactly once.
     assert _CountingHandler.request_count == 1, (
@@ -331,6 +327,6 @@ async def test_healthy_upstream_no_extra_latency(real_server):
     assert resp.status_code == 200
     # Strict: must be far below the smallest backoff interval.
     assert elapsed < 0.05, (
-        f"healthy upstream added latency: {elapsed*1000:.1f}ms "
+        f"healthy upstream added latency: {elapsed * 1000:.1f}ms "
         f"(expected < 50ms; retry backoff starts at 50ms)"
     )

@@ -246,8 +246,7 @@ class WorkerdApp:
             proc = self._proc
             if proc is not None and proc.poll() is not None:
                 raise WorkerdAppError(
-                    f"wrangler dev exited early with code {proc.returncode}\n"
-                    f"{self._dev_log()}"
+                    f"wrangler dev exited early with code {proc.returncode}\n{self._dev_log()}"
                 )
             try:
                 self._request(
@@ -348,7 +347,9 @@ def _materialize_tree(tree: Mapping[str, str], root: Path) -> None:
 def _stub_dist(root: Path) -> None:
     dist = root / "dist"
     dist.mkdir(parents=True, exist_ok=True)
-    (dist / "index.html").write_text("<!doctype html><title>appkit test</title>\n", encoding="utf-8")
+    (dist / "index.html").write_text(
+        "<!doctype html><title>appkit test</title>\n", encoding="utf-8"
+    )
 
 
 def _d1_database_name(wrangler_toml: Path) -> str:
@@ -385,8 +386,7 @@ def _run_checked(
             list(argv),
             cwd=str(cwd),
             env=_command_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout_s,
             check=False,
@@ -395,8 +395,7 @@ def _run_checked(
         stdout = _coerce_output(exc.stdout)
         stderr = _coerce_output(exc.stderr)
         raise WorkerdAppError(
-            f"{label} exceeded {timeout_s:g}s and was killed\n"
-            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            f"{label} exceeded {timeout_s:g}s and was killed\nstdout:\n{stdout}\nstderr:\n{stderr}"
         ) from exc
     except OSError as exc:
         raise WorkerdAppError(f"failed to launch {label}: {exc}") from exc

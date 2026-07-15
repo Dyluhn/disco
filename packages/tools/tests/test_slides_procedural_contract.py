@@ -24,7 +24,9 @@ def _deck_with_image() -> AuthoredDeck:
         title="History of Three.js",
         slides=[
             AuthoredSlide(
-                type="title", title="Hero", body=[],
+                type="title",
+                title="Hero",
+                body=[],
                 image_prompt="a hero image of the three.js logo",
             ),
         ],

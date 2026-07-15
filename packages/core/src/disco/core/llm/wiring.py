@@ -168,9 +168,7 @@ def build_providers(
         )
     fallback = config.role_fallback
     if fallback.enabled and fallback.base_url.strip():
-        if not approved(
-            fallback.base_url.strip(), "role_fallback", fallback.api_key_env.strip()
-        ):
+        if not approved(fallback.base_url.strip(), "role_fallback", fallback.api_key_env.strip()):
             _LOG.warning("role fallback origin is not operator-approved; skipping")
             return providers
         if not secret_ref_allowed_for_origin(

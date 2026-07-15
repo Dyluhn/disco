@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 # ---- helpers -----------------------------------------------------------------
 
+
 @pytest.fixture
 def client() -> TestClient:
     store = SqliteEventStore(":memory:")
@@ -63,6 +64,7 @@ def _create_conversation(client: TestClient) -> str:
 
 # ---- no-runtime guard --------------------------------------------------------
 
+
 def test_list_sessions_no_runtime_returns_empty(client: TestClient) -> None:
     cid = _create_conversation(client)
     r = client.get(f"/conversations/{cid}/sessions")
@@ -77,6 +79,7 @@ def test_get_session_view_no_runtime_404(client: TestClient) -> None:
 
 
 # ---- list shape --------------------------------------------------------------
+
 
 def test_list_sessions_wire_shape() -> None:
     sessions = [
@@ -116,6 +119,7 @@ def test_list_sessions_empty_when_no_sandbox() -> None:
 
 # ---- __-prefix exclusion -----------------------------------------------------
 
+
 def test_internal_sessions_excluded_from_list() -> None:
     sessions = [
         SessionInfo(name="__browser", busy=False, last_lines=""),
@@ -145,6 +149,7 @@ def test_internal_session_view_404() -> None:
 
 # ---- view wire shape ---------------------------------------------------------
 
+
 def test_view_wire_shape() -> None:
     sessions = [SessionInfo(name="dev", busy=True, last_lines="VITE ready")]
     rt = _make_fake_runtime(sessions)
@@ -162,6 +167,7 @@ def test_view_wire_shape() -> None:
 
 # ---- 404 on unknown name -----------------------------------------------------
 
+
 def test_view_unknown_name_404() -> None:
     sessions = [SessionInfo(name="dev", busy=True, last_lines="running")]
     rt = _make_fake_runtime(sessions)
@@ -174,6 +180,7 @@ def test_view_unknown_name_404() -> None:
 
 
 # ---- tail_chars clamp --------------------------------------------------------
+
 
 def test_tail_chars_clamped_to_max() -> None:
     sessions = [SessionInfo(name="dev", busy=False, last_lines="ok")]
@@ -188,6 +195,7 @@ def test_tail_chars_clamped_to_max() -> None:
 
 
 # ---- coalescing: two concurrent /view calls → one exec_shell -----------------
+
 
 def test_view_coalescing_single_exec() -> None:
     """Two concurrent session_view calls for the same (cid, name) coalesce into one

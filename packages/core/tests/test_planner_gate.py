@@ -75,7 +75,8 @@ def test_backstop_drops_a_mutating_tool_even_when_the_allowlist_names_it():
     names = _names(loop._tools_for_step())
     assert "shell" not in names  # backstop won, despite the allowlist
     assert "file_write" not in names
-    # ask_user + questions_v2 + clarify are the virtual planning escape hatches (read-only-safe; the loop
+    # ask_user + questions_v2 + clarify are the virtual planning escape hatches
+    # (read-only-safe; the loop
     # intercepts them, never executes them) — present alongside the readonly set.
     assert names == {"file_read", "search", "submit_plan", "ask_user", "questions_v2", "clarify"}
 

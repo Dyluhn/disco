@@ -281,9 +281,7 @@ async def test_c10_boundary_never_splits_action_from_observation():
             kept_actions = [
                 e
                 for e in events
-                if isinstance(e, ActionEvent)
-                and e.seq is not None
-                and e.seq >= tail_start_seq
+                if isinstance(e, ActionEvent) and e.seq is not None and e.seq >= tail_start_seq
             ]
             for a in kept_actions:
                 o = obs_by_action_id.get(a.id)
@@ -425,6 +423,6 @@ async def test_update_in_place_fires_on_real_re_condensation():
     assert _has_prior_anchored_summary(summarizer.seen[1]), (
         "re-condensation must hand the prior GOAL: summary to the summarizer"
     )
-    assert (
-        _select_summarize_instruction(summarizer.seen[1]) is _SUMMARIZE_UPDATE_INSTRUCTION
-    ), "re-condensation must select UPDATE-in-place, not CREATE-fresh"
+    assert _select_summarize_instruction(summarizer.seen[1]) is _SUMMARIZE_UPDATE_INSTRUCTION, (
+        "re-condensation must select UPDATE-in-place, not CREATE-fresh"
+    )

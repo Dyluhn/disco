@@ -38,6 +38,7 @@ from disco.tools.builtin._pptx_render import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _bar_spec() -> ChartSpec:
     return ChartSpec(
         kind="bar",
@@ -127,6 +128,7 @@ def _chart_deck() -> MinimalDeck:
 # ChartSpec / TableSpec validation
 # ---------------------------------------------------------------------------
 
+
 def test_chart_spec_parses():
     s = _bar_spec()
     assert s.kind == "bar"
@@ -152,6 +154,7 @@ def test_chart_spec_empty_defaults():
 # Bridge: _to_svg_dict
 # ---------------------------------------------------------------------------
 
+
 def test_to_svg_dict_bar():
     d = _to_svg_dict(_bar_spec())
     assert d["chart_type"] == "bar"
@@ -169,7 +172,8 @@ def test_to_svg_dict_scatter_dict_format():
 
 def test_to_svg_dict_scatter_list_format():
     spec = ChartSpec(
-        kind="scatter", labels=[],
+        kind="scatter",
+        labels=[],
         series=[{"name": "G", "data": [[1.0, 2.0], [3.0, 4.0]]}],
     )
     d = _to_svg_dict(spec)
@@ -185,9 +189,11 @@ def test_to_svg_dict_empty_series():
 # HTML chart content
 # ---------------------------------------------------------------------------
 
+
 def test_html_chart_content_contains_svg():
     """Valid chart data → HTML embeds an <svg>."""
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_chart_content("My Chart", _bar_spec(), theme)
     assert "<svg" in result
@@ -196,6 +202,7 @@ def test_html_chart_content_contains_svg():
 
 def test_html_chart_content_line_svg():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_chart_content("Trend", _line_spec(), theme)
     assert "<svg" in result
@@ -203,6 +210,7 @@ def test_html_chart_content_line_svg():
 
 def test_html_chart_content_pie_svg():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_chart_content("Share", _pie_spec(), theme)
     assert "<svg" in result
@@ -211,6 +219,7 @@ def test_html_chart_content_pie_svg():
 def test_html_chart_content_scatter_svg_or_table():
     """Scatter with valid data → SVG or table fallback (depends on SVG renderer)."""
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_chart_content("Scatter", _scatter_spec(), theme)
     # Must contain either SVG or a table (chart-table fallback)
@@ -220,6 +229,7 @@ def test_html_chart_content_scatter_svg_or_table():
 def test_html_chart_content_malformed_falls_back_to_table():
     """Empty/malformed chart data → render_chart_table fallback (HTML table, not SVG)."""
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_chart_content("Bad", _empty_chart_spec(), theme)
     # SVG renderer returns None → fallback to chart-table or chart-fallback div
@@ -230,9 +240,10 @@ def test_html_chart_content_malformed_falls_back_to_table():
 
 def test_html_chart_content_title_escaped():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     spec = ChartSpec(kind="bar", labels=["A"], series=[{"name": "S", "data": [1]}])
-    result = html_chart_content('<script>alert(1)</script>', spec, theme)
+    result = html_chart_content("<script>alert(1)</script>", spec, theme)
     assert "<script>" not in result
     assert "&lt;script&gt;" in result
 
@@ -241,8 +252,10 @@ def test_html_chart_content_title_escaped():
 # HTML table content
 # ---------------------------------------------------------------------------
 
+
 def test_html_table_content_produces_table():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_table_content("Results", _table_spec(), theme)
     assert "<table" in result
@@ -254,6 +267,7 @@ def test_html_table_content_produces_table():
 
 def test_html_table_content_has_headers():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_table_content("T", _table_spec(), theme)
     for hdr in ["Name", "Score", "Grade"]:
@@ -262,6 +276,7 @@ def test_html_table_content_has_headers():
 
 def test_html_table_content_empty_spec():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     result = html_table_content("Empty", TableSpec(), theme)
     assert "<table" not in result
@@ -270,6 +285,7 @@ def test_html_table_content_empty_spec():
 
 def test_html_table_content_escapes_cells():
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     spec = TableSpec(headers=["<Col>"], rows=[["<val>"]])
     result = html_table_content("T", spec, theme)
@@ -282,6 +298,7 @@ def test_html_table_content_headerless_still_renders():
     rows. The old gate discarded every row and rendered '(no table data)'. A
     headerless-but-populated table must render all its rows."""
     from disco.core.brand import resolve_theme
+
     theme = resolve_theme("disco", "light")
     spec = TableSpec(
         headers=[],
@@ -303,6 +320,7 @@ def test_html_table_content_headerless_still_renders():
 # PPTX layout — chart slide
 # ---------------------------------------------------------------------------
 
+
 def test_pptx_chart_slide_has_chart_or_table_shape():
     """A chart slide should add a chart shape (or table fallback) — NOT just text."""
     from pptx import Presentation
@@ -323,8 +341,7 @@ def test_pptx_chart_slide_has_chart_or_table_shape():
             return  # found a native chart shape — test passes
     # Fallback table also acceptable: MSO_SHAPE_TYPE.TABLE == 19
     assert 19 in shape_types or 3 in shape_types, (
-        f"Expected a chart (type=3) or table (type=19) shape; "
-        f"found shape_types={shape_types}"
+        f"Expected a chart (type=3) or table (type=19) shape; found shape_types={shape_types}"
     )
 
 
@@ -356,9 +373,7 @@ def test_pptx_headerless_table_renders_rows():
     # A native table shape (MSO_SHAPE_TYPE.TABLE == 19) must be present.
     tables = [s for s in slide.shapes if s.has_table]
     assert tables, "headerless table dropped to placeholder — no table shape rendered"
-    cells_text = " ".join(
-        c.text for t in tables for row in t.table.rows for c in row.cells
-    )
+    cells_text = " ".join(c.text for t in tables for row in t.table.rows for c in row.cells)
     assert "Cost model" in cells_text and "Network round-trip" in cells_text
 
 
@@ -443,6 +458,7 @@ def test_pptx_scatter_chart():
 # PPTX layout — table slide
 # ---------------------------------------------------------------------------
 
+
 def test_pptx_table_slide_has_native_table():
     """A table slide must add a native PPTX table shape (shape_type == 19)."""
     from pptx import Presentation
@@ -492,7 +508,9 @@ def test_pptx_table_slide_cell_content():
             tbl = shape.table
             all_cells = [
                 tbl.cell(r, c).text
-                for r in range(tbl._tbl.tr_lst.__len__() if hasattr(tbl._tbl, 'tr_lst') else len(tbl.rows))
+                for r in range(
+                    tbl._tbl.tr_lst.__len__() if hasattr(tbl._tbl, "tr_lst") else len(tbl.rows)
+                )
                 for c in range(len(tbl.columns))
             ]
             all_cell_text = " ".join(all_cells)
@@ -516,6 +534,7 @@ def test_pptx_table_empty_spec_no_crash():
 # ---------------------------------------------------------------------------
 # Full deck round-trip
 # ---------------------------------------------------------------------------
+
 
 def test_full_chart_table_deck_pptx():
     """A deck with chart + table slides produces valid PPTX with 2 slides."""
@@ -560,6 +579,7 @@ def test_render_deck_chart_table():
 # ---------------------------------------------------------------------------
 # DeckSlide field integration
 # ---------------------------------------------------------------------------
+
 
 def test_deckslide_accepts_chart_field():
     s = DeckSlide(title="T", layout="chart", chart=_bar_spec())

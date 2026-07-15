@@ -48,8 +48,10 @@ class _Runtime:
     def set_depth(self, cid: str, tier: object) -> None: ...
     def get_last_selected_model(self) -> str | None:
         return None
+
     def sandbox_backend_name(self) -> str | None:
         return "process"
+
     def live_session(self, cid: str) -> None:
         return None
 

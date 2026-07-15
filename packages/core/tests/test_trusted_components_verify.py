@@ -85,9 +85,7 @@ async def test_all_green_is_verified(tmp_path: Path) -> None:
     files = _write_component(tmp_path, "database-kit")
     reg = TrustedComponentRegistry(tmp_path)
     lock = _lock_for(("database-kit", "1.0.0"))
-    res = await verify_trusted_components(
-        lock, reg, files, run_probe=_probe_pass, now_iso=NOW
-    )
+    res = await verify_trusted_components(lock, reg, files, run_probe=_probe_pass, now_iso=NOW)
     assert [c.status for c in res.checks] == ["pass", "pass"]  # integrity + probe
     assert not res.failing and not res.newly_ejected
 
@@ -172,9 +170,7 @@ async def test_probe_failure_blocks_with_detail(tmp_path: Path) -> None:
         return ProbeVerdict(
             passed=False,
             summary="unauth read allowed",
-            checks=[
-                {"name": "unauth_401", "passed": False, "detail": "/admin returned 200"}
-            ],
+            checks=[{"name": "unauth_401", "passed": False, "detail": "/admin returned 200"}],
         )
 
     res = await verify_trusted_components(lock, reg, files, run_probe=failing_probe, now_iso=NOW)

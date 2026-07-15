@@ -149,9 +149,7 @@ async def test_enter_workflow_seeds_approved_plan_and_exposes_run_tools(
     assert [step.title for step in plan.steps] == [
         "Run workflow: browser_automation — outputs/browser.md"
     ]
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events)
     execution_tools = {tool.name for tool in loop._tools_for_step()}
     assert "browser" in execution_tools
     assert "enter_workflow" not in execution_tools

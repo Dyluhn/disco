@@ -47,8 +47,10 @@ def fence_mcp_result(server: str, tool: str, result: Any) -> str:
                 text_parts.append(item.text)
             elif isinstance(item, dict) and "text" in item:
                 text_parts.append(item["text"])
-        body = "\n".join(text_parts) if text_parts else json.dumps(
-            result, ensure_ascii=False, default=str
+        body = (
+            "\n".join(text_parts)
+            if text_parts
+            else json.dumps(result, ensure_ascii=False, default=str)
         )
     else:
         body = json.dumps(result, ensure_ascii=False, default=str)

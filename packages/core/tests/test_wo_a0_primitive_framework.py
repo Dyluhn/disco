@@ -56,8 +56,7 @@ def test_existing_primitive_still_resolves_and_generates(prim_id: str) -> None:
     tree = prim.generate(app, _design())
     assert tree, f"{prim_id} generated an empty tree"
     assert all(
-        isinstance(path, str) and isinstance(contents, str)
-        for path, contents in tree.items()
+        isinstance(path, str) and isinstance(contents, str) for path, contents in tree.items()
     )
 
 

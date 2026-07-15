@@ -211,9 +211,7 @@ async def test_assist_off_never_consults_pressure_constants():
     body = _build_large_file(line_count=5000, line_width=80)  # ~400k chars
     sbx = _FakeSandbox({"huge.py": body})
 
-    out = await FileReadTool().run(
-        FileReadArgs(path="huge.py"), _ctx_for(sbx, assist=False)
-    )
+    out = await FileReadTool().run(FileReadArgs(path="huge.py"), _ctx_for(sbx, assist=False))
 
     assert out.success is True
     assert "HEAD-ONLY" not in out.content
@@ -291,9 +289,7 @@ async def test_assist_on_explicit_limit_only_also_bypasses_gate():
     body = _build_large_file(line_count=300, line_width=70)
     sbx = _FakeSandbox({"big.py": body})
 
-    out = await FileReadTool().run(
-        FileReadArgs(path="big.py", limit=5), _ctx_for(sbx, assist=True)
-    )
+    out = await FileReadTool().run(FileReadArgs(path="big.py", limit=5), _ctx_for(sbx, assist=True))
 
     assert out.success is True
     assert "HEAD-ONLY" not in out.content

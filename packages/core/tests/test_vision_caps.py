@@ -370,9 +370,7 @@ class TestProbeVision:
         mock_client = AsyncMock()
         mock_client.get = fake_get
 
-        result = await probe_vision(
-            "https://openrouter.ai/api/v1", model_id, mock_client
-        )
+        result = await probe_vision("https://openrouter.ai/api/v1", model_id, mock_client)
         assert result is True
 
     @pytest.mark.asyncio
@@ -403,9 +401,7 @@ class TestProbeVision:
         mock_client = AsyncMock()
         mock_client.get = fake_get
 
-        result = await probe_vision(
-            "https://openrouter.ai/api/v1", model_id, mock_client
-        )
+        result = await probe_vision("https://openrouter.ai/api/v1", model_id, mock_client)
         assert result is False
 
     @pytest.mark.asyncio
@@ -528,9 +524,7 @@ class TestVisionIntegration:
             update={
                 "models": {
                     **config.models,
-                    "driver-local": driver.model_copy(
-                        update={"capabilities": frozenset(caps)}
-                    ),
+                    "driver-local": driver.model_copy(update={"capabilities": frozenset(caps)}),
                 }
             }
         )
@@ -612,9 +606,7 @@ class TestVisionAwarePrompts:
         return DriverPrompts()
 
     def _system_prompt(self, *, vision: bool, mode: OperatingMode) -> str:
-        caps: frozenset[Requirement] = (
-            frozenset({Requirement.VISION}) if vision else frozenset()
-        )
+        caps: frozenset[Requirement] = frozenset({Requirement.VISION}) if vision else frozenset()
         driver = DriverPrompts()
         return driver.system_prompt(
             model_family="qwen",

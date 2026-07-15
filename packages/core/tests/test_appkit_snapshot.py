@@ -71,9 +71,7 @@ def test_summarize_specs_projects_the_manifest_shape():
     expected_sections = sum(len(p.sections) for p in app.pages)
     assert summary["section_count"] == expected_sections
     # section_kinds is the sorted, de-duplicated set of kinds.
-    assert summary["section_kinds"] == sorted(
-        {s.kind for p in app.pages for s in p.sections}
-    )
+    assert summary["section_kinds"] == sorted({s.kind for p in app.pages for s in p.sections})
     # design tokens are carried through verbatim.
     assert summary["design"]["palette"]["primary"] == design.palette.primary
     assert summary["design"]["typography"]["heading_font"] == design.typography.heading_font

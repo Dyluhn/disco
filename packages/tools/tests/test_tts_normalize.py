@@ -6,10 +6,9 @@ from typing import Any
 
 import numpy as np
 import pytest
+from disco.tools.builtin._tts_normalize import normalize_tts_text
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-from disco.tools.builtin._tts_normalize import normalize_tts_text
 
 
 @pytest.mark.parametrize(
@@ -42,8 +41,7 @@ from disco.tools.builtin._tts_normalize import normalize_tts_text
         ),
         (
             "Revenue was $4.2B vs $4B, e.g. strong growth.",
-            "Revenue was 4.2 billion dollars versus 4 billion dollars, "
-            "for example strong growth.",
+            "Revenue was 4.2 billion dollars versus 4 billion dollars, for example strong growth.",
         ),
         ("Use `short_name` here.", "Use short_name here."),
     ],
@@ -75,9 +73,7 @@ _CLEAN_WORDS = st.sampled_from(
 @settings(max_examples=40)
 @given(
     st.lists(
-        st.lists(_CLEAN_WORDS, min_size=3, max_size=10).map(
-            lambda words: " ".join(words) + "."
-        ),
+        st.lists(_CLEAN_WORDS, min_size=3, max_size=10).map(lambda words: " ".join(words) + "."),
         min_size=1,
         max_size=4,
     ).map(" ".join)
@@ -127,7 +123,7 @@ async def test_remote_synthesis_payload_receives_normalized_text(
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        async def __aenter__(self) -> "_FakeClient":
+        async def __aenter__(self) -> _FakeClient:
             return self
 
         async def __aexit__(self, *args: Any) -> None:

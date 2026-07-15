@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 class _FakeMCPArgs(BaseModel):
     """Accepts any kwargs (MCP tools use dynamic schemas; empty call is valid)."""
+
     model_config = {"frozen": True, "extra": "ignore"}
 
 
@@ -97,10 +98,12 @@ async def test_over_cap_tool_search_callable():
     ex = _executor()
     _apply_mcp_scope(ex, _fake_mcp_tools(21), _FakeCallTarget(), max_active_schemas=20)
 
-    result = await ex.execute(ToolCall(
-        tool_name="tool_search",
-        arguments={"query": "fake tool", "limit": 3},
-    ))
+    result = await ex.execute(
+        ToolCall(
+            tool_name="tool_search",
+            arguments={"query": "fake tool", "limit": 3},
+        )
+    )
     assert result.success, f"tool_search call failed: {result.error}"
 
 

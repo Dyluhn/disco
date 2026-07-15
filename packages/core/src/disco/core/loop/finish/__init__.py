@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .common import *
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
     _DOD_REFUSAL_CAP,
@@ -12,10 +11,10 @@ from .common import (
     _EXECUTION_NUDGE_CAP,
     _FINISH_VERIFY_CAP,
     _PREVIEW_PORTS,
-    _DoDWorkspaceUnavailable,
     _app_verify_command,
     _browser_content_meaningful,
     _browser_verified,
+    _DoDWorkspaceUnavailable,
     _is_web_deliverable,
     _last_productive_seq,
     _latest_browser_error,
@@ -25,6 +24,7 @@ from .common import (
     _prior_verify_marker_fp,
     _static_verify_command,
     _url_targets_preview,
+    host_verify_authoritative_enabled,
 )
 from .content_gates import _ContentGateMixin
 from .finalize import _FinalizeMixin
@@ -38,6 +38,30 @@ from .verify_gates import (
 
 if TYPE_CHECKING:
     from ..engine import AgentLoop
+
+__all__ = [
+    "FinishGate",
+    "_DICTATED_CONTENT_REFUSAL_CAP",
+    "_DOD_REFUSAL_CAP",
+    "_EXECUTION_NUDGE",
+    "_EXECUTION_NUDGE_CAP",
+    "_FINISH_VERIFY_CAP",
+    "_PREVIEW_PORTS",
+    "_app_verify_command",
+    "_browser_content_meaningful",
+    "_browser_verified",
+    "_DoDWorkspaceUnavailable",
+    "_is_web_deliverable",
+    "_last_productive_seq",
+    "_latest_browser_error",
+    "_latest_browser_structured",
+    "_latest_verify_verdict",
+    "_preview_key",
+    "_prior_verify_marker_fp",
+    "_static_verify_command",
+    "_url_targets_preview",
+    "host_verify_authoritative_enabled",
+]
 
 
 class FinishGate(

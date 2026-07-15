@@ -35,19 +35,14 @@ CID = "conv"
 
 
 def _plan_approvals(events):
-    return [
-        e
-        for e in events
-        if isinstance(e, StatusEvent) and e.detail == "plan_approved"
-    ]
+    return [e for e in events if isinstance(e, StatusEvent) and e.detail == "plan_approved"]
 
 
 def _awaiting_plan(events):
     return [
         e
         for e in events
-        if isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.AWAITING_PLAN_APPROVAL
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.AWAITING_PLAN_APPROVAL
     ]
 
 
@@ -278,8 +273,7 @@ async def test_autonomous_propose_plan_update_appended_steps_do_not_trip():
         and e.detail == "bookkeeping_only"
     ]
     assert not stuck_statuses, (
-        "appending a step must reset the streak — bookkeeping_only STUCK "
-        "should NOT have fired"
+        "appending a step must reset the streak — bookkeeping_only STUCK should NOT have fired"
     )
 
 
@@ -314,8 +308,7 @@ async def test_autonomous_propose_plan_update_changed_steps_do_not_trip():
         and e.detail == "bookkeeping_only"
     ]
     assert not stuck_statuses, (
-        "changing a step must reset the streak — bookkeeping_only STUCK "
-        "should NOT have fired"
+        "changing a step must reset the streak — bookkeeping_only STUCK should NOT have fired"
     )
 
 

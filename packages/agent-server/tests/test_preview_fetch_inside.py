@@ -122,9 +122,7 @@ def test_preview_app_503_when_no_live_session() -> None:
 # ---- (e) codex P1: canonical hostname proxy falls back to fetch_inside --------
 
 
-def _host_proxy_client(
-    *, upstream: str | None, session: _FakeSession | None
-) -> TestClient:
+def _host_proxy_client(*, upstream: str | None, session: _FakeSession | None) -> TestClient:
     async def _upstream_resolver(cid8: str, port: int) -> str | None:
         return upstream
 

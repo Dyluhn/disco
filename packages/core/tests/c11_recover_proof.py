@@ -1,4 +1,5 @@
 """C11 evidence script #1 — recover.txt output."""
+
 from disco.core import (
     ActionEvent,
     CondensationEvent,
@@ -18,9 +19,7 @@ def show(label, evs):
             content = e.message.content
             print(f"      [seq={e.seq}] {kind}(content={content!r})")
         elif isinstance(e, ActionEvent):
-            print(
-                f"      [seq={e.seq}] {kind}(tool_name={e.tool_call.tool_name!r}, success=None)"
-            )
+            print(f"      [seq={e.seq}] {kind}(tool_name={e.tool_call.tool_name!r}, success=None)")
         elif isinstance(e, ObservationEvent):
             print(
                 f"      [seq={e.seq}] {kind}(success={e.tool_result.success}, "
@@ -56,10 +55,7 @@ def main():
         for e in recovered
         if isinstance(e, MessageEvent)
     )
-    print(
-        f"    recovered is NOT the summary: "
-        f"{not_summary}"
-    )
+    print(f"    recovered is NOT the summary: {not_summary}")
     print(f"    recovered IS the original Event objects: {all(e in events for e in recovered)}")
 
     print()
@@ -88,20 +84,14 @@ def main():
         "[microcompacted" in (e.summary if isinstance(e, CondensationEvent) else "")
         for e in rec_micro
     )
-    print(
-        f"    recovered is NOT the summary: "
-        f"{no_microcompact_marker}"
-    )
+    print(f"    recovered is NOT the summary: {no_microcompact_marker}")
     print(f"    recovered IS the original Event objects: {all(e in base for e in rec_micro)}")
 
     print()
     print("=== View vs recovery: span is gone from View, alive on the log ===")
     view_before = View.of(events)
     view_after_recovery = View.of(events)
-    print(
-        f"    default View.messages content order: "
-        f"{[m.content for m in view_before.messages]}"
-    )
+    print(f"    default View.messages content order: {[m.content for m in view_before.messages]}")
     print(
         f"    'early-1' in default View.messages: "
         f"{'early-1' in [m.content for m in view_before.messages]}"
@@ -134,9 +124,7 @@ def main():
     print()
     print("=== Edge cases ===")
     empty = with_seqs([user_msg("u")])
-    phantom = CondensationEvent(
-        forgotten_start_seq=99, forgotten_end_seq=100, summary="phantom"
-    )
+    phantom = CondensationEvent(forgotten_start_seq=99, forgotten_end_seq=100, summary="phantom")
     print(f"    unmatched range (start=99, end=100) -> {recover_span(empty, phantom)}")
     deg = CondensationEvent(forgotten_start_seq=10, forgotten_end_seq=5, summary="empty")
     print(

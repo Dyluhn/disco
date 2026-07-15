@@ -75,9 +75,7 @@ def make_schedules_router(
         return {"ok": deleted, "schedule_id": schedule_id, "deleted": deleted}
 
     @router.post("/api/conversations/{conversation_id}/schedules/{schedule_id}/fire-now")
-    async def fire_schedule_now(
-        conversation_id: str, schedule_id: str, request: Request
-    ) -> dict:
+    async def fire_schedule_now(conversation_id: str, schedule_id: str, request: Request) -> dict:
         """Run a schedule IMMEDIATELY (gap #98 — the 'fire now' control + the verify
         fire-now seam). Reuses the periodic execute path: emits a ScheduleRunEvent,
         re-injects the original query, kicks the loop. 404 if no such schedule."""

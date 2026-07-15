@@ -94,9 +94,7 @@ def registry_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _install(sbx, *, edited: bool = False) -> None:
-    sbx._fs["src/trusted/auth-kit/core/auth.js"] = (
-        b"model edit" if edited else b"// auth core\n"
-    )
+    sbx._fs["src/trusted/auth-kit/core/auth.js"] = b"model edit" if edited else b"// auth core\n"
     sbx._fs["src/trusted/auth-kit/GUIDE.md"] = b"# auth\n"
     sbx._fs[LOCKFILE_RELPATH] = json.dumps(
         {

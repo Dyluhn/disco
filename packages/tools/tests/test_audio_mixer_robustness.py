@@ -35,12 +35,7 @@ import numpy as np
 # (e.g. an optional dep is missing in CI). The module uses lazy imports for
 # numpy + lameenc, so a direct load is safe.
 _MIXER_PATH = (
-    Path(__file__).parent.parent
-    / "src"
-    / "disco"
-    / "tools"
-    / "builtin"
-    / "_audio_mixer.py"
+    Path(__file__).parent.parent / "src" / "disco" / "tools" / "builtin" / "_audio_mixer.py"
 )
 
 
@@ -78,10 +73,7 @@ def _mp3_frame_sync(mp3: bytes) -> bool:
     """True iff `mp3` carries an MPEG-1/2/2.5 Layer III frame sync in the
     first 64 bytes (lameenc writes a LAME header, no ID3 tag)."""
     head = mp3[:64]
-    return any(
-        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0
-        for i in range(len(head) - 1)
-    )
+    return any(head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1))
 
 
 # ---- happy path: multi-turn → valid decodable MP3 of expected duration -----
@@ -97,10 +89,9 @@ def test_multi_turn_overview_produces_valid_mp3_of_expected_duration():
     turns = [_sine_ms(ms, freq=180.0 + 30.0 * i) for i, ms in enumerate(turn_durations_ms)]
 
     pcm = mix_pcm(turns, silence_ms=silence_ms, sample_rate=TARGET_SR)
-    expected_pcm_samples = (
-        sum(int(TARGET_SR * ms / 1000) for ms in turn_durations_ms)
-        + mix_turns_count(len(turns)) * int(TARGET_SR * silence_ms / 1000)
-    )
+    expected_pcm_samples = sum(
+        int(TARGET_SR * ms / 1000) for ms in turn_durations_ms
+    ) + mix_turns_count(len(turns)) * int(TARGET_SR * silence_ms / 1000)
     assert pcm.size == expected_pcm_samples
     assert pcm.dtype == np.float32
 
@@ -238,11 +229,11 @@ def test_rate_mismatched_turns_in_a_multi_turn_list():
     line up on a common sample-rate grid so the silence gap is correct."""
     sr_low = 16000
     silence_ms = 300
-    t_a = _sine_ms(400, 220.0)                              # bare, 24 kHz
-    t_b_raw = _sine_ms(500, 330.0, sr=sr_low)               # 8 000 samples
-    t_b = (t_b_raw, sr_low)                                 # tagged 16 kHz
-    t_c_raw = _sine_ms(600, 440.0, sr=sr_low)               # 9 600 samples
-    t_c = (t_c_raw, sr_low)                                 # tagged 16 kHz
+    t_a = _sine_ms(400, 220.0)  # bare, 24 kHz
+    t_b_raw = _sine_ms(500, 330.0, sr=sr_low)  # 8 000 samples
+    t_b = (t_b_raw, sr_low)  # tagged 16 kHz
+    t_c_raw = _sine_ms(600, 440.0, sr=sr_low)  # 9 600 samples
+    t_c = (t_c_raw, sr_low)  # tagged 16 kHz
     pcm = mix_pcm([t_a, t_b, t_c], silence_ms=silence_ms, sample_rate=TARGET_SR)
 
     # 24 kHz turn + 24 kHz-resampled 16 kHz turn + 24 kHz-resampled 16 kHz turn
@@ -250,10 +241,7 @@ def test_rate_mismatched_turns_in_a_multi_turn_list():
     resampled_b = resample_pcm(t_b_raw, from_rate=sr_low, to_rate=TARGET_SR)
     resampled_c = resample_pcm(t_c_raw, from_rate=sr_low, to_rate=TARGET_SR)
     expected = (
-        t_a.size
-        + resampled_b.size
-        + resampled_c.size
-        + 2 * int(TARGET_SR * silence_ms / 1000)
+        t_a.size + resampled_b.size + resampled_c.size + 2 * int(TARGET_SR * silence_ms / 1000)
     )
     assert pcm.size == expected, (
         f"mixed-rate mix: got {pcm.size} samples, expected {expected} "

@@ -227,10 +227,22 @@ async def test_streaming_blank_stop_response_is_flagged():
         ),
         _sse(
             {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
-            {"choices": [{"delta": {"tool_calls": [
-                {"index": 0, "id": "c1", "type": "function",
-                 "function": {"name": "shell", "arguments": '{"cmd": "ls"}'}}
-            ]}}]},
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "shell", "arguments": '{"cmd": "ls"}'},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
             {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
         ),
         _sse(
@@ -252,17 +264,50 @@ async def test_streaming_tool_args_accumulate_across_many_fragments():
     # JSON arguments streamed across 3 more deltas (incl. an empty-string
     # fragment). The final assembled arguments must be COMPLETE and parseable.
     content = _sse(
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "id": "c1", "type": "function",
-             "function": {"name": "update_plan_progress", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "function": {"arguments": '{"steps": ["Build '}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "function": {"arguments": ""}}]}}]},  # empty fragment, no reset
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "function": {"arguments": 'home", "Add foo'}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "function": {"arguments": 'ter"]}'}}]}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "c1",
+                                "type": "function",
+                                "function": {"name": "update_plan_progress", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {"index": 0, "function": {"arguments": '{"steps": ["Build '}}
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": ""}}]}}]
+        },  # empty fragment, no reset
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [{"index": 0, "function": {"arguments": 'home", "Add foo'}}]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": 'ter"]}'}}]}}
+            ]
+        },
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, arg_deltas = await _collect(_stream_provider(content))
@@ -278,13 +323,30 @@ async def test_streaming_continuation_fragments_omit_index():
     # `index`; argument-continuation deltas omit it. The old `tc.get("index", 0)`
     # default happened to work for a SINGLE call (0), so this is a regression guard.
     content = _sse(
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "id": "c1", "type": "function",
-             "function": {"name": "update_plan_progress", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"function": {"arguments": '{"steps": ["a", '}}]}}]},  # no index
-        {"choices": [{"delta": {"tool_calls": [
-            {"function": {"arguments": '"b"]}'}}]}}]},  # no index
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "c1",
+                                "type": "function",
+                                "function": {"name": "update_plan_progress", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"function": {"arguments": '{"steps": ["a", '}}]}}
+            ]
+        },  # no index
+        {
+            "choices": [{"delta": {"tool_calls": [{"function": {"arguments": '"b"]}'}}]}}]
+        },  # no index
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, _ = await _collect(_stream_provider(content))
@@ -294,20 +356,50 @@ async def test_streaming_continuation_fragments_omit_index():
 async def test_streaming_parallel_calls_with_index_on_every_delta():
     # Compliant interleaved parallel calls — must stay correct after the fix.
     content = _sse(
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "id": "a", "type": "function",
-             "function": {"name": "toolA", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 1, "id": "b", "type": "function",
-             "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "function": {"arguments": '{"x": '}}
-        ]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 1, "function": {"arguments": '{"y": '}}
-        ]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '1}'}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '2}'}}]}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "a",
+                                "type": "function",
+                                "function": {"name": "toolA", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "b",
+                                "type": "function",
+                                "function": {"name": "toolB", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"x": '}}]}}
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '{"y": '}}]}}
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "1}"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": "2}"}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, _ = await _collect(_stream_provider(content))
@@ -323,18 +415,44 @@ async def test_streaming_parallel_calls_with_index_dropped_on_continuations():
     # garbage) and toolB got "" (empty args). The fix routes index-less
     # continuations to the most-recently-touched slot.
     content = _sse(
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "id": "a", "type": "function",
-             "function": {"name": "toolA", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"function": {"arguments": '{"x": 1}'}}
-        ]}}]},  # no index -> toolA
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 1, "id": "b", "type": "function",
-             "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"function": {"arguments": '{"y": 2}'}}
-        ]}}]},  # no index -> toolB
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "a",
+                                "type": "function",
+                                "function": {"name": "toolA", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"x": 1}'}}]}}]
+        },  # no index -> toolA
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "b",
+                                "type": "function",
+                                "function": {"name": "toolB", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"y": 2}'}}]}}]
+        },  # no index -> toolB
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, _ = await _collect(_stream_provider(content))
@@ -347,20 +465,50 @@ async def test_streaming_interleaved_continuations_keyed_by_id_without_index():
     # Hardest shape: interleaved parallel continuations that drop `index` but
     # re-send the call `id`. Routing must follow the id, not last-touched or 0.
     content = _sse(
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 0, "id": "a", "type": "function",
-             "function": {"name": "toolA", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"index": 1, "id": "b", "type": "function",
-             "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"id": "a", "function": {"arguments": '{"x": '}}
-        ]}}]},
-        {"choices": [{"delta": {"tool_calls": [
-            {"id": "b", "function": {"arguments": '{"y": '}}
-        ]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '1}'}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '2}'}}]}}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "a",
+                                "type": "function",
+                                "function": {"name": "toolA", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "b",
+                                "type": "function",
+                                "function": {"name": "toolB", "arguments": ""},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '{"x": '}}]}}
+            ]
+        },
+        {
+            "choices": [
+                {"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '{"y": '}}]}}
+            ]
+        },
+        {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": "1}"}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": "2}"}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, _ = await _collect(_stream_provider(content))

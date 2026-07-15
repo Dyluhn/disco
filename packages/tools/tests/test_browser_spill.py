@@ -8,11 +8,10 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 from disco.core.llm import ModelExecutionPolicy
-from disco.tools.sandbox.base import ExecResult
 from disco.core.observations import scan_for_destructive_elision
 from disco.tools import DefaultToolExecutor, agent_scope
 from disco.tools.builtin import build_default_registry
-
+from disco.tools.sandbox.base import ExecResult
 from tool_fakes import FakeSandboxInstance, call
 
 

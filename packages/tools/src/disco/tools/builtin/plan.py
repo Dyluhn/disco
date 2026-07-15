@@ -207,9 +207,9 @@ class UpdatePlanProgressTool:
         description=(
             "Update the plan tracker by rewriting the FULL list of step states (a "
             "declarative snapshot). `steps` is a list of OBJECTS, one per plan step: "
-            "{\"index\": <1-based step number>, \"state\": \"pending\"|\"active\"|\"done\"} "
-            "— e.g. {\"steps\": [{\"index\": 1, \"state\": \"done\"}, "
-            "{\"index\": 2, \"state\": \"active\"}]}. Pass EVERY step (mark the one you're "
+            '{"index": <1-based step number>, "state": "pending"|"active"|"done"} '
+            '— e.g. {"steps": [{"index": 1, "state": "done"}, '
+            '{"index": 2, "state": "active"}]}. Pass EVERY step (mark the one you\'re '
             "working on 'active', completed ones 'done'). This UPDATES the live progress "
             "UI — it changes plan state, but performs NO action in the workspace (no files, "
             "no commands). Call it as you make progress; each call is the full picture, so "

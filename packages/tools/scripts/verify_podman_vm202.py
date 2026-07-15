@@ -38,8 +38,14 @@ async def main() -> None:
     # 1 + 2: create (sealed default) → crun rootless; multi-exec; workspace persists.
     inst = await svc.create(SandboxSpec(memory_mb=256), owner_id="local", conversation_id="verify")
     print(f"\ncreated {inst.id}")
-    who = await inst.exec_shell("id -un; cat /proc/1/comm; readlink /proc/self/ns/user", timeout_s=10)
-    ok("1. connects (crun rootless container running)", who.exit_code == 0, who.stdout.strip().replace("\n", " ")[:50])
+    who = await inst.exec_shell(
+        "id -un; cat /proc/1/comm; readlink /proc/self/ns/user", timeout_s=10
+    )
+    ok(
+        "1. connects (crun rootless container running)",
+        who.exit_code == 0,
+        who.stdout.strip().replace("\n", " ")[:50],
+    )
     await inst.write_file("state.txt", b"step1\n")
     appended = await inst.exec_shell("cat state.txt; echo step2 >> state.txt", timeout_s=10)
     persisted = await inst.read_file("state.txt")
@@ -54,18 +60,30 @@ async def main() -> None:
         "curl -s --max-time 6 https://example.com -o /dev/null -w '%{http_code}' || echo BLOCKED",
         timeout_s=12,
     )
-    ok("3a. sealed (default): no network", "BLOCKED" in net.stdout or net.exit_code != 0, net.stdout.strip()[:40])
+    ok(
+        "3a. sealed (default): no network",
+        "BLOCKED" in net.stdout or net.exit_code != 0,
+        net.stdout.strip()[:40],
+    )
 
     # 5: timeout — killed + reported, partial output preserved.
     slow = await inst.exec_shell("sleep 30", timeout_s=3)
-    ok("5. timeout reported", slow.timed_out and slow.exit_code in (124, 137), f"timed_out={slow.timed_out} exit={slow.exit_code}")
+    ok(
+        "5. timeout reported",
+        slow.timed_out and slow.exit_code in (124, 137),
+        f"timed_out={slow.timed_out} exit={slow.exit_code}",
+    )
 
     # 7: secret non-leak — env/proc/files secret-free.
     env = await inst.exec_shell("env", timeout_s=10)
     procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
     files = await inst.list_dir(".")
     leaked = SENTINEL in env.stdout or SENTINEL in procs.stdout or any(SENTINEL in f for f in files)
-    ok("7. SECRET NON-LEAK (env/proc/files)", not leaked, "secret absent from the box" if not leaked else "LEAKED!")
+    ok(
+        "7. SECRET NON-LEAK (env/proc/files)",
+        not leaked,
+        "secret absent from the box" if not leaked else "LEAKED!",
+    )
 
     vol_name = f"{cfg.workspace_volume_prefix}-{inst.id}"
 
@@ -101,13 +119,19 @@ async def main() -> None:
 
     # 3b: a GRANTED sandbox can reach the network.
     open_inst = await svc.create(
-        SandboxSpec(egress_allow=frozenset({"example.com"})), owner_id="local", conversation_id="verify"
+        SandboxSpec(egress_allow=frozenset({"example.com"})),
+        owner_id="local",
+        conversation_id="verify",
     )
     net2 = await open_inst.exec_shell(
         "curl -s --max-time 8 https://example.com -o /dev/null -w '%{http_code}' || echo BLOCKED",
         timeout_s=15,
     )
-    ok("3b. granted: network reachable", "200" in net2.stdout or "301" in net2.stdout, net2.stdout.strip()[:40])
+    ok(
+        "3b. granted: network reachable",
+        "200" in net2.stdout or "301" in net2.stdout,
+        net2.stdout.strip()[:40],
+    )
     await open_inst.destroy()
 
     # 6: image-by-load / NEVER pull — a missing image fails loud, no pull attempted.
@@ -116,7 +140,11 @@ async def main() -> None:
         await bad.create(SandboxSpec(), owner_id="local", conversation_id="verify")
         ok("6. image-by-load: missing → typed error (no pull)", False, "did NOT fail!")
     except SandboxUnavailableError as e:
-        ok("6. image-by-load: missing → typed error (no pull)", "never pulls" in str(e), str(e)[:70])
+        ok(
+            "6. image-by-load: missing → typed error (no pull)",
+            "never pulls" in str(e),
+            str(e)[:70],
+        )
 
     print("\nDone. Any FAIL above is a real gap to fix.")
 

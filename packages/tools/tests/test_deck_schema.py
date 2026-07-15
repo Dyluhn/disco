@@ -36,6 +36,7 @@ from disco.tools.builtin._deck_schema import (
 # Sample fixtures
 # ---------------------------------------------------------------------------
 
+
 def _sample_authored_deck() -> AuthoredDeck:
     """A representative 5-slide AuthoredDeck covering multiple layouts."""
     return AuthoredDeck(
@@ -67,7 +68,10 @@ def _sample_authored_deck() -> AuthoredDeck:
                 type="image_right",
                 title="Architecture Overview",
                 body=["Query router", "Parallel retrieval", "NLI grounding"],
-                image_prompt="A clean technical architecture diagram with three boxes connected by arrows on a light background",
+                image_prompt=(
+                    "A clean technical architecture diagram with three boxes connected "
+                    "by arrows on a light background"
+                ),
             ),
             AuthoredSlide(
                 type="closing",
@@ -92,7 +96,10 @@ def _overflow_authored_deck() -> AuthoredDeck:
             AuthoredSlide(
                 type="bullets",
                 title="Dense Slide",
-                body=[f"Bullet point number {i+1}: some reasonably detailed content here" for i in range(30)],
+                body=[
+                    f"Bullet point number {i + 1}: some reasonably detailed content here"
+                    for i in range(30)
+                ],
             ),
         ],
     )
@@ -202,7 +209,10 @@ def test_overflow_creates_continuation_slide():
     deck = lower_deck(authored)
 
     # The overflow deck has 2 authored slides; the dense one should split.
-    dense_slides = [s for s in deck.slides if "Dense" in s.type or "_cont" in s.type or s.type == "bullets"]
+    dense_slides = [
+        s for s in deck.slides if "Dense" in s.type or "_cont" in s.type or s.type == "bullets"
+    ]
+    assert len(dense_slides) >= 2
     # At minimum, the original "Dense Slide" and one continuation
     assert len(deck.slides) >= 3, (
         f"Expected at least 3 slides (title + dense + continuation), got {len(deck.slides)}"
@@ -216,14 +226,12 @@ def test_overflow_no_truncation():
 
     # Collect all text from elements across all slides
     all_text = " ".join(
-        el.text for slide in deck.slides
-        for el in slide.elements
-        if el.kind == "text"
+        el.text for slide in deck.slides for el in slide.elements if el.kind == "text"
     )
     for i in range(30):
-        expected = f"Bullet point number {i+1}"
+        expected = f"Bullet point number {i + 1}"
         assert expected in all_text, (
-            f"Bullet {i+1} was truncated (not found in any slide element text)"
+            f"Bullet {i + 1} was truncated (not found in any slide element text)"
         )
 
 
@@ -352,9 +360,7 @@ def _two_column_overflow_deck() -> AuthoredDeck:
 
 def _comparison_overflow_deck() -> AuthoredDeck:
     """A comparison slide (body[0]/body[1] labels + dense 50/50 content)."""
-    body = ["LEFT SIDE", "RIGHT SIDE"] + [
-        f"Item {i + 1}: " + ("detail " * 14) for i in range(40)
-    ]
+    body = ["LEFT SIDE", "RIGHT SIDE"] + [f"Item {i + 1}: " + ("detail " * 14) for i in range(40)]
     return AuthoredDeck(
         title="Comparison Overflow",
         theme="disco-light",
@@ -385,15 +391,12 @@ def _assert_editor_pointer_parity(authored: AuthoredDeck, orig: int, nbody: int)
             j = int(m.group(1))
             # The pointer must reference the authored line this element DISPLAYS.
             assert el.content == body[j].lstrip("• "), (
-                f"pointer {el.json_pointer} shows {el.content!r} "
-                f"but body[{j}]={body[j]!r}"
+                f"pointer {el.json_pointer} shows {el.content!r} but body[{j}]={body[j]!r}"
             )
             seen[j] = seen.get(j, 0) + 1
 
     # Every authored body line addressable exactly once across the split.
-    assert sorted(seen) == list(range(nbody)), (
-        f"addressed {sorted(seen)} != 0..{nbody - 1}"
-    )
+    assert sorted(seen) == list(range(nbody)), f"addressed {sorted(seen)} != 0..{nbody - 1}"
     assert all(v == 1 for v in seen.values()), f"duplicate pointers: {seen}"
 
 
@@ -517,6 +520,7 @@ def test_render_pointer_identity_bullets_continuation_overflow():
 def test_fit_text_short_content_no_overflow():
     """4 lines of short bullets fit at max font."""
     from disco.tools.builtin._deck_schema import _BODY_FONT_MAX, _CH, _CW
+
     lines = ["Short bullet one", "Short bullet two", "Short bullet three", "Short bullet four"]
     font, fitted, overflow = _fit_text(lines, box_width=float(_CW), box_height=float(_CH))
     assert overflow == []
@@ -527,6 +531,7 @@ def test_fit_text_short_content_no_overflow():
 def test_fit_text_many_long_lines_steps_down():
     """Many long lines force font step-down below max."""
     from disco.tools.builtin._deck_schema import _BODY_FONT_MAX
+
     lines = ["A" * 150 for _ in range(20)]  # very long lines, many of them
     font, fitted, overflow = _fit_text(lines, box_width=float(_CW), box_height=float(_CH))
     # Should have stepped down OR produced overflow
@@ -543,6 +548,7 @@ def test_fit_text_overflow_is_not_truncated():
 def test_fit_text_empty_input():
     """Empty input returns (max_font, [], [])."""
     from disco.tools.builtin._deck_schema import _BODY_FONT_MAX
+
     font, fitted, overflow = _fit_text([], box_width=float(_CW), box_height=float(_CH))
     assert font == _BODY_FONT_MAX
     assert fitted == []
@@ -660,12 +666,7 @@ def test_image_element_has_prompt():
     """An image slide produces an Element(kind='image') with the image_prompt."""
     authored = _image_deck()
     deck = lower_deck(authored)
-    img_elements = [
-        el
-        for slide in deck.slides
-        for el in slide.elements
-        if el.kind == "image"
-    ]
+    img_elements = [el for slide in deck.slides for el in slide.elements if el.kind == "image"]
     assert len(img_elements) >= 1
     assert any(el.image_prompt for el in img_elements), (
         "No image element carries the image_prompt for C7 wiring"
@@ -824,9 +825,13 @@ def test_two_by_two_axis_labels_only_when_authored() -> None:
 
     def _deck(body: list[str]) -> AuthoredDeck:
         return AuthoredDeck(
-            title="T", theme="disco-light",
-            slides=[AuthoredSlide(type="bullets", archetype="two_by_two",
-                                  title="Decision Map", body=body)],
+            title="T",
+            theme="disco-light",
+            slides=[
+                AuthoredSlide(
+                    type="bullets", archetype="two_by_two", title="Decision Map", body=body
+                )
+            ],
         )
 
     four = _deck(["Fast wins", "Strategic bets", "Maintenance", "Avoid"])
@@ -842,10 +847,9 @@ def test_two_by_two_axis_labels_only_when_authored() -> None:
     import io
 
     from pptx import Presentation
+
     prs = Presentation(io.BytesIO(render_pptx(lower_deck(four))))
-    all_text = " ".join(
-        s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame
-    )
+    all_text = " ".join(s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame)
     assert "Higher impact" not in all_text and "Higher certainty" not in all_text
 
 
@@ -853,12 +857,12 @@ def test_lower_deck_theme_override_rethemes_without_mutating_authored() -> None:
     """The slide-deck template selector path: theme_override re-themes at render
     time, the authored deck's own theme is untouched, and an unknown id raises."""
     import pytest
-
     from disco.core.brand import resolve_theme
     from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
 
     authored = AuthoredDeck(
-        title="T", theme="disco-light",
+        title="T",
+        theme="disco-light",
         slides=[AuthoredSlide(type="title", title="Hi", body=["x"])],
     )
     base = lower_deck(authored)
@@ -875,7 +879,8 @@ def test_lower_deck_brand_override_uses_direction_tokens() -> None:
     from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
 
     authored = AuthoredDeck(
-        title="T", theme="disco-light",
+        title="T",
+        theme="disco-light",
         slides=[AuthoredSlide(type="title", title="Hi", body=["x"])],
     )
     theme = to_brand_tokens(DIRECTION_BY_ID["brutalist"])
@@ -897,10 +902,13 @@ def test_empty_image_slot_renders_art_fallback_not_dead_box() -> None:
     from pptx import Presentation
 
     authored = AuthoredDeck(
-        title="T", theme="disco-light",
+        title="T",
+        theme="disco-light",
         slides=[
             AuthoredSlide(
-                type="image_right", archetype="bullets", title="With image",
+                type="image_right",
+                archetype="bullets",
+                title="With image",
                 body=["point one"],
                 image_prompt="art; subject: thing; slot: side; no words",
             )
@@ -913,16 +921,12 @@ def test_empty_image_slot_renders_art_fallback_not_dead_box() -> None:
     assert "<svg" in html_str  # the themed art fallback
 
     prs = Presentation(io.BytesIO(render_pptx(deck)))
-    all_text = " ".join(
-        s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame
-    )
+    all_text = " ".join(s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame)
     assert "[image]" not in all_text
     # The art fallback draws multiple EMPTY autoshapes (base field + accents) —
     # python-pptx autoshapes all carry a text_frame, so count empty-text shapes:
     # baseline layout has 1 (the accent bar); the art adds at least 3 more.
     empty_shapes = [
-        s
-        for s in prs.slides[0].shapes
-        if s.has_text_frame and not s.text_frame.text.strip()
+        s for s in prs.slides[0].shapes if s.has_text_frame and not s.text_frame.text.strip()
     ]
     assert len(empty_shapes) >= 4, f"art fallback shapes missing: {len(empty_shapes)}"

@@ -67,7 +67,9 @@ def _clear_tracker():
 
 
 # A >1500-byte HTML file with distinct, unique anchors to edit.
-_FILLER = "\n".join(f"<p>row {i}: lorem ipsum dolor sit amet consectetur adipiscing</p>" for i in range(40))
+_FILLER = "\n".join(
+    f"<p>row {i}: lorem ipsum dolor sit amet consectetur adipiscing</p>" for i in range(40)
+)
 BIG = f"<html><body>\n<h1>Acme Cloud</h1>\n{_FILLER}\n<footer>OLD FOOTER</footer>\n</body></html>\n"
 BIG_BYTES = BIG.encode("utf-8")
 assert len(BIG_BYTES) > 1500  # guard is active only above this threshold
@@ -80,7 +82,8 @@ async def test_back_to_back_anchored_edits_using_returned_region_without_reread(
     ctx = _ctx(sbx)
     assert (await FileReadTool().run(FileReadArgs(path="index.html"), ctx)).success
     a = await FileEditTool().run(
-        FileEditArgs(path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Acme Cloud Pro</h1>"), ctx
+        FileEditArgs(path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Acme Cloud Pro</h1>"),
+        ctx,
     )
     assert a.success, a.content
     assert "applied — lines 1-12 now read:" in a.content
@@ -100,7 +103,8 @@ async def test_back_to_back_anchored_edits_using_returned_region_without_reread(
 @pytest.mark.asyncio
 async def test_stale_old_text_still_fails_after_edit():
     """Re-grounding must NOT make a wrong/stale `old` silently apply: text that no longer exists
-    (because a prior edit changed it) fails cleanly as old_text_not_found — never a blind mutation."""
+    (because a prior edit changed it) fails cleanly as old_text_not_found — never a
+    blind mutation."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="index.html"), ctx)

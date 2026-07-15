@@ -34,9 +34,7 @@ def resolve_kernel_kind(selected: str | None) -> BuildKernelKind:
     return "disco"
 
 
-def select_kernel(
-    runtime: Any, *, disco: DiscoKernel, selected: str | None
-) -> BuildKernel:
+def select_kernel(runtime: Any, *, disco: DiscoKernel, selected: str | None) -> BuildKernel:
     """Pick the active kernel instance.
 
     Kept as the small selection seam so runtime pinning and tests keep exercising

@@ -173,7 +173,7 @@ _BUTTON_SELECTOR_TOKENS: tuple[str, ...] = (
     ".button",
     "[type=submit]",
     "[type='submit']",
-    'btn',
+    "btn",
 )
 
 _HEADING_SELECTOR_TOKENS: tuple[str, ...] = (
@@ -189,12 +189,7 @@ _HEADING_SELECTOR_TOKENS: tuple[str, ...] = (
 
 # Broad emoji ranges (pictographs, symbols, transport, dingbats, supplemental).
 _EMOJI_RE = re.compile(
-    "["
-    "\U0001f300-\U0001faff"
-    "\U00002600-\U000027bf"
-    "\U0001f000-\U0001f0ff"
-    "\U00002b00-\U00002bff"
-    "]"
+    "[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f0ff\U00002b00-\U00002bff]"
 )
 
 _CSS_BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
@@ -268,7 +263,9 @@ _WEB_MEDIA_CONTAINER_RE = re.compile(
     re.I | re.DOTALL,
 )
 _WEB_TEXT_TAG_RE = re.compile(r"<\s*(?:h[1-6]|p|a|span|strong|em)\b", re.I)
-_WEB_HEROISH_RE = re.compile(r"\b(?:hero|masthead|banner|cover|full-bleed|relative|absolute)\b", re.I)
+_WEB_HEROISH_RE = re.compile(
+    r"\b(?:hero|masthead|banner|cover|full-bleed|relative|absolute)\b", re.I
+)
 _WEB_HIDDEN_DECL_RE = re.compile(
     r"(?:opacity\s*:\s*(?:0|0\.0+)\s*(?:!important\s*)?(?:;|$)|"
     r"visibility\s*:\s*hidden\s*(?:!important\s*)?(?:;|$))",
@@ -330,9 +327,7 @@ _MAX_SPEC_BYTES = MAX_DESIGNSPEC_BYTES
 _SIZE_PROBE_TIMEOUT_S = 10
 
 
-async def _bounded_read(
-    sandbox: SandboxInstance, path: str, cap: int
-) -> bytes | None:
+async def _bounded_read(sandbox: SandboxInstance, path: str, cap: int) -> bytes | None:
     """Read a file ONLY if it is within `cap` bytes — and prove that BEFORE pulling
     any bytes into this process. We stat the size in-sandbox (`wc -c < file` streams
     the file through the guest's own `wc`; nothing lands in Python memory) and refuse
@@ -516,8 +511,10 @@ def _has_deck_wrapper(text: str) -> bool:
 
 
 def _is_deck_section_candidate(attrs: str) -> bool:
-    return _has_attr(attrs, "data-slide-id") or _has_attr(attrs, "data-label") or _has_class(
-        attrs, "slide"
+    return (
+        _has_attr(attrs, "data-slide-id")
+        or _has_attr(attrs, "data-label")
+        or _has_class(attrs, "slide")
     )
 
 
@@ -619,11 +616,14 @@ def _deck_image_count(slides: list[_DeckSlide]) -> int:
 
 
 def _has_colorful_backdrop(raw: str) -> bool:
-    return re.search(
-        r"(?:linear|radial|conic)-gradient|url\(|<\s*(?:img|picture|video)\b",
-        raw,
-        re.I,
-    ) is not None
+    return (
+        re.search(
+            r"(?:linear|radial|conic)-gradient|url\(|<\s*(?:img|picture|video)\b",
+            raw,
+            re.I,
+        )
+        is not None
+    )
 
 
 def _is_flat_background_value(value: str) -> bool:
@@ -639,11 +639,15 @@ def _is_flat_background_value(value: str) -> bool:
 
 
 def _style_has_flat_background(style: str) -> bool:
-    return any(_is_flat_background_value(m.group("value")) for m in _BACKGROUND_DECL_RE.finditer(style))
+    return any(
+        _is_flat_background_value(m.group("value")) for m in _BACKGROUND_DECL_RE.finditer(style)
+    )
 
 
 def _slide_has_flat_backdrop(slide: _DeckSlide) -> bool:
-    return any(_style_has_flat_background(m.group("style")) for m in _STYLE_ATTR_RE.finditer(slide.attrs))
+    return any(
+        _style_has_flat_background(m.group("style")) for m in _STYLE_ATTR_RE.finditer(slide.attrs)
+    )
 
 
 def _global_deck_backdrop_is_flat(text: str) -> bool:
@@ -724,9 +728,7 @@ def _rule_generic_font(
 ) -> list[DesignFinding]:
     findings: list[DesignFinding] = []
     seen: set[str] = set()
-    body_font = (
-        design_spec.typography.body_font.strip().lower() if design_spec is not None else ""
-    )
+    body_font = design_spec.typography.body_font.strip().lower() if design_spec is not None else ""
     for lineno, line in enumerate(text.splitlines(), 1):
         if not _FONT_CONTEXT_RE.search(line):
             continue
@@ -849,7 +851,9 @@ def _class_has_hover_utility(raw: str) -> bool:
 
 
 def _class_has_focus_visible_utility(raw: str) -> bool:
-    return any(token.startswith("focus-visible:") or ":focus-visible:" in token for token in raw.split())
+    return any(
+        token.startswith("focus-visible:") or ":focus-visible:" in token for token in raw.split()
+    )
 
 
 def _has_scrim_or_overlay(raw: str) -> bool:
@@ -1002,9 +1006,10 @@ def _is_generic_font_family(token: str) -> bool:
 def _rule_too_many_fonts(path: str, text: str) -> list[DesignFinding]:
     families: dict[str, int] = {}
     for lineno, line in enumerate(text.splitlines(), 1):
-        if not _FONT_CONTEXT_RE.search(line) and re.search(
-            r"--(?:display|ui|reading|mono)\s*:", line, re.I
-        ) is None:
+        if (
+            not _FONT_CONTEXT_RE.search(line)
+            and re.search(r"--(?:display|ui|reading|mono)\s*:", line, re.I) is None
+        ):
             continue
         for token in _primary_families(line):
             family = _norm_font_name(token)
@@ -1219,9 +1224,7 @@ def _rule_direction_conformance(
     return findings
 
 
-def _rule_gradient_hero_text(
-    path: str, text: str, justified: set[str]
-) -> list[DesignFinding]:
+def _rule_gradient_hero_text(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
     if CHOICE_EFFECTS_GRADIENT_TEXT in justified:
         return []
     findings: list[DesignFinding] = []
@@ -1234,9 +1237,7 @@ def _rule_gradient_hero_text(
             "-webkit-background-clip" in body and "text" in body
         )
         gradient = (
-            "linear-gradient" in body
-            or "conic-gradient" in body
-            or "radial-gradient" in body
+            "linear-gradient" in body or "conic-gradient" in body or "radial-gradient" in body
         )
         if clipped and gradient:
             findings.append(
@@ -1257,9 +1258,7 @@ def _rule_gradient_hero_text(
     return findings
 
 
-def _rule_dark_neon_glow(
-    path: str, text: str, justified: set[str]
-) -> list[DesignFinding]:
+def _rule_dark_neon_glow(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
     if CHOICE_EFFECTS_GLOW in justified:
         return []
     low = text.lower()
@@ -1282,9 +1281,7 @@ def _rule_dark_neon_glow(
     if neon_match is None:
         return []
     # glow: a shadow/blur effect
-    glow = bool(
-        re.search(r"box-shadow|text-shadow|drop-shadow|filter\s*:[^;{}]*blur", low)
-    )
+    glow = bool(re.search(r"box-shadow|text-shadow|drop-shadow|filter\s*:[^;{}]*blur", low))
     if not glow:
         return []
     return [
@@ -1330,7 +1327,6 @@ def _rule_too_many_animations(path: str, text: str, justified: set[str]) -> list
 
 def _rule_web_reflexive_hover_scale(path: str, text: str) -> list[DesignFinding]:
     selectors: dict[str, int] = {}
-    low = text.lower()
     for m in _CSS_BLOCK_RE.finditer(text):
         selector = m.group(1).strip()
         body = m.group(2)
@@ -1407,7 +1403,7 @@ def _rule_web_hover_only_interactivity(
                 severity="warning",
                 path=path,
                 line=_line_of(text, m.start()),
-                evidence=f"<{m.group('tag')} class=\"{classes[:90]}\">",
+                evidence=f'<{m.group("tag")} class="{classes[:90]}">',
                 choice_key=_CHOICE_WEB_HOVER_A11Y,
                 message=(
                     "Interactive elements have hover utility classes but the workspace has no "
@@ -1424,7 +1420,10 @@ def _rule_web_text_over_image_no_scrim(path: str, text: str) -> list[DesignFindi
         body = m.group(2)
         if not _has_background_image_url(body):
             continue
-        if not _selector_targets_body_or_heading(selector) and _WEB_HEROISH_RE.search(selector) is None:
+        if (
+            not _selector_targets_body_or_heading(selector)
+            and _WEB_HEROISH_RE.search(selector) is None
+        ):
             continue
         if _has_scrim_or_overlay(body):
             continue
@@ -1666,9 +1665,7 @@ def _rule_centered_hero_3_cards_cta(
     return []
 
 
-def _rule_deck_type_floor(
-    path: str, text: str, slides: list[_DeckSlide]
-) -> list[DesignFinding]:
+def _rule_deck_type_floor(path: str, text: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
     findings: list[DesignFinding] = []
     for slide in slides:
         for style, offset in _style_attrs(slide):
@@ -1733,9 +1730,7 @@ def _slide_is_pure_bullet_list(slide: _DeckSlide) -> bool:
     return len(non_bullet_blocks) == 0
 
 
-def _rule_deck_bullet_monotony(
-    path: str, slides: list[_DeckSlide]
-) -> list[DesignFinding]:
+def _rule_deck_bullet_monotony(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
     findings: list[DesignFinding] = []
     run_start: int | None = None
     for idx, slide in enumerate(slides):
@@ -1835,8 +1830,7 @@ def _rule_deck_glass(path: str, text: str, slides: list[_DeckSlide]) -> list[Des
                         evidence=evidence,
                         choice_key=_CHOICE_DECK_GLASS,
                         message=(
-                            "backdrop-filter without saturate() makes deck glass "
-                            "read as gray mud"
+                            "backdrop-filter without saturate() makes deck glass read as gray mud"
                         ),
                     )
                 )
@@ -1905,11 +1899,14 @@ def _slide_text_blocks(slide: _DeckSlide) -> list[tuple[str, str]]:
 
 
 def _slide_has_media(slide: _DeckSlide) -> bool:
-    return re.search(
-        r"<\s*(?:img|picture|svg|canvas|video|table)\b",
-        slide.html,
-        re.I,
-    ) is not None
+    return (
+        re.search(
+            r"<\s*(?:img|picture|svg|canvas|video|table)\b",
+            slide.html,
+            re.I,
+        )
+        is not None
+    )
 
 
 def _rule_deck_orphan_slide(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
@@ -1940,9 +1937,7 @@ def _rule_deck_orphan_slide(path: str, slides: list[_DeckSlide]) -> list[DesignF
                 severity="warning",
                 path=path,
                 line=slide.line,
-                evidence=(
-                    f"slide {slide.number}: title plus {len(content)} short content line(s)"
-                ),
+                evidence=(f"slide {slide.number}: title plus {len(content)} short content line(s)"),
                 choice_key=_CHOICE_DECK_ORPHAN_SLIDE,
                 message=(
                     f"Slide {slide.number} reads like an orphan: a non-divider slide has "
@@ -1955,12 +1950,15 @@ def _rule_deck_orphan_slide(path: str, slides: list[_DeckSlide]) -> list[DesignF
 
 
 def _has_slide_nav_markers(text: str) -> bool:
-    return re.search(
-        r"\b(?:slide-nav|btn-prev|btn-next|currentSlide|goToSlide|nextSlide|prevSlide|"
-        r"ArrowRight|ArrowLeft)\b",
-        text,
-        re.I,
-    ) is not None
+    return (
+        re.search(
+            r"\b(?:slide-nav|btn-prev|btn-next|currentSlide|goToSlide|nextSlide|prevSlide|"
+            r"ArrowRight|ArrowLeft)\b",
+            text,
+            re.I,
+        )
+        is not None
+    )
 
 
 def _rule_deck_handwritten_html(path: str, text: str) -> list[DesignFinding]:
@@ -2283,9 +2281,7 @@ class DesignLintTool:
         await walk(root, 0)
         return files
 
-    async def _load_design_spec(
-        self, ctx: ToolContext
-    ) -> tuple[DesignSpec | None, bool, bool]:
+    async def _load_design_spec(self, ctx: ToolContext) -> tuple[DesignSpec | None, bool, bool]:
         """Read + parse `.disco/designspec.json`. Returns (spec, present, valid).
         Absent → (None, False, False); present-but-bad → (None, True, False)."""
         assert ctx.sandbox is not None

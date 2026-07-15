@@ -75,9 +75,7 @@ def test_make_stripe_live_verifier_handles_unknown_id() -> None:
 def test_make_stripe_live_verifier_fails_named_checks_when_wrangler_missing(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "disco.agent_server.stripe_live_verifier._find_wrangler", lambda _cwd: None
-    )
+    monkeypatch.setattr("disco.agent_server.stripe_live_verifier._find_wrangler", lambda _cwd: None)
     verifier = make_stripe_live_verifier()
     app, tree = _filled_tree()
     result = asyncio.run(verifier("stripe.security.v1", app, _design(), tree))

@@ -25,13 +25,13 @@ from pydantic import BaseModel
 
 from ..equality import event_content_eq
 from ..events import (
-    StatusEvent,
     ActionEvent,
     AgentErrorEvent,
     Event,
     EventSource,
     MessageEvent,
     ObservationEvent,
+    StatusEvent,
 )
 from .signals import (
     _NON_PRODUCTIVE_TOOLS,
@@ -43,13 +43,15 @@ from .signals import (
 # inline here so stuck.py stays self-contained — engine.py is held by another
 # worker and stuck.py must not import from it). A new mutating tool added in
 # one place must be added in the other.
-F6_FILE_MUTATING_TOOLS = frozenset({
-    "file_write",
-    "file_edit",
-    "file_append",
-    "file_replace_lines",
-    "file_insert_lines",
-})
+F6_FILE_MUTATING_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_edit",
+        "file_append",
+        "file_replace_lines",
+        "file_insert_lines",
+    }
+)
 _BARREN_NO_EFFECT_MUTATING_TOOLS = F6_FILE_MUTATING_TOOLS | frozenset(
     {
         "exact_replace",
@@ -58,9 +60,7 @@ _BARREN_NO_EFFECT_MUTATING_TOOLS = F6_FILE_MUTATING_TOOLS | frozenset(
         "safe_write_file",
     }
 )
-_BARREN_NO_EFFECT_ERROR_CODES = frozenset(
-    {"FRESH_READ_REQUIRED", "no_op_edit", "no_op_write"}
-)
+_BARREN_NO_EFFECT_ERROR_CODES = frozenset({"FRESH_READ_REQUIRED", "no_op_edit", "no_op_write"})
 
 # WALK-19 — probe/verify tools whose ObservationEvent carries the "what does the
 # running app actually look like now" signal. When this signal is unchanged
@@ -79,9 +79,7 @@ NO_PROGRESS_DISTINCT_EDITS = 4
 # count as barren, and identical failing observations are required.
 BARREN_STREAK_TURNS = 8
 BARREN_STREAK_IDENTICAL_FAILURES = 3
-_BARREN_READ_ONLY_TOOLS = frozenset(
-    {"think", "file_read", "file_list", "search", "extract"}
-)
+_BARREN_READ_ONLY_TOOLS = frozenset({"think", "file_read", "file_list", "search", "extract"})
 _FAILURE_PREFIX_CHARS = 160
 
 # Live M3 probe-spin: a weak model can poll the same non-productive probe tool
@@ -104,9 +102,9 @@ _PROBE_SPIN_TOOLS = _NO_PROGRESS_PROBE_TOOLS | frozenset(
 # W1 — wait/poll tools exempted from patterns 1 and 4 (but NOT 2): a legit
 # "poll until server up" loop must not be flagged as stuck (OpenHands #5355 FP
 # class). Pattern 2 keeps them: a perpetually-erroring poll IS stuck.
-_WAIT_POLL_TOOLS = frozenset({
-    "sleep", "wait", "server_status", "poll", "browser_wait", "job_status", "deploy_status"
-})
+_WAIT_POLL_TOOLS = frozenset(
+    {"sleep", "wait", "server_status", "poll", "browser_wait", "job_status", "deploy_status"}
+)
 
 # W1 — plan/meta tools managed by the dedicated bookkeeping halt
 # (turn_control.py gate_bookkeeping_streak). Excluded from patterns 1 and 4
@@ -199,10 +197,7 @@ def _after_last_user_message(events: list[Event]) -> list[Event]:
     for i, e in enumerate(events):
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             last = i
-        elif (
-            isinstance(e, StatusEvent)
-            and (e.detail or "") in _RECOVERY_BOUNDARY_DETAILS
-        ):
+        elif isinstance(e, StatusEvent) and (e.detail or "") in _RECOVERY_BOUNDARY_DETAILS:
             last = i
     return events[last + 1 :]
 
@@ -346,7 +341,8 @@ class StuckDetector:
         # world answered" from a tight no-wait loop. Only exempt ACTIONS are
         # dropped (a `think` between two clicks does not make them non-adjacent).
         stream = [
-            e for e in events
+            e
+            for e in events
             if isinstance(e, ObservationEvent | AgentErrorEvent)
             or (
                 isinstance(e, ActionEvent)
@@ -381,9 +377,7 @@ class StuckDetector:
     # directive is a recommendation, not an automatic edit — the engine (or
     # a future Rung consumer) decides how to act on it.
 
-    def _per_file_rewrite_directive(
-        self, events: list[Event]
-    ) -> RewriteDirective | None:
+    def _per_file_rewrite_directive(self, events: list[Event]) -> RewriteDirective | None:
         # Gate closed at the threshold level (e.g. 0 ⇒ disabled) and at the
         # call site (assist ON). A 0 in either knob short-circuits the
         # bookkeeping, so a misconfigured threshold can't silently do work.
@@ -470,7 +464,8 @@ class StuckDetector:
         # consecutive-pairs logic sees the correct adjacency structure.
         _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
         filtered = [
-            e for e in events
+            e
+            for e in events
             if not (
                 isinstance(e, ActionEvent)
                 and e.tool_call is not None
@@ -512,17 +507,17 @@ class StuckDetector:
             for (a, e) in _consecutive_pairs(events, ActionEvent, AgentErrorEvent)
             if isinstance(a, ActionEvent)
             and isinstance(e, AgentErrorEvent)
-            and (
-                a.tool_call is None
-                or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS
-            )
+            and (a.tool_call is None or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS)
         ]
         if len(pairs) < n:
             return False
         last = pairs[-n:]
         a0, e0 = last[0]
         # W1: ignore_thought=True so thought-paraphrasing does not mask a loop.
-        return all(event_content_eq(a, a0, ignore_thought=True) and event_content_eq(e, e0) for a, e in last)
+        return all(
+            event_content_eq(a, a0, ignore_thought=True) and event_content_eq(e, e0)
+            for a, e in last
+        )
 
     # -- pattern 3: agent monologue (consecutive agent messages) --------------
 
@@ -545,7 +540,8 @@ class StuckDetector:
         # W1: exempt wait/poll and plan/meta tools (same rationale as pattern 1).
         _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
         actions = [
-            e for e in events
+            e
+            for e in events
             if isinstance(e, ActionEvent)
             and e.tool_call is not None
             and e.tool_call.tool_name not in _exempt
@@ -624,7 +620,9 @@ def repeated_verify_no_progress(
             if payload != last_key:
                 break
             probe_count += 1
-        elif not any(event_content_eq(cast("ActionEvent", payload), d, ignore_thought=True) for d in distinct):
+        elif not any(
+            event_content_eq(cast("ActionEvent", payload), d, ignore_thought=True) for d in distinct
+        ):
             distinct.append(cast("ActionEvent", payload))
     return probe_count >= 2 and len(distinct) >= distinct_edits
 
@@ -684,9 +682,7 @@ def barren_streak_no_progress(
     if turns <= 0 or identical_failures <= 0:
         return False
     window = _after_last_user_message(events)
-    actions = [
-        e for e in window if isinstance(e, ActionEvent) and e.tool_call is not None
-    ]
+    actions = [e for e in window if isinstance(e, ActionEvent) and e.tool_call is not None]
     if len(actions) < turns:
         return False
     recent_actions = actions[-turns:]
@@ -710,19 +706,14 @@ def barren_streak_no_progress(
             code = _no_effect_refusal_code_from_observation(event)
             if code is not None:
                 no_effect_failures[event.action_id or ""] = code
-            prefix = _failure_prefix(
-                event.tool_result.error or event.tool_result.content
-            )
+            prefix = _failure_prefix(event.tool_result.error or event.tool_result.content)
             if prefix:
                 prefixes.append(prefix)
     for action in recent_actions:
         tool_name = action.tool_call.tool_name
         if tool_name in _BARREN_READ_ONLY_TOOLS:
             continue
-        if (
-            tool_name in _BARREN_NO_EFFECT_MUTATING_TOOLS
-            and action.id in no_effect_failures
-        ):
+        if tool_name in _BARREN_NO_EFFECT_MUTATING_TOOLS and action.id in no_effect_failures:
             prefixes.append(no_effect_failures[action.id])
             continue
         return False

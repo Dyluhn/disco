@@ -313,8 +313,16 @@ def _make_canonical_report() -> ReportEvent:
             ),
         ],
         passages=[
-            {"id": "p0", "source_title": "Avian Speed Database", "source_url": "https://birds.example.com/p0"},
-            {"id": "p1", "source_title": "European Ornithology Journal", "source_url": "https://birds.example.com/p1"},
+            {
+                "id": "p0",
+                "source_title": "Avian Speed Database",
+                "source_url": "https://birds.example.com/p0",
+            },
+            {
+                "id": "p1",
+                "source_title": "European Ornithology Journal",
+                "source_url": "https://birds.example.com/p1",
+            },
         ],
         all_hits=[],
         unsupported_count=1,
@@ -328,8 +336,7 @@ def test_markdown_byte_parity_with_theme() -> None:
     report = _make_canonical_report()
     result = serialize_markdown(report)
     assert result == CAPTURED_MARKDOWN, (
-        f"Byte-parity failed.\n--- EXPECTED ---\n{CAPTURED_MARKDOWN!r}\n"
-        f"--- GOT ---\n{result!r}"
+        f"Byte-parity failed.\n--- EXPECTED ---\n{CAPTURED_MARKDOWN!r}\n--- GOT ---\n{result!r}"
     )
 
 

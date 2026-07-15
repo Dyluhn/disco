@@ -96,7 +96,7 @@ def test_provider_prefixed_secrets_are_scrubbed(secret: str) -> None:
 # ---- 2. Bearer / Authorization headers -------------------------------------
 
 BEARER_CASES = [
-    'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig',
+    "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
     "Authorization: Bearer ghp_abc123def456ghi789jkl012mno345pqr678",
     "authorization: bearer sk_live_4eC39HqLyjWDarjtT1zdp7dc",
     "Token: sk_live_4eC39HqLyjWDarjtT1zdp7dc",
@@ -268,6 +268,7 @@ def test_streaming_frame_is_scrubbed(frame: dict) -> None:
 
 # ---- 9. Event payload scrubbing (recursive walk) ---------------------------
 
+
 def test_event_payload_scrubs_recursively() -> None:
     """A captured event payload with secrets in arguments, thought, AND
     observation content — every text field is scrubbed; non-text fields
@@ -353,6 +354,7 @@ def test_event_payload_handles_nested_observation_with_error() -> None:
 
 
 # ---- 10. Order invariant: specific patterns fire BEFORE generic ------------
+
 
 def test_order_specific_before_generic_on_plain_text() -> None:
     """A provider-prefixed secret in PLAIN TEXT (no KEY= prefix) MUST

@@ -11,7 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from disco.core.appkit.spec import AppSpec
 from disco.core.appkit import (
     Action,
     DesignSpec,
@@ -26,6 +25,7 @@ from disco.core.appkit import (
     save_app_spec,
     save_design_spec,
 )
+from disco.core.appkit.spec import AppSpec
 from pydantic import ValidationError
 
 
@@ -141,9 +141,7 @@ def test_design_justifications_round_trip(tmp_path: Path) -> None:
         update={
             "justifications": (
                 *base.justifications,
-                Justification(
-                    choice="amber accent", reason="brand color matches the client logo"
-                ),
+                Justification(choice="amber accent", reason="brand color matches the client logo"),
             )
         }
     )
@@ -312,27 +310,21 @@ def test_oversized_design_spec_rejected_before_parse(tmp_path: Path) -> None:
 def test_rejects_too_many_pages() -> None:
     data = _valid_app_spec().model_dump()
     template = data["pages"][0]
-    data["pages"] = [
-        {**template, "id": f"p{i}", "route": f"/p{i}"} for i in range(51)
-    ]
+    data["pages"] = [{**template, "id": f"p{i}", "route": f"/p{i}"} for i in range(51)]
     with pytest.raises(ValidationError):
         AppSpec.model_validate(data)
 
 
 def test_rejects_too_many_sections() -> None:
     data = _valid_app_spec().model_dump()
-    data["pages"][0]["sections"] = [
-        {"id": f"s{i}", "kind": "custom"} for i in range(31)
-    ]
+    data["pages"][0]["sections"] = [{"id": f"s{i}", "kind": "custom"} for i in range(31)]
     with pytest.raises(ValidationError):
         AppSpec.model_validate(data)
 
 
 def test_rejects_too_many_entity_fields() -> None:
     data = _valid_app_spec().model_dump()
-    data["entities"][0]["fields"] = [
-        {"name": f"f{i}", "type": "str"} for i in range(61)
-    ]
+    data["entities"][0]["fields"] = [{"name": f"f{i}", "type": "str"} for i in range(61)]
     with pytest.raises(ValidationError):
         AppSpec.model_validate(data)
 
@@ -364,8 +356,7 @@ def test_entity_field_name_accepts_valid_snake_case() -> None:
 def test_rejects_too_many_actions() -> None:
     data = _valid_app_spec().model_dump()
     data["primary_actions"] = [
-        {"id": f"a{i}", "label": "x", "type": "submit", "target": "task"}
-        for i in range(31)
+        {"id": f"a{i}", "label": "x", "type": "submit", "target": "task"} for i in range(31)
     ]
     with pytest.raises(ValidationError):
         AppSpec.model_validate(data)
@@ -564,9 +555,7 @@ def test_accepts_external_action_with_url() -> None:
         "type": "external",
         "target": "https://example.com/docs",
     }
-    assert AppSpec.model_validate(data).primary_actions[0].target == (
-        "https://example.com/docs"
-    )
+    assert AppSpec.model_validate(data).primary_actions[0].target == ("https://example.com/docs")
 
 
 # ---- EPIC E schema additions: Section.variant_id + Section.content ------------
@@ -694,8 +683,7 @@ def test_save_app_spec_rejects_model_copy_over_cap_list(tmp_path: Path) -> None:
     template = spec.pages[0]
     # 51 > _MAX_PAGES (50): the max_length list cap re-fires on revalidation.
     over_cap = tuple(
-        template.model_copy(update={"id": f"p{i}", "route": f"/p{i}"})
-        for i in range(51)
+        template.model_copy(update={"id": f"p{i}", "route": f"/p{i}"}) for i in range(51)
     )
     tampered = spec.model_copy(update={"pages": over_cap})
     with pytest.raises(ValidationError):
@@ -750,8 +738,9 @@ def test_save_app_spec_rejects_wrong_spec_type(tmp_path: Path) -> None:
     """save_app_spec validates against AppSpec (the destination), not type(model):
     handing it a valid DesignSpec must be REJECTED, not written to appspec.json."""
     from disco.core.appkit.spec import appspec_path, save_app_spec
+
     design = _valid_design_spec()
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         save_app_spec(tmp_path, design)  # type: ignore[arg-type]
     assert not appspec_path(tmp_path).exists()
 
@@ -771,6 +760,7 @@ def test_save_rejects_oversized_serialized_spec(tmp_path: Path) -> None:
         appspec_path,
         save_app_spec,
     )
+
     # Build a valid AppSpec whose JSON exceeds the cap. Every free-form string field is
     # now length-capped (see the bounded-str aliases), so we inflate via the section
     # CONTENT slots — bounded individually (body <= _MAX_BODY, items <= _MAX_ITEMS each
@@ -779,12 +769,8 @@ def test_save_rejects_oversized_serialized_spec(tmp_path: Path) -> None:
         body="x" * _MAX_BODY,
         items=tuple("x" * _MAX_ITEM for _ in range(_MAX_ITEMS)),
     )
-    sections = tuple(
-        Section(id=f"s{i}", kind="custom", content=big_content) for i in range(30)
-    )
-    pages = tuple(
-        Page(id=f"p{i}", route=f"/p{i}", title="t", sections=sections) for i in range(50)
-    )
+    sections = tuple(Section(id=f"s{i}", kind="custom", content=big_content) for i in range(30))
+    pages = tuple(Page(id=f"p{i}", route=f"/p{i}", title="t", sections=sections) for i in range(50))
     spec = AppSpec(schema_version=1, app_kind="web_app", name="big", pages=pages)
     assert len(spec.model_dump_json().encode("utf-8")) > _MAX_SPEC_BYTES
     with pytest.raises(ValueError, match="too large"):
@@ -796,8 +782,9 @@ def test_entity_field_name_rejects_reserved_columns() -> None:
     """A field named like an implicit generated column (id/created_at/rowid) would
     produce a duplicate-column → invalid DDL; the spec must reject it."""
     from disco.core.appkit.spec import EntityField
+
     for bad in ("id", "created_at", "rowid"):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             EntityField(name=bad, type="str")
     # a normal name still works
     assert EntityField(name="email", type="str").name == "email"
@@ -809,6 +796,7 @@ def test_entity_field_name_rejects_js_prototype_keys() -> None:
     pass `_IDENT_RE` (leading letter) but pollute/shadow the prototype → broken
     generated JS, so the spec must reject them."""
     from disco.core.appkit.spec import EntityField
+
     for bad in (
         "constructor",
         "prototype",
@@ -838,6 +826,7 @@ def test_rejects_overlong_page_id() -> None:
     """An unbounded page.id could drive the generator into an over-NAME_MAX component
     filename; the spec caps every free-form string. A 300-char id is rejected."""
     from disco.core.appkit.spec import _ID_MAX, Page
+
     Page(id="a" * _ID_MAX, route="/x", title="t")  # exactly at the cap is fine
     with pytest.raises(ValidationError):
         Page(id="a" * 300, route="/x", title="t")
@@ -845,6 +834,7 @@ def test_rejects_overlong_page_id() -> None:
 
 def test_rejects_overlong_section_id() -> None:
     from disco.core.appkit.spec import _ID_MAX, Section
+
     Section(id="a" * _ID_MAX, kind="custom")  # at the cap is fine
     with pytest.raises(ValidationError):
         Section(id="a" * 300, kind="custom")

@@ -247,9 +247,7 @@ def test_stale_paths_detects_external_change():
     sbx = _FakeSandbox({"readme.md": changed})
     stale = asyncio.run(tracker.stale_paths(sbx, ["readme.md"]))
 
-    assert "readme.md" in stale, (
-        "stale_paths must flag readme.md because its disk SHA changed"
-    )
+    assert "readme.md" in stale, "stale_paths must flag readme.md because its disk SHA changed"
 
 
 def test_stale_paths_empty_when_unchanged():
@@ -294,9 +292,7 @@ def test_externally_changed_file_shown_full_in_snapshot():
         stale=frozenset({"work.py"}),
     )
     assert text is not None
-    assert "BEGIN FILE work.py" in text, (
-        "stale file must be shown in full (not a pointer)"
-    )
+    assert "BEGIN FILE work.py" in text, "stale file must be shown in full (not a pointer)"
     assert "new body after external edit" in text
 
     # After rendering, tracker SHA updated to the new disk SHA

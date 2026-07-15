@@ -198,8 +198,7 @@ class ScheduleManager:
         because a manual fire is always intentional. Returns False if no such
         schedule belongs to this owner (caller surfaces a 404)."""
         schedules = [
-            Schedule.from_store_row(r)
-            for r in self._store.list_schedules(owner_id=owner_id)
+            Schedule.from_store_row(r) for r in self._store.list_schedules(owner_id=owner_id)
         ]
         sched = next((s for s in schedules if s.schedule_id == schedule_id), None)
         if sched is None:
@@ -273,10 +272,7 @@ class ScheduleManager:
     async def _tick(self) -> None:
         """Check all enabled schedules and execute any that are due."""
         now = self._now_fn()
-        schedules = [
-            Schedule.from_store_row(r)
-            for r in self._store.list_enabled_schedules()
-        ]
+        schedules = [Schedule.from_store_row(r) for r in self._store.list_enabled_schedules()]
         for sched in schedules:
             if sched.next_run is None:
                 continue

@@ -67,9 +67,7 @@ async def test_write_tool_in_planning_produces_recoverable_rejection():
     write_id = writes[0].id
     rejected = any(isinstance(e, AgentErrorEvent) and e.action_id == write_id for e in events)
     executed_ok = any(
-        isinstance(e, ObservationEvent)
-        and e.action_id == write_id
-        and e.tool_result.success
+        isinstance(e, ObservationEvent) and e.action_id == write_id and e.tool_result.success
         for e in events
     )
     # SPEC: the write is rejected, not executed.

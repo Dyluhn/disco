@@ -22,9 +22,7 @@ from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 
 class _FakeSandbox:
     def __init__(self, existing: dict[str, bytes] | None = None) -> None:
-        self._fs = {
-            strip_redundant_workspace_prefix(k): v for k, v in (existing or {}).items()
-        }
+        self._fs = {strip_redundant_workspace_prefix(k): v for k, v in (existing or {}).items()}
 
     async def read_file(self, path: str) -> bytes:
         key = strip_redundant_workspace_prefix(path)

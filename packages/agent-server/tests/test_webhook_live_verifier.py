@@ -37,15 +37,18 @@ def _app_tree() -> tuple[AppSpec, DesignSpec, dict[str, str]]:
     design = recipe.to_design_spec()
     tree = generate(app, design)
     tree[".disco/appspec.json"] = serialize_app_spec(app)
-    tree[".disco/primitives/webhook.json"] = json.dumps(
-        {
-            "primitive_id": "webhook",
-            "tier": "template_only",
-            "applied_at": "2026-07-11T00:00:00Z",
-            "specs": [spec.model_dump(mode="json") for spec in specs],
-        },
-        indent=2,
-    ) + "\n"
+    tree[".disco/primitives/webhook.json"] = (
+        json.dumps(
+            {
+                "primitive_id": "webhook",
+                "tier": "template_only",
+                "applied_at": "2026-07-11T00:00:00Z",
+                "specs": [spec.model_dump(mode="json") for spec in specs],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return app, design, tree
 
 
@@ -68,9 +71,7 @@ async def test_missing_wrangler_fails_all_named_checks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, design, tree = _app_tree()
-    monkeypatch.setattr(
-        "disco.agent_server.webhook_live_verifier.find_wrangler", lambda _cwd: None
-    )
+    monkeypatch.setattr("disco.agent_server.webhook_live_verifier.find_wrangler", lambda _cwd: None)
     result = await make_webhook_live_verifier()("webhook.security.v1", app, design, tree)
     assert not result.ok
     assert all(not check.passed for check in result.checks)

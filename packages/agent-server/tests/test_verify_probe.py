@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.agent_server.verify.host import HostWebAppVerifier
 from disco.agent_server.verify.probe import (
     AppProbeTarget,
     app_body_problem,
@@ -10,7 +11,6 @@ from disco.agent_server.verify.probe import (
     compute_web_app_verdict,
     validate_app_deliverables,
 )
-from disco.agent_server.verify.host import HostWebAppVerifier
 from disco.core.loop import HostVerificationDeliverable
 
 
@@ -38,8 +38,7 @@ def test_app_probe_targets_collects_url_and_preview_targets() -> None:
 def test_app_body_problem_preserves_existing_response_rules() -> None:
     assert app_body_problem(None, label="x") == "app deliverable not reachable: x"
     assert (
-        app_body_problem((503, b""), label="x")
-        == "app deliverable preview not available (503): x"
+        app_body_problem((503, b""), label="x") == "app deliverable preview not available (503): x"
     )
     assert (
         app_body_problem((300, b"<html>choices</html>"), label="x")

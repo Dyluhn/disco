@@ -5,6 +5,7 @@ is HARDWARE-DEFERRED — VM 201 (the gVisor sandbox host) is destroyed. These
 integration tests require a real sandbox backend; run them manually with a live
 podman/local backend when re-provisioned.
 """
+
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
 
@@ -158,10 +159,12 @@ def test_live_url_route_happy_path_returns_200_and_NO_raw_url():
     import httpx
 
     # exec_shell #1 = health curl (ok), #2 = live_start POST (ok JSON)
-    session = _fake_session([
-        _shell_result(0, "ok"),
-        _shell_result(0, '{"ok": true, "novnc_port": 6080, "display": ":1"}'),
-    ])
+    session = _fake_session(
+        [
+            _shell_result(0, "ok"),
+            _shell_result(0, '{"ok": true, "novnc_port": 6080, "display": ":1"}'),
+        ]
+    )
     # wake_for_preview resolves a RAW upstream (the readiness signal); the route must
     # NOT leak it to the browser.
     raw = "http://192.168.1.77:49213"
@@ -363,6 +366,7 @@ def test_live_ready_route_disabled_no_side_effect():
             body = resp.json()
             assert body["ready"] is False
             assert body["reason"] == "disabled"
+
     asyncio.run(run())
     # live_session is never even reached for the disabled case; wake_for_preview not called.
     runtime.wake_for_preview.assert_not_called()
@@ -403,10 +407,12 @@ def test_live_ready_route_healthy_daemon_is_ready_with_NO_live_start():
     from disco.core.store.sqlite import SqliteEventStore
 
     # A session whose exec_shell would yield a live_start JSON if (wrongly) called twice.
-    session = _fake_session([
-        _shell_result(0, "OK"),  # the health curl
-        _shell_result(0, '{"ok": true}'),  # MUST NOT be consumed (no live_start)
-    ])
+    session = _fake_session(
+        [
+            _shell_result(0, "OK"),  # the health curl
+            _shell_result(0, '{"ok": true}'),  # MUST NOT be consumed (no live_start)
+        ]
+    )
 
     entry = ModelEntry(model_id="m", provider="local", context_window=8192)
     cfg = RouterConfig(
@@ -535,10 +541,12 @@ def test_live_url_route_no_upstream_returns_503():
 
     import httpx
 
-    session = _fake_session([
-        _shell_result(0, "ok"),
-        _shell_result(0, '{"ok": true}'),
-    ])
+    session = _fake_session(
+        [
+            _shell_result(0, "ok"),
+            _shell_result(0, '{"ok": true}'),
+        ]
+    )
     app = _enabled_app(session=session, upstream=None)  # wake_for_preview → None
 
     async def run():

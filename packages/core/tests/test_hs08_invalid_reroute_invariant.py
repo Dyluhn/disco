@@ -144,10 +144,9 @@ def _paired_ids(events: list) -> dict[str, str]:
 
 def _unknown_actions(events: list, name: str) -> list[ActionEvent]:
     return [
-        e for e in events
-        if isinstance(e, ActionEvent)
-        and e.tool_call is not None
-        and e.tool_call.tool_name == name
+        e
+        for e in events
+        if isinstance(e, ActionEvent) and e.tool_call is not None and e.tool_call.tool_name == name
     ]
 
 
@@ -213,7 +212,7 @@ async def test_requery_exhausted_unknown_tool_emits_paired_result_no_abort():
             f"has no matching ObservationEvent.tool_result.call_id OR "
             f"AgentErrorEvent.tool_call_id. The Rung-7 exhausted path "
             f"violated the message invariant — the next provider call "
-            f"will 400 with a 'messages with role \"tool\" must be a "
+            f'will 400 with a \'messages with role "tool" must be a '
             f"response to a preceeding tool_call' error. "
             f"Paired ids so far: {paired!r}"
         )
@@ -231,10 +230,10 @@ async def test_requery_exhausted_unknown_tool_emits_paired_result_no_abort():
     # so the model can self-correct on its next turn.
     err = next(
         (
-            e for e in events
-            if isinstance(e, AgentErrorEvent) and e.tool_call_id in {
-                a.tool_call.call_id for a in unknown_actions
-            }
+            e
+            for e in events
+            if isinstance(e, AgentErrorEvent)
+            and e.tool_call_id in {a.tool_call.call_id for a in unknown_actions}
         ),
         None,
     )
@@ -244,8 +243,7 @@ async def test_requery_exhausted_unknown_tool_emits_paired_result_no_abort():
         f"which the engine emits as an AgentErrorEvent."
     )
     assert unknown in err.error, (
-        f"AgentErrorEvent.error should mention the unknown tool name; "
-        f"got {err.error!r}"
+        f"AgentErrorEvent.error should mention the unknown tool name; got {err.error!r}"
     )
     # F1 (c) defense: the AgentErrorEvent MUST carry the tool_call_id
     # so the OpenAI provider's _message() renders it as role:"tool"
@@ -305,12 +303,10 @@ async def test_requery_exhausted_with_raising_executor_still_pairs():
         )
         # The error from the executor is what surfaces.
         err = next(
-            e for e in events
-            if isinstance(e, AgentErrorEvent) and e.tool_call_id == call_id
+            e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == call_id
         )
         assert "sandbox blew up" in err.error, (
-            f"AgentErrorEvent should carry the executor's exception text; "
-            f"got {err.error!r}"
+            f"AgentErrorEvent should carry the executor's exception text; got {err.error!r}"
         )
 
 
@@ -336,12 +332,14 @@ async def test_requery_exhausted_then_finish_yields_finished_status():
     # Three steps: hallucinate, hallucinate again, hallucinate once more
     # (so the requery bound caps + 1 fall-through to the action path),
     # THEN finish. The script's last entry sticks for any further calls.
-    agent = ScriptedAgent([
-        action_step(unknown),
-        action_step(unknown),
-        action_step(unknown),
-        finish_step("recovered"),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step(unknown),
+            action_step(unknown),
+            action_step(unknown),
+            finish_step("recovered"),
+        ]
+    )
     loop, store = build_loop(agent, executor=executor)
 
     await loop.send_message("go")
@@ -398,11 +396,9 @@ async def test_requery_exhausted_proof_requery_actually_fired():
     # requery hint is appended as a transient user message BEFORE the
     # requery call. Inspect the views to confirm the hint fired.
     hint_views = [
-        v for v in agent.seen_views
-        if any(
-            m.role == "user" and "Unknown tool" in (m.content or "")
-            for m in v.messages
-        )
+        v
+        for v in agent.seen_views
+        if any(m.role == "user" and "Unknown tool" in (m.content or "") for m in v.messages)
     ]
     assert hint_views, (
         f"Expected at least one agent.step() view to carry the Rung-7 "
@@ -412,10 +408,9 @@ async def test_requery_exhausted_proof_requery_actually_fired():
     )
     # The hint references the offending name (so the model can self-correct).
     hint = next(
-        m.content for v in hint_views
+        m.content
+        for v in hint_views
         for m in v.messages
         if m.role == "user" and "Unknown tool" in (m.content or "")
     )
-    assert unknown in hint, (
-        f"Rung-7 hint should name the offending tool; got {hint!r}"
-    )
+    assert unknown in hint, f"Rung-7 hint should name the offending tool; got {hint!r}"

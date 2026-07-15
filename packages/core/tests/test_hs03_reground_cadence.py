@@ -402,8 +402,7 @@ async def test_hs03_does_not_fire_on_every_step():
             )
             nonboundary_silents += 1
     assert boundary_hits == [3, 6], (
-        f"cadence=3 over counts 1..8 must fire on counts 3 and 6; "
-        f"got {boundary_hits}"
+        f"cadence=3 over counts 1..8 must fire on counts 3 and 6; got {boundary_hits}"
     )
     assert nonboundary_silents == 6, (
         f"cadence=3 over counts 1..8 must be silent on 6 non-boundary "
@@ -535,15 +534,9 @@ async def test_hs03_assist_off_store_unchanged_after_real_run():
     # Mark BOTH plan steps done so the finish gate (C18 / F4) accepts
     # the FINISHED transition — otherwise the loop halts at STUCK on
     # an incomplete plan.
-    actions = [
-        action_step(tool="shell", args={"cmd": f"ls step{i}"}) for i in range(5)
-    ] + [
-        action_step(
-            tool="plan_step", args={"index": 1, "state": "done"}
-        ),
-        action_step(
-            tool="plan_step", args={"index": 2, "state": "done"}
-        ),
+    actions = [action_step(tool="shell", args={"cmd": f"ls step{i}"}) for i in range(5)] + [
+        action_step(tool="plan_step", args={"index": 1, "state": "done"}),
+        action_step(tool="plan_step", args={"index": 2, "state": "done"}),
         finish_step(),
     ]
     agent = ScriptedAgent(actions)
@@ -571,17 +564,14 @@ async def test_hs03_assist_off_store_unchanged_after_real_run():
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
     )
     await store.append(CID, _plan())
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await loop.run()
     state = await store.get_state(CID)
     assert state.execution_status == ConversationStatus.FINISHED
     reground_count = sum(
         1
         for e in await store.get_events(CID)
-        if isinstance(e, MessageEvent)
-        and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
+        if isinstance(e, MessageEvent) and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
     )
     assert reground_count == 0, (
         f"assist=OFF: the store must contain zero re-ground "
@@ -634,18 +624,14 @@ async def test_hs03_emitted_content_is_recap_not_steer():
     )
     # 1. Direct helper test: the recap shape.
     recap = _hs03_reground_message(events)
-    assert recap is not None, (
-        "events contain a plan → the helper should return a recap"
-    )
+    assert recap is not None, "events contain a plan → the helper should return a recap"
     body = recap.content
     # Sentinel bracketing.
     assert body.startswith(_HS03_REGROUND_SENTINEL), (
-        f"recap must start with the sentinel tag {_HS03_REGROUND_SENTINEL!r}; "
-        f"got {body[:60]!r}"
+        f"recap must start with the sentinel tag {_HS03_REGROUND_SENTINEL!r}; got {body[:60]!r}"
     )
     assert body.rstrip().endswith(_HS03_REGROUND_SENTINEL), (
-        f"recap must end with the closing sentinel tag; got "
-        f"{body[-60:]!r}"
+        f"recap must end with the closing sentinel tag; got {body[-60:]!r}"
     )
     # Anchored headings — the four the brief calls out, present
     # because the test plan has a context block (so CONSTRAINTS
@@ -656,9 +642,7 @@ async def test_hs03_emitted_content_is_recap_not_steer():
             f"the brief requires the same anchored structure HS-02 uses"
         )
     # Goal content reflects the plan summary.
-    assert "ship the page" in body, (
-        "recap GOAL section should restate the plan summary"
-    )
+    assert "ship the page" in body, "recap GOAL section should restate the plan summary"
     # Progress checklist is present (the helper renders "✓" or "□"
     # for each step; we don't pin the exact marks — they depend on
     # the plan_step marks, of which there are none in the seed).
@@ -666,9 +650,7 @@ async def test_hs03_emitted_content_is_recap_not_steer():
         "recap PROGRESS section should list the plan step titles"
     )
     # Files section names the touched paths.
-    assert "index.html" in body, (
-        "recap FILES section should name the recently-touched file"
-    )
+    assert "index.html" in body, "recap FILES section should name the recently-touched file"
     # Length: the recap is a "few hundred chars" per the brief.
     # Generous ceiling — anything < 2k chars is a recap; a 2k+
     # recap is the second-prompt bloat the cadence is designed to
@@ -752,12 +734,8 @@ async def test_hs03_end_to_end_through_real_run():
       step 7 — finish → 0
     """
     actions = [action_step(tool="shell", args={"cmd": f"ls step{i}"}) for i in range(4)] + [
-        action_step(
-            tool="plan_step", args={"index": 1, "state": "done"}
-        ),
-        action_step(
-            tool="plan_step", args={"index": 2, "state": "done"}
-        ),
+        action_step(tool="plan_step", args={"index": 1, "state": "done"}),
+        action_step(tool="plan_step", args={"index": 2, "state": "done"}),
         finish_step(),
     ]
     agent = ScriptedAgent(actions)
@@ -789,8 +767,7 @@ async def test_hs03_end_to_end_through_real_run():
     regrounds = sum(
         1
         for e in await loop.store.get_events(CID)
-        if isinstance(e, MessageEvent)
-        and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
+        if isinstance(e, MessageEvent) and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
     )
     # 4 shell actions + a 7-step script: the materialize-step at the
     # start of step i sees events through step i-1's action (with

@@ -65,13 +65,7 @@ def _clear_tracker():
 _FILLER = "\n".join(
     f"<p>row {i}: lorem ipsum dolor sit amet consectetur adipiscing</p>" for i in range(1, 41)
 )
-BIG = (
-    "<html><body>\n"
-    "<h1>Acme Cloud</h1>\n"
-    f"{_FILLER}\n"
-    "<footer>OLD FOOTER</footer>\n"
-    "</body></html>\n"
-)
+BIG = f"<html><body>\n<h1>Acme Cloud</h1>\n{_FILLER}\n<footer>OLD FOOTER</footer>\n</body></html>\n"
 BIG_BYTES = BIG.encode("utf-8")
 assert len(BIG_BYTES) > 1500
 assert len(BIG_BYTES) <= 16 * 1024
@@ -90,7 +84,7 @@ assert len(LARGE_BYTES) > 64 * 1024
 
 @pytest.mark.asyncio
 async def test_outside_success_view_refusal_delivers_numbered_content_and_retry_succeeds():
-    """read -> line edit -> outside-view line edit -> refusal content -> corrected retry succeeds."""
+    """Outside-view refusal provides content; a corrected retry then succeeds."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
 
@@ -201,19 +195,26 @@ async def test_large_line_refusal_delivers_bounded_window():
     ctx = _ctx(sbx)
 
     refused = await FileReplaceLinesTool().run(
-        FileReplaceLinesArgs(path="large.txt", start_line=120, end_line=120, new_text="line 120 edited"),
+        FileReplaceLinesArgs(
+            path="large.txt", start_line=120, end_line=120, new_text="line 120 edited"
+        ),
         ctx,
     )
     assert refused.success is False
     assert refused.error == "FRESH_READ_REQUIRED"
-    assert "Fresh current window for large.txt [lines 80-160 of 700; total lines: 700]" in refused.content
+    assert (
+        "Fresh current window for large.txt [lines 80-160 of 700; total lines: 700]"
+        in refused.content
+    )
     delivered = (refused.structured or {})["delivered_read"]
     assert delivered["full"] is False
     assert delivered["ranges"] == [(80, 160)]
     assert "\tline 120 " in refused.content
 
     retry = await FileReplaceLinesTool().run(
-        FileReplaceLinesArgs(path="large.txt", start_line=120, end_line=120, new_text="line 120 edited"),
+        FileReplaceLinesArgs(
+            path="large.txt", start_line=120, end_line=120, new_text="line 120 edited"
+        ),
         ctx,
     )
     assert retry.success, retry.content

@@ -180,9 +180,7 @@ async def test_reapply_with_changed_items_replaces_in_place():
 async def test_invalid_spec_refused_with_schema():
     sbx = FakeSandboxInstance()
     assert (await _create_lead_gen_app(sbx)).success is True
-    out = await _add_collection(
-        sbx, {"collection_id": "team", "title": "T", "items": []}
-    )
+    out = await _add_collection(sbx, {"collection_id": "team", "title": "T", "items": []})
     assert out.success is False
     assert "invalid 'collection' spec" in out.content
     assert "Expected schema" in out.content

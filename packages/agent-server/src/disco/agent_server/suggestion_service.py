@@ -81,8 +81,7 @@ _SURFACE_PROMPTS: dict[SuggestionSurface, str] = {
         "timelines, tradeoffs, or source-backed explanation"
     ),
     "build": (
-        "things to build: sites, decks, sheets, games, apps, dashboards, documents, "
-        "and small tools"
+        "things to build: sites, decks, sheets, games, apps, dashboards, documents, and small tools"
     ),
     "agent": (
         "small multi-step computer tasks involving files, browsing, forms, extraction, "
@@ -171,9 +170,7 @@ class SuggestionService:
             _LOG.debug("suggestion generation failed for %s", surface, exc_info=task.exception())
 
     async def _generate_and_cache(self, surface: SuggestionSurface) -> list[str]:
-        suggestions = await asyncio.wait_for(
-            self._generate(surface), timeout=_GENERATION_TIMEOUT_S
-        )
+        suggestions = await asyncio.wait_for(self._generate(surface), timeout=_GENERATION_TIMEOUT_S)
         self._write_cache(surface, suggestions)
         return suggestions
 

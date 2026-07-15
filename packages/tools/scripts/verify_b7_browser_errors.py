@@ -6,6 +6,7 @@ stacks, source:line, and NETWORK FAIL lines instead of a bare '(1 errors)'.
 
   uv run python packages/tools/scripts/verify_b7_browser_errors.py
 """
+
 from __future__ import annotations
 
 import threading
@@ -32,10 +33,14 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/":
-            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
             self.wfile.write(BROKEN_PAGE)
         else:
-            self.send_response(404); self.end_headers(); self.wfile.write(b"not found")
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"not found")
 
 
 def main() -> None:
@@ -50,13 +55,18 @@ def main() -> None:
         st.page.goto(f"http://127.0.0.1:{port}/", wait_until="load")
         st.page.wait_for_timeout(800)  # let the failed fetches + the setTimeout throw land
         data = {
-            "ok": True, "url": st.page.url, "title": st.page.title(),
-            "console": st.console_logs, "network": st.network_fails,
-            "elements": [], "text": "",
+            "ok": True,
+            "url": st.page.url,
+            "title": st.page.title(),
+            "console": st.console_logs,
+            "network": st.network_fails,
+            "elements": [],
+            "text": "",
         }
     finally:
         try:
-            st.browser.close(); st.playwright.stop()
+            st.browser.close()
+            st.playwright.stop()
         except Exception:
             pass
     srv.shutdown()
@@ -68,7 +78,12 @@ def main() -> None:
     checks = {
         "console error text": "CONFIG_MISSING" in obs,
         "stack trace present": ("boom" in obs or "undefinedThing" in obs or "at " in obs),
-        "source:line present": ":" in obs and ("127.0.0.1" in obs or "line" in obs.lower() or any(c.get("location") for c in st.console_logs)),
+        "source:line present": ":" in obs
+        and (
+            "127.0.0.1" in obs
+            or "line" in obs.lower()
+            or any(c.get("location") for c in st.console_logs)
+        ),
         "NETWORK FAIL line": "NETWORK FAIL" in obs,
         "404 captured": "404" in obs,
         "console.log surfaced w/ errors": "boot: step 1" in obs,

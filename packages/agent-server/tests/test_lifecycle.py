@@ -66,10 +66,13 @@ def _runtime_with_storage(store: SqliteEventStore, projects_root: str) -> Conver
 async def _make_conversation(store: SqliteEventStore, status: ConversationStatus) -> str:
     """Create a conversation with a user message and the given status."""
     cid = f"conv_test_{status.value.lower()}_{id(status)}"
-    await store.append(cid, MessageEvent(
-        source=EventSource.USER,
-        message=LLMMessage(role="user", content="hello"),
-    ))
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="hello"),
+        ),
+    )
     if status != ConversationStatus.IDLE:
         await store.append(cid, StatusEvent(status=status))
     return cid
@@ -154,9 +157,7 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     assert events[1].trigger == "finish"
 
 
-async def test_maybe_snapshot_survives_cut_version_failure(
-    monkeypatch, tmp_path, caplog
-):
+async def test_maybe_snapshot_survives_cut_version_failure(monkeypatch, tmp_path, caplog):
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = "conv-snapshot-cut-fails"
@@ -181,13 +182,17 @@ async def test_maybe_snapshot_survives_cut_version_failure(
 
 # ---- idleness truth table ----------------------------------------------------
 
-@pytest.mark.parametrize("status", [
-    ConversationStatus.FINISHED,
-    ConversationStatus.PAUSED,
-    ConversationStatus.STUCK,
-    ConversationStatus.ERROR,
-    ConversationStatus.IDLE,
-])
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ConversationStatus.FINISHED,
+        ConversationStatus.PAUSED,
+        ConversationStatus.STUCK,
+        ConversationStatus.ERROR,
+        ConversationStatus.IDLE,
+    ],
+)
 async def test_idle_statuses_are_eligible(status, tmp_path):
     """Non-RUNNING statuses with no connections and old events are swept."""
     store = SqliteEventStore(":memory:")
@@ -294,6 +299,7 @@ async def test_no_executor_not_swept():
 
 # ---- sandbox_state -----------------------------------------------------------
 
+
 async def test_sandbox_state_active_with_executor():
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
@@ -311,6 +317,7 @@ async def test_sandbox_state_no_context():
 
 
 # ---- _rehydrated flag regression (the production bug) -----------------------
+
 
 async def test_rehydrated_flag_cleared_after_teardown():
     """_teardown_sandbox must clear the _rehydrated flag so a second rehydrate
@@ -364,6 +371,7 @@ async def test_build_session_wires_recreate_hook():
 
 
 # ---- orphan container sweep: terminal-status coverage -------------------------
+
 
 async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
     """IDLE is the PRIMARY live stop state (bp-12) — its containers are just as
@@ -441,9 +449,7 @@ async def test_orphan_sweep_destroys_concurrently(tmp_path):
     assert set(destroyed) == set(cids), "every orphan must be destroyed"
     # Serial would be n*delay (1.2s); concurrent (fan-out 6) ~= one delay. Generous
     # bound rules out serialization without being flaky.
-    assert elapsed < delay * (n / 2), (
-        f"destroys ran serially: {elapsed:.2f}s for {n} x {delay}s"
-    )
+    assert elapsed < delay * (n / 2), f"destroys ran serially: {elapsed:.2f}s for {n} x {delay}s"
 
 
 async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
@@ -480,6 +486,7 @@ async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
 
 
 # ---- HTTP state route overlay parity (live-spec regression) -------------------
+
 
 async def test_http_state_route_overlays_sandbox_state():
     """GET /conversations/{cid}/state must carry the SAME extras.sandbox overlay

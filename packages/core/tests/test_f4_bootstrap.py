@@ -110,11 +110,15 @@ class _SandboxExecutor:
         return await self._inner.execute(call)
 
 
-def _write_workspace(tmp_path: Path, *, package: dict | None = None,
-                      pyproject: str | None = None,
-                      makefile: str | None = None,
-                      cargo: str | None = None,
-                      gomod: str | None = None) -> str:
+def _write_workspace(
+    tmp_path: Path,
+    *,
+    package: dict | None = None,
+    pyproject: str | None = None,
+    makefile: str | None = None,
+    cargo: str | None = None,
+    gomod: str | None = None,
+) -> str:
     """Materialize the manifests requested on a tmp_path; return the path as
     a string. Each manifest is OPTIONAL — pass None to skip it. The detector
     only sees the files we write; everything else in the workspace is
@@ -165,7 +169,8 @@ async def test_assist_on_turn_one_emits_bootstrap_with_package_json_scripts(tmp_
 
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -207,11 +212,13 @@ async def test_assist_on_bootstrap_fires_only_on_turn_one_even_with_many_actions
     # Two real actions in the script → the bootstrap fires on turn 1
     # (no actions yet) and NOT on turn 2/3 (actions present). The
     # once-per-session flag is the load-bearing piece.
-    agent = ScriptedAgent([
-        action_step("shell", {"command": "echo a"}),
-        action_step("shell", {"command": "echo b"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {"command": "echo a"}),
+            action_step("shell", {"command": "echo b"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
@@ -222,7 +229,8 @@ async def test_assist_on_bootstrap_fires_only_on_turn_one_even_with_many_actions
 
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -248,10 +256,12 @@ async def test_assist_on_bootstrap_fires_once_across_two_run_segments(tmp_path):
         tmp_path,
         package={"name": "demo", "scripts": {"build": "tsc", "test": "vitest"}},
     )
-    agent = ScriptedAgent([
-        action_step("shell", {"command": "echo a"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {"command": "echo a"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(
         agent,
         executor=_SandboxExecutor(_FakeSandbox(workspace)),
@@ -268,7 +278,8 @@ async def test_assist_on_bootstrap_fires_once_across_two_run_segments(tmp_path):
 
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -301,7 +312,8 @@ async def test_assist_off_emits_no_bootstrap_message(tmp_path):
 
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -337,8 +349,7 @@ async def test_assist_off_byte_identical_to_pre_f4_event_log(tmp_path):
     # ENVIRONMENT MessageEvents at all on the assist-OFF path — no
     # bootstrap, no escape, nothing.
     env_msgs = [
-        e for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert env_msgs == [], (
         f"assist OFF must produce zero ENVIRONMENT messages (F4 closed the "
@@ -347,10 +358,9 @@ async def test_assist_off_byte_identical_to_pre_f4_event_log(tmp_path):
     # And no KnowledgeEvents (the bootstrap does NOT add facts to the
     # knowledge base — it's an ephemeral observation, not pinned memory).
     from disco.core import KnowledgeEvent
+
     knowledge = [e for e in events if isinstance(e, KnowledgeEvent)]
-    assert knowledge == [], (
-        f"the bootstrap must NOT pollute the knowledge base; got: {knowledge}"
-    )
+    assert knowledge == [], f"the bootstrap must NOT pollute the knowledge base; got: {knowledge}"
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +382,8 @@ async def test_assist_on_workspace_with_no_manifests_emits_nothing(tmp_path):
 
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -398,9 +409,9 @@ async def test_assist_on_workspace_with_unreadable_manifest_emits_nothing(tmp_pa
     await loop.run()
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
-        if isinstance(e, MessageEvent)
-        and "F4 bootstrap" in (e.message.content or "")
+        e
+        for e in events
+        if isinstance(e, MessageEvent) and "F4 bootstrap" in (e.message.content or "")
     ]
     assert bootstrap_msgs == []
 
@@ -413,17 +424,21 @@ async def test_assist_on_workspace_with_unreadable_manifest_emits_nothing(tmp_pa
 
 
 def test_detect_package_json_surfaces_documented_keys(tmp_path):
-    (tmp_path / "package.json").write_text(json.dumps({
-        "name": "demo",
-        "scripts": {
-            "build": "tsc -p .",
-            "test": "vitest",
-            "dev": "vite",
-            "lint": "eslint .",
-            "deploy": "echo deploying",  # NOT in the documented key set
-            "weird": "echo weird",       # NOT in the documented key set
-        },
-    }))
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "demo",
+                "scripts": {
+                    "build": "tsc -p .",
+                    "test": "vitest",
+                    "dev": "vite",
+                    "lint": "eslint .",
+                    "deploy": "echo deploying",  # NOT in the documented key set
+                    "weird": "echo weird",  # NOT in the documented key set
+                },
+            }
+        )
+    )
     out = _detect_package_json(tmp_path)
     # The detector surfaces the documented keys only. The script names ARE
     # the commands (npm run <name>), and the actual command body is shown
@@ -632,10 +647,7 @@ async def test_bootstrap_message_reaches_first_model_call_view(tmp_path):
     first_view = agent.seen_views[0]
     # The bootstrap is a MessageEvent with source=ENVIRONMENT and the
     # F4 system-reminder content. The View's `messages` field carries it.
-    bootstrap_in_view = [
-        m for m in first_view.messages
-        if "F4 bootstrap" in (m.content or "")
-    ]
+    bootstrap_in_view = [m for m in first_view.messages if "F4 bootstrap" in (m.content or "")]
     assert len(bootstrap_in_view) == 1, (
         f"the bootstrap must reach the first model call's view; got "
         f"{len(bootstrap_in_view)} matching messages in view: "
@@ -685,7 +697,8 @@ async def test_planning_mode_skips_bootstrap(tmp_path):
     await loop.run()
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")
@@ -723,7 +736,8 @@ async def test_assist_on_with_file_as_workspace_path_does_not_crash(tmp_path):
     await loop.run()
     events = await store.get_events(CID)
     bootstrap_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "F4 bootstrap" in (e.message.content or "")

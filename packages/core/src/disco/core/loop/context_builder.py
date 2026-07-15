@@ -113,9 +113,7 @@ def _sanitize_todo_seed_text(text: object) -> str:
     if not any(token in raw for token in _DISCO_PATH_TOKENS):
         return raw
     lowered = raw.lower()
-    if "todo" in lowered and any(
-        verb in lowered for verb in ("mark", "update", "edit", "check")
-    ):
+    if "todo" in lowered and any(verb in lowered for verb in ("mark", "update", "edit", "check")):
         return "Mark progress via update_plan_progress"
     words: list[str] = []
     for word in raw.split():
@@ -157,7 +155,10 @@ def render_context_pack(pack: ContextPack, *, priority: SourcePriority | None = 
     if pack.direct_edits_summary:
         sections[SourceKind.DIRECT_EDIT] = [
             "User direct edits:",
-            *[f"- {e.rel_path}: {e.kind.value}{(' — ' + e.summary) if e.summary else ''}" for e in pack.direct_edits_summary],
+            *[
+                f"- {e.rel_path}: {e.kind.value}{(' — ' + e.summary) if e.summary else ''}"
+                for e in pack.direct_edits_summary
+            ],
         ]
     if pack.unresolved_comments:
         sections[SourceKind.COMMENT] = [

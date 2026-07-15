@@ -178,9 +178,7 @@ def _assert_tool_pairs_adjacent(messages: list[LLMMessage]) -> None:
         if msg.role == "assistant" and msg.tool_calls:
             ids = [tc["id"] for tc in msg.tool_calls]
             following = messages[i + 1 : i + 1 + len(ids)]
-            assert [(m.role, m.tool_call_id) for m in following] == [
-                ("tool", cid) for cid in ids
-            ]
+            assert [(m.role, m.tool_call_id) for m in following] == [("tool", cid) for cid in ids]
 
 
 def test_condensation_starting_at_observation_omits_the_action_too():
@@ -202,9 +200,7 @@ def test_condensation_starting_at_observation_omits_the_action_too():
     assert "[tool turn condensed]" in [m.content for m in view.messages]
     assert all(
         not (
-            m.role == "assistant"
-            and m.tool_calls
-            and m.tool_calls[0]["id"] == a.tool_call.call_id
+            m.role == "assistant" and m.tool_calls and m.tool_calls[0]["id"] == a.tool_call.call_id
         )
         for m in view.messages
     )
@@ -232,9 +228,7 @@ def test_condensed_injected_reminder_cannot_split_tool_pair():
         ),
     )
     o = _obs_for(a, "tests passed")
-    events = with_seqs(
-        [user_msg("test"), a, reminder, o, tombstone(3, 3, "[reminder condensed]")]
-    )
+    events = with_seqs([user_msg("test"), a, reminder, o, tombstone(3, 3, "[reminder condensed]")])
 
     view = View.of(events)
     pair_idx = next(
@@ -276,14 +270,18 @@ def test_recitation_scopes_plan_steps_to_the_current_plan():
     def act(tool, args):
         return action(tool=tool, args=args)
 
-    evs = with_seqs([
-        user_msg("build"),
-        PlanEvent(summary="v1", steps=[{"title": "a"}, {"title": "b"}], revision=1),
-        act("plan_step", {"index": 1, "state": "done"}),
-        act("plan_step", {"index": 2, "state": "done"}),  # v1 fully done
-        PlanEvent(summary="v2", steps=[{"title": "x"}, {"title": "y"}, {"title": "z"}], revision=2),
-        act("plan_step", {"index": 1, "state": "done"}),  # only step 1 of v2 done
-    ])
+    evs = with_seqs(
+        [
+            user_msg("build"),
+            PlanEvent(summary="v1", steps=[{"title": "a"}, {"title": "b"}], revision=1),
+            act("plan_step", {"index": 1, "state": "done"}),
+            act("plan_step", {"index": 2, "state": "done"}),  # v1 fully done
+            PlanEvent(
+                summary="v2", steps=[{"title": "x"}, {"title": "y"}, {"title": "z"}], revision=2
+            ),
+            act("plan_step", {"index": 1, "state": "done"}),  # only step 1 of v2 done
+        ]
+    )
     msg = _recitation_message(evs)
     assert msg is not None
     # the new plan is 1/3 done — NOT 3/3 (v1's marks excluded)
@@ -318,9 +316,10 @@ def test_c11_recover_span_returns_original_dropped_events():
     recovered = recover_span(events, t)
     # Originals in seq order, raw Event objects.
     assert [e.seq for e in recovered] == [2, 3]
-    assert [
-        e.message.content for e in recovered if isinstance(e, MessageEvent)
-    ] == ["early-1", "early-2"]
+    assert [e.message.content for e in recovered if isinstance(e, MessageEvent)] == [
+        "early-1",
+        "early-2",
+    ]
     # The summary that replaced them is NOT returned (we recover the originals,
     # not the substitute).
     assert all(
@@ -406,9 +405,7 @@ def test_c11_recover_works_on_microcompact_tombstones():
         action_id=a1.id, tool="shell", success=False, content="network error\n" + "x" * 200
     )
     a2 = action(tool="shell", args={"command": "pip install x"})  # identical retry
-    o2 = observation(
-        action_id=a2.id, tool="shell", success=True, content="installed"
-    )
+    o2 = observation(action_id=a2.id, tool="shell", success=True, content="installed")
     base = with_seqs([user_msg("go"), a1, o1, a2, o2])
     tombs = microcompact(base)
     assert len(tombs) == 1

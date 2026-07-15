@@ -64,8 +64,7 @@ async def test_temporary_outage_preserves_state_and_executes_side_effect_once(
     assert len([event for event in events if isinstance(event, ActionEvent)]) == 1
     assert len([event for event in events if isinstance(event, ObservationEvent)]) == 1
     assert any(
-        isinstance(event, MessageEvent)
-        and "keep the current workspace" in event.message.content
+        isinstance(event, MessageEvent) and "keep the current workspace" in event.message.content
         for event in events
     )
 

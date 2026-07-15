@@ -56,7 +56,9 @@ def _print_new(events: list, shown: int) -> int:
             print(f"  ★ PLAN revision={getattr(e, 'revision', '?')} steps={len(e.steps)}")
         elif isinstance(e, ActionEvent):
             tc = e.tool_call
-            print(f"  → ACTION {tc.tool_name if tc else '(finish)'} {str(tc.arguments if tc else {})[:90]}")
+            print(
+                f"  → ACTION {tc.tool_name if tc else '(finish)'} {str(tc.arguments if tc else {})[:90]}"
+            )
         elif isinstance(e, StatusEvent):
             print(f"  [status] {e.status.value}{(' · ' + e.detail) if e.detail else ''}")
     return len(events)
@@ -91,7 +93,13 @@ async def _drive(runtime: ConversationRuntime, store, *, max_rounds: int, label:
             print("  [approve] risky action auto-approved")
             await runtime.confirm(CID)
             continue
-        if st in (ConversationStatus.FINISHED, ConversationStatus.ERROR, ConversationStatus.IDLE, ConversationStatus.STUCK, ConversationStatus.PAUSED):
+        if st in (
+            ConversationStatus.FINISHED,
+            ConversationStatus.ERROR,
+            ConversationStatus.IDLE,
+            ConversationStatus.STUCK,
+            ConversationStatus.PAUSED,
+        ):
             break
     return len(await store.get_events(CID))
 
@@ -105,7 +113,9 @@ async def main() -> None:
         key = cfg.default_model
         cfg.models[key] = cfg.models[key].model_copy(update={"model_id": _ov})
         print(f"driver model_id OVERRIDE → {_ov}")
-    print(f"driver default_model = {cfg.default_model} ({cfg.models[cfg.default_model].model_id})  (live disco-config.json)")
+    print(
+        f"driver default_model = {cfg.default_model} ({cfg.models[cfg.default_model].model_id})  (live disco-config.json)"
+    )
     sbx = LocalSandboxService(
         SandboxConfig(
             backend="local",
@@ -115,7 +125,9 @@ async def main() -> None:
         )
     )
     store = SqliteEventStore(":memory:")
-    runtime = ConversationRuntime(store, config=cfg, sandbox_service=sbx, sandbox_spec=SandboxSpec(memory_mb=512))
+    runtime = ConversationRuntime(
+        store, config=cfg, sandbox_service=sbx, sandbox_spec=SandboxSpec(memory_mb=512)
+    )
     store.create_conversation(CID, owner_id="local")
     runtime.set_surface(CID, "build")
 
@@ -142,17 +154,28 @@ async def main() -> None:
     print("\n--- assertions ---")
     # B5: phase-1 build landed FINISHED, not PAUSED.
     b5 = phase1.execution_status == ConversationStatus.FINISHED
-    print(f"  [{'PASS' if b5 else 'FAIL'}] B5  phase-1 build status = {phase1.execution_status.value} (want FINISHED, not PAUSED)")
+    print(
+        f"  [{'PASS' if b5 else 'FAIL'}] B5  phase-1 build status = {phase1.execution_status.value} (want FINISHED, not PAUSED)"
+    )
 
     # B4: no FALSE c18 'missing'/'does not exist' advisory for written files.
     advisories = [
-        e for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
-        and ("does not exist" in (e.message.content or "").lower()
-             or ("c18" in (e.message.content or "").lower() and "not met" in (e.message.content or "").lower()))
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and (
+            "does not exist" in (e.message.content or "").lower()
+            or (
+                "c18" in (e.message.content or "").lower()
+                and "not met" in (e.message.content or "").lower()
+            )
+        )
     ]
     b4 = len(advisories) == 0
-    print(f"  [{'PASS' if b4 else 'FAIL'}] B4  false file-missing/C18-not-met advisories = {len(advisories)} (want 0)")
+    print(
+        f"  [{'PASS' if b4 else 'FAIL'}] B4  false file-missing/C18-not-met advisories = {len(advisories)} (want 0)"
+    )
     for a in advisories[:3]:
         print(f"        ! {a.message.content.strip()[:160]}")
 
@@ -164,13 +187,21 @@ async def main() -> None:
     if b6:
         first_replan_idx = replan_plans[0][0]
         first_exec_idx = next(
-            (i for i, e in enumerate(events) if i >= b1 and isinstance(e, ActionEvent)
-             and e.tool_call is not None and e.tool_call.tool_name in _EXEC_WRITE_TOOLS),
+            (
+                i
+                for i, e in enumerate(events)
+                if i >= b1
+                and isinstance(e, ActionEvent)
+                and e.tool_call is not None
+                and e.tool_call.tool_name in _EXEC_WRITE_TOOLS
+            ),
             None,
         )
         b2 = first_exec_idx is None or first_replan_idx < first_exec_idx
     print(f"  [{'PASS' if b6 else 'FAIL'}] B6  re-plan emitted a revision>=2 plan = {b6}")
-    print(f"  [{'PASS' if b2 else 'FAIL'}] B2  plan precedes execution in the re-plan phase = {b2} (no free-build / no infinite spinner)")
+    print(
+        f"  [{'PASS' if b2 else 'FAIL'}] B2  plan precedes execution in the re-plan phase = {b2} (no free-build / no infinite spinner)"
+    )
 
     ok = b2 and b4 and b5 and b6
     print(f"\n  final status: {final.execution_status.value}")

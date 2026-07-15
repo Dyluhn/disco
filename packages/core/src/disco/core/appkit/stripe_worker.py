@@ -171,7 +171,9 @@ async function stripeRuntimeProofs(
 
 def _emit_stripe_verification_ts(meta: StripeMeta) -> str:
     """Raw-body, signature, and envelope verification code."""
-    return _emit_stripe_runtime_ts(meta) + f"""{''}function stripeJson(
+    return (
+        _emit_stripe_runtime_ts(meta)
+        + f"""{""}function stripeJson(
   data: unknown,
   status = 200,
 ): Response {{
@@ -298,6 +300,7 @@ function stripeUserId(event: StripeEnvelope): number | null {{
   return Number.isSafeInteger(value) ? value : null;
 }}
 """
+    )
 
 
 def _emit_stripe_correlation_ts() -> str:

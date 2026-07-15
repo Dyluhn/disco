@@ -94,9 +94,7 @@ _PDF_BYTE_FLOOR = 2048
 _CHROME_TOKENS = tuple(
     re.sub(r"\s+", " ", t).casefold() for t in (*BRAND_CHROME_TEXTS, *RENDER_PLACEHOLDERS)
 )
-_CHROME_RE = re.compile(
-    "|".join(rf"(?<!\w){re.escape(tok)}(?!\w)" for tok in _CHROME_TOKENS)
-)
+_CHROME_RE = re.compile("|".join(rf"(?<!\w){re.escape(tok)}(?!\w)" for tok in _CHROME_TOKENS))
 
 _PDF_PAGE_RE = re.compile(rb"/Type\s*/Page(?![s])")
 # Capture the id VALUE, not just the attribute — renderers (the C3 deck template)
@@ -149,6 +147,8 @@ def _strip_script_style(html: str) -> str:
             break
         i = cm.end()
     return "".join(out)
+
+
 # Strip default-template CHROME by CLASS (the "Disco." wordmark + Latin colophon +
 # their bc-* pieces) BEFORE measuring content — token-matching the rendered strings
 # is fragile (tag-stripping inserts spaces: `Disco<span>.` → "Disco ."), so a blank
@@ -343,8 +343,12 @@ def check_export_render(
     else:
         # Unknown format → honestly unverifiable (never fabricate a pass/fail).
         return ExportRenderFacts(
-            fmt=f, byte_len=len(data or b""), valid_header=False, unit_count=0,
-            declared_units=declared_units, ok=False,
+            fmt=f,
+            byte_len=len(data or b""),
+            valid_header=False,
+            unit_count=0,
+            declared_units=declared_units,
+            ok=False,
             detail=f"no render validator for export format {f!r}",
         )
 
@@ -366,9 +370,16 @@ def check_export_render(
         detail = f"{f} render ok: {units} unit(s), {visible_len} chars"
 
     return ExportRenderFacts(
-        fmt=f, byte_len=byte_len, valid_header=valid, unit_count=units,
-        declared_units=declared_units, visible_text_len=visible_len,
-        truncated=truncated, non_blank=non_blank, ok=ok, detail=detail,
+        fmt=f,
+        byte_len=byte_len,
+        valid_header=valid,
+        unit_count=units,
+        declared_units=declared_units,
+        visible_text_len=visible_len,
+        truncated=truncated,
+        non_blank=non_blank,
+        ok=ok,
+        detail=detail,
     )
 
 

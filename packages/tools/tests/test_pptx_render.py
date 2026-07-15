@@ -35,6 +35,7 @@ from disco.tools.builtin._pptx_render import (
 # Sample decks
 # ---------------------------------------------------------------------------
 
+
 def _sample_deck() -> MinimalDeck:
     """A minimal multi-slide deck exercising all four layouts."""
     return MinimalDeck(
@@ -132,7 +133,7 @@ def test_pptx_contains_real_text_runs():
     data = render_pptx(deck)
     prs = Presentation(io.BytesIO(data))
 
-    for i, (pptx_slide, deck_slide) in enumerate(zip(prs.slides, deck.slides)):
+    for i, (pptx_slide, deck_slide) in enumerate(zip(prs.slides, deck.slides, strict=True)):
         # Collect all text in the slide
         all_text = ""
         pic_count = 0
@@ -187,9 +188,7 @@ def test_pptx_bullets_slide_has_bullet_text():
     data = render_pptx(deck)
     prs = Presentation(io.BytesIO(data))
     slide = prs.slides[0]
-    all_text = " ".join(
-        shape.text_frame.text for shape in slide.shapes if shape.has_text_frame
-    )
+    all_text = " ".join(shape.text_frame.text for shape in slide.shapes if shape.has_text_frame)
     for bullet in ("Alpha", "Beta", "Gamma"):
         assert bullet in all_text, f"Bullet {bullet!r} missing from slide text"
 
@@ -213,9 +212,7 @@ def test_pptx_title_layout():
     data = render_pptx(deck)
     prs = Presentation(io.BytesIO(data))
     slide = prs.slides[0]
-    all_text = " ".join(
-        s.text_frame.text for s in slide.shapes if s.has_text_frame
-    )
+    all_text = " ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame)
     assert "Grand Title" in all_text
     assert "A subtitle here" in all_text
 
@@ -235,9 +232,7 @@ def test_pptx_section_layout():
     data = render_pptx(deck)
     prs = Presentation(io.BytesIO(data))
     slide = prs.slides[0]
-    all_text = " ".join(
-        s.text_frame.text for s in slide.shapes if s.has_text_frame
-    )
+    all_text = " ".join(s.text_frame.text for s in slide.shapes if s.has_text_frame)
     assert "Chapter One" in all_text
 
 
@@ -314,9 +309,7 @@ def test_html_one_section_per_slide():
     deck = _sample_deck()
     html_str = render_html(deck)
     count = html_str.count('<section class="slide')
-    assert count == len(deck.slides), (
-        f"Expected {len(deck.slides)} slide sections, found {count}"
-    )
+    assert count == len(deck.slides), f"Expected {len(deck.slides)} slide sections, found {count}"
 
 
 def test_html_16_9_ratio():
@@ -330,9 +323,7 @@ def test_html_contains_title_text():
     deck = _sample_deck()
     html_str = render_html(deck)
     for slide in deck.slides:
-        assert slide.title in html_str, (
-            f"Slide title {slide.title!r} not found in HTML"
-        )
+        assert slide.title in html_str, f"Slide title {slide.title!r} not found in HTML"
 
 
 def test_html_has_keyboard_nav_script():
@@ -474,8 +465,7 @@ async def test_convert_to_pdf_nonzero_exit_returns_failure():
     """A non-zero soffice exit code returns (False, error text)."""
     ctx = MagicMock()
     probe_ok = MagicMock(exit_code=0)
-    fail_result = MagicMock(exit_code=2, timed_out=False,
-                            stderr="Error: import failed")
+    fail_result = MagicMock(exit_code=2, timed_out=False, stderr="Error: import failed")
     ctx.sandbox.exec_shell = AsyncMock(side_effect=[probe_ok, fail_result])
 
     ok, err = await convert_to_pdf(ctx, "deck.pptx")
@@ -722,6 +712,7 @@ def _tiny_png() -> bytes:
     import io as _io
 
     from PIL import Image
+
     buf = _io.BytesIO()
     Image.new("RGB", (32, 24), (123, 200, 90)).save(buf, format="PNG")
     return buf.getvalue()
@@ -741,8 +732,9 @@ def test_lower_deck_embeds_image_assets_into_pptx_and_html():
         title="Test",
         theme="disco-light",
         slides=[
-            AuthoredSlide(type="full_image", title="Cover", body=[],
-                          image_prompt="a green rectangle"),
+            AuthoredSlide(
+                type="full_image", title="Cover", body=[], image_prompt="a green rectangle"
+            ),
             AuthoredSlide(type="bullets", title="Plain", body=["no image here"]),
         ],
     )
@@ -773,9 +765,11 @@ def test_lower_deck_image_assets_default_none_is_backcompat():
     """No image_assets (re-theme / editor path) → no image_bytes, current behavior."""
     from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
 
-    authored = AuthoredDeck(title="T", theme="disco-light",
-                            slides=[AuthoredSlide(type="full_image", title="C", body=[],
-                                                  image_prompt="x")])
+    authored = AuthoredDeck(
+        title="T",
+        theme="disco-light",
+        slides=[AuthoredSlide(type="full_image", title="C", body=[], image_prompt="x")],
+    )
     deck = lower_deck(authored)  # no image_assets
     assert all(el.image_bytes is None for s in deck.slides for el in s.elements)
 
@@ -783,6 +777,7 @@ def test_lower_deck_image_assets_default_none_is_backcompat():
 # ---------------------------------------------------------------------------
 # W-23 — grouped bullets into one auto-fit frame (no LibreOffice/Google overlap)
 # ---------------------------------------------------------------------------
+
 
 def _long_bullet_deck():
     """A bullets slide whose lines are long enough to wrap under font

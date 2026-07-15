@@ -34,10 +34,40 @@ _MPEG_L3_SAMPLES_PER_FRAME_MPEG2 = 576
 # Bitrate tables (kbps) for Layer III, indexed by the 4-bit bitrate index in
 # frame header byte 2 bits 7-4. Index 0 and 15 are "free" / "bad" → ignored.
 _MPEG1_L3_BITRATE_KBPS = (
-    None, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, None,
+    None,
+    32,
+    40,
+    48,
+    56,
+    64,
+    80,
+    96,
+    112,
+    128,
+    160,
+    192,
+    224,
+    256,
+    320,
+    None,
 )
 _MPEG2_L3_BITRATE_KBPS = (
-    None, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, None,
+    None,
+    8,
+    16,
+    24,
+    32,
+    40,
+    48,
+    56,
+    64,
+    80,
+    96,
+    112,
+    128,
+    144,
+    160,
+    None,
 )
 
 # Sample-rate tables (Hz) indexed by the 2-bit samplerate index in frame header

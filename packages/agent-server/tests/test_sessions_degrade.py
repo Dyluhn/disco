@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 # ---- helpers -----------------------------------------------------------------
 
+
 def _make_runtime_with_mock_session(list_mock: AsyncMock) -> ConversationRuntime:
     """Return a ConversationRuntime whose live_session() yields a fake sandbox
     whose sessions.list is the supplied AsyncMock."""
@@ -46,6 +47,7 @@ def _fresh_session(name: str = "dev") -> SessionInfo:
 
 
 # ---- sessions_snapshot unit tests --------------------------------------------
+
 
 def test_transient_failure_succeeds_on_second_attempt() -> None:
     """list raises once then succeeds → (fresh, False), exactly 2 calls, cache updated."""
@@ -150,6 +152,7 @@ def test_teardown_hygiene() -> None:
 
 # ---- route layer tests -------------------------------------------------------
 
+
 def _create_conversation(client: TestClient) -> str:
     resp = client.post("/conversations", json={"owner_id": "test"})
     assert resp.status_code == 200
@@ -198,6 +201,7 @@ def test_route_never_500_on_degraded_path() -> None:
 
 
 # ---- DEFECT-1 replay ---------------------------------------------------------
+
 
 def test_defect1_ssh_pipe_drop_two_consecutive_polls() -> None:
     """Replay DEFECT-1: sessions.list raises ConnectionResetError mid-poll.

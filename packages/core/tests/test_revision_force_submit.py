@@ -199,10 +199,7 @@ def test_current_revision_instruction_returns_user_followup():
         _user_msg("change every CTA button to Get Started", seq=5),
         StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6),
     ]
-    assert (
-        signals.current_revision_instruction(events)
-        == "change every CTA button to Get Started"
-    )
+    assert signals.current_revision_instruction(events) == "change every CTA button to Get Started"
 
 
 def test_current_revision_instruction_excludes_env_force_submit_directive():

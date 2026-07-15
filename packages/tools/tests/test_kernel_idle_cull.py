@@ -52,9 +52,7 @@ class _FakeKernel:
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
         self.exec_calls += 1
-        return KernelResult(
-            ok=True, stdout=f"fake#{self.id}:{code}", stderr=""
-        )
+        return KernelResult(ok=True, stdout=f"fake#{self.id}:{code}", stderr="")
 
     async def interrupt(self) -> None:
         self.interrupt_calls += 1
@@ -119,9 +117,7 @@ def make_manager(clock: _Clock):
 
 
 @pytest.mark.asyncio
-async def test_cull_when_idle_past_threshold_then_respawn(
-    clock: _Clock, make_manager
-) -> None:
+async def test_cull_when_idle_past_threshold_then_respawn(clock: _Clock, make_manager) -> None:
     """ACCEPTANCE 1: a kernel idle past the threshold is culled, and a
     subsequent exec re-spawns it (works)."""
     build, spawned = make_manager
@@ -209,6 +205,7 @@ async def test_freshly_spawned_kernel_is_not_immediately_culled(
     the cull timer. The manager captures `last_exec_end_at` AFTER `start()`
     returns, so the first exec always uses the new inner and the cull timer
     starts fresh from end-of-first-exec."""
+
     # A kernel whose `start()` advances the clock by 100s — simulates a
     # slow jupyter wait_for_ready.
     class SlowStartKernel(_FakeKernel):
@@ -247,9 +244,7 @@ async def test_failed_exec_still_marks_recent_use(clock: _Clock) -> None:
     agent's first action was to use it)."""
     state = {"calls": 0}
 
-    async def first_raises_then_recovers(
-        _code: str, *, timeout_s: int
-    ) -> KernelResult:
+    async def first_raises_then_recovers(_code: str, *, timeout_s: int) -> KernelResult:
         state["calls"] += 1
         if state["calls"] == 1:
             raise RuntimeError("kernel crashed")

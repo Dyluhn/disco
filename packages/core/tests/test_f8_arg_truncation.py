@@ -186,9 +186,7 @@ async def test_assist_on_confirmed_write_shrinks_content_to_prefix_marker():
     `content` arg in the rendered view replaced with a 200-char prefix
     + a path-aware recovery marker. The full content is still on disk
     (recoverable via file_read); only the rendered message shrank."""
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _success_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _success_observation()])
     loop = _make_loop(
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
@@ -219,9 +217,7 @@ async def test_assist_on_confirmed_write_marker_is_deterministic_for_same_event(
     IDENTICAL rendered content (no time-based nondeterminism, no
     random tokens, no per-call salt). This is the cache-stability
     contract: a re-materialized view matches the prior one byte-for-byte."""
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _success_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _success_observation()])
     loop = _make_loop(
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
@@ -246,9 +242,7 @@ async def test_assist_on_failed_write_does_not_shrink():
     F8 doesn't change the snip). The headline contract
     here is the ABSENCE of the F8-specific marker, which is the proof
     that F8 didn't fire for this write."""
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _failure_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _failure_observation()])
     loop = _make_loop(
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
@@ -283,9 +277,7 @@ async def test_assist_on_failed_write_keeps_full_content_for_retry():
     _ARG_SNIP elision marker still applies; CW P1-a/P1-c made that marker tier-
     specific, so the two tiers are no longer byte-identical — the invariant under
     test is the ABSENCE of the F8 mutation, not cross-tier byte-equality.)"""
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _failure_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _failure_observation()])
     loop_on = _make_loop(
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
@@ -316,9 +308,7 @@ async def test_assist_off_byte_identical_even_for_confirmed_write():
     marker must be ABSENT. The model-facing wire format is unchanged
     for capable models — the only thing that moved is the weak-model
     path's context window."""
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _success_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _success_observation()])
     loop = _make_loop(
         model_policy=ModelExecutionPolicy.standard(),
         store=SqliteEventStore(":memory:"),
@@ -544,9 +534,7 @@ async def test_non_file_write_tool_does_not_shrink():
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
     )
-    content = _content_of(
-        (await loop._materialize_view(events)).messages, name="file_append"
-    )
+    content = _content_of((await loop._materialize_view(events)).messages, name="file_append")
     # F8 marker is absent — the transform doesn't fire for `file_append`.
     assert "written to" not in content
     assert "file_read to recover" not in content
@@ -573,13 +561,11 @@ async def test_multiple_confirmed_writes_all_shrink():
 
     view = await loop._materialize_view(events)
     file_write_msgs = [
-        m for m in view.messages
+        m
+        for m in view.messages
         if m.role == "assistant"
         and m.tool_calls
-        and any(
-            isinstance(tc, dict) and tc.get("name") == "file_write"
-            for tc in m.tool_calls
-        )
+        and any(isinstance(tc, dict) and tc.get("name") == "file_write" for tc in m.tool_calls)
     ]
     # Two file_write actions → two assistant messages with file_write calls.
     assert len(file_write_msgs) == 2
@@ -602,9 +588,7 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     shared across many call sites; a render-time transform that
     mutated it would corrupt every consumer."""
 
-    events = with_seqs(
-        [user_msg("write it"), _write_event(), _success_observation()]
-    )
+    events = with_seqs([user_msg("write it"), _write_event(), _success_observation()])
     loop = _make_loop(
         model_policy=ModelExecutionPolicy(tier="weak"),
         store=SqliteEventStore(":memory:"),
@@ -615,10 +599,7 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
     # is unmodified.
     _pre_ids = [(id(m), [id(tc) for tc in (m.tool_calls or [])]) for m in view.messages]
     pre_contents = {
-        id(m): {
-            id(tc): tc["arguments"]["content"]
-            for tc in (m.tool_calls or [])
-        }
+        id(m): {id(tc): tc["arguments"]["content"] for tc in (m.tool_calls or [])}
         for m in view.messages
     }
 
@@ -682,9 +663,7 @@ def test_f8_confirmed_file_writes_includes_path_and_full_content():
     """The pure helper's return shape: {call_id: (path, full_content)}.
     The full_content is the ORIGINAL event-stored content (not the
     snipped version), so the F8 method can emit a real 200-char prefix."""
-    events = with_seqs(
-        [user_msg(), _write_event(), _success_observation()]
-    )
+    events = with_seqs([user_msg(), _write_event(), _success_observation()])
     confirmed = _f8_confirmed_file_writes(events)
     assert list(confirmed.keys()) == ["call_fw_1"]
     path, content = confirmed["call_fw_1"]

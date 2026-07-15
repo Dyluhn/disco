@@ -20,13 +20,13 @@ import re
 from dataclasses import dataclass
 
 from disco.core import LLMMessage
-from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     LLMRouter,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
 
 
 @dataclass(frozen=True)

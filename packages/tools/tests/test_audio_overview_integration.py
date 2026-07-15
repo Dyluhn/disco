@@ -180,9 +180,9 @@ def _assert_mp3_head(data: bytes) -> None:
     """MP3 must carry an MPEG frame sync (0xFF Ex) within its head."""
     assert len(data) > 0
     head = data[:64]
-    assert any(
-        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)
-    ), "no MPEG frame sync in MP3 head"
+    assert any(head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)), (
+        "no MPEG frame sync in MP3 head"
+    )
 
 
 # ---- tests ------------------------------------------------------------------

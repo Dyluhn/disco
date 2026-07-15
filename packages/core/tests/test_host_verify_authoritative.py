@@ -153,9 +153,10 @@ def _statuses(events) -> list[tuple[str, str | None]]:
 
 
 def test_model_verifier_event_cause_rejects_untrusted_free_form_text() -> None:
-    assert _bounded_model_verifier_cause(
-        "provider echoed TOP_SECRET_RESPONSE_CONTENT"
-    ) == "model verifier unavailable (unclassified structural failure)"
+    assert (
+        _bounded_model_verifier_cause("provider echoed TOP_SECRET_RESPONSE_CONTENT")
+        == "model verifier unavailable (unclassified structural failure)"
+    )
 
 
 @pytest.mark.asyncio
@@ -185,8 +186,7 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
     assert verdicts[0].verified is True
     assert verdicts[0].verdict == "pass"
     assert not any(
-        isinstance(e, ActionEvent) and e.tool_call.tool_name == "verify_web_app"
-        for e in events
+        isinstance(e, ActionEvent) and e.tool_call.tool_name == "verify_web_app" for e in events
     )
     assert not any(
         isinstance(e, ObservationEvent) and e.tool_result.tool_name == "verify_web_app"
@@ -289,11 +289,7 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
     assert verdicts[0].detail == "Typed verifier summary only."
     assert verdicts[0].failures[0]["message"] == "Typed failure only."
 
-    builder_context = "\n".join(
-        msg.content
-        for view in agent.seen_views
-        for msg in view.messages
-    )
+    builder_context = "\n".join(msg.content for view in agent.seen_views for msg in view.messages)
     assert "Typed verifier summary only." in builder_context
     assert "Typed failure only." in builder_context
     assert "RAW_CHECK_SECRET" not in builder_context
@@ -308,8 +304,7 @@ async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_event
             verified=False,
             verdict="unavailable",
             detail=(
-                "model verifier unavailable "
-                "(JSONDecodeError: Expecting value at line 1 column 1)"
+                "model verifier unavailable (JSONDecodeError: Expecting value at line 1 column 1)"
             ),
             failures=[
                 {
@@ -349,8 +344,7 @@ async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_event
         assert event.meta["model_verifier_status"] == "unavailable"
         assert event.meta["model_verifier_applied"] is False
         assert event.meta["model_verifier_cause"] == (
-            "model verifier unavailable "
-            "(JSONDecodeError: Expecting value at line 1 column 1)"
+            "model verifier unavailable (JSONDecodeError: Expecting value at line 1 column 1)"
         )
 
 
@@ -399,12 +393,8 @@ async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
 @pytest.mark.asyncio
 async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> None:
     """Browser infrastructure absence is terminal but can never become a pass."""
-    host_verdict = _verdict(
-        passed=False, fp="browser_unavailable", verdict="unverifiable"
-    )
-    host_verdict["startup_diagnostic"] = (
-        "exit=1; API_KEY=do-not-retain chromium launch failed"
-    )
+    host_verdict = _verdict(passed=False, fp="browser_unavailable", verdict="unverifiable")
+    host_verdict["startup_diagnostic"] = "exit=1; API_KEY=do-not-retain chromium launch failed"
     host = _HostVerifier(host_verdict)
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
     agent = ScriptedAgent(
@@ -495,9 +485,7 @@ async def test_files_handoff_without_validator_records_unverifiable() -> None:
     assert execu.verify_calls == 0
     events = await store.get_events("conv")
     assert any(
-        isinstance(e, DeliverableEvent)
-        and e.artifact_kind == "files"
-        and e.path == "report.txt"
+        isinstance(e, DeliverableEvent) and e.artifact_kind == "files" and e.path == "report.txt"
         for e in events
     )
     verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]

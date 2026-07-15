@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -34,12 +33,11 @@ from disco.core.context import (
     context_mark_resolved,
     context_write_summary,
 )
-from disco.core.llm import OperatingMode
 from disco.core.inspect import install as install_inspect
 from disco.core.inspect import registry as inspect_registry
+from disco.core.llm import OperatingMode
 from disco.core.loop.engine import AgentLoop
 from disco.core.loop.view_render import ViewBuilder
-
 from event_fakes import action, observation, user_msg, with_seqs
 from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer, NeverConfirm, ScriptedAgent
 
@@ -62,7 +60,7 @@ class _MemFS:
 def _make_loop(*, sandbox: _MemFS | None = None, cadence: int = 1) -> AgentLoop:
     executor = FakeExecutor()
     if sandbox is not None:
-        setattr(executor, "sandbox", sandbox)
+        executor.sandbox = sandbox
     return AgentLoop(
         CID,
         SqliteEventStore(":memory:"),
@@ -232,9 +230,7 @@ async def test_context_snips_fire_before_condenser_and_are_idempotent(monkeypatc
         context_mark_resolved(2, 3, range_id="old"),
         context_write_summary("old", ".disco/context/summary/old.md", "old summary"),
         context_mark_resolved(4, 5, range_id="current"),
-        context_write_summary(
-            "current", ".disco/context/summary/current.md", "current summary"
-        ),
+        context_write_summary("current", ".disco/context/summary/current.md", "current summary"),
     ]
     cond = _SnipFirstCondenser()
     loop = _ViewLoop(events, cond)
@@ -325,8 +321,7 @@ async def test_plan_step_transition_emits_mark_and_summary(monkeypatch) -> None:
     assert len(summaries) == 1
     assert summaries[0].rel_path.startswith(".disco/context/summary/")
     assert (
-        "Step 'Add auth' completed; 1 tool call, last: file_write auth.py."
-        in summaries[0].summary
+        "Step 'Add auth' completed; 1 tool call, last: file_write auth.py." in summaries[0].summary
     )
     assert fs.files[summaries[0].rel_path].decode("utf-8") == summaries[0].summary + "\n"
 

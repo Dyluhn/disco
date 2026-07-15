@@ -23,8 +23,8 @@ from .files import (
     _atomic_write,
     _canonical,
     _clear_grounding,
-    _has_elision_marker,
     _governed_route_text,
+    _has_elision_marker,
     _is_governed_artifact,
     _read_state,
     _syntax_errors,
@@ -42,11 +42,17 @@ class RunScriptOp(BaseModel):
     path: str = Field(description="Workspace-relative path the op targets.")
     # replace_text
     old: str | None = Field(default=None, description="replace_text: exact literal text to find.")
-    new: str | None = Field(default=None, description="replace_text: literal replacement (no regex).")
-    replace_all: bool = Field(default=False, description="replace_text: replace ALL occurrences (default: first).")
+    new: str | None = Field(
+        default=None, description="replace_text: literal replacement (no regex)."
+    )
+    replace_all: bool = Field(
+        default=False, description="replace_text: replace ALL occurrences (default: first)."
+    )
     # save
     content: str | None = Field(default=None, description="save: full UTF-8 content to write.")
-    allow_shrink: bool = Field(default=False, description="save: permit a >50% shrink of an existing file.")
+    allow_shrink: bool = Field(
+        default=False, description="save: permit a >50% shrink of an existing file."
+    )
     expected_sha256: str | None = Field(
         default=None, description="save: grounds the write — must equal the file's current sha256."
     )
@@ -54,7 +60,9 @@ class RunScriptOp(BaseModel):
 
 class RunScriptArgs(BaseModel):
     operations: list[RunScriptOp] = Field(
-        description="Ordered operations applied as ONE transaction: all commit together, or none do."
+        description=(
+            "Ordered operations applied as ONE transaction: all commit together, or none do."
+        )
     )
 
 
@@ -62,8 +70,26 @@ def _fail(op_index: int, error: str, message: str, **extra: Any) -> ToolOutcome:
     return ToolOutcome(
         success=False,
         error=error,
-        content=f"run_project_script aborted at operation #{op_index} (nothing was written): {message}",
+        content=(
+            f"run_project_script aborted at operation #{op_index} (nothing was written): {message}"
+        ),
         structured={"kind": "run_script_aborted", "op_index": op_index, "error": error, **extra},
+    )
+
+
+def _success(
+    content: str, applied: list[str], operations_run: int, reads: dict[str, Any]
+) -> ToolOutcome:
+    return ToolOutcome(
+        success=True,
+        content=content,
+        artifacts=applied,
+        structured={
+            "ok": True,
+            "applied": applied,
+            "operations_run": operations_run,
+            "reads": reads,
+        },
     )
 
 
@@ -76,17 +102,19 @@ class RunProjectScriptTool:
         name="run_project_script",
         description=(
             "Apply MANY deterministic file edits as ONE transaction. Pass `operations`: a list of "
-            "{op, path, ...} where op is 'read'/'ls' (inspect), 'replace_text' (literal find/replace "
+            "{op, path, ...} where op is 'read'/'ls' (inspect), 'replace_text' "
+            "(literal find/replace "
             "— pass exact `old` + `new`, optional replace_all), or 'save' (write full `content`). "
             "All edits commit together; if ANY op fails (no match, shrink, an unread file, a "
             ".disco/ artifact, a syntax error) NOTHING is written. To save over an existing file, "
             "read it first (a 'read' op on it, or a prior replace_text, or pass expected_sha256). "
             "Each element of `operations` is an OBJECT, never a bare string. Example call:\n"
-            '  run_project_script(operations=[\n'
+            "  run_project_script(operations=[\n"
             '    {"op": "read", "path": "index.html"},\n'
-            '    {"op": "replace_text", "path": "index.html", "old": "Launch Day", "new": "Grand Opening"},\n'
+            '    {"op": "replace_text", "path": "index.html", "old": "Launch Day", '
+            '"new": "Grand Opening"},\n'
             '    {"op": "save", "path": "styles.css", "content": "body { margin: 0; }"}\n'
-            '  ])'
+            "  ])"
         ),
         args_model=RunScriptArgs,
         needs=_FS,
@@ -100,14 +128,18 @@ class RunProjectScriptTool:
         if not ops:
             return _fail(0, "SCRIPT_BATCH_FAILED", "no operations supplied.")
         if len(ops) > _MAX_OPS:
-            return _fail(0, "SCRIPT_TOO_LARGE", f"{len(ops)} operations exceeds the cap of {_MAX_OPS}.")
+            return _fail(
+                0, "SCRIPT_TOO_LARGE", f"{len(ops)} operations exceeds the cap of {_MAX_OPS}."
+            )
 
         # EVERYTHING is keyed by the REAL (symlink-followed) workspace-relative path so an alias
         # (a symlink or a `..` path) can never make the checks validate one file while the commit
         # writes another (codex CD-TOOLS-7 round-1). The same key is used for the buffer, the
         # grounding `seen` set, AND the atomic_write commit path — they can never diverge.
         buffer: dict[str, str] = {}  # REAL relpath -> current (possibly mutated) content
-        original: dict[str, str | None] = {}  # REAL relpath -> disk content at first load (None=absent)
+        original: dict[
+            str, str | None
+        ] = {}  # REAL relpath -> disk content at first load (None=absent)
         mutated: set[str] = set()  # REAL relpaths the buffer changed
         seen: set[str] = set()  # GROUNDED real relpaths (explicitly read or transformed this batch)
         reads_out: dict[str, Any] = {}
@@ -149,13 +181,13 @@ class RunProjectScriptTool:
             #     .disco/ namespace is routed to its semantic tool. Checked on `canon` (the same key
             #     used for the commit) so a symlink/alias can never split the check from the write.
             if mutating and _is_governed_artifact(canon):
-                tool, route = _governed_route_text(
-                    canon, allowed_tools=ctx.scope_allowed_tools
-                )
+                tool, route = _governed_route_text(canon, allowed_tools=ctx.scope_allowed_tools)
                 return _fail(
-                    i, "GOVERNED_ARTIFACT_REJECTED",
+                    i,
+                    "GOVERNED_ARTIFACT_REJECTED",
                     f"{op.path} resolves to the host-managed .disco/ namespace ({canon}). {route}",
-                    resolved=canon, route_to=tool,
+                    resolved=canon,
+                    route_to=tool,
                 )
 
             try:
@@ -172,20 +204,30 @@ class RunProjectScriptTool:
                     if op.old is None or op.new is None:
                         return _fail(i, "SCRIPT_OP_INVALID", "replace_text needs `old` and `new`.")
                     if _has_elision_marker(op.old, op.new):
-                        return _fail(i, "ELISION_MARKER_REJECTED", "edit text contains an elision placeholder.")
+                        return _fail(
+                            i,
+                            "ELISION_MARKER_REJECTED",
+                            "edit text contains an elision placeholder.",
+                        )
                     cur = await _load(canon, op.path)
                     if cur is None:
                         return _fail(i, "SCRIPT_NO_MATCH", f"{op.path} does not exist.")
                     if op.old not in cur:
                         return _fail(i, "SCRIPT_NO_MATCH", f"`old` not found in {op.path}.")
                     seen.add(canon)  # matched the file's REAL current content → grounded
-                    buffer[canon] = cur.replace(op.old, op.new) if op.replace_all else cur.replace(op.old, op.new, 1)
+                    buffer[canon] = (
+                        cur.replace(op.old, op.new)
+                        if op.replace_all
+                        else cur.replace(op.old, op.new, 1)
+                    )
                     mutated.add(canon)
                 elif op.op == "save":
                     if op.content is None:
                         return _fail(i, "SCRIPT_OP_INVALID", "save needs `content`.")
                     if _has_elision_marker(op.content):
-                        return _fail(i, "ELISION_MARKER_REJECTED", "content contains an elision placeholder.")
+                        return _fail(
+                            i, "ELISION_MARKER_REJECTED", "content contains an elision placeholder."
+                        )
                     existed_text, raw = await _disk_read(op.path)
                     if canon not in original:
                         original[canon] = existed_text
@@ -194,24 +236,39 @@ class RunProjectScriptTool:
                         grounded = (canon in seen) or (canon in rsw)
                         if op.expected_sha256 is not None:
                             if op.expected_sha256 != hashlib.sha256(raw).hexdigest():
-                                return _fail(i, "STALE_FILE_CONTEXT", f"{op.path} changed since you read it.")
+                                return _fail(
+                                    i, "STALE_FILE_CONTEXT", f"{op.path} changed since you read it."
+                                )
                             grounded = True
                         if not grounded:
                             return _fail(
-                                i, "FRESH_READ_REQUIRED",
+                                i,
+                                "FRESH_READ_REQUIRED",
                                 f"cannot save over the existing {op.path} without reading it first "
-                                "(add a 'read' op on it, transform it with replace_text, or pass expected_sha256).",
+                                "(add a 'read' op on it, transform it with replace_text, "
+                                "or pass expected_sha256).",
                             )
                         # extension from the REAL resolved path (canon), not the alias the model
-                        # typed — so alias.txt -> deck.pptx can't validate one ext + clobber another.
+                        # typed — so alias.txt -> deck.pptx can't validate one ext +
+                        # clobber another.
                         ext = canon.rsplit(".", 1)[-1].lower() if "." in canon else ""
                         if ext in _BINARY_DELIVERABLE_EXTS:
-                            return _fail(i, "binary_deliverable_clobber", f"{op.path} is an existing {ext} binary.")
-                        matching_sha = op.expected_sha256 is not None
-                        if len(op.content) < 0.5 * len(existed_text) and not op.allow_shrink and not matching_sha:
                             return _fail(
-                                i, "SAFE_WRITE_SHRINK_REJECTED",
-                                f"save would shrink {op.path} from {len(existed_text)} to {len(op.content)} chars "
+                                i,
+                                "binary_deliverable_clobber",
+                                f"{op.path} is an existing {ext} binary.",
+                            )
+                        matching_sha = op.expected_sha256 is not None
+                        if (
+                            len(op.content) < 0.5 * len(existed_text)
+                            and not op.allow_shrink
+                            and not matching_sha
+                        ):
+                            return _fail(
+                                i,
+                                "SAFE_WRITE_SHRINK_REJECTED",
+                                f"save would shrink {op.path} from {len(existed_text)} "
+                                f"to {len(op.content)} chars "
                                 "(>50%); pass allow_shrink=true if intended.",
                             )
                     buffer[canon] = op.content
@@ -221,23 +278,27 @@ class RunProjectScriptTool:
                 return _fail(i, "SCRIPT_PATH_ESCAPE", f"path escapes the workspace: {op.path!r}")
 
         if not mutated:
-            return ToolOutcome(
-                success=True,
-                content="run_project_script: inspection only — no files changed.",
-                structured={"ok": True, "applied": [], "operations_run": len(ops), "reads": reads_out},
+            return _success(
+                "run_project_script: inspection only — no files changed.", [], len(ops), reads_out
             )
 
         # (2) caps + syntax pre-check IN MEMORY — a syntax-introducing batch writes nothing.
         total = sum(len(buffer[c].encode("utf-8")) for c in mutated)
         if total > _MAX_TOTAL_WRITE_BYTES:
-            return _fail(len(ops) - 1, "SCRIPT_TOO_LARGE", f"committed content {total}B exceeds {_MAX_TOTAL_WRITE_BYTES}B.")
+            return _fail(
+                len(ops) - 1,
+                "SCRIPT_TOO_LARGE",
+                f"committed content {total}B exceeds {_MAX_TOTAL_WRITE_BYTES}B.",
+            )
         for canon in mutated:
             pre = _syntax_errors(canon, original.get(canon) or "")
             introduced = [e for e in _syntax_errors(canon, buffer[canon]) if e not in pre]
             if introduced:
                 return _fail(
-                    len(ops) - 1, "SCRIPT_BATCH_FAILED",
-                    f"the batch would introduce syntax error(s) in {canon}: {'; '.join(introduced)}.",
+                    len(ops) - 1,
+                    "SCRIPT_BATCH_FAILED",
+                    f"the batch would introduce syntax error(s) in {canon}: "
+                    f"{'; '.join(introduced)}.",
                 )
 
         # (3) COMMIT — every logic fault is already caught, so this only does the writes. The commit
@@ -249,9 +310,9 @@ class RunProjectScriptTool:
             # both bits so the next edit/write requires a genuine fresh read.
             _clear_grounding(ctx.conversation_id, canon)
             applied.append(canon)
-        return ToolOutcome(
-            success=True,
-            content=f"run_project_script committed {len(applied)} file(s): {', '.join(applied)}.",
-            artifacts=applied,
-            structured={"ok": True, "applied": applied, "operations_run": len(ops), "reads": reads_out},
+        return _success(
+            f"run_project_script committed {len(applied)} file(s): {', '.join(applied)}.",
+            applied,
+            len(ops),
+            reads_out,
         )

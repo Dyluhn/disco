@@ -24,8 +24,8 @@ class Theme:
     fields are lower-case 7-char CSS hex strings (``#rrggbb``).
     """
 
-    name: str           # registry key, e.g. "disco"
-    mode: str           # "light" | "dark"
+    name: str  # registry key, e.g. "disco"
+    mode: str  # "light" | "dark"
 
     # ---- backgrounds / surfaces ----
     bg: str
@@ -330,8 +330,7 @@ def resolve_theme(name: str, mode: str = "light") -> Theme:
     if light_key in THEMES:
         return THEMES[light_key]
     raise ValueError(
-        f"Unknown theme {name!r}. Valid themes: "
-        + ", ".join(sorted({k[0] for k in THEMES}))
+        f"Unknown theme {name!r}. Valid themes: " + ", ".join(sorted({k[0] for k in THEMES}))
     )
 
 
@@ -345,13 +344,13 @@ def resolve_theme(name: str, mode: str = "light") -> Theme:
 
 @dataclass(frozen=True)
 class TemplateInfo:
-    id: str           # selector value, "{name}-{mode}"
-    name: str         # registry name
-    mode: str         # "light" | "dark"
-    label: str        # short UI label
-    description: str   # one-line mood description
-    accent: str       # swatch chroma (hex)
-    bg: str           # swatch canvas (hex)
+    id: str  # selector value, "{name}-{mode}"
+    name: str  # registry name
+    mode: str  # "light" | "dark"
+    label: str  # short UI label
+    description: str  # one-line mood description
+    accent: str  # swatch chroma (hex)
+    bg: str  # swatch canvas (hex)
     default: bool
 
 
@@ -369,10 +368,17 @@ def _tpl(theme: Theme, label: str, description: str, *, default: bool = False) -
 
 
 TEMPLATE_CATALOG: list[TemplateInfo] = [
-    _tpl(DISCO_LIGHT, "Disco", "Warm editorial — Fraunces serif on paper-white, blue accent.", default=True),
+    _tpl(
+        DISCO_LIGHT,
+        "Disco",
+        "Warm editorial — Fraunces serif on paper-white, blue accent.",
+        default=True,
+    ),
     _tpl(INK_LIGHT, "Ink", "Stark monochrome print — near-black on white, oxblood accent."),
     _tpl(SEPIA_LIGHT, "Sepia", "Warm archival — parchment + terracotta, vintage-academic."),
-    _tpl(SIGNAL_LIGHT, "Signal", "Modern sans — Schibsted display, cobalt accent, clean & technical."),
+    _tpl(
+        SIGNAL_LIGHT, "Signal", "Modern sans — Schibsted display, cobalt accent, clean & technical."
+    ),
     _tpl(DISCO_DARK, "Disco Dark", "The default, inverted — dark canvas, sky-blue accent."),
     _tpl(MIDNIGHT_DARK, "Midnight", "Editorial dark — deep navy, warm ink, amber accent."),
     _tpl(NEUTRAL_LIGHT, "Neutral", "Unbranded greyscale, system fonts — no marks."),

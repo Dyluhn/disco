@@ -143,7 +143,8 @@ class PreviewStartTool:
     async def run(self, args: PreviewStartArgs, ctx: ToolContext) -> ToolOutcome:
         if ctx.sandbox is None:
             return ToolOutcome(
-                success=False, content="No sandbox available for a preview.",
+                success=False,
+                content="No sandbox available for a preview.",
                 error="no_sandbox",
             )
         if not (args.serve_dir or args.command or args.framework):
@@ -192,8 +193,7 @@ class PreviewStatusTool:
     definition = ToolDef(
         name="preview_status",
         description=(
-            "Show the status, health, and platform URL of running previews (all, or one "
-            "by name)."
+            "Show the status, health, and platform URL of running previews (all, or one by name)."
         ),
         args_model=PreviewStatusArgs,
         needs=frozenset({Capability.SHELL}),
@@ -234,8 +234,7 @@ class PreviewLogsTool:
     definition = ToolDef(
         name="preview_logs",
         description=(
-            "Show recent server output (stdout/stderr) for a preview — useful when it "
-            "won't start."
+            "Show recent server output (stdout/stderr) for a preview — useful when it won't start."
         ),
         args_model=PreviewLogsArgs,
         needs=frozenset({Capability.SHELL}),

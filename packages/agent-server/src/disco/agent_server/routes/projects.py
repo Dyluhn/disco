@@ -249,9 +249,7 @@ async def _parse_import_source(request: Request) -> _ImportSource:
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
         try:
-            uploads = [
-                value for _key, value in form.multi_items() if isinstance(value, UploadFile)
-            ]
+            uploads = [value for _key, value in form.multi_items() if isinstance(value, UploadFile)]
             if len(uploads) != 1:
                 _reject_import(
                     400, "invalid_request", "multipart import requires exactly one zip file"

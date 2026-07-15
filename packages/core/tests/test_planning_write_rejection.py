@@ -109,11 +109,13 @@ async def test_unsafe_done_conditions_rejected_then_corrected_plan_arms_cleanly(
     assert [step.done_condition for step in plans[0].steps] == [
         FileExistsPredicate(path="release/fonts/proof.woff2")
     ]
-    assert sum(
-        isinstance(event, StatusEvent)
-        and event.detail == "invalid_plan_done_conditions"
-        for event in events
-    ) == 1
+    assert (
+        sum(
+            isinstance(event, StatusEvent) and event.detail == "invalid_plan_done_conditions"
+            for event in events
+        )
+        == 1
+    )
     feedback = [
         event.message.content
         for event in events
@@ -145,12 +147,15 @@ async def test_repeated_unsafe_done_conditions_land_bounded_stuck():
 
     events = await store.get_events("pw-invalid-done-condition-bounded")
     assert not any(isinstance(event, PlanEvent) for event in events)
-    assert sum(
-        isinstance(event, StatusEvent)
-        and event.status == ConversationStatus.RUNNING
-        and event.detail == "invalid_plan_done_conditions"
-        for event in events
-    ) == 3
+    assert (
+        sum(
+            isinstance(event, StatusEvent)
+            and event.status == ConversationStatus.RUNNING
+            and event.detail == "invalid_plan_done_conditions"
+            for event in events
+        )
+        == 3
+    )
     state = await loop.get_state()
     assert state.execution_status == ConversationStatus.STUCK
     assert any(
@@ -188,9 +193,7 @@ async def test_write_in_planning_is_rejected_then_recovers_to_plan():
     # ... but it was REJECTED with a recoverable AgentErrorEvent paired by tool_call_id,
     # and NEVER executed.
     rejections = [
-        e
-        for e in events
-        if isinstance(e, AgentErrorEvent) and e.action_id == write_action.id
+        e for e in events if isinstance(e, AgentErrorEvent) and e.action_id == write_action.id
     ]
     assert len(rejections) == 1, "expected exactly one paired rejection for the write"
     assert rejections[0].tool_call_id == write_action.tool_call.call_id
@@ -199,8 +202,7 @@ async def test_write_in_planning_is_rejected_then_recovers_to_plan():
     assert not any(c.tool_name == "file_write" for c in executor.calls), "write reached executor"
     assert "index.html" not in executor.world, "the file must NOT have been written"
     assert not any(
-        isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_write"
-        for e in events
+        isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_write" for e in events
     ), "no observation for an unexecuted write"
 
     # The agent got a SECOND turn and recovered with submit_plan.
@@ -273,10 +275,7 @@ async def test_revision_refusal_escalation_harvests_one_step_plan():
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
     assert [step.title for step in plans[-1].steps] == [followup]
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan"
-        for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan" for e in events)
     assert not any(c.tool_name == "file_write" for c in executor.calls)
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
@@ -343,8 +342,7 @@ async def test_repeated_planning_shell_refusals_escalate_and_narrow_to_submit_or
     refusals = [
         e
         for e in events
-        if isinstance(e, AgentErrorEvent)
-        and "is not available in PLANNING mode" in e.error
+        if isinstance(e, AgentErrorEvent) and "is not available in PLANNING mode" in e.error
     ]
     assert len(refusals) == 3
     assert "ONLY valid next action" not in refusals[0].error
@@ -354,8 +352,7 @@ async def test_repeated_planning_shell_refusals_escalate_and_narrow_to_submit_or
     assert "Planning-mode refusal 3" in refusals[2].error
     assert "only `submit_plan` + `file_read`" in refusals[2].error
     assert not any(
-        isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan"
-        for e in events
+        isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan" for e in events
     )
 
     assert len(agent.seen_tools) >= 4

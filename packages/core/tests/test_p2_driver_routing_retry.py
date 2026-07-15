@@ -107,7 +107,8 @@ async def test_provider_unavailable_no_json_hint_in_retry():
     if len(agent.seen_messages_at_call) >= 2:
         retry_messages = agent.seen_messages_at_call[1]
         hint_texts = [
-            m.content for m in retry_messages
+            m.content
+            for m in retry_messages
             if "check tool names" in (m.content or "").lower()
             or "json structure" in (m.content or "").lower()
         ]
@@ -226,8 +227,19 @@ async def test_terminal_auth_error_skips_requery_and_emits_auth_error():
         def __init__(self):
             self.calls = 0
 
-        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+        async def step(
+            self,
+            view,
+            tools,
+            *,
+            mode,
+            overflow_signal,
+            on_stream=None,
+            temperature=None,
+            assist=False,
+            attempt=1,
+            provider_prefs=None,
+        ):
             self.calls += 1
             raise LLMAuthError("Key limit exceeded (total limit)", provider="openrouter")
 
@@ -275,8 +287,19 @@ async def test_tool_result_adjacency_protocol_error_retries_with_repaired_histor
             self.calls = 0
             self.seen_messages: list[list[LLMMessage]] = []
 
-        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+        async def step(
+            self,
+            view,
+            tools,
+            *,
+            mode,
+            overflow_signal,
+            on_stream=None,
+            temperature=None,
+            assist=False,
+            attempt=1,
+            provider_prefs=None,
+        ):
             self.calls += 1
             self.seen_messages.append(list(view.messages))
             if self.calls == 1:
@@ -307,8 +330,19 @@ async def test_tool_result_adjacency_protocol_error_repair_is_bounded():
         def __init__(self):
             self.calls = 0
 
-        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+        async def step(
+            self,
+            view,
+            tools,
+            *,
+            mode,
+            overflow_signal,
+            on_stream=None,
+            temperature=None,
+            assist=False,
+            attempt=1,
+            provider_prefs=None,
+        ):
             self.calls += 1
             raise LLMError(
                 "invalid params, tool call result does not follow tool call (2013)",

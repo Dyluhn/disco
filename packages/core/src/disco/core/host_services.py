@@ -93,7 +93,6 @@ if TYPE_CHECKING:
     from .webhook_host_service import WebhookAppConfigStore
 
 
-
 AiChatComplete = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 

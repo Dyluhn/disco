@@ -46,6 +46,7 @@ def resolve_llm_config() -> tuple[str, str, str | None]:
         return "", LLM_MODEL, None
     return entry.base_url.rstrip("/"), entry.model_id, entry.api_key_env
 
+
 # ---- inter-turn silence range (ms) -----------------------------------------
 
 SILENCE_MS_MIN: int = 300

@@ -15,7 +15,8 @@ app_set_tweak / app_snapshot_version.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from disco.core import SecurityRisk
 from disco.core.appkit import AppSection, AppSpec, render_html
@@ -45,7 +46,9 @@ class AppSpecStore:
         return AppSpec.model_validate_json(data)  # raises on corrupt → caller maps to error
 
     async def write(self, spec: AppSpec) -> None:
-        await self._fs.write_file(_SPEC_PATH, (spec.model_dump_json(indent=2) + "\n").encode("utf-8"))
+        await self._fs.write_file(
+            _SPEC_PATH, (spec.model_dump_json(indent=2) + "\n").encode("utf-8")
+        )
         await self._fs.write_file(_HTML_PATH, render_html(spec).encode("utf-8"))
 
 
@@ -56,9 +59,13 @@ async def _apply(ctx: ToolContext, mutate: Callable[[AppSpec], AppSpec]) -> Tool
     try:
         spec = await store.read()
     except Exception:
-        return ToolOutcome(success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable")
+        return ToolOutcome(
+            success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable"
+        )
     if spec is None:
-        return ToolOutcome(success=False, error="no_app", content="no app yet — call app_create first")
+        return ToolOutcome(
+            success=False, error="no_app", content="no app yet — call app_create first"
+        )
     try:
         new_spec = mutate(spec)
     except ValueError as exc:
@@ -100,12 +107,24 @@ class AppCreateArgs(BaseModel):
 def _default_tweakspec() -> TweakSpec:
     """The owner controls seeded for the DEFAULT lead app, so app_set_tweak is usable the
     moment app_create runs (no governed-but-unauthorable false affordance)."""
-    return TweakSpec(fields=(
-        TweakField(key="lead.include_phone", label="Include phone field", editor=TweakEditor.BOOLEAN,
-                   affects=("lead.phone",), default=False),
-        TweakField(key="brand.accent", label="Accent color", editor=TweakEditor.PALETTE,
-                   colors=(DEFAULT_DESIGN["accent"], DEFAULT_DESIGN["primary"]), affects=("design.accent",)),
-    ))
+    return TweakSpec(
+        fields=(
+            TweakField(
+                key="lead.include_phone",
+                label="Include phone field",
+                editor=TweakEditor.BOOLEAN,
+                affects=("lead.phone",),
+                default=False,
+            ),
+            TweakField(
+                key="brand.accent",
+                label="Accent color",
+                editor=TweakEditor.PALETTE,
+                colors=(DEFAULT_DESIGN["accent"], DEFAULT_DESIGN["primary"]),
+                affects=("design.accent",),
+            ),
+        )
+    )
 
 
 class AppCreateTool:
@@ -122,7 +141,9 @@ class AppCreateTool:
         store = AppSpecStore(ctx.sandbox)
         if args.sections is not None:
             try:
-                sections = tuple(AppSection(id=s.id, kind=s.kind, fields=s.fields) for s in args.sections)
+                sections = tuple(
+                    AppSection(id=s.id, kind=s.kind, fields=s.fields) for s in args.sections
+                )
             except Exception as exc:  # bad kind etc.
                 return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
             try:
@@ -139,8 +160,11 @@ class AppCreateTool:
         # TweakSpec — so the tool reports unknown_tweak, never no_tweakspec, post-create.
         tspec = _default_tweakspec() if args.sections is None else TweakSpec(fields=())
         await write_tweakspec(ctx.sandbox, tspec)
-        return ToolOutcome(success=True, content=f"created app '{args.title}' + index.html",
-                           structured={"sections": [s.id for s in spec.sections]})
+        return ToolOutcome(
+            success=True,
+            content=f"created app '{args.title}' + index.html",
+            structured={"sections": [s.id for s in spec.sections]},
+        )
 
 
 # --- app_update_content -------------------------------------------------------
@@ -171,11 +195,15 @@ class AppAddSectionArgs(BaseModel):
 
 
 class AppAddSectionTool:
-    definition = _def("app_add_section", "Add a section of a known kind at an optional index.", AppAddSectionArgs)
+    definition = _def(
+        "app_add_section", "Add a section of a known kind at an optional index.", AppAddSectionArgs
+    )
 
     async def run(self, args: AppAddSectionArgs, ctx: ToolContext) -> ToolOutcome:
         def _m(s: AppSpec) -> AppSpec:
-            return s.with_section_added(AppSection(id=args.id, kind=args.kind, fields=args.fields), index=args.index)
+            return s.with_section_added(
+                AppSection(id=args.id, kind=args.kind, fields=args.fields), index=args.index
+            )
 
         return await _apply(ctx, _m)
 
@@ -198,7 +226,9 @@ class AppReorderSectionArgs(BaseModel):
 
 
 class AppReorderSectionTool:
-    definition = _def("app_reorder_section", "Move a section to a new index.", AppReorderSectionArgs)
+    definition = _def(
+        "app_reorder_section", "Move a section to a new index.", AppReorderSectionArgs
+    )
 
     async def run(self, args: AppReorderSectionArgs, ctx: ToolContext) -> ToolOutcome:
         return await _apply(ctx, lambda s: s.with_section_reordered(args.section_id, args.to_index))
@@ -206,12 +236,20 @@ class AppReorderSectionTool:
 
 # --- app_set_design / app_set_tweak -------------------------------------------
 class AppSetKVArgs(BaseModel):
-    key: str = Field(description="Tweak key exactly as defined in .disco/tweaks.json (e.g. 'lead.include_phone').")
-    value: str = Field(description="New value, as a string; validated against the tweak's spec (e.g. 'true').")
+    key: str = Field(
+        description=(
+            "Tweak key exactly as defined in .disco/tweaks.json (e.g. 'lead.include_phone')."
+        )
+    )
+    value: str = Field(
+        description="New value, as a string; validated against the tweak's spec (e.g. 'true')."
+    )
 
 
 class AppSetDesignTool:
-    definition = _def("app_set_design", "Set a design token (e.g. primary='#0b5'). Re-renders.", AppSetKVArgs)
+    definition = _def(
+        "app_set_design", "Set a design token (e.g. primary='#0b5'). Re-renders.", AppSetKVArgs
+    )
 
     async def run(self, args: AppSetKVArgs, ctx: ToolContext) -> ToolOutcome:
         return await _apply(ctx, lambda s: s.with_design(args.key, args.value))
@@ -233,35 +271,52 @@ class AppSetTweakTool:
         try:
             spec = await store.read()
         except Exception:
-            return ToolOutcome(success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable")
+            return ToolOutcome(
+                success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable"
+            )
         if spec is None:
-            return ToolOutcome(success=False, error="no_app", content="no app yet — call app_create first")
+            return ToolOutcome(
+                success=False, error="no_app", content="no app yet — call app_create first"
+            )
         try:
-            tspec = await read_tweakspec(ctx.sandbox)  # ValueError = corrupt; backend errors propagate
+            tspec = await read_tweakspec(
+                ctx.sandbox
+            )  # ValueError = corrupt; backend errors propagate
         except ValueError:
-            return ToolOutcome(success=False, error="corrupt_tweakspec", content=f"{TWEAKS_PATH} is unreadable")
+            return ToolOutcome(
+                success=False, error="corrupt_tweakspec", content=f"{TWEAKS_PATH} is unreadable"
+            )
         if tspec is None:
-            return ToolOutcome(success=False, error="no_tweakspec",
-                               content=f"this app defines no tweaks ({TWEAKS_PATH} missing)")
+            return ToolOutcome(
+                success=False,
+                error="no_tweakspec",
+                content=f"this app defines no tweaks ({TWEAKS_PATH} missing)",
+            )
         field = tspec.get(args.key)
         if field is None:
             avail = ", ".join(f.key for f in tspec.fields) or "(none)"
-            return ToolOutcome(success=False, error="unknown_tweak",
-                               content=f"unknown tweak {args.key!r}; defined: {avail}")
+            return ToolOutcome(
+                success=False,
+                error="unknown_tweak",
+                content=f"unknown tweak {args.key!r}; defined: {avail}",
+            )
         try:
             coerced = tspec.validate_value(args.key, args.value)
         except ValueError as exc:
             return ToolOutcome(success=False, error="invalid_tweak_value", content=str(exc))
         await store.write(spec.with_tweak(args.key, coerced))  # only mutate after all validation
         return ToolOutcome(
-            success=True, content=f"set tweak {args.key} = {coerced!r}",
+            success=True,
+            content=f"set tweak {args.key} = {coerced!r}",
             structured={"tweak": args.key, "value": coerced, "affects": list(field.affects)},
         )
 
 
 # --- app_snapshot_version -----------------------------------------------------
 class AppSnapshotArgs(BaseModel):
-    label: str = Field(default="", description="optional version label; defaults to a sequence number")
+    label: str = Field(
+        default="", description="optional version label; defaults to a sequence number"
+    )
 
 
 class AppSnapshotVersionTool:
@@ -277,9 +332,13 @@ class AppSnapshotVersionTool:
         try:
             spec = await store.read()
         except Exception:
-            return ToolOutcome(success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable")
+            return ToolOutcome(
+                success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable"
+            )
         if spec is None:
-            return ToolOutcome(success=False, error="no_app", content="no app yet — call app_create first")
+            return ToolOutcome(
+                success=False, error="no_app", content="no app yet — call app_create first"
+            )
         # deterministic, content-addressed label (NOT builtin hash() — that is
         # per-process randomized, so it would produce unstable/colliding names).
         digest = hashlib.sha256(spec.model_dump_json().encode("utf-8")).hexdigest()[:12]
@@ -287,7 +346,9 @@ class AppSnapshotVersionTool:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)
         path = f".disco/versions/{safe}.json"
         await ctx.sandbox.write_file(path, (spec.model_dump_json(indent=2) + "\n").encode("utf-8"))
-        return ToolOutcome(success=True, content=f"snapshotted app → {path}", structured={"rel_path": path})
+        return ToolOutcome(
+            success=True, content=f"snapshotted app → {path}", structured={"rel_path": path}
+        )
 
 
 APP_TOOLS: tuple[type, ...] = (

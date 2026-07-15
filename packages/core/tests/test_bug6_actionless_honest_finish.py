@@ -42,8 +42,7 @@ def _statuses(events):
 
 def _has_honest_marker(events) -> bool:
     return any(
-        isinstance(e, StatusEvent) and e.detail == "unverifiable_static_finish"
-        for e in events
+        isinstance(e, StatusEvent) and e.detail == "unverifiable_static_finish" for e in events
     )
 
 
@@ -186,6 +185,8 @@ _PLAN_CONTENT_TAIL = {
         {"title": "Add a testimonials section"},
     ],
 }
+
+
 def _plan_with_tail(title):
     return {
         "summary": "bakery landing page",
@@ -200,8 +201,7 @@ def _plan_with_tail(title):
 _HTML = "<html><body><h1>Bakery</h1></body></html>"
 # A REAL content/structure validation (HTML parser) referencing index.html.
 _VALIDATE_CMD = (
-    "python3 -c \"from html.parser import HTMLParser as P; "
-    "P().feed(open('index.html').read())\""
+    "python3 -c \"from html.parser import HTMLParser as P; P().feed(open('index.html').read())\""
 )
 # A bare existence check — proves the file EXISTS, validates NOTHING about content.
 _EXISTENCE_CMD = "ls -la index.html"
@@ -216,7 +216,11 @@ _IDLE_TAIL = [
 
 
 def _deliver_then_idle_steps(
-    *, plan=_PLAN, done_idxs=(1, 2), active_idx=3, validate_cmd=_VALIDATE_CMD,
+    *,
+    plan=_PLAN,
+    done_idxs=(1, 2),
+    active_idx=3,
+    validate_cmd=_VALIDATE_CMD,
     browser_steps=(_NAVIGATE,),
 ):
     """Write both deliverables, mark the build steps done + the active step active,
@@ -261,9 +265,7 @@ async def test_positive_complete_static_build_honest_finishes_not_paused():
     assert _has_honest_marker(events), sts
     assert state.execution_status == ConversationStatus.FINISHED, sts
     assert (ConversationStatus.FINISHED, None) in sts, sts
-    assert not any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert not any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
     assert not any(s == ConversationStatus.STUCK for s, _ in sts), sts
 
 
@@ -277,9 +279,7 @@ async def test_negative_no_deliverable_does_not_honest_finish():
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -293,9 +293,7 @@ async def test_negative_failed_validation_does_not_honest_finish():
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -320,7 +318,9 @@ async def test_negative_zero_work_after_approval_stucks_not_honest_finish():
 
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
-    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing, sts
+    assert (
+        state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    )  # terminal-collapse landing, sts
     assert any(d == "approve_plan_no_execution" for _, d in sts), sts
 
 
@@ -340,9 +340,7 @@ async def test_negative_content_step_not_verify_does_not_honest_finish():
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -358,9 +356,7 @@ async def test_negative_existence_check_is_not_a_validation():
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -373,17 +369,13 @@ async def test_negative_browser_failure_evidence_blocks_honest_finish(mode):
     NO honest finish (W-45); PAUSE/actionless instead."""
     execu = _BrokenThenUnavailableExecutor(mode=mode)
     # Two navigates: the first observes the broken page, the second is unavailable.
-    agent = ScriptedAgent(
-        _deliver_then_idle_steps(browser_steps=(_NAVIGATE, _NAVIGATE))
-    )
+    agent = ScriptedAgent(_deliver_then_idle_steps(browser_steps=(_NAVIGATE, _NAVIGATE)))
     state, events = await _approve_and_run(execu, agent)
 
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -415,9 +407,7 @@ async def test_negative_verification_word_as_content_noun_not_verify(tail):
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
 
 
 @pytest.mark.asyncio
@@ -434,6 +424,4 @@ async def test_negative_echoed_validation_word_is_not_a_validation(cmd):
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
-    assert any(
-        s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts
-    ), sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts

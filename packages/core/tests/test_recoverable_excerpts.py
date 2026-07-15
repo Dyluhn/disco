@@ -33,7 +33,8 @@ def test_scan_does_not_flag_recoverable_markers() -> None:
             "[lines 1-50 of 900; read more with offset=51]",
             "…[truncated; full output at .disco-spill-x.log — file_read or grep it]",
             "… (truncated — file_read the manifest files directly for the full body)",
-            "[full browser diagnostics (80 console, 30 network) at .disco-spill-browser-x.json — file_read it]",
+            "[full browser diagnostics (80 console, 30 network) at "
+            ".disco-spill-browser-x.json — file_read it]",
         ]
     )
     assert scan_for_destructive_elision(recoverable) == []

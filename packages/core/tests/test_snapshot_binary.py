@@ -149,7 +149,7 @@ def test_stray_nul_past_1kb_in_mostly_text_file_is_NOT_omitted():
     # A ~1.15MB text file, with one stray NUL injected at byte 1,000,000 (well
     # past the 1KB sample). The text after decoding is NUL-tainted, so the
     # snapshot decodes with `errors="replace"` and shows head + tail as usual.
-    body = (b"the quick brown fox jumps over the lazy dog. " * 23000)  # ~1.15MB
+    body = b"the quick brown fox jumps over the lazy dog. " * 23000  # ~1.15MB
     assert len(body) > 1_000_000
     body = body[:1_000_000] + b"\x00" + body[1_000_001:]
     sandbox = FakeSandboxInstance(files={"src/large.txt": body})

@@ -46,7 +46,7 @@ def canonical_hex(value: Any) -> str:
         raise ValueError(f"color must be a hex string, got {type(value).__name__}")
     v = value.strip()
     if _HEX3.match(v):
-        return f"#{v[1]*2}{v[2]*2}{v[3]*2}".lower()
+        return f"#{v[1] * 2}{v[2] * 2}{v[3] * 2}".lower()
     if _HEX6.match(v):
         return v.lower()
     raise ValueError(f"color must be #RGB or #RRGGBB hex, got {value!r}")
@@ -126,10 +126,17 @@ class TweakField(BaseModel):
             raise ValueError("min/max/step only valid for int/float")
         # GROUNDED invariant
         if not self.controls_behavior and not self.affects:
-            raise ValueError(f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects")
-        if ed in (TweakEditor.TEXT, TweakEditor.COLOR) and not self.controls_behavior and len(self.affects) < 2:
             raise ValueError(
-                f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields (else use a direct edit)"
+                f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects"
+            )
+        if (
+            ed in (TweakEditor.TEXT, TweakEditor.COLOR)
+            and not self.controls_behavior
+            and len(self.affects) < 2
+        ):
+            raise ValueError(
+                f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields "
+                "(else use a direct edit)"
             )
         # per-editor constraints
         if ed is TweakEditor.ENUM:
@@ -156,7 +163,9 @@ class TweakField(BaseModel):
             raise ValueError("int/float require min/max/step")
         if not (_is_real(lo) and _is_real(hi) and _is_real(step)):
             raise ValueError("min/max/step must be finite numbers (no bool/NaN/inf)")
-        if self.editor is TweakEditor.INT and not all(float(x).is_integer() for x in (lo, hi, step)):
+        if self.editor is TweakEditor.INT and not all(
+            float(x).is_integer() for x in (lo, hi, step)
+        ):
             raise ValueError("int min/max/step must be integral")
         if step <= 0:
             raise ValueError("step must be > 0")

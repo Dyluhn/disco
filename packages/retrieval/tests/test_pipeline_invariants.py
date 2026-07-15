@@ -1,4 +1,3 @@
-
 import asyncio
 import hashlib
 import time
@@ -14,15 +13,15 @@ from disco.retrieval.models import Passage
 @pytest.mark.asyncio
 async def test_pipeline_invariants():
     """RP-04: Verify concurrency, serial synthesis, and race fixes (hash-based IDs)."""
-    
+
     gather_calls = []
     synth_calls = []
-    
+
     async def mock_gather(subq, **kwargs):
         start = time.monotonic()
         gather_calls.append((subq.title, "start", start))
         # Wait enough to ensure overlap with other gathers and following synths
-        await asyncio.sleep(0.2) 
+        await asyncio.sleep(0.2)
         end = time.monotonic()
         gather_calls.append((subq.title, "end", end))
         return SubQuestionResult(
@@ -40,14 +39,14 @@ async def test_pipeline_invariants():
             all_hits=[],
             rounds_run=1,
             issued_queries=[subq.title],
-            bounded_by_rounds=False
+            bounded_by_rounds=False,
         )
 
     async def mock_synth(sub_result, **kwargs):
         subq_title = sub_result.subq.title
         start = time.monotonic()
         synth_calls.append((subq_title, "start", start))
-        await asyncio.sleep(0.05) # Simulate serial LLM work
+        await asyncio.sleep(0.05)  # Simulate serial LLM work
         end = time.monotonic()
         synth_calls.append((subq_title, "end", end))
         return ReportSection(
@@ -55,7 +54,7 @@ async def test_pipeline_invariants():
             title=subq_title,
             markdown="body",
             cited_passage_ids=[p.id for p in sub_result.passages],
-            unsupported_count=0
+            unsupported_count=0,
         )
 
     # Mock dependencies for DeepResearchRun
@@ -64,7 +63,7 @@ async def test_pipeline_invariants():
     embedder = AsyncMock()
     vector_store = AsyncMock()
     nli = AsyncMock()
-    
+
     run = DeepResearchRun(
         query="test query",
         router=router,
@@ -72,11 +71,12 @@ async def test_pipeline_invariants():
         embedder=embedder,
         vector_store=vector_store,
         nli=nli,
-        conversation_id="test_conv"
+        conversation_id="test_conv",
     )
 
     plan_steps = ["Q1", "Q2", "Q3"]
     captured_events = []
+
     async def emit(kind, payload):
         captured_events.append((kind, payload))
 
@@ -94,7 +94,6 @@ async def test_pipeline_invariants():
             return_value="summary",
         ),
     ):
-        
         report = await run.run(plan_steps, emit=emit)
 
     # 1. Assert Concurrency (Pipeline)
@@ -103,7 +102,7 @@ async def test_pipeline_invariants():
     q1_synth_start = next(
         t for title, event, t in synth_calls if title == "Q1" and event == "start"
     )
-    
+
     # Check that all gathers started before the first synthesis
     # (since they are tasks started upfront)
     for title in ["Q1", "Q2", "Q3"]:
@@ -115,10 +114,8 @@ async def test_pipeline_invariants():
     # Synthesis calls should NOT overlap.
     for i in range(len(plan_steps) - 1):
         q_curr = plan_steps[i]
-        q_next = plan_steps[i+1]
-        curr_end = next(
-            t for title, event, t in synth_calls if title == q_curr and event == "end"
-        )
+        q_next = plan_steps[i + 1]
+        curr_end = next(t for title, event, t in synth_calls if title == q_curr and event == "end")
         next_start = next(
             t for title, event, t in synth_calls if title == q_next and event == "start"
         )
@@ -136,12 +133,13 @@ async def test_pipeline_invariants():
     assert done_events[1]["title"] == "Q2"
     assert done_events[2]["title"] == "Q3"
 
+
 @pytest.mark.asyncio
 async def test_budget_partitioning():
     """RP-04: Verify that the source budget is partitioned N-ways upfront."""
-    
+
     partitioned_budgets = {}
-    
+
     async def mock_gather(subq, **kwargs):
         partitioned_budgets[subq.title] = kwargs.get("remaining_source_budget")
         return SubQuestionResult(
@@ -150,7 +148,7 @@ async def test_budget_partitioning():
             all_hits=[],
             rounds_run=1,
             issued_queries=[subq.title],
-            bounded_by_rounds=False
+            bounded_by_rounds=False,
         )
 
     # Mock dependencies
@@ -159,7 +157,7 @@ async def test_budget_partitioning():
     embedder = AsyncMock()
     vector_store = AsyncMock()
     nli = AsyncMock()
-    
+
     run = DeepResearchRun(
         query="test query",
         router=router,
@@ -167,13 +165,14 @@ async def test_budget_partitioning():
         embedder=embedder,
         vector_store=vector_store,
         nli=nli,
-        depth="standard_deep" # max_sources=20
+        depth="standard_deep",  # max_sources=20
     )
 
     # 40 // 3 = 13, with 1 leftover → Q1 gets 14, Q2 gets 13, Q3 gets 13
     plan_steps = ["Q1", "Q2", "Q3"]
-    
-    async def emit(kind, payload): pass
+
+    async def emit(kind, payload):
+        pass
 
     with (
         patch(
@@ -189,12 +188,13 @@ async def test_budget_partitioning():
     assert partitioned_budgets["Q2"] == 13
     assert partitioned_budgets["Q3"] == 13
 
+
 @pytest.mark.asyncio
 async def test_resume_semantics_with_pipeline():
     """RP-04: Verify that resume still works correctly (skips done sections)."""
-    
+
     gather_calls = []
-    
+
     async def mock_gather(subq, **kwargs):
         gather_calls.append(subq.title)
         return SubQuestionResult(
@@ -226,8 +226,9 @@ async def test_resume_semantics_with_pipeline():
             unsupported_count=0,
         )
     ]
-    
-    async def emit(kind, payload): pass
+
+    async def emit(kind, payload):
+        pass
 
     with (
         patch(

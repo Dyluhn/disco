@@ -18,7 +18,9 @@ from disco.core.context import (
 
 
 def _failure(i: int, *, resolved: bool = False) -> VerifierFailureRef:
-    return VerifierFailureRef(kind="console_error", message=f"err {i}", resolved=resolved, severity=Severity.ERROR)
+    return VerifierFailureRef(
+        kind="console_error", message=f"err {i}", resolved=resolved, severity=Severity.ERROR
+    )
 
 
 def _resource(i: int) -> ResourceRef:
@@ -28,9 +30,16 @@ def _resource(i: int) -> ResourceRef:
 def test_from_ledger_passes_through_anchors() -> None:
     todo = ArtifactMemoryRef(kind=ArtifactMemoryKind.TODO, rel_path=".disco/context/todo.md")
     led = ContextLedger.empty("c").model_copy(
-        update={"active_goal": "goal", "active_contract": "static.site", "current_version": 3, "todo_ref": todo}
+        update={
+            "active_goal": "goal",
+            "active_contract": "static.site",
+            "current_version": 3,
+            "todo_ref": todo,
+        }
     )
-    pack = ContextPack.from_ledger(led, allowed_next_actions=("edit", "verify"), todo_text="- [ ] do thing")
+    pack = ContextPack.from_ledger(
+        led, allowed_next_actions=("edit", "verify"), todo_text="- [ ] do thing"
+    )
     assert pack.active_goal == "goal"
     assert pack.active_contract == "static.site"
     assert pack.current_version == 3
@@ -77,7 +86,9 @@ def test_from_ledger_caps_omittable_but_exempts_never_compact() -> None:
             ),
             "unresolved_comments": tuple(f"c{i}" for i in range(5)),
             "retained_refs": tuple(
-                ArtifactMemoryRef(kind=ArtifactMemoryKind.SUMMARY, rel_path=f".disco/context/sum{i}.md")
+                ArtifactMemoryRef(
+                    kind=ArtifactMemoryKind.SUMMARY, rel_path=f".disco/context/sum{i}.md"
+                )
                 for i in range(5)
             ),
         }

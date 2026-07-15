@@ -20,13 +20,13 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from disco.core.events import Event, EventSource, MessageEvent
-from disco.core.think import strip_think_spans
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
     LLMMessage,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
 
 _LOG = logging.getLogger(__name__)
 
@@ -175,9 +175,7 @@ class TitleService:
                     CompletionRequest(
                         profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
                         messages=[
-                            LLMMessage(
-                                role="user", content=_PROMPT_PREFIX + task[:_MAX_TASK_CHARS]
-                            )
+                            LLMMessage(role="user", content=_PROMPT_PREFIX + task[:_MAX_TASK_CHARS])
                         ],
                         temperature=0.0,
                         max_tokens=max_tokens,

@@ -9,22 +9,22 @@ parallel, drifting token catalog. Pure; reuses disco.core.brand.
 
 from __future__ import annotations
 
-from ..brand import THEMES, resolve_theme
+from ..brand import THEMES, Theme, resolve_theme
 
 # The brand names available to project (the registry keys of disco.core.brand.THEMES).
 BRAND_NAMES: frozenset[str] = frozenset(name for name, _mode in THEMES)
 
 
-def brand_to_appkit_tokens(theme: object) -> dict[str, str]:
+def brand_to_appkit_tokens(theme: Theme) -> dict[str, str]:
     """Project a disco.core.brand Theme into AppKit design tokens. The brand's accent is
     the primary action color; bg/text become the canvas/ink; the UI font stack drives
     type. Keys match appkit.DEFAULT_DESIGN exactly so app_set_design can apply them."""
     return {
-        "primary": getattr(theme, "accent"),
-        "accent": getattr(theme, "accent"),
-        "bg": getattr(theme, "bg"),
-        "fg": getattr(theme, "text"),
-        "font": getattr(theme, "font_ui"),
+        "primary": theme.accent,
+        "accent": theme.accent,
+        "bg": theme.bg,
+        "fg": theme.text,
+        "font": theme.font_ui,
     }
 
 

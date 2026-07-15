@@ -34,7 +34,7 @@ class _FakeSession:
 
     async def list_dir(self, path: str) -> list[str]:
         prefix = path.rstrip("/") + "/"
-        return [k[len(prefix):] for k in self._files if k.startswith(prefix)]
+        return [k[len(prefix) :] for k in self._files if k.startswith(prefix)]
 
     async def read_file(self, path: str) -> bytes:
         return self._files.get(path, b"")
@@ -109,8 +109,7 @@ def _upload(client: TestClient, cid: str, files: list[tuple[str, bytes, str]]) -
     `files`: list of (field_name, data, filename).
     """
     parts = [
-        ("files", (fname, io.BytesIO(data), "application/octet-stream"))
-        for _, data, fname in files
+        ("files", (fname, io.BytesIO(data), "application/octet-stream")) for _, data, fname in files
     ]
     return client.post(f"/conversations/{cid}/files", files=parts)
 
@@ -255,8 +254,7 @@ async def test_event_text_format_single_file() -> None:
 
     all_events = await store.get_events(cid)
     env = [
-        e for e in all_events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in all_events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert len(env) == 1
     assert env[0].message.content == "User uploaded: uploads/data.csv (18,234 bytes)"
@@ -271,16 +269,19 @@ async def test_event_text_format_multi_file() -> None:
     sess = _FakeSession()
     rt._executors[cid] = _FakeExecutor(sess)
 
-    r = _upload(client, cid, [
-        ("files", b"a" * 100, "a.csv"),
-        ("files", b"b" * 200, "b.csv"),
-    ])
+    r = _upload(
+        client,
+        cid,
+        [
+            ("files", b"a" * 100, "a.csv"),
+            ("files", b"b" * 200, "b.csv"),
+        ],
+    )
     assert r.status_code == 200
 
     all_events = await store.get_events(cid)
     env = [
-        e for e in all_events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in all_events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert len(env) == 1
     content = env[0].message.content
@@ -303,8 +304,7 @@ async def test_no_event_when_all_rejected() -> None:
 
     all_events = await store.get_events(cid)
     env = [
-        e for e in all_events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in all_events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert env == []
 
@@ -431,10 +431,14 @@ def test_partial_reject_returns_200_with_saved_and_rejected() -> None:
     client, cid, _ = _make_client()
     big = b"x" * (25 * 1024 * 1024 + 1)
     small = b"ok"
-    r = _upload(client, cid, [
-        ("files", big, "big.bin"),
-        ("files", small, "small.txt"),
-    ])
+    r = _upload(
+        client,
+        cid,
+        [
+            ("files", big, "big.bin"),
+            ("files", small, "small.txt"),
+        ],
+    )
     assert r.status_code == 200
     body = r.json()
     assert len(body["saved"]) == 1
@@ -550,12 +554,10 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
         mock_instance.write_file = mock.AsyncMock(
             side_effect=lambda path, d: mock_files.__setitem__(path, d)
         )
-        mock_instance.read_file = mock.AsyncMock(
-            side_effect=lambda path: mock_files.get(path, b"")
-        )
+        mock_instance.read_file = mock.AsyncMock(side_effect=lambda path: mock_files.get(path, b""))
         mock_instance.list_dir = mock.AsyncMock(
             side_effect=lambda path: [
-                k[len(path.rstrip("/") + "/"):]
+                k[len(path.rstrip("/") + "/") :]
                 for k in mock_files
                 if k.startswith(path.rstrip("/") + "/")
             ]

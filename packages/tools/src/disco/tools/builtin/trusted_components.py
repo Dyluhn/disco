@@ -74,8 +74,7 @@ def _corrupt_refusal(exc: LockfileCorrupt) -> ToolOutcome:
 class AddTrustedComponentArgs(BaseModel):
     name: str = Field(
         description=(
-            "Which trusted component to install. Catalog (latest versions):\n"
-            + _catalog()
+            "Which trusted component to install. Catalog (latest versions):\n" + _catalog()
         )
     )
     version: str | None = Field(

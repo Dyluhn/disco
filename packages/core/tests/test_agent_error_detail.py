@@ -3,6 +3,7 @@
 `error` stays the canonical CODE (the stuck-detector + classifier key on it); `detail` carries the
 human-readable text so a domain error like bad_range shows the valid range instead of a bare code.
 """
+
 from __future__ import annotations
 
 from disco.core.events import AgentErrorEvent

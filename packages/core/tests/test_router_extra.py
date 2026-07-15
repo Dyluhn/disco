@@ -106,9 +106,7 @@ async def test_hard_cap_refuses_to_spend_passive_backstop():
     cost.add(5.0, conversation_id=None)  # already over the hard cap
     router, _sink, _ = build_router(config=cfg, cost_tracker=cost)
     with pytest.raises(BudgetExceeded):
-        await router.complete(
-            _driver_req(), context=CallContext(model_override="frontier")
-        )
+        await router.complete(_driver_req(), context=CallContext(model_override="frontier"))
 
 
 async def test_hard_cap_does_not_block_the_default_when_uncapped_role_is_free():

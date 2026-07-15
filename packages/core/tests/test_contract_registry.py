@@ -22,7 +22,9 @@ def test_every_builtin_contract_is_coherent_and_serializable() -> None:
         # kind/artifact coherence + finalizer convention are enforced by the models;
         # a successful round-trip proves the built-in is well-formed.
         assert BuildContract.model_validate(c.model_dump(mode="json")) == c
-        assert c.verify.finalizer.startswith("ready_for_") and c.verify.finalizer.endswith("_verification")
+        assert c.verify.finalizer.startswith("ready_for_") and c.verify.finalizer.endswith(
+            "_verification"
+        )
 
 
 def test_get_for_brief_by_kind() -> None:
@@ -72,7 +74,9 @@ def test_all_builtin_contract_tools_are_registered() -> None:
         if c.export is not None:
             tools |= set(c.export.tools)
         missing = tools - registered
-        assert not missing, f"{kind.value} contract references unregistered tools: {sorted(missing)}"
+        assert not missing, (
+            f"{kind.value} contract references unregistered tools: {sorted(missing)}"
+        )
 
 
 def test_appkit_leadgen_contract_shape() -> None:

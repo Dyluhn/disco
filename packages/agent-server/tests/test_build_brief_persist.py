@@ -204,8 +204,8 @@ async def test_ws_brief_and_user_appended_atomically_in_order() -> None:
 
 
 async def test_rest_post_message_atomic_and_server_derives() -> None:
-    from disco.agent_server.routes.conversations import make_conversations_router
     from disco.agent_server.routes._common import SendMessageBody
+    from disco.agent_server.routes.conversations import make_conversations_router
 
     inner = SqliteEventStore(":memory:")
     inner.create_conversation(CID, surface="build")

@@ -191,8 +191,7 @@ class SubprocessCommandRunner:
                 cwd=str(cwd),
                 env=env,
                 input=stdin.encode() if stdin is not None else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 timeout=self._timeout_s,
                 check=False,
             )
@@ -226,9 +225,7 @@ class SubprocessCommandRunner:
             text += f"\n…[output truncated at {self._max_output_bytes} bytes]"
         return text
 
-    async def _drain(
-        self, proc: asyncio.subprocess.Process, stdin: str | None
-    ) -> tuple[str, str]:
+    async def _drain(self, proc: asyncio.subprocess.Process, stdin: str | None) -> tuple[str, str]:
         """Feed stdin (if any), read stdout+stderr CONCURRENTLY under a per-stream
         byte cap, and reap. Returns the decoded, capped ``(stdout, stderr)``."""
 

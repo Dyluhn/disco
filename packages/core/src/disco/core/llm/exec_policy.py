@@ -63,7 +63,8 @@ class ModelExecutionPolicy:
 
     @classmethod
     def standard(cls) -> ModelExecutionPolicy:
-        """The no-compensation default — a capable model with anchored edits and no weak-model compensations."""
+        """The no-compensation default for a capable model with anchored edits
+        and no weak-model compensations."""
         return cls(tier="standard", anchored_edit=True)
 
 

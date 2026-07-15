@@ -4,7 +4,6 @@ recovery, and faithful ledger reconstruction."""
 from __future__ import annotations
 
 import pytest
-
 from disco.core.context import (
     ArtifactMemoryKind,
     ContextRecoveryError,
@@ -212,11 +211,7 @@ async def test_artifact_manifest_roundtrip_and_lazy_default() -> None:
     assert ".disco/context/artifact_manifest.json" in fs.files
     back = await store.read_artifacts()
     assert back == recs  # frozen models round-trip identically
-    assert (
-        back[0].shown is True
-        and back[0].verified is False
-        and back[0].verify_verdict is None
-    )
+    assert back[0].shown is True and back[0].verified is False and back[0].verify_verdict is None
     assert back[1].verified is True and back[1].verify_verdict == "passed"
     assert back[1].export == {"pdf": "2026-06-30T00:00:00Z"}
 
@@ -243,9 +238,7 @@ async def test_artifact_manifest_upsert_replaces_whole_list() -> None:
     await store.record_artifacts((ArtifactRecord(path="a.html", shown=False),))
     # a read-modify-write upsert (what the per-cid-locked caller does): flip shown=True
     cur = list(await store.read_artifacts())
-    cur[0] = cur[0].model_copy(
-        update={"shown": True, "verified": True, "verify_verdict": "passed"}
-    )
+    cur[0] = cur[0].model_copy(update={"shown": True, "verified": True, "verify_verdict": "passed"})
     await store.record_artifacts(tuple(cur))
     back = await store.read_artifacts()
     assert len(back) == 1 and back[0].shown is True and back[0].verified is True

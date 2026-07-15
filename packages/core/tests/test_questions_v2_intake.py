@@ -81,8 +81,7 @@ async def test_questions_v2_yields_structured_intake_event_capped_to_four():
     statuses = [
         e
         for e in events
-        if isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.AWAITING_USER_QUESTION
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.AWAITING_USER_QUESTION
     ]
     assert statuses[-1].detail == intake[0].id
     assert state.pending_questions_v2_id == intake[0].id

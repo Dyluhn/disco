@@ -9,9 +9,7 @@ def validate_pdf(path: str) -> list[str]:
 
     # Check page count
     try:
-        result = subprocess.run(
-            ["pdfinfo", path], capture_output=True, text=True
-        )
+        result = subprocess.run(["pdfinfo", path], capture_output=True, text=True)
     except FileNotFoundError:
         return ["pdfinfo unavailable"]
     if result.returncode != 0:
@@ -27,9 +25,7 @@ def validate_pdf(path: str) -> list[str]:
 
     # Check for extractable text (pdftotext is optional — skip silently if absent)
     try:
-        result = subprocess.run(
-            ["pdftotext", path, "-"], capture_output=True, text=True
-        )
+        result = subprocess.run(["pdftotext", path, "-"], capture_output=True, text=True)
         if result.returncode == 0 and not result.stdout.strip():
             problems.append("pdf has no extractable text")
     except FileNotFoundError:
@@ -44,8 +40,16 @@ def validate_audio(path: str) -> list[str]:
 
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
             capture_output=True,
             text=True,
         )

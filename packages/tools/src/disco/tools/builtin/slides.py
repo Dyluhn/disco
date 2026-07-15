@@ -87,8 +87,7 @@ class SlidesGenerateArgs(BaseModel):
         ge=2,
         le=30,
         description=(
-            "Approximate number of slides (used by the C2 pipeline; ignored for "
-            "markdown path)."
+            "Approximate number of slides (used by the C2 pipeline; ignored for markdown path)."
         ),
     )
     mode: Literal["deck", "markdown"] = Field(
@@ -194,9 +193,7 @@ def _basic_md_to_html(md: str) -> str:
             while i < len(lines) and lines[i].startswith("> "):
                 bq_lines.append(lines[i][2:])
                 i += 1
-            bq_text = "<br>".join(
-                _inline_markdown_to_html(html.escape(ln)) for ln in bq_lines
-            )
+            bq_text = "<br>".join(_inline_markdown_to_html(html.escape(ln)) for ln in bq_lines)
             out.append(f"<blockquote>{bq_text}</blockquote>")
             continue
 
@@ -204,9 +201,7 @@ def _basic_md_to_html(md: str) -> str:
         if re.match(r"^[-*+]\s+", line):
             out.append("<ul>")
             while i < len(lines) and re.match(r"^[-*+]\s+", lines[i]):
-                text = _inline_markdown_to_html(
-                    html.escape(re.sub(r"^[-*+]\s+", "", lines[i]))
-                )
+                text = _inline_markdown_to_html(html.escape(re.sub(r"^[-*+]\s+", "", lines[i])))
                 out.append(f"<li>{text}</li>")
                 i += 1
             out.append("</ul>")
@@ -216,9 +211,7 @@ def _basic_md_to_html(md: str) -> str:
         if re.match(r"^\d+\.\s+", line):
             out.append("<ol>")
             while i < len(lines) and re.match(r"^\d+\.\s+", lines[i]):
-                text = _inline_markdown_to_html(
-                    html.escape(re.sub(r"^\d+\.\s+", "", lines[i]))
-                )
+                text = _inline_markdown_to_html(html.escape(re.sub(r"^\d+\.\s+", "", lines[i])))
                 out.append(f"<li>{text}</li>")
                 i += 1
             out.append("</ol>")
@@ -237,18 +230,17 @@ def _basic_md_to_html(md: str) -> str:
 
         # Paragraph (collect consecutive non-empty, non-special lines)
         para_lines: list[str] = []
-        while i < len(lines) and lines[i].strip() and not any(
-            lines[i].startswith(p)
-            for p in ("#", "```", "> ", "- ", "* ", "+ ")
-        ) and not re.match(r"^\d+\.\s+", lines[i]) and not re.match(
-            r"^[-*]{3,}\s*$", lines[i]
+        while (
+            i < len(lines)
+            and lines[i].strip()
+            and not any(lines[i].startswith(p) for p in ("#", "```", "> ", "- ", "* ", "+ "))
+            and not re.match(r"^\d+\.\s+", lines[i])
+            and not re.match(r"^[-*]{3,}\s*$", lines[i])
         ):
             para_lines.append(lines[i])
             i += 1
         if para_lines:
-            text = "<br>".join(
-                _inline_markdown_to_html(html.escape(ln)) for ln in para_lines
-            )
+            text = "<br>".join(_inline_markdown_to_html(html.escape(ln)) for ln in para_lines)
             out.append(f"<p>{text}</p>")
 
     return "\n    ".join(out)
@@ -281,11 +273,7 @@ def _fallback_html(markdown: str, theme: str | None = None) -> str:
     sections = ""
     for i, slide_md in enumerate(slides_raw):
         html_body = _basic_md_to_html(slide_md)
-        sections += (
-            f'  <section class="slide" id="slide-{i + 1}">\n'
-            f"    {html_body}\n"
-            f"  </section>\n"
-        )
+        sections += f'  <section class="slide" id="slide-{i + 1}">\n    {html_body}\n  </section>\n'
 
     return dedent(
         f"""\
@@ -467,9 +455,7 @@ class SlidesTool:
             outcome = await self._stamp_export_render(outcome, ctx)
         return outcome
 
-    async def _stamp_export_render(
-        self, outcome: ToolOutcome, ctx: ToolContext
-    ) -> ToolOutcome:
+    async def _stamp_export_render(self, outcome: ToolOutcome, ctx: ToolContext) -> ToolOutcome:
         """Read the produced deck file back from the sandbox and add ExportRenderFacts
         to the tool result's structured payload. Best-effort: on any read/parse
         failure the payload is left unstamped (the gate then falls through — absence
@@ -574,7 +560,10 @@ class SlidesTool:
             # C2 succeeded — render via C3. authored_sidecar is the fresh editable
             # source (or None if the sidecar write failed) → gates the editor.
             return await self._render_c1_deck(
-                c1_deck, args, ctx, fmt,
+                c1_deck,
+                args,
+                ctx,
+                fmt,
                 editable_source=authored_sidecar,
                 image_stats=image_stats,
             )
@@ -651,9 +640,7 @@ class SlidesTool:
         out_filename = f"{args.filename}.{fmt}"
 
         # A2: advertise the in-app editor ONLY when THIS run wrote a fresh sidecar.
-        editable: dict[str, str] = (
-            {"editable_source": editable_source} if editable_source else {}
-        )
+        editable: dict[str, str] = {"editable_source": editable_source} if editable_source else {}
         img_note = image_stats.note() if image_stats is not None else ""
         img_structured: dict = (
             {

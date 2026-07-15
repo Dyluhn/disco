@@ -83,7 +83,7 @@ def test_is_ship_it_intent_matches_stop_phrases(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "publish it",         # ambiguous — bare publish is NOT a stop phrase
+        "publish it",  # ambiguous — bare publish is NOT a stop phrase
         "publish",
         "deploy it",
         "publish to Netlify",
@@ -116,7 +116,8 @@ async def test_ship_it_post_finish_appends_message_no_planning_status() -> None:
     events = await store.get_events(CID)
     # The user's echo must appear in the log.
     user_msgs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.USER
         and e.message.content == "publish it and be done"
@@ -125,8 +126,7 @@ async def test_ship_it_post_finish_appends_message_no_planning_status() -> None:
 
     # No RUNNING/planning status must have been emitted.
     planning_statuses = [
-        e for e in events
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING
+        e for e in events if isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING
     ]
     assert not planning_statuses, "no RUNNING/planning status on ship-it path"
 
@@ -208,9 +208,7 @@ async def test_real_change_intent_post_finish_still_replans() -> None:
     await ops.request_plan(CID, "add a dark mode toggle")
 
     rt._loop_for.assert_called_once_with(CID)
-    rt._loop_for.return_value.enter_planning.assert_awaited_once_with(
-        "add a dark mode toggle"
-    )
+    rt._loop_for.return_value.enter_planning.assert_awaited_once_with("add a dark mode toggle")
     rt.kick.assert_called_once_with(CID)
 
 

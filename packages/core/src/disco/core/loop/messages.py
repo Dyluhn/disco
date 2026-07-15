@@ -174,6 +174,8 @@ _HS03_REGROUND_SENTINEL = "<reground-anchors>"
 # second prompt. The whole recap stays well under ~1k chars.
 _HS03_REGROUND_SECTION_CHARS = 200
 _HS03_REGROUND_MAX_FILES = 4  # only the most recent few files in the recap
+
+
 def _hs03_reground_message(
     events: list[Event], *, goal_override: str | None = None
 ) -> LLMMessage | None:
@@ -258,9 +260,7 @@ def _hs03_reground_message(
     remaining = _HS03_REGROUND_MAX_FILES - len(file_paths)
     if remaining > 0:
         file_paths.extend(read_only[:remaining])
-    files_block = (
-        "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
-    )
+    files_block = "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
 
     # 4. CONSTRAINTS: the plan's `context` field, when present — the
     # planner's exploration findings + trade-offs (Claude-Code-style
@@ -284,11 +284,7 @@ def _hs03_reground_message(
     sections.append(f"PROGRESS ({len(done)}/{len(plan.steps)} done):\n{progress}")
     sections.append(f"FILES:\n{files_block}")
 
-    body = (
-        f"{_HS03_REGROUND_SENTINEL}\n"
-        + "\n".join(sections)
-        + f"\n{_HS03_REGROUND_SENTINEL}"
-    )
+    body = f"{_HS03_REGROUND_SENTINEL}\n" + "\n".join(sections) + f"\n{_HS03_REGROUND_SENTINEL}"
     return LLMMessage(role="user", content=body)
 
 

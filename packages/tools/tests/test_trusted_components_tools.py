@@ -129,12 +129,12 @@ async def test_install_writes_tree_lockfile_and_returns_guide(registry_root: Pat
 async def test_dependency_chain_installs_and_reinstall_is_idempotent(registry_root: Path) -> None:
     sbx = FakeSandboxInstance()
     ctx = _ctx(sbx)
-    assert (await AddTrustedComponentTool().run(
-        AddTrustedComponentArgs(name="database-kit"), ctx
-    )).success
-    assert (await AddTrustedComponentTool().run(
-        AddTrustedComponentArgs(name="auth-kit"), ctx
-    )).success
+    assert (
+        await AddTrustedComponentTool().run(AddTrustedComponentArgs(name="database-kit"), ctx)
+    ).success
+    assert (
+        await AddTrustedComponentTool().run(AddTrustedComponentArgs(name="auth-kit"), ctx)
+    ).success
     again = await AddTrustedComponentTool().run(AddTrustedComponentArgs(name="auth-kit"), ctx)
     assert again.success and again.structured["written"] == []  # byte-identical → no-op
 

@@ -80,9 +80,7 @@ class _FakeInstance:
                 else:
                     ec, out = v  # type: ignore[misc]
                 return ExecResult(exit_code=ec, stdout=out, stderr="")
-        return ExecResult(
-            exit_code=self.default_exit_code, stdout=self.default_output, stderr=""
-        )
+        return ExecResult(exit_code=self.default_exit_code, stdout=self.default_output, stderr="")
 
     async def read_file(self, path: str) -> bytes:
         return b""
@@ -155,6 +153,7 @@ def _fasten_polls(monkeypatch, wait_s: float = 0.1, poll_s: float = 0.02) -> Non
     in <1s instead of 15s. The behavior is unchanged — exec() just decides
     "still running" sooner."""
     from disco.tools.sandbox import shell_sessions
+
     monkeypatch.setattr(shell_sessions, "_EXEC_WAIT_S", wait_s)
     monkeypatch.setattr(shell_sessions, _POLL_S_NAME := "_POLL_S", poll_s)
 
@@ -336,9 +335,7 @@ async def test_rehydrate_reissues_recorded_command(monkeypatch):
     # The rehydrate re-issued the command — there should be a fresh
     # `tmux send-keys ... vite --port 5173` call on the instance.
     send_keys = [c for c in inst.cmd_log if "send-keys" in c and "vite" in c]
-    assert send_keys, (
-        f"rehydrate did not re-issue the recorded command. cmd_log={inst.cmd_log}"
-    )
+    assert send_keys, f"rehydrate did not re-issue the recorded command. cmd_log={inst.cmd_log}"
     # And the entry is refreshed (re-recorded by the re-issued exec).
     assert mgr._persistent_servers["dev"].port == 5173
     # The log line is human-readable + includes the session name + command.
@@ -369,8 +366,7 @@ async def test_rehydrate_skips_when_port_already_bound(monkeypatch):
 
     send_keys = [c for c in inst.cmd_log if "send-keys" in c]
     assert not send_keys, (
-        f"rehydrate MUST NOT re-issue when the port is already bound, but "
-        f"issued: {send_keys}"
+        f"rehydrate MUST NOT re-issue when the port is already bound, but issued: {send_keys}"
     )
     assert any("already bound" in line for line in logs), logs
 
@@ -424,9 +420,11 @@ async def test_session_recreate_triggers_rehydrate(monkeypatch):
     _setup_running_capture(initial)
 
     session = SandboxSession(svc, conversation_id="conv-c3-recreate")
+
     # Speed up the auto-preview task so it doesn't race the assertion.
     async def _noop_preview(port: int = 8000) -> bool:  # type: ignore[no-redef]
         return False
+
     session.ensure_preview = _noop_preview  # type: ignore[method-assign]
 
     # Trigger first create.
@@ -459,15 +457,10 @@ async def test_session_recreate_triggers_rehydrate(monkeypatch):
     # The rehydrate already ran inside `_recreate` — re-run it with a
     # fresh canned_outputs set on the new instance so we can observe
     # the send-keys call.
-    await session.sessions.rehydrate_persistent_servers(
-        port_check=lambda _p: False
-    )
+    await session.sessions.rehydrate_persistent_servers(port_check=lambda _p: False)
 
     # The new instance received a send-keys for the rehydrated command.
-    send_keys = [
-        c for c in new_inst.cmd_log
-        if "send-keys" in c and "vite" in c and "5173" in c
-    ]
+    send_keys = [c for c in new_inst.cmd_log if "send-keys" in c and "vite" in c and "5173" in c]
     assert send_keys, (
         f"after _recreate, the new instance did not receive the rehydrated "
         f"dev-server command. cmd_log={new_inst.cmd_log}"

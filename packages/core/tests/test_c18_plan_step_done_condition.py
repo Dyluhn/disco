@@ -106,6 +106,7 @@ class _SandboxExecutor:
 
     def available_tools(self):
         from disco.core.llm import ToolSpec
+
         return [
             ToolSpec(name="shell", description="run a shell command", parameters_schema={}),
             ToolSpec(name="plan_step", description="mark plan step progress", parameters_schema={}),
@@ -129,7 +130,8 @@ def _advisory_notes(events: list) -> list[MessageEvent]:
     — NOT wrapped in <system-reminder> (so they are visible but
     non-nudging)."""
     return [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and isinstance(e.meta, dict)
@@ -383,12 +385,14 @@ async def test_c18_no_predicate_emits_no_note(tmp_path):
     # The plan_step ActionEvent + its ObservationEvent are the only
     # trace artifacts for the mark-done — exactly as today.
     plan_step_actions = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, ActionEvent) and e.tool_call and e.tool_call.tool_name == "plan_step"
     ]
     assert len(plan_step_actions) == 1
     plan_step_observations = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, ObservationEvent)
         and e.tool_result is not None
         and e.tool_result.tool_name == "plan_step"
@@ -576,8 +580,7 @@ async def test_c18_real_workspace_path_escape_is_rejected_before_approval(tmp_pa
     plans = [event for event in events if isinstance(event, PlanEvent)]
     assert [plan.summary for plan in plans] == ["corrected"]
     assert any(
-        isinstance(event, StatusEvent)
-        and event.detail == "invalid_plan_done_conditions"
+        isinstance(event, StatusEvent) and event.detail == "invalid_plan_done_conditions"
         for event in events
     )
     assert any(
@@ -639,8 +642,7 @@ async def test_c18_placeholder_http_gate_is_rejected_before_plan_persistence(tmp
     assert [plan.summary for plan in plans] == ["corrected"]
     assert await store.get_dod_spec(CID) is None
     assert any(
-        isinstance(event, StatusEvent)
-        and event.detail == "invalid_plan_done_conditions"
+        isinstance(event, StatusEvent) and event.detail == "invalid_plan_done_conditions"
         for event in events
     )
     feedback = [
@@ -751,9 +753,7 @@ async def test_c18_container_command_timed_out_fails(tmp_path):
     non-pass, even when exit_code coincidentally matches expect_exit (e.g. 124).
     The note must name 'timed out' so the user sees the actual failure reason."""
     # exit_code=0 equals expect_exit=0, but timed_out=True → must fail.
-    sbx = _FakeContainerSandboxWithExecShell(
-        result=_FakeExecResult(exit_code=0, timed_out=True)
-    )
+    sbx = _FakeContainerSandboxWithExecShell(result=_FakeExecResult(exit_code=0, timed_out=True))
 
     agent = ScriptedAgent(
         [

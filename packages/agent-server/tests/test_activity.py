@@ -53,31 +53,58 @@ def test_list_recent_schedule_runs_owner_scoped_and_joined(store):
     store.create_conversation("c_bob", owner_id="bob", title="Bob's thing")
     store.create_schedule(
         {
-            "schedule_id": "s_alice", "conversation_id": "c_alice", "owner_id": "alice",
-            "rrule": "0 9 * * *", "description": "Morning brief", "depth": None,
-            "model_override": None, "created_at": "2026-06-10T00:00:00Z",
-            "enabled": True, "next_run": "2026-06-13T09:00:00Z",
+            "schedule_id": "s_alice",
+            "conversation_id": "c_alice",
+            "owner_id": "alice",
+            "rrule": "0 9 * * *",
+            "description": "Morning brief",
+            "depth": None,
+            "model_override": None,
+            "created_at": "2026-06-10T00:00:00Z",
+            "enabled": True,
+            "next_run": "2026-06-13T09:00:00Z",
         }
     )
     store.create_schedule(
         {
-            "schedule_id": "s_bob", "conversation_id": "c_bob", "owner_id": "bob",
-            "rrule": "0 9 * * *", "description": "Bob brief", "depth": None,
-            "model_override": None, "created_at": "2026-06-10T00:00:00Z",
-            "enabled": True, "next_run": "2026-06-13T09:00:00Z",
+            "schedule_id": "s_bob",
+            "conversation_id": "c_bob",
+            "owner_id": "bob",
+            "rrule": "0 9 * * *",
+            "description": "Bob brief",
+            "depth": None,
+            "model_override": None,
+            "created_at": "2026-06-10T00:00:00Z",
+            "enabled": True,
+            "next_run": "2026-06-13T09:00:00Z",
         }
     )
     store.create_schedule_run(
-        {"run_id": "r1", "schedule_id": "s_alice", "conversation_id": "c_alice",
-         "fired_at": "2026-06-11T09:00:00Z", "coalesced": False}
+        {
+            "run_id": "r1",
+            "schedule_id": "s_alice",
+            "conversation_id": "c_alice",
+            "fired_at": "2026-06-11T09:00:00Z",
+            "coalesced": False,
+        }
     )
     store.create_schedule_run(
-        {"run_id": "r2", "schedule_id": "s_alice", "conversation_id": "c_alice",
-         "fired_at": "2026-06-12T09:00:00Z", "coalesced": True}
+        {
+            "run_id": "r2",
+            "schedule_id": "s_alice",
+            "conversation_id": "c_alice",
+            "fired_at": "2026-06-12T09:00:00Z",
+            "coalesced": True,
+        }
     )
     store.create_schedule_run(
-        {"run_id": "r3", "schedule_id": "s_bob", "conversation_id": "c_bob",
-         "fired_at": "2026-06-12T09:00:00Z", "coalesced": False}
+        {
+            "run_id": "r3",
+            "schedule_id": "s_bob",
+            "conversation_id": "c_bob",
+            "fired_at": "2026-06-12T09:00:00Z",
+            "coalesced": False,
+        }
     )
 
     rows = store.list_recent_schedule_runs("alice", limit=50)
@@ -126,15 +153,26 @@ def test_activity_includes_recent_runs(store):
     store.create_conversation("c1", owner_id="local", title="Scheduled one")
     store.create_schedule(
         {
-            "schedule_id": "s1", "conversation_id": "c1", "owner_id": "local",
-            "rrule": "0 9 * * *", "description": "Daily", "depth": None,
-            "model_override": None, "created_at": "2026-06-10T00:00:00Z",
-            "enabled": True, "next_run": "2026-06-13T09:00:00Z",
+            "schedule_id": "s1",
+            "conversation_id": "c1",
+            "owner_id": "local",
+            "rrule": "0 9 * * *",
+            "description": "Daily",
+            "depth": None,
+            "model_override": None,
+            "created_at": "2026-06-10T00:00:00Z",
+            "enabled": True,
+            "next_run": "2026-06-13T09:00:00Z",
         }
     )
     store.create_schedule_run(
-        {"run_id": "r1", "schedule_id": "s1", "conversation_id": "c1",
-         "fired_at": "2026-06-12T09:00:00Z", "coalesced": False}
+        {
+            "run_id": "r1",
+            "schedule_id": "s1",
+            "conversation_id": "c1",
+            "fired_at": "2026-06-12T09:00:00Z",
+            "coalesced": False,
+        }
     )
     client = TestClient(create_app(store, runtime=runtime))
     body = client.get("/api/activity").json()

@@ -41,6 +41,7 @@ class PersistentServer:
     `port` is the USER_PORT it binds (the rehydrate skip-check uses this to
     avoid duplicating a server that's already running on the fresh instance).
     """
+
     name: str
     command: str
     exec_dir: str | None
@@ -74,9 +75,7 @@ class SessionInfo:
 
 class ShellSessionManager:
     def __init__(
-        self,
-        instance_getter: Callable[[], Awaitable[SandboxInstance]],
-        namespace: str = ""
+        self, instance_getter: Callable[[], Awaitable[SandboxInstance]], namespace: str = ""
     ) -> None:
         self._get_instance = instance_getter
         self.namespace = namespace
@@ -133,6 +132,7 @@ class ShellSessionManager:
         # base, which is fine; this is purely for the dependency direction
         # remaining one-way: shell_sessions <- port_owner, not the reverse).
         from ._container import USER_PORTS
+
         return USER_PORTS
 
     def _full_name(self, name: str) -> str:
@@ -166,18 +166,14 @@ class ShellSessionManager:
         """
         for key, value in (await self._process_session_environment()).items():
             await self._run_tmux(
-                "set-environment -t "
-                f"{shlex.quote(full)} {shlex.quote(key)} {shlex.quote(value)}"
+                f"set-environment -t {shlex.quote(full)} {shlex.quote(key)} {shlex.quote(value)}"
             )
 
     async def _run_tmux(self, cmd: str) -> str:
         inst = await self._get_instance()
         res = await inst.exec_shell(f"tmux {cmd}", timeout_s=_TMUX_TIMEOUT_S)
         if res.exit_code != 0:
-            raise RuntimeError(
-                f"tmux {cmd} failed: {res.stdout} "
-                f"{res.stderr}"
-            )
+            raise RuntimeError(f"tmux {cmd} failed: {res.stdout} {res.stderr}")
         return res.stdout
 
     async def _run_tmux_safe(self, cmd: str) -> tuple[int, str]:
@@ -203,8 +199,7 @@ class ShellSessionManager:
             f"-e {shlex.quote(f'{key}={value}')}" for key, value in session_env.items()
         )
         await self._run_tmux(
-            f"new-session -d -s {shlex.quote(full)} -x 250 -y 50 "
-            f"{env_args} {cd_args}".rstrip()
+            f"new-session -d -s {shlex.quote(full)} -x 250 -y 50 {env_args} {cd_args}".rstrip()
         )
 
         setup_cmd = f"export PS1='{_PS1}' PS2='' PROMPT_COMMAND=''; history -c; clear"
@@ -229,7 +224,7 @@ class ShellSessionManager:
     def _strip_output(self, delta: str) -> tuple[str, int | None]:
         if not delta:
             return "", None
-            
+
         lines = delta.split("\n")
         while lines and lines[-1] == "":
             lines.pop()
@@ -291,9 +286,7 @@ class ShellSessionManager:
                 f"list-panes -t {shlex.quote(full)} -F '#{{pane_current_command}}'"
             )
             cmd_name = (
-                pane_out.strip().splitlines()[0].strip()
-                if rc == 0 and pane_out.strip()
-                else ""
+                pane_out.strip().splitlines()[0].strip() if rc == 0 and pane_out.strip() else ""
             )
             if cmd_name:
                 raise SessionBusy(
@@ -328,14 +321,14 @@ class ShellSessionManager:
             post_cap = post_cap.rstrip("\r\n")
 
             if post_cap.startswith(pre_cap):
-                delta = post_cap[len(pre_cap):]
+                delta = post_cap[len(pre_cap) :]
             else:
                 delta = post_cap
 
             delta_lines = delta.split("\n")
             while delta_lines and delta_lines[-1] == "":
                 delta_lines.pop()
-                
+
             if delta_lines and _MARKER_RE.search(delta_lines[-1]):
                 cleaned, exit_code = self._strip_output(delta)
                 outcome = ExecOutcome(
@@ -347,7 +340,7 @@ class ShellSessionManager:
         _, post_cap = await self._run_tmux_safe(f"capture-pane -t {shlex.quote(full)} -p -S -")
         post_cap = post_cap.rstrip("\r\n")
         if post_cap.startswith(pre_cap):
-            delta = post_cap[len(pre_cap):]
+            delta = post_cap[len(pre_cap) :]
         else:
             delta = post_cap
 
@@ -356,7 +349,7 @@ class ShellSessionManager:
             running=True,
             exit_code=None,
             output=cleaned_running[-_EXEC_RETURN_CHARS:],
-            note="still running after 15s — use shell_view / shell_wait"
+            note="still running after 15s — use shell_view / shell_wait",
         )
         self._record_persistent_if_match(name, command, exec_dir, outcome)
         return outcome
@@ -412,6 +405,7 @@ class ShellSessionManager:
         from .port_owner import port_owner
 
         if port_check is None:
+
             async def _default_check(port: int) -> bool:
                 try:
                     inst = await self._get_instance()
@@ -449,9 +443,7 @@ class ShellSessionManager:
                     f"failed to re-materialize persistent server '{name}' "
                     f"(cmd: {srv.command}): {exc!r}"
                 )
-                _LOG.warning(
-                    "rehydrate of persistent server %r failed: %r", name, exc
-                )
+                _LOG.warning("rehydrate of persistent server %r failed: %r", name, exc)
                 continue
             logs.append(
                 f"re-materialized persistent server '{name}' on port {srv.port} "
@@ -537,7 +529,7 @@ class ShellSessionManager:
                     prefix_match = cand
                     break
             if prefix_match is not None:
-                name = line[len(prefix_match):]
+                name = line[len(prefix_match) :]
                 # W3 C-5: never enumerate internal, `__`-prefixed sessions (e.g.
                 # `__kernel`, whose pane holds the gateway launch line). This is
                 # the single choke point every listing consumer inherits — the

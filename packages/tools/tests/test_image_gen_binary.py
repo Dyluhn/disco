@@ -367,9 +367,9 @@ async def test_image_generate_preserves_f3_read_before_write_guard():
     # file_read / file_write conversation, and image_generate is a third
     # path that bypasses both.)
     state = _files._read_state.get("conv-d9")
-    assert state is None or all(
-        not v for v in state.values()
-    ), f"image_generate leaked F3 tracker state: {state}"
+    assert state is None or all(not v for v in state.values()), (
+        f"image_generate leaked F3 tracker state: {state}"
+    )
 
     # Crucially: the existing `important.txt` was NOT read by image_generate
     # (it doesn't go through FileReadTool), and a subsequent assist-ON
@@ -546,6 +546,7 @@ def test_image_generate_rejects_non_bytes_backend_output():
     class _BadBackend:
         name = "broken"
         is_remote = False
+
         def generate(self, **_):
             return "not bytes"  # str — would silently corrupt under utf-8 encode
 
@@ -598,12 +599,16 @@ def test_select_image_backend_raises_when_openai_has_no_key(monkeypatch):
     never a silent procedural placeholder."""
 
     class _MockConfig:
-        image_gen = type('obj', (object,), {
-            'provider': 'openai',
-            'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY',
-            'model': ''
-        })()
+        image_gen = type(
+            "obj",
+            (object,),
+            {
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "",
+            },
+        )()
 
     class _MockStore:
         def load(self):
@@ -617,8 +622,8 @@ def test_select_image_backend_raises_when_openai_has_no_key(monkeypatch):
         def get_secret(self, name):
             return None
 
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
-    monkeypatch.setattr('disco.tools.builtin.image_gen.SecretStore', lambda: _MockSecrets())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore", lambda: _MockSecrets())
 
     with pytest.raises(ImageGenNotConfigured, match="isn't configured"):
         select_image_backend()
@@ -628,11 +633,15 @@ def test_select_image_backend_raises_when_comfyui_has_no_url(monkeypatch):
     """W-50: comfyui provider configured but no base_url → NOT configured (raise)."""
 
     class _MockConfig:
-        image_gen = type('obj', (object,), {
-            'provider': 'comfyui',
-            'base_url': '',  # Empty URL
-            'api_key_env': ''
-        })()
+        image_gen = type(
+            "obj",
+            (object,),
+            {
+                "provider": "comfyui",
+                "base_url": "",  # Empty URL
+                "api_key_env": "",
+            },
+        )()
 
     class _MockStore:
         def load(self):
@@ -641,7 +650,7 @@ def test_select_image_backend_raises_when_comfyui_has_no_url(monkeypatch):
         def origin_approved(self, *_args, **_kwargs):
             return True
 
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
 
     with pytest.raises(ImageGenNotConfigured):
         select_image_backend()
@@ -652,12 +661,16 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
     the factory returns the OpenAI-compatible backend."""
 
     class _MockConfig:
-        image_gen = type('obj', (object,), {
-            'provider': 'openai',
-            'base_url': 'https://api.openai.com/v1',
-            'api_key_env': 'OPENAI_API_KEY',
-            'model': ''
-        })()
+        image_gen = type(
+            "obj",
+            (object,),
+            {
+                "provider": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "",
+            },
+        )()
 
     class _MockStore:
         def load(self):
@@ -670,8 +683,8 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
         def get_secret(self, name):
             return "test-api-key-12345"
 
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
-    monkeypatch.setattr('disco.tools.builtin.image_gen.SecretStore', lambda: _MockSecrets())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore", lambda: _MockSecrets())
 
     backend = select_image_backend()
     assert isinstance(backend, _OpenAIImageBackend)
@@ -684,13 +697,17 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
     the factory returns the ComfyUI backend."""
 
     class _MockConfig:
-        image_gen = type('obj', (object,), {
-            'provider': 'comfyui',
-            'base_url': 'http://localhost:8188',
-            'api_key_env': '',
-            'model': 'sd_xl.safetensors',
-            'workflow_json': '{"1": {"class_type": "X"}}'
-        })()
+        image_gen = type(
+            "obj",
+            (object,),
+            {
+                "provider": "comfyui",
+                "base_url": "http://localhost:8188",
+                "api_key_env": "",
+                "model": "sd_xl.safetensors",
+                "workflow_json": '{"1": {"class_type": "X"}}',
+            },
+        )()
 
     class _MockStore:
         def load(self):
@@ -699,14 +716,14 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
         def origin_approved(self, *_args, **_kwargs):
             return True
 
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
 
     backend = select_image_backend()
     assert isinstance(backend, _ComfyUIBackend)
     assert backend.name == "comfyui"
     assert backend.is_remote is True
     # The factory forwards BOTH the checkpoint and the custom workflow template.
-    assert backend._ckpt == 'sd_xl.safetensors'
+    assert backend._ckpt == "sd_xl.safetensors"
     assert backend._workflow_json == '{"1": {"class_type": "X"}}'
 
 
@@ -714,17 +731,15 @@ def test_select_image_backend_unknown_provider_raises(monkeypatch):
     """W-50: an unknown/unset provider → NOT configured (raise), no placeholder."""
 
     class _MockConfig:
-        image_gen = type('obj', (object,), {
-            'provider': 'unknown-provider',
-            'base_url': '',
-            'api_key_env': ''
-        })()
+        image_gen = type(
+            "obj", (object,), {"provider": "unknown-provider", "base_url": "", "api_key_env": ""}
+        )()
 
     class _MockStore:
         def load(self):
             return _MockConfig()
 
-    monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
+    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
 
     with pytest.raises(ImageGenNotConfigured):
         select_image_backend()
@@ -740,11 +755,13 @@ def test_openai_backend_builds_correct_request_shape():
     from unittest.mock import MagicMock, patch
 
     # Create a minimal valid PNG (1x1 transparent)
-    png_data = base64.b64encode(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82')  # noqa: E501
+    png_data = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )  # noqa: E501
 
     # Mock the httpx client
     mock_response = MagicMock()
-    mock_response.json.return_value = {'data': [{'b64_json': png_data.decode()}]}
+    mock_response.json.return_value = {"data": [{"b64_json": png_data.decode()}]}
     mock_response.raise_for_status = MagicMock()
 
     mock_client = MagicMock()
@@ -752,39 +769,39 @@ def test_openai_backend_builds_correct_request_shape():
     mock_client.__exit__ = MagicMock(return_value=False)
     mock_client.post.return_value = mock_response
 
-    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=mock_client):
         backend = _OpenAIImageBackend(
-            base_url='https://api.openai.com/v1',
-            api_key='test-key',
+            base_url="https://api.openai.com/v1",
+            api_key="test-key",
         )
 
         result = backend.generate(
-            prompt='a sunset',
+            prompt="a sunset",
             width=512,
             height=512,
             seed=42,
-            fmt='png',
+            fmt="png",
         )
 
         # Verify the request was made with correct payload
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args
 
-        assert '/v1/images/generations' in str(call_args)
-        body = call_args.kwargs.get('json') or call_args[1].get('json')
-        assert body['prompt'] == 'a sunset'
+        assert "/v1/images/generations" in str(call_args)
+        body = call_args.kwargs.get("json") or call_args[1].get("json")
+        assert body["prompt"] == "a sunset"
         # OpenAI only accepts fixed sizes; a square request snaps to 1024x1024
         # (arbitrary WxH like 512x512 would 400).
-        assert body['size'] == '1024x1024'
-        assert body['n'] == 1
-        assert body['response_format'] == 'b64_json'
+        assert body["size"] == "1024x1024"
+        assert body["n"] == 1
+        assert body["response_format"] == "b64_json"
 
-        headers = call_args.kwargs.get('headers') or call_args[1].get('headers')
-        assert 'Authorization' in headers
-        assert headers['Authorization'] == 'Bearer test-key'
+        headers = call_args.kwargs.get("headers") or call_args[1].get("headers")
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "Bearer test-key"
 
         # Verify we got the image back
-        assert result.startswith(b'\x89PNG')
+        assert result.startswith(b"\x89PNG")
 
 
 def test_openai_backend_raises_on_api_error():
@@ -806,19 +823,19 @@ def test_openai_backend_raises_on_api_error():
     mock_client.__exit__ = MagicMock(return_value=False)
     mock_client.post.return_value = mock_response
 
-    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=mock_client):
         backend = _OpenAIImageBackend(
-            base_url='https://api.openai.com/v1',
-            api_key='invalid-key',
+            base_url="https://api.openai.com/v1",
+            api_key="invalid-key",
         )
 
         with pytest.raises(httpx.HTTPStatusError):
             backend.generate(
-                prompt='a sunset',
+                prompt="a sunset",
                 width=512,
                 height=512,
                 seed=42,
-                fmt='png',
+                fmt="png",
             )
 
 
@@ -835,24 +852,24 @@ def test_comfyui_backend_builds_workflow_and_polls():
     def mock_get(url, **kwargs):
         call_count[0] += 1
         mock_resp = MagicMock()
-        if '/prompt' in str(url):
-            mock_resp.json.return_value = {'prompt_id': 'test-prompt-123'}
+        if "/prompt" in str(url):
+            mock_resp.json.return_value = {"prompt_id": "test-prompt-123"}
             mock_resp.raise_for_status = MagicMock()
-        elif '/history/test-prompt-123' in str(url):
+        elif "/history/test-prompt-123" in str(url):
             if call_count[0] <= 2:
                 # Not ready yet
                 mock_resp.json.return_value = {}
             else:
                 # Ready
                 mock_resp.json.return_value = {
-                    'test-prompt-123': {
-                        'outputs': {
-                            '9': {
-                                'images': [
+                    "test-prompt-123": {
+                        "outputs": {
+                            "9": {
+                                "images": [
                                     {
-                                        'filename': 'test.png',
-                                        'subfolder': '',
-                                        'type': 'output',
+                                        "filename": "test.png",
+                                        "subfolder": "",
+                                        "type": "output",
                                     }
                                 ]
                             }
@@ -860,8 +877,8 @@ def test_comfyui_backend_builds_workflow_and_polls():
                     }
                 }
             mock_resp.raise_for_status = MagicMock()
-        elif '/view' in str(url):
-            mock_resp.content = b'\x89PNG\r\n\x1a\n' + b'fake png data'
+        elif "/view" in str(url):
+            mock_resp.content = b"\x89PNG\r\n\x1a\n" + b"fake png data"
             mock_resp.raise_for_status = MagicMock()
         return mock_resp
 
@@ -871,48 +888,48 @@ def test_comfyui_backend_builds_workflow_and_polls():
     mock_client.post.side_effect = lambda url, **kwargs: mock_get(url, **kwargs)
     mock_client.get.side_effect = lambda url, **kwargs: mock_get(url, **kwargs)
 
-    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=mock_client):
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=mock_client):
         backend = _ComfyUIBackend(
-            base_url='http://localhost:8188', model='sd_xl_base_1.0.safetensors'
+            base_url="http://localhost:8188", model="sd_xl_base_1.0.safetensors"
         )
 
         result = backend.generate(
-            prompt='a sunset',
+            prompt="a sunset",
             width=512,
             height=512,
             seed=42,
-            fmt='png',
+            fmt="png",
         )
 
         # Verify prompt was submitted
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args
-        assert '/prompt' in str(call_args)
+        assert "/prompt" in str(call_args)
 
         # The submitted default graph is the SDXL/SD shape: CLIP comes from the
         # checkpoint (CheckpointLoaderSimple), NOT a separate FLUX T5 CLIPLoader.
-        submitted = (call_args.kwargs.get('json') or call_args[1].get('json'))['prompt']
-        class_types = {node['class_type'] for node in submitted.values()}
-        assert 'CheckpointLoaderSimple' in class_types
-        assert 'CLIPLoader' not in class_types  # the old FLUX-frankenstein node is gone
-        assert 'VAEDecode' in class_types and 'SaveImage' in class_types
+        submitted = (call_args.kwargs.get("json") or call_args[1].get("json"))["prompt"]
+        class_types = {node["class_type"] for node in submitted.values()}
+        assert "CheckpointLoaderSimple" in class_types
+        assert "CLIPLoader" not in class_types  # the old FLUX-frankenstein node is gone
+        assert "VAEDecode" in class_types and "SaveImage" in class_types
         # The configured checkpoint is wired into the loader.
-        ckpt_nodes = [n for n in submitted.values() if n['class_type'] == 'CheckpointLoaderSimple']
-        assert ckpt_nodes[0]['inputs']['ckpt_name'] == 'sd_xl_base_1.0.safetensors'
+        ckpt_nodes = [n for n in submitted.values() if n["class_type"] == "CheckpointLoaderSimple"]
+        assert ckpt_nodes[0]["inputs"]["ckpt_name"] == "sd_xl_base_1.0.safetensors"
 
         # Verify polling happened
         assert mock_client.get.call_count >= 2
 
         # Verify we got image data
-        assert result == b'\x89PNG\r\n\x1a\n' + b'fake png data'
+        assert result == b"\x89PNG\r\n\x1a\n" + b"fake png data"
 
 
 def test_comfyui_default_graph_requires_a_checkpoint():
     """Without a checkpoint (and no custom workflow), the default graph can't name a
     model to load — fail loud with a Settings pointer rather than 404 on a bogus default."""
-    backend = _ComfyUIBackend(base_url='http://localhost:8188', model='')
+    backend = _ComfyUIBackend(base_url="http://localhost:8188", model="")
     with pytest.raises(ValueError, match="checkpoint"):
-        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+        backend.generate(prompt="x", width=1024, height=1024, seed=1, fmt="png")
 
 
 def test_comfyui_snaps_subnative_dimensions_up():
@@ -933,35 +950,35 @@ def test_comfyui_template_substitutes_tokens_and_is_injection_safe():
     JSON-escapes string tokens so a hostile prompt can't break out of its string or
     inject/drop nodes."""
     template = (
-        '{'
+        "{"
         '"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}},'
         '"2": {"class_type": "CLIPTextEncode", "inputs": {"text": "%prompt%", "clip": ["1", 1]}},'
         '"3": {"class_type": "CLIPTextEncode", "inputs": {"text": "%negative%", "clip": ["1", 1]}},'
         '"4": {"class_type": "EmptyLatentImage", "inputs": {"width": %width%, "height": %height%, "batch_size": 1}},'  # noqa: E501
         '"5": {"class_type": "KSampler", "inputs": {"seed": %seed%, "model": ["1", 0]}}'
-        '}'
+        "}"
     )
     backend = _ComfyUIBackend(
-        base_url='http://localhost:8188', model='my-ckpt.safetensors', workflow_json=template
+        base_url="http://localhost:8188", model="my-ckpt.safetensors", workflow_json=template
     )
 
     # A hostile prompt full of JSON-breaking characters + an injected-node attempt.
     hostile = 'a cat", "EVIL": {"class_type": "X"}, "z": "\nline\\two'
     graph = backend._render_template(
-        prompt=hostile, negative='lowres', width=768, height=1024, seed=12345
+        prompt=hostile, negative="lowres", width=768, height=1024, seed=12345
     )
 
     # Exactly the template's 5 nodes — no injected "EVIL"/"z" nodes leaked in.
-    assert set(graph) == {'1', '2', '3', '4', '5'}
+    assert set(graph) == {"1", "2", "3", "4", "5"}
     # The prompt round-trips verbatim as a STRING value (not parsed as JSON structure).
-    assert graph['2']['inputs']['text'] == hostile
-    assert graph['3']['inputs']['text'] == 'lowres'
-    assert graph['1']['inputs']['ckpt_name'] == 'my-ckpt.safetensors'
+    assert graph["2"]["inputs"]["text"] == hostile
+    assert graph["3"]["inputs"]["text"] == "lowres"
+    assert graph["1"]["inputs"]["ckpt_name"] == "my-ckpt.safetensors"
     # Numeric tokens are real ints, not quoted strings.
-    assert graph['5']['inputs']['seed'] == 12345
-    assert isinstance(graph['5']['inputs']['seed'], int)
-    assert graph['4']['inputs']['width'] == 768
-    assert isinstance(graph['4']['inputs']['width'], int)
+    assert graph["5"]["inputs"]["seed"] == 12345
+    assert isinstance(graph["5"]["inputs"]["seed"], int)
+    assert graph["4"]["inputs"]["width"] == 768
+    assert isinstance(graph["4"]["inputs"]["width"], int)
 
 
 def test_comfyui_template_prompt_containing_a_token_is_not_re_substituted():
@@ -973,7 +990,7 @@ def test_comfyui_template_prompt_containing_a_token_is_not_re_substituted():
         '"5": {"class_type": "KSampler", "inputs": {"seed": %seed%}}}'
     )
     backend = _ComfyUIBackend(
-        base_url='http://localhost:8188', model='c.safetensors', workflow_json=template
+        base_url="http://localhost:8188", model="c.safetensors", workflow_json=template
     )
     graph = backend._render_template(
         prompt="render seed %seed% and %width%px please",
@@ -982,20 +999,20 @@ def test_comfyui_template_prompt_containing_a_token_is_not_re_substituted():
         height=512,
         seed=98765,
     )
-    assert graph['2']['inputs']['text'] == "render seed %seed% and %width%px please"
-    assert graph['5']['inputs']['seed'] == 98765
+    assert graph["2"]["inputs"]["text"] == "render seed %seed% and %width%px please"
+    assert graph["5"]["inputs"]["seed"] == 98765
 
 
 def test_comfyui_template_using_ckpt_token_requires_a_checkpoint():
     """A custom workflow that references %ckpt% but has no Checkpoint set fails with the
     Settings pointer BEFORE submitting (not a confusing empty-model 404 inside ComfyUI)."""
     backend = _ComfyUIBackend(
-        base_url='http://localhost:8188',
-        model='',
+        base_url="http://localhost:8188",
+        model="",
         workflow_json='{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "%ckpt%"}}}',  # noqa: E501
     )
     with pytest.raises(ValueError, match="Checkpoint"):
-        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+        backend.generate(prompt="x", width=1024, height=1024, seed=1, fmt="png")
 
 
 def test_comfyui_prefers_output_image_over_temp_preview():
@@ -1008,21 +1025,25 @@ def test_comfyui_prefers_output_image_over_temp_preview():
     def mock_call(url, **kwargs):
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
-        if '/prompt' in str(url):
-            resp.json.return_value = {'prompt_id': 'p1'}
-        elif '/history/p1' in str(url):
+        if "/prompt" in str(url):
+            resp.json.return_value = {"prompt_id": "p1"}
+        elif "/history/p1" in str(url):
             resp.json.return_value = {
-                'p1': {
-                    'outputs': {
+                "p1": {
+                    "outputs": {
                         # preview node first (temp), final saved node second (output)
-                        '8': {'images': [{'filename': 'prev.png', 'subfolder': '', 'type': 'temp'}]},  # noqa: E501
-                        '9': {'images': [{'filename': 'final.png', 'subfolder': '', 'type': 'output'}]},  # noqa: E501
+                        "8": {
+                            "images": [{"filename": "prev.png", "subfolder": "", "type": "temp"}]
+                        },  # noqa: E501
+                        "9": {
+                            "images": [{"filename": "final.png", "subfolder": "", "type": "output"}]
+                        },  # noqa: E501
                     }
                 }
             }
-        elif '/view' in str(url):
-            fetched['params'] = kwargs.get('params')
-            resp.content = b'\x89PNG\r\n\x1a\n' + b'final-bytes'
+        elif "/view" in str(url):
+            fetched["params"] = kwargs.get("params")
+            resp.content = b"\x89PNG\r\n\x1a\n" + b"final-bytes"
         return resp
 
     client = MagicMock()
@@ -1031,24 +1052,24 @@ def test_comfyui_prefers_output_image_over_temp_preview():
     client.post.side_effect = mock_call
     client.get.side_effect = mock_call
 
-    with patch('disco.tools.builtin.image_gen.httpx.Client', return_value=client):
-        backend = _ComfyUIBackend(base_url='http://localhost:8188', model='m.safetensors')
-        result = backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+    with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=client):
+        backend = _ComfyUIBackend(base_url="http://localhost:8188", model="m.safetensors")
+        result = backend.generate(prompt="x", width=1024, height=1024, seed=1, fmt="png")
 
-    assert fetched['params']['filename'] == 'final.png'
-    assert fetched['params']['type'] == 'output'
-    assert result == b'\x89PNG\r\n\x1a\n' + b'final-bytes'
+    assert fetched["params"]["filename"] == "final.png"
+    assert fetched["params"]["type"] == "output"
+    assert result == b"\x89PNG\r\n\x1a\n" + b"final-bytes"
 
 
 def test_comfyui_template_malformed_json_raises_clearly():
     """A template that isn't valid JSON after substitution fails loud with guidance."""
     backend = _ComfyUIBackend(
-        base_url='http://localhost:8188',
-        model='c.safetensors',
-        workflow_json='{ this is not json %seed%',
+        base_url="http://localhost:8188",
+        model="c.safetensors",
+        workflow_json="{ this is not json %seed%",
     )
     with pytest.raises(ValueError, match="API Format|valid JSON"):
-        backend.generate(prompt='x', width=1024, height=1024, seed=1, fmt='png')
+        backend.generate(prompt="x", width=1024, height=1024, seed=1, fmt="png")
 
 
 # ---- ImageRouter / OpenAI-compatible endpoint + format handling -------------
@@ -1058,6 +1079,7 @@ def _webp_bytes() -> bytes:
     import io as _io
 
     from PIL import Image
+
     buf = _io.BytesIO()
     Image.new("RGB", (32, 24), (200, 120, 40)).save(buf, format="WEBP")
     return buf.getvalue()
@@ -1183,10 +1205,17 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
     from disco.tools.builtin.image_gen import _OpenRouterImageBackend
 
     class _Cfg:
-        image_gen = type("o", (object,), {
-            "provider": "openrouter", "base_url": "", "api_key_env": "",
-            "model": "google/gemini-2.5-flash-image", "workflow_json": "",
-        })()
+        image_gen = type(
+            "o",
+            (object,),
+            {
+                "provider": "openrouter",
+                "base_url": "",
+                "api_key_env": "",
+                "model": "google/gemini-2.5-flash-image",
+                "workflow_json": "",
+            },
+        )()
 
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.ConfigStore",
@@ -1200,6 +1229,7 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
     class _Secret:
         def get_openrouter_key(self):
             return "sk-or-reserved"
+
     monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore", lambda: _Secret())
 
     be = select_image_backend()
@@ -1214,11 +1244,19 @@ def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
     configured — the factory must raise ImageGenNotConfigured, not silently fall back to
     a hardcoded default model the user never chose. Settings already shows this tier as
     unavailable until a model id is set; the factory must enforce the same."""
+
     class _Cfg:
-        image_gen = type("o", (object,), {
-            "provider": "openrouter", "base_url": "", "api_key_env": "",
-            "model": "", "workflow_json": "",
-        })()
+        image_gen = type(
+            "o",
+            (object,),
+            {
+                "provider": "openrouter",
+                "base_url": "",
+                "api_key_env": "",
+                "model": "",
+                "workflow_json": "",
+            },
+        )()
 
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.ConfigStore",
@@ -1228,8 +1266,10 @@ def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
             {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
         )(),
     )
-    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
-                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.SecretStore",
+        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+    )
 
     with pytest.raises(ImageGenNotConfigured):
         select_image_backend()
@@ -1237,11 +1277,19 @@ def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
 
 def test_select_image_backend_openrouter_whitespace_model_raises(monkeypatch):
     """A model id of only whitespace is just as unconfigured as empty — must raise."""
+
     class _Cfg:
-        image_gen = type("o", (object,), {
-            "provider": "openrouter", "base_url": "", "api_key_env": "",
-            "model": "   ", "workflow_json": "",
-        })()
+        image_gen = type(
+            "o",
+            (object,),
+            {
+                "provider": "openrouter",
+                "base_url": "",
+                "api_key_env": "",
+                "model": "   ",
+                "workflow_json": "",
+            },
+        )()
 
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.ConfigStore",
@@ -1251,8 +1299,10 @@ def test_select_image_backend_openrouter_whitespace_model_raises(monkeypatch):
             {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
         )(),
     )
-    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
-                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.SecretStore",
+        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+    )
 
     with pytest.raises(ImageGenNotConfigured):
         select_image_backend()
@@ -1264,22 +1314,33 @@ def test_select_openrouter_ignores_stale_base_url(monkeypatch):
     from disco.tools.builtin.image_gen import _OpenRouterImageBackend
 
     class _Cfg:
-        image_gen = type("o", (object,), {
-            "provider": "openrouter", "base_url": "https://evil.example/v1",
-            "api_key_env": "", "model": "g/img", "workflow_json": "",
-        })()
+        image_gen = type(
+            "o",
+            (object,),
+            {
+                "provider": "openrouter",
+                "base_url": "https://evil.example/v1",
+                "api_key_env": "",
+                "model": "g/img",
+                "workflow_json": "",
+            },
+        )()
 
-    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore",
-                        lambda: type(
-                            "S",
-                            (),
-                            {
-                                "load": lambda s: _Cfg(),
-                                "origin_approved": lambda s, *a, **kw: True,
-                            },
-                        )())
-    monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
-                        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.ConfigStore",
+        lambda: type(
+            "S",
+            (),
+            {
+                "load": lambda s: _Cfg(),
+                "origin_approved": lambda s, *a, **kw: True,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.SecretStore",
+        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+    )
     be = select_image_backend()
     assert isinstance(be, _OpenRouterImageBackend)
     assert be._base_url == "https://openrouter.ai/api/v1", "stale base_url was NOT ignored"
@@ -1298,4 +1359,6 @@ def test_openai_endpoint_ignores_query_string_false_positive():
     from disco.tools.builtin.image_gen import _OpenAIImageBackend
 
     be = _OpenAIImageBackend("https://proxy.example/api?next=/images/generations", "k")
-    assert be._endpoint() == "https://proxy.example/api?next=/images/generations/v1/images/generations"  # noqa: E501
+    assert (
+        be._endpoint() == "https://proxy.example/api?next=/images/generations/v1/images/generations"
+    )  # noqa: E501

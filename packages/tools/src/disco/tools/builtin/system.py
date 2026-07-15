@@ -23,6 +23,7 @@ from ._shell_caps import cap_shell_observation
 # the executor's bare `timeout` failure. The executor's ceiling stays a pure backstop.
 _GRACE_S = 5
 
+
 def _inner_timeout(ceiling_s: int) -> int:
     return max(1, ceiling_s - _GRACE_S)
 
@@ -155,12 +156,9 @@ class CodeExecTool:
             # (floored: a tiny tool timeout must not go zero/negative on the kernel)
             kernel_timeout = max(5, min(ctx.timeout_s - 5, 120))
             res = await ctx.kernel.execute(args.code, timeout_s=kernel_timeout)
-            
+
             return ToolOutcome(
-                success=res.ok,
-                content=str(res),
-                structured=res.__dict__,
-                artifacts=res.images
+                success=res.ok, content=str(res), structured=res.__dict__, artifacts=res.images
             )
 
         # Node: one-shot (no cross-cell state — documented).

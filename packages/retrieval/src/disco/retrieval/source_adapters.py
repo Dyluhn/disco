@@ -144,9 +144,7 @@ class ArxivSearchProvider:
             hits.append(
                 SearchHit(
                     url=url,
-                    title=(
-                        _collapse_ws(entry.findtext("a:title", namespaces=_ATOM_NS)) or url
-                    ),
+                    title=(_collapse_ws(entry.findtext("a:title", namespaces=_ATOM_NS)) or url),
                     snippet=(entry.findtext("a:summary", namespaces=_ATOM_NS) or "").strip(),
                     source_engine="arxiv",
                     rank=i,
@@ -343,14 +341,8 @@ class SiteScopedSearchProvider:
         time_filter: str | None = None,
     ) -> list[SearchHit]:
         domains = _parse_sites(self._sites)
-        augmented = (
-            f"{query} ({' OR '.join('site:' + d for d in domains)})" if domains else query
-        )
-        allow = (
-            frozenset(domains) | (domains_allow or frozenset())
-            if domains
-            else domains_allow
-        )
+        augmented = f"{query} ({' OR '.join('site:' + d for d in domains)})" if domains else query
+        allow = frozenset(domains) | (domains_allow or frozenset()) if domains else domains_allow
         try:
             hits = await self._inner.search(
                 augmented,

@@ -52,9 +52,7 @@ class SessionsService:
             )
         return self._rt._pending_sessions[conversation_id]
 
-    async def sessions_snapshot(
-        self, conversation_id: str
-    ) -> tuple[list[SessionInfo], bool]:
+    async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
         """Session list + staleness. Fresh on success (cache updated); on
         transport failure retry twice (0.25 s apart), then degrade to the
         last-known list marked stale=True — a read-only listing must never

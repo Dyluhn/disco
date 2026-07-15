@@ -300,7 +300,9 @@ def _rbac_login(port: int, user: dict) -> str | None:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
     try:
         conn.request(
-            "POST", "/auth/login", body=json.dumps(user).encode(),
+            "POST",
+            "/auth/login",
+            body=json.dumps(user).encode(),
             headers={"Content-Type": "application/json"},
         )
         resp = conn.getresponse()
@@ -337,9 +339,13 @@ def test_rbac_kit_member_cannot_climb_via_case_matrix_or_encoding(tmp_path: Path
         assert _rbac_get(port, "/admin", admin)[0] == 200
         assert _rbac_get(port, "/admin", member)[0] == 403
         for climb in (
-            "/ADMIN", "/Admin", "/aDmIn",
-            "/%41dmin", "/%41DMIN",
-            "/admin;x", "/admin;jsessionid=1",
+            "/ADMIN",
+            "/Admin",
+            "/aDmIn",
+            "/%41dmin",
+            "/%41DMIN",
+            "/admin;x",
+            "/admin;jsessionid=1",
             "/admin/%252e%252e/admin",
         ):
             st, body = _rbac_get(port, climb, member)

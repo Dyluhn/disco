@@ -397,8 +397,7 @@ class PodmanSandboxService:
                 ) from exc
             if rc != 0:
                 raise SandboxUnavailableError(
-                    f"Podman unreachable at {self._cfg.podman_url}: "
-                    f"native client probe exited {rc}"
+                    f"Podman unreachable at {self._cfg.podman_url}: native client probe exited {rc}"
                 )
             client: Any | None = None
             try:

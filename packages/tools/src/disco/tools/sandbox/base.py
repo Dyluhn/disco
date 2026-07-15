@@ -40,7 +40,6 @@ def clean_sandbox_env(workspace: object) -> dict[str, str]:
     }
 
 
-
 class SandboxError(Exception):
     """Raised by an instance on a backend/lifecycle failure (e.g. use after
     destroy). The executor maps it to a `sandbox_error` ToolResult."""

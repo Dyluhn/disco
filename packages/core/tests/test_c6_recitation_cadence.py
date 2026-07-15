@@ -195,8 +195,7 @@ async def test_c6_plan_change_mid_run_triggers_off_cadence_recap_exactly_once():
         if last.startswith(_RECAP_SENTINEL):
             recap_steps.append(step)
     assert recap_steps == [0], (
-        f"cadence=5 with stable plan A over 2 steps: only step 0 "
-        f"should fire; got {recap_steps}"
+        f"cadence=5 with stable plan A over 2 steps: only step 0 should fire; got {recap_steps}"
     )
 
     # Plan B arrives between step 1 and step 2. The signature flips
@@ -245,9 +244,9 @@ async def test_c6_no_plan_yields_no_recap_and_gate_is_inert():
     events = with_seqs([user_msg("hello"), user_msg("still no plan")])
     for _ in range(3):
         view = await loop._materialize_view(events)
-        assert not any(
-            m.content.startswith(_RECAP_SENTINEL) for m in view.messages
-        ), "no plan → no tail-recap; the gate must not invent one"
+        assert not any(m.content.startswith(_RECAP_SENTINEL) for m in view.messages), (
+            "no plan → no tail-recap; the gate must not invent one"
+        )
     # Counter advanced (3 steps), but the signature stayed None so the
     # next step with a plan will drift.
     assert loop._recitation_step_count == 3
@@ -397,9 +396,7 @@ async def test_c6_gate_inspects_message_before_snapshot_can_mask_it():
             # Steps 1, 2: cadence=10 means step counter=2, 3 → no
             # fire. The gate drops the recap. The View no longer
             # ends in the recap.
-            assert not (
-                view.messages and view.messages[-1].content.startswith(_RECAP_SENTINEL)
-            ), (
+            assert not (view.messages and view.messages[-1].content.startswith(_RECAP_SENTINEL)), (
                 f"step {step}: gate should suppress the recap "
                 f"(cadence=10, no drift); last message = "
                 f"{view.messages[-1].content[:60]!r}"
@@ -479,9 +476,7 @@ async def test_c6_gate_correctly_drops_recap_even_when_snapshot_present():
     # path (it drives a real loop with cadence=3 and counts
     # recaps — if the gate ran post-snapshot, count would be the
     # materialize count, not the boundary count).
-    has_snapshot_at_end = (
-        view_with_snapshot.messages[-1].content.startswith("# CURRENT WORKSPACE")
-    )
+    has_snapshot_at_end = view_with_snapshot.messages[-1].content.startswith("# CURRENT WORKSPACE")
     assert has_snapshot_at_end, (
         "sanity: the test setup places the snapshot at the END of "
         "the message list — this is the bug shape the engine order "
@@ -538,9 +533,7 @@ async def test_c6_end_to_end_recap_count_through_loop():
         # Mark the plan step done (the gate that allows finish).
         AgentStep(
             thought="mark done",
-            tool_call=ToolCall(
-                tool_name="plan_step", arguments={"index": 1, "state": "done"}
-            ),
+            tool_call=ToolCall(tool_name="plan_step", arguments={"index": 1, "state": "done"}),
             finished=False,
         ),
         # Now finish cleanly.
@@ -580,9 +573,7 @@ async def test_c6_end_to_end_recap_count_through_loop():
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
     )
     await store.append(CID, PlanEvent(summary="ship", steps=[{"title": "a"}], revision=1))
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await loop.run()
 
     recaps_seen = sum(

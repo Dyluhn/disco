@@ -62,9 +62,7 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
             return httpx.Response(200, content=b"# grounded report")
         return httpx.Response(404)
 
-    client = HttpVerifyClient(
-        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
-    )
+    client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
     cid = await client.create_conversation("build", None)
     assert cid == "conv_authproof"
     assert await client.export_report(cid, "md") == (200, b"# grounded report")
@@ -75,6 +73,7 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
         "/conversations",
         "/api/conversations/conv_authproof/report/export",
     ]
+
 
 # ---------------------------------------------------------------------------
 # Fake transport — feeds canned responses, records calls
@@ -631,9 +630,7 @@ async def test_run_scenario_dossier_events_jsonl_redacted(tmp_path: Path) -> Non
     """Sensitive keys are redacted in the events.jsonl output."""
     client = FakeVerifyClient(
         final_state={"execution_status": "FINISHED"},
-        events=[
-            {"kind": "message", "content": "hello", "api_key": "sk-super-secret"}
-        ],
+        events=[{"kind": "message", "content": "hello", "api_key": "sk-super-secret"}],
     )
     result = await run_scenario(
         Scenario(id="redact_test", prompt="hi"),
@@ -767,8 +764,10 @@ async def test_app_scenario_passes_when_app_served_and_reachable(tmp_path: Path)
         app_responses={url: (200, b"<html><body>ok</body></html>")},
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert result.passed
@@ -780,8 +779,10 @@ async def test_app_scenario_fails_when_no_app_delivered(tmp_path: Path) -> None:
     (the previous gap: app deliverables were dropped + unknown types treated as satisfied)."""
     client = FakeVerifyClient(final_state={"execution_status": "FINISHED"}, events=[])
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -796,8 +797,10 @@ async def test_app_url_unreachable_fails(tmp_path: Path) -> None:
         app_responses={},  # fetch_app returns None → unreachable
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -812,8 +815,10 @@ async def test_app_url_empty_fails(tmp_path: Path) -> None:
         app_responses={url: (200, b"")},  # reachable but empty
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -828,8 +833,10 @@ async def test_app_urlless_passes_when_entry_file_served(tmp_path: Path) -> None
         preview_response=(200, b"<!doctype html><title>My App</title><h1>Hi</h1>"),
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert result.passed
@@ -843,8 +850,10 @@ async def test_app_urlless_fails_when_preview_unavailable(tmp_path: Path) -> Non
         preview_response=(503, b""),
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -864,8 +873,10 @@ async def test_app_urlless_fails_on_directory_listing(tmp_path: Path) -> None:
         preview_response=(200, listing),
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -880,8 +891,10 @@ async def test_app_fails_on_3xx(tmp_path: Path) -> None:
         preview_response=(300, b"<html>choices</html>"),
     )
     scenario = Scenario(
-        id="app", prompt="build a site",
-        expect={"terminal_status": "FINISHED", "deliverable_type": "app"}, forbid=[],
+        id="app",
+        prompt="build a site",
+        expect={"terminal_status": "FINISHED", "deliverable_type": "app"},
+        forbid=[],
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -923,8 +936,10 @@ async def test_report_export_md_validates_and_passes(tmp_path: Path) -> None:
         export_response=(200, b"# Report\n\nReal markdown body."),
     )
     scenario = Scenario(
-        id="report_md", prompt="research X",
-        expect={"terminal_status": "FINISHED"}, report_export="md",
+        id="report_md",
+        prompt="research X",
+        expect={"terminal_status": "FINISHED"},
+        report_export="md",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert "export_report" in client.calls
@@ -938,8 +953,10 @@ async def test_report_export_blank_md_fails(tmp_path: Path) -> None:
         export_response=(200, b"   \n  "),
     )
     scenario = Scenario(
-        id="report_blank", prompt="research X",
-        expect={"terminal_status": "FINISHED"}, report_export="md",
+        id="report_blank",
+        prompt="research X",
+        expect={"terminal_status": "FINISHED"},
+        report_export="md",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -952,8 +969,10 @@ async def test_report_export_unreachable_fails(tmp_path: Path) -> None:
         export_response=None,  # endpoint unreachable
     )
     scenario = Scenario(
-        id="report_dead", prompt="research X",
-        expect={"terminal_status": "FINISHED"}, report_export="pdf",
+        id="report_dead",
+        prompt="research X",
+        expect={"terminal_status": "FINISHED"},
+        report_export="pdf",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -972,8 +991,10 @@ async def test_fire_schedule_passes_when_run_event_appears(tmp_path: Path) -> No
         post_fire_events=[{"kind": "schedule_run", "schedule_id": "sched-1"}],
     )
     scenario = Scenario(
-        id="sched_fire", prompt="schedule X",
-        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+        id="sched_fire",
+        prompt="schedule X",
+        expect={"terminal_status": "FINISHED"},
+        fire_schedule_id="sched-1",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert "fire_schedule_now" in client.calls
@@ -987,8 +1008,10 @@ async def test_fire_schedule_fails_when_hook_rejected(tmp_path: Path) -> None:
         schedule_fires=False,
     )
     scenario = Scenario(
-        id="sched_reject", prompt="schedule X",
-        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+        id="sched_reject",
+        prompt="schedule X",
+        expect={"terminal_status": "FINISHED"},
+        fire_schedule_id="sched-1",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed
@@ -1002,8 +1025,10 @@ async def test_fire_schedule_fails_without_run_event(tmp_path: Path) -> None:
         post_fire_events=[{"kind": "status", "status": "FINISHED"}],  # no schedule_run
     )
     scenario = Scenario(
-        id="sched_noevent", prompt="schedule X",
-        expect={"terminal_status": "FINISHED"}, fire_schedule_id="sched-1",
+        id="sched_noevent",
+        prompt="schedule X",
+        expect={"terminal_status": "FINISHED"},
+        fire_schedule_id="sched-1",
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert not result.passed

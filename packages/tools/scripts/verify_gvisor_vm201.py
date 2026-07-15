@@ -31,10 +31,13 @@ def _workspace_exists_on_daemon(socket: str, path: str) -> bool:
         target = socket[len("ssh://") :]  # user@host
         r = subprocess.run(
             ["ssh", target, f"test -d {path} && echo EXISTS"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         return "EXISTS" in r.stdout
     return os.path.isdir(path)
+
 
 SENTINEL = "sk-LEAK-SENTINEL-9f3a-do-not-expose"
 

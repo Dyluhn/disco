@@ -28,8 +28,19 @@ from .scopes import ContractToolScopes, Phase, compile_tool_scopes
 # tool's read_only flag, so enforcement does NOT depend on this list staying in sync
 # with the registry (no bypass via an unlisted writer/exec like file_append/shell_exec).
 DANGEROUS_TOOLS: frozenset[str] = frozenset(
-    {"file_write", "file_edit", "file_replace_lines", "file_delete", "file_append",
-     "file_str_replace", "shell", "shell_exec", "code_exec", "bash", "exec"}
+    {
+        "file_write",
+        "file_edit",
+        "file_replace_lines",
+        "file_delete",
+        "file_append",
+        "file_str_replace",
+        "shell",
+        "shell_exec",
+        "code_exec",
+        "bash",
+        "exec",
+    }
 )
 
 
@@ -58,9 +69,7 @@ def _governed(tool: str, scopes: ContractToolScopes, is_mutating: bool | None) -
     mutating = is_mutating if is_mutating is not None else (tool in DANGEROUS_TOOLS)
     if mutating:
         return True
-    return tool in (
-        scopes.bootstrap | scopes.edit | scopes.repair | scopes.verify | scopes.export
-    )
+    return tool in (scopes.bootstrap | scopes.edit | scopes.repair | scopes.verify | scopes.export)
 
 
 def decide_tool_in_scope(
@@ -140,9 +149,7 @@ class ContractScopeGuard:
 
     def check(self, tool_name: str, *, is_mutating: bool | None = None) -> ScopeDecision:
         phase = self._phase()
-        decision = decide_tool_in_scope(
-            self._scopes, phase, tool_name, is_mutating=is_mutating
-        )
+        decision = decide_tool_in_scope(self._scopes, phase, tool_name, is_mutating=is_mutating)
         if self._observer is not None:
             self._observer(tool_name, phase, decision)
         if self._observe:

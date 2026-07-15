@@ -9,9 +9,7 @@ from ..runtime import ConversationRuntime
 from ._common import _MAX_SESSION_TAIL_CHARS, require_owned_conversation
 
 
-def make_sessions_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_sessions_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/conversations/{conversation_id}/sessions")

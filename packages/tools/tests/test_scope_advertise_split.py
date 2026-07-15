@@ -70,7 +70,7 @@ def test_advertised_must_be_subset_of_allowed_in_practice():
     only contains allowed tools in in_scope(), so the intersection is automatic."""
     ex = _make_executor(
         ["a", "b"],
-        allowed=frozenset({"a"}),       # b not allowed
+        allowed=frozenset({"a"}),  # b not allowed
         advertised=frozenset({"a", "b"}),  # b advertised but not allowed
     )
     names = {t.name for t in ex.available_tools()}
@@ -97,13 +97,12 @@ async def test_not_allowed_tool_yields_unknown_tool():
     ex = _make_executor(
         ["a", "b", "c", "d"],
         allowed=frozenset({"a", "b", "c"}),  # d registered but not allowed
-        advertised=frozenset({"a", "d"}),    # d advertised — should still be uncallable
+        advertised=frozenset({"a", "d"}),  # d advertised — should still be uncallable
     )
     result = await ex.execute(call("d"))
     assert not result.success
     assert (
-        "unknown" in (result.error or "").lower()
-        or "out-of-scope" in (result.error or "").lower()
+        "unknown" in (result.error or "").lower() or "out-of-scope" in (result.error or "").lower()
     )
 
 
@@ -139,7 +138,7 @@ def test_readonly_tool_names_not_restricted_to_advertised():
     ex = _make_executor(
         ["a", "b"],
         allowed=frozenset({"a", "b"}),
-        advertised=frozenset({"a"}),   # b not advertised
+        advertised=frozenset({"a"}),  # b not advertised
         read_only_names=frozenset({"b"}),
     )
     rnames = ex.readonly_tool_names()

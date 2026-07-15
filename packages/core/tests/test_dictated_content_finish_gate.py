@@ -281,15 +281,11 @@ def test_serve_file_path_dot_does_not_turn_following_title_into_visible_copy():
         "Call serve with path 'release/index.html'. "
         "Then make the page title 'Selected reliability release'."
     )
-    assert extract_dictated_content_literals(visible_copy) == [
-        "Selected reliability release"
-    ]
+    assert extract_dictated_content_literals(visible_copy) == ["Selected reliability release"]
 
 
 def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
-    assert _safe_deliverable_file_path("/workspace/release/index.html") == (
-        "release/index.html"
-    )
+    assert _safe_deliverable_file_path("/workspace/release/index.html") == ("release/index.html")
     assert _safe_deliverable_file_path("/workspace", app_root=True) == "index.html"
     assert _safe_deliverable_file_path("/workspace/../secret.txt") is None
     assert _safe_deliverable_file_path("/workspace/../../etc/passwd") is None
@@ -348,9 +344,9 @@ async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
 
     assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
     assert not any("quoted user literal is missing" in msg for msg in _env_messages(events))
-    assert (
-        tmp_path / "release/index.html"
-    ).read_text(encoding="utf-8") == "<h1>SELECTED RELEASE ONE</h1>"
+    assert (tmp_path / "release/index.html").read_text(
+        encoding="utf-8"
+    ) == "<h1>SELECTED RELEASE ONE</h1>"
 
 
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():
@@ -550,8 +546,7 @@ async def test_dictated_content_gate_releases_loudly_at_cap(tmp_path: Path):
     assert sum("quoted user literal is missing" in m for m in env) == _DICTATED_CONTENT_REFUSAL_CAP
     assert any("Finished despite missing dictated content" in m and "Get Started" in m for m in env)
     assert any(
-        isinstance(e, StatusEvent) and e.detail == "dictated_content_release"
-        for e in events
+        isinstance(e, StatusEvent) and e.detail == "dictated_content_release" for e in events
     )
 
 

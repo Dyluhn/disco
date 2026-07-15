@@ -79,7 +79,9 @@ class ContextMemoryTool:
             return ToolOutcome(
                 success=False,
                 error="invalid_kind",
-                content=f"{kind.value} is not a durable singleton context kind; valid: {_DURABLE_KINDS}",
+                content=(
+                    f"{kind.value} is not a durable singleton context kind; valid: {_DURABLE_KINDS}"
+                ),
             )
 
         assert ctx.sandbox is not None  # runs_in="sandbox" → executor supplies one

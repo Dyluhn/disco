@@ -60,9 +60,7 @@ class HttpStripeWorkerProbe:
 
     async def payments_ready(self, deployed_origin: str, admin_token: str) -> bool:
         try:
-            origin = _canonical_https_origin(
-                deployed_origin, label="Stripe deployed Worker origin"
-            )
+            origin = _canonical_https_origin(deployed_origin, label="Stripe deployed Worker origin")
         except StripeDeployError:
             return False
         url = origin + _RUNTIME_PROBE_PATH

@@ -127,9 +127,7 @@ def _writes(paths: Iterable[str]) -> list[ActionEvent]:
 
 def _snapshot(files: dict[str, bytes], caps: ContextCaps | None) -> str:
     sbx = _FakeSandbox(files)
-    msg = asyncio.run(
-        workspace_snapshot_message(sbx, _writes(list(files)), caps=caps)
-    )
+    msg = asyncio.run(workspace_snapshot_message(sbx, _writes(list(files)), caps=caps))
     assert isinstance(msg, LLMMessage)
     return msg.content
 
@@ -166,9 +164,7 @@ def test_assist_on_truncates_11kb_file_byte_identical_to_today():
 
 def _obs(content: str) -> ObservationEvent:
     return ObservationEvent(
-        tool_result=ToolResult(
-            call_id="c1", tool_name="file_read", success=True, content=content
-        ),
+        tool_result=ToolResult(call_id="c1", tool_name="file_read", success=True, content=content),
         action_id="a1",
     )
 

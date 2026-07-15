@@ -383,16 +383,14 @@ def _cover_subtitle_text(summary: str | None, limit: int = 240) -> str:
 
 def _cover_meta_html(report: ReportEvent, n_passages: int) -> str:
     items = [
-        "<span><span class=\"meta-label\">Depth</span>&nbsp;"
+        '<span><span class="meta-label">Depth</span>&nbsp;'
         f"{_html.escape(report.depth_tier or 'standard_deep')}</span>",
-        "<span><span class=\"meta-label\">Sources</span>&nbsp;"
-        f"{n_passages}</span>",
+        f'<span><span class="meta-label">Sources</span>&nbsp;{n_passages}</span>',
     ]
     _trunc = report_truncation(report.bounded_by)
     if _trunc:
         items.append(
-            '<span><span class="meta-label">Bounded by</span>&nbsp;'
-            f"{_html.escape(_trunc)}</span>"
+            f'<span><span class="meta-label">Bounded by</span>&nbsp;{_html.escape(_trunc)}</span>'
         )
     return "".join(items)
 
@@ -427,9 +425,7 @@ def _build_pdf_html(
 
     # ---- running header ----
     running_header = (
-        '<div id="running-header">'
-        f'<span class="running-wordmark">{wordmark_html()}</span>'
-        "</div>"
+        f'<div id="running-header"><span class="running-wordmark">{wordmark_html()}</span></div>'
     )
 
     # ---- cover ----
@@ -463,8 +459,7 @@ def _build_pdf_html(
     toc_html = ""
     if n_sections > 10:
         toc_items = "".join(
-            f'<li><span class="toc-no">{str(i + 1).zfill(2)}</span>'
-            f"{_html.escape(s.title)}</li>"
+            f'<li><span class="toc-no">{str(i + 1).zfill(2)}</span>{_html.escape(s.title)}</li>'
             for i, s in enumerate(sections)
         )
         toc_html = (
@@ -610,9 +605,9 @@ def _report_pdf_url_fetcher(url: str, *args, **kwargs):
         # We embed the licensed fonts as data URIs and reject every external
         # scheme. Pin redirect behavior off explicitly: WeasyPrint 69 removed
         # the old default fetcher's redirect semantics for security reasons.
-        return URLFetcher(
-            allowed_protocols={"data"}, allow_redirects=False
-        ).fetch(url, *args, **kwargs)
+        return URLFetcher(allowed_protocols={"data"}, allow_redirects=False).fetch(
+            url, *args, **kwargs
+        )
     raise ValueError("external PDF resource fetch blocked")
 
 

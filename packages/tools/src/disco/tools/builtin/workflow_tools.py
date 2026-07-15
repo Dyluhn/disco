@@ -283,9 +283,7 @@ class EnterWorkflowTool:
                 f"Workflow {args.instance_id!r} has not been approved.",
             )
         try:
-            compiled = compile_workflow_scope(
-                instance.definition, self._mcp_tool_names_getter()
-            )
+            compiled = compile_workflow_scope(instance.definition, self._mcp_tool_names_getter())
         except ValueError as exc:
             return _failure("workflow_scope_compile_failed", str(exc))
 
@@ -301,9 +299,7 @@ class EnterWorkflowTool:
         self._phase_state.phase = WorkflowPhase.RUN
         self._phase_state.instance_id = args.instance_id
         self._phase_state.compiled_run_scope = compiled
-        self._phase_state.output_path_template = (
-            instance.definition.output_contract.path_template
-        )
+        self._phase_state.output_path_template = instance.definition.output_contract.path_template
         return ToolOutcome(
             success=True,
             content=(
@@ -586,9 +582,7 @@ def _instance_payload(instance: WorkflowInstance) -> dict[str, object]:
         "mcp_mounts": [m.model_dump(mode="json") for m in instance.definition.mcp_mounts],
         "enabled": instance.enabled,
         "approval": (
-            instance.approval.model_dump(mode="json")
-            if instance.approval is not None
-            else None
+            instance.approval.model_dump(mode="json") if instance.approval is not None else None
         ),
     }
 

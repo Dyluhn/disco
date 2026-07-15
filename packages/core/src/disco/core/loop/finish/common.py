@@ -533,8 +533,29 @@ _GREP_EXECUTABLES = frozenset({"grep", "egrep", "fgrep", "rg", "ripgrep", "ag"})
 _PYTHON_EXECUTABLES = frozenset({"python", "python3", "py", "python2"})
 # First token = an explicit no-op / text-echo / existence-or-dump → NEVER a validation.
 _NONVALIDATION_EXECUTABLES = frozenset(
-    {"echo", "printf", ":", "true", "false", "cat", "ls", "stat", "test", "[", "[[",
-     "wc", "file", "head", "tail", "touch", "cp", "mv", "rm", "dd", "tee"}
+    {
+        "echo",
+        "printf",
+        ":",
+        "true",
+        "false",
+        "cat",
+        "ls",
+        "stat",
+        "test",
+        "[",
+        "[[",
+        "wc",
+        "file",
+        "head",
+        "tail",
+        "touch",
+        "cp",
+        "mv",
+        "rm",
+        "dd",
+        "tee",
+    }
 )
 # A python -c/-m body that actually IMPORTS/USES an HTML/XML parser or markup validator.
 _PYTHON_PARSER_RE = re.compile(
@@ -577,6 +598,8 @@ def _shell_command_text(action: ActionEvent) -> str:
         if isinstance(v, str) and v.strip():
             return v
     return " ".join(str(v) for v in args.values())
+
+
 # Distinctive substring of `browser.BROWSER_UNAVAILABLE_MSG` (kept inline rather than
 # imported — core must not depend on the tools package). Matched against the error/
 # content text a failed `browser` action leaves in the log.
@@ -720,9 +743,7 @@ def _url_targets_preview(url: str, target_key: tuple[str, int] | None) -> bool:
     safe fallback rather than asserting a wrong port (on an ISOLATED backend :8000 IS
     the app; the resolver returns it as the target_key there, so this also matches)."""
     if target_key is None:
-        return url.startswith("http://127.0.0.1:8000") or url.startswith(
-            "http://localhost:8000"
-        )
+        return url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
     return _preview_key(url) == target_key
 
 
@@ -834,10 +855,7 @@ def _vision_mode() -> bool:
     The env-var check is the contract surface here; wiring.py / config.py set
     these on startup from the resolved RouterConfig. Consumer code (this module,
     browser.py) reads them; config.py/wiring.py own them."""
-    return (
-        disco_env("DRIVER_VISION") == "1"
-        or bool(disco_env("VISION_ESCALATION_MODEL"))
-    )
+    return disco_env("DRIVER_VISION") == "1" or bool(disco_env("VISION_ESCALATION_MODEL"))
 
 
 def _latest_browser_screenshot(
@@ -977,8 +995,10 @@ def _latest_verify_verdict(
             continue
         if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == tool_name:
             res = ev.tool_result
-            if res.success and res.structured and _verdict_targets_preview(
-                res.structured, target_url
+            if (
+                res.success
+                and res.structured
+                and _verdict_targets_preview(res.structured, target_url)
             ):
                 return res.structured
     return None
@@ -1006,10 +1026,12 @@ def _prior_verify_marker_fp(events: list[Event], since_seq: int) -> str | None:
     for ev in reversed(events):
         if ev.seq is None or ev.seq <= since_seq:
             continue
-        if isinstance(ev, StatusEvent) and ev.detail and ev.detail.startswith(
-            _VERIFY_MARKER_PREFIX
+        if (
+            isinstance(ev, StatusEvent)
+            and ev.detail
+            and ev.detail.startswith(_VERIFY_MARKER_PREFIX)
         ):
-            return ev.detail[len(_VERIFY_MARKER_PREFIX):]
+            return ev.detail[len(_VERIFY_MARKER_PREFIX) :]
     return None
 
 
@@ -1034,23 +1056,17 @@ class _FinishGateProto:
 
         async def _detect_preview_url(self) -> str | None: ...
 
-        async def _drive_finish_browser_probe(
-            self, target_url: str | None = None
-        ) -> bool: ...
+        async def _drive_finish_browser_probe(self, target_url: str | None = None) -> bool: ...
 
         async def finish_verify_passed(self, command: str) -> tuple[bool, bool]: ...
 
         async def finish_dod_gate_passed(self) -> bool: ...
 
-        async def gate_execution_nudge(
-            self, step: AgentStep, events: list[Event]
-        ) -> Disp: ...
+        async def gate_execution_nudge(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
         async def dictated_content_gate_passed(self, events: list[Event]) -> bool: ...
 
-        async def run_finish_verify_gates(
-            self, step: AgentStep, events: list[Event]
-        ) -> Disp: ...
+        async def run_finish_verify_gates(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
         async def normalize_finish_step(
             self, step: AgentStep, events: list[Event]
@@ -1076,26 +1092,17 @@ class _FinishGateProto:
             include_unverifiable: bool = False,
         ) -> HostVerificationDeliverable | None: ...
 
-        async def gate_host_verify(
-            self, step: AgentStep, events: list[Event]
-        ) -> Disp: ...
+        async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
-        async def gate_browser_verify(
-            self, step: AgentStep, events: list[Event]
-        ) -> Disp: ...
+        async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
-        async def gate_export_render(
-            self, step: AgentStep, events: list[Event]
-        ) -> Disp: ...
+        async def gate_export_render(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
         async def _record_verifier_failure_to_context(
             self, *, message: str, rel_path: str | None
         ) -> None: ...
 
 
-
 __all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
-    name
-    for name in globals()
-    if not name.startswith("__") and name not in {"annotations"}
+    name for name in globals() if not name.startswith("__") and name not in {"annotations"}
 ]

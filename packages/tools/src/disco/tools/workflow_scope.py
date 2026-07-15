@@ -28,9 +28,7 @@ WORKFLOW_RUN_CONTROL_TOOLS: frozenset[str] = frozenset({"finish", "workflow_abor
 WORKFLOW_ROUTER_CONTEXT_TOOLS: frozenset[str] = APPKIT_READ_TOOLS
 
 WORKFLOW_ROUTER_ALLOWED_TOOLS: frozenset[str] = (
-    WORKFLOW_ROUTER_TOOLS
-    | WORKFLOW_ROUTER_CONTROL_TOOLS
-    | WORKFLOW_ROUTER_CONTEXT_TOOLS
+    WORKFLOW_ROUTER_TOOLS | WORKFLOW_ROUTER_CONTROL_TOOLS | WORKFLOW_ROUTER_CONTEXT_TOOLS
 )
 
 _GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
@@ -91,12 +89,8 @@ def workflow_effective_scope(
     else:
         context_advertised = context_allowed & base_scope.advertised_tools
     return ToolScope(
-        allowed_tools=WORKFLOW_ROUTER_TOOLS
-        | WORKFLOW_ROUTER_CONTROL_TOOLS
-        | context_allowed,
-        advertised_tools=WORKFLOW_ROUTER_TOOLS
-        | WORKFLOW_ROUTER_CONTROL_TOOLS
-        | context_advertised,
+        allowed_tools=WORKFLOW_ROUTER_TOOLS | WORKFLOW_ROUTER_CONTROL_TOOLS | context_allowed,
+        advertised_tools=WORKFLOW_ROUTER_TOOLS | WORKFLOW_ROUTER_CONTROL_TOOLS | context_advertised,
         preset="workflow_router",
     )
 

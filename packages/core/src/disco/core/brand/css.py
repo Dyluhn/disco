@@ -74,9 +74,7 @@ def _ensure_font_cache() -> None:
     d = _font_dir()
     for fname in _FONT_FILES:
         raw = (d / fname).read_bytes()
-        _FONT_B64_CACHE[fname] = (
-            "data:font/ttf;base64," + base64.b64encode(raw).decode("ascii")
-        )
+        _FONT_B64_CACHE[fname] = "data:font/ttf;base64," + base64.b64encode(raw).decode("ascii")
 
 
 def font_face_css() -> str:

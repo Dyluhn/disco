@@ -160,9 +160,7 @@ def _first_failing_check(verdict: dict) -> str | None:
     if not isinstance(checks, list):
         return None
     failed = {
-        str(c.get("name"))
-        for c in checks
-        if isinstance(c, dict) and c.get("passed") is False
+        str(c.get("name")) for c in checks if isinstance(c, dict) and c.get("passed") is False
     }
     for name in _APPKIT_CHECK_ORDER:
         if name in failed:
@@ -194,9 +192,7 @@ def _is_appkit_dossier(result_doc: dict) -> bool:
     return bool(scenario.get("appkit_mode") or scenario.get("expect_appkit_verify"))
 
 
-def _collect_ui_screenshots(
-    cid: str, e2e_root: Path | None, out_dir: Path
-) -> list[str]:
+def _collect_ui_screenshots(cid: str, e2e_root: Path | None, out_dir: Path) -> list[str]:
     """UI evidence screenshots whose run folder references this conversation id.
 
     A folder matches when any ``*.json`` in it (manifest/result/conversation files)
@@ -288,9 +284,7 @@ def build_summary(rows: list[AppKitRunRow]) -> DashboardSummary:
     failing_checks: dict[str, int] = {}
     for r in rows:
         if r.first_failing_check:
-            failing_checks[r.first_failing_check] = (
-                failing_checks.get(r.first_failing_check, 0) + 1
-            )
+            failing_checks[r.first_failing_check] = failing_checks.get(r.first_failing_check, 0) + 1
     # P1: a run is GREEN only when BOTH result.passed AND the AppKit verify passed. A
     # passed-but-verify-missing/failing dossier counts as FAILED (no silent false-green),
     # which also drives main()'s non-zero exit via summary.failed.
@@ -317,8 +311,8 @@ def _e(text: object) -> str:
 def render_html(summary: DashboardSummary) -> str:
     """A self-contained, dependency-free HTML dashboard (no JS, no external CSS)."""
     head = (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>AppKit Verified-App Regression Dashboard</title><style>"
         "body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;color:#1a1a1a}"
         "h1{font-size:20px}.meta{color:#666;font-size:13px;margin-bottom:16px}"
@@ -332,9 +326,9 @@ def render_html(summary: DashboardSummary) -> str:
     )
     summary_line = (
         f"<h1>AppKit Verified-App Regression Dashboard</h1>"
-        f"<div class=\"meta\">generated {_e(summary.generated_at)} &middot; "
-        f"<span class=\"pass\">{summary.passed} passed</span> / "
-        f"<span class=\"fail\">{summary.failed} failed</span> "
+        f'<div class="meta">generated {_e(summary.generated_at)} &middot; '
+        f'<span class="pass">{summary.passed} passed</span> / '
+        f'<span class="fail">{summary.failed} failed</span> '
         f"of {summary.total} AppKit run(s)</div>"
     )
     if summary.failing_checks:
@@ -342,29 +336,22 @@ def render_html(summary: DashboardSummary) -> str:
             f"<code>{_e(name)}&times;{count}</code>"
             for name, count in summary.failing_checks.items()
         )
-        summary_line += f"<div class=\"meta\">first-failing checks: {chips}</div>"
+        summary_line += f'<div class="meta">first-failing checks: {chips}</div>'
     reliability = summary.reliability
     totals = reliability.get("totals") if isinstance(reliability, dict) else None
     if isinstance(totals, dict) and summary.total:
         nonzero = {
-            str(k): v
-            for k, v in totals.items()
-            if isinstance(v, int) and v > 0 and k != "runs"
+            str(k): v for k, v in totals.items() if isinstance(v, int) and v > 0 and k != "runs"
         }
         if nonzero:
             chips = " ".join(
-                f"<code>{_e(name)}&times;{count}</code>"
-                for name, count in sorted(nonzero.items())
+                f"<code>{_e(name)}&times;{count}</code>" for name, count in sorted(nonzero.items())
             )
             stall_rate = reliability.get("stall_rate")
             rate_text = (
-                f"{float(stall_rate):.1%}"
-                if isinstance(stall_rate, int | float)
-                else "0.0%"
+                f"{float(stall_rate):.1%}" if isinstance(stall_rate, int | float) else "0.0%"
             )
-            summary_line += (
-                f"<div class=\"meta\">reliability: stall rate {rate_text}; {chips}</div>"
-            )
+            summary_line += f'<div class="meta">reliability: stall rate {rate_text}; {chips}</div>'
 
     rows_html = [
         "<table><thead><tr>"
@@ -377,37 +364,37 @@ def render_html(summary: DashboardSummary) -> str:
         # P1: the overall verdict is GREEN only when result.passed AND verify passed.
         passed_cls = "pass" if r.green else "fail"
         if r.appkit_verify_passed is True:
-            verify_cell = "<span class=\"pass\">pass</span>"
+            verify_cell = '<span class="pass">pass</span>'
         elif r.appkit_verify_passed is False:
-            verify_cell = "<span class=\"fail\">fail</span>"
+            verify_cell = '<span class="fail">fail</span>'
         else:
-            verify_cell = "<span class=\"muted\">— (not run)</span>"
+            verify_cell = '<span class="muted">— (not run)</span>'
         # Make the false-green case unmistakable: result.passed but verify did not pass.
         if r.passed and not r.green:
-            verify_cell += " <span class=\"fail\">(false-green: result passed)</span>"
+            verify_cell += ' <span class="fail">(false-green: result passed)</span>'
         if r.first_failing_check:
             ff = f"<code>{_e(r.first_failing_check)}</code>"
             if r.failure_fingerprint:
-                ff += f" <span class=\"muted\">{_e(r.failure_fingerprint)}</span>"
+                ff += f' <span class="muted">{_e(r.failure_fingerprint)}</span>'
         else:
-            ff = "<span class=\"muted\">—</span>"
+            ff = '<span class="muted">—</span>'
         problems = (
             "<ul>" + "".join(f"<li>{_e(p)}</li>" for p in r.validator_problems) + "</ul>"
             if r.validator_problems
-            else "<span class=\"muted\">none</span>"
+            else '<span class="muted">none</span>'
         )
-        evidence_bits = [f"<a href=\"{_e(r.dossier_path)}\">dossier</a>"]
+        evidence_bits = [f'<a href="{_e(r.dossier_path)}">dossier</a>']
         for shot in r.ui_screenshots:
             s = _e(shot)
-            evidence_bits.append(f"<a href=\"{s}\"><img class=\"shot\" src=\"{s}\"></a>")
+            evidence_bits.append(f'<a href="{s}"><img class="shot" src="{s}"></a>')
         rows_html.append(
             "<tr>"
             f"<td>{_e(r.run_id)}</td>"
             f"<td>{_e(r.scenario_id)}</td>"
             f"<td>{_e(r.conversation_id)}</td>"
-            f"<td>{_e(r.app_name) if r.app_name else '<span class=\"muted\">—</span>'}</td>"
+            f"<td>{_e(r.app_name) if r.app_name else '<span class="muted">—</span>'}</td>"
             f"<td>{_e(r.terminal_status)}</td>"
-            f"<td class=\"{passed_cls}\">{'PASS' if r.green else 'FAIL'}</td>"
+            f'<td class="{passed_cls}">{"PASS" if r.green else "FAIL"}</td>'
             f"<td>{verify_cell}</td>"
             f"<td>{ff}</td>"
             f"<td>{problems}</td>"
@@ -416,7 +403,7 @@ def render_html(summary: DashboardSummary) -> str:
         )
     rows_html.append("</tbody></table>")
     if not summary.rows:
-        rows_html.append("<p class=\"muted\">No AppKit dossiers found.</p>")
+        rows_html.append('<p class="muted">No AppKit dossiers found.</p>')
     return head + summary_line + "".join(rows_html) + "</body></html>"
 
 

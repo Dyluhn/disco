@@ -75,9 +75,7 @@ def _app_public(path: str) -> bool:
 
 
 def _agent_capability_or_session(path: str, methods: set[str]) -> bool:
-    return "GET" in methods and path.startswith(
-        "/conversations/{conversation_id}/preview-app/"
-    )
+    return "GET" in methods and path.startswith("/conversations/{conversation_id}/preview-app/")
 
 
 def _route_class(path: str, methods: set[str]) -> str:

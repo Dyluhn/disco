@@ -75,11 +75,15 @@ class _SpyExecutor:
         self.calls.append(call)
         if call.tool_name == "file_read":
             return ToolResult(
-                call_id=call.call_id, tool_name="file_read", success=True,
+                call_id=call.call_id,
+                tool_name="file_read",
+                success=True,
                 content=self._read_body,
             )
         return ToolResult(
-            call_id=call.call_id, tool_name=call.tool_name, success=True,
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            success=True,
             content=f"wrote to {call.arguments.get('path')}",
         )
 
@@ -258,8 +262,11 @@ async def test_snapshot_pinned_full_grounds_writes():
     view = await ViewBuilder(loop).build(loop._log)
     # The snapshot is present and pins the small file in full.
     snap = next(
-        (m for m in view.messages if m.role == "user" and m.content.startswith(
-            WORKSPACE_SNAPSHOT_SENTINEL)),
+        (
+            m
+            for m in view.messages
+            if m.role == "user" and m.content.startswith(WORKSPACE_SNAPSHOT_SENTINEL)
+        ),
         None,
     )
     assert snap is not None
@@ -305,8 +312,7 @@ async def test_k1_recovery_reexpands_accepted_prior_write():
     assert "app.js" in ex.grounded
     # A success observation exists for the recovered write.
     obs = [
-        e for e in events
-        if isinstance(e, ObservationEvent) and e.tool_result.call_id == "w_copy"
+        e for e in events if isinstance(e, ObservationEvent) and e.tool_result.call_id == "w_copy"
     ]
     assert obs and obs[0].tool_result.success is True
 
@@ -384,9 +390,7 @@ async def test_k1_recovery_ignores_marker_in_non_file_write():
     marker = _marker_for("C" * 4_000)
     action = ActionEvent(
         thought="shell",
-        tool_call=ToolCall(
-            tool_name="shell", call_id="sh1", arguments={"command": marker}
-        ),
+        tool_call=ToolCall(tool_name="shell", call_id="sh1", arguments={"command": marker}),
     )
     events = await _drive(loop, action)
     errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "sh1"]

@@ -45,9 +45,7 @@ def test_cut_version_creates_metadata_and_dedups_unchanged_tree(
 
     version_dir = tmp_path / cid / "versions" / f"001-{record.tree_digest[:12]}"
     assert (version_dir / "workspace" / "app.py").read_bytes() == b"print('hi')\n"
-    assert json.loads((version_dir / "version.json").read_text()) == _index(
-        tmp_path, cid
-    )[0]
+    assert json.loads((version_dir / "version.json").read_text()) == _index(tmp_path, cid)[0]
 
     assert store.cut_version(cid, trigger="manual") is None
     assert sorted((tmp_path / cid / "versions").iterdir()) == [version_dir]
@@ -101,11 +99,7 @@ def test_list_versions_ordering_fields_and_resolver(tmp_path: Path) -> None:
     assert versions[1].file_count == 1
     assert versions[1].pinned is True
     metadata = (
-        tmp_path
-        / cid
-        / "versions"
-        / f"{first.seq:03d}-{first.tree_digest[:12]}"
-        / "version.json"
+        tmp_path / cid / "versions" / f"{first.seq:03d}-{first.tree_digest[:12]}" / "version.json"
     )
     assert json.loads(metadata.read_text())["pinned"] is True
     assert store.version_workspace_path(cid, first.seq) == _version_workspace(
@@ -174,9 +168,7 @@ def test_byte_budget_pruning_counts_hardlinks_once(tmp_path: Path) -> None:
     labeled_cid = "conv_labeled_budget"
     labeled_workspace = labeled_store.path_for(labeled_cid)
     _write(labeled_workspace, "payload.bin", b"large")
-    labeled = labeled_store.cut_version(
-        labeled_cid, label="release", trigger="manual"
-    )
+    labeled = labeled_store.cut_version(labeled_cid, label="release", trigger="manual")
     assert labeled is not None
     _write(labeled_workspace, "payload.bin", b"tiny")
     assert labeled_store.cut_version(labeled_cid, trigger="auto") is not None
@@ -200,12 +192,8 @@ def test_byte_budget_pruning_counts_hardlinks_once(tmp_path: Path) -> None:
     versions = constrained_store.list_versions(pinned_cid)
     assert [version.seq for version in versions] == [pinned.seq]
     assert versions[0].pinned is True
-    assert _version_workspace(
-        pinned_root, pinned_cid, pinned.seq, pinned.tree_digest
-    ).exists()
-    assert not _version_workspace(
-        pinned_root, pinned_cid, second.seq, second.tree_digest
-    ).exists()
+    assert _version_workspace(pinned_root, pinned_cid, pinned.seq, pinned.tree_digest).exists()
+    assert not _version_workspace(pinned_root, pinned_cid, second.seq, second.tree_digest).exists()
 
 
 def test_poisoned_cid_and_seq_rejected(tmp_path: Path) -> None:

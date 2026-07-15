@@ -372,10 +372,10 @@ from disco.agent_server.preview_manager import (  # noqa: E402
 @pytest.mark.parametrize(
     "command",
     [
-        "python3 -m http.server 9999 -d dist",   # positional http.server port
-        "uvicorn app:app --host 0.0.0.0 9000",   # trailing host:port-ish positional bind
-        "gunicorn app:app -b 0.0.0.0:8000",      # host:port bind argument
-        "serve -l :4321",                        # bare :port bind
+        "python3 -m http.server 9999 -d dist",  # positional http.server port
+        "uvicorn app:app --host 0.0.0.0 9000",  # trailing host:port-ish positional bind
+        "gunicorn app:app -b 0.0.0.0:8000",  # host:port bind argument
+        "serve -l :4321",  # bare :port bind
     ],
 )
 async def test_raw_command_binding_a_hardcoded_port_is_rejected(command: str) -> None:
@@ -396,9 +396,7 @@ async def test_raw_command_port_placeholder_is_filled_with_platform_port() -> No
     model's), so positional-port servers stay platform-owned."""
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000, 5173])
-    session = await mgr.start(
-        command="python3 -m http.server {port} -d dist", supervise=False
-    )
+    session = await mgr.start(command="python3 -m http.server {port} -d dist", supervise=False)
     assert session.port == 3000
     assert "http.server 3000" in session.command
     assert "{port}" not in session.command
@@ -409,8 +407,8 @@ async def test_raw_command_port_placeholder_is_filled_with_platform_port() -> No
 @pytest.mark.parametrize(
     "command",
     [
-        "python3 -m http.server {port} 9999",      # placeholder AND a positional port
-        "gunicorn app:app -b :{port} -b :8000",    # placeholder AND a host:port bind
+        "python3 -m http.server {port} 9999",  # placeholder AND a positional port
+        "gunicorn app:app -b :{port} -b :8000",  # placeholder AND a host:port bind
         "uvicorn app:app --host 0.0.0.0 {port} 9000",  # placeholder AND trailing port
     ],
 )
@@ -444,13 +442,13 @@ async def test_placeholder_with_extra_hardcoded_port_is_rejected(command: str) -
         # platform server, which passes the ownership probe while 4321 is also bound.
         "python3 -m http.server --bind 0.0.0.0 4321 -d d & python3 -m http.server {port} -d d",
         "python3 -m http.server {port} -d dist; python3 -m http.server 4321",  # `;` chain
-        "python3 -m http.server {port} -d dist | tee log",                     # `|` pipe
-        "true && python3 -m http.server {port} -d dist",                       # `&&`
-        "false || python3 -m http.server {port} -d dist",                      # `||`
-        "python3 -m http.server `echo {port}` -d dist",                        # backtick subst
-        "python3 -m http.server $(echo {port}) -d dist",                       # $() subst
-        ">(python3 -m http.server {port})",                                    # >( ) proc subst
-        "python3 -m http.server {port}\npython3 -m http.server 4321",          # newline
+        "python3 -m http.server {port} -d dist | tee log",  # `|` pipe
+        "true && python3 -m http.server {port} -d dist",  # `&&`
+        "false || python3 -m http.server {port} -d dist",  # `||`
+        "python3 -m http.server `echo {port}` -d dist",  # backtick subst
+        "python3 -m http.server $(echo {port}) -d dist",  # $() subst
+        ">(python3 -m http.server {port})",  # >( ) proc subst
+        "python3 -m http.server {port}\npython3 -m http.server 4321",  # newline
     ],
 )
 async def test_raw_command_with_shell_operator_is_rejected(command: str) -> None:
@@ -495,9 +493,7 @@ async def test_numeric_flag_value_is_not_misread_as_port() -> None:
     and the platform port is placed via the placeholder."""
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000, 5173])
-    session = await mgr.start(
-        command="uvicorn app:app --port {port} --workers 4", supervise=False
-    )
+    session = await mgr.start(command="uvicorn app:app --port {port} --workers 4", supervise=False)
     assert session.status is PreviewStatus.RUNNING
     assert session.port == 3000
     assert "--workers 4" in session.command  # the non-port numeric arg survived
@@ -511,12 +507,12 @@ async def test_numeric_flag_value_is_not_misread_as_port() -> None:
 @pytest.mark.parametrize(
     "command",
     [
-        'npm run dev --port "8000"',   # quoted value — old regex needed BARE digits
-        "npm run dev --port='8000'",   # =-joined + quoted — one token after shlex
-        "npm run dev -p8000",          # short flag, directly joined (no separator)
-        "npm run dev -p 8000",         # short flag, space-separated
-        "npm run dev -p='8000'",       # short flag, =-joined + quoted
-        "PORT='8000' npm run dev",     # leading PORT= env-assignment, quoted
+        'npm run dev --port "8000"',  # quoted value — old regex needed BARE digits
+        "npm run dev --port='8000'",  # =-joined + quoted — one token after shlex
+        "npm run dev -p8000",  # short flag, directly joined (no separator)
+        "npm run dev -p 8000",  # short flag, space-separated
+        "npm run dev -p='8000'",  # short flag, =-joined + quoted
+        "PORT='8000' npm run dev",  # leading PORT= env-assignment, quoted
     ],
 )
 async def test_quoted_or_joined_concrete_port_flag_is_scrubbed_to_platform_port(
@@ -541,11 +537,11 @@ async def test_quoted_or_joined_concrete_port_flag_is_scrubbed_to_platform_port(
 @pytest.mark.parametrize(
     "command,expect",
     [
-        ("uvicorn app:app --port {port}", "--port 3000"),    # long flag, space-separated
-        ("uvicorn app:app --port={port}", "--port=3000"),    # long flag, =-joined
-        ("uvicorn app:app -p {port}", "-p 3000"),            # short flag, space-separated
-        ("uvicorn app:app -p{port}", "-p3000"),              # short flag, directly joined
-        ("uvicorn app:app -p={port}", "-p=3000"),            # short flag, =-joined
+        ("uvicorn app:app --port {port}", "--port 3000"),  # long flag, space-separated
+        ("uvicorn app:app --port={port}", "--port=3000"),  # long flag, =-joined
+        ("uvicorn app:app -p {port}", "-p 3000"),  # short flag, space-separated
+        ("uvicorn app:app -p{port}", "-p3000"),  # short flag, directly joined
+        ("uvicorn app:app -p={port}", "-p=3000"),  # short flag, =-joined
     ],
 )
 async def test_port_placeholder_in_every_flag_form_is_filled_with_platform_port(
@@ -570,9 +566,7 @@ async def test_quoted_concrete_port_with_workers_keeps_workers_drops_port() -> N
     `--workers N` survives — proving the scrub is flag-specific, not a blanket digit purge."""
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000, 5173])
-    session = await mgr.start(
-        command='uvicorn app:app --port "8000" --workers 4', supervise=False
-    )
+    session = await mgr.start(command='uvicorn app:app --port "8000" --workers 4', supervise=False)
     assert session.port == 3000
     assert "8000" not in session.command
     assert "--workers 4" in session.command  # non-port numeric arg untouched
@@ -619,8 +613,12 @@ async def test_foreign_owner_answering_is_not_marked_running() -> None:
     # Bypass allocation (which now SKIPS an occupied port) to drive the EADDRINUSE race
     # directly: a session already pinned to the port a foreign server answers on.
     session = PreviewSession(
-        name="app", port=3000, command="python3 -m http.server 3000 -d dist",
-        exec_dir="/workspace", intent={}, _supervise=False,
+        name="app",
+        port=3000,
+        command="python3 -m http.server 3000 -d dist",
+        exec_dir="/workspace",
+        intent={},
+        _supervise=False,
     )
     mgr._sessions["app"] = session
     await mgr._launch(session)
@@ -662,8 +660,12 @@ async def test_foreign_namespace_owner_with_same_name_is_not_misattributed() -> 
     sandbox._serving.add(3000)  # foreign conversation already answers on the port
     mgr = _mgr(sandbox, port_pool=[3000])
     session = PreviewSession(
-        name="preview", port=3000, command="python3 -m http.server 3000 -d dist",
-        exec_dir="/workspace", intent={}, _supervise=False,
+        name="preview",
+        port=3000,
+        command="python3 -m http.server 3000 -d dist",
+        exec_dir="/workspace",
+        intent={},
+        _supervise=False,
     )
     mgr._sessions["preview"] = session
     await mgr._launch(session)
@@ -856,8 +858,10 @@ class _StaticServingSandbox:
         root = self.sessions.port_root.get(port)
         if root is None:
             return None
-        target = posixpath.join(root, "index.html") if path in ("", "/") else (
-            posixpath.normpath(posixpath.join(root, path.lstrip("/")))
+        target = (
+            posixpath.join(root, "index.html")
+            if path in ("", "/")
+            else (posixpath.normpath(posixpath.join(root, path.lstrip("/"))))
         )
         if target in self._files:
             return (200, b"<h1>hi</h1>", "text/html")

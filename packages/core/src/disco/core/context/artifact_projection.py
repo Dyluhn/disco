@@ -15,8 +15,8 @@ Sources collected per tool (unchanged from the original route logic):
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 import posixpath
+from collections.abc import Iterable
 from typing import Any
 
 from ..env import disco_env
@@ -73,7 +73,8 @@ def manifest_path_divergence(
 ) -> tuple[set[str], set[str]]:
     """Compare the single-source projection against the maintained manifest's paths. Returns
     ``(missing, extra)`` — paths the projection has but the manifest lacks, and paths the manifest
-    has but the projection doesn't. Both empty ⇒ the manifest faithfully tracks emitted artifacts."""
+    has but the projection doesn't. Both empty ⇒ the manifest faithfully tracks
+    emitted artifacts."""
     return (projected - manifest_paths, manifest_paths - projected)
 
 
@@ -81,11 +82,7 @@ def artifact_paths_from_events(events: list[Event]) -> set[str]:
     """The set of workspace-relative paths this conversation EMITTED as results (normalized)."""
     out: set[str] = set()
     for e in events:
-        if (
-            isinstance(e, ObservationEvent)
-            and e.tool_result.success
-            and e.tool_result.structured
-        ):
+        if isinstance(e, ObservationEvent) and e.tool_result.success and e.tool_result.structured:
             tn = e.tool_result.tool_name
             s = e.tool_result.structured
             if tn in ("sheet_generate", "slides_generate"):

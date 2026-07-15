@@ -3,49 +3,54 @@ registry+scope membership, and the no-app / corrupt-spec error paths."""
 
 from __future__ import annotations
 
-import json
-
 import pytest
-
 from disco.core.appkit import AppSpec
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import agent_scope, build_default_registry
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin.appkit import (
     AppAddSectionArgs,
+    AppAddSectionTool,
     AppCreateArgs,
     AppCreateTool,
-    AppAddSectionTool,
+    AppRemoveSectionTool,
     AppReorderSectionArgs,
     AppReorderSectionTool,
-    AppSetKVArgs,
+    AppSectionRefArgs,
     AppSetDesignTool,
+    AppSetKVArgs,
     AppSetTweakTool,
     AppSnapshotArgs,
     AppSnapshotVersionTool,
-    AppSectionRefArgs,
-    AppRemoveSectionTool,
     AppUpdateContentArgs,
     AppUpdateContentTool,
 )
 from disco.tools.registry import artifact_scope
 from disco.tools.secrets import CapabilityBroker
-
 from tool_fakes import FakeSandboxInstance
 
 _RETIRED_LEGACY_APP_NAMES = (
-    "app_create", "app_update_content", "app_add_section", "app_remove_section",
-    "app_reorder_section", "app_set_design",
+    "app_create",
+    "app_update_content",
+    "app_add_section",
+    "app_remove_section",
+    "app_reorder_section",
+    "app_set_design",
 )
 _KEPT_LEGACY_APP_NAMES = (
-    "app_set_tweak", "app_snapshot_version",
+    "app_set_tweak",
+    "app_snapshot_version",
 )
 
 
 def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
     return ToolContext(
-        sandbox=sbx, workspace_path=".", timeout_s=30,
-        capabilities=CapabilityBroker().grant(frozenset()), owner_id="t", conversation_id="c",
+        sandbox=sbx,
+        workspace_path=".",
+        timeout_s=30,
+        capabilities=CapabilityBroker().grant(frozenset()),
+        owner_id="t",
+        conversation_id="c",
     )
 
 
@@ -57,7 +62,10 @@ def _spec_of(sbx: FakeSandboxInstance) -> AppSpec:
 def test_legacy_app_tools_registration_retirement() -> None:
     reg = build_default_registry()
     names = reg.names()
-    agent = {t.definition.name for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))}
+    agent = {
+        t.definition.name
+        for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))
+    }
     artifact = {t.definition.name for t in reg.in_scope(artifact_scope())}
     for n in _KEPT_LEGACY_APP_NAMES:
         assert n in names, n
@@ -95,7 +103,8 @@ async def test_update_content_touches_one_field_and_rerenders() -> None:
     sbx = FakeSandboxInstance()
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
     out = await AppUpdateContentTool().run(
-        AppUpdateContentArgs(section_id="hero", field="headline", value="Brand new headline"), _ctx(sbx)
+        AppUpdateContentArgs(section_id="hero", field="headline", value="Brand new headline"),
+        _ctx(sbx),
     )
     assert out.success
     assert _spec_of(sbx).section("hero").fields["headline"] == "Brand new headline"
@@ -106,9 +115,13 @@ async def test_update_content_touches_one_field_and_rerenders() -> None:
 async def test_add_reorder_remove_sections() -> None:
     sbx = FakeSandboxInstance()
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
-    await AppAddSectionTool().run(AppAddSectionArgs(id="about", kind="about", fields={"body": "we roof"}), _ctx(sbx))
+    await AppAddSectionTool().run(
+        AppAddSectionArgs(id="about", kind="about", fields={"body": "we roof"}), _ctx(sbx)
+    )
     assert [s.id for s in _spec_of(sbx).sections] == ["hero", "lead", "about"]
-    await AppReorderSectionTool().run(AppReorderSectionArgs(section_id="about", to_index=0), _ctx(sbx))
+    await AppReorderSectionTool().run(
+        AppReorderSectionArgs(section_id="about", to_index=0), _ctx(sbx)
+    )
     assert [s.id for s in _spec_of(sbx).sections][0] == "about"
     await AppRemoveSectionTool().run(AppSectionRefArgs(section_id="lead"), _ctx(sbx))
     assert "lead" not in [s.id for s in _spec_of(sbx).sections]
@@ -120,9 +133,13 @@ async def test_set_design_and_tweak() -> None:
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
     await AppSetDesignTool().run(AppSetKVArgs(key="primary", value="#0b5e2a"), _ctx(sbx))
     assert b"--primary:#0b5e2a" in sbx._fs["index.html"]
-    out = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx))
+    out = await AppSetTweakTool().run(
+        AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx)
+    )
     assert out.success and _spec_of(sbx).tweaks["lead.include_phone"] is True  # coerced to bool
-    assert out.structured is not None and out.structured["affects"] == ["lead.phone"]  # P9C echoes affects
+    assert out.structured is not None and out.structured["affects"] == [
+        "lead.phone"
+    ]  # P9C echoes affects
 
 
 @pytest.mark.asyncio
@@ -159,7 +176,9 @@ async def test_typed_tweak_validation_and_appspec_untouched_on_error() -> None:
     sbx = FakeSandboxInstance()
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
     # defined boolean (mixed case) + defined palette (a real swatch) both succeed + coerce
-    assert (await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="TRUE"), _ctx(sbx))).success
+    assert (
+        await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="TRUE"), _ctx(sbx))
+    ).success
     assert _spec_of(sbx).tweaks["lead.include_phone"] is True
     ok = await AppSetTweakTool().run(AppSetKVArgs(key="brand.accent", value="#4077A3"), _ctx(sbx))
     assert ok.success and _spec_of(sbx).tweaks["brand.accent"] == "#4077a3"  # canonicalized swatch
@@ -167,16 +186,22 @@ async def test_typed_tweak_validation_and_appspec_untouched_on_error() -> None:
     before = sbx._fs[".disco/appspec.json"]
     unk = await AppSetTweakTool().run(AppSetKVArgs(key="nope.key", value="x"), _ctx(sbx))
     assert unk.error == "unknown_tweak" and sbx._fs[".disco/appspec.json"] == before
-    bad = await AppSetTweakTool().run(AppSetKVArgs(key="brand.accent", value="#000000"), _ctx(sbx))  # not a swatch
+    bad = await AppSetTweakTool().run(
+        AppSetKVArgs(key="brand.accent", value="#000000"), _ctx(sbx)
+    )  # not a swatch
     assert bad.error == "invalid_tweak_value" and sbx._fs[".disco/appspec.json"] == before
-    rng = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="maybe"), _ctx(sbx))
+    rng = await AppSetTweakTool().run(
+        AppSetKVArgs(key="lead.include_phone", value="maybe"), _ctx(sbx)
+    )
     assert rng.error == "invalid_tweak_value" and sbx._fs[".disco/appspec.json"] == before
 
 
 @pytest.mark.asyncio
 async def test_set_tweak_no_app_takes_precedence() -> None:
     sbx = FakeSandboxInstance()  # no app_create
-    out = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx))
+    out = await AppSetTweakTool().run(
+        AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx)
+    )
     assert not out.success and out.error == "no_app"
 
 
@@ -184,7 +209,9 @@ async def test_set_tweak_no_app_takes_precedence() -> None:
 async def test_create_with_duplicate_section_ids_persists_nothing() -> None:
     sbx = FakeSandboxInstance()
     out = await AppCreateTool().run(
-        AppCreateArgs(title="X", sections=[{"id": "dup", "kind": "hero"}, {"id": "dup", "kind": "about"}]),  # type: ignore[list-item]
+        AppCreateArgs(
+            title="X", sections=[{"id": "dup", "kind": "hero"}, {"id": "dup", "kind": "about"}]
+        ),  # type: ignore[list-item]
         _ctx(sbx),
     )
     assert not out.success and out.error == "invalid_app_edit"
@@ -224,7 +251,8 @@ async def test_corrupt_spec_is_structured_error() -> None:
 async def test_create_with_bad_section_kind_errors() -> None:
     sbx = FakeSandboxInstance()
     out = await AppCreateTool().run(
-        AppCreateArgs(title="X", sections=[{"id": "h", "kind": "nonsense"}]), _ctx(sbx)  # type: ignore[list-item]
+        AppCreateArgs(title="X", sections=[{"id": "h", "kind": "nonsense"}]),
+        _ctx(sbx),  # type: ignore[list-item]
     )
     assert not out.success and out.error == "invalid_app_edit"
     assert ".disco/appspec.json" not in sbx._fs  # nothing persisted

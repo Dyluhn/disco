@@ -115,9 +115,7 @@ class _FakeExtraction:
 
 
 class _FakeReranker:
-    async def rerank(
-        self, query: str, passages: list[Passage], *, top_k: int
-    ) -> list[Passage]:
+    async def rerank(self, query: str, passages: list[Passage], *, top_k: int) -> list[Passage]:
         return sorted(passages, key=lambda p: p.id)[:top_k]
 
 
@@ -454,9 +452,7 @@ async def test_refine_combined_corpus_includes_originals_under_embedder() -> Non
     # whose instruction carries the fresh passage marker pq1. It MUST also carry
     # the ORIGINAL passage's unique text — proving the combined corpus.
     synth_prompts = [
-        msg
-        for role, msg in router.calls
-        if role == "rag_answerer" and "UNIQUE-EVIDENCE-q1" in msg
+        msg for role, msg in router.calls if role == "rag_answerer" and "UNIQUE-EVIDENCE-q1" in msg
     ]
     assert synth_prompts, "expected a refine synthesis prompt that saw the fresh pq1"
     refine_prompt = synth_prompts[0]
@@ -511,13 +507,10 @@ async def test_fresh_refine_evidence_is_judged_and_in_report_under_embedder() ->
     # have dropped the claim and no such judge call would exist.
     judge_prompts = [msg for role, msg in router.calls if role == "judge"]
     fresh_judged = [
-        m
-        for m in judge_prompts
-        if "fresh corroborating data" in m and "UNIQUE-EVIDENCE-q1" in m
+        m for m in judge_prompts if "fresh corroborating data" in m and "UNIQUE-EVIDENCE-q1" in m
     ]
     assert fresh_judged, (
-        "the fresh-cited claim was never judged — fresh evidence was discarded "
-        "(Defect-2 not fixed)"
+        "the fresh-cited claim was never judged — fresh evidence was discarded (Defect-2 not fixed)"
     )
 
     # The refined body (citing pq1) replaced the section.

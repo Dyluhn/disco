@@ -166,9 +166,7 @@ def test_mcp_create_duplicate_is_400(client):
     "url",
     ["not-a-url", "ftp://mcp.example/tools", "https://user:secret@mcp.example/tools"],
 )
-def test_mcp_create_rejects_invalid_http_target_without_persisting(
-    client, config_store, url
-):
+def test_mcp_create_rejects_invalid_http_target_without_persisting(client, config_store, url):
     response = client.post(
         "/api/mcp/servers",
         json={"name": "invalid", "url": url, "transport": "streamable_http"},
@@ -285,14 +283,9 @@ def test_mcp_patch_rejects_empty_url_and_silent_rename(client, config_store):
     assert created.status_code == 201, created.text
 
     assert client.patch("/api/mcp/servers/unchanged", json={"url": ""}).status_code == 400
-    assert (
-        client.patch("/api/mcp/servers/unchanged", json={"name": "renamed"}).status_code
-        == 400
-    )
+    assert client.patch("/api/mcp/servers/unchanged", json={"name": "renamed"}).status_code == 400
     assert set(config_store.load().mcp.servers) == {"unchanged"}
-    assert config_store.load().mcp.servers["unchanged"]["url"] == (
-        "https://mcp.example/tools"
-    )
+    assert config_store.load().mcp.servers["unchanged"]["url"] == ("https://mcp.example/tools")
 
     invalid_stdio = client.post(
         "/api/mcp/servers",

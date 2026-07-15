@@ -160,7 +160,7 @@ class _FakeSandbox:
             if not path.startswith(prefix):
                 continue
             matched = True
-            remainder = path[len(prefix):]
+            remainder = path[len(prefix) :]
             children.add(remainder.split("/", 1)[0] if "/" in remainder else remainder)
         if not matched and rel != "":
             raise FileNotFoundError(rel)
@@ -179,11 +179,15 @@ class _FakeSandbox:
             # fake cannot run).
             import json as _json
 
-            return _ExecRes(_json.dumps({
-                "status": 200,
-                "content_type": "text/html",
-                "body": '<script type="module" src="/assets/index-dir1234.js"></script>',
-            }))
+            return _ExecRes(
+                _json.dumps(
+                    {
+                        "status": 200,
+                        "content_type": "text/html",
+                        "body": '<script type="module" src="/assets/index-dir1234.js"></script>',
+                    }
+                )
+            )
         return _ExecRes("200")
 
 
@@ -258,10 +262,14 @@ async def test_directory_verify_passes_directory_check_set(stub_browser):
 @pytest.mark.asyncio
 async def test_directory_verify_fails_when_worker_grows_a_lead_api(stub_browser):
     tree = _directory_tree()
-    worker = tree["worker/index.ts"].decode("utf-8").replace(
-        "return env.ASSETS.fetch(request);",
-        'if (new URL(request.url).pathname === "/api/leads") {}\n'
-        "    return env.ASSETS.fetch(request);",
+    worker = (
+        tree["worker/index.ts"]
+        .decode("utf-8")
+        .replace(
+            "return env.ASSETS.fetch(request);",
+            'if (new URL(request.url).pathname === "/api/leads") {}\n'
+            "    return env.ASSETS.fetch(request);",
+        )
     )
     tree["worker/index.ts"] = worker.encode("utf-8")
     out = await VerifyAppKitAppTool().run(

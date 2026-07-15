@@ -1,4 +1,5 @@
 """C11 evidence script #2 — still-omitted.txt output."""
+
 from disco.core import (
     CondensationEvent,
     View,
@@ -27,14 +28,8 @@ def main():
     # Re-materialize the View. Recovery has no side effects on the View.
     view2 = View.of(events)
     print(f"    View.messages: {[m.content for m in view1.messages]}")
-    print(
-        f"    'early-1' in any message: "
-        f"{'early-1' in [m.content for m in view1.messages]}"
-    )
-    print(
-        f"    'early-2' in any message: "
-        f"{'early-2' in [m.content for m in view1.messages]}"
-    )
+    print(f"    'early-1' in any message: {'early-1' in [m.content for m in view1.messages]}")
+    print(f"    'early-2' in any message: {'early-2' in [m.content for m in view1.messages]}")
     print(f"    visible_seqs: {view1.visible_seqs}")
     print(f"    forgotten_count: {view1.forgotten_count}")
     print(
@@ -61,7 +56,9 @@ def main():
     print("=== Microcompact case: failed turn still dropped, originals recoverable ===")
     a1 = action(tool="shell", args={"command": "pip install x"})
     o1 = observation(
-        action_id=a1.id, tool="shell", success=False,
+        action_id=a1.id,
+        tool="shell",
+        success=False,
         content="network error\n" + "x" * 200,
     )
     a2 = action(tool="shell", args={"command": "pip install x"})
@@ -83,8 +80,7 @@ def main():
         f"({type(rec_micro[0]).__name__}, {type(rec_micro[1]).__name__})"
     )
     print(
-        f"    fingerprint byte-identical before/after recovery: "
-        f"{fp_micro_before == fp_micro_after}"
+        f"    fingerprint byte-identical before/after recovery: {fp_micro_before == fp_micro_after}"
     )
 
 

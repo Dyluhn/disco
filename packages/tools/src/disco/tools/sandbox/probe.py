@@ -47,8 +47,7 @@ async def probe_sandbox_reachability(
         return (
             False,
             "unreachable",
-            f"{endpoint} unreachable: no response within {timeout_s:.0f}s "
-            "(the probe timed out).",
+            f"{endpoint} unreachable: no response within {timeout_s:.0f}s (the probe timed out).",
         )
     except SandboxUnavailableError as exc:
         return False, "unreachable", f"{endpoint} unreachable: {exc}"

@@ -71,9 +71,7 @@ async def test_kill_drops_executor_and_loop_so_resume_rebuilds(tmp_path, monkeyp
     assert cid not in rt._loops
 
 
-async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(
-    tmp_path, monkeypatch
-):
+async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(tmp_path, monkeypatch):
     """The 'can't keep building after the first plan finished' fix: tearing down a
     FINISHED build's sandbox must clear the rehydrate-once flag, so the NEXT run
     restores the snapshot into the fresh sandbox instead of starting from an EMPTY
@@ -284,9 +282,7 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
         query="state of X",
         summary="(partial)",
         sections=[
-            ReportSection(
-                id="s0", title="A", markdown="body [[p0]]", cited_passage_ids=["p0"]
-            )
+            ReportSection(id="s0", title="A", markdown="body [[p0]]", cited_passage_ids=["p0"])
         ],
         passages=[],
         all_hits=[],

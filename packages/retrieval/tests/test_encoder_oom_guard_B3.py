@@ -118,9 +118,7 @@ def test_ample_ram_embed_loads_normally(monkeypatch):
 def test_ample_ram_reranker_loads_normally(monkeypatch):
     """With RAM well above threshold, _reranker() instantiates normally."""
     monkeypatch.setattr(le, "_mem_available_gb", lambda: 32.0)
-    monkeypatch.setattr(
-        "fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder
-    )
+    monkeypatch.setattr("fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder)
 
     instance = le._reranker()
 
@@ -131,9 +129,7 @@ def test_ample_ram_reranker_loads_normally(monkeypatch):
 def test_ample_ram_no_encoder_unavailable_raised(monkeypatch):
     """Verify no EncoderUnavailable is raised when RAM is ample."""
     monkeypatch.setattr(le, "_mem_available_gb", lambda: 16.0)
-    monkeypatch.setattr(
-        "fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder
-    )
+    monkeypatch.setattr("fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder)
 
     # Neither call should raise.
     embed = le._embedding()

@@ -44,9 +44,7 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
 
 async def _create_lead_gen_app(sbx: FakeSandboxInstance):
     return await AppCreateTool().run(
-        AppCreateArgs(
-            recipe_id="editorial-ledger", primitive_id="lead_gen", brief="Acme Studio"
-        ),
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id="lead_gen", brief="Acme Studio"),
         _ctx(sbx),
     )
 
@@ -124,6 +122,6 @@ async def test_identical_seo_reapply_is_loud_noop():
     # a DIFFERENT spec goes through
     changed = await _add_seo(sbx, {**_SEO_SPEC, "site_name": "Acme Studio Co"})
     assert changed.success is True, changed.content
-    assert '<meta property="og:title" content="Acme Studio Co" />' in sbx._fs[
-        "index.html"
-    ].decode("utf-8")
+    assert '<meta property="og:title" content="Acme Studio Co" />' in sbx._fs["index.html"].decode(
+        "utf-8"
+    )

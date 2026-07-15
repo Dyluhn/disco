@@ -65,9 +65,7 @@ dynamic = f'/workspace/{root.name}'
     assert f"f'{tmp_path.resolve()}/" in rewritten
 
     with pytest.raises(SandboxError, match="escapes workspace"):
-        _rewrite_process_workspace_literals(
-            "open('/workspace/../../etc/passwd').read()", tmp_path
-        )
+        _rewrite_process_workspace_literals("open('/workspace/../../etc/passwd').read()", tmp_path)
 
 
 def test_process_workspace_literal_rewrite_preserves_ipython_only_cells(tmp_path):
@@ -76,9 +74,7 @@ def test_process_workspace_literal_rewrite_preserves_ipython_only_cells(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_process_kernel_refuses_plaintext_fallback_without_posix_ipc(
-    tmp_path, monkeypatch
-):
+async def test_process_kernel_refuses_plaintext_fallback_without_posix_ipc(tmp_path, monkeypatch):
     pk = ProcessKernel(str(tmp_path))
     monkeypatch.setattr("disco.tools.sandbox.kernel.os.name", "nt")
     with pytest.raises(SandboxError, match="refusing plaintext TCP"):
@@ -229,16 +225,13 @@ async def test_kernel_integration_workspace_contract(tmp_path):
 
         (tmp_path / "from-shell.txt").write_text("shared")
         read = await pk.execute(
-            "from pathlib import Path; "
-            "print(Path('/workspace/from-shell.txt').read_text())",
+            "from pathlib import Path; print(Path('/workspace/from-shell.txt').read_text())",
             timeout_s=10,
         )
         assert read.ok, str(read)
         assert read.stdout.strip() == "shared"
 
-        refused = await pk.execute(
-            "open('/workspace/../../etc/passwd').read()", timeout_s=10
-        )
+        refused = await pk.execute("open('/workspace/../../etc/passwd').read()", timeout_s=10)
         assert not refused.ok
         assert "escapes workspace" in str(refused)
     finally:

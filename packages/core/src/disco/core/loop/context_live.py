@@ -39,11 +39,7 @@ def unresolved_failure_seqs(events: list[Event]) -> frozenset[int]:
                 protected.add(seq)
         elif isinstance(e, AgentErrorEvent) and seq is not None:
             protected.add(seq)
-        elif (
-            isinstance(e, ObservationEvent)
-            and not e.tool_result.success
-            and seq is not None
-        ):
+        elif isinstance(e, ObservationEvent) and not e.tool_result.success and seq is not None:
             protected.add(seq)
     return frozenset(protected)
 

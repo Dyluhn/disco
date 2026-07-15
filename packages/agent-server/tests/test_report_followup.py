@@ -41,6 +41,7 @@ async def test_followup_triggered_by_new_user_message():
 
     # Before follow-up: no fresh user message
     from disco.agent_server.runtime import ConversationRuntime
+
     assert not ConversationRuntime._has_fresh_user_message(events, reports)
 
     # After follow-up: user sends a question
@@ -121,4 +122,5 @@ async def test_followup_requires_existing_report():
     reports = [e for e in events if isinstance(e, ReportEvent)]
 
     from disco.agent_server.runtime import ConversationRuntime
+
     assert not ConversationRuntime._has_fresh_user_message(events, reports)

@@ -13,7 +13,8 @@ unwrapped; a genuinely absent file reads as ``None``; a corrupt file surfaces th
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from disco.core.tweaks import TweakSpec
 
@@ -21,7 +22,7 @@ TWEAKS_PATH = ".disco/tweaks.json"
 
 
 class TweaksError(ValueError):
-    """A semantic tweak failure (unknown key / invalid value / invalid default / required-but-absent)."""
+    """A semantic tweak failure: unknown key/value/default or a required omission."""
 
 
 async def read_tweakspec(sandbox: Any) -> TweakSpec | None:

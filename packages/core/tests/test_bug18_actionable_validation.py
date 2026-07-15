@@ -27,7 +27,6 @@ from disco.core import (
     NoOpCondenser,
     ObservationEvent,
     SqliteEventStore,
-    StatusEvent,
     ToolCall,
 )
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
@@ -52,9 +51,7 @@ _STANDARD = ModelExecutionPolicy.standard()
 def _real_executor() -> DefaultToolExecutor:
     """A real executor over the default tool registry (update_plan_progress is an
     in_process, read_only tool — no sandbox needed)."""
-    return DefaultToolExecutor(
-        build_default_registry(), agent_scope(model_policy=_STANDARD)
-    )
+    return DefaultToolExecutor(build_default_registry(), agent_scope(model_policy=_STANDARD))
 
 
 def _make_loop(executor) -> tuple[AgentLoop, SqliteEventStore]:
@@ -98,9 +95,7 @@ async def test_first_error_is_actionable_and_corrected_call_succeeds():
 
     # 1. malformed: empty strings where each step must be an object.
     events = await _drive(loop, _upp("bad1", ["", "", ""]))
-    err = next(
-        e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "bad1"
-    )
+    err = next(e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "bad1")
     seen = err.to_llm_message().content  # the EXACT bytes the model receives
     assert "steps.0" in seen
     assert "list of objects" in seen
@@ -111,15 +106,11 @@ async def test_first_error_is_actionable_and_corrected_call_succeeds():
     # 2. corrected: the shape the error pointed at validates + runs.
     events = await _drive(loop, _upp("good1", [{"index": 1, "state": "done"}]))
     obs = next(
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.tool_result.call_id == "good1"
+        e for e in events if isinstance(e, ObservationEvent) and e.tool_result.call_id == "good1"
     )
     assert obs.tool_result.success is True
     # and no error was emitted for the corrected call.
-    assert not any(
-        isinstance(e, AgentErrorEvent) and e.tool_call_id == "good1" for e in events
-    )
+    assert not any(isinstance(e, AgentErrorEvent) and e.tool_call_id == "good1" for e in events)
 
 
 async def test_ignored_actionable_error_still_stucks():
@@ -134,8 +125,7 @@ async def test_ignored_actionable_error_still_stucks():
     bookkeeping gate (detail="bookkeeping_only"), which IS the intended backstop."""
     # Real executor so the genuine (now-actionable) invalid_arguments fires each turn.
     agent = ScriptedAgent(
-        [action_step("update_plan_progress", {"steps": ["", "", ""]})] * 8
-        + [finish_step()]
+        [action_step("update_plan_progress", {"steps": ["", "", ""]})] * 8 + [finish_step()]
     )
     loop, store = build_loop(
         agent,
@@ -155,7 +145,6 @@ async def test_ignored_actionable_error_still_stucks():
     upp_obs = [
         e
         for e in events
-        if isinstance(e, ObservationEvent)
-        and e.tool_result.tool_name == "update_plan_progress"
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "update_plan_progress"
     ]
     assert all(o.tool_result.success is False for o in upp_obs)

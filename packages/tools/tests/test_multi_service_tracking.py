@@ -227,9 +227,7 @@ async def test_two_user_port_services_both_tracked_and_exposed(monkeypatch):
             f"ensure_service must return the exposed URL on success; got {api_url!r}"
         )
         # Frontend service on port 5173.
-        web_url = await session.ensure_service(
-            "web", 5173, "vite --port 5173", exec_dir="/web"
-        )
+        web_url = await session.ensure_service("web", 5173, "vite --port 5173", exec_dir="/web")
         assert web_url == "http://fake-host:5173"
 
         # Both tracked in `_tracked_services`.
@@ -274,9 +272,7 @@ async def test_ensure_preview_and_ensure_service_coexist(monkeypatch):
     session = SandboxSession(svc, conversation_id="conv-multi-mix")
     try:
         await session.ensure_preview(8000)
-        url = await session.ensure_service(
-            "api", 3000, "uvicorn --port 3000", exec_dir="/app"
-        )
+        url = await session.ensure_service("api", 3000, "uvicorn --port 3000", exec_dir="/app")
         assert url == "http://fake-host:3000"
 
         # Both tracked, both exposed, names distinct.
@@ -306,9 +302,7 @@ async def test_ensure_service_refuses_non_user_port(monkeypatch):
     session = SandboxSession(svc, conversation_id="conv-multi-refuse")
     try:
         with pytest.raises(SandboxError) as excinfo:
-            await session.ensure_service(
-                "rogue", 9999, "python3 -m rogue --port 9999"
-            )
+            await session.ensure_service("rogue", 9999, "python3 -m rogue --port 9999")
         assert "not in USER_PORTS" in str(excinfo.value), (
             f"error should name the gate ('USER_PORTS'); got: {excinfo.value}"
         )
@@ -361,9 +355,7 @@ async def test_ensure_service_polite_backoff_when_port_taken(monkeypatch):
     svc = _TakenPortService()
     session = SandboxSession(svc, conversation_id="conv-multi-backoff")
     try:
-        url = await session.ensure_service(
-            "api", 3000, "uvicorn --port 3000", exec_dir="/app"
-        )
+        url = await session.ensure_service("api", 3000, "uvicorn --port 3000", exec_dir="/app")
         # Returns None — port was taken, no fight.
         assert url is None
         # Intent IS recorded (so wake machinery sees "wanted a service on 3000").
@@ -394,9 +386,7 @@ async def test_tracked_services_returns_fresh_list(monkeypatch):
         assert len(snap1) == 1
         # Mutate the snapshot in place.
         snap1.clear()
-        snap1.append(
-            TrackedService(name="bogus", port=9999, command="x", exec_dir=None)
-        )
+        snap1.append(TrackedService(name="bogus", port=9999, command="x", exec_dir=None))
         # Session state is unchanged.
         snap2 = session.tracked_services()
         assert len(snap2) == 1
@@ -455,8 +445,7 @@ async def test_tracked_services_survive_recreate(monkeypatch):
         # box; that re-issue is tested in test_rematerialize_servers.py.)
         after_ports = session.tracked_ports()
         assert sorted(after_ports) == [3000, 5173], (
-            f"tracked ports lost across recreate: before={before_ports} "
-            f"after={after_ports}"
+            f"tracked ports lost across recreate: before={before_ports} after={after_ports}"
         )
         after_names = {s.port: s.name for s in session.tracked_services()}
         assert after_names == {3000: "api", 5173: "web"}

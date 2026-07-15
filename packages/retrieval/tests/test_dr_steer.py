@@ -266,7 +266,8 @@ async def test_no_hooks_run_is_byte_identical_to_baseline() -> None:
 
     # No steer observation events emitted (guards against spurious emit)
     steer_obs = [
-        p for k, p in captured_b
+        p
+        for k, p in captured_b
         if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
     ]
     assert steer_obs == [], "steer observation emitted on the OFF-path"
@@ -290,7 +291,7 @@ async def test_steer_at_boundary_adds_section_and_emits_observation() -> None:
         "rag_answerer": [
             "The basics [[p0]].",
             "The mechanism [[p3]].",
-            "The risks [[p6]].",          # steer section synthesis
+            "The risks [[p6]].",  # steer section synthesis
             "Overview of X and its risks.",  # coherence
         ],
     }
@@ -318,8 +319,7 @@ async def test_steer_at_boundary_adds_section_and_emits_observation() -> None:
 
     # steer observation emitted with the right detail
     steer_obs = [
-        p for k, p in captured
-        if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
+        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
     ]
     assert len(steer_obs) == 1, f"expected 1 steer observation, got {steer_obs}"
     assert steer_obs[0].get("subquestion") == STEER
@@ -351,8 +351,7 @@ async def test_steer_empty_returns_do_not_change_run() -> None:
     assert result.sections[0].title == "What is X?"
     assert result.sections[1].title == "How does X work?"
     steer_obs = [
-        p for k, p in captured
-        if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
+        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
     ]
     assert steer_obs == []
 
@@ -439,8 +438,7 @@ async def test_inject_empty_returns_do_not_change_run() -> None:
     assert result.bounded_by is None
     # No steer observation (no steer hook was installed)
     steer_obs = [
-        p for k, p in captured
-        if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
+        p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
     ]
     assert steer_obs == []
 
@@ -465,8 +463,8 @@ async def test_steer_and_inject_compose_correctly() -> None:
     scripts = {
         "query_rewriter": ["SUFFICIENT\nnone"] * 4,
         "rag_answerer": [
-            f"Basics [[p0]] [[{INJECTED_ID}]].",      # section 1 cites injected
-            f"Risks [[p3]] [[{INJECTED_ID}]].",       # steer section
+            f"Basics [[p0]] [[{INJECTED_ID}]].",  # section 1 cites injected
+            f"Risks [[p3]] [[{INJECTED_ID}]].",  # steer section
             "Overview of X.",
         ],
     }
@@ -497,9 +495,7 @@ async def test_steer_and_inject_compose_correctly() -> None:
     assert STEER in section_titles
 
     cited_ids = {p.id for p in result.cited_passages}
-    assert INJECTED_ID in cited_ids, (
-        f"injected passage {INJECTED_ID!r} not cited; got {cited_ids}"
-    )
+    assert INJECTED_ID in cited_ids, f"injected passage {INJECTED_ID!r} not cited; got {cited_ids}"
 
 
 # ---- test 5: WS frame type round-trip ----------------------------------------

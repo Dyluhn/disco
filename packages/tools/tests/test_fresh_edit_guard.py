@@ -38,7 +38,10 @@ def _ground_full() -> None:
 
 def test_edit_after_full_fresh_read_is_allowed() -> None:
     _ground_full()
-    assert guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="line2", new="X", edit_lines=(2, 2)) is None
+    assert (
+        guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="line2", new="X", edit_lines=(2, 2))
+        is None
+    )
 
 
 def test_ungrounded_edit_is_blocked_fresh_read_required() -> None:
@@ -51,15 +54,21 @@ def test_ungrounded_edit_is_blocked_fresh_read_required() -> None:
 def test_edit_after_file_changed_since_read_is_stale() -> None:
     _ground_full()  # recorded against SHA(BODY)
     changed = BODY + b"line6 added by another tool\n"  # different sha now on disk
-    out = guard_fresh_edit(CONV, PATH, current_bytes=changed, old="line2", new="X", edit_lines=(2, 2))
+    out = guard_fresh_edit(
+        CONV, PATH, current_bytes=changed, old="line2", new="X", edit_lines=(2, 2)
+    )
     assert out is not None and out.error == "STALE_FILE_CONTEXT"
 
 
 def test_elision_marker_in_new_is_rejected() -> None:
     _ground_full()
     out = guard_fresh_edit(
-        CONV, PATH, current_bytes=BODY, old="line2",
-        new="line2\n<4500 chars elided — re-issue the call>", edit_lines=(2, 2),
+        CONV,
+        PATH,
+        current_bytes=BODY,
+        old="line2",
+        new="line2\n<4500 chars elided — re-issue the call>",
+        edit_lines=(2, 2),
     )
     assert out is not None and out.error == "ELISION_MARKER_REJECTED"
 
@@ -81,11 +90,15 @@ def test_partial_read_not_covering_region_is_blocked() -> None:
 
 
 def test_ranged_read_covering_region_is_allowed() -> None:
-    # a ranged read that DOES cover the edited lines must NOT be false-blocked (no whole-file read forced).
+    # a ranged read that DOES cover the edited lines must NOT be false-blocked
+    # (no whole-file read forced).
     reset_read_tracker()
     record_read(CONV, PATH, sha=SHA, start_line=3, end_line=5, full=False)
     mark_read(CONV, PATH)
-    assert guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="line4", new="X", edit_lines=(4, 4)) is None
+    assert (
+        guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="line4", new="X", edit_lines=(4, 4))
+        is None
+    )
 
 
 def test_partial_read_undetermined_region_is_blocked() -> None:
@@ -101,7 +114,9 @@ def test_partial_read_undetermined_region_is_blocked() -> None:
 def test_full_read_undetermined_region_is_allowed() -> None:
     # a FULL read covers the whole file → an undetermined region is fine (no false-block).
     _ground_full()
-    assert guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="zz", new="y", edit_lines=None) is None
+    assert (
+        guard_fresh_edit(CONV, PATH, current_bytes=BODY, old="zz", new="y", edit_lines=None) is None
+    )
 
 
 def test_blocked_edit_returns_no_mutation_signal() -> None:

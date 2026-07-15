@@ -18,6 +18,7 @@ def test_small_old_observation_is_full():
     assert "small" in view.messages[1].content
     assert "[older observation" not in view.messages[1].content
 
+
 def test_large_recent_observation_is_full_but_snipped():
     # _MASK_KEEP_RECENT = 8
     # ObservationEvent.to_llm_message() calls snip_content (8000 chars)
@@ -27,8 +28,9 @@ def test_large_recent_observation_is_full_but_snipped():
     view = View.of(events)
     content = view.messages[1].content
     assert len(content) < 10000
-    assert "[snipped" in content 
+    assert "[snipped" in content
     assert "[masked" not in content
+
 
 def test_large_old_observation_is_masked():
     large_content = "A" * 1000
@@ -36,7 +38,7 @@ def test_large_old_observation_is_masked():
     # seq will be 2
     events = with_seqs([user_msg(), obs] + [observation(content="recent") for _ in range(10)])
     view = View.of(events)
-    
+
     content = view.messages[1].content
     # [masked output: {tool_name} #{seq} — {n_chars:,} chars, sha256:{hash12}.
     # Re-run the tool (or file_read the same path) to see it again.]
@@ -47,6 +49,7 @@ def test_large_old_observation_is_masked():
     )
     assert re.match(expected_pattern, content)
 
+
 def test_agent_error_never_masked():
     # AgentErrorEvent with a 50KB body, old → NEVER masked.
     large_error = "E" * 50000
@@ -55,6 +58,7 @@ def test_agent_error_never_masked():
     view = View.of(events)
     # AgentErrorEvent is LLMConvertible. It should be at index 1.
     assert view.messages[1].content == f"ERROR: {large_error}"
+
 
 def test_pinned_events_never_masked():
     large_content = "K" * 1000
@@ -69,6 +73,7 @@ def test_pinned_events_never_masked():
     assert "[masked" not in view.messages[1].content
     assert "[masked" not in view.messages[2].content
 
+
 def test_masked_stub_preserves_tool_call_id():
     large_content = "A" * 1000
     obs = observation(content=large_content)
@@ -76,6 +81,7 @@ def test_masked_stub_preserves_tool_call_id():
     events = with_seqs([user_msg(), obs] + [observation(content="recent") for _ in range(10)])
     view = View.of(events)
     assert view.messages[1].tool_call_id == "c"
+
 
 def test_action_events_untouched():
     large_thought = "T" * 1000

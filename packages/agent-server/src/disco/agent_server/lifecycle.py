@@ -412,9 +412,7 @@ class LifecycleManager:
                 suspended += 1
         return suspended
 
-    async def sweep_abandoned_gates_once(
-        self, *, owner_id: str = DEFAULT_OWNER_ID
-    ) -> int:
+    async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         """P-C: reap conversations parked at an AWAITING_* gate that the user never
         answered. The idle sweep only frees the SANDBOX of a gated conversation —
         it never resolves the gate, so a plan/decision/question the user walked away
@@ -478,9 +476,7 @@ class LifecycleManager:
                     captured_generation = self._rt._run_generation.get(cid)
                     events = await self._rt._store.get_events(
                         cid,
-                        EventFilter(after_seq=state.last_seq - 1)
-                        if state.last_seq > 0
-                        else None,
+                        EventFilter(after_seq=state.last_seq - 1) if state.last_seq > 0 else None,
                     )
                     if not events:
                         continue
@@ -655,12 +651,14 @@ class LifecycleManager:
                 except Exception:  # noqa: BLE001 — best effort
                     _LOG.warning(
                         "[dc-07] failed to re-materialize upload %r for %s",
-                        p.name, conversation_id,
+                        p.name,
+                        conversation_id,
                     )
         if written:
             _LOG.info(
                 "[dc-07] re-materialized %d upload(s) for %s",
-                written, conversation_id,
+                written,
+                conversation_id,
             )
 
     async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
@@ -758,6 +756,7 @@ class LifecycleManager:
                 f"snapshot failed: {exc}",
             )
             return
+
     async def _maybe_synthesize_app_deliverable(
         self, conversation_id: str, snapshot_dir: Path
     ) -> None:
@@ -788,9 +787,7 @@ class LifecycleManager:
                 ),
             )
         except Exception:  # noqa: BLE001 — synthetic card is a convenience, never crash snapshot
-            _LOG.debug(
-                "synthetic app-deliverable skipped for %s", conversation_id, exc_info=True
-            )
+            _LOG.debug("synthetic app-deliverable skipped for %s", conversation_id, exc_info=True)
 
     @staticmethod
     def _find_snapshot_index(snapshot_dir: Path) -> Path | None:
@@ -800,7 +797,8 @@ class LifecycleManager:
         if root.is_file():
             return root
         candidates = [
-            p for p in snapshot_dir.rglob("index.html")
+            p
+            for p in snapshot_dir.rglob("index.html")
             if p.is_file()
             and ".pmx" not in p.parts
             and ".disco" not in p.parts

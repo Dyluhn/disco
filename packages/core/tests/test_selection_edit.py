@@ -14,7 +14,9 @@ from disco.core.selection_edit import (
 
 class TestParseSelectionRef:
     def test_source_ref(self) -> None:
-        ref = parse_selection_ref({"kind": "source", "oid": "index.html:12", "file": "index.html", "line": 12})
+        ref = parse_selection_ref(
+            {"kind": "source", "oid": "index.html:12", "file": "index.html", "line": 12}
+        )
         assert isinstance(ref, SourceSelectionRef)
         assert ref.file == "index.html" and ref.line == 12
 
@@ -25,7 +27,12 @@ class TestParseSelectionRef:
 
     def test_semantic_field_ref(self) -> None:
         ref = parse_selection_ref(
-            {"kind": "semantic", "section_id": "hero", "field_id": "headline", "screen_label": "hero"}
+            {
+                "kind": "semantic",
+                "section_id": "hero",
+                "field_id": "headline",
+                "screen_label": "hero",
+            }
         )
         assert isinstance(ref, SemanticSelectionRef)
         assert ref.section_id == "hero" and ref.field_id == "headline"
@@ -41,13 +48,17 @@ class TestParseSelectionRef:
         assert parse_selection_ref({"kind": "source", "oid": "x", "file": "index.html"}) is None
 
     def test_negative_line_rejected(self) -> None:
-        assert parse_selection_ref({"kind": "source", "oid": "x:-1", "file": "index.html", "line": -1}) is None
+        assert (
+            parse_selection_ref({"kind": "source", "oid": "x:-1", "file": "index.html", "line": -1})
+            is None
+        )
 
     def test_extra_field_rejected(self) -> None:
         # extra="forbid" — a smuggled field is rejected, not ignored
-        assert parse_selection_ref(
-            {"kind": "deck", "slide_id": "s", "element_id": "e", "evil": True}
-        ) is None
+        assert (
+            parse_selection_ref({"kind": "deck", "slide_id": "s", "element_id": "e", "evil": True})
+            is None
+        )
 
     def test_non_dict_rejected(self) -> None:
         assert parse_selection_ref("not a dict") is None
@@ -106,10 +117,14 @@ class TestFrameValid:
         )
 
     def test_empty_instruction_invalid(self) -> None:
-        assert not selection_edit_frame_valid({"kind": "source", "oid": "a:1", "file": "a.html", "line": 1}, "  ")
+        assert not selection_edit_frame_valid(
+            {"kind": "source", "oid": "a:1", "file": "a.html", "line": 1}, "  "
+        )
 
     def test_bad_ref_invalid(self) -> None:
         assert not selection_edit_frame_valid({"kind": "nope"}, "make it blue")
 
     def test_non_string_instruction_invalid(self) -> None:
-        assert not selection_edit_frame_valid({"kind": "deck", "slide_id": "s", "element_id": "e"}, None)
+        assert not selection_edit_frame_valid(
+            {"kind": "deck", "slide_id": "s", "element_id": "e"}, None
+        )

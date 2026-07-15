@@ -81,12 +81,8 @@ async def test_change_followup_after_finish_reenters_planning_and_defers_write()
 
     # The model, given the change, tries to WRITE first (the bug) — then, after the
     # planning gate rejects it, submits a revised plan.
-    loop.agent = ScriptedAgent(
-        [_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")]
-    )
-    await loop.send_message(
-        "Revise the hero heading to 'Grand Opening' and add a pricing section."
-    )
+    loop.agent = ScriptedAgent([_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")])
+    await loop.send_message("Revise the hero heading to 'Grand Opening' and add a pricing section.")
     await loop.run()
 
     events = await store.get_events(cid)
@@ -94,9 +90,7 @@ async def test_change_followup_after_finish_reenters_planning_and_defers_write()
 
     # (a) re-entered PLANNING after the follow-up (the durable `planning` marker).
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "follow-up did not re-enter PLANNING"
     assert loop.mode == OperatingMode.PLANNING
@@ -114,9 +108,7 @@ async def test_change_followup_after_finish_reenters_planning_and_defers_write()
     # (c) a revised plan rev 2 was submitted; not yet approved.
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
-    assert (
-        await loop.get_state()
-    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
 async def test_change_followup_after_terminal_idle_timeout_replans_even_when_pickup_masked():
@@ -130,12 +122,8 @@ async def test_change_followup_after_terminal_idle_timeout_replans_even_when_pic
     loop, store = await _finished_first_build(cid)
     executor: BuildExecutor = loop.executor  # type: ignore[assignment]
 
-    await store.append(
-        cid, StatusEvent(status=ConversationStatus.IDLE, detail="inactive_timeout")
-    )
-    await loop.send_message(
-        "Revise the hero heading to 'Grand Opening' and add a pricing section."
-    )
+    await store.append(cid, StatusEvent(status=ConversationStatus.IDLE, detail="inactive_timeout"))
+    await loop.send_message("Revise the hero heading to 'Grand Opening' and add a pricing section.")
     await store.append(
         cid,
         MessageEvent(
@@ -150,17 +138,13 @@ async def test_change_followup_after_terminal_idle_timeout_replans_even_when_pic
         == "Revise the hero heading to 'Grand Opening' and add a pricing section."
     )
 
-    loop.agent = ScriptedAgent(
-        [_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")]
-    )
+    loop.agent = ScriptedAgent([_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")])
     await loop.run()
 
     events = await store.get_events(cid)
     followup_seq = _seq_of_user(events, "Grand Opening")
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "terminal-idle follow-up did not re-enter PLANNING"
     assert "Grand Opening" not in (executor.world.get("index.html") or "")
@@ -183,14 +167,10 @@ async def test_revised_plan_approval_then_write_succeeds_with_ordered_chain():
     loop, store = await _finished_first_build(cid)
     executor: BuildExecutor = loop.executor  # type: ignore[assignment]
 
-    loop.agent = ScriptedAgent(
-        [_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")]
-    )
+    loop.agent = ScriptedAgent([_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")])
     await loop.send_message("Revise the hero heading to 'Grand Opening'.")
     await loop.run()  # -> AWAITING_PLAN_APPROVAL (rev 2)
-    assert (
-        await loop.get_state()
-    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
     await loop.approve_plan()  # approve the revision
     loop.agent = ScriptedAgent([_write_step("<h1>Grand Opening</h1>"), finish_step()])
@@ -200,9 +180,7 @@ async def test_revised_plan_approval_then_write_succeeds_with_ordered_chain():
 
     events = await store.get_events(cid)
     followup_seq = _seq_of_user(events, "Grand Opening")
-    rev2_seq = next(
-        e.seq for e in events if isinstance(e, PlanEvent) and e.revision == 2
-    )
+    rev2_seq = next(e.seq for e in events if isinstance(e, PlanEvent) and e.revision == 2)
     awaiting_seq = next(
         e.seq
         for e in events
@@ -268,8 +246,7 @@ async def test_change_followup_mid_step_write_is_deferred_until_revised_plan():
     # the steer lands WHILE the write step is in flight, AFTER the top-of-loop
     # re-plan check already ran. The apply-time gate must still defer the write.
     loop.agent = ScriptedAgent(
-        [_write_step("<h1>Contact</h1>", path="contact.html"),
-         _submit_plan_step("second")],
+        [_write_step("<h1>Contact</h1>", path="contact.html"), _submit_plan_step("second")],
         before={0: _steer_injector(store, cid)},
     )
     await loop.run()  # -> AWAITING_PLAN_APPROVAL (rev 2); the mid-step write deferred
@@ -279,9 +256,7 @@ async def test_change_followup_mid_step_write_is_deferred_until_revised_plan():
 
     # re-entered PLANNING off the in-flight steer (the apply-time gate path).
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "in-flight steer did not re-enter PLANNING"
     # the mid-step write on the OLD plan did NOT land (deferred, no successful obs).
@@ -295,9 +270,7 @@ async def test_change_followup_mid_step_write_is_deferred_until_revised_plan():
     ), "a write executed on the OLD plan from an in-flight steer"
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
-    assert (
-        await loop.get_state()
-    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
     # Only an APPROVED revised plan lets the write through — the full chain holds
     # even though the steer arrived mid-step.
@@ -309,9 +282,7 @@ async def test_change_followup_mid_step_write_is_deferred_until_revised_plan():
     assert "contact.html" in executor.world
 
     events = await store.get_events(cid)
-    rev2_seq = next(
-        e.seq for e in events if isinstance(e, PlanEvent) and e.revision == 2
-    )
+    rev2_seq = next(e.seq for e in events if isinstance(e, PlanEvent) and e.revision == 2)
     approved_seq = next(
         e.seq
         for e in events
@@ -346,8 +317,11 @@ async def test_change_followup_between_steps_reenters_planning():
     executor: BuildExecutor = loop.executor  # type: ignore[assignment]
 
     loop.agent = ScriptedAgent(
-        [_silent_noop(), _write_step("<h1>Contact</h1>", path="contact.html"),
-         _submit_plan_step("second")],
+        [
+            _silent_noop(),
+            _write_step("<h1>Contact</h1>", path="contact.html"),
+            _submit_plan_step("second"),
+        ],
         before={0: _steer_injector(store, cid)},
     )
     await loop.run()
@@ -355,17 +329,13 @@ async def test_change_followup_between_steps_reenters_planning():
     events = await store.get_events(cid)
     followup_seq = _seq_of_user(events, "Contact page")
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "between-steps steer did not re-enter PLANNING"
     assert "contact.html" not in executor.world
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
-    assert (
-        await loop.get_state()
-    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
 # --------------------------------------------------------------------------- #
@@ -387,9 +357,11 @@ async def test_change_followup_during_in_flight_read_still_gates_next_write():
     # before[0] fires at the START of the in-flight READ step (the steer lands
     # while the read is in flight). step1 is the WRITE the model then attempts.
     loop.agent = ScriptedAgent(
-        [_read_step("index.html"),
-         _write_step("<h1>Contact</h1>", path="contact.html"),
-         _submit_plan_step("second")],
+        [
+            _read_step("index.html"),
+            _write_step("<h1>Contact</h1>", path="contact.html"),
+            _submit_plan_step("second"),
+        ],
         before={0: _steer_injector(store, cid)},
     )
     await loop.run()  # -> AWAITING_PLAN_APPROVAL (rev 2); the next write rejected
@@ -399,9 +371,7 @@ async def test_change_followup_during_in_flight_read_still_gates_next_write():
 
     # planning re-entered ON DETECTION even though the in-flight tool was a READ.
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "in-flight read did not re-enter PLANNING on steer detection"
     # the read MAY have proceeded (harmless) — but the WRITE did NOT land.
@@ -415,9 +385,7 @@ async def test_change_followup_during_in_flight_read_still_gates_next_write():
     ), "a write slipped through after a read-in-flight steer (read-then-write window)"
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
-    assert (
-        await loop.get_state()
-    ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
     # Only an APPROVED revised plan lets the write through.
     await loop.approve_plan()
@@ -437,8 +405,10 @@ async def test_question_followup_after_finish_does_not_force_replan():
 
     # A pure, non-mutating question. The model answers (notify_user) then finishes.
     loop.agent = ScriptedAgent(
-        [action_step("notify_user", {"message": "The hero uses the Inter typeface."}),
-         finish_step()]
+        [
+            action_step("notify_user", {"message": "The hero uses the Inter typeface."}),
+            finish_step(),
+        ]
     )
     await loop.send_message("What font did you use?")
     await loop.run()
@@ -448,9 +418,7 @@ async def test_question_followup_after_finish_does_not_force_replan():
 
     # NO forced re-plan: no planning marker, no AWAITING gate, no new PlanEvent.
     assert not any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "a pure Q&A follow-up was wrongly forced into a re-plan"
     assert loop.mode != OperatingMode.PLANNING
@@ -490,9 +458,7 @@ async def test_steer_ingest_immediately_reenters_planning_before_any_drive():
     events = await store.get_events(cid)
     followup_seq = _seq_of_user(events, "Contact page")
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     ), "ingest steer did not re-enter PLANNING immediately"
 

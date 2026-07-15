@@ -85,9 +85,7 @@ class _FakeSandboxInstance:
     independently of the convert exec, so tests can simulate a stale image
     (no LibreOffice → probe_exit != 0) vs a conversion-time failure."""
 
-    def __init__(
-        self, exec_result: _FakeExec, pdf_bytes: bytes, *, probe_exit: int = 0
-    ) -> None:
+    def __init__(self, exec_result: _FakeExec, pdf_bytes: bytes, *, probe_exit: int = 0) -> None:
         self._exec = exec_result
         self._pdf = pdf_bytes
         self._probe_exit = probe_exit
@@ -144,6 +142,7 @@ class _LiveRuntime:
     def set_depth(self, cid: str, tier: object) -> None: ...
     def get_last_selected_model(self) -> str | None:
         return None
+
     def sandbox_backend_name(self) -> str | None:
         return self._backend
 
@@ -192,8 +191,11 @@ def _declare_marp_slides(store: SqliteEventStore, cid: str, base: str = "deck") 
             ObservationEvent(
                 action_id="a2",
                 tool_result=ToolResult(
-                    call_id="c2", tool_name="slides_generate", success=True,
-                    content="ok", structured={"filename": f"{base}.html", "base_name": base},
+                    call_id="c2",
+                    tool_name="slides_generate",
+                    success=True,
+                    content="ok",
+                    structured={"filename": f"{base}.html", "base_name": base},
                 ),
             ),
         )
@@ -226,7 +228,9 @@ def test_get_returns_lowered_deck() -> None:
     assert len(body["slides"]) == 2
     # The first slide's title element points at /slides/0/title with the right text.
     titles = [
-        el for s in body["slides"] for el in s["elements"]
+        el
+        for s in body["slides"]
+        for el in s["elements"]
         if el["json_pointer"] == "/slides/0/title"
     ]
     assert titles and titles[0]["content"] == "Q4 Highlights"
@@ -244,8 +248,11 @@ def test_get_undeclared_deck_404() -> None:
             ObservationEvent(
                 action_id="a1",
                 tool_result=ToolResult(
-                    call_id="c1", tool_name="slides_generate", success=True,
-                    content="ok", structured={"filename": "deck.html", "base_name": "deck"},
+                    call_id="c1",
+                    tool_name="slides_generate",
+                    success=True,
+                    content="ok",
+                    structured={"filename": "deck.html", "base_name": "deck"},
                 ),
             ),
         )
@@ -260,7 +267,7 @@ def test_get_superseded_sidecar_404() -> None:
     client, store = _client(session)
     cid = _create(client)
     _declare_editable_slides(store, cid)  # editable C2 render
-    _declare_marp_slides(store, cid)      # LATER non-editable same-base render
+    _declare_marp_slides(store, cid)  # LATER non-editable same-base render
     assert client.get(f"/conversations/{cid}/deck/editor?path=deck").status_code == 404
 
 
@@ -309,7 +316,9 @@ def test_put_text_replace_updates_lowered() -> None:
     assert body["pptx_file"] == "deck.pptx"
     # The returned lowered deck reflects the new title.
     titles = [
-        el for s in body["lowered"]["slides"] for el in s["elements"]
+        el
+        for s in body["lowered"]["slides"]
+        for el in s["elements"]
         if el["json_pointer"] == "/slides/0/title"
     ]
     assert titles and titles[0]["content"] == "Q4 Recap"
@@ -492,7 +501,8 @@ def test_put_rollback_restores_the_corrupted_failed_target() -> None:
     assert session._files["deck.html"] == b"<old/>"
     assert (
         AuthoredDeck.model_validate(json.loads(session._files["deck.authored.json"]))
-        .slides[0].title
+        .slides[0]
+        .title
         == "Q4 Highlights"
     )
 
@@ -515,9 +525,9 @@ def test_render_returns_200_html_no_attachment() -> None:
     cd = r.headers.get("content-disposition", "")
     assert "attachment" not in cd, f"Unexpected attachment header: {cd!r}"
     # The render stamps data-element-id on editable elements (required for overlay measurement).
-    assert 'data-element-id=' in r.text
+    assert "data-element-id=" in r.text
     # Slide sections carry data-slide-id so the editor can toggle the active slide.
-    assert 'data-slide-id=' in r.text
+    assert "data-slide-id=" in r.text
 
 
 def test_render_undeclared_404() -> None:

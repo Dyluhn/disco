@@ -38,29 +38,29 @@ from pydantic import BaseModel, Field
 # Slide canvas geometry (16:9)
 # ---------------------------------------------------------------------------
 
-_SLIDE_W = 12_192_000   # 13.33 inches
-_SLIDE_H = 6_858_000    # 7.5 inches
-_MARGIN = 457_200       # 0.5 inch
-_CW = _SLIDE_W - 2 * _MARGIN   # 11 277 600
-_CH = _SLIDE_H - 2 * _MARGIN   # 5 943 600
-_TITLE_H = 914_400              # ≈1 in title strip
-_BAR_H = 91_440                 # 0.1 in accent bar
-_GAP = 91_440                   # 0.1 in gap between elements
+_SLIDE_W = 12_192_000  # 13.33 inches
+_SLIDE_H = 6_858_000  # 7.5 inches
+_MARGIN = 457_200  # 0.5 inch
+_CW = _SLIDE_W - 2 * _MARGIN  # 11 277 600
+_CH = _SLIDE_H - 2 * _MARGIN  # 5 943 600
+_TITLE_H = 914_400  # ≈1 in title strip
+_BAR_H = 91_440  # 0.1 in accent bar
+_GAP = 91_440  # 0.1 in gap between elements
 
 # Content box (below title + bar) used for body text
 _BODY_TOP = _MARGIN + _TITLE_H + _GAP + _BAR_H + _GAP
 _BODY_H = _SLIDE_H - _BODY_TOP - _MARGIN
-_BODY_INDENT = 228_600           # 0.25 in left indent for bullets
+_BODY_INDENT = 228_600  # 0.25 in left indent for bullets
 
 # Column geometry — SINGLE source of truth shared by the two_column / comparison
 # layout fns AND _body_partition, so the editor's overflow split is byte-identical
 # to the export's (BW-13 non-suffix overflow parity).
-_COL_GAP = 182_880               # 0.2 in gap between the two columns
+_COL_GAP = 182_880  # 0.2 in gap between the two columns
 _COL_W = (_CW - _COL_GAP) // 2
 _COL_BAR_TOP = _MARGIN + _TITLE_H + 45_720
 _COL_TOP = _COL_BAR_TOP + _BAR_H + _GAP
-_TWO_COL_H = _SLIDE_H - _COL_TOP - _MARGIN          # two_column body box height
-_CMP_LABEL_H = 457_200           # 0.5 in column-label strip (comparison)
+_TWO_COL_H = _SLIDE_H - _COL_TOP - _MARGIN  # two_column body box height
+_CMP_LABEL_H = 457_200  # 0.5 in column-label strip (comparison)
 _CMP_CONTENT_TOP = _COL_TOP + _CMP_LABEL_H + _GAP
 _CMP_CONTENT_H = _SLIDE_H - _CMP_CONTENT_TOP - _MARGIN  # comparison content box height
 
@@ -115,7 +115,7 @@ class ChartSpec(BaseModel):
     kind: Literal["bar", "line", "pie", "scatter"]
     title: str = ""
     labels: list[str] = Field(default_factory=list)
-    series: list[dict] = Field(default_factory=list)   # [{"name": str, "data": [float]}]
+    series: list[dict] = Field(default_factory=list)  # [{"name": str, "data": [float]}]
 
 
 class TableSpec(BaseModel):
@@ -168,9 +168,7 @@ class AuthoredSlide(BaseModel):
             "the lowerer falls back to 'bullets' for unknown types."
         )
     )
-    title: str = Field(
-        description="Slide heading.  No hard limit — lowerer truncates if needed."
-    )
+    title: str = Field(description="Slide heading.  No hard limit — lowerer truncates if needed.")
     body: list[str] = Field(
         default=[],
         description=(
@@ -283,17 +281,17 @@ class Element:
 
     # ---- text fields --------------------------------------------------------
     text: str = ""
-    font_name: str = ""       # first font in the CSS stack
+    font_name: str = ""  # first font in the CSS stack
     font_size_pt: float = 20.0
     hex_color: str = "#1a1813"
     bold: bool = False
     italic: bool = False
-    align: str = "LEFT"       # "LEFT" | "CENTER" | "RIGHT"
+    align: str = "LEFT"  # "LEFT" | "CENTER" | "RIGHT"
     word_wrap: bool = True
 
     # ---- image fields -------------------------------------------------------
     image_prompt: str | None = None  # C7 wire: generate from this prompt
-    image_path: str | None = None    # file path if already generated
+    image_path: str | None = None  # file path if already generated
     # C7 wire: the generated image BYTES, carried on the element so the renderer
     # embeds them directly (BytesIO → add_picture / data-URI) without resolving a
     # path against the sandbox — works identically for local + container sandboxes.
@@ -309,14 +307,14 @@ class Slide:
     """One slide in the precise Deck — layout resolved, elements positioned."""
 
     id: str
-    type: str                   # from AuthoredSlide.type (e.g. "bullets_cont")
-    layout: LayoutHint          # resolved, never None
+    type: str  # from AuthoredSlide.type (e.g. "bullets_cont")
+    layout: LayoutHint  # resolved, never None
     archetype: SlideArchetype | None = None
-    title: str = ""             # propagated from AuthoredSlide.title (for c8 duck-typing)
+    title: str = ""  # propagated from AuthoredSlide.title (for c8 duck-typing)
     elements: list[Element] = field(default_factory=list)
     notes: str | None = None
-    chart: ChartSpec | None = None   # propagated when AuthoredSlide.chart is set
-    table: TableSpec | None = None   # propagated when AuthoredSlide.table is set
+    chart: ChartSpec | None = None  # propagated when AuthoredSlide.chart is set
+    table: TableSpec | None = None  # propagated when AuthoredSlide.table is set
     # BW-13: the ORIGINAL authored-body index of each rendered body line, in render
     # order — the SAME ``body_index_map`` the editor pointer model (lower_deck_for_editor)
     # uses. ``render_html`` stamps ``data-element-id="{slide}:body:{orig}"`` from this so
@@ -333,7 +331,7 @@ class Deck:
 
     id: str
     title: str
-    theme: Theme               # resolved via core.brand.resolve_theme
+    theme: Theme  # resolved via core.brand.resolve_theme
     slides: list[Slide] = field(default_factory=list)
     size: tuple[int, int] = (12_192_000, 6_858_000)  # 16:9 EMU
 
@@ -433,7 +431,7 @@ def _fit_text(
         else:
             break  # this line triggers overflow; rest goes to continuation
 
-    overflow = lines[len(fitted):]
+    overflow = lines[len(fitted) :]
     if 0 < len(overflow) < 2:
         return font, lines, []
     return font, fitted, overflow
@@ -536,41 +534,56 @@ def _layout_title(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element], li
     v_origin = int(_SLIDE_H * 0.28)
 
     # Accent bar
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=v_origin,
-        width=2_286_000, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=v_origin,
+            width=2_286_000,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     # Display title
     title_top = v_origin + 182_880
     title_h = 1_828_800
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=title_top,
-        width=_CW, height=title_h,
-        text=slide.title,
-        font_name=_first_font(theme.font_display),
-        font_size_pt=52.0,
-        hex_color=theme.text,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=title_top,
+            width=_CW,
+            height=title_h,
+            text=slide.title,
+            font_name=_first_font(theme.font_display),
+            font_size_pt=52.0,
+            hex_color=theme.text,
+        )
+    )
 
     # Subtitle (first body line only; image_prompt excluded per verdict)
     overflow: list[str] = []
     shown = _visible_body_count_without_orphan(len(slide.body), 1)
     for i, line in enumerate(slide.body[:shown]):
         sub_top = title_top + title_h + int(i * 365_760)
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=sub_top,
-            width=_CW, height=365_760,
-            text=line,
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=24.0,
-            hex_color=theme.text_muted,
-            italic=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=sub_top,
+                width=_CW,
+                height=365_760,
+                text=line,
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=24.0,
+                hex_color=theme.text_muted,
+                italic=True,
+            )
+        )
     if slide.body:
         overflow = slide.body[shown:]
 
@@ -586,52 +599,72 @@ def _layout_section_header(slide: AuthoredSlide, theme: Theme) -> tuple[list[Ele
 
     # Kicker
     kicker_top = bar_top - 457_200
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=kicker_top,
-        width=_CW, height=457_200,
-        text="SECTION",
-        font_name=_first_font(theme.font_ui),
-        font_size_pt=9.0,
-        hex_color=theme.accent,
-        bold=True,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=kicker_top,
+            width=_CW,
+            height=457_200,
+            text="SECTION",
+            font_name=_first_font(theme.font_ui),
+            font_size_pt=9.0,
+            hex_color=theme.accent,
+            bold=True,
+        )
+    )
 
     # Accent bar
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=bar_top,
-        width=1_371_600, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=bar_top,
+            width=1_371_600,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     # Title
     title_top = bar_top + 182_880
     title_h = 1_371_600
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=title_top,
-        width=_CW, height=title_h,
-        text=slide.title,
-        font_name=_first_font(theme.font_display),
-        font_size_pt=40.0,
-        hex_color=theme.text,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=title_top,
+            width=_CW,
+            height=title_h,
+            text=slide.title,
+            font_name=_first_font(theme.font_display),
+            font_size_pt=40.0,
+            hex_color=theme.text,
+        )
+    )
 
     overflow: list[str] = []
     shown = _visible_body_count_without_orphan(len(slide.body), 1)
     for i, line in enumerate(slide.body[:shown]):
         sub_top = title_top + title_h + int(i * 320_040)
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=sub_top,
-            width=_CW, height=320_040,
-            text=line,
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=18.0,
-            hex_color=theme.text_muted,
-            italic=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=sub_top,
+                width=_CW,
+                height=320_040,
+                text=line,
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=18.0,
+                hex_color=theme.text_muted,
+                italic=True,
+            )
+        )
     if slide.body:
         overflow = slide.body[shown:]
 
@@ -643,51 +676,62 @@ def _layout_bullets(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element], 
     els: list[Element] = []
 
     # Title
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=_MARGIN,
-        width=_CW, height=_TITLE_H,
-        text=slide.title,
-        font_name=_first_font(theme.font_ui),
-        font_size_pt=32.0,
-        hex_color=theme.text,
-        bold=True,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=_MARGIN,
+            width=_CW,
+            height=_TITLE_H,
+            text=slide.title,
+            font_name=_first_font(theme.font_ui),
+            font_size_pt=32.0,
+            hex_color=theme.text,
+            bold=True,
+        )
+    )
 
     # Accent bar under title
     bar_top = _MARGIN + _TITLE_H + 45_720
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=bar_top,
-        width=_CW, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=bar_top,
+            width=_CW,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     # Bullets with _fit_text overflow control
     body_top = bar_top + _BAR_H + _GAP
     body_h = _SLIDE_H - body_top - _MARGIN
     body_w = _CW - _BODY_INDENT
 
-    font_pt, fitted, overflow = _fit_text(
-        slide.body, box_width=body_w, box_height=body_h
-    )
+    font_pt, fitted, overflow = _fit_text(slide.body, box_width=body_w, box_height=body_h)
 
     for i, bullet in enumerate(fitted):
         line_h = font_pt * 12_700 * 1.3
         bullet_top = body_top + int(i * line_h)
         bullet_text = f"• {bullet}"
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN + _BODY_INDENT,
-            top=bullet_top,
-            width=body_w,
-            height=int(line_h * 1.15),
-            text=bullet_text,
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=font_pt,
-            hex_color=theme.text,
-            word_wrap=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN + _BODY_INDENT,
+                top=bullet_top,
+                width=body_w,
+                height=int(line_h * 1.15),
+                text=bullet_text,
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=font_pt,
+                hex_color=theme.text,
+                word_wrap=True,
+            )
+        )
 
     return els, overflow
 
@@ -698,37 +742,52 @@ def _layout_closing(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element], 
 
     v_center = int(_SLIDE_H * 0.42)
 
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=v_center - _BAR_H - 182_880,
-        width=2_286_000, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=v_center,
-        width=_CW, height=1_371_600,
-        text=slide.title,
-        font_name=_first_font(theme.font_display),
-        font_size_pt=48.0,
-        hex_color=theme.text,
-        align="LEFT",
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=v_center - _BAR_H - 182_880,
+            width=2_286_000,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=v_center,
+            width=_CW,
+            height=1_371_600,
+            text=slide.title,
+            font_name=_first_font(theme.font_display),
+            font_size_pt=48.0,
+            hex_color=theme.text,
+            align="LEFT",
+        )
+    )
 
     overflow: list[str] = []
     shown = _visible_body_count_without_orphan(len(slide.body), 1)
     for i, line in enumerate(slide.body[:shown]):
         sub_top = v_center + 1_371_600 + _GAP + int(i * 342_900)
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=sub_top,
-            width=_CW, height=342_900,
-            text=line,
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=22.0,
-            hex_color=theme.text_muted,
-            italic=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=sub_top,
+                width=_CW,
+                height=342_900,
+                text=line,
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=22.0,
+                hex_color=theme.text_muted,
+                italic=True,
+            )
+        )
     if slide.body:
         overflow = slide.body[shown:]
 
@@ -750,58 +809,74 @@ def _layout_image_right(
         img_left = _MARGIN + half_w + 182_880
 
     # Title (text side)
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=text_left, top=_MARGIN,
-        width=half_w, height=_TITLE_H,
-        text=slide.title,
-        font_name=_first_font(theme.font_ui),
-        font_size_pt=28.0,
-        hex_color=theme.text,
-        bold=True,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=text_left,
+            top=_MARGIN,
+            width=half_w,
+            height=_TITLE_H,
+            text=slide.title,
+            font_name=_first_font(theme.font_ui),
+            font_size_pt=28.0,
+            hex_color=theme.text,
+            bold=True,
+        )
+    )
 
     bar_top = _MARGIN + _TITLE_H + 45_720
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=text_left, top=bar_top,
-        width=half_w, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=text_left,
+            top=bar_top,
+            width=half_w,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     # Bullets
     body_top = bar_top + _BAR_H + _GAP
     body_h = _SLIDE_H - body_top - _MARGIN
     body_w = half_w - _BODY_INDENT
 
-    font_pt, fitted, overflow = _fit_text(
-        slide.body, box_width=body_w, box_height=body_h
-    )
+    font_pt, fitted, overflow = _fit_text(slide.body, box_width=body_w, box_height=body_h)
 
     for i, bullet in enumerate(fitted):
         line_h = font_pt * 12_700 * 1.3
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=text_left + _BODY_INDENT,
-            top=body_top + int(i * line_h),
-            width=body_w,
-            height=int(line_h * 1.15),
-            text=f"• {bullet}",
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=font_pt,
-            hex_color=theme.text,
-            word_wrap=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=text_left + _BODY_INDENT,
+                top=body_top + int(i * line_h),
+                width=body_w,
+                height=int(line_h * 1.15),
+                text=f"• {bullet}",
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=font_pt,
+                hex_color=theme.text,
+                word_wrap=True,
+            )
+        )
 
     img_w = _CW - half_w - 182_880
-    els.append(Element(
-        id=_uid(), kind="image",
-        left=img_left, top=_MARGIN,
-        width=img_w, height=_CH,
-        image_prompt=slide.image_prompt,
-        fill_hex=theme.surface_2,
-        border_hex=theme.hairline,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="image",
+            left=img_left,
+            top=_MARGIN,
+            width=img_w,
+            height=_CH,
+            image_prompt=slide.image_prompt,
+            fill_hex=theme.surface_2,
+            border_hex=theme.hairline,
+        )
+    )
 
     return els, overflow
 
@@ -816,13 +891,18 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     els: list[Element] = []
 
     # Full-bleed image (or placeholder)
-    els.append(Element(
-        id=_uid(), kind="image",
-        left=0, top=0,
-        width=_SLIDE_W, height=_SLIDE_H,
-        image_prompt=slide.image_prompt,
-        fill_hex=theme.surface_2,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="image",
+            left=0,
+            top=0,
+            width=_SLIDE_W,
+            height=_SLIDE_H,
+            image_prompt=slide.image_prompt,
+            fill_hex=theme.surface_2,
+        )
+    )
 
     # Bottom band: title stacked ABOVE the caption with REAL height accounting.
     # Gauntlet s-arxiv: a two-line wrapped title overprinted the caption because
@@ -832,49 +912,63 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     # type is always on the dark band regardless of artwork or title length.
     overflow: list[str] = []
     shown = _visible_body_count_without_orphan(len(slide.body), 1)
-    caption_line_h = 274_320          # one 14pt italic line
-    caption_pad = 137_160             # breathing room under the title block
+    caption_line_h = 274_320  # one 14pt italic line
+    caption_pad = 137_160  # breathing room under the title block
     caption_block_h = (caption_line_h * max(0, shown) + caption_pad) if slide.body else 0
-    _TITLE_CHARS_PER_LINE = 46        # 36pt bold across _CW — conservative
+    _TITLE_CHARS_PER_LINE = 46  # 36pt bold across _CW — conservative
     title_lines = max(1, -(-len(slide.title) // _TITLE_CHARS_PER_LINE)) if slide.title else 0
-    title_line_h = 548_640            # 36pt line + leading
+    title_line_h = 548_640  # 36pt line + leading
     title_block_h = title_lines * title_line_h
 
     if slide.title or slide.body:
         scrim_h = title_block_h + caption_block_h + _MARGIN + 137_160
-        els.append(Element(
-            id=_uid(), kind="rect",
-            left=0, top=_SLIDE_H - scrim_h,
-            width=_SLIDE_W, height=scrim_h,
-            fill_hex="#111111",
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="rect",
+                left=0,
+                top=_SLIDE_H - scrim_h,
+                width=_SLIDE_W,
+                height=scrim_h,
+                fill_hex="#111111",
+            )
+        )
 
     # Title block sits directly above the caption block (both above margin).
     if slide.title:
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN,
-            top=_SLIDE_H - _MARGIN - caption_block_h - title_block_h,
-            width=_CW, height=title_block_h,
-            text=slide.title,
-            font_name=_first_font(theme.font_display),
-            font_size_pt=36.0,
-            hex_color="#ffffff",  # white overlay (scrim-backed above)
-            bold=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=_SLIDE_H - _MARGIN - caption_block_h - title_block_h,
+                width=_CW,
+                height=title_block_h,
+                text=slide.title,
+                font_name=_first_font(theme.font_display),
+                font_size_pt=36.0,
+                hex_color="#ffffff",  # white overlay (scrim-backed above)
+                bold=True,
+            )
+        )
 
     caption_top = _SLIDE_H - _MARGIN - (caption_line_h * max(0, shown))
     for i, line in enumerate(slide.body[:shown]):
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=caption_top + i * caption_line_h,
-            width=_CW, height=caption_line_h * 2,  # wrap room, next line is band
-            text=line,
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=14.0,
-            hex_color="#e0e0e0",
-            italic=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=caption_top + i * caption_line_h,
+                width=_CW,
+                height=caption_line_h * 2,  # wrap room, next line is band
+                text=line,
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=14.0,
+                hex_color="#e0e0e0",
+                italic=True,
+            )
+        )
     if slide.body:
         overflow = slide.body[shown:]
 
@@ -886,24 +980,34 @@ def _layout_two_column(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     els: list[Element] = []
 
     # Title spanning full width
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=_MARGIN,
-        width=_CW, height=_TITLE_H,
-        text=slide.title,
-        font_name=_first_font(theme.font_ui),
-        font_size_pt=28.0,
-        hex_color=theme.text,
-        bold=True,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=_MARGIN,
+            width=_CW,
+            height=_TITLE_H,
+            text=slide.title,
+            font_name=_first_font(theme.font_ui),
+            font_size_pt=28.0,
+            hex_color=theme.text,
+            bold=True,
+        )
+    )
 
     bar_top = _MARGIN + _TITLE_H + 45_720
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=bar_top,
-        width=_CW, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=bar_top,
+            width=_CW,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     col_top = _COL_TOP
     col_h = _TWO_COL_H
@@ -922,28 +1026,37 @@ def _layout_two_column(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
 
     for i, line in enumerate(fitted_l):
         line_h = col_font * 12_700 * 1.3
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=col_top + int(i * line_h),
-            width=col_w, height=int(line_h * 1.15),
-            text=f"• {line}",
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=col_font,
-            hex_color=theme.text,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=col_top + int(i * line_h),
+                width=col_w,
+                height=int(line_h * 1.15),
+                text=f"• {line}",
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=col_font,
+                hex_color=theme.text,
+            )
+        )
 
     for i, line in enumerate(fitted_r):
         line_h = col_font * 12_700 * 1.3
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN + col_w + _COL_GAP,
-            top=col_top + int(i * line_h),
-            width=col_w, height=int(line_h * 1.15),
-            text=f"• {line}",
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=col_font,
-            hex_color=theme.text,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN + col_w + _COL_GAP,
+                top=col_top + int(i * line_h),
+                width=col_w,
+                height=int(line_h * 1.15),
+                text=f"• {line}",
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=col_font,
+                hex_color=theme.text,
+            )
+        )
 
     return els, overflow
 
@@ -957,24 +1070,34 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     els: list[Element] = []
 
     # Title
-    els.append(Element(
-        id=_uid(), kind="text",
-        left=_MARGIN, top=_MARGIN,
-        width=_CW, height=_TITLE_H,
-        text=slide.title,
-        font_name=_first_font(theme.font_ui),
-        font_size_pt=28.0,
-        hex_color=theme.text,
-        bold=True,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="text",
+            left=_MARGIN,
+            top=_MARGIN,
+            width=_CW,
+            height=_TITLE_H,
+            text=slide.title,
+            font_name=_first_font(theme.font_ui),
+            font_size_pt=28.0,
+            hex_color=theme.text,
+            bold=True,
+        )
+    )
 
     bar_top = _MARGIN + _TITLE_H + 45_720
-    els.append(Element(
-        id=_uid(), kind="accent_bar",
-        left=_MARGIN, top=bar_top,
-        width=_CW, height=_BAR_H,
-        fill_hex=theme.accent,
-    ))
+    els.append(
+        Element(
+            id=_uid(),
+            kind="accent_bar",
+            left=_MARGIN,
+            top=bar_top,
+            width=_CW,
+            height=_BAR_H,
+            fill_hex=theme.accent,
+        )
+    )
 
     col_top = _COL_TOP
     col_w = _COL_W
@@ -986,28 +1109,38 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
     content_lines = slide.body[2:] if len(slide.body) > 2 else []
 
     if left_label:
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=col_top,
-            width=col_w, height=label_h,
-            text=left_label,
-            font_name=_first_font(theme.font_ui),
-            font_size_pt=16.0,
-            hex_color=theme.accent,
-            bold=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=col_top,
+                width=col_w,
+                height=label_h,
+                text=left_label,
+                font_name=_first_font(theme.font_ui),
+                font_size_pt=16.0,
+                hex_color=theme.accent,
+                bold=True,
+            )
+        )
 
     if right_label:
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN + col_w + _COL_GAP, top=col_top,
-            width=col_w, height=label_h,
-            text=right_label,
-            font_name=_first_font(theme.font_ui),
-            font_size_pt=16.0,
-            hex_color=theme.accent,
-            bold=True,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN + col_w + _COL_GAP,
+                top=col_top,
+                width=col_w,
+                height=label_h,
+                text=right_label,
+                font_name=_first_font(theme.font_ui),
+                font_size_pt=16.0,
+                hex_color=theme.accent,
+                bold=True,
+            )
+        )
 
     content_top = _CMP_CONTENT_TOP
     content_h = _CMP_CONTENT_H
@@ -1022,27 +1155,37 @@ def _layout_comparison(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
 
     for i, line in enumerate(fitted_l):
         lh = col_font * 12_700 * 1.3
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN, top=content_top + int(i * lh),
-            width=col_w, height=int(lh * 1.15),
-            text=f"• {line}",
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=col_font,
-            hex_color=theme.text,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN,
+                top=content_top + int(i * lh),
+                width=col_w,
+                height=int(lh * 1.15),
+                text=f"• {line}",
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=col_font,
+                hex_color=theme.text,
+            )
+        )
 
     for i, line in enumerate(fitted_r):
         lh = col_font * 12_700 * 1.3
-        els.append(Element(
-            id=_uid(), kind="text",
-            left=_MARGIN + col_w + _COL_GAP, top=content_top + int(i * lh),
-            width=col_w, height=int(lh * 1.15),
-            text=f"• {line}",
-            font_name=_first_font(theme.font_reading),
-            font_size_pt=col_font,
-            hex_color=theme.text,
-        ))
+        els.append(
+            Element(
+                id=_uid(),
+                kind="text",
+                left=_MARGIN + col_w + _COL_GAP,
+                top=content_top + int(i * lh),
+                width=col_w,
+                height=int(lh * 1.15),
+                text=f"• {line}",
+                font_name=_first_font(theme.font_reading),
+                font_size_pt=col_font,
+                hex_color=theme.text,
+            )
+        )
 
     return els, overflow
 
@@ -1114,11 +1257,11 @@ def _body_partition(
         _fl, fitted_l, _ovl = _fit_text(content[:mid], _COL_W, _CMP_CONTENT_H)
         _fr, fitted_r, _ovr = _fit_text(content[mid:], _COL_W, _CMP_CONTENT_H)
         kl, kr = len(fitted_l), len(fitted_r)
-        rendered = [p for p in (0, 1) if p < n]              # labels
-        rendered += list(range(2, 2 + kl))                   # left content head
-        rendered += list(range(2 + mid, 2 + mid + kr))       # right content head
-        overflow = list(range(2 + kl, 2 + mid))              # left content tail
-        overflow += list(range(2 + mid + kr, n))             # right content tail
+        rendered = [p for p in (0, 1) if p < n]  # labels
+        rendered += list(range(2, 2 + kl))  # left content head
+        rendered += list(range(2 + mid, 2 + mid + kr))  # right content head
+        overflow = list(range(2 + kl, 2 + mid))  # left content tail
+        overflow += list(range(2 + mid + kr, n))  # right content tail
         return rendered, overflow
 
     # Contiguous-suffix layouts (bullets / image_* / title / section_header /
@@ -1155,11 +1298,11 @@ class _EffSlide:
     comparison overflow (BW-13 non-suffix case).
     """
 
-    aslide: AuthoredSlide      # original slide OR a synthesized "_cont" fragment
-    layout: LayoutHint         # resolved ONCE here (image-side alternation included)
-    render_body: list[str]     # body lines this fragment shows, in render order
+    aslide: AuthoredSlide  # original slide OR a synthesized "_cont" fragment
+    layout: LayoutHint  # resolved ONCE here (image-side alternation included)
+    render_body: list[str]  # body lines this fragment shows, in render order
     body_index_map: list[int]  # original-body index of each render_body line
-    orig_index: int            # index into authored.slides (image bytes + pointer base)
+    orig_index: int  # index into authored.slides (image bytes + pointer base)
     is_cont: bool
 
 
@@ -1181,21 +1324,21 @@ def _expand_slides(
     """
     eff: list[_EffSlide] = []
 
-    def _walk(
-        aslide: AuthoredSlide, depth: int, orig_index: int, index_map: list[int]
-    ) -> None:
+    def _walk(aslide: AuthoredSlide, depth: int, orig_index: int, index_map: list[int]) -> None:
         if depth > _MAX_CONT_DEPTH:
             return  # guard: discard overflow beyond depth cap
         layout = _infer_layout(aslide, image_alt)
         rendered_pos, overflow_pos = _body_partition(aslide, layout, theme)
-        eff.append(_EffSlide(
-            aslide=aslide,
-            layout=layout,
-            render_body=[aslide.body[p] for p in rendered_pos],
-            body_index_map=[index_map[p] for p in rendered_pos],
-            orig_index=orig_index,
-            is_cont=depth > 0,
-        ))
+        eff.append(
+            _EffSlide(
+                aslide=aslide,
+                layout=layout,
+                render_body=[aslide.body[p] for p in rendered_pos],
+                body_index_map=[index_map[p] for p in rendered_pos],
+                orig_index=orig_index,
+                is_cont=depth > 0,
+            )
+        )
         if overflow_pos:
             # Spilled lines, in overflow order, with their ORIGINAL indices — same
             # content the export's layout fn drops (determinism preserved).
@@ -1203,8 +1346,8 @@ def _expand_slides(
                 type=f"{aslide.type}_cont",
                 title=f"{aslide.title} (cont.)",
                 body=[aslide.body[p] for p in overflow_pos],
-                layout_hint="bullets",   # FORCE bullets — never map back to title/section/closing
-                notes=None,              # notes stay on the original slide
+                layout_hint="bullets",  # FORCE bullets — never map back to title/section/closing
+                notes=None,  # notes stay on the original slide
             )
             _walk(cont, depth + 1, orig_index, [index_map[p] for p in overflow_pos])
 
@@ -1276,20 +1419,22 @@ def lower_deck(
                 if el.kind == "image":
                     el.image_bytes = image_assets[eff.orig_index]
 
-        deck_slides.append(Slide(
-            id=_uid(),
-            type=aslide.type,
-            layout=layout,
-            archetype=aslide.archetype,
-            title=aslide.title,
-            elements=elements,
-            notes=aslide.notes,
-            chart=aslide.chart,
-            table=aslide.table,
-            # Carry the SHARED expansion's index map so render_html stamps the same
-            # authored-body pointer the editor's lower_deck_for_editor model uses (BW-13).
-            body_index_map=list(eff.body_index_map),
-        ))
+        deck_slides.append(
+            Slide(
+                id=_uid(),
+                type=aslide.type,
+                layout=layout,
+                archetype=aslide.archetype,
+                title=aslide.title,
+                elements=elements,
+                notes=aslide.notes,
+                chart=aslide.chart,
+                table=aslide.table,
+                # Carry the SHARED expansion's index map so render_html stamps the same
+                # authored-body pointer the editor's lower_deck_for_editor model uses (BW-13).
+                body_index_map=list(eff.body_index_map),
+            )
+        )
 
     return Deck(
         id=_uid(),
@@ -1302,6 +1447,7 @@ def lower_deck(
 # ---------------------------------------------------------------------------
 # Layer 3 — editor geometry (percentage-based, consumed by React DeckEditor)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ElementGeometry:
@@ -1317,15 +1463,15 @@ class ElementGeometry:
 class LoweredElement:
     """One element as the React editor sees it — percentage geometry + JSON pointer."""
 
-    element_id: str        # e.g. "slide-0:title"
-    slide_id: str          # e.g. "slide-0"
-    kind: str              # "title" | "subtitle" | "bullet" | "chart" | "table" | "image_prompt"
-    content: str           # display text
+    element_id: str  # e.g. "slide-0:title"
+    slide_id: str  # e.g. "slide-0"
+    kind: str  # "title" | "subtitle" | "bullet" | "chart" | "table" | "image_prompt"
+    content: str  # display text
     geometry: ElementGeometry
-    font_size_vw: float    # font-size in vw units
-    font_weight: str       # "normal" | "bold"
-    font_style: str        # "normal" | "italic"
-    json_pointer: str      # RFC-6901 path into AuthoredDeck (e.g. "/slides/0/title")
+    font_size_vw: float  # font-size in vw units
+    font_weight: str  # "normal" | "bold"
+    font_style: str  # "normal" | "italic"
+    json_pointer: str  # RFC-6901 path into AuthoredDeck (e.g. "/slides/0/title")
 
 
 @dataclass
@@ -1357,19 +1503,19 @@ class LoweredDeck:
 _PCT = 100.0
 
 # Title strip: left=4%, top=6%, width=92%, height=13%
-_E_TITLE_LEFT   = round(_MARGIN / _SLIDE_W * _PCT, 2)        # ≈ 3.75
-_E_TITLE_TOP    = round(_MARGIN / _SLIDE_H * _PCT, 2)        # ≈ 6.67
-_E_TITLE_W      = round(_CW / _SLIDE_W * _PCT, 2)            # ≈ 92.5
-_E_TITLE_H      = round(_TITLE_H / _SLIDE_H * _PCT, 2)       # ≈ 13.33
+_E_TITLE_LEFT = round(_MARGIN / _SLIDE_W * _PCT, 2)  # ≈ 3.75
+_E_TITLE_TOP = round(_MARGIN / _SLIDE_H * _PCT, 2)  # ≈ 6.67
+_E_TITLE_W = round(_CW / _SLIDE_W * _PCT, 2)  # ≈ 92.5
+_E_TITLE_H = round(_TITLE_H / _SLIDE_H * _PCT, 2)  # ≈ 13.33
 
 # Body area: below title+bar
-_E_BODY_TOP     = round(_BODY_TOP / _SLIDE_H * _PCT, 2)      # ≈ 26.7
-_E_BODY_H       = round(_BODY_H / _SLIDE_H * _PCT, 2)        # ≈ 66.7
-_E_BODY_W       = round((_CW - _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 88.6
-_E_BODY_LEFT    = round((_MARGIN + _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 5.6
+_E_BODY_TOP = round(_BODY_TOP / _SLIDE_H * _PCT, 2)  # ≈ 26.7
+_E_BODY_H = round(_BODY_H / _SLIDE_H * _PCT, 2)  # ≈ 66.7
+_E_BODY_W = round((_CW - _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 88.6
+_E_BODY_LEFT = round((_MARGIN + _BODY_INDENT) / _SLIDE_W * _PCT, 2)  # ≈ 5.6
 
 # Per-bullet height: ~8% of slide
-_E_BULLET_H     = 8.0
+_E_BULLET_H = 8.0
 
 
 def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
@@ -1404,28 +1550,45 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         def _add(
             kind: str,
             content: str,
-            x: float, y: float, w: float, h: float,
-            fsz: float, fw: str, fi: str,
+            x: float,
+            y: float,
+            w: float,
+            h: float,
+            fsz: float,
+            fw: str,
+            fi: str,
             jptr: str,
+            _elements: list[LoweredElement] = elements,
+            _slide_id: str = slide_id,
         ) -> None:
-            elements.append(LoweredElement(
-                element_id=f"{slide_id}:{kind}" if ":" not in kind else f"{slide_id}:{kind}",
-                slide_id=slide_id,
-                kind=kind.split(":")[-1] if ":" in kind else kind,
-                content=content,
-                geometry=ElementGeometry(x=x, y=y, w=w, h=h),
-                font_size_vw=fsz,
-                font_weight=fw,
-                font_style=fi,
-                json_pointer=jptr,
-            ))
+            _elements.append(
+                LoweredElement(
+                    element_id=(
+                        f"{_slide_id}:{kind}" if ":" not in kind else f"{_slide_id}:{kind}"
+                    ),
+                    slide_id=_slide_id,
+                    kind=kind.split(":")[-1] if ":" in kind else kind,
+                    content=content,
+                    geometry=ElementGeometry(x=x, y=y, w=w, h=h),
+                    font_size_vw=fsz,
+                    font_weight=fw,
+                    font_style=fi,
+                    json_pointer=jptr,
+                )
+            )
 
         # Title element (always present).  Continuation fragments point back at
         # the ORIGINAL slide's title (their "(cont.)" suffix is display-only).
         _add(
-            kind="title", content=aslide.title,
-            x=_E_TITLE_LEFT, y=_E_TITLE_TOP, w=_E_TITLE_W, h=_E_TITLE_H,
-            fsz=2.5, fw="bold", fi="normal",
+            kind="title",
+            content=aslide.title,
+            x=_E_TITLE_LEFT,
+            y=_E_TITLE_TOP,
+            w=_E_TITLE_W,
+            h=_E_TITLE_H,
+            fsz=2.5,
+            fw="bold",
+            fi="normal",
             jptr=f"/slides/{orig}/title",
         )
         elements[-1].element_id = f"{slide_id}:title"
@@ -1435,9 +1598,15 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         if layout in ("title", "section_header", "closing") and render_body:
             sub_top = _E_TITLE_TOP + _E_TITLE_H + 2.0
             _add(
-                kind="subtitle", content=render_body[0],
-                x=_E_TITLE_LEFT, y=sub_top, w=_E_TITLE_W, h=_E_BULLET_H,
-                fsz=1.8, fw="normal", fi="italic",
+                kind="subtitle",
+                content=render_body[0],
+                x=_E_TITLE_LEFT,
+                y=sub_top,
+                w=_E_TITLE_W,
+                h=_E_BULLET_H,
+                fsz=1.8,
+                fw="normal",
+                fi="italic",
                 jptr=f"/slides/{orig}/body/{body_index_map[0]}",
             )
             elements[-1].element_id = f"{slide_id}:subtitle"
@@ -1454,9 +1623,15 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
             orig_bj = body_index_map[local_j]
             content_stripped = line.lstrip("• ")
             _add(
-                kind=f"body:{orig_bj}", content=content_stripped,
-                x=_E_BODY_LEFT, y=body_y, w=_E_BODY_W, h=_E_BULLET_H,
-                fsz=1.6, fw="normal", fi="normal",
+                kind=f"body:{orig_bj}",
+                content=content_stripped,
+                x=_E_BODY_LEFT,
+                y=body_y,
+                w=_E_BODY_W,
+                h=_E_BULLET_H,
+                fsz=1.6,
+                fw="normal",
+                fi="normal",
                 jptr=f"/slides/{orig}/body/{orig_bj}",
             )
             elements[-1].element_id = f"{slide_id}:body:{orig_bj}"
@@ -1467,9 +1642,15 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         if aslide.chart is not None:
             chart_desc = f"[{aslide.chart.kind} chart] {aslide.chart.title}"
             _add(
-                kind="chart", content=chart_desc,
-                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
-                fsz=1.4, fw="normal", fi="normal",
+                kind="chart",
+                content=chart_desc,
+                x=_E_TITLE_LEFT,
+                y=_E_BODY_TOP,
+                w=_E_TITLE_W,
+                h=55.0,
+                fsz=1.4,
+                fw="normal",
+                fi="normal",
                 jptr=f"/slides/{orig}/chart",
             )
             elements[-1].element_id = f"{slide_id}:chart"
@@ -1478,9 +1659,15 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         if aslide.table is not None:
             table_desc = f"[table] {' | '.join(aslide.table.headers[:4])}"
             _add(
-                kind="table", content=table_desc,
-                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
-                fsz=1.4, fw="normal", fi="normal",
+                kind="table",
+                content=table_desc,
+                x=_E_TITLE_LEFT,
+                y=_E_BODY_TOP,
+                w=_E_TITLE_W,
+                h=55.0,
+                fsz=1.4,
+                fw="normal",
+                fi="normal",
                 jptr=f"/slides/{orig}/table",
             )
             elements[-1].element_id = f"{slide_id}:table"
@@ -1488,20 +1675,28 @@ def lower_deck_for_editor(authored: AuthoredDeck) -> LoweredDeck:
         # Image prompt placeholder element
         if aslide.image_prompt is not None:
             _add(
-                kind="image_prompt", content=aslide.image_prompt,
-                x=_E_TITLE_LEFT, y=_E_BODY_TOP, w=_E_TITLE_W, h=55.0,
-                fsz=1.4, fw="normal", fi="normal",
+                kind="image_prompt",
+                content=aslide.image_prompt,
+                x=_E_TITLE_LEFT,
+                y=_E_BODY_TOP,
+                w=_E_TITLE_W,
+                h=55.0,
+                fsz=1.4,
+                fw="normal",
+                fi="normal",
                 jptr=f"/slides/{orig}/image_prompt",
             )
             elements[-1].element_id = f"{slide_id}:image_prompt"
 
-        lslides.append(LoweredSlide(
-            slide_id=slide_id,
-            slide_idx=si,
-            layout=layout,
-            bg_color=bg_color,
-            elements=elements,
-        ))
+        lslides.append(
+            LoweredSlide(
+                slide_id=slide_id,
+                slide_idx=si,
+                layout=layout,
+                bg_color=bg_color,
+                elements=elements,
+            )
+        )
 
     return LoweredDeck(
         title=authored.title,

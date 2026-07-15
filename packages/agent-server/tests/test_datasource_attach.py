@@ -39,7 +39,7 @@ class _FakeSession:
 
     async def list_dir(self, path: str) -> list[str]:
         prefix = path.rstrip("/") + "/"
-        return [k[len(prefix):] for k in self._files if k.startswith(prefix)]
+        return [k[len(prefix) :] for k in self._files if k.startswith(prefix)]
 
     async def read_file(self, path: str) -> bytes:
         return self._files.get(path, b"")
@@ -104,8 +104,7 @@ def _make_client() -> tuple[TestClient, str, SqliteEventStore, _FakeSession]:
 
 def _upload(client: TestClient, cid: str, files: list[tuple[str, bytes, str]]) -> object:
     parts = [
-        ("files", (fname, io.BytesIO(data), "application/octet-stream"))
-        for _, data, fname in files
+        ("files", (fname, io.BytesIO(data), "application/octet-stream")) for _, data, fname in files
     ]
     return client.post(f"/conversations/{cid}/files", files=parts)
 
@@ -140,8 +139,7 @@ async def test_single_upload_emits_exactly_one_datasource_event() -> None:
 
     # The MessageEvent announcement is still emitted (existing behavior).
     msgs = [
-        e for e in all_events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in all_events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert len(msgs) == 1
     assert "uploads/data.csv" in msgs[0].message.content
@@ -152,11 +150,15 @@ async def test_multi_file_upload_emits_one_datasource_event_not_many() -> None:
     turn). The contract summarizes the batch under one `name`, the docs list
     each file verbatim."""
     client, cid, store, _ = _make_client()
-    r = _upload(client, cid, [
-        ("files", b"a" * 100, "a.csv"),
-        ("files", b"b" * 200, "b.csv"),
-        ("files", b"c" * 300, "c.csv"),
-    ])
+    r = _upload(
+        client,
+        cid,
+        [
+            ("files", b"a" * 100, "a.csv"),
+            ("files", b"b" * 200, "b.csv"),
+            ("files", b"c" * 300, "c.csv"),
+        ],
+    )
     assert r.status_code == 200
 
     all_events = await store.get_events(cid)
@@ -241,8 +243,10 @@ async def test_datasource_event_survives_condensation() -> None:
     # The lossy summary IS present (the surrounding events were forgotten)…
     assert "[summary" in joined
     # …but the verbatim contract is NOT reduced to it.
-    assert "greeting.txt" not in joined.split("[summary")[1].split("</condensation")[-1] \
-        or "<datasource" in joined  # the <datasource> block precedes the summary
+    assert (
+        "greeting.txt" not in joined.split("[summary")[1].split("</condensation")[-1]
+        or "<datasource" in joined
+    )  # the <datasource> block precedes the summary
 
 
 async def test_datasource_event_renders_to_llm_context() -> None:

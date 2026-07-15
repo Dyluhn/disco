@@ -20,9 +20,7 @@ from ..runtime import ConversationRuntime
 from ._common import require_owned_conversation
 
 
-def make_debug_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     def _disabled() -> JSONResponse:
@@ -39,9 +37,7 @@ def make_debug_router(
         """Is inspect on, and which conversations currently have a trace?"""
         if not inspect_enabled():
             return _disabled()
-        return JSONResponse(
-            {"enabled": True, "conversations": registry().conversations()}
-        )
+        return JSONResponse({"enabled": True, "conversations": registry().conversations()})
 
     @router.get("/api/debug/trace/{conversation_id}")
     async def trace(conversation_id: str, request: Request) -> JSONResponse:
@@ -81,14 +77,13 @@ def make_debug_router(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
 
         # Conversation state (reconstructed from the append-only event log).
-        state_dict: dict[str, Any] = (
-            await store.get_state(conversation_id)
-        ).model_dump(mode="json")
+        state_dict: dict[str, Any] = (await store.get_state(conversation_id)).model_dump(
+            mode="json"
+        )
 
         # Full event log, each event serialised to its JSON-ready dict form.
         events_list: list[dict[str, Any]] = [
-            e.model_dump(mode="json")
-            for e in await store.get_events(conversation_id)
+            e.model_dump(mode="json") for e in await store.get_events(conversation_id)
         ]
 
         # Inspect trace — may be None when inspect is on but no model call has

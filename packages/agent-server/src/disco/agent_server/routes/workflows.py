@@ -21,17 +21,17 @@ from disco.core.llm.types import (
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.think import strip_think_spans
 from disco.core.workflow import (
-    ScheduleSpec,
     WORKFLOW_CONTROL_TOOLS,
+    ScheduleSpec,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
     WorkflowValidationFinding,
     compile_workflow_scope,
-    workflow_finish_tool_description,
-    workflow_finish_tool_schema,
     simulate_definition,
     validate_definition,
+    workflow_finish_tool_description,
+    workflow_finish_tool_schema,
 )
 from disco.tools import ToolDef, ToolScope, build_default_registry
 from disco.tools.builtin.workflow_tools import (
@@ -47,8 +47,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from ..runtime import ConversationRuntime
 from ..auth import current_owner_id, current_session
+from ..runtime import ConversationRuntime
 from ..workflow_schedule import JsonWorkflowScheduleStore
 
 _SAFE_ID_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")

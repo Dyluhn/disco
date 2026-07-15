@@ -118,9 +118,7 @@ class _FiringCondenser:
     def should_condense(self, view: View, *, token_count):
         return None if self.fired else CondensationRequest(soft=True, reason="tokens")
 
-    async def condense(
-        self, events, view, *, summarizer, reason="tokens", artifact_paths=None
-    ):
+    async def condense(self, events, view, *, summarizer, reason="tokens", artifact_paths=None):
         if self.fired:
             return None
         self.fired = True
@@ -223,17 +221,13 @@ def _build_events_read_twice(paths: list[str]) -> list:
         out.append(
             ActionEvent(
                 thought=f"write {p}",
-                tool_call=ToolCall(
-                    tool_name="file_write", arguments={"path": p, "content": ""}
-                ),
+                tool_call=ToolCall(tool_name="file_write", arguments={"path": p, "content": ""}),
             )
         )
         for cid, body in ((f"{p}-r1", "READ-1"), (f"{p}-r2", "READ-2")):
             a = ActionEvent(
                 thought=f"read {p}",
-                tool_call=ToolCall(
-                    tool_name="file_read", arguments={"path": p}, call_id=cid
-                ),
+                tool_call=ToolCall(tool_name="file_read", arguments={"path": p}, call_id=cid),
             )
             o = ObservationEvent(
                 tool_result=ToolResult(
@@ -298,20 +292,14 @@ def test_pin_survives_condensation_and_covers_touched_files(monkeypatch):
     )
     write = ActionEvent(
         thought="scaffold",
-        tool_call=ToolCall(
-            tool_name="file_write", arguments={"path": "app.js", "content": ""}
-        ),
+        tool_call=ToolCall(tool_name="file_write", arguments={"path": "app.js", "content": ""}),
     )
     obs = ObservationEvent(
-        tool_result=ToolResult(
-            call_id="w1", tool_name="file_write", success=True, content="ok"
-        ),
+        tool_result=ToolResult(call_id="w1", tool_name="file_write", success=True, content="ok"),
         action_id=write.id,
     )
     cond = _FiringCondenser()
-    loop = _FakeLoop(
-        assist=False, sandbox=sbx, events=[old, write, obs], condenser=cond
-    )
+    loop = _FakeLoop(assist=False, sandbox=sbx, events=[old, write, obs], condenser=cond)
     view = asyncio.run(ViewBuilder(loop).build(loop._log))
 
     # The condenser fired (a tombstone was emitted into the log).

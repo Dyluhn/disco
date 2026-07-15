@@ -62,6 +62,7 @@ def client_with_runtime() -> TestClient:
 def _seed_search_pair(store: SqliteEventStore, cid: str) -> None:
     """Append a paired (ActionEvent→ObservationEvent) for a ddgs.search call,
     so the projection has a real `search` cassette row to assert on."""
+
     async def go() -> None:
         store.create_conversation(cid, owner_id="local", surface="deep_research")
         await store.append(
@@ -226,8 +227,9 @@ def test_service_call_path_reads_same_projection() -> None:
         "action_id": "evt_a",
         "tool_result": {
             "tool_name": "ddgs.search",
-            "content": [{"url": "u", "title": "t", "snippet": "s",
-                          "source_engine": "ddgs", "rank": 0}],
+            "content": [
+                {"url": "u", "title": "t", "snippet": "s", "source_engine": "ddgs", "rank": 0}
+            ],
         },
     }
     rows = project_cassette_rows([action, obs])
@@ -245,8 +247,10 @@ def test_projection_is_deterministic_for_same_events() -> None:
         {
             "kind": "action",
             "id": "a1",
-            "tool_call": {"tool_name": "ddgs.search",
-                           "arguments": {"query": "q", "limit": 1, "deny": ["x.com"]}},
+            "tool_call": {
+                "tool_name": "ddgs.search",
+                "arguments": {"query": "q", "limit": 1, "deny": ["x.com"]},
+            },
         },
         {
             "kind": "observation",
@@ -268,14 +272,24 @@ def test_projection_skips_orphans_and_unknown_tools() -> None:
     rejected them at record-time too)."""
     events = [
         {"kind": "status", "status": "RUNNING"},
-        {"kind": "action", "id": "orphan",
-         "tool_call": {"tool_name": "ddgs.search",
-                        "arguments": {"query": "no-pair", "limit": 1, "deny": []}}},  # no obs
-        {"kind": "action", "id": "a2",
-         "tool_call": {"tool_name": "shell",
-                        "arguments": {"command": "ls"}}},  # not a service seam
-        {"kind": "observation", "action_id": "a2",
-         "tool_result": {"tool_name": "shell", "content": "files"}},
+        {
+            "kind": "action",
+            "id": "orphan",
+            "tool_call": {
+                "tool_name": "ddgs.search",
+                "arguments": {"query": "no-pair", "limit": 1, "deny": []},
+            },
+        },  # no obs
+        {
+            "kind": "action",
+            "id": "a2",
+            "tool_call": {"tool_name": "shell", "arguments": {"command": "ls"}},
+        },  # not a service seam
+        {
+            "kind": "observation",
+            "action_id": "a2",
+            "tool_result": {"tool_name": "shell", "content": "files"},
+        },
     ]
     rows = project_cassette_rows(events)
     assert rows == []
@@ -286,24 +300,44 @@ def test_projection_handles_extract_and_llm_seams() -> None:
     harness replay supports: search, extract, llm.complete."""
     events = [
         # extract pair
-        {"kind": "action", "id": "ax",
-         "tool_call": {"tool_name": "ddgs.extract",
-                        "arguments": {"url": "https://example.com/x"}}},
-        {"kind": "observation", "action_id": "ax",
-         "tool_result": {"tool_name": "ddgs.extract",
-                          "content": {"url": "https://example.com/x", "content": "hi"}}},
+        {
+            "kind": "action",
+            "id": "ax",
+            "tool_call": {
+                "tool_name": "ddgs.extract",
+                "arguments": {"url": "https://example.com/x"},
+            },
+        },
+        {
+            "kind": "observation",
+            "action_id": "ax",
+            "tool_result": {
+                "tool_name": "ddgs.extract",
+                "content": {"url": "https://example.com/x", "content": "hi"},
+            },
+        },
         # llm pair
-        {"kind": "action", "id": "al",
-         "tool_call": {"tool_name": "llm.complete",
-                        "arguments": {
-                            "role": "ModelRole.RAG_ANSWERER",
-                            "messages": [{"role": "user", "content": "hi"}],
-                            "tools": [],
-                            "temperature": 0.0,
-                        }}},
-        {"kind": "observation", "action_id": "al",
-         "tool_result": {"tool_name": "llm.complete",
-                          "content": {"text": "hello", "tool_calls": []}}},
+        {
+            "kind": "action",
+            "id": "al",
+            "tool_call": {
+                "tool_name": "llm.complete",
+                "arguments": {
+                    "role": "ModelRole.RAG_ANSWERER",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "tools": [],
+                    "temperature": 0.0,
+                },
+            },
+        },
+        {
+            "kind": "observation",
+            "action_id": "al",
+            "tool_result": {
+                "tool_name": "llm.complete",
+                "content": {"text": "hello", "tool_calls": []},
+            },
+        },
     ]
     rows = project_cassette_rows(events)
     seams = {r["seam"] for r in rows}
@@ -334,11 +368,14 @@ def test_cassette_record_lookup_unchanged() -> None:
     `record`/`lookup` semantics."""
     cas = Cassette()
     payload = {"query": "x", "limit": 1, "deny": []}
-    cas.record("search", payload, [{"url": "u", "title": "t", "snippet": "s",
-                                     "source_engine": "ddgs", "rank": 0}])
-    assert cas.lookup("search", payload) == [{"url": "u", "title": "t",
-                                                "snippet": "s", "source_engine": "ddgs",
-                                                "rank": 0}]
+    cas.record(
+        "search",
+        payload,
+        [{"url": "u", "title": "t", "snippet": "s", "source_engine": "ddgs", "rank": 0}],
+    )
+    assert cas.lookup("search", payload) == [
+        {"url": "u", "title": "t", "snippet": "s", "source_engine": "ddgs", "rank": 0}
+    ]
 
 
 # ---- 5. share-bundle share envelope (the /api/share/{token}/bundle path) ----

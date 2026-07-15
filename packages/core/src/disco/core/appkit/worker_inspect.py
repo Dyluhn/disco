@@ -229,9 +229,7 @@ def _read_block_gated(block: str, denial_ok: Callable[[str], bool]) -> bool:
     caller — control falls through the guard to the read — so it FAILS. An ignored
     auth result, a 200-regardless block, or a dead denial are the false-PASS holes
     this closes."""
-    guard = re.search(
-        r"if\s*\(\s*!\s*isAuthorized\s*\(\s*request\s*,\s*env\s*\)\s*\)\s*\{", block
-    )
+    guard = re.search(r"if\s*\(\s*!\s*isAuthorized\s*\(\s*request\s*,\s*env\s*\)\s*\)\s*\{", block)
     if guard is None:
         return False
     gbrace = block.find("{", guard.end() - 1)
@@ -369,7 +367,7 @@ def _region_has_run_insert(region: str) -> tuple[bool, bool]:
     found here; local runtime reachability is proved separately by
     `packages/core/tests/test_workerd_persistence.py`."""
     for m in re.finditer(r"\.insert\s*\(\s*leads\s*\)", region):
-        values = re.match(r"\s*\.values\s*\(", region[m.end():])
+        values = re.match(r"\s*\.values\s*\(", region[m.end() :])
         if values is None:
             continue
         values_open = m.end() + values.end() - 1
@@ -425,9 +423,7 @@ def _post_region(src: str, post_block: str) -> str:
         if name in seen:
             continue
         seen.add(name)
-        body = _braced_block_after(
-            src, r"\bfunction\s+" + re.escape(name) + r"\s*\([^)]*\)[^{]*\{"
-        )
+        body = _braced_block_after(src, r"\bfunction\s+" + re.escape(name) + r"\s*\([^)]*\)[^{]*\{")
         if body is not None:
             region += "\n" + body
     return region
@@ -513,9 +509,7 @@ def _admin_token_safe(src: str) -> bool:
     if _token_flows_to_sink(src, r"env\s*\.\s*ADMIN_TOKEN\b"):
         return False  # the token read piped straight into a sink
     for name in set(
-        re.findall(
-            r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*env\s*\.\s*ADMIN_TOKEN\b", src
-        )
+        re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*env\s*\.\s*ADMIN_TOKEN\b", src)
     ):
         if _token_flows_to_sink(src, r"\b" + re.escape(name) + r"\b"):
             return False  # an alias of the token escapes into a sink
@@ -665,9 +659,7 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
             "GET /api/leads does not early-return 401 via the auth guard before reading leads"
         )
     if not admin_guarded:
-        reasons.append(
-            "/admin does not early-return 401 via the auth guard before reading leads"
-        )
+        reasons.append("/admin does not early-return 401 via the auth guard before reading leads")
     if not bearer_checked:
         reasons.append(
             "isAuthorized does not validate the Authorization: Bearer token against ADMIN_TOKEN"
@@ -809,15 +801,11 @@ def inspect_lead_form(form_src: str, lead: Entity) -> tuple[bool, list[str]]:
         name = re.escape(field.name)
         has_input = re.search(r'name="' + name + r'"', code) is not None
         value_bound = re.search(r'value=\{\s*form\[\s*"' + name + r'"\s*\]', code) is not None
-        change_bound = (
-            re.search(r'updateField\(\s*"' + name + r'"\s*,', code) is not None
-        )
+        change_bound = re.search(r'updateField\(\s*"' + name + r'"\s*,', code) is not None
         if not has_input:
             reasons.append(f'no input named "{field.name}" for the lead field')
         elif not (value_bound and change_bound):
-            reasons.append(
-                f'the "{field.name}" input is not bound to form state (value/onChange)'
-            )
+            reasons.append(f'the "{field.name}" input is not bound to form state (value/onChange)')
     return (not reasons), reasons
 
 

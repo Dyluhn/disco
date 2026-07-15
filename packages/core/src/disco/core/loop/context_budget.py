@@ -130,6 +130,7 @@ def derive_context_caps(*, assist: bool, context_window: int | None) -> ContextC
         obs_snip_chars=obs_snip_chars,
     )
 
+
 # CW-6 — the observation-snip override (the cap raised in tandem with the read
 # budget for assist-OFF) lives in events.py as `obs_snip_override`. That module is
 # a foundational leaf (it defines LLMMessage); importing the `loop` package from it

@@ -7,12 +7,15 @@ from disco.tools.sandbox.base import ExecResult
 
 pytestmark = pytest.mark.asyncio
 
+
 class MockSandbox:
     def __init__(self, proc_dir: str):
         self.proc_dir = proc_dir
+
         async def _list(*args, **kwargs):
             return []
-        self.sessions = type('S', (), {'list': _list, 'namespace': ''})()
+
+        self.sessions = type("S", (), {"list": _list, "namespace": ""})()
 
     async def exec_shell(self, cmd: str, *args, **kwargs) -> ExecResult:
         return ExecResult(exit_code=0, stdout=self._run_probe_logic(cmd), stderr="")
@@ -26,19 +29,18 @@ class MockSandbox:
         results = []
         for port in ports:
             if port == 8000:
-                results.append({
-                    "port": 8000,
-                    "pid": 1234,
-                    "cmdline": "python3 -m http.server 8000",
-                    "session": "disco-preview"
-                })
+                results.append(
+                    {
+                        "port": 8000,
+                        "pid": 1234,
+                        "cmdline": "python3 -m http.server 8000",
+                        "session": "disco-preview",
+                    }
+                )
             elif port == 3000:
-                results.append({
-                    "port": 3000,
-                    "pid": 5678,
-                    "cmdline": "node server.js",
-                    "session": "disco-api"
-                })
+                results.append(
+                    {"port": 3000, "pid": 5678, "cmdline": "node server.js", "session": "disco-api"}
+                )
             else:
                 results.append({"port": port, "pid": None})
         return json.dumps(results)
@@ -70,8 +72,7 @@ async def test_server_status_formatting(tmp_path):
     assert "SERVER STATUS" in out.content
     assert "- preview: running — last: Serving at 8000" in out.content
     assert (
-        "- 8000: OWNED by pid 1234 (python3 -m http.server 8000) [session: preview]"
-        in out.content
+        "- 8000: OWNED by pid 1234 (python3 -m http.server 8000) [session: preview]" in out.content
     )
     assert "- 3000: OWNED by pid 5678 (node server.js) [session: api]" in out.content
     assert "- 5173: FREE" in out.content

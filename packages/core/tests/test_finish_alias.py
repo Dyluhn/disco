@@ -89,7 +89,6 @@ def test_alias_in_requery_known_names() -> None:
     assert _ALIAS not in known_plain and "finish" in known_plain
 
 
-
 # --- agent batched-call selection (P6 bugs 1+2) -------------------------------
 def _calls(*names):
     return [SimpleNamespace(tool_name=n, arguments={"k": n}) for n in names]
@@ -97,6 +96,7 @@ def _calls(*names):
 
 def test_batched_alias_plus_action_keeps_the_real_action() -> None:
     from disco.core.loop.agent import _pick_tool_call
+
     # [finalizer-alias, shell] → the REAL action survives (not discarded), W-32 alias-aware
     name, args = _pick_tool_call(_calls(_ALIAS, "shell"), _ALIAS)
     assert name == "shell" and args == {"k": "shell"}
@@ -106,6 +106,7 @@ def test_batched_alias_plus_action_keeps_the_real_action() -> None:
 
 def test_alias_alone_canonicalizes_to_finish() -> None:
     from disco.core.loop.agent import _pick_tool_call
+
     # a lone finalizer alias → canonical "finish" (the alias name never leaks downstream)
     assert _pick_tool_call(_calls(_ALIAS), _ALIAS)[0] == "finish"
     assert _pick_tool_call(_calls("finish"), _ALIAS)[0] == "finish"

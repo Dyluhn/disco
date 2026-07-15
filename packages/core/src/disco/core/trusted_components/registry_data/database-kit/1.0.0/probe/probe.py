@@ -51,9 +51,7 @@ def run(base_url: str, workspace: str) -> dict:
             }
         )
         return _verdict(checks)
-    checks.append(
-        {"name": "health_http_200", "passed": True, "detail": f"GET {url} -> 200"}
-    )
+    checks.append({"name": "health_http_200", "passed": True, "detail": f"GET {url} -> 200"})
 
     try:
         parsed = json.loads(body)

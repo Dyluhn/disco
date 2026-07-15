@@ -180,10 +180,10 @@ def _build_segment_payload_for_model(
         ]
         context = (
             "\nFor continuity only, these already accepted turns precede this batch; "
-            "do not repeat them:\n"
-            + json.dumps(context_rows, ensure_ascii=False)
+            "do not repeat them:\n" + json.dumps(context_rows, ensure_ascii=False)
         )
-    batch_protocol = f"""
+    batch_protocol = (
+        f"""
 
 Return ONLY one valid JSON object with exactly this shape:
 {{
@@ -196,7 +196,9 @@ Return ONLY one valid JSON object with exactly this shape:
 {total_instruction}
 Generate exactly the contiguous turn indexes {start_turn} through {end_turn}.
 Never repeat an earlier turn index. Do not include markdown fences or prose outside JSON.
-""" + context
+"""
+        + context
+    )
     return {
         "model": model,
         "messages": [
@@ -204,7 +206,7 @@ Never repeat an earlier turn index. Do not include markdown fences or prose outs
             {
                 "role": "user",
                 "content": prompt.format(report_text=report_text) + batch_protocol,
-            }
+            },
         ],
         "temperature": 0.7,
         "max_tokens": _segment_output_tokens(requested_turns),
@@ -230,9 +232,7 @@ async def _call_llm(payload: dict, llm_url: str) -> LLMResponse:
         )
 
 
-async def _call_llm_with_key(
-    payload: dict, llm_url: str, api_key: str
-) -> LLMResponse:
+async def _call_llm_with_key(payload: dict, llm_url: str, api_key: str) -> LLMResponse:
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -395,9 +395,7 @@ def _validate_script_batch(
     except json.JSONDecodeError as exc:
         return None, None, f"Invalid JSON: {exc}"
 
-    validate_full = (
-        _validate_turn_script_single if mode == "single" else _validate_turn_script
-    )
+    validate_full = _validate_turn_script_single if mode == "single" else _validate_turn_script
     if isinstance(data, list):
         if start_turn != 1:
             return None, None, "Continuation returned an unindexed legacy turn array"
@@ -470,22 +468,22 @@ def _coerce_llm_response(value: LLMResponseLike) -> LLMResponse:
     raise TypeError(f"LLM adapter returned unsupported response type {type(value).__name__}")
 
 
-def _malformed_retry_payload(
-    payload: dict[str, Any], response: str, error: str
-) -> dict[str, Any]:
+def _malformed_retry_payload(payload: dict[str, Any], response: str, error: str) -> dict[str, Any]:
     retry_payload = dict(payload)
     retry_payload["messages"] = list(payload["messages"])
-    retry_payload["messages"].extend([
-        {"role": "assistant", "content": response},
-        {
-            "role": "user",
-            "content": (
-                f"Your JSON batch was invalid: {error}\n\n"
-                "Return ONLY a corrected, complete JSON object for the exact indexed "
-                "batch requested. Do not repeat, skip, or renumber turns."
-            ),
-        },
-    ])
+    retry_payload["messages"].extend(
+        [
+            {"role": "assistant", "content": response},
+            {
+                "role": "user",
+                "content": (
+                    f"Your JSON batch was invalid: {error}\n\n"
+                    "Return ONLY a corrected, complete JSON object for the exact indexed "
+                    "batch requested. Do not repeat, skip, or renumber turns."
+                ),
+            },
+        ]
+    )
     return retry_payload
 
 
@@ -542,10 +540,7 @@ async def _generate_segmented_turn_script(
             finish_reason = (response.finish_reason or "").strip().lower()
             if finish_reason == "length":
                 truncations += 1
-                if (
-                    truncations >= _SCRIPT_MAX_TRUNCATIONS_PER_BATCH
-                    or requested_turns == 1
-                ):
+                if truncations >= _SCRIPT_MAX_TRUNCATIONS_PER_BATCH or requested_turns == 1:
                     raise AudioScriptGenerationError(
                         "Provider truncated the audio turn-script batch at "
                         f"turn {start_turn} after {truncations} bounded attempts "
@@ -587,9 +582,7 @@ async def _generate_segmented_turn_script(
             break
 
     serialized = json.dumps([turn.model_dump() for turn in accepted])
-    validate_full = (
-        _validate_turn_script_single if mode == "single" else _validate_turn_script
-    )
+    validate_full = _validate_turn_script_single if mode == "single" else _validate_turn_script
     validated, error = validate_full(serialized)
     if error is not None or validated is None:
         raise AudioScriptGenerationError(
@@ -767,8 +760,7 @@ class AudioOverviewTool:
                     return None, ToolOutcome(
                         success=False,
                         content=(
-                            "Audio overview secret_ref is not allowed for this "
-                            "endpoint origin."
+                            "Audio overview secret_ref is not allowed for this endpoint origin."
                         ),
                         error="tts secret_ref origin mismatch",
                     )
@@ -828,8 +820,11 @@ class AudioOverviewTool:
             try:
                 if cfg.is_remote:
                     pcm = await _synthesize_remote(
-                        turn.text, voice, cfg.remote_base,
-                        api_key=cfg.remote_key, model=cfg.remote_model,
+                        turn.text,
+                        voice,
+                        cfg.remote_base,
+                        api_key=cfg.remote_key,
+                        model=cfg.remote_model,
                     )
                 else:
                     pcm = await _synthesize_local(turn.text, voice)
@@ -867,9 +862,7 @@ class AudioOverviewTool:
     def _mix_and_encode(self, pcm_turns: list[Any], silence_ms: int) -> bytes:
         """Step 4: mix the per-turn PCM with inter-turn silence (one sample rate end
         to end), then encode the whole overview to MP3 exactly once."""
-        mixed_pcm = mix_pcm(
-            pcm_turns, silence_ms=silence_ms, sample_rate=TTS_SAMPLE_RATE
-        )
+        mixed_pcm = mix_pcm(pcm_turns, silence_ms=silence_ms, sample_rate=TTS_SAMPLE_RATE)
         return encode_mp3(mixed_pcm, sample_rate=TTS_SAMPLE_RATE)
 
     async def _write_outputs(
@@ -913,9 +906,7 @@ class AudioOverviewTool:
             },
         )
 
-    def _build_transcript(
-        self, turns: list[Turn], voice_a: str, voice_b: str
-    ) -> str:
+    def _build_transcript(self, turns: list[Turn], voice_a: str, voice_b: str) -> str:
         """Step 5: render the turn-script to a Markdown transcript."""
         transcript_lines: list[str] = [
             "# Audio Overview Transcript",

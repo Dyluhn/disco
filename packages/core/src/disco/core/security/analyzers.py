@@ -58,8 +58,10 @@ _SHELL_HIGH: list[tuple[re.Pattern[str], str]] = [
 
 _SHELL_MEDIUM: list[tuple[re.Pattern[str], str]] = [
     (
-        re.compile(r"\b(apt|apt-get|yum|dnf|pip3?|npm|pnpm|yarn|gem|cargo|brew|go|go install)\b"
-                   r"[^\n;|&]*\b(install|add|get)\b"),
+        re.compile(
+            r"\b(apt|apt-get|yum|dnf|pip3?|npm|pnpm|yarn|gem|cargo|brew|go|go install)\b"
+            r"[^\n;|&]*\b(install|add|get)\b"
+        ),
         "package installation",
     ),
     (re.compile(r"\bgit\s+push\b"), "pushing to a remote"),
@@ -112,11 +114,32 @@ _SHELL_DENY: list[tuple[re.Pattern[str], str]] = [
 # overridden, so a false positive would block ordinary builds.
 _PROTECTED_ROOTS: frozenset[str] = frozenset(
     {
-        "/", "/*", "/.", "/..",
-        "~", "$HOME", "${HOME}",
-        "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64",
-        "/libx32", "/mnt", "/opt", "/proc", "/root", "/run", "/sbin", "/srv",
-        "/sys", "/usr", "/var",
+        "/",
+        "/*",
+        "/.",
+        "/..",
+        "~",
+        "$HOME",
+        "${HOME}",
+        "/bin",
+        "/boot",
+        "/dev",
+        "/etc",
+        "/home",
+        "/lib",
+        "/lib32",
+        "/lib64",
+        "/libx32",
+        "/mnt",
+        "/opt",
+        "/proc",
+        "/root",
+        "/run",
+        "/sbin",
+        "/srv",
+        "/sys",
+        "/usr",
+        "/var",
     }
 )
 
@@ -165,8 +188,20 @@ def _resolve_target(token: str, assignments: dict[str, str]) -> str:
 # leading `NAME=val` assignments — is what lets us analyze the COMMAND position
 # only, so `echo rm -rf /` (rm is an ARGUMENT, harmless) is never a false positive.
 _CMD_PREFIXES: frozenset[str] = frozenset(
-    {"sudo", "doas", "command", "builtin", "exec", "env", "nice", "nohup",
-     "time", "ionice", "stdbuf", "setsid"}
+    {
+        "sudo",
+        "doas",
+        "command",
+        "builtin",
+        "exec",
+        "env",
+        "nice",
+        "nohup",
+        "time",
+        "ionice",
+        "stdbuf",
+        "setsid",
+    }
 )
 
 
@@ -232,9 +267,7 @@ def _find_deny(rest: list[str], assignments: dict[str, str]) -> str | None:
         return None
     # `-exec /bin/rm …` is still rm — match by basename, not the literal token.
     has_rm = any(t.rsplit("/", 1)[-1] == "rm" for t in rest)
-    destructive = "-delete" in rest or (
-        ("-exec" in rest or "-execdir" in rest) and has_rm
-    )
+    destructive = "-delete" in rest or (("-exec" in rest or "-execdir" in rest) and has_rm)
     return "recursive find-delete of a protected system path" if destructive else None
 
 

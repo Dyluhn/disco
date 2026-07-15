@@ -65,9 +65,7 @@ async def _enrich_image_pricing(
                 m.image_price_per_m = max(rates) * 1_000_000  # USD per M image tokens
 
     try:
-        await asyncio.wait_for(
-            asyncio.gather(*(one(m) for m in targets)), timeout=_ENRICH_BUDGET_S
-        )
+        await asyncio.wait_for(asyncio.gather(*(one(m) for m in targets)), timeout=_ENRICH_BUDGET_S)
     except TimeoutError:
         pass  # partial enrichment is fine — unenriched models fall back in the UI
 

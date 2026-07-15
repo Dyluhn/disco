@@ -238,9 +238,7 @@ async def test_vision_request_succeeds_when_a_vision_model_is_assigned():
     request runs against it."""
     router, _sink, _ = build_router()
     ctx = CallContext(model_override="frontier")
-    resp = await router.complete(
-        _req(requirements=frozenset({Requirement.VISION})), context=ctx
-    )
+    resp = await router.complete(_req(requirements=frozenset({Requirement.VISION})), context=ctx)
     assert resp.model_used == "frontier-xl"
     assert resp.routing.path == "manual"
 

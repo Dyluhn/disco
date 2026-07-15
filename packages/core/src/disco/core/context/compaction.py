@@ -171,7 +171,5 @@ def resolved_ranges_from_events(events: Sequence[Event]) -> tuple[ResolvedContex
                 if se is not None
                 else None
             )
-            out.append(
-                ResolvedContextRange(range_id=e.range_id, reason=e.reason, summary_ref=sref)
-            )
+            out.append(ResolvedContextRange(range_id=e.range_id, reason=e.reason, summary_ref=sref))
     return tuple(out)

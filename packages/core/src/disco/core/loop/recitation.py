@@ -112,9 +112,7 @@ class RecitationRegrounder:
         # (e.g. after a condensation). That keeps the cadence tied to
         # MODEL TURNS, not View re-materializations.
         self._loop._recitation_step_count += 1
-        if not (
-            view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)
-        ):
+        if not (view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)):
             # No tail recap in the rendered View (no plan yet) — nothing
             # to gate. Don't touch the signature: the next step with a
             # plan will drift on signature != None.
@@ -122,9 +120,7 @@ class RecitationRegrounder:
         if context_pack_active:
             narrowed = _recitation_message(events, context_pack_active=True)
             if narrowed is not None:
-                view = view.model_copy(
-                    update={"messages": [*view.messages[:-1], narrowed]}
-                )
+                view = view.model_copy(update={"messages": [*view.messages[:-1], narrowed]})
         if self._loop._should_emit_recitation(events):
             # The View already has a tail-recap; the gate fired (cadence
             # boundary or drift). Record the signature so the NEXT step
@@ -277,20 +273,24 @@ class RecitationRegrounder:
             existing = (await sbx.read_file(path)).decode("utf-8", errors="replace")
         except (FileNotFoundError, NotADirectoryError):
             try:
-                existing = (
-                    await sbx.read_file(self._loop._LEGACY_MEMORY_PATH)
-                ).decode("utf-8", errors="replace")
+                existing = (await sbx.read_file(self._loop._LEGACY_MEMORY_PATH)).decode(
+                    "utf-8", errors="replace"
+                )
             except Exception:  # noqa: BLE001 — no legacy mirror either: fresh start
                 existing = ""
         except Exception:  # noqa: BLE001 — read flakiness: start clean
             existing = ""
-        lines: list[str] = existing.splitlines() if existing.strip() else [
-            "# Standing memory",
-            "",
-            "Durable facts the agent learned this run (C5: write-through mirror "
-            "of the in-View KnowledgeEvent channel).",
-            "",
-        ]
+        lines: list[str] = (
+            existing.splitlines()
+            if existing.strip()
+            else [
+                "# Standing memory",
+                "",
+                "Durable facts the agent learned this run (C5: write-through mirror "
+                "of the in-View KnowledgeEvent channel).",
+                "",
+            ]
+        )
         if scope:
             header = f"## {scope}"
             if header not in lines:

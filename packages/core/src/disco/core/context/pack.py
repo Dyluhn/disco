@@ -22,7 +22,7 @@ from .source_priority import SourceKind
 _T = TypeVar("_T")
 
 
-def _cap(seq: Sequence[_T], kind: SourceKind, policy: CompactionPolicy) -> tuple[_T, ...]:
+def _cap[T](seq: Sequence[T], kind: SourceKind, policy: CompactionPolicy) -> tuple[T, ...]:
     """Cap a sequence to the policy limit for ``kind``. Never-compact kinds
     (and uncapped kinds) are returned in full."""
     limit = policy.limit_for(kind)
@@ -67,9 +67,7 @@ class ContextPack(BaseModel):
         )
 
         # Only UNRESOLVED failures reach the model; never-compact keeps them all.
-        unresolved_failures = tuple(
-            f for f in ledger.latest_verifier_failures if not f.resolved
-        )
+        unresolved_failures = tuple(f for f in ledger.latest_verifier_failures if not f.resolved)
         return cls(
             active_goal=ledger.active_goal,
             active_contract=ledger.active_contract,

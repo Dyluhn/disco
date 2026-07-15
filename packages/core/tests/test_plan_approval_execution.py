@@ -97,8 +97,7 @@ async def test_kick_after_approval_produces_action_or_terminal_failure():
     )
     # The terminal must NOT be a false FINISHED.
     finished = any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in events
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
     )
     assert has_action or terminal_failure
     assert not finished, "approved-but-no-execution must not land FINISHED"
@@ -125,8 +124,7 @@ async def test_approval_then_no_action_is_bounded_stuck_not_finished():
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
     assert not any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in events
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
     )
     # Bounded: the gate fired its full cap (no infinite loop) and the run landed
     # in a handful of turns (the script's finish repeats but the loop halted).
@@ -232,4 +230,6 @@ async def test_failed_productive_actions_do_not_satisfy_execution_gate():
         if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_insert_lines"
     )
     assert (nudges[0].seq or 0) < (successful_insert.seq or 0)
-    assert (await store.get_state("appr-failed-actions")).execution_status == ConversationStatus.FINISHED
+    assert (
+        await store.get_state("appr-failed-actions")
+    ).execution_status == ConversationStatus.FINISHED

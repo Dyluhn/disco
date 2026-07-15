@@ -69,10 +69,18 @@ def _bounded_box(network: str = "none") -> Iterator[str]:
     one container is alive per `with` block (the tests never nest these)."""
     name = f"disco-sbx-itest-{uuid.uuid4().hex[:12]}"
     res = _run(
-        "run", "-d", "--rm", "--name", name,
-        "--memory=2g", "--cpus=2", "--pids-limit=512",
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        name,
+        "--memory=2g",
+        "--cpus=2",
+        "--pids-limit=512",
         f"--network={network}",
-        _IMAGE, "sleep", "infinity",
+        _IMAGE,
+        "sleep",
+        "infinity",
     )
     assert res.returncode == 0, f"failed to start bounded box: {res.stderr}"
     try:

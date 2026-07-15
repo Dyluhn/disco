@@ -119,7 +119,7 @@ def _nli_round0_empty_round1_supported() -> FakeNLI:
     return FakeNLI(
         {
             _ROUND0_CLAIM_TEXT: "contradict",  # → score 0.0 → not entail → "unsupported"
-            _ROUND1_CLAIM_TEXT: "entail",      # → score 1.0 → "supported"
+            _ROUND1_CLAIM_TEXT: "entail",  # → score 1.0 → "supported"
         }
     )
 
@@ -278,12 +278,14 @@ async def test_off_path_byte_identical_when_round0_has_answer():
                 out.append({"type": "token", "token": f["token"], "block_id": f["block_id"]})
             elif f["type"] == "final":
                 # Compare the answer text blocks (not passage ids which are run-specific)
-                out.append({
-                    "type": "final",
-                    "blocks": f["answer"]["blocks"],
-                    "claims_verdicts": [c["verdict"] for c in f["answer"]["claims"]],
-                    "unsupported_count": f["answer"]["unsupported_count"],
-                })
+                out.append(
+                    {
+                        "type": "final",
+                        "blocks": f["answer"]["blocks"],
+                        "claims_verdicts": [c["verdict"] for c in f["answer"]["claims"]],
+                        "unsupported_count": f["answer"]["unsupported_count"],
+                    }
+                )
             else:
                 out.append(f)
         return out
@@ -313,9 +315,7 @@ async def test_reformulates_once_when_round0_has_no_supported_claims():
     nli = _nli_round0_empty_round1_supported()
 
     # Two different search results so round 1 can return a fresh URL
-    multi_search = FakeSearchProvider(
-        [hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)]
-    )
+    multi_search = FakeSearchProvider([hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)])
     extraction = _make_extraction([_SEARCH_URL_R0, _SEARCH_URL_R1])
 
     # Router returns doomed answer on call 0, good answer on call 1
@@ -352,9 +352,7 @@ async def test_reformulates_once_when_round0_has_no_supported_claims():
     )
 
     # Round-1 tokens (from _ROUND1_ANSWER) ARE present
-    assert "blue" in emitted_text, (
-        f"Round-1 answer tokens missing from output: {emitted_text!r}"
-    )
+    assert "blue" in emitted_text, f"Round-1 answer tokens missing from output: {emitted_text!r}"
 
     # The final answer uses the round-1 result (has the supported claim)
     final = next(f for f in frames if f["type"] == "final")
@@ -369,7 +367,8 @@ async def test_reformulates_once_when_round0_has_no_supported_claims():
     assert types[-1] == "state" and frames[-1]["status"] == "finished"
     assert types[-2] == "final"
     reformulating_idx = next(
-        i for i, f in enumerate(frames)
+        i
+        for i, f in enumerate(frames)
         if f.get("type") == "phase" and f.get("phase") == "reformulating"
     )
     first_token_idx = next(i for i, f in enumerate(frames) if f["type"] == "token")
@@ -409,15 +408,12 @@ async def test_bound_honoured_emits_best_effort_final_when_always_empty():
     )
 
     # Exactly one reformulate between round 0 and round 1
-    assert len(rewriter.calls) == 1, (
-        f"expected ≤1 rewrite calls, got {rewriter.calls}"
-    )
+    assert len(rewriter.calls) == 1, f"expected ≤1 rewrite calls, got {rewriter.calls}"
 
     # A reformulating phase frame was emitted
-    assert any(
-        f.get("type") == "phase" and f.get("phase") == "reformulating"
-        for f in frames
-    ), "expected reformulating phase frame"
+    assert any(f.get("type") == "phase" and f.get("phase") == "reformulating" for f in frames), (
+        "expected reformulating phase frame"
+    )
 
     # Terminates with a final + state:finished (best-effort)
     types = [f["type"] for f in frames]
@@ -427,9 +423,7 @@ async def test_bound_honoured_emits_best_effort_final_when_always_empty():
     # The last round's answer (round 1) is what's in final (not round 0)
     token_frames = [f for f in frames if f["type"] == "token"]
     emitted_text = "".join(f["token"] for f in token_frames)
-    assert "blue" in emitted_text, (
-        f"Expected round-1 tokens in output, got: {emitted_text!r}"
-    )
+    assert "blue" in emitted_text, f"Expected round-1 tokens in output, got: {emitted_text!r}"
     assert "unclear" not in emitted_text, (
         f"Round-0 draft tokens should not appear, got: {emitted_text!r}"
     )
@@ -474,8 +468,7 @@ async def test_default_max_rounds_never_reformulates():
 
     # No reformulating phase frame
     assert not any(
-        f.get("type") == "phase" and f.get("phase") == "reformulating"
-        for f in frames
+        f.get("type") == "phase" and f.get("phase") == "reformulating" for f in frames
     ), "reformulating frame emitted with max_research_rounds=1"
 
     # Pipeline still completes normally — final + finished

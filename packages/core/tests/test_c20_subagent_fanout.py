@@ -112,7 +112,8 @@ class _StubFanout:
         self.idx += 1
         spec = self._scripted[i]
         return _make_tool_result(
-            call_id=call_id, success=spec.get("success", True),
+            call_id=call_id,
+            success=spec.get("success", True),
             content=spec["content"],
             structured=spec.get("structured"),
             error=spec.get("error"),
@@ -288,11 +289,7 @@ async def test_c20_fanout_over_cap_is_refused_no_observation():
         # (every fan-out action has a unique call_id; the cap-refusal
         # AgentErrorEvent echoes the over-cap action's call_id).
         and e.tool_call_id
-        in {
-            a.tool_call.call_id
-            for a in fanout_actions
-            if a.tool_call is not None
-        }
+        in {a.tool_call.call_id for a in fanout_actions if a.tool_call is not None}
     ]
     # _FANOUT_MAX_PER_RUN successful dispatches, +1 cap-refused action
     # whose ObservationEvent is an AgentErrorEvent (not a successful

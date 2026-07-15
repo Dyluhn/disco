@@ -94,9 +94,7 @@ async def test_create_fresh_directive_has_all_six_anchored_headings():
     # The six anchored headings must all appear, in the directive.
     directive = _final_user_message(req)
     for heading in ANCHORED_HEADINGS:
-        assert heading in directive, (
-            f"create-fresh directive missing heading: {heading!r}"
-        )
+        assert heading in directive, f"create-fresh directive missing heading: {heading!r}"
     # And the create-fresh signature: the directive opens with a condense-
     # from-above framing, NOT an update-in-place framing.
     assert "Condense the conversation above" in directive
@@ -193,14 +191,7 @@ async def test_create_fresh_and_update_in_place_are_observably_different():
     fresh = _final_user_message(recorder.seen_requests[-1])
 
     recorder.seen_requests.clear()
-    prior = (
-        "GOAL: x\n"
-        "CONSTRAINTS: y\n"
-        "PROGRESS: z\n"
-        "DECISIONS: w\n"
-        "NEXT: v\n"
-        "FILES: u\n"
-    )
+    prior = "GOAL: x\nCONSTRAINTS: y\nPROGRESS: z\nDECISIONS: w\nNEXT: v\nFILES: u\n"
     await summ.summarize([LLMMessage(role="user", content=prior)])
     update = _final_user_message(recorder.seen_requests[-1])
 
@@ -219,29 +210,34 @@ async def test_marker_scan_detects_goal_prefix_in_any_message():
     turn (e.g. user/agent chat) MUST NOT contain it; a turn that is a prior
     anchored summary MUST. This pins the marker contract on the helper."""
     # No prior summary → no detection.
-    assert _has_prior_anchored_summary(
-        [LLMMessage(role="user", content="just a normal user turn")]
-    ) is False
+    assert (
+        _has_prior_anchored_summary([LLMMessage(role="user", content="just a normal user turn")])
+        is False
+    )
     # Empty messages list → no detection.
     assert _has_prior_anchored_summary([]) is False
     # The prior summary, anywhere in the message list, fires the detection —
     # the scan walks every message, not just the last.
-    assert _has_prior_anchored_summary(
-        [
-            LLMMessage(role="user", content="earlier context"),
-            LLMMessage(role="user", content="GOAL: ship the feature\n..."),
-        ]
-    ) is True
+    assert (
+        _has_prior_anchored_summary(
+            [
+                LLMMessage(role="user", content="earlier context"),
+                LLMMessage(role="user", content="GOAL: ship the feature\n..."),
+            ]
+        )
+        is True
+    )
     # A lowercase "goal:" is NOT the marker (the directive mandates the
     # uppercase prefix); this guards against a too-loose scan.
-    assert _has_prior_anchored_summary(
-        [LLMMessage(role="user", content="goal: lowercase is not the marker")]
-    ) is False
+    assert (
+        _has_prior_anchored_summary(
+            [LLMMessage(role="user", content="goal: lowercase is not the marker")]
+        )
+        is False
+    )
     # An empty-string content is also a non-match (the marker is the
     # `GOAL:` prefix, not the empty string).
-    assert _has_prior_anchored_summary(
-        [LLMMessage(role="user", content="")]
-    ) is False
+    assert _has_prior_anchored_summary([LLMMessage(role="user", content="")]) is False
     # The defensive `isinstance(c, str)` check in the helper means a non-
     # string `content` (if a future schema ever loosens the type) is
     # silently skipped, not crashed on. We can't construct that through
@@ -262,14 +258,10 @@ async def test_marker_scan_uses_goal_prefix_not_other_anchored_headings():
         "NEXT: implement step 2\n"
         "FILES: src/foo.py\n"
     )
-    assert _has_prior_anchored_summary(
-        [LLMMessage(role="user", content=partial)]
-    ) is False
+    assert _has_prior_anchored_summary([LLMMessage(role="user", content=partial)]) is False
     # But the full template, leading with GOAL:, does.
     full = "GOAL: ship it\n" + partial
-    assert _has_prior_anchored_summary(
-        [LLMMessage(role="user", content=full)]
-    ) is True
+    assert _has_prior_anchored_summary([LLMMessage(role="user", content=full)]) is True
 
 
 # ---- (f) The directive selector mirrors the marker scan --------------------

@@ -127,7 +127,7 @@ async def test_truncated_prose_step_is_flagged_and_not_finished():
     fragment as a complete answer is the bug."""
     for agent in (
         ResearchAgent(_truncated_router()),  # prose_finishes=True
-        BuildAgent(_truncated_router()),     # prose_finishes=False
+        BuildAgent(_truncated_router()),  # prose_finishes=False
     ):
         step = await _step(agent, OperatingMode.LONG_HORIZON)
         assert step.truncated is True
@@ -169,7 +169,7 @@ async def test_unclosed_think_prose_is_flagged_truncated_despite_stop():
     of mis-reading it as a finished no-op) EVEN WHEN finish_reason=="stop"."""
     for agent in (
         ResearchAgent(_unclosed_think_router()),  # prose_finishes=True
-        BuildAgent(_unclosed_think_router()),     # prose_finishes=False
+        BuildAgent(_unclosed_think_router()),  # prose_finishes=False
     ):
         step = await _step(agent, OperatingMode.LONG_HORIZON)
         assert step.truncated is True

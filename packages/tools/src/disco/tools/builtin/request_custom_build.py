@@ -24,8 +24,7 @@ class RequestCustomBuildArgs(BaseModel):
     needed_capabilities: list[str] = Field(
         default_factory=list,
         description=(
-            "The raw capabilities needed, such as 'shell', 'file_write', "
-            "'code_exec', or 'browser'."
+            "The raw capabilities needed, such as 'shell', 'file_write', 'code_exec', or 'browser'."
         ),
     )
 
@@ -48,11 +47,7 @@ class RequestCustomBuildTool:
     )
 
     async def run(self, args: RequestCustomBuildArgs, ctx: ToolContext) -> ToolOutcome:
-        caps = (
-            ", ".join(args.needed_capabilities)
-            if args.needed_capabilities
-            else "(unspecified)"
-        )
+        caps = ", ".join(args.needed_capabilities) if args.needed_capabilities else "(unspecified)"
         return ToolOutcome(
             success=True,
             content=(

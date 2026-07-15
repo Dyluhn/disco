@@ -85,10 +85,7 @@ async def test_unknown_pci_id_preserves_numeric_identity_without_guessing() -> N
     sandbox = _Sandbox(
         ExecResult(
             exit_code=0,
-            stdout=(
-                "SOURCE\t/usr/share/misc/pci.ids\n"
-                "VENDOR\tExample Devices Incorporated\n"
-            ),
+            stdout=("SOURCE\t/usr/share/misc/pci.ids\nVENDOR\tExample Devices Incorporated\n"),
             stderr="",
         )
     )

@@ -56,17 +56,13 @@ async def _seed_revision_state(store, cid: str, *, planning_marker: bool) -> Non
     await store.append(cid, plan)
     await store.append(
         cid,
-        StatusEvent(
-            status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
-        ),
+        StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id),
     )
     await store.append(
         cid,
         MessageEvent(
             source=EventSource.USER,
-            message=LLMMessage(
-                role="user", content="do not include models released before 2026"
-            ),
+            message=LLMMessage(role="user", content="do not include models released before 2026"),
         ),
     )
     if planning_marker:
@@ -147,9 +143,7 @@ async def test_awaiting_approval_without_new_message_stays_parked(monkeypatch):
     await store.append("c1", plan)
     await store.append(
         "c1",
-        StatusEvent(
-            status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
-        ),
+        StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id),
     )
     before = len(await store.get_events("c1"))
 

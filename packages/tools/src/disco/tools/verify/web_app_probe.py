@@ -238,8 +238,7 @@ def compute_verdict(
             first = console_errors[0]
             where = f" @ {first['source']}" if first["source"] else ""
             summary = (
-                f"App loaded (HTTP {http_status}) but threw a console error: "
-                f"{first['text']}{where}"
+                f"App loaded (HTTP {http_status}) but threw a console error: {first['text']}{where}"
             )
             next_action = f"Fix the console error: {first['text']}"
         else:

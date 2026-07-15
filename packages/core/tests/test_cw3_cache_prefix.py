@@ -301,11 +301,13 @@ def test_no_directional_words_in_recovery_markers():
     msg = LLMMessage(
         role="assistant",
         content="",
-        tool_calls=[{
-            "id": "c1",
-            "name": "file_write",
-            "arguments": {"path": "app.js", "content": raw},
-        }],
+        tool_calls=[
+            {
+                "id": "c1",
+                "name": "file_write",
+                "arguments": {"path": "app.js", "content": raw},
+            }
+        ],
     )
     out = retarget_elided_arg_markers([msg])
     snipped = out[0].tool_calls[0]["arguments"]["content"]

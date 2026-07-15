@@ -91,9 +91,7 @@ async def test_identical_plan_update_warns_then_halts_on_workless_streak():
     assert len(nudges) == 1
     assert "One more identical proposal will halt the run" in nudges[0].message.content
     assert state.execution_status == ConversationStatus.STUCK
-    assert_blocked_question_landing(
-        events, legacy_detail="bookkeeping_only", flavor="terminal"
-    )
+    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only", flavor="terminal")
     assert provider.calls >= 2 + _PROPOSE_PLAN_UPDATE_REPEAT_CAP
 
 
@@ -165,9 +163,7 @@ async def test_interactive_identical_plan_update_still_awaits_approval_without_n
         autonomous=False,
     )
     await store.append(CID, PlanEvent(summary="plan", steps=[{"title": "one"}], revision=1))
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await loop.send_message("continue")
 
     state = await loop.run()

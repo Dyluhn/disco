@@ -115,9 +115,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # PEM private keys (entire block replaced).
     (
         _PEM_LABEL,
-        re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
-        ),
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
     ),
     # URL-embedded credentials: https://user:pass@host
     (

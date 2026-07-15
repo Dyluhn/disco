@@ -52,6 +52,7 @@ def _sse(*chunks: dict) -> bytes:
 # (a) empty-structured + Hermes text + assist ON  ->  recovered
 # ---------------------------------------------------------------------------
 
+
 async def test_non_streaming_recovers_from_hermes_text_when_assist_on():
     """_to_response path: structured is empty, model emitted a Hermes call in content,
     req.assist=True -> recover and surface a ProposedToolCall, finish_reason=tool_calls."""
@@ -128,9 +129,7 @@ async def test_streaming_recovers_from_hermes_text_when_assist_on():
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content)["stream"] is True
-        return httpx.Response(
-            200, content=content, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
 
     final = None
     async for ch in _provider(handler).stream_complete(_req(assist=True), model="m"):
@@ -159,9 +158,7 @@ async def test_streaming_recovers_from_reasoning_content_when_assist_on():
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert json.loads(request.content)["stream"] is True
-        return httpx.Response(
-            200, content=content, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
 
     final = None
     async for ch in _provider(handler).stream_complete(_req(assist=True), model="m"):
@@ -179,6 +176,7 @@ async def test_streaming_recovers_from_reasoning_content_when_assist_on():
 # ---------------------------------------------------------------------------
 # (b) req.assist=False  ->  no recovery, content passes through unchanged
 # ---------------------------------------------------------------------------
+
 
 async def test_non_streaming_no_recovery_when_assist_off():
     """Capable-model path must be byte-identical to today: text preserved, no calls,
@@ -223,9 +221,7 @@ async def test_streaming_no_recovery_when_assist_off():
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, content=content, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
 
     final = None
     async for ch in _provider(handler).stream_complete(_req(assist=False), model="m"):
@@ -241,6 +237,7 @@ async def test_streaming_no_recovery_when_assist_off():
 # (c) structured tool_calls present  ->  recover_tool_calls NOT called
 # ---------------------------------------------------------------------------
 
+
 async def test_non_streaming_structured_present_skips_recovery(monkeypatch):
     """When structured tool_calls is non-empty on the wire, the recovery layer
     must NOT be invoked -- even though req.assist=True and content also happens
@@ -252,9 +249,7 @@ async def test_non_streaming_structured_present_skips_recovery(monkeypatch):
         sentinel_calls.append((args, kwargs))
         return []
 
-    monkeypatch.setattr(
-        "disco.core.llm.openai_provider.recover_tool_calls", fake_recover
-    )
+    monkeypatch.setattr("disco.core.llm.openai_provider.recover_tool_calls", fake_recover)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -307,9 +302,7 @@ async def test_streaming_structured_present_skips_recovery(monkeypatch):
         sentinel_calls.append((args, kwargs))
         return []
 
-    monkeypatch.setattr(
-        "disco.core.llm.openai_provider.recover_tool_calls", fake_recover
-    )
+    monkeypatch.setattr("disco.core.llm.openai_provider.recover_tool_calls", fake_recover)
 
     content = _sse(
         {
@@ -339,9 +332,7 @@ async def test_streaming_structured_present_skips_recovery(monkeypatch):
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200, content=content, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
 
     final = None
     async for ch in _provider(handler).stream_complete(_req(assist=True), model="m"):

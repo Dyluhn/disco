@@ -10,9 +10,7 @@ from fastapi.responses import JSONResponse
 from ..runtime import ConversationRuntime
 
 
-def make_health_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_health_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/health")

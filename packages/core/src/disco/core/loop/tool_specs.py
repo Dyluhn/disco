@@ -59,7 +59,7 @@ _CLARIFY_DESCRIPTION = (
     "sentence, 'choice' for a pick from `options`), and optional `options` "
     "array for choice-type questions. For a 'choice' question, `options` MUST "
     "be a FLAT array of plain strings (the exact labels the user picks, e.g. "
-    "[\"Modern\", \"Classic\", \"Your call\"]) — never objects, never nested "
+    '["Modern", "Classic", "Your call"]) — never objects, never nested '
     "arrays. Prefer 2-5 questions — enough to "
     "disambiguate, not an interrogation. Call this BEFORE submit_plan when "
     "the unknowns are genuine blockers to a good plan."

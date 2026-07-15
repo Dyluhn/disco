@@ -33,9 +33,7 @@ def _file_write_obs(path: str = "site/index.html") -> ObservationEvent:
 
 
 def test_artifact_projection_picks_up_file_write_structured_path() -> None:
-    assert artifact_paths_from_events([_file_write_obs("./site/index.html")]) == {
-        "site/index.html"
-    }
+    assert artifact_paths_from_events([_file_write_obs("./site/index.html")]) == {"site/index.html"}
 
 
 def test_file_write_observation_round_trip_still_projects() -> None:

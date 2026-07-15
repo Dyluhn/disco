@@ -54,9 +54,7 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
         # podman config pointed at the SAME local socket.
         if "podman" in (cfg.docker_socket or "").lower():
             return PodmanSandboxService(
-                cfg.model_copy(
-                    update={"backend": "podman", "podman_url": cfg.docker_socket}
-                )
+                cfg.model_copy(update={"backend": "podman", "podman_url": cfg.docker_socket})
             )
         return LocalSandboxService(cfg)
     if cfg.backend == "podman":
@@ -71,8 +69,7 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
     # an un-sandboxed run. Refuse it here; the caller surfaces the error rather than
     # downgrading the isolation boundary.
     raise ValueError(
-        f"unknown sandbox backend {cfg.backend!r} "
-        "(expected one of: gvisor, local, podman, process)"
+        f"unknown sandbox backend {cfg.backend!r} (expected one of: gvisor, local, podman, process)"
     )
 
 

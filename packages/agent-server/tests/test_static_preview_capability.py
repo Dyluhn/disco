@@ -162,10 +162,7 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     assert "default-src 'none'" in bootstrap.headers["content-security-policy"]
     nonce_match = re.search(r'<script nonce="([A-Za-z0-9_-]+)">', redeem.text)
     assert nonce_match is not None
-    assert (
-        f"script-src 'nonce-{nonce_match.group(1)}'"
-        in redeem.headers["content-security-policy"]
-    )
+    assert f"script-src 'nonce-{nonce_match.group(1)}'" in redeem.headers["content-security-policy"]
     assert redeem.headers["x-content-type-options"] == "nosniff"
     set_cookie = redeem.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
@@ -231,9 +228,7 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
         r"window\.location\.replace\((\"[^\"]+\")\)", hostile_bootstrap.text
     )
     assert hostile_redeem_match is not None
-    hostile_redeem = isolated.get(
-        json.loads(hostile_redeem_match.group(1)), follow_redirects=False
-    )
+    hostile_redeem = isolated.get(json.loads(hostile_redeem_match.group(1)), follow_redirects=False)
     assert hostile_redeem.status_code == 200
     assert "</script><script>" not in hostile_redeem.text
     assert "\\u003c/script\\u003e\\u003cscript\\u003e" in hostile_redeem.text
@@ -260,9 +255,7 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     assert remote_capability.status_code == 200
     remote_url = remote_capability.json()["path_bootstrap_url"]
     assert urlsplit(remote_url).hostname == "a1b2c3d4-8000.mybox.example"
-    remote_isolated = TestClient(
-        app, base_url="https://a1b2c3d4-8000.mybox.example"
-    )
+    remote_isolated = TestClient(app, base_url="https://a1b2c3d4-8000.mybox.example")
     remote_bootstrap = remote_isolated.get(remote_url, follow_redirects=False)
     assert remote_bootstrap.status_code == 200
     assert "location" not in remote_bootstrap.headers

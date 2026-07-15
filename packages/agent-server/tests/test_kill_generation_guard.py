@@ -56,18 +56,14 @@ async def _seed(store: SqliteEventStore) -> None:
 
 
 def _killed_detail_present(events: list[object]) -> bool:
-    return any(
-        isinstance(e, StatusEvent) and e.detail == "killed" for e in events
-    )
+    return any(isinstance(e, StatusEvent) and e.detail == "killed" for e in events)
 
 
 def _cancelled_errors(events: list[object], action_id: str) -> list[AgentErrorEvent]:
     return [
         e
         for e in events
-        if isinstance(e, AgentErrorEvent)
-        and e.action_id == action_id
-        and e.error == "cancelled"
+        if isinstance(e, AgentErrorEvent) and e.action_id == action_id and e.error == "cancelled"
     ]
 
 

@@ -25,6 +25,7 @@ from disco.tools.mcp.retrieval_tier import (
 # Fake MCP call function (simulates pool.call_tool)
 # ---------------------------------------------------------------------------
 
+
 class _FakeMCPCall:
     """Simulates an MCP pool's call_tool method."""
 
@@ -60,6 +61,7 @@ class _FakeMCPTool:
 # Shape matching tests
 # ---------------------------------------------------------------------------
 
+
 def test_tool_matches_search_shape():
     """Search-shaped tools are correctly identified."""
     assert _tool_matches_search_shape(_FakeMCPTool("search"))
@@ -89,6 +91,7 @@ def test_tool_matches_fetch_shape():
 # Protocol compliance tests (ANTI-GAMING: isinstance against REAL Protocols)
 # ---------------------------------------------------------------------------
 
+
 def test_search_provider_isinstance_check():
     """ANTI-GAMING: isinstance(wrapped, SearchProvider) against the REAL
     @runtime_checkable Protocol."""
@@ -117,11 +120,13 @@ def test_build_retrieval_providers_returns_protocol_instances():
             "content": [
                 {
                     "type": "text",
-                    "text": json.dumps({
-                        "results": [
-                            {"id": "1", "title": "Test Result", "url": "https://example.com"},
-                        ]
-                    }),
+                    "text": json.dumps(
+                        {
+                            "results": [
+                                {"id": "1", "title": "Test Result", "url": "https://example.com"},
+                            ]
+                        }
+                    ),
                 }
             ],
             "isError": False,
@@ -181,6 +186,7 @@ def test_build_retrieval_providers_returns_protocol_instances():
 # Functional tests — drive the REAL broker pattern
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_search_provider_calls_mcp_tool():
     """The wrapped SearchProvider calls the real MCP call function with
@@ -190,12 +196,14 @@ async def test_search_provider_calls_mcp_tool():
             "content": [
                 {
                     "type": "text",
-                    "text": json.dumps({
-                        "results": [
-                            {"id": "1", "title": "Result One", "url": "https://example.com/1"},
-                            {"id": "2", "title": "Result Two", "url": "https://example.com/2"},
-                        ],
-                    }),
+                    "text": json.dumps(
+                        {
+                            "results": [
+                                {"id": "1", "title": "Result One", "url": "https://example.com/1"},
+                                {"id": "2", "title": "Result Two", "url": "https://example.com/2"},
+                            ],
+                        }
+                    ),
                 }
             ],
             "isError": False,
@@ -278,6 +286,7 @@ async def test_extraction_provider_extract_many():
 @pytest.mark.asyncio
 async def test_search_provider_handles_error_gracefully():
     """When the MCP call fails, the provider returns an empty list (no crash)."""
+
     async def failing_call(server, tool, args):
         raise RuntimeError("MCP call failed")
 
@@ -309,12 +318,14 @@ async def test_mcp_error_results_never_become_search_hits_or_citable_content():
 @pytest.mark.asyncio
 async def test_search_provider_handles_non_json_result():
     """When the MCP result is not valid JSON, the provider returns empty."""
-    fake_call = _FakeMCPCall({
-        "srv/search": {
-            "content": [{"type": "text", "text": "not valid json {{{"}],
-            "isError": False,
-        },
-    })
+    fake_call = _FakeMCPCall(
+        {
+            "srv/search": {
+                "content": [{"type": "text", "text": "not valid json {{{"}],
+                "isError": False,
+            },
+        }
+    )
     provider = _MCPRetrievalSearchProvider("srv", "search", fake_call.call)
     hits = await provider.search("query")
     assert hits == []
@@ -347,14 +358,23 @@ async def test_mcp_discovered_url_flows_through_real_engine_to_citation():
     # Production MCP search provider, returning a hit ONLY the MCP tier knows.
     mcp_search_results = {
         "srv/search": {
-            "content": [{"type": "text", "text": json.dumps({
-                "results": [{
-                    "id": "1",
-                    "title": "MCP Discovery",
-                    "url": MCP_URL,
-                    "snippet": "discovered via MCP",
-                }],
-            })}],
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "results": [
+                                {
+                                    "id": "1",
+                                    "title": "MCP Discovery",
+                                    "url": MCP_URL,
+                                    "snippet": "discovered via MCP",
+                                }
+                            ],
+                        }
+                    ),
+                }
+            ],
             "isError": False,
         },
     }
@@ -378,12 +398,14 @@ async def test_mcp_discovered_url_flows_through_real_engine_to_citation():
                 url=url,
                 title="Read",
                 content="full text about the topic",
-                passages=[Passage(
-                    id="p1",
-                    source_url=url,
-                    source_title="Read",
-                    text="grounded passage about the topic",
-                )],
+                passages=[
+                    Passage(
+                        id="p1",
+                        source_url=url,
+                        source_title="Read",
+                        text="grounded passage about the topic",
+                    )
+                ],
                 fetched_ok=True,
             )
 
@@ -450,22 +472,26 @@ async def test_duplicate_url_keeps_mcp_affinity_through_real_engine():
     url = "https://example.com/shared"
     mcp_results = {
         "srv/search": {
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "results": [{"title": "Shared", "url": url, "snippet": "MCP"}]
-                }),
-            }],
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"results": [{"title": "Shared", "url": url, "snippet": "MCP"}]}
+                    ),
+                }
+            ],
             "isError": False,
         },
         "srv/fetch": {
-            "content": [{
-                "type": "text",
-                "text": (
-                    "MCP_AFFINITY_PROOF safe method content is substantive enough "
-                    "to become a citable passage in the production chunker."
-                ),
-            }],
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "MCP_AFFINITY_PROOF safe method content is substantive enough "
+                        "to become a citable passage in the production chunker."
+                    ),
+                }
+            ],
             "isError": False,
         },
     }
@@ -487,12 +513,14 @@ async def test_duplicate_url_keeps_mcp_affinity_through_real_engine():
                 url=target,
                 title="Bundled",
                 content="bundled fallback",
-                passages=[Passage(
-                    id="bundled_p0",
-                    source_url=target,
-                    source_title="Bundled",
-                    text="bundled fallback",
-                )],
+                passages=[
+                    Passage(
+                        id="bundled_p0",
+                        source_url=target,
+                        source_title="Bundled",
+                        text="bundled fallback",
+                    )
+                ],
             )
 
         async def extract_many(self, urls):
@@ -504,9 +532,9 @@ async def test_duplicate_url_keeps_mcp_affinity_through_real_engine():
         mcp_searches=[mcp_search],
         mcp_extractions=[mcp_extract],
     )
-    result = await DefaultRetrievalEngine(
-        search, extraction, LexicalReranker()
-    ).retrieve(RetrievalRequest(query="safe method", top_k=3))
+    result = await DefaultRetrievalEngine(search, extraction, LexicalReranker()).retrieve(
+        RetrievalRequest(query="safe method", top_k=3)
+    )
 
     assert result.all_hits[0].source_engine == "bundled|mcp__srv__search"
     assert any("MCP_AFFINITY_PROOF" in passage.text for passage in result.passages)

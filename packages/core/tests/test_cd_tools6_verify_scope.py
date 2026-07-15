@@ -9,12 +9,32 @@ from disco.core.contract.models import ContractKind
 from disco.core.contract.registry import BuildContractRegistry
 from disco.core.contract.scopes import Phase
 
-_DIAGNOSTICS = ["verify_web_app", "file_read", "file_list", "search", "server_status",
-                "preview_start", "preview_status", "preview_logs", "preview_stop", "think"]
+_DIAGNOSTICS = [
+    "verify_web_app",
+    "file_read",
+    "file_list",
+    "search",
+    "server_status",
+    "preview_start",
+    "preview_status",
+    "preview_logs",
+    "preview_stop",
+    "think",
+]
 # raw `browser` is a MUTATOR-grade tool here (BrowserArgs admits click/fill/submit) → DENIED in
 # VERIFY; the verifier inspects via verify_web_app's encapsulated read-only checks instead.
-_MUTATORS = ["file_write", "file_edit", "file_replace_lines", "exact_replace", "safe_write_file",
-             "shell", "code_exec", "app_create", "deck_patch", "browser"]
+_MUTATORS = [
+    "file_write",
+    "file_edit",
+    "file_replace_lines",
+    "exact_replace",
+    "safe_write_file",
+    "shell",
+    "code_exec",
+    "app_create",
+    "deck_patch",
+    "browser",
+]
 
 _FINALIZER = "ready_for_static_site_verification"
 

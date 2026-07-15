@@ -124,10 +124,16 @@ def test_retarget_uses_neutral_marker_for_pinned_and_unpinned_alike():
         role="assistant",
         content="",
         tool_calls=[
-            {"id": "c1", "name": "file_write",
-             "arguments": _snip_args({"path": "pinned.py", "content": long})},
-            {"id": "c2", "name": "file_write",
-             "arguments": _snip_args({"path": "omitted.py", "content": long})},
+            {
+                "id": "c1",
+                "name": "file_write",
+                "arguments": _snip_args({"path": "pinned.py", "content": long}),
+            },
+            {
+                "id": "c2",
+                "name": "file_write",
+                "arguments": _snip_args({"path": "omitted.py", "content": long}),
+            },
         ],
     )
     out = retarget_elided_arg_markers([msg])
@@ -154,8 +160,7 @@ def test_retarget_argument_without_a_path_uses_nondangling_marker():
     msg = LLMMessage(
         role="assistant",
         content="",
-        tool_calls=[{"id": "c1", "name": "shell",
-                     "arguments": _snip_args({"command": long})}],
+        tool_calls=[{"id": "c1", "name": "shell", "arguments": _snip_args({"command": long})}],
     )
     out = retarget_elided_arg_markers([msg])
     marker = out[0].tool_calls[0]["arguments"]["command"]

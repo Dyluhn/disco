@@ -384,6 +384,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         # Drive the loop to compose (_compose_build_loop stores the executor)
         from disco.core import LLMMessage
         from disco.core import MessageEvent as CoreMessageEvent
+
         await store.append(
             cid,
             CoreMessageEvent(
@@ -400,6 +401,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
 
         # Wait for the loop to compose the executor (it runs in a background task)
         import asyncio
+
         for _ in range(20):
             if cid in rt._executors:
                 break
@@ -490,6 +492,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
 
         from disco.core import LLMMessage
         from disco.core import MessageEvent as CoreMessageEvent
+
         await store.append(
             cid,
             CoreMessageEvent(
@@ -505,6 +508,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
             rt.kick(cid)
 
         import asyncio
+
         for _ in range(20):
             if cid in rt._executors:
                 break
@@ -545,7 +549,12 @@ def test_sweep_no_legacy_agent_loop_assist_kwarg_in_runtime() -> None:
 
     runtime_path = (
         Path(__file__).parents[3]
-        / "packages" / "agent-server" / "src" / "disco" / "agent_server" / "runtime.py"
+        / "packages"
+        / "agent-server"
+        / "src"
+        / "disco"
+        / "agent_server"
+        / "runtime.py"
     )
     source = runtime_path.read_text()
 
@@ -584,7 +593,12 @@ def test_sweep_no_legacy_executor_assist_kwarg_in_runtime() -> None:
 
     runtime_path = (
         Path(__file__).parents[3]
-        / "packages" / "agent-server" / "src" / "disco" / "agent_server" / "runtime.py"
+        / "packages"
+        / "agent-server"
+        / "src"
+        / "disco"
+        / "agent_server"
+        / "runtime.py"
     )
     source = runtime_path.read_text()
 
@@ -613,7 +627,12 @@ def test_sweep_no_legacy_agent_scope_model_caps_in_runtime() -> None:
 
     runtime_path = (
         Path(__file__).parents[3]
-        / "packages" / "agent-server" / "src" / "disco" / "agent_server" / "runtime.py"
+        / "packages"
+        / "agent-server"
+        / "src"
+        / "disco"
+        / "agent_server"
+        / "runtime.py"
     )
     source = runtime_path.read_text()
 

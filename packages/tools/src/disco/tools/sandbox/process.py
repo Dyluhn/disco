@@ -270,9 +270,7 @@ class ProcessSandboxInstance:
                     f"invalid /workspace path token: {m.group(0)!r}"
                 ) from exc
             if len(parsed) != 1:
-                raise SandboxPermissionError(
-                    f"invalid /workspace path token: {m.group(0)!r}"
-                )
+                raise SandboxPermissionError(f"invalid /workspace path token: {m.group(0)!r}")
             return shlex.quote(str(self._resolve(parsed[0])))
 
         return _WORKSPACE_TOKEN_RE.sub(_sub, cmd)

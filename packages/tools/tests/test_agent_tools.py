@@ -140,6 +140,7 @@ async def test_code_exec_python_state_persists_across_cells(tmp_path):
 
     # Mock the pwd for the session
     from unittest.mock import patch
+
     try:
         with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
             mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
@@ -157,15 +158,17 @@ async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
     """A cell that raises surfaces the traceback + a failure, but does NOT wipe the
     session — names bound before it remain available (kernel-like)."""
     from disco.tools.sandbox.process import ProcessSandboxInstance, ProcessSandboxService
+
     ws = tmp_path / "ws"
     ws.mkdir()
-    
+
     svc = ProcessSandboxService(root=str(tmp_path))
     session = SandboxSession(svc, owner_id="o", conversation_id="c")
-    
+
     ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=session)
 
     from unittest.mock import patch
+
     try:
         with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
             mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
@@ -176,9 +179,7 @@ async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
             )
             assert err.success is False and "ValueError" in err.content
             # state survived the error
-            ok = await ex.execute(
-                call("code_exec", language="python", code="print(counter + 1)")
-            )
+            ok = await ex.execute(call("code_exec", language="python", code="print(counter + 1)"))
             assert ok.success and "8" in ok.content, ok.content
     finally:
         await session.destroy()

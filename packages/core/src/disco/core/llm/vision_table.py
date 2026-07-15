@@ -31,30 +31,30 @@ from __future__ import annotations
 # Checked before vision patterns so an "embedding-4o" edge-case stays False.
 _NON_VISION_KEYWORDS: tuple[str, ...] = (
     "embedding",  # text-embedding-*, *-embed-*, etc.
-    "whisper",    # audio transcription models
-    "-tts",       # TTS generation: tts-1, tts-1-hd, *-tts
-    "rerank",     # cross-encoder rerankers
+    "whisper",  # audio transcription models
+    "-tts",  # TTS generation: tts-1, tts-1-hd, *-tts
+    "rerank",  # cross-encoder rerankers
 )
 
 # Substring patterns that identify a known-vision model (applied after non-vision check).
 # Keep these specific enough that an accidental substring match is unlikely.
 _VISION_SUBSTRINGS: tuple[str, ...] = (
-    "gpt-4o",   # gpt-4o, gpt-4o-mini, gpt-4o-2024-*
+    "gpt-4o",  # gpt-4o, gpt-4o-mini, gpt-4o-2024-*
     "gpt-4.1",  # gpt-4.1, gpt-4.1-mini, gpt-4.1-nano
     "gpt-4.5",  # gpt-4.5, gpt-4.5-preview
-    "gpt-5",    # gpt-5 and anticipated variants
-    "gemini",   # gemini-*, google/gemini-* — all Gemini are multimodal
+    "gpt-5",  # gpt-5 and anticipated variants
+    "gemini",  # gemini-*, google/gemini-* — all Gemini are multimodal
     # Open / multilingual vision-language models. "-vl" is the universal
     # vision-language naming convention (Qwen-VL, InternVL, …); the rest are
     # named multimodal families. Conclusive enough that an accidental substring
     # match is highly unlikely in a real model id.
-    "-vl",      # qwen-2.5-vl, qwen2-vl, qwen3-vl, *-vl-*
-    "internvl", # InternVL (written as one word, no hyphen before vl)
-    "llava",    # LLaVA family
-    "vision",   # explicit *-vision-* tags
-    "glm-4v",   # GLM-4V (Zhipu/THUDM multimodal)
-    "glm-4.5v", # GLM-4.5V
-    "glm-4.6v", # GLM-4.6V
+    "-vl",  # qwen-2.5-vl, qwen2-vl, qwen3-vl, *-vl-*
+    "internvl",  # InternVL (written as one word, no hyphen before vl)
+    "llava",  # LLaVA family
+    "vision",  # explicit *-vision-* tags
+    "glm-4v",  # GLM-4V (Zhipu/THUDM multimodal)
+    "glm-4.5v",  # GLM-4.5V
+    "glm-4.6v",  # GLM-4.6V
 )
 
 

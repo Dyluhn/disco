@@ -73,9 +73,7 @@ def test_thought_varied_read_loop_below_threshold_does_not_fire():
     events = [user_msg("go")]
     for i in range(3):
         events += _read_pair(thought=f"try {i}")
-    assert d.is_stuck(events) is False, (
-        "3 file_read calls (below threshold=4) must NOT fire stuck"
-    )
+    assert d.is_stuck(events) is False, "3 file_read calls (below threshold=4) must NOT fire stuck"
 
 
 def test_pure_repeat_fires_on_back_to_back_identical_actions():
@@ -113,7 +111,15 @@ def test_wait_poll_server_status_loop_does_not_fire():
 
 def test_wait_poll_tools_enumerated_in_sentinel():
     """Smoke-test that _WAIT_POLL_TOOLS contains the expected members."""
-    expected = {"sleep", "wait", "server_status", "poll", "browser_wait", "job_status", "deploy_status"}
+    expected = {
+        "sleep",
+        "wait",
+        "server_status",
+        "poll",
+        "browser_wait",
+        "job_status",
+        "deploy_status",
+    }
     assert expected <= _WAIT_POLL_TOOLS, (
         f"_WAIT_POLL_TOOLS is missing members: {expected - _WAIT_POLL_TOOLS}"
     )
@@ -132,8 +138,7 @@ def test_wait_poll_action_error_still_fires():
         events.append(a)
         events.append(agent_error("connection refused", action_id=a.id))
     assert d.is_stuck(events) is True, (
-        "server_status → error repeated 3× must fire pattern 2 "
-        "(perpetually-erroring poll IS stuck)"
+        "server_status → error repeated 3× must fire pattern 2 (perpetually-erroring poll IS stuck)"
     )
 
 
@@ -164,7 +169,7 @@ def test_alternating_same_tool_same_args_different_thought_is_pure_repeat_not_al
     The overall is_stuck can still be True via _pure_repeat."""
     d = StuckDetector(StuckThresholds(alternating=3))
     events = [user_msg("go")]
-    for i in range(3):
+    for _ in range(3):
         events.append(action(thought="read A", tool="shell", args={}))
         events.append(action(thought="read B", tool="shell", args={}))
     # _alternating must NOT fire (A and B are identical ignoring thought).
@@ -300,7 +305,9 @@ def test_repeated_plan_step_does_not_fire_pattern1():
     events = [user_msg("execute plan")]
     for i in range(6):
         events += [
-            action(thought=f"mark step done {i}", tool="plan_step", args={"index": 1, "state": "done"}),
+            action(
+                thought=f"mark step done {i}", tool="plan_step", args={"index": 1, "state": "done"}
+            ),
             observation(content="ok"),
         ]
     # Pattern 1 must NOT fire on plan_step (it is in _PLAN_META_TOOLS).

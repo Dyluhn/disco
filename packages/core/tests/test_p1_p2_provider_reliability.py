@@ -171,6 +171,7 @@ async def test_provider_unavailable_is_transient_subclass():
 
 async def test_unrelated_4xx_stays_llm_error():
     """A generic 4xx with an unrelated message must NOT be over-captured."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         return _make_error_resp(400, "something specific broke", "invalid_request")
 

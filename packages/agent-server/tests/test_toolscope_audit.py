@@ -157,19 +157,15 @@ async def test_flag_on_would_deny_file_write_in_edit_but_does_not_block(
         # carries the full working set, so a second file_write in EDIT is
         # legitimately ALLOWED. The would-deny case that remains real under
         # CUSTOM is a CROSS-KIND mutator (deck/doc/app_* tools stay excluded).
-        second = await executor.execute(
-            _call("doc_set_section", section="intro", title="Two", body="two")
-        )
+        await executor.execute(_call("doc_set_section", section="intro", title="Two", body="two"))
 
     assert first.success is True
-    denies = [
-        r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_would_deny"
-    ]
+    denies = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_would_deny"]
     assert len(denies) == 1
-    assert getattr(denies[0], "conversation") == cid
-    assert getattr(denies[0], "phase") == "edit"
-    assert getattr(denies[0], "tool") == "doc_set_section"
-    assert "out of contract scope" in getattr(denies[0], "reason")
+    assert denies[0].conversation == cid
+    assert denies[0].phase == "edit"
+    assert denies[0].tool == "doc_set_section"
+    assert "out of contract scope" in denies[0].reason
 
 
 @pytest.mark.asyncio
@@ -213,13 +209,11 @@ async def test_terminal_summary_emitted(
     ):
         await rt._run_with_persistence(cid, _DoneLoop())
 
-    summaries = [
-        r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"
-    ]
+    summaries = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"]
     assert len(summaries) == 1
-    assert getattr(summaries[0], "conversation") == cid
-    assert getattr(summaries[0], "total_tools") == 2
-    assert getattr(summaries[0], "would_denies_by_phase") == {"edit": 1}
+    assert summaries[0].conversation == cid
+    assert summaries[0].total_tools == 2
+    assert summaries[0].would_denies_by_phase == {"edit": 1}
 
 
 def _call(tool_name: str, **arguments):

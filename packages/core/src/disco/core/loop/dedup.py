@@ -37,10 +37,15 @@ from ..events import (
 # _workspace_snapshot_message. file_list is excluded (its path is a directory).
 # Files the agent MUTATED — the deliverable; these must never be evicted from the
 # snapshot by exploration reads (steelman finding #1).
-_WORKSPACE_MUTATING_TOOLS = frozenset({
-    "file_write", "file_append", "file_edit",
-    "file_replace_lines", "file_insert_lines",
-})
+_WORKSPACE_MUTATING_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_append",
+        "file_edit",
+        "file_replace_lines",
+        "file_insert_lines",
+    }
+)
 _WORKSPACE_READ_TOOLS = frozenset({"file_read"})
 
 
@@ -61,7 +66,7 @@ def _canonical_path(path: str) -> str:
 
     for prefix in ("/workspace/", "workspace/"):
         if path.startswith(prefix):
-            path = path[len(prefix):]
+            path = path[len(prefix) :]
             break
     return posixpath.normpath(path)
 

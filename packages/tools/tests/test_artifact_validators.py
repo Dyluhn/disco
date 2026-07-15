@@ -79,9 +79,7 @@ def test_validate_deck_file_corrupt_pptx():
         corrupt_path = f.name
     try:
         problems = validate_deck_file(corrupt_path)
-        assert len(problems) > 0, (
-            "expected at least one problem for a corrupt pptx file"
-        )
+        assert len(problems) > 0, "expected at least one problem for a corrupt pptx file"
         assert not any("Traceback" in p for p in problems), (
             "problems list must not contain a traceback — validator should not raise"
         )

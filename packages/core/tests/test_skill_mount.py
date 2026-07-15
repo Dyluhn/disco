@@ -15,7 +15,9 @@ def test_contract_without_skills_mounts_nothing() -> None:
 def test_appkit_mounts_only_its_declared_skills() -> None:
     c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
     assert c is not None
-    assert resolve_mounted_skills(c) == frozenset({"appkit.leadgen", "cloudflare_export", "design_recipe"})
+    assert resolve_mounted_skills(c) == frozenset(
+        {"appkit.leadgen", "cloudflare_export", "design_recipe"}
+    )
 
 
 def test_no_global_skill_soup() -> None:
@@ -40,7 +42,9 @@ def test_base_skills_union_but_default_empty() -> None:
     # default: only the contract's (deck declares none)
     assert resolve_mounted_skills(c) == frozenset()
     # an explicit host base set is unioned in (never inferred)
-    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset({"safety_always_on"})
+    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset(
+        {"safety_always_on"}
+    )
     assert is_skill_mountable("safety_always_on", c, base_skills=("safety_always_on",)) is True
 
 

@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
-from .common import *
 from .common import (
     _APP_VERIFY_PREFIX,
     _FINISH_VERIFY_CAP,
-    _FinishGateProto,
     _STATIC_VERIFY_PREFIX,
+    AgentStep,
+    ConversationState,
+    ConversationStatus,
+    Disp,
+    Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    StatusEvent,
+    ToolCall,
     _app_verify_command,
+    _FinishGateProto,
     _static_verify_command,
+    signals,
 )
 
 
@@ -25,9 +35,7 @@ class _FinalizeMixin(_FinishGateProto):
             verify_cmd = _static_verify_command(_path)
         # app / app:<url> — verify the RUNNING deliverable actually serves
         # (HTTP 200 + non-trivial body), not just that a file exists.
-        elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(
-            _APP_VERIFY_PREFIX + ":"
-        ):
+        elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(_APP_VERIFY_PREFIX + ":"):
             _, _, _url = verify_cmd.partition(":")
             _url = _url.strip()
             if not _url:
@@ -284,14 +292,10 @@ class _FinalizeMixin(_FinishGateProto):
                 detail=signals.SYNTHETIC_FINISH_ATTEMPT_DETAIL,
             )
         )
-        step = AgentStep(
-            tool_call=ToolCall(tool_name="finish", arguments={"summary": summary})
-        )
+        step = AgentStep(tool_call=ToolCall(tool_name="finish", arguments={"summary": summary}))
         step, disp = await self.normalize_finish_step(step, await self._loop._events())
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:
             return Disp.HALT
-        return await self.handle_finish_path(
-            step, state, await self._loop._events()
-        )
+        return await self.handle_finish_path(step, state, await self._loop._events())

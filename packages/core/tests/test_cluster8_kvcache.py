@@ -63,9 +63,7 @@ def test_response_surfaces_cached_tokens():
     }
     from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 
-    req = CompletionRequest(
-        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER), messages=[]
-    )
+    req = CompletionRequest(profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER), messages=[])
     resp = adapter._to_response(req, "m", data)
     assert resp.usage.cached_tokens == 900
     assert resp.usage.input_tokens == 1000

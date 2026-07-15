@@ -186,9 +186,39 @@ _SAMPLE_OUTLINE_JSON = {
     },
     "art_direction": "grainy editorial risograph, cerulean and warm paper palette, soft grain, no text",
     "slides": [
-        {"type": "title", "archetype": "title", "title": "PowerCell AI", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
-        {"type": "bullets", "archetype": "bullets", "title": "The Problem", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
-        {"type": "closing", "archetype": "closing", "title": "Join Us", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
+        {
+            "type": "title",
+            "archetype": "title",
+            "title": "PowerCell AI",
+            "body": [],
+            "layout_hint": None,
+            "image_prompt": None,
+            "chart": None,
+            "table": None,
+            "notes": None,
+        },
+        {
+            "type": "bullets",
+            "archetype": "bullets",
+            "title": "The Problem",
+            "body": [],
+            "layout_hint": None,
+            "image_prompt": None,
+            "chart": None,
+            "table": None,
+            "notes": None,
+        },
+        {
+            "type": "closing",
+            "archetype": "closing",
+            "title": "Join Us",
+            "body": [],
+            "layout_hint": None,
+            "image_prompt": None,
+            "chart": None,
+            "table": None,
+            "notes": None,
+        },
     ],
 }
 
@@ -261,7 +291,9 @@ async def test_stage_outline_success():
     """Outline stage parses a mocked LLM response."""
     raw_outline = json.dumps(_SAMPLE_OUTLINE_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.return_value = raw_outline
         deck, raw, err = await _stage_outline(
             "EV battery pitch", 3, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -283,7 +315,9 @@ async def test_stage_outline_retry_on_malformed():
     """Malformed first response → retry with the second valid response."""
     raw_valid = json.dumps(_SAMPLE_OUTLINE_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = ["this is not json", raw_valid]
         deck, raw, err = await _stage_outline(
             "EV battery pitch", 3, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -297,7 +331,9 @@ async def test_stage_outline_retry_on_malformed():
 @pytest.mark.asyncio
 async def test_stage_outline_both_fail_returns_none():
     """Two consecutive failures → (None, raw, error)."""
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = ["not json", "also not json"]
         deck, raw, err = await _stage_outline(
             "EV battery pitch", 3, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -318,7 +354,9 @@ async def test_stage_fill_success():
     outline = AuthoredDeck.model_validate(_SAMPLE_OUTLINE_JSON)
     full_raw = json.dumps(_SAMPLE_DECK_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.return_value = full_raw
         filled, err = await _stage_fill(
             outline, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -388,7 +426,9 @@ async def test_stage_fill_enforces_density_and_visual_image_slots():
         ],
     }
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.return_value = json.dumps(overfull)
         filled, err = await _stage_fill(
             outline, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -397,11 +437,15 @@ async def test_stage_fill_enforces_density_and_visual_image_slots():
     assert filled is not None
     assert err == ""
     assert filled.slides[0].title == "leverage"
-    assert filled.slides[0].image_prompt and "full-bleed background" in filled.slides[0].image_prompt
+    assert (
+        filled.slides[0].image_prompt and "full-bleed background" in filled.slides[0].image_prompt
+    )
     assert len(filled.slides[1].body) == 5
     assert all(len(line.split()) <= 9 for line in filled.slides[1].body)
     assert len(filled.slides[2].body) == 2
-    assert filled.slides[2].image_prompt and "no words, no lettering" in filled.slides[2].image_prompt
+    assert (
+        filled.slides[2].image_prompt and "no words, no lettering" in filled.slides[2].image_prompt
+    )
     assert filled.slides[2].layout_hint == "full_image"
 
 
@@ -411,7 +455,9 @@ async def test_stage_fill_retry_on_malformed():
     outline = AuthoredDeck.model_validate(_SAMPLE_OUTLINE_JSON)
     full_raw = json.dumps(_SAMPLE_DECK_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = ["BAD JSON", full_raw]
         filled, err = await _stage_fill(
             outline, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -427,7 +473,9 @@ async def test_stage_fill_both_fail_returns_none():
     """Two fill failures → (None, error)."""
     outline = AuthoredDeck.model_validate(_SAMPLE_OUTLINE_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = ["BAD1", "BAD2"]
         filled, err = await _stage_fill(
             outline, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
@@ -454,7 +502,9 @@ async def test_generate_deck_success(tmp_workspace):
     mock_backend = MagicMock()
     mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         # Outline call → valid; Fill call → valid
         mock_llm.side_effect = [outline_raw, full_raw]
         deck, fallback_md, err, _, _ = await generate_deck(
@@ -480,7 +530,9 @@ async def test_generate_deck_fill_failure_returns_fallback(tmp_workspace):
     outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
     mock_backend = MagicMock()
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         # Outline succeeds; fill fails twice
         mock_llm.side_effect = [outline_raw, "BAD JSON", "STILL BAD"]
         deck, fallback_md, err, _, _ = await generate_deck(
@@ -504,7 +556,9 @@ async def test_generate_deck_outline_failure_returns_fallback(tmp_workspace):
     ctx = _ctx(sbx)
     mock_backend = MagicMock()
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = ["BAD", "STILL BAD"]
         deck, fallback_md, err, _, _ = await generate_deck(
             "test goal", "test-deck", ctx, mock_backend
@@ -527,7 +581,9 @@ async def test_generate_deck_image_backend_called_for_image_prompts(tmp_workspac
     mock_backend = MagicMock()
     mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
         deck, _, _, _, _ = await generate_deck(
             "EV battery startup pitch", "test-deck", ctx, mock_backend
@@ -552,7 +608,9 @@ async def test_generate_deck_degrades_image_less_when_backend_none(tmp_workspace
     outline_raw = json.dumps(_SAMPLE_OUTLINE_JSON)
     full_raw = json.dumps(_SAMPLE_DECK_JSON)
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
         deck, fallback_md, err, _, _ = await generate_deck(
             "EV battery startup pitch",
@@ -567,10 +625,7 @@ async def test_generate_deck_degrades_image_less_when_backend_none(tmp_workspace
     assert err is None
     # Image slots remain present, but no generated bytes are embedded.
     assert not any(
-        el.image_bytes
-        for slide in deck.slides
-        for el in slide.elements
-        if el.kind == "image"
+        el.image_bytes for slide in deck.slides for el in slide.elements if el.kind == "image"
     )
 
 
@@ -771,7 +826,9 @@ async def test_c2_pptx_carries_editable_source(tmp_workspace):
     ):
         mock_llm.side_effect = [outline_raw, full_raw]
         outcome = await tool.run(
-            SlidesGenerateArgs(goal="EV battery startup pitch", filename="ev-deck-px", format="pptx"),
+            SlidesGenerateArgs(
+                goal="EV battery startup pitch", filename="ev-deck-px", format="pptx"
+            ),
             ctx,
         )
 
@@ -901,7 +958,9 @@ async def test_weak_model_gets_weak_prompt(tmp_workspace):
     mock_backend = MagicMock()
     mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n"
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
         await generate_deck("test goal", "d", ctx, mock_backend)
 
@@ -924,7 +983,9 @@ async def test_capable_model_gets_capable_prompt(tmp_workspace):
     mock_backend = MagicMock()
     mock_backend.generate.return_value = b"\x89PNG\r\n\x1a\n"
 
-    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+    with patch(
+        "disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock
+    ) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
         await generate_deck("test goal", "d", ctx, mock_backend)
 
@@ -1014,8 +1075,12 @@ async def test_call_llm_sends_bearer_when_api_key_present():
         return client
 
     with patch("disco.tools.builtin._slides_pipeline.httpx.AsyncClient", fake_client):
-        await _call_llm([{"role": "user", "content": "hi"}], "https://openrouter.ai/api/v1",
-                        "m", api_key="sk-secret")
+        await _call_llm(
+            [{"role": "user", "content": "hi"}],
+            "https://openrouter.ai/api/v1",
+            "m",
+            api_key="sk-secret",
+        )
         assert captured["headers"].get("Authorization") == "Bearer sk-secret"
 
         captured.clear()
@@ -1071,6 +1136,7 @@ def test_resolve_llm_key_reads_reserved_openrouter_slot(monkeypatch):
     class _Store:
         def get_secret(self, name):
             return None  # NOT stored under the env-var name
+
         def get_openrouter_key(self):
             return "sk-or-reserved"  # the reserved "openrouter" slot
 
@@ -1140,10 +1206,19 @@ def test_coerce_unknown_alias_is_not_coerced():
     assert result["theme"] == "corporate"  # unchanged — not in _THEME_ALIASES
 
 
-@pytest.mark.parametrize("theme", [
-    "disco-light", "disco-dark", "ink-light", "sepia-light",
-    "signal-light", "midnight-dark", "neutral", "neutral-light",
-])
+@pytest.mark.parametrize(
+    "theme",
+    [
+        "disco-light",
+        "disco-dark",
+        "ink-light",
+        "sepia-light",
+        "signal-light",
+        "midnight-dark",
+        "neutral",
+        "neutral-light",
+    ],
+)
 def test_all_8_valid_themes_parse(theme):
     """Each of the 8 Literal theme values passes _parse_authored_deck successfully."""
     data = dict(_SAMPLE_DECK_JSON, theme=theme)
@@ -1175,18 +1250,22 @@ async def test_stage_assets_reports_failures_honestly():
         title="Visual Deck",
         slides=[
             AuthoredSlide(
-                type="full_image", archetype="full_bleed_image", title="Hero",
-                body=[], image_prompt="art; subject: Hero; slot: cover; no words",
+                type="full_image",
+                archetype="full_bleed_image",
+                title="Hero",
+                body=[],
+                image_prompt="art; subject: Hero; slot: cover; no words",
             ),
             AuthoredSlide(
-                type="bullets", archetype="bullets", title="Points", body=["a"],
+                type="bullets",
+                archetype="bullets",
+                title="Points",
+                body=["a"],
             ),
         ],
     )
     backend = MagicMock()
-    backend.generate.side_effect = RuntimeError(
-        "openrouter-image image endpoint returned HTTP 404"
-    )
+    backend.generate.side_effect = RuntimeError("openrouter-image image endpoint returned HTTP 404")
 
     assets, stats = await _stage_assets(deck, ctx, backend, "v")
 
@@ -1207,8 +1286,11 @@ async def test_stage_assets_unconfigured_is_named_in_note():
         title="Visual Deck",
         slides=[
             AuthoredSlide(
-                type="full_image", archetype="full_bleed_image", title="Hero",
-                body=[], image_prompt="art; subject: Hero; slot: cover; no words",
+                type="full_image",
+                archetype="full_bleed_image",
+                title="Hero",
+                body=[],
+                image_prompt="art; subject: Hero; slot: cover; no words",
             )
         ],
     )
@@ -1231,21 +1313,27 @@ def test_tableless_thin_comparison_demoted_to_bullets():
         title="T",
         slides=[
             AuthoredSlide(
-                type="comparison", archetype="comparison_table",
-                title="Thin", body=["a vs b", "c vs d", "e vs f"],
+                type="comparison",
+                archetype="comparison_table",
+                title="Thin",
+                body=["a vs b", "c vs d", "e vs f"],
             ),
             AuthoredSlide(
-                type="comparison", archetype="comparison_table",
-                title="Rich body", body=["a", "b", "c", "d"],
+                type="comparison",
+                archetype="comparison_table",
+                title="Rich body",
+                body=["a", "b", "c", "d"],
             ),
             AuthoredSlide(
-                type="table", archetype="comparison_table", title="Real table",
+                type="table",
+                archetype="comparison_table",
+                title="Real table",
                 body=[],
                 table={"headers": ["x", "y"], "rows": [["1", "2"]]},
             ),
         ],
     )
     out = _prepare_filled_deck(deck)
-    assert out.slides[0].archetype == "bullets"          # thin + tableless → demoted
+    assert out.slides[0].archetype == "bullets"  # thin + tableless → demoted
     assert out.slides[1].archetype == "comparison_table"  # 4+ body lines → kept
     assert out.slides[2].archetype == "comparison_table"  # real table → kept

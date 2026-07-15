@@ -21,8 +21,8 @@ import pytest
 from disco.core.appkit import RECIPES
 from disco.core.appkit.spec import DesignSpec, Justification, Palette, Typography
 from disco.core.design import DIRECTION_BY_ID, direction_tokens_css, render_design_direction
-from disco.tools.builtin import design_lint as design_lint_module
 from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin import design_lint as design_lint_module
 from disco.tools.builtin.design_lint import DesignLintArgs, DesignLintTool, lint_design
 
 # --- samples -----------------------------------------------------------------
@@ -73,9 +73,7 @@ def _justified_spec() -> DesignSpec:
     return DesignSpec(
         schema_version=1,
         typography=Typography(heading_font="Inter", body_font="Georgia"),
-        palette=Palette(
-            primary="#7c3aed", surface="#ffffff", text="#111111", accent="#8b5cf6"
-        ),
+        palette=Palette(primary="#7c3aed", surface="#ffffff", text="#111111", accent="#8b5cf6"),
         layout_family="centered",
         component_style="flat",
         density="comfortable",
@@ -123,9 +121,7 @@ class _FakeSandbox:
     storing the bytes — so a multi-GB hostile file can be simulated cheaply and we
     can prove `read_file` is never called for an over-cap file."""
 
-    def __init__(
-        self, files: dict[str, bytes], *, sizes: dict[str, int] | None = None
-    ) -> None:
+    def __init__(self, files: dict[str, bytes], *, sizes: dict[str, int] | None = None) -> None:
         self._files = {posixpath.normpath(k): v for k, v in files.items()}
         self._sizes = {posixpath.normpath(k): v for k, v in (sizes or {}).items()}
         self.read_paths: list[str] = []  # every read_file(key) call, in order
@@ -162,7 +158,7 @@ class _FakeSandbox:
                 raise NotADirectoryError(path)
             if base == "." or key.startswith(prefix):
                 matched_any = True
-                rest = key if base == "." else key[len(prefix):]
+                rest = key if base == "." else key[len(prefix) :]
                 children.add(rest.split("/", 1)[0])
         if not matched_any and base != ".":
             raise FileNotFoundError(path)
@@ -321,8 +317,7 @@ def test_justified_roboto_heading_does_not_suppress_inter():
     css = "h1 { font-family: Inter; }\n"
     v = lint_design({"s.css": css}, spec, spec_present=True, spec_valid=True)
     assert any(
-        f["rule_id"] == "generic_font" and "inter" in f["evidence"].lower()
-        for f in v["findings"]
+        f["rule_id"] == "generic_font" and "inter" in f["evidence"].lower() for f in v["findings"]
     )
 
 
@@ -346,9 +341,7 @@ def _deck_html(*slides: str, head_style: str = "") -> str:
     return (
         "<!doctype html><html><head>"
         f"<style>{head_style}</style>"
-        "</head><body><div class=\"deck\">"
-        + "\n".join(slides)
-        + "</div></body></html>"
+        '</head><body><div class="deck">' + "\n".join(slides) + "</div></body></html>"
     )
 
 
@@ -357,9 +350,7 @@ def _fired(verdict: dict[str, object]) -> set[str]:
 
 
 def test_deck_type_floor_flags_inline_font_size_under_24px():
-    bad = _deck_html(
-        _deck_slide(0, '<p style="font-size:23px">Too small</p><img src="cover.png">')
-    )
+    bad = _deck_html(_deck_slide(0, '<p style="font-size:23px">Too small</p><img src="cover.png">'))
     clean = _deck_html(
         _deck_slide(0, '<p style="font-size:24px">Large enough</p><img src="cover.png">')
     )
@@ -367,19 +358,21 @@ def test_deck_type_floor_flags_inline_font_size_under_24px():
     bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
     clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
 
-    assert any(f["rule_id"] == "deck_type_floor" and f["severity"] == "error" for f in bad_v["findings"])
+    assert any(
+        f["rule_id"] == "deck_type_floor" and f["severity"] == "error" for f in bad_v["findings"]
+    )
     assert "deck_type_floor" not in _fired(clean_v)
     assert clean_v["ok"] is True
 
 
 def test_deck_text_budget_flags_overlong_slide_and_clean_slide_passes():
     long_text = " ".join(f"word{i}" for i in range(91))
-    bad = _deck_html(_deck_slide(0, f"<p>{long_text}</p><img src=\"cover.png\">"))
+    bad = _deck_html(_deck_slide(0, f'<p>{long_text}</p><img src="cover.png">'))
     clean = _deck_html(
         _deck_slide(
             0,
             "<ul><li>One</li><li>Two</li><li>Three</li><li>Four</li>"
-            "<li>Five</li><li>Six</li></ul><img src=\"cover.png\">",
+            '<li>Five</li><li>Six</li></ul><img src="cover.png">',
         )
     )
 
@@ -394,12 +387,12 @@ def test_deck_text_budget_flags_overlong_slide_and_clean_slide_passes():
 
 def test_deck_text_budget_flags_more_than_six_bullet_lines():
     bullets = "".join(f"<li>Point {i}</li>" for i in range(7))
-    bad = _deck_html(_deck_slide(0, f"<ul>{bullets}</ul><img src=\"cover.png\">"))
+    bad = _deck_html(_deck_slide(0, f'<ul>{bullets}</ul><img src="cover.png">'))
     clean = _deck_html(
         _deck_slide(
             0,
             "<ul><li>One</li><li>Two</li><li>Three</li><li>Four</li>"
-            "<li>Five</li><li>Six</li></ul><img src=\"cover.png\">",
+            '<li>Five</li><li>Six</li></ul><img src="cover.png">',
         )
     )
 
@@ -442,7 +435,10 @@ def test_deck_missing_imagery_flags_zero_images_and_image_deck_passes():
     clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
 
     imagery = [f for f in bad_v["findings"] if f["rule_id"] == "deck_missing_imagery"]
-    assert imagery and imagery[0]["message"] == "no imagery: cover/divider slides should carry generated art"
+    assert (
+        imagery
+        and imagery[0]["message"] == "no imagery: cover/divider slides should carry generated art"
+    )
     assert "deck_missing_imagery" not in _fired(clean_v)
     assert clean_v["ok"] is True
 
@@ -498,13 +494,11 @@ def test_deck_glass_flags_flat_single_color_parent_and_gradient_parent_passes():
 
 
 def test_deck_orphan_slide_flags_title_plus_one_short_line_and_clean_passes():
-    bad = _deck_html(
-        _deck_slide(0, "<h2>Thin Slide</h2><p>One short line.</p>", layout="bullets")
-    )
+    bad = _deck_html(_deck_slide(0, "<h2>Thin Slide</h2><p>One short line.</p>", layout="bullets"))
     clean = _deck_html(
         _deck_slide(
             0,
-            '<h2>Substantive Slide</h2><p>First supporting line.</p>'
+            "<h2>Substantive Slide</h2><p>First supporting line.</p>"
             '<p>Second supporting line.</p><img src="cover.png">',
             layout="bullets",
         )
@@ -790,7 +784,7 @@ code {
 
 
 def test_numeric_rule_meta_severities_are_registered():
-    rule_meta = getattr(design_lint_module, "_RULE_META")
+    rule_meta = design_lint_module._RULE_META
 
     assert rule_meta["too_many_fonts"][0] == "warning"
     assert rule_meta["font_size_too_small"][0] == "info"
@@ -1002,7 +996,9 @@ async def test_tool_is_read_only_and_registered():
 
 
 def test_direction_font_mismatch_fires_and_committed_fonts_pass():
-    direction = DIRECTION_BY_ID["editorial-magazine"]  # Newsreader / Schibsted Grotesk / IBM Plex Mono
+    direction = DIRECTION_BY_ID[
+        "editorial-magazine"
+    ]  # Newsreader / Schibsted Grotesk / IBM Plex Mono
     off = "h1 { font-family: 'Comic Sans MS', cursive; }\n"
     on = (
         "h1 { font-family: 'Newsreader', Georgia, serif; }\n"

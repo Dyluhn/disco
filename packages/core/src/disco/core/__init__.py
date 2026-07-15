@@ -66,8 +66,8 @@ from .events import (
     VerifierShadowEvent,
     VerifierStartedEvent,
     VerifierVerdictEvent,
-    WorkspaceVersionEvent,
     WorkspaceRestoredEvent,
+    WorkspaceVersionEvent,
     event_from_json_dict,
     event_to_json_dict,
 )

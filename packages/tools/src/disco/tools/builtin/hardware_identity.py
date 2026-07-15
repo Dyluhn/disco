@@ -97,9 +97,7 @@ def _parse_lookup(
         "status": "recognized" if device_name is not None else "unknown",
         "vendor_name": vendor_name,
         "device_name": device_name,
-        "mapping_source": (
-            {"kind": "pci.ids", "path": source} if source is not None else None
-        ),
+        "mapping_source": ({"kind": "pci.ids", "path": source} if source is not None else None),
     }
 
 

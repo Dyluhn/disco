@@ -82,9 +82,7 @@ async def test_consecutive_noops_end_the_run_cleanly():
     from disco.core.loop.stuck import StuckThresholds
 
     agent = ScriptedAgent([_prose(f"thought number {i}") for i in range(10)])
-    loop, store = build_loop(
-        agent, stuck_thresholds=StuckThresholds(agent_monologue=100)
-    )
+    loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(agent_monologue=100))
     await loop.send_message("go")
     state = await loop.run()
     assert state.execution_status == ConversationStatus.FINISHED
@@ -92,8 +90,7 @@ async def test_consecutive_noops_end_the_run_cleanly():
     terminal = next(
         e
         for e in reversed(events)
-        if e.__class__.__name__ == "StatusEvent"
-        and e.status == ConversationStatus.FINISHED
+        if e.__class__.__name__ == "StatusEvent" and e.status == ConversationStatus.FINISHED
     )
     assert terminal.detail == "noop_limit"
 
@@ -120,9 +117,7 @@ def test_consecutive_noops_helper_counts_and_resets():
         )
 
     def user_msg(text):
-        return MessageEvent(
-            source=EventSource.USER, message=LLMMessage(role="user", content=text)
-        )
+        return MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=text))
 
     # 3 trailing agent prose messages → 3.
     seq = [user_msg("go"), agent_msg("a"), agent_msg("b"), agent_msg("c")]

@@ -57,9 +57,7 @@ _UNIT_RE = re.compile(
     re.IGNORECASE,
 )
 
-_CODE_FENCE_RE = re.compile(
-    r"(?ms)^[ \t]*(```|~~~)[^\n]*\n.*?^[ \t]*\1[ \t]*$"
-)
+_CODE_FENCE_RE = re.compile(r"(?ms)^[ \t]*(```|~~~)[^\n]*\n.*?^[ \t]*\1[ \t]*$")
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
@@ -72,9 +70,7 @@ _HTML_AUTOLINK_RE = re.compile(r"<(https?://[^>]+)>")
 _HEADING_RE = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+(?P<text>.*?)[ \t#]*$")
 _BLOCKQUOTE_RE = re.compile(r"^[ \t]*>[ \t]?")
 _HR_RE = re.compile(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$")
-_LIST_RE = re.compile(
-    r"^[ \t]*(?:[-+*•]|\d{1,3}[.)]|[A-Za-z][.)])[ \t]+(?P<item>.+)$"
-)
+_LIST_RE = re.compile(r"^[ \t]*(?:[-+*•]|\d{1,3}[.)]|[A-Za-z][.)])[ \t]+(?P<item>.+)$")
 _SENTENCE_END_RE = re.compile(r"""[.!?]["')\]]*$""")
 _EMOJI_RE = re.compile(
     "["
@@ -206,7 +202,7 @@ def _expand_abbreviations(text: str) -> str:
 def _replace_url(match: re.Match[str]) -> str:
     raw = match.group("url")
     stripped = raw.rstrip(".,!?;:")
-    trailing = raw[len(stripped):]
+    trailing = raw[len(stripped) :]
     domain = _domain_for_url(stripped)
     return f"{domain}{trailing}" if domain else trailing
 

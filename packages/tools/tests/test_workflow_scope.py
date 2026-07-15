@@ -320,8 +320,7 @@ async def test_workflow_run_denial_text_names_workflow_exit() -> None:
 
     assert result.success is False
     assert (
-        result.content
-        == "unknown or out-of-scope tool 'file_write'; available: ['file_read']. "
+        result.content == "unknown or out-of-scope tool 'file_write'; available: ['file_read']. "
         "This workflow completes by writing outputs/report.md and then calling finish; "
         "workflow_abort returns to the router if the goal needs tools outside this seal."
     )
@@ -623,8 +622,10 @@ def test_simulate_definition_writes_fixture_output(tmp_path) -> None:
     assert result.ok is True
     assert result.output_path == "outputs/mcp-safety.md"
     assert result.output_format == "markdown"
-    assert (tmp_path / "outputs" / "mcp-safety.md").read_text(encoding="utf-8").startswith(
-        "# Workflow simulation fixture"
+    assert (
+        (tmp_path / "outputs" / "mcp-safety.md")
+        .read_text(encoding="utf-8")
+        .startswith("# Workflow simulation fixture")
     )
 
 
@@ -728,9 +729,7 @@ def test_scripted_workspace_task_definition_compiles_and_seeds(tmp_path) -> None
     assert compiled.allowed_tools == expected
     assert compiled.advertised == expected
     path = seed_scripted_workspace_task(tmp_path)
-    instance = JsonDirWorkflowStore(tmp_path).get_instance(
-        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
-    )
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(SCRIPTED_WORKSPACE_TASK_INSTANCE_ID)
 
     assert path == tmp_path / "workflows" / "scripted_workspace_task.json"
     assert instance is not None
@@ -758,9 +757,7 @@ def test_document_deck_studio_definition_compiles_and_seeds(tmp_path) -> None:
     )
 
     path = seed_document_deck_studio(tmp_path)
-    instance = JsonDirWorkflowStore(tmp_path).get_instance(
-        DOCUMENT_DECK_STUDIO_INSTANCE_ID
-    )
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(DOCUMENT_DECK_STUDIO_INSTANCE_ID)
 
     assert path == tmp_path / "workflows" / "document_deck_studio.json"
     assert instance is not None
@@ -895,9 +892,7 @@ def test_seed_builtin_workflows_writes_all_seven_instances(tmp_path) -> None:
         "skill_authoring.json",
     }
 
-    instances = {
-        row.instance_id: row.instance for row in store.list_instances()
-    }
+    instances = {row.instance_id: row.instance for row in store.list_instances()}
     assert set(instances) == {
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
         SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
@@ -934,9 +929,7 @@ def test_seed_builtin_workflows_refreshes_stale_builtin_digest(tmp_path) -> None
     stale_path.write_text(json.dumps(payload), encoding="utf-8")
 
     seed_builtin_workflows(tmp_path)
-    instance = JsonDirWorkflowStore(tmp_path).get_instance(
-        GENERAL_WORKSPACE_TASK_INSTANCE_ID
-    )
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(GENERAL_WORKSPACE_TASK_INSTANCE_ID)
 
     assert instance is not None
     digest = GENERAL_WORKSPACE_TASK_DEFINITION.digest()
@@ -1008,9 +1001,7 @@ def test_build_workflow_definition_matches_draft_tool_shape() -> None:
     assert defn.params_model_schema == {
         "type": "object",
         "additionalProperties": False,
-        "properties": {
-            "query": {"type": "string", "description": "Research query."}
-        },
+        "properties": {"query": {"type": "string", "description": "Research query."}},
         "required": ["query"],
     }
     assert defn.tools == ("file_read", "search")

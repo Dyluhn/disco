@@ -83,8 +83,7 @@ async def test_file_write_then_finish_reaches_finished() -> None:
     first_action = action_events[0]
     assert first_action.tool_call is not None
     assert first_action.tool_call.tool_name == "file_write", (
-        f"Expected first action to be file_write, got "
-        f"{first_action.tool_call.tool_name!r}"
+        f"Expected first action to be file_write, got {first_action.tool_call.tool_name!r}"
     )
 
     # ── 3. File exists in the sandbox workspace ───────────────────────────────
@@ -96,8 +95,7 @@ async def test_file_write_then_finish_reaches_finished() -> None:
 
     host_path = os.path.join(workspace, output_path)
     assert os.path.exists(host_path), (
-        f"Written file not found at {host_path!r}. "
-        f"workspace_path={workspace!r}"
+        f"Written file not found at {host_path!r}. workspace_path={workspace!r}"
     )
 
     with open(host_path) as f:

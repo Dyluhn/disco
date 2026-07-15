@@ -54,9 +54,7 @@ def test_empty_seed_title_left_unset_for_auto_titler() -> None:
     store = SqliteEventStore(":memory:")
     try:
         client = _client(store)
-        resp = client.post(
-            "/conversations", json={"owner_id": "local", "surface": "build"}
-        )
+        resp = client.post("/conversations", json={"owner_id": "local", "surface": "build"})
         assert resp.status_code == 200
         cid = resp.json()["conversation_id"]
         row = store._conn.execute(

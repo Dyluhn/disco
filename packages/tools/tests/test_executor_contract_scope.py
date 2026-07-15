@@ -11,7 +11,6 @@ unchanged.
 from __future__ import annotations
 
 import pytest
-
 from disco.core.contract import (
     BuildContractRegistry,
     BuildPhaseTracker,
@@ -22,7 +21,6 @@ from disco.core.contract import (
 from disco.core.events import ToolResult
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
-
 from tool_fakes import FakeSandboxInstance, call
 
 _STANDARD = ModelExecutionPolicy.standard()
@@ -114,6 +112,8 @@ async def test_retired_legacy_bootstrap_is_not_available_on_normal_agent_scope()
 async def test_no_guard_means_no_enforcement() -> None:
     # a plain agent run (no contract) is unchanged: file_write just works
     sbx = FakeSandboxInstance()
-    ex = DefaultToolExecutor(build_default_registry(), agent_scope(model_policy=_STANDARD), sandbox=sbx)
+    ex = DefaultToolExecutor(
+        build_default_registry(), agent_scope(model_policy=_STANDARD), sandbox=sbx
+    )
     res = await ex.execute(call("file_write", path="index.html", content="<h1>plain</h1>"))
     assert res.success and sbx._fs.get("index.html")

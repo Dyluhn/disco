@@ -103,9 +103,9 @@ async def _synth_local(text: str, voice: str) -> np.ndarray:
 
 def _assert_mp3(data: bytes) -> None:
     head = data[:64]
-    assert any(
-        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)
-    ), "no MPEG frame sync in MP3 head"
+    assert any(head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)), (
+        "no MPEG frame sync in MP3 head"
+    )
 
 
 # The three-mode matrix — one focused assertion per mode. ---------------------
@@ -129,9 +129,7 @@ async def test_mode_bundled_uses_local_kokoro():
             mock.patch("disco.tools.builtin.audio_overview._synthesize_local", local),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
         ):
-            outcome = await tool.run(
-                AudioOverviewArgs(report_text="x", filename="bundled"), ctx
-            )
+            outcome = await tool.run(AudioOverviewArgs(report_text="x", filename="bundled"), ctx)
 
         assert outcome.success, outcome.content
         assert outcome.structured["backend"] == "bundled"
@@ -158,7 +156,7 @@ async def test_mode_speaches_uses_remote_endpoint():
             )
             assert api_key == "", "self-host (speaches) must send NO key"
             n = max(240, len(text) * 200)
-            return (0.1 * np.ones(n, dtype=np.float32))
+            return 0.1 * np.ones(n, dtype=np.float32)
 
         local = mock.AsyncMock(side_effect=AssertionError("local must not run in remote mode"))
         remote = mock.AsyncMock(side_effect=remote_ok)
@@ -175,9 +173,7 @@ async def test_mode_speaches_uses_remote_endpoint():
             mock.patch("disco.tools.builtin.audio_overview._synthesize_local", local),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
         ):
-            outcome = await tool.run(
-                AudioOverviewArgs(report_text="x", filename="remote"), ctx
-            )
+            outcome = await tool.run(AudioOverviewArgs(report_text="x", filename="remote"), ctx)
 
         assert outcome.success, outcome.content
         assert outcome.structured["backend"] == "speaches"
@@ -200,7 +196,7 @@ async def test_mode_openai_sends_key_and_model():
             assert api_key == "sk-test-123", f"paid key not resolved; got {api_key!r}"
             assert model == "tts-1", f"model not threaded; got {model!r}"
             n = max(240, len(text) * 200)
-            return (0.1 * np.ones(n, dtype=np.float32))
+            return 0.1 * np.ones(n, dtype=np.float32)
 
         remote = mock.AsyncMock(side_effect=remote_ok)
         with (
@@ -220,9 +216,7 @@ async def test_mode_openai_sends_key_and_model():
             mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
         ):
-            outcome = await tool.run(
-                AudioOverviewArgs(report_text="x", filename="paid"), ctx
-            )
+            outcome = await tool.run(AudioOverviewArgs(report_text="x", filename="paid"), ctx)
         assert outcome.success, outcome.content
         assert outcome.structured["backend"] == "openai"
         assert remote.await_count == 2
@@ -255,18 +249,14 @@ async def test_mode_off_fails_soft_and_unloads_model():
         tool = AudioOverviewTool()
         ctx = _ctx(sb)
 
-        local = mock.AsyncMock(
-            side_effect=AssertionError("local must not run in off mode")
-        )
+        local = mock.AsyncMock(side_effect=AssertionError("local must not run in off mode"))
 
         with (
             _patch_tts(TtsSettings(enabled=False)),
             mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_local", local),
         ):
-            outcome = await tool.run(
-                AudioOverviewArgs(report_text="x", filename="off"), ctx
-            )
+            outcome = await tool.run(AudioOverviewArgs(report_text="x", filename="off"), ctx)
 
         # Soft failure with the documented message.
         assert not outcome.success
@@ -303,9 +293,7 @@ async def test_mode_off_unload_is_safe_when_nothing_loaded():
         ctx = _ctx(sb)
 
         with _patch_tts(TtsSettings(enabled=False)):
-            outcome = await tool.run(
-                AudioOverviewArgs(report_text="x", filename="off_cold"), ctx
-            )
+            outcome = await tool.run(AudioOverviewArgs(report_text="x", filename="off_cold"), ctx)
 
     assert not outcome.success
     assert tts_local.is_loaded() is False  # still cold

@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 XLSX = b"PK\x03\x04" + b"stub-workbook"  # zip magic — stands in for a real .xlsx
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n" + b"stub-image"  # PNG signature
-MP3_MAGIC = b"\xff\xfb\x90\x00" + b"stub-audio"   # MPEG frame header
+MP3_MAGIC = b"\xff\xfb\x90\x00" + b"stub-audio"  # MPEG frame header
 
 
 HTML_STUB = b"<!DOCTYPE html><html><body><h1>Deck</h1></body></html>"
@@ -51,6 +51,7 @@ class _LiveRuntime:
     def set_depth(self, cid: str, tier: object) -> None: ...
     def get_last_selected_model(self) -> str | None:
         return None
+
     def sandbox_backend_name(self) -> str | None:
         return "process"
 
@@ -69,6 +70,7 @@ class _SnapshotRuntime:
     def set_depth(self, cid: str, tier: object) -> None: ...
     def get_last_selected_model(self) -> str | None:
         return None
+
     def sandbox_backend_name(self) -> str | None:
         return "process"
 
@@ -354,7 +356,7 @@ def test_html_inline_true_serves_inline_with_csp(live_client: TestClient) -> Non
     assert 'filename="deck.html"' in r.headers["content-disposition"]
     # CSP must be present and must restrict the sandboxed page.
     csp = r.headers["content-security-policy"]
-    assert _INLINE_CSP_FRAGMENT in csp          # sandbox allow-scripts
+    assert _INLINE_CSP_FRAGMENT in csp  # sandbox allow-scripts
     assert "default-src 'none'" in csp
     assert "frame-ancestors 'self'" in csp
     # The existing nosniff header must be preserved.
@@ -378,5 +380,10 @@ def test_inline_true_non_html_returns_404(live_client: TestClient) -> None:
     cid = _create(live_client)
     _declare_sheet(live_client._store, cid, "budget.xlsx")  # type: ignore[attr-defined]
     _declare_image(live_client._store, cid, "cover.png")  # type: ignore[attr-defined]
-    assert live_client.get(f"/conversations/{cid}/artifacts/budget.xlsx?inline=true").status_code == 404
-    assert live_client.get(f"/conversations/{cid}/artifacts/cover.png?inline=true").status_code == 404
+    assert (
+        live_client.get(f"/conversations/{cid}/artifacts/budget.xlsx?inline=true").status_code
+        == 404
+    )
+    assert (
+        live_client.get(f"/conversations/{cid}/artifacts/cover.png?inline=true").status_code == 404
+    )

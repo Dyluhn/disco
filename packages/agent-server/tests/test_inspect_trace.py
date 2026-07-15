@@ -100,9 +100,7 @@ _STEPS = [
 
 
 def _user(content: str) -> MessageEvent:
-    return MessageEvent(
-        source=EventSource.USER, message=LLMMessage(role="user", content=content)
-    )
+    return MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=content))
 
 
 def _inspect_runtime(store: SqliteEventStore) -> ConversationRuntime:
@@ -201,13 +199,11 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
     client_counts = TestClient(create_app(store, runtime=runtime))
     trace_body = client_counts.get(f"/api/debug/trace/{CID}").json()
     rest_step_ends = [
-        s
-        for s in trace_body["spans"]
-        if s.get("span") == "agent.step" and s.get("event") == "end"
+        s for s in trace_body["spans"] if s.get("span") == "agent.step" and s.get("event") == "end"
     ]
-    assert any(
-        s.get("in_tokens") == 3 and s.get("cached_tokens") == 2 for s in rest_step_ends
-    ), rest_step_ends
+    assert any(s.get("in_tokens") == 3 and s.get("cached_tokens") == 2 for s in rest_step_ends), (
+        rest_step_ends
+    )
 
     # (d) the interleaved stream is ordered by true emission order (seq monotonic)
     seqs = [e["seq"] for e in snap["events"]]

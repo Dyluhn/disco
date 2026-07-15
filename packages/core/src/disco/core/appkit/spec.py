@@ -688,8 +688,11 @@ class WebhookMeta(BaseModel):
 
     @model_validator(mode="after")
     def _endpoint_ids_unique(self) -> WebhookMeta:
-        _require_unique((endpoint.endpoint_id for endpoint in self.endpoints), what="webhook endpoint")
+        _require_unique(
+            (endpoint.endpoint_id for endpoint in self.endpoints), what="webhook endpoint"
+        )
         return self
+
 
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.

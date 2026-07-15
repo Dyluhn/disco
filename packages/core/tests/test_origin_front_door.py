@@ -69,8 +69,14 @@ LOCAL_HOST = "localhost:8088"
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    for var in ("DISCO_BIND", "PMX_BIND", "DISCO_HOST", "PMX_HOST",
-                "DISCO_AUTH_LOCAL_AUTO_PAIR", "PMX_AUTH_LOCAL_AUTO_PAIR"):
+    for var in (
+        "DISCO_BIND",
+        "PMX_BIND",
+        "DISCO_HOST",
+        "PMX_HOST",
+        "DISCO_AUTH_LOCAL_AUTO_PAIR",
+        "PMX_AUTH_LOCAL_AUTO_PAIR",
+    ):
         monkeypatch.delenv(var, raising=False)
     return monkeypatch
 
@@ -139,8 +145,13 @@ def test_auto_pair_refused_behind_a_proxy(clean_env: pytest.MonkeyPatch) -> None
 def test_request_traversed_proxy_detects_forwarding_headers() -> None:
     # Starlette Headers are case-insensitive; a plain dict get() is not, so the
     # helper is exercised with lowercase keys (what Starlette normalizes to).
-    for header in ("x-forwarded-for", "x-forwarded-host", "forwarded",
-                   "cf-connecting-ip", "x-real-ip"):
+    for header in (
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "forwarded",
+        "cf-connecting-ip",
+        "x-real-ip",
+    ):
         assert request_traversed_proxy({header: "1.2.3.4"})
     # The front door's OWN header (X-Forwarded-Proto) must NOT trip it — else the
     # legit local case would always be refused.

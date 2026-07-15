@@ -206,10 +206,12 @@ async def test_think_only_summary_retries_with_wider_budget() -> None:
     (sanitize → ""), which used to store the fallback clamp PERMANENTLY — the
     cut-off Deep Research PDF cover title. The retry must widen and win."""
     store = _FakeStore([_user("How did the transatlantic telegraph cable change global finance?")])
-    router = _ScriptedRouter([
-        "<think>The user wants a concise title for",  # budget died mid-think
-        "<think>ok</think>Transatlantic Telegraph and Global Finance",
-    ])
+    router = _ScriptedRouter(
+        [
+            "<think>The user wants a concise title for",  # budget died mid-think
+            "<think>ok</think>Transatlantic Telegraph and Global Finance",
+        ]
+    )
     svc = TitleService(store, lambda *a, **k: router)
     await svc._run("cid")  # type: ignore[attr-defined]
     assert store.updated_to == "Transatlantic Telegraph and Global Finance"
@@ -239,8 +241,8 @@ async def test_backfill_leaves_real_titles_alone_even_when_forced() -> None:
 
 
 def test_sanitize_title_strips_leaked_think() -> None:
-    assert sanitize_title("<think>The user wants a concise title</think>Container Shipping Overview") == (
-        "Container Shipping Overview"
-    )
+    assert sanitize_title(
+        "<think>The user wants a concise title</think>Container Shipping Overview"
+    ) == ("Container Shipping Overview")
     # Unclosed think consumes everything → empty → caller falls back honestly.
     assert sanitize_title("<think>The user wants a concise title (3-6 words, Title") == ""

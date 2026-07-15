@@ -172,14 +172,16 @@ def ensure_x11vnc() -> bool:
     proc = _spawn(
         [
             "x11vnc",
-            "-display", DISPLAY,
-            "-localhost",       # bind 127.0.0.1 only — the screen never leaves the container
-            "-rfbport", str(VNC_PORT),
+            "-display",
+            DISPLAY,
+            "-localhost",  # bind 127.0.0.1 only — the screen never leaves the container
+            "-rfbport",
+            str(VNC_PORT),
             "-nopw",
             "-forever",
             "-noxdamage",
             "-quiet",
-            "-viewonly",        # no input injection — server-side enforced
+            "-viewonly",  # no input injection — server-side enforced
         ],
         env={**os.environ, "DISPLAY": DISPLAY},
     )
@@ -206,7 +208,8 @@ def ensure_websockify() -> bool:
             "websockify",
             f"0.0.0.0:{NOVNC_PORT}",
             f"127.0.0.1:{VNC_PORT}",
-            "--web", "/usr/share/novnc",
+            "--web",
+            "/usr/share/novnc",
         ]
     )
     if proc is None:
@@ -251,9 +254,9 @@ def _start_watchdog() -> None:
     global _watchdog
     old = _watchdog
     if old is not None and old.is_alive() and old is not threading.current_thread():
-        _watchdog_stop.set()       # wake the old thread out of its wait() so it exits now
+        _watchdog_stop.set()  # wake the old thread out of its wait() so it exits now
         old.join(timeout=2)
-    _watchdog_stop.clear()         # fresh run: the new loop must NOT see a set stop flag
+    _watchdog_stop.clear()  # fresh run: the new loop must NOT see a set stop flag
     _watchdog = threading.Thread(target=_watchdog_loop, name="live-view-watchdog", daemon=True)
     _watchdog.start()
 

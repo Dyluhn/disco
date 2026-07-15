@@ -103,7 +103,8 @@ class McpServerConfig(BaseModel):
             or "#" in raw
             or parsed.scheme not in {"http", "https"}
             or hostname is None
-            or port is not None and not 1 <= port <= 65535
+            or port is not None
+            and not 1 <= port <= 65535
             or parsed.username is not None
             or parsed.password is not None
         ):

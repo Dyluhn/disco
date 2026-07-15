@@ -333,13 +333,10 @@ async def test_assist_on_repeat_read_pointer_text_is_lossless():
     second = _read_action(call_id="call_read_2", path="src/foo.py")
     events = await _drive_execute(loop, second)
     pointer = next(
-        e for e in events
-        if isinstance(e, ObservationEvent) and "F9 dedup" in e.tool_result.content
+        e for e in events if isinstance(e, ObservationEvent) and "F9 dedup" in e.tool_result.content
     ).tool_result.content
     # The pointer is the F9 template applied with the right substitutions.
-    expected = _F9_POINTER_TEMPLATE.format(
-        tool_name="file_read", arg_summary="src/foo.py"
-    )
+    expected = _F9_POINTER_TEMPLATE.format(tool_name="file_read", arg_summary="src/foo.py")
     assert pointer == expected
     # The pointer explicitly tells the model the recovery affordance.
     assert "file_read again" in pointer
@@ -359,12 +356,14 @@ async def test_assist_on_read_after_write_to_same_path_re_executes():
     (file_write / file_edit / file_append / file_replace_lines /
     file_insert_lines) — any of them on the same path invalidates.
     """
+
     # Echo the executor's tool name + call_id back so the observation
     # is recognizable. (A fixed `result=` would set the SAME tool_name
     # for every call, masking the file_read vs. file_write distinction.)
     class _EchoResultExecutor(_ReadonlyExecutor):
         async def execute(self, call):
             from disco.core import ToolResult as _TR
+
             self.calls.append(call)
             return _TR(
                 call_id=call.call_id,
@@ -372,6 +371,7 @@ async def test_assist_on_read_after_write_to_same_path_re_executes():
                 success=True,
                 content="the file content" if call.tool_name == "file_read" else "wrote",
             )
+
     ex = _EchoResultExecutor()
     loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     # 1. First read of P.
@@ -382,25 +382,19 @@ async def test_assist_on_read_after_write_to_same_path_re_executes():
     events = await _drive_execute(loop, write)
     # The write's success observation was emitted.
     assert any(
-        isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_write"
-        for e in events
+        isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_write" for e in events
     )
     # 3. Second read of P (identical args) → MUST re-execute (stale).
     second = _read_action(call_id="call_read_2", path="src/foo.py")
     events = await _drive_execute(loop, second)
     # The executor was called for the second read (no dedup).
-    file_read_calls = [
-        c for c in loop.executor.calls if c.tool_name == "file_read"
-    ]
+    file_read_calls = [c for c in loop.executor.calls if c.tool_name == "file_read"]
     assert len(file_read_calls) == 2, (
-        "F9 dedup must NOT fire after a write to the same path; "
-        "the second read should re-execute"
+        "F9 dedup must NOT fire after a write to the same path; the second read should re-execute"
     )
     # The second observation is the real tool output, NOT the F9 pointer.
     obs_events = [e for e in events if isinstance(e, ObservationEvent)]
-    read_obs = [
-        e for e in obs_events if e.tool_result.tool_name == "file_read"
-    ]
+    read_obs = [e for e in obs_events if e.tool_result.tool_name == "file_read"]
     assert len(read_obs) == 2
     assert "F9 dedup" not in read_obs[1].tool_result.content
     assert read_obs[1].tool_result.content == "the file content"
@@ -449,7 +443,8 @@ async def test_assist_off_repeat_read_always_re_executes():
         action = _read_action(call_id=f"call_read_{i + 1}", path="src/foo.py")
         events = await _drive_execute(loop, action)
         read_obs = [
-            e for e in events
+            e
+            for e in events
             if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_read"
         ]
         # Every observation is the real tool output, NEVER the F9 pointer.
@@ -530,12 +525,14 @@ async def test_assist_on_non_read_only_call_does_not_dedup():
     EFFECT, not a no-op. The executor is called for every shell
     invocation.
     """
+
     # Echo the tool name back so file_read vs. shell observations are
     # distinguishable (a fixed `result=` would set the same tool_name
     # for every call, masking the distinction).
     class _EchoResultExecutor(_ReadonlyExecutor):
         async def execute(self, call):
             from disco.core import ToolResult as _TR
+
             self.calls.append(call)
             return _TR(
                 call_id=call.call_id,
@@ -543,6 +540,7 @@ async def test_assist_on_non_read_only_call_does_not_dedup():
                 success=True,
                 content="ok" if call.tool_name == "shell" else "the file content",
             )
+
     ex = _EchoResultExecutor()
     loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     # Two identical shell calls. The dedup helper's success-observation
@@ -555,8 +553,7 @@ async def test_assist_on_non_read_only_call_does_not_dedup():
     # Executor was called for BOTH shell calls.
     shell_calls = [c for c in loop.executor.calls if c.tool_name == "shell"]
     assert len(shell_calls) == 2, (
-        "F9 must never dedup a non-read-only call (shell); the executor "
-        "must be called every time"
+        "F9 must never dedup a non-read-only call (shell); the executor must be called every time"
     )
     obs = [e for e in events if isinstance(e, ObservationEvent)]
     assert all("F9 dedup" not in o.tool_result.content for o in obs)
@@ -691,9 +688,7 @@ def test_f9_pointer_template_is_single_source_of_truth():
     call time so a future change to args summary doesn't require a
     template change).
     """
-    rendered = _F9_POINTER_TEMPLATE.format(
-        tool_name="file_read", arg_summary="src/foo.py"
-    )
+    rendered = _F9_POINTER_TEMPLATE.format(tool_name="file_read", arg_summary="src/foo.py")
     assert "file_read(src/foo.py)" in rendered
     assert "F9 dedup" in rendered
     assert "see the earlier result" in rendered

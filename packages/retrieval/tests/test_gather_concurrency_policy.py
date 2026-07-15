@@ -31,12 +31,7 @@ def test_remote_encoders_still_capped_but_with_lighter_per_leg(monkeypatch) -> N
 
 
 def test_single_subquestion_is_never_capped() -> None:
-    assert (
-        gather_concurrency_for(
-            in_process_encoders=True, n_subquestions=1, env={}
-        )
-        is None
-    )
+    assert gather_concurrency_for(in_process_encoders=True, n_subquestions=1, env={}) is None
 
 
 def test_bundled_tier_caps_when_ram_constrained(monkeypatch) -> None:

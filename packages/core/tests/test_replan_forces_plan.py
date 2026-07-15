@@ -134,8 +134,7 @@ def _replan_reminders(events: list) -> list[MessageEvent]:
         and e.source == EventSource.ENVIRONMENT
         # _REPLAN_FRAMING is now a TEMPLATE (current plan + instruction threaded in), so
         # match its stable lead-in rather than exact equality with the unformatted constant.
-        and "RE-PLANNING: the user added a new instruction"
-        in (e.message.content or "")
+        and "RE-PLANNING: the user added a new instruction" in (e.message.content or "")
     ]
 
 
@@ -188,8 +187,7 @@ async def test_replan_caps_exploration_and_forces_a_plan():
     # The forcing reminder fired exactly once (append-once at the threshold).
     forces = _force_reminders(events)
     assert len(forces) == 1, (
-        f"expected exactly ONE forcing reminder after {cap} planning reads; "
-        f"got {len(forces)}"
+        f"expected exactly ONE forcing reminder after {cap} planning reads; got {len(forces)}"
     )
     assert str(cap) in forces[0].message.content
     assert "submit_plan" in forces[0].message.content
@@ -269,16 +267,13 @@ async def test_replan_plan_event_is_revision_two_before_execution():
     assert len(plans) == 2
     assert plans[0].revision == 1, "the first plan must be revision 1"
     assert plans[1].revision == 2, (
-        f"the re-plan must be revision 2 (count of prior plans + 1); "
-        f"got {plans[1].revision}"
+        f"the re-plan must be revision 2 (count of prior plans + 1); got {plans[1].revision}"
     )
 
     # No execution happened during the re-plan segment: the executor only ever
     # ran the planner's reads (none here), never a mutating tool, and the
     # second PlanEvent precedes the AWAITING_PLAN_APPROVAL halt.
-    assert executor.execute_calls == [], (
-        "the re-plan must propose a plan, NOT execute file edits"
-    )
+    assert executor.execute_calls == [], "the re-plan must propose a plan, NOT execute file edits"
 
 
 # ---------------------------------------------------------------------------
@@ -341,14 +336,11 @@ async def test_reground_in_planning_mode_uses_new_instruction_not_old_goal():
     recaps = [
         e
         for e in after
-        if isinstance(e, MessageEvent)
-        and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
+        if isinstance(e, MessageEvent) and e.message.content.startswith(_HS03_REGROUND_SENTINEL)
     ]
     assert len(recaps) == 1, "assist=ON + a plan + count==0 → one post-resume recap"
     body = recaps[0].message.content
-    assert _NEW_INSTRUCTION in body, (
-        "PLANNING-mode reground must anchor to the new instruction"
-    )
+    assert _NEW_INSTRUCTION in body, "PLANNING-mode reground must anchor to the new instruction"
     assert _OLD_GOAL not in body, (
         "PLANNING-mode reground must NOT re-inject the superseded build GOAL"
     )
@@ -400,7 +392,6 @@ def test_replan_framing_threads_current_plan_and_forbids_prose():
     call submit_plan' rule, so the model revises the actual plan via the tool instead of
     narrating it. Full plan shown (no aggressive truncation)."""
     from disco.core.loop.messages import (
-        _REPLAN_FRAMING,
         _render_replan_plan_digest,
     )
 

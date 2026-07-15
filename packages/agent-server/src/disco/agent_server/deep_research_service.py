@@ -262,9 +262,7 @@ class DeepResearchService:
         )
         ext_key = (
             self._rt._resolve_secret(ext.api_key_env) or ""
-            if self._rt._origin_approved(
-                extraction_secret_url, extraction_purpose, ext.api_key_env
-            )
+            if self._rt._origin_approved(extraction_secret_url, extraction_purpose, ext.api_key_env)
             and secret_ref_allowed_for_origin(ext.api_key_env, extraction_secret_url)
             else ""
         )
@@ -272,9 +270,16 @@ class DeepResearchService:
             secret_store=self._rt._secret_store
         ).verified()
         key = (
-            enc.remote, enc.reranker_url, enc.embedder_url, enc.nli_url,
-            sch.provider, sch.base_url, sch.api_key_env,
-            ext.provider, ext.base_url, ext.api_key_env,
+            enc.remote,
+            enc.reranker_url,
+            enc.embedder_url,
+            enc.nli_url,
+            sch.provider,
+            sch.base_url,
+            sch.api_key_env,
+            ext.provider,
+            ext.base_url,
+            ext.api_key_env,
             approval_key,
         )
         if search_override is not None:
@@ -382,9 +387,7 @@ class DeepResearchService:
             brave_url=(
                 sch.base_url
                 if sch.provider == "brave"
-                and self._rt._origin_approved(
-                    sch.base_url, "search:brave", sch.api_key_env
-                )
+                and self._rt._origin_approved(sch.base_url, "search:brave", sch.api_key_env)
                 else ""
             ),
             site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
@@ -504,11 +507,7 @@ class DeepResearchService:
         router = self._rt._router_now(pick=model_override, enable_thinking=think)
         # G1/DR-4 F3: load seed passages from the upload corpus for this cid.
         # Empty list when no text files were attached (the OFF path).
-        seed_passages = (
-            self._rt.get_upload_passages(conversation_id)
-            if conversation_id
-            else []
-        )
+        seed_passages = self._rt.get_upload_passages(conversation_id) if conversation_id else []
         async for frame in stream_research_answer(
             query,
             router=router,
@@ -570,9 +569,7 @@ class DeepResearchService:
         # Re-decompose with every post-question user message folded in as plan
         # constraints and re-propose (revision = prev+1).
         if not reports:
-            last_status = next(
-                (e for e in reversed(events) if isinstance(e, StatusEvent)), None
-            )
+            last_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
             in_revision_planning = (
                 state.execution_status == ConversationStatus.RUNNING
                 and last_status is not None
@@ -604,22 +601,15 @@ class DeepResearchService:
                 conversation_id,
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             )
-            await self._rt._execute_deep_research(
-                conversation_id, plans[-1], resume_from=partial
-            )
+            await self._rt._execute_deep_research(conversation_id, plans[-1], resume_from=partial)
             return
 
         # Phase 2: plan approved, no report yet → run the engine
-        if (
-            state.execution_status == ConversationStatus.RUNNING
-            and not reports
-        ):
+        if state.execution_status == ConversationStatus.RUNNING and not reports:
             # Distinguish "RUNNING because plan was just approved" from "RUNNING
             # because we're already deep in the engine and the task re-fired."
             # The marker: the last StatusEvent's detail is "plan_approved".
-            last_status = next(
-                (e for e in reversed(events) if isinstance(e, StatusEvent)), None
-            )
+            last_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
             if last_status is not None and last_status.detail == "plan_approved":
                 await self._rt._execute_deep_research(conversation_id, plans[-1])
 
@@ -629,9 +619,7 @@ class DeepResearchService:
         elif reports and self._has_fresh_user_message(events, reports):
             await self._follow_up_deep_research(conversation_id, events, reports[-1])
 
-    async def _propose_deep_research_plan(
-        self, conversation_id: str, events: list
-    ) -> None:
+    async def _propose_deep_research_plan(self, conversation_id: str, events: list) -> None:
         """Decompose the user's query into sub-questions and emit a synthetic
         PlanEvent + AWAITING_PLAN_APPROVAL. Same shape Build's plan gate uses —
         the UI reuses the existing approve_plan / request_plan affordances
@@ -678,9 +666,7 @@ class DeepResearchService:
         if preflight_reason is not None:
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.ERROR, detail=preflight_reason[:200]
-                ),
+                StatusEvent(status=ConversationStatus.ERROR, detail=preflight_reason[:200]),
             )
             return
 
@@ -700,9 +686,7 @@ class DeepResearchService:
         if rewriter_reason is not None:
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.ERROR, detail=rewriter_reason[:200]
-                ),
+                StatusEvent(status=ConversationStatus.ERROR, detail=rewriter_reason[:200]),
             )
             return
 
@@ -725,7 +709,9 @@ class DeepResearchService:
         recency_window = self._recency_for(conversation_id)
         try:
             subqs = await decompose_query(
-                router, query, max_subq=bound.max_subquestions,
+                router,
+                query,
+                max_subq=bound.max_subquestions,
                 recency_window=recency_window,
             )
         except Exception as exc:  # noqa: BLE001 — surface as a system reminder
@@ -752,9 +738,7 @@ class DeepResearchService:
                 conversation_id,
                 StatusEvent(
                     status=ConversationStatus.ERROR,
-                    detail=(
-                        f"Plan decomposition failed: {type(exc).__name__}: {exc}"
-                    )[:200],
+                    detail=(f"Plan decomposition failed: {type(exc).__name__}: {exc}")[:200],
                 ),
             )
             return
@@ -786,17 +770,13 @@ class DeepResearchService:
             # plan auto-approve (engine.py).
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.RUNNING, detail="plan_approved"
-                ),
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             )
             await self._rt._execute_deep_research(conversation_id, plan)
             return
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(
-                status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
-            ),
+            StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id),
         )
 
     async def _execute_deep_research(
@@ -864,9 +844,7 @@ class DeepResearchService:
         override = self._rt._model_override.get(conversation_id)
         # P1-3: the DR engine synthesises/judges with RAG_ANSWERER — probe THAT
         # role, not AGENT_DRIVER (which DR generation does not use).
-        required_encoders = (
-            ("reranker", "nli", "embedder") if space_ids else ("reranker", "nli")
-        )
+        required_encoders = ("reranker", "nli", "embedder") if space_ids else ("reranker", "nli")
         preflight_reason = await self._rt._preflight_driver(
             conversation_id, override=override, role=ModelRole.RAG_ANSWERER
         ) or await self._preflight_encoders(deps, required=required_encoders)
@@ -877,18 +855,14 @@ class DeepResearchService:
             )
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.ERROR, detail=preflight_reason[:200]
-                ),
+                StatusEvent(status=ConversationStatus.ERROR, detail=preflight_reason[:200]),
             )
             return
         # RP-05b §3: deep research's discovery/extraction also flows MCP providers
         # through the SAME engine, so deep-research citations can come from the MCP
         # tier identically to bundled providers.
         search, extraction = self._rt._compose_mcp_retrieval(deps)
-        router = self._rt._router_now(
-            pick=self._rt._model_override.get(conversation_id)
-        )
+        router = self._rt._router_now(pick=self._rt._model_override.get(conversation_id))
         retrieval_engine = DefaultRetrievalEngine(
             search=search,
             extraction=extraction,
@@ -969,9 +943,7 @@ class DeepResearchService:
                     last_action = next(
                         (
                             e
-                            for e in reversed(
-                                await self._rt._store.get_events(conversation_id)
-                            )
+                            for e in reversed(await self._rt._store.get_events(conversation_id))
                             if isinstance(e, ActionEvent)
                         ),
                         None,
@@ -984,9 +956,7 @@ class DeepResearchService:
                             call_id=f"call_{kind}",
                             tool_name=kind,
                             success=bool(payload.get("ok", True)),
-                            content=str(
-                                {k: v for k, v in payload.items() if k != "ok"}
-                            ),
+                            content=str({k: v for k, v in payload.items() if k != "ok"}),
                             structured=payload,
                         ),
                         action_id=action_id,
@@ -1013,12 +983,8 @@ class DeepResearchService:
         if resume_from:
             from disco.retrieval.models import Passage, SearchHit
 
-            resume_passages = [
-                Passage.model_validate(p) for p in resume_from.passages
-            ]
-            resume_all_hits = [
-                SearchHit.model_validate(h) for h in resume_from.all_hits
-            ]
+            resume_passages = [Passage.model_validate(p) for p in resume_from.passages]
+            resume_all_hits = [SearchHit.model_validate(h) for h in resume_from.all_hits]
 
         # Fresh cancel flag for this execution; the engine polls it at each
         # sub-question/section boundary so Stop actually halts the run.
@@ -1096,9 +1062,7 @@ class DeepResearchService:
         )
 
     @staticmethod
-    def _has_fresh_user_message(
-        events: list[Event], reports: list[ReportEvent]
-    ) -> bool:
+    def _has_fresh_user_message(events: list[Event], reports: list[ReportEvent]) -> bool:
         """True when a USER message arrived AFTER the latest ReportEvent —
         a follow-up question the user asked on a finished report."""
         if not reports:
@@ -1159,9 +1123,7 @@ class DeepResearchService:
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: synthesizing answer (no passage corpus)",
-                    tool_call=ToolCall(
-                        tool_name="phase", arguments={"phase": "synthesizing"}
-                    ),
+                    tool_call=ToolCall(tool_name="phase", arguments={"phase": "synthesizing"}),
                 ),
             )
             router = self._rt._router_now()
@@ -1211,9 +1173,7 @@ class DeepResearchService:
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: reading grounding passages from report corpus",
-                    tool_call=ToolCall(
-                        tool_name="phase", arguments={"phase": "reading"}
-                    ),
+                    tool_call=ToolCall(tool_name="phase", arguments={"phase": "reading"}),
                 ),
             )
             # Build a grounding block from the report's cited passages so the
@@ -1249,9 +1209,7 @@ class DeepResearchService:
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: synthesizing grounded answer",
-                    tool_call=ToolCall(
-                        tool_name="phase", arguments={"phase": "synthesizing"}
-                    ),
+                    tool_call=ToolCall(tool_name="phase", arguments={"phase": "synthesizing"}),
                 ),
             )
             router = self._rt._router_now()

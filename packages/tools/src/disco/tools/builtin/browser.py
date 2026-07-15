@@ -81,9 +81,7 @@ class BrowserUnavailableError(RuntimeError):
 def _bounded_startup_diagnostic(output: object, exit_code: object = None) -> str:
     """Return bounded startup-only evidence without importing the host environment."""
 
-    text = "".join(
-        char for char in str(output or "") if char in "\n\t" or ord(char) >= 32
-    ).strip()
+    text = "".join(char for char in str(output or "") if char in "\n\t" or ord(char) >= 32).strip()
     text = _STARTUP_SECRET_RE.sub("<redacted>", text)
     if len(text) > 1200:
         text = "…" + text[-1199:]
@@ -129,6 +127,7 @@ def _installed_playwright_runtime() -> tuple[str, str] | None:
         venv_python = pathlib.Path()
     interpreter = venv_python if venv_python.is_file() else pathlib.Path(sys.executable)
     return str(interpreter), str(package_root)
+
 
 _MAX_TEXT = 4000  # cap the quarantined text the agent sees
 
@@ -230,9 +229,7 @@ def _quarantine(raw_html: str, url: str) -> dict[str, Any]:
 
 def _fence(view: dict[str, Any]) -> str:
     """Render the structured PageView as a clearly-fenced untrusted-data block."""
-    links = "\n".join(
-        f"  - {lnk['text'].strip()[:60]!r} → {lnk['href']}" for lnk in view["links"]
-    )
+    links = "\n".join(f"  - {lnk['text'].strip()[:60]!r} → {lnk['href']}" for lnk in view["links"])
     forms = "\n".join(
         f"  - form action={f['action']!r} method={f['method']} fields={f['fields']}"
         for f in view["forms"]
@@ -260,10 +257,7 @@ def _vision_mode() -> bool:
 
     The env-vars are the contract surface; wiring.py/config.py own setting them.
     This function only READS them — it does NOT set Requirement.VISION."""
-    return (
-        disco_env("DRIVER_VISION") == "1"
-        or bool(disco_env("VISION_ESCALATION_MODEL"))
-    )
+    return disco_env("DRIVER_VISION") == "1" or bool(disco_env("VISION_ESCALATION_MODEL"))
 
 
 class BrowserArgs(BaseModel):
@@ -278,8 +272,7 @@ class BrowserArgs(BaseModel):
         "console_view",
     ] = Field(
         description=(
-            "Browser actions: navigate, screenshot, click, press, fill, submit, back, "
-            "console_view."
+            "Browser actions: navigate, screenshot, click, press, fill, submit, back, console_view."
         )
     )
     url: str = Field(default="", description="URL to navigate to.")
@@ -301,9 +294,7 @@ class BrowserArgs(BaseModel):
         ),
     )
     text: str = Field(default="", description="Text for fill action.")
-    key: str = Field(
-        default="", description="Keyboard key for press action, e.g. Space."
-    )
+    key: str = Field(default="", description="Keyboard key for press action, e.g. Space.")
     full_page: bool = Field(default=False, description="Whether to take a full page screenshot.")
     viewport_width: int | None = Field(
         default=None,
@@ -422,9 +413,7 @@ class BrowserTool:
                 unavailable["startup_diagnostic"] = e.startup_diagnostic
             return fail_outcome(str(e), structured=unavailable)
         except Exception as e:
-            return fail_outcome(
-                f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}"
-            )
+            return fail_outcome(f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}")
 
     async def _process_daemon_url(self, ctx: ToolContext) -> str | None:
         assert ctx.sandbox is not None
@@ -494,18 +483,14 @@ class BrowserTool:
             executable = await asyncio.to_thread(_installed_chromium_executable)
             playwright_runtime = await asyncio.to_thread(_installed_playwright_runtime)
             executable_env = (
-                f" DISCO_BROWSER_EXECUTABLE={shlex.quote(executable)}"
-                if executable
-                else ""
+                f" DISCO_BROWSER_EXECUTABLE={shlex.quote(executable)}" if executable else ""
             )
             daemon_python, playwright_pythonpath = playwright_runtime or (
                 sys.executable,
                 "",
             )
             pythonpath_env = (
-                f" PYTHONPATH={shlex.quote(playwright_pythonpath)}"
-                if playwright_pythonpath
-                else ""
+                f" PYTHONPATH={shlex.quote(playwright_pythonpath)}" if playwright_pythonpath else ""
             )
             command = (
                 f"DISCO_BROWSER_PORT=0{executable_env}{pythonpath_env} "
@@ -602,10 +587,7 @@ class BrowserTool:
             return ""
         if truncated:
             lines.append(f"  ... (console truncated to {_MAX_CONSOLE_LINES} lines)")
-        return (
-            f"CONSOLE ({errors} errors, {warnings} warnings):\n"
-            + "\n".join(lines) + "\n"
-        )
+        return f"CONSOLE ({errors} errors, {warnings} warnings):\n" + "\n".join(lines) + "\n"
 
     @staticmethod
     def _render_network(network: list[dict[str, Any]]) -> str:

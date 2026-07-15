@@ -66,7 +66,9 @@ def test_host_verify_canary_flag_default_off(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_host_verify_canary_flag_off_installs_no_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_host_verify_canary_flag_off_installs_no_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The hook installs when canary OR authoritative is enabled. Authoritative
     became the code default with the REL-1e flip, so the no-hook posture now
     requires BOTH explicitly off — and the default env installs the hook."""
@@ -132,4 +134,3 @@ async def test_host_verify_canary_on_default_build_updates_phase_and_manifest(
     assert record.export == {"zip": "t"}
     assert record.verified is True
     assert record.verify_verdict == "pass"
-

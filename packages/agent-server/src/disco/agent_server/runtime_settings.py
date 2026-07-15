@@ -86,6 +86,7 @@ class RuntimeSettings:
         if not self._rt._override_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._rt._override_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -95,9 +96,7 @@ class RuntimeSettings:
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
-    def _set_model_override_unlocked(
-        self, conversation_id: str, model_id: str | None
-    ) -> None:
+    def _set_model_override_unlocked(self, conversation_id: str, model_id: str | None) -> None:
         """Inner setter — does NOT acquire the per-cid lock; call ONLY from
         apply_settings_change (which holds the lock) or from set_model_override
         (non-route, non-concurrent callers that don't need the atomic gate)."""
@@ -157,6 +156,7 @@ class RuntimeSettings:
         if not path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -176,11 +176,7 @@ class RuntimeSettings:
             try:
                 with open(self._rt._surface_path) as f:
                     data = json.load(f)
-                return {
-                    str(k): str(v)
-                    for k, v in data.items()
-                    if v in self._rt._VALID_SURFACES
-                }
+                return {str(k): str(v) for k, v in data.items() if v in self._rt._VALID_SURFACES}
             except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
                 return {}
         return {}
@@ -189,6 +185,7 @@ class RuntimeSettings:
         if not self._rt._surface_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._rt._surface_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -213,6 +210,7 @@ class RuntimeSettings:
         if not self._rt._autonomous_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._rt._autonomous_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -261,6 +259,7 @@ class RuntimeSettings:
         if not self._rt._quiet_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._rt._quiet_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -308,6 +307,7 @@ class RuntimeSettings:
         if not self._rt._assist_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._rt._assist_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -417,15 +417,9 @@ class RuntimeSettings:
                 return False
             if isinstance(event, ActionEvent):
                 return False
-            if (
-                isinstance(event, MessageEvent)
-                and event.source == EventSource.AGENT
-            ):
+            if isinstance(event, MessageEvent) and event.source == EventSource.AGENT:
                 return False
-            if (
-                isinstance(event, StatusEvent)
-                and event.status != ConversationStatus.IDLE
-            ):
+            if isinstance(event, StatusEvent) and event.status != ConversationStatus.IDLE:
                 return False
         return True
 

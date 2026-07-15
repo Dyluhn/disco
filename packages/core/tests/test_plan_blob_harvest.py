@@ -2,6 +2,7 @@
 The model authors correct steps but serializes the whole {steps:[...]} object into the wrong
 submit_plan parameter, leaving `steps` empty. We recover the titles without invoking any parser.
 """
+
 from __future__ import annotations
 
 from disco.core.loop.plans import _coerce_step, _harvest_steps
@@ -13,7 +14,8 @@ def test_harvest_recovers_run001_rev4_steps_object_in_summary() -> None:
     args = {
         "summary": (
             "{'steps': [{'title': 'Update hero copy to \"Grand Opening\"', "
-            "'detail': 'edit index.html', 'done_condition': {'kind':'file_exists','path':'index.html'}}, "
+            "'detail': 'edit index.html', 'done_condition': "
+            "{'kind':'file_exists','path':'index.html'}}, "
             "{'title': 'Re-verify the page renders', 'detail': '...'}], 'context': 'two edits'}"
         ),
         "steps": [],

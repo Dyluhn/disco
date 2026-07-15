@@ -20,9 +20,10 @@ def test_analyzer_allows_pkill_but_denies_mkfs():
     # pkill is no longer in _SHELL_DENY
     assert hard_deny_reason("pkill -f http.server") is None
     assert hard_deny_reason("killall preview") is None
-    
+
     # mkfs is still denied
     assert hard_deny_reason("mkfs.ext4 /dev/sda1") is not None
+
 
 def test_shell_exec_is_guarded_like_shell():
     def is_denied(tool_name: str, command: str) -> bool:
@@ -33,14 +34,15 @@ def test_shell_exec_is_guarded_like_shell():
     # BOTH are denied for destructive root commands
     assert is_denied("shell", "rm -rf /") is True
     assert is_denied("shell_exec", "rm -rf /") is True
-    
+
     # NEITHER is denied for pkill
     assert is_denied("shell", "pkill -f http.server") is False
     assert is_denied("shell_exec", "pkill -f http.server") is False
 
+
 def test_new_tool_risk_levels():
     analyzer = RuleBasedAnalyzer()
-    
+
     def get_risk(tool_name: str, args: dict | None = None) -> SecurityRisk:
         call = ToolCall(tool_name=tool_name, arguments=args or {})
         action = ActionEvent(thought="test", tool_call=call)
@@ -50,15 +52,16 @@ def test_new_tool_risk_levels():
     assert get_risk("shell_view") == SecurityRisk.LOW
     assert get_risk("shell_wait") == SecurityRisk.LOW
     assert get_risk("server_status") == SecurityRisk.LOW
-    
+
     # MEDIUM risk tools
     assert get_risk("shell_kill_process") == SecurityRisk.MEDIUM
     assert get_risk("shell_write_to_process") == SecurityRisk.MEDIUM
-    
+
     # shell_exec follows command risk (unrecognized command = MEDIUM default)
     assert get_risk("shell_exec", {"command": "ls"}) == SecurityRisk.LOW
     assert get_risk("shell_exec", {"command": "npm install"}) == SecurityRisk.MEDIUM
     assert get_risk("shell_exec", {"command": "sudo rm -rf /"}) == SecurityRisk.HIGH
+
 
 def test_prompt_contract_text():
     # Execution prompt MUST teach the PLATFORM-owned preview contract: the model declares
@@ -76,6 +79,7 @@ def test_prompt_contract_text():
     assert "pkill http.server" not in _EXECUTION_DRIVER_PROMPT
     assert "run_server" not in _EXECUTION_DRIVER_PROMPT
     assert "restart_preview" not in _EXECUTION_DRIVER_PROMPT
+
 
 def test_scanfix_prompt_surgery_contract():
     assert "TALKING vs FINISHING — know what each tool is for" in _EXECUTION_DRIVER_PROMPT
@@ -109,6 +113,7 @@ def test_verify_mandates_lead_with_structured_verifier():
         assert "never a guessed :8000" in mandate
         assert "Verify once and stop" in mandate
         assert "browser tool once" not in mandate
+
 
 def test_planning_prompt_environment():
     # Planning prompt MUST contain the new environment paragraph + the preview_start

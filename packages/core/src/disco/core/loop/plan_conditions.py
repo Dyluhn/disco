@@ -242,11 +242,7 @@ def _drop_scoped_edit_superseded_conditions(
         return conditions
     # A label-less directive only supersedes when it still contains the old literal.
     # Otherwise the prior dictated condition remains, by design.
-    return [
-        c
-        for c in conditions
-        if not _superseded_by_scoped_edit(c, scoped_edits)
-    ]
+    return [c for c in conditions if not _superseded_by_scoped_edit(c, scoped_edits)]
 
 
 def dictated_content_conditions_from_events(
@@ -284,9 +280,7 @@ def dictated_content_conditions_from_events(
         if plan.revision > 1:
             from . import signals
 
-            users = [
-                e for e in users if signals.is_revision_intent(e.message.content or "")
-            ]
+            users = [e for e in users if signals.is_revision_intent(e.message.content or "")]
         for user in users:
             content = user.message.content or ""
             if is_scoped_edit_directive(content):
@@ -365,9 +359,7 @@ class PlanStepConditions:
             _, prev = effective_plan_progress([e for e in events if e.id != action.id])
             newly_done = [i for i, st in cur.items() if st == "done" and prev.get(i) != "done"]
 
-        await self._maybe_emit_context_step_done_marks(
-            events, latest_plan, newly_done, action
-        )
+        await self._maybe_emit_context_step_done_marks(events, latest_plan, newly_done, action)
 
         for idx in newly_done:
             # 1-based step index. Out-of-range = nothing to look up.
@@ -387,7 +379,7 @@ class PlanStepConditions:
             verdict_word = "met" if passed else "NOT met"
             body = (
                 f"[advisory, C18] done-condition for plan step {idx} "
-                f"(\"{latest_plan.steps[idx - 1].title}\"): {verdict_word}. "
+                f'("{latest_plan.steps[idx - 1].title}"): {verdict_word}. '
                 f"{reason}"
             )
             await self._loop._emit(
@@ -419,9 +411,7 @@ class PlanStepConditions:
                 (
                     e
                     for e in events
-                    if isinstance(e, ActionEvent)
-                    and e.id == action.id
-                    and e.seq is not None
+                    if isinstance(e, ActionEvent) and e.id == action.id and e.seq is not None
                 ),
                 None,
             )
@@ -439,17 +429,10 @@ class PlanStepConditions:
             start_seq, end_seq = event_range
             if any(start_seq <= seq <= end_seq for seq in failures):
                 continue
-            range_id = (
-                f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
-            )
-            if any(
-                isinstance(e, ContextResolvedEvent) and e.range_id == range_id
-                for e in events
-            ):
+            range_id = f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
+            if any(isinstance(e, ContextResolvedEvent) and e.range_id == range_id for e in events):
                 continue
-            summary = self._context_step_summary(
-                events, latest_plan, idx, start_seq, end_seq
-            )
+            summary = self._context_step_summary(events, latest_plan, idx, start_seq, end_seq)
             try:
                 ref = await store.write_summary(range_id, summary)
             except Exception:  # noqa: BLE001 - context marks are best-effort
@@ -475,9 +458,7 @@ class PlanStepConditions:
                 }
             )
             await self._loop._emit(mark)
-            await self._loop._emit(
-                context_write_summary(range_id, ref.rel_path, summary)
-            )
+            await self._loop._emit(context_write_summary(range_id, ref.rel_path, summary))
 
     def _context_step_done_range(
         self,
@@ -622,9 +603,7 @@ class PlanStepConditions:
             return f"{name} {head[:120]}"
         return name
 
-    async def evaluate_plan_step_predicate(
-        self, predicate: DoDPredicate
-    ) -> tuple[bool, str]:
+    async def evaluate_plan_step_predicate(self, predicate: DoDPredicate) -> tuple[bool, str]:
         """Lightweight inline evaluation of a single DoDPredicate for the
         C18 advisory note. The three kinds reuse the
         `disco.core.dod.DoDPredicate` discriminated union:
@@ -692,6 +671,7 @@ class PlanStepConditions:
         The literal-`Path` branch survives ONLY for the sandbox-less /
         fake-executor path (no `file_exists` capability) the tests rely on."""
         from pathlib import Path
+
         sbx = getattr(self._loop.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         path_str = predicate.path
@@ -788,8 +768,7 @@ class PlanStepConditions:
             except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
                 return (
                     False,
-                    f"command({predicate.cmd!r}): sandbox exec error "
-                    f"({type(exc).__name__}: {exc})",
+                    f"command({predicate.cmd!r}): sandbox exec error ({type(exc).__name__}: {exc})",
                 )
             # Timeout caveat: timed_out=True is always a non-pass, even when
             # exit_code coincidentally matches expect_exit (e.g. 124 from SIGKILL).
@@ -803,8 +782,7 @@ class PlanStepConditions:
             if result.exit_code == predicate.expect_exit:
                 return (
                     True,
-                    f"command({predicate.cmd!r}): exited {result.exit_code} "
-                    f"as expected (sandbox)",
+                    f"command({predicate.cmd!r}): exited {result.exit_code} as expected (sandbox)",
                 )
             return (
                 False,
@@ -844,8 +822,7 @@ class PlanStepConditions:
         except Exception as exc:  # noqa: BLE001 — defensive
             return (
                 False,
-                f"command({predicate.cmd!r}): executor error "
-                f"({type(exc).__name__}: {exc})",
+                f"command({predicate.cmd!r}): executor error ({type(exc).__name__}: {exc})",
             )
         duration = asyncio.get_event_loop().time() - started
         if completed.returncode == predicate.expect_exit:
@@ -860,9 +837,7 @@ class PlanStepConditions:
             f"expected {predicate.expect_exit}",
         )
 
-    async def check_http_for_plan_step(
-        self, predicate: HTTPOkPredicate
-    ) -> tuple[bool, str]:
+    async def check_http_for_plan_step(self, predicate: HTTPOkPredicate) -> tuple[bool, str]:
         """GET `predicate.url` and compare to `predicate.expect_status`
         (default 200). Tight timeout; failures surface the reason. Uses
         the shared class-1 host egress guard so private ranges and redirects
@@ -878,6 +853,5 @@ class PlanStepConditions:
             return (True, f"http_ok({predicate.url}): status {status} as expected")
         return (
             False,
-            f"http_ok({predicate.url}): status {status}, "
-            f"expected {predicate.expect_status}",
+            f"http_ok({predicate.url}): status {status}, expected {predicate.expect_status}",
         )

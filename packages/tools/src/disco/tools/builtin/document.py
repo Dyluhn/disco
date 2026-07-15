@@ -347,10 +347,9 @@ def _render_pdf(md: str) -> tuple[bytes, int]:
     for off in offsets[1:]:
         out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
     out.extend(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref}\n%%EOF\n"
-        ).encode("ascii")
+        (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").encode(
+            "ascii"
+        )
     )
     return bytes(out), len(pages)
 

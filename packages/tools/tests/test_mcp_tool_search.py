@@ -74,10 +74,7 @@ async def test_tool_search_handler_basic():
 @pytest.mark.asyncio
 async def test_tool_search_handler_limit():
     """Search respects the limit parameter."""
-    tools = [
-        {"name": f"tool_{i}", "description": f"Description {i}"}
-        for i in range(10)
-    ]
+    tools = [{"name": f"tool_{i}", "description": f"Description {i}"} for i in range(10)]
     results = await _tool_search_handler("tool", 3, tools)
     assert len(results) == 3
 

@@ -49,9 +49,7 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
 
 async def _create_app(sbx: FakeSandboxInstance, primitive_id: str):
     return await AppCreateTool().run(
-        AppCreateArgs(
-            recipe_id="editorial-ledger", primitive_id=primitive_id, brief="Acme Studio"
-        ),
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id=primitive_id, brief="Acme Studio"),
         _ctx(sbx),
     )
 
@@ -87,15 +85,20 @@ async def test_add_webhook_renders_pending_endpoint_and_stays_inert():
     assert "declared, not active" in after
 
     # …and the regenerated tree is still inert: no worker route, no sig-verify code
-    emitted = {
-        path: data
-        for path, data in sbx._fs.items()
-        if not path.startswith(".disco/")
-    }
+    emitted = {path: data for path, data in sbx._fs.items() if not path.startswith(".disco/")}
     assert set(emitted) == {"index.html"}
     haystack = after.lower()
-    for token in ("hmac", "timingsafeequal", "crypto.subtle", "idempotency",
-                  "addeventlistener", "wrangler", "fetch(", "<script", "<form"):
+    for token in (
+        "hmac",
+        "timingsafeequal",
+        "crypto.subtle",
+        "idempotency",
+        "addeventlistener",
+        "wrangler",
+        "fetch(",
+        "<script",
+        "<form",
+    ):
         assert token not in haystack, f"forbidden token {token!r} in index.html"
 
 

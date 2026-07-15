@@ -45,7 +45,9 @@ def _service() -> LocalSandboxService:
     cfg = SandboxConfig(
         backend="local",
         runtime=os.environ.get("PMX_LOCAL_RUNTIME", "runc"),
-        docker_socket=os.environ.get("PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"),
+        docker_socket=os.environ.get(
+            "PMX_LOCAL_SOCKET", "unix:///run/user/1000/podman/podman.sock"
+        ),
         image=os.environ.get("PMX_LOCAL_IMAGE", "pmx-sandbox:base"),
     )
     return LocalSandboxService(cfg)
@@ -62,12 +64,25 @@ async def main() -> None:
 
     # ---- a normal session: tools drive a real box --------------------------------
     session = SandboxSession(svc, SandboxSpec(memory_mb=256), conversation_id="verify")
-    ex = DefaultToolExecutor(registry, agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=session, default_timeout_s=20)
+    ex = DefaultToolExecutor(
+        registry,
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=session,
+        default_timeout_s=20,
+    )
 
     # 1. exec genuinely captures (real output + a non-trivial exit code)
     r = await ex.execute(_call("shell", command="echo CAPTURED_LIVE; exit 7"))
-    captured = r.structured and r.structured.get("stdout", "").strip() == "CAPTURED_LIVE" and r.structured.get("exit_code") == 7
-    ok("1. exec genuinely captures real output + exit code", bool(captured), f"stdout={r.structured.get('stdout','').strip()!r} exit={r.structured.get('exit_code')}")
+    captured = (
+        r.structured
+        and r.structured.get("stdout", "").strip() == "CAPTURED_LIVE"
+        and r.structured.get("exit_code") == 7
+    )
+    ok(
+        "1. exec genuinely captures real output + exit code",
+        bool(captured),
+        f"stdout={r.structured.get('stdout', '').strip()!r} exit={r.structured.get('exit_code')}",
+    )
 
     # 2. file round-trip through the tools + jail
     await ex.execute(_call("file_write", path="notes/todo.txt", content="step1\n"))
@@ -76,7 +91,10 @@ async def main() -> None:
     esc = await ex.execute(_call("file_read", path="../../etc/passwd"))
     ok(
         "2. file round-trip via tools + workspace jail",
-        rd.success and rd.content.strip() == "step1" and "todo.txt" in ls.structured["entries"] and esc.success is False,
+        rd.success
+        and rd.content.strip() == "step1"
+        and "todo.txt" in ls.structured["entries"]
+        and esc.success is False,
         f"read={rd.content.strip()!r} jail_rejected={not esc.success}",
     )
 
@@ -89,19 +107,37 @@ async def main() -> None:
     )
 
     # 4a. containment: sealed by default (no network)
-    net = await ex.execute(_call("shell", command="curl -s --max-time 6 https://example.com -o /dev/null -w '%{http_code}' || echo BLOCKED"))
-    ok("4a. sealed by default (no network)", "BLOCKED" in net.content or not net.success, net.content.strip()[:30])
+    net = await ex.execute(
+        _call(
+            "shell",
+            command="curl -s --max-time 6 https://example.com -o /dev/null -w '%{http_code}' || echo BLOCKED",
+        )
+    )
+    ok(
+        "4a. sealed by default (no network)",
+        "BLOCKED" in net.content or not net.success,
+        net.content.strip()[:30],
+    )
 
     # 4b. containment: the host-env secret is absent from the box (and exec really ran)
     env = await ex.execute(_call("shell", command="env"))
     leaked = SENTINEL in (env.structured.get("stdout", "") or "")
-    ok("4b. secret non-leak (host env absent in box)", (not leaked) and len(env.structured.get("stdout", "")) > 0, "secret absent; env captured" if not leaked else "LEAKED!")
+    ok(
+        "4b. secret non-leak (host env absent in box)",
+        (not leaked) and len(env.structured.get("stdout", "")) > 0,
+        "secret absent; env captured" if not leaked else "LEAKED!",
+    )
 
     await session.destroy()
 
     # ---- THE HEADLINE: sandbox dies mid-session → re-create (lesson #1) -----------
     death_session = SandboxSession(svc, SandboxSpec(memory_mb=256), conversation_id="death")
-    dx = DefaultToolExecutor(registry, agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=death_session, default_timeout_s=20)
+    dx = DefaultToolExecutor(
+        registry,
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=death_session,
+        default_timeout_s=20,
+    )
 
     warm = await dx.execute(_call("shell", command="echo alive; cat /etc/hostname"))
     gen_before = death_session.generation

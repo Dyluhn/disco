@@ -11,9 +11,7 @@ from fastapi import APIRouter
 from ..runtime import ConversationRuntime
 
 
-def make_export_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_export_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/export/capabilities")

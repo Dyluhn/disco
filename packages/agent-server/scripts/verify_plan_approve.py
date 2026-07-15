@@ -76,19 +76,25 @@ def _print_new(events: list, shown: int) -> int:
                 print(f"      thought: {e.thought.strip()[:120]}")
         elif isinstance(e, ObservationEvent):
             r = e.tool_result
-            print(f"      ✓ obs (exit {(_get(r.structured, 'exit_code'))}): {r.content.strip()[:120]!r}")
+            print(
+                f"      ✓ obs (exit {(_get(r.structured, 'exit_code'))}): {r.content.strip()[:120]!r}"
+            )
         elif isinstance(e, AgentErrorEvent):
             print(f"      ✗ {e.error[:120]}")
         elif isinstance(e, ErrorEvent):
             print(f"  [FATAL ERROR] {str(getattr(e, 'detail', e))[:300]}")
         elif isinstance(e, CondensationEvent):
-            print(f"  ~ CONDENSED seq {e.forgotten_start_seq}-{e.forgotten_end_seq}: {e.summary[:80]}")
+            print(
+                f"  ~ CONDENSED seq {e.forgotten_start_seq}-{e.forgotten_end_seq}: {e.summary[:80]}"
+            )
         elif isinstance(e, StatusEvent):
             print(f"  [status] {e.status.value}{(' · ' + e.detail) if e.detail else ''}")
     return len(events)
 
 
-async def _drive(runtime: ConversationRuntime, store: SqliteEventStore, *, auto_approve_plan: bool, shown: int) -> tuple[int, dict]:
+async def _drive(
+    runtime: ConversationRuntime, store: SqliteEventStore, *, auto_approve_plan: bool, shown: int
+) -> tuple[int, dict]:
     """Drive the loop to a terminal-for-now status, printing events as they stream.
     Auto-approve the plan gate ONCE (the first time it appears), auto-approve risky
     actions, and return counters about what happened. Returns (shown, stats)."""
@@ -135,7 +141,11 @@ async def _drive(runtime: ConversationRuntime, store: SqliteEventStore, *, auto_
             break
         if state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION:
             pending = next(
-                (e for e in events if isinstance(e, ActionEvent) and e.id == state.pending_action_id),
+                (
+                    e
+                    for e in events
+                    if isinstance(e, ActionEvent) and e.id == state.pending_action_id
+                ),
                 None,
             )
             risk = _get(pending.meta.get("risk_assessment") if pending else None, "risk")
@@ -183,10 +193,16 @@ async def main() -> None:
     first_plan_ctx_len = len(plan_events[0].context) if plan_events else 0
     print("\n--- round 1 result ---")
     print(f"  status         : {state.execution_status.value}")
-    print(f"  plan gates     : {s1['plan_gates']} (PLANNING → AWAITING_PLAN_APPROVAL → approve → build)")
-    print(f"  planning reads : {s1['planning_reads']} (Phase 1 exploration — file_list/file_read/search/extract)")
+    print(
+        f"  plan gates     : {s1['plan_gates']} (PLANNING → AWAITING_PLAN_APPROVAL → approve → build)"
+    )
+    print(
+        f"  planning reads : {s1['planning_reads']} (Phase 1 exploration — file_list/file_read/search/extract)"
+    )
     print(f"  plan ctx chars : {first_plan_ctx_len} (the markdown rationale on the PlanEvent)")
-    print(f"  action gates   : {s1['action_gates']} (per-action ConfirmRisky still bites mid-build)")
+    print(
+        f"  action gates   : {s1['action_gates']} (per-action ConfirmRisky still bites mid-build)"
+    )
     print(f"  tool actions   : {s1['actions']}")
 
     ok1 = (
@@ -194,7 +210,9 @@ async def main() -> None:
         and s1["plan_gates"] >= 1
         and s1["actions"] >= 2
     )
-    print(f"  [{'PASS' if ok1 else 'CHECK'}] plan-first: model proposed, we approved, build ran to FINISHED")
+    print(
+        f"  [{'PASS' if ok1 else 'CHECK'}] plan-first: model proposed, we approved, build ran to FINISHED"
+    )
 
     # Round 2: re-enter plan mode with a focused diff request, expect a NEW plan
     # (revision 2) at AWAITING_PLAN_APPROVAL — the re-plan affordance the UI exposes.

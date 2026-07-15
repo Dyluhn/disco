@@ -138,6 +138,7 @@ async def test_hard_deny_refuses_sandboxed_rm_rf_before_policy():
     statuses = [e.status for e in events if hasattr(e, "status")]
     assert ConversationStatus.WAITING_FOR_CONFIRMATION not in statuses
     from disco.core import AgentErrorEvent
+
     errors = [e for e in events if isinstance(e, AgentErrorEvent)]
     assert errors, "hard-deny must emit an AgentErrorEvent"
     assert any("hard-denied" in e.error or "REFUSED" in e.error for e in errors)
@@ -225,6 +226,7 @@ async def test_auto_approved_not_stamped_when_base_would_not_gate():
     # treated as unknown and requeried — the test executor must register what
     # the script calls, like a real registry would.
     from disco.core.llm.types import ToolSpec
+
     loop, store = build_loop(
         agent,
         executor=_SandboxScopedExecutor(

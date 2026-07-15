@@ -15,10 +15,10 @@ class FakeInstance:
         self.default_output = ("", "")
         self.default_exit_code = 0
         self.capture_pane_calls = 0
-    
+
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self.cmd_log.append(cmd)
-        
+
         if "capture-pane" in cmd:
             self.capture_pane_calls += 1
             if "capture-pane" in self.canned_outputs:
@@ -26,7 +26,7 @@ class FakeInstance:
                     cp = self.canned_outputs["capture-pane"]
                     val = cp.pop(0) if cp else self.canned_outputs["capture-pane_default"]
                     return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
-                
+
         for k, v in self.canned_outputs.items():
             if k in cmd and k != "capture-pane":
                 if isinstance(v, list):
@@ -37,11 +37,11 @@ class FakeInstance:
                     return ExecResult(
                         exit_code=exit_code, stdout=stdout, stderr="", timed_out=False
                     )
-                
+
         if "capture-pane" in cmd and "capture-pane" in self.canned_outputs:
-             val = self.canned_outputs["capture-pane"]
-             return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
-        
+            val = self.canned_outputs["capture-pane"]
+            return ExecResult(exit_code=val[0], stdout=val[1], stderr="", timed_out=False)
+
         return ExecResult(
             exit_code=self.default_exit_code,
             stdout=self.default_output[1],
@@ -49,61 +49,73 @@ class FakeInstance:
             timed_out=False,
         )
 
+
 @pytest.mark.asyncio
 async def test_marker_parse_exit_0():
     inst = FakeInstance()
-    async def get_inst(): return inst
+
+    async def get_inst():
+        return inst
+
     manager = ShellSessionManager(get_inst)
-    
+
     # Fake ensure
     inst.canned_outputs["has-session"] = (0, "")
-    
+
     # Fake view (busy -> not busy)
     inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__DISCO_PS1__0__$ "), # view
-        (0, "__DISCO_PS1__0__$ "), # view in is_busy
-        (0, "__DISCO_PS1__0__$ "), # pre_cap
-        (0, "__DISCO_PS1__0__$ \necho hi\nhi\n__DISCO_PS1__0__$ ") # post_cap
+        (0, "__DISCO_PS1__0__$ "),  # view
+        (0, "__DISCO_PS1__0__$ "),  # view in is_busy
+        (0, "__DISCO_PS1__0__$ "),  # pre_cap
+        (0, "__DISCO_PS1__0__$ \necho hi\nhi\n__DISCO_PS1__0__$ "),  # post_cap
     ]
-    
+
     view = await manager.view("main")
     assert not view.running
-    
+
     out = await manager.exec("main", "echo hi", None)
     assert not out.running
     assert out.exit_code == 0
     assert out.output == "echo hi\nhi"
 
+
 @pytest.mark.asyncio
 async def test_marker_parse_exit_7():
     inst = FakeInstance()
-    async def get_inst(): return inst
+
+    async def get_inst():
+        return inst
+
     manager = ShellSessionManager(get_inst)
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__DISCO_PS1__0__$ "), # view in is_busy
-        (0, "__DISCO_PS1__0__$ "), # pre_cap
-        (0, "__DISCO_PS1__0__$ \nexit 7\n__DISCO_PS1__7__$ ") # post_cap
+        (0, "__DISCO_PS1__0__$ "),  # view in is_busy
+        (0, "__DISCO_PS1__0__$ "),  # pre_cap
+        (0, "__DISCO_PS1__0__$ \nexit 7\n__DISCO_PS1__7__$ "),  # post_cap
     ]
-    
+
     out = await manager.exec("main", "exit 7", None)
     assert not out.running
     assert out.exit_code == 7
     assert out.output == "exit 7"
 
+
 @pytest.mark.asyncio
 async def test_busy_detection():
     inst = FakeInstance()
-    async def get_inst(): return inst
+
+    async def get_inst():
+        return inst
+
     manager = ShellSessionManager(get_inst)
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane"] = (0, "sleep 10\n")
-    
+
     view = await manager.view("main")
     assert view.running
-    
+
     # test SessionBusy verbatim message
     with pytest.raises(
         SessionBusy,
@@ -115,15 +127,19 @@ async def test_busy_detection():
     ):
         await manager.exec("main", "ls", None)
 
+
 @pytest.mark.asyncio
 async def test_kill_then_recreate():
     inst = FakeInstance()
-    async def get_inst(): return inst
+
+    async def get_inst():
+        return inst
+
     manager = ShellSessionManager(get_inst)
     inst.canned_outputs["has-session"] = [(0, ""), (1, "")]
     inst.canned_outputs["has-session_default"] = (0, "")
     inst.canned_outputs["capture-pane"] = (0, "sleep 10\n")
-    
+
     res = await manager.kill_foreground("main")
     assert "Process ignored Ctrl-C; session 'main' was killed and recreated." in res
     assert "tmux kill-session" in " ".join(inst.cmd_log)
@@ -135,7 +151,10 @@ async def test_session_lost_after_recreate():
     """After a sandbox recreate, viewing a previously-known session must say WHY
     it is gone — not the generic 'not found'."""
     inst = FakeInstance()
-    async def get_inst(): return inst
+
+    async def get_inst():
+        return inst
+
     manager = ShellSessionManager(get_inst)
 
     # Session 'main' becomes known (idle prompt visible).
@@ -200,56 +219,59 @@ async def test_existing_process_session_refreshes_tmux_environment():
 async def test_integration_scenarios():
     service = ProcessSandboxService()
     inst = await service.create(spec=None, owner_id="test", conversation_id="conv-int")
-    
+
     try:
-        async def get_inst(): return inst
+
+        async def get_inst():
+            return inst
+
         manager = ShellSessionManager(get_inst, namespace="conv-int-")
-        
+
         # a) state persists
         out1 = await manager.exec("main", "x=42; echo started", None)
         assert not out1.running
-        
+
         out2 = await manager.exec("main", "echo $x", None)
         assert not out2.running
         assert out2.output.strip() == "42"
-        
+
         # b) start server, curl, kill
         out_srv = await manager.exec("srv", "python3 -m http.server 8123", None)
         assert out_srv.running
-        
+
         # give it a second to start
         await asyncio.sleep(1)
-        
+
         view_srv = await manager.view("srv")
         assert "Serving HTTP" in view_srv.output
-        
+
         # verify from test
         req = urllib.request.Request("http://127.0.0.1:8123")
         with urllib.request.urlopen(req) as response:
             assert response.status == 200
-        
+
         # actually curl 127.0.0.1:8123
         kill_res = await manager.kill_foreground("srv")
         assert "idle" in kill_res or "killed" in kill_res
-        
+
         # c) busy session
         out_read = await manager.exec("main", "read -p 'name? ' n && echo hi-$n", None)
         assert out_read.running
-        
+
         await manager.write("main", "dylan", press_enter=True)
-        
+
         # Wait for it to finish
         view_read = await manager.wait("main", 5)
         assert not view_read.running
         assert "hi-dylan" in view_read.output
-        
+
         # d) SessionBusy
         out_busy = await manager.exec("main2", "sleep 20", None)
         assert out_busy.running
-        
+
         with pytest.raises(SessionBusy):
             await manager.exec("main2", "echo nope", None)
-            
+
     finally:
         await inst.destroy()
 
@@ -268,18 +290,14 @@ async def test_shared_tmux_server_cannot_cross_bind_process_workspaces():
     class IsolatedTmuxManager(ShellSessionManager):
         async def _run_tmux(self, cmd: str) -> str:
             inst = await self._get_instance()
-            res = await inst.exec_shell(
-                f"tmux -L {socket_name} {cmd}", timeout_s=10
-            )
+            res = await inst.exec_shell(f"tmux -L {socket_name} {cmd}", timeout_s=10)
             if res.exit_code != 0:
                 raise RuntimeError(res.stderr)
             return res.stdout
 
         async def _run_tmux_safe(self, cmd: str) -> tuple[int, str]:
             inst = await self._get_instance()
-            res = await inst.exec_shell(
-                f"tmux -L {socket_name} {cmd}", timeout_s=10
-            )
+            res = await inst.exec_shell(f"tmux -L {socket_name} {cmd}", timeout_s=10)
             return res.exit_code, res.stdout
 
     async def get_a():
@@ -299,7 +317,7 @@ async def test_shared_tmux_server_cannot_cross_bind_process_workspaces():
 
         manager_a = IsolatedTmuxManager(get_a, namespace=f"{conv_a[:8]}-")
         manager_b = IsolatedTmuxManager(get_b, namespace=f"{conv_b[:8]}-")
-        command = "printf '%s|%s|%s\\n' \"$HOME\" \"$TMPDIR\" \"$DISCO_WORKSPACE\""
+        command = 'printf \'%s|%s|%s\\n\' "$HOME" "$TMPDIR" "$DISCO_WORKSPACE"'
         out_a = await manager_a.exec("main", command, None)
         out_b = await manager_b.exec("main", command, None)
 
@@ -325,8 +343,8 @@ def _serve_canned(inst):
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane_default"] = (0, "__DISCO_PS1__0__$ ")
     inst.canned_outputs["capture-pane"] = [
-        (0, "__DISCO_PS1__0__$ "),                       # is_busy view
-        (0, "__DISCO_PS1__0__$ "),                       # pre_cap
+        (0, "__DISCO_PS1__0__$ "),  # is_busy view
+        (0, "__DISCO_PS1__0__$ "),  # pre_cap
         (0, "__DISCO_PS1__0__$ \nserving\n__DISCO_PS1__0__$ "),  # post_cap w/ marker
     ]
 
@@ -405,5 +423,5 @@ async def test_exec_never_rewrites_serve_shaped_text_on_shared_host():
         _serve_canned(inst)
         await manager.exec("main", command, None)
         sent = _sent_literals(inst)
-        assert "http.server 8000" in sent, command   # verbatim
+        assert "http.server 8000" in sent, command  # verbatim
         assert "http.server 3000" not in sent, command

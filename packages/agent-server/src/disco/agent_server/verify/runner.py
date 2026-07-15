@@ -248,9 +248,7 @@ class HttpVerifyClient(AbstractVerifyClient):
         send_build_brief: bool = False,
     ) -> None:
         await self._ensure_session()
-        ws_base = (
-            self._base_url.replace("http://", "ws://").replace("https://", "wss://")
-        )
+        ws_base = self._base_url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_base}/ws/conversations/{cid}"
         deadline = time.monotonic() + timeout_s
         answers = 0
@@ -278,9 +276,7 @@ class HttpVerifyClient(AbstractVerifyClient):
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        log.warning(
-                            "run_ws_exchange: timed out driving gates on %s", cid
-                        )
+                        log.warning("run_ws_exchange: timed out driving gates on %s", cid)
                         break
                     try:
                         raw: str = await asyncio.wait_for(
@@ -301,9 +297,7 @@ class HttpVerifyClient(AbstractVerifyClient):
                         # stalls the run. Auto-answer via a fresh user message (the
                         # same channel the UI uses), capped so we never loop forever.
                         answers += 1
-                        await ws.send(
-                            json.dumps({"type": "send_message", "content": auto_answer})
-                        )
+                        await ws.send(json.dumps({"type": "send_message", "content": auto_answer}))
                     # Gap #3: scripted extra command frames (steer/stop/resume/…),
                     # once, after the run is underway.
                     if not sent_cmds and ws_commands:
@@ -359,9 +353,7 @@ class HttpVerifyClient(AbstractVerifyClient):
                 if status in _TERMINAL:
                     return state
                 if time.monotonic() >= deadline:
-                    log.warning(
-                        "poll_until_terminal: timeout for %s (last status=%s)", cid, status
-                    )
+                    log.warning("poll_until_terminal: timeout for %s (last status=%s)", cid, status)
                     state["_timed_out"] = True  # codex P0: a timeout must FAIL, not pass
                     return state
                 await asyncio.sleep(_POLL_INTERVAL)
@@ -516,7 +508,16 @@ def _locate_deliverables(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # File extensions the runner can download + validate. A deliverable without one of these
 # (e.g. a live "app" deliverable) is NOT a file to fetch, so it's skipped — not a failure.
 _VALIDATABLE_EXTS = (
-    ".pdf", ".mp3", ".wav", ".xlsx", ".pptx", ".html", ".htm", ".png", ".jpg", ".jpeg"
+    ".pdf",
+    ".mp3",
+    ".wav",
+    ".xlsx",
+    ".pptx",
+    ".html",
+    ".htm",
+    ".png",
+    ".jpg",
+    ".jpeg",
 )
 
 # Expected-deliverable-type → the extensions that satisfy it. A scenario that declares
@@ -530,9 +531,7 @@ _DELIVERABLE_TYPE_EXTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _deliverable_type_satisfied(
-    deliverables: list[dict[str, Any]], dtype: str | None
-) -> bool:
+def _deliverable_type_satisfied(deliverables: list[dict[str, Any]], dtype: str | None) -> bool:
     """True if the scenario's expected deliverable_type is satisfied. None/unrecognised type
     → no gate. ``app`` is matched by deliverable KIND (a live-app handoff, no file extension);
     other types require ≥1 deliverable with a matching file extension."""
@@ -641,9 +640,7 @@ def _tools_with_success(events: list[dict[str, Any]]) -> set[str]:
     return names
 
 
-def _run_tool_checks(
-    scenario: Scenario, events: list[dict[str, Any]]
-) -> list[str]:
+def _run_tool_checks(scenario: Scenario, events: list[dict[str, Any]]) -> list[str]:
     """EPIC M: prove the run took the strict AppKit golden path. Every ``expect_tools``
     entry must have a SUCCESSFUL OBSERVATION in the event log (not just an emitted action —
     P1); no ``forbid_tools`` entry may appear at all (action OR observation, so a forbidden

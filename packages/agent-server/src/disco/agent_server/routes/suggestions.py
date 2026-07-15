@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, Query
@@ -20,7 +21,7 @@ def make_suggestions_router(
 
     @router.get("/api/suggestions")
     async def get_suggestions(
-        surface: SuggestionSurface = Query(...),
+        surface: Annotated[SuggestionSurface, Query()],
     ) -> dict:
         if runtime is not None:
             try:

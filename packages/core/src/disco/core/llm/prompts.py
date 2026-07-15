@@ -150,8 +150,8 @@ _PLANNING_DRIVER_PROMPT = (
     "system, variation direction, brand color, tech preference, target host, file "
     "name, or layout choice. Ask at most 4 questions. Each item has: `id`, `question`, "
     "and optional `options` as a FLAT list of plain strings (never objects or nested "
-    "lists). Every question MUST include these options exactly: \"Explore a few "
-    "options\", \"Decide for me\", and \"Other\"; the UI also provides free text. "
+    'lists). Every question MUST include these options exactly: "Explore a few '
+    'options", "Decide for me", and "Other"; the UI also provides free text. '
     "After calling `questions_v2`, END THE TURN. Do not call it more than once before "
     "`submit_plan`; if ambiguity remains, state a reasonable assumption in the plan "
     "context. If only ONE thing is missing, `ask_user` is simpler."
@@ -199,14 +199,14 @@ _PLANNING_DRIVER_PROMPT = (
     "    - summary (REQUIRED — never omit it): one or two plain-language sentences "
     "describing what you will deliver.\n"
     "    - steps: an ordered list of step OBJECTS, each "
-    "{\"title\": \"<short outcome-focused capstone>\", \"done_condition\": "
-    "{\"kind\": \"file_exists\", \"path\": \"<a file this step creates>\"}} — e.g. "
-    "{\"title\": \"Scaffold the file layout: index.html + styles.css + app.js\", "
-    "\"done_condition\": "
-    "{\"kind\": \"file_exists\", \"path\": \"styles.css\"}}. `done_condition` is OPTIONAL: "
+    '{"title": "<short outcome-focused capstone>", "done_condition": '
+    '{"kind": "file_exists", "path": "<a file this step creates>"}} — e.g. '
+    '{"title": "Scaffold the file layout: index.html + styles.css + app.js", '
+    '"done_condition": '
+    '{"kind": "file_exists", "path": "styles.css"}}. `done_condition` is OPTIONAL: '
     "OMIT it entirely rather than guess a shape; when used the ONLY valid shapes are "
-    "{\"kind\": \"file_exists\", \"path\": ...}, {\"kind\": \"command\", \"cmd\": ..., "
-    "\"expect_exit\": 0}, or {\"kind\": \"http_ok\", \"url\": ..., \"expect_status\": 200}. "
+    '{"kind": "file_exists", "path": ...}, {"kind": "command", "cmd": ..., '
+    '"expect_exit": 0}, or {"kind": "http_ok", "url": ..., "expect_status": 200}. '
     "Use http_ok only for a concrete, already-known external fully qualified hostname "
     "or IP address; never guess a local, future, single-label, or placeholder host. "
     "Omit http_ok when the final URL is not already known. "
@@ -559,9 +559,8 @@ _MENTIONED_ELEMENT_GUIDANCE = (
 
 
 def _soften_self_verify_mandate(prompt: str) -> str:
-    return (
-        prompt.replace(_SELF_VERIFY_MANDATE_CAPABLE, _HOST_VERIFY_MANDATE_CAPABLE)
-        .replace(_SELF_VERIFY_MANDATE_SMALL, _HOST_VERIFY_MANDATE_SMALL)
+    return prompt.replace(_SELF_VERIFY_MANDATE_CAPABLE, _HOST_VERIFY_MANDATE_CAPABLE).replace(
+        _SELF_VERIFY_MANDATE_SMALL, _HOST_VERIFY_MANDATE_SMALL
     )
 
 

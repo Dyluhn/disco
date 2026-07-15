@@ -432,9 +432,7 @@ class Planner:
                 if plan is not None and getattr(plan, "steps", None)
                 else "  (the prior plan's steps are not on record — restate the full plan)"
             )
-            content = _REPLAN_FRAMING.format(
-                current_plan=digest, instruction=text.strip()
-            )
+            content = _REPLAN_FRAMING.format(current_plan=digest, instruction=text.strip())
             await self._loop._emit(
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
@@ -485,9 +483,7 @@ class Planner:
         # Every plan consumer already guards `not plan.steps` (the honest no-steps
         # state), so the UI shows a clean summary-only plan card instead.
         summary = _strip_plan_tags(arguments.get("summary")) or "Proposed plan"
-        context = _strip_plan_tags(
-            arguments.get("context") or arguments.get("rationale")
-        )
+        context = _strip_plan_tags(arguments.get("context") or arguments.get("rationale"))
         if getattr(self._loop, "_autonomous", False):
             context = _with_autonomous_assumptions(context)
         # C18 — harvest the predicates (revision-scoped). We walk the raw
@@ -513,7 +509,9 @@ class Planner:
                 _LOG.warning(
                     "C18: malformed done_condition on plan step %d (revision %d); "
                     "ignoring (advisory only): %r",
-                    one_based, revision, cond,
+                    one_based,
+                    revision,
+                    cond,
                 )
                 continue
             self._loop._plan_step_predicates[(revision, one_based)] = predicate
@@ -562,11 +560,7 @@ class Planner:
                 or (opt.get("tool_call") or {}).get("tool_name")
                 or ""
             ).strip()
-            args = (
-                opt.get("arguments")
-                or (opt.get("tool_call") or {}).get("arguments")
-                or {}
-            )
+            args = opt.get("arguments") or (opt.get("tool_call") or {}).get("arguments") or {}
             if not isinstance(args, dict):
                 # Malformed args shouldn't sink the whole option — drop the args,
                 # keep the labeled choice. (The executor revalidates args anyway.)
@@ -578,11 +572,7 @@ class Planner:
             # those exist the option carries no information to show — skip it
             # rather than render a meaningless button.
             title = str(
-                opt.get("title")
-                or opt.get("label")
-                or opt.get("name")
-                or description
-                or tool_name
+                opt.get("title") or opt.get("label") or opt.get("name") or description or tool_name
             ).strip()
             if not title:
                 continue
@@ -603,10 +593,7 @@ class Planner:
         if not options:
             return None
         summary = str(
-            arguments.get("question")
-            or arguments.get("summary")
-            or arguments.get("goal")
-            or ""
+            arguments.get("question") or arguments.get("summary") or arguments.get("goal") or ""
         ).strip()
         if not summary:
             summary = "the agent is asking which path to take"

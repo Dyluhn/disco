@@ -45,7 +45,9 @@ def _provider() -> OpenAIProvider:
         )
     )
     return OpenAIProvider(
-        name="opencode-go", base_url="https://opencode.ai/zen/go/v1", api_key="k",
+        name="opencode-go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_key="k",
         transport=transport,
     )
 

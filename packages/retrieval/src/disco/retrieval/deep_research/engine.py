@@ -148,9 +148,7 @@ class DeepResearchRun:
         # available RAM (a big box → K high enough to run every leg; a small box
         # → protected) and passes it on every tier. `None` (the default, used by
         # hermetic tests) = UNBOUNDED.
-        self._gather_concurrency = (
-            gather_concurrency if (gather_concurrency or 0) > 0 else None
-        )
+        self._gather_concurrency = gather_concurrency if (gather_concurrency or 0) > 0 else None
 
     @property
     def bound(self) -> DepthBound:
@@ -193,9 +191,8 @@ class DeepResearchRun:
         # from available RAM. Surface it — and whether it's actually *constraining*
         # parallelism (cap < legs) — so a memory-reduced run is VISIBLE, never a
         # silent degradation. `concurrency=None` means unbounded (big box / remote).
-        memory_bounded = (
-            self._gather_concurrency is not None
-            and self._gather_concurrency < len(pending)
+        memory_bounded = self._gather_concurrency is not None and self._gather_concurrency < len(
+            pending
         )
         await emit(
             "phase",
@@ -491,14 +488,10 @@ class DeepResearchRun:
                         {
                             "subquestion": steer_text,
                             "ok": True,
-                            "detail": (
-                                f"mid-run steer: adding research section '{steer_text}'"
-                            ),
+                            "detail": (f"mid-run steer: adding research section '{steer_text}'"),
                         },
                     )
-                    new_task_tuple = self._start_one_steer_task(
-                        new_subq, steer_budget, emit=emit
-                    )
+                    new_task_tuple = self._start_one_steer_task(new_subq, steer_budget, emit=emit)
                     gather_tasks.append(new_task_tuple)
 
             # D3 inject-source checkpoint — only active when hook is installed.
@@ -514,12 +507,8 @@ class DeepResearchRun:
                     _injected_passages.extend(new_injected)
                     if self._embedder is not None:
                         try:
-                            vecs = await self._embedder.embed(
-                                [p.text for p in new_injected]
-                            )
-                            await self._vector_store.upsert(
-                                subq_namespace, new_injected, vecs
-                            )
+                            vecs = await self._embedder.embed([p.text for p in new_injected])
+                            await self._vector_store.upsert(subq_namespace, new_injected, vecs)
                         except Exception:  # noqa: BLE001
                             pass  # fallback_passages path covers it
 
@@ -670,7 +659,9 @@ class DeepResearchRun:
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
         summary = await coherence_pass(
-            self._query, sections, router=self._router,
+            self._query,
+            sections,
+            router=self._router,
             recency_window=self._recency_window,
         )
 
@@ -781,18 +772,12 @@ class DeepResearchRun:
             # is a typing-only narrowing — identity at runtime.
             return await judge_claims(claims, router=cast(_Completer, self._router))
 
-        async def refine_section(
-            sec: ReportSection, weak: list[ClaimVerdict]
-        ) -> ReportSection:
+        async def refine_section(sec: ReportSection, weak: list[ClaimVerdict]) -> ReportSection:
             # Seed the re-search leg with the section's ORIGINAL cited passages so
             # re-synthesis sees the COMBINED corpus (fresh evidence + originals) —
             # this is how the combined-corpus requirement is met without any
             # per-section context retention in the loop.
-            orig = [
-                passages_by_id_obj[i]
-                for i in sec.cited_passage_ids
-                if i in passages_by_id_obj
-            ]
+            orig = [passages_by_id_obj[i] for i in sec.cited_passage_ids if i in passages_by_id_obj]
             # Build a targeted sub-question: the section topic + its weak claims.
             # `title` is the FULL verbose query (section topic + claim digest) used
             # for the actual search and synthesis prompt — preserves search quality.
@@ -879,4 +864,3 @@ class DeepResearchRun:
             },
         )
         return res.sections, list(fresh_passages.values()), fresh_hits
-

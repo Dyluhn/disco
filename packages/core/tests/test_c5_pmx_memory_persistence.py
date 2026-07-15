@@ -99,7 +99,7 @@ class _FakeSandboxInstance:
         for k in self.files:
             if not k.startswith(prefix):
                 continue
-            tail = k[len(prefix):]
+            tail = k[len(prefix) :]
             if not tail:
                 continue
             # Just the first path component (top-level child).
@@ -108,6 +108,7 @@ class _FakeSandboxInstance:
 
     async def exec_shell(self, cmd: str, *, timeout_s: int):
         from disco.tools.sandbox.base import ExecResult
+
         return ExecResult(exit_code=0, stdout="", stderr="")
 
     def display_url(self):
@@ -166,6 +167,7 @@ class _WriteThroughSandboxExecutor:
 
     def available_tools(self):
         from disco.core.llm import ToolSpec
+
         return [ToolSpec(name="shell", description="run a shell command", parameters_schema={})]
 
     async def execute(self, call: ToolCall):
@@ -244,9 +246,9 @@ async def test_c5_remember_dedup_keeps_mirror_in_sync():
         [
             action_step("shell", {}),
             action_step("remember", {"fact": "alpha", "scope": "x"}),
-            action_step("remember", {"fact": "alpha", "scope": "x"}),       # dup
-            action_step("remember", {"fact": "alpha  ", "scope": "x"}),    # dup (trailing ws)
-            action_step("remember", {"fact": "alpha", "scope": "y"}),      # new scope
+            action_step("remember", {"fact": "alpha", "scope": "x"}),  # dup
+            action_step("remember", {"fact": "alpha  ", "scope": "x"}),  # dup (trailing ws)
+            action_step("remember", {"fact": "alpha", "scope": "y"}),  # new scope
             finish_step(),
         ]
     )
@@ -350,9 +352,7 @@ async def test_c5_session_recreate_reads_back_pmx_memory_md():
             return self._inst
 
     svc = _SameService(fresh)
-    session = SandboxSession(
-        svc, owner_id="local", conversation_id="c-c5-rec", on_recreate=None
-    )
+    session = SandboxSession(svc, owner_id="local", conversation_id="c-c5-rec", on_recreate=None)
 
     # Prime the session with its first instance via _ensure() so that
     # _recreate's guard (`if self._instance is not dead: return`) is
@@ -421,9 +421,7 @@ async def test_c5_engine_drains_recovered_facts_and_re_emits_as_knowledge_events
     sbx = _FakeSandboxInstance()
     # Pre-seed the on-disk mirror (the test simulates "we just came back
     # from a recreate; the file is on disk, the in-memory View is gone").
-    sbx.files[".pmx/MEMORY.md"] = (
-        b"# Standing memory\n\n## build\n- make is the build\n"
-    )
+    sbx.files[".pmx/MEMORY.md"] = b"# Standing memory\n\n## build\n- make is the build\n"
 
     # Wire a session-like object that returns the recovery facts.
     class _FakeSessionForRecovery:
@@ -441,9 +439,7 @@ async def test_c5_engine_drains_recovered_facts_and_re_emits_as_knowledge_events
             self._facts = []  # one-shot drain
             return out
 
-    fake_session = _FakeSessionForRecovery(
-        [("build", "make is the build"), ("db", "Postgres 15")]
-    )
+    fake_session = _FakeSessionForRecovery([("build", "make is the build"), ("db", "Postgres 15")])
     executor = _WriteThroughSandboxExecutor(sbx)
     # Override the sandbox on the executor with the fake session — the
     # engine reaches `take_recovered_memory_facts` via
@@ -515,6 +511,7 @@ async def test_c5_workspace_snapshot_excludes_pmx_directory():
     # `app.py` up as a working-set file. The snapshot is built FROM the
     # event list, so we pass it in directly (no need to run the loop).
     from disco.core import ToolCall
+
     events = [
         ActionEvent(
             thought="wrote app",
@@ -561,6 +558,7 @@ async def test_c5_workspace_snapshot_excludes_pmx_nested_and_root():
     # the loop. The snapshot method walks `events` and reads live bytes
     # for each path it finds; the fake sandbox serves those bytes.
     from disco.core import ToolCall
+
     events = [
         ActionEvent(
             thought="wrote app",
@@ -695,6 +693,7 @@ async def test_c5_remember_with_sandboxless_executor_does_not_raise():
     state = await loop.run()
     # No error, no crash.
     from disco.core import ConversationStatus
+
     assert state.execution_status == ConversationStatus.FINISHED
     # In-View emission is unchanged.
     knowledges = [e for e in await store.get_events(CID) if isinstance(e, KnowledgeEvent)]

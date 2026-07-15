@@ -341,8 +341,6 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     exec_mock2 = AsyncMock()
     monkeypatch.setattr(rt2, "_execute_deep_research", exec_mock2)
     asyncio.run(rt2._propose_deep_research_plan(cid2, asyncio.run(store2.get_events(cid2))))
-    statuses2 = [
-        e for e in asyncio.run(store2.get_events(cid2)) if isinstance(e, StatusEvent)
-    ]
+    statuses2 = [e for e in asyncio.run(store2.get_events(cid2)) if isinstance(e, StatusEvent)]
     assert any(e.status == ConversationStatus.AWAITING_PLAN_APPROVAL for e in statuses2)
     assert exec_mock2.await_count == 0

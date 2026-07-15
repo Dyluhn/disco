@@ -29,9 +29,7 @@ class UpdateSpaceBody(BaseModel):
     description: str | None = None
 
 
-def make_spaces_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_spaces_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/spaces")

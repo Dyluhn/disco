@@ -105,9 +105,7 @@ async def test_execution_nudge_releases_after_cap():
 
     # Exactly 3 nudge system-reminders before the cap.
     nudges = [m for m in env if "The approved plan has not been executed" in m]
-    assert len(nudges) == 3, (
-        f"expected 3 nudges before cap, got {len(nudges)}: {env}"
-    )
+    assert len(nudges) == 3, f"expected 3 nudges before cap, got {len(nudges)}: {env}"
 
     # The terminal warning is present and says the plan was not executed.
     warnings = [m for m in env if "no execution action was taken" in m]
@@ -152,9 +150,7 @@ async def test_execution_nudge_release_is_loud():
     warnings = [m for m in env if "no execution action was taken" in m]
     assert warnings, "terminal warning not found"
     # Must reference the count (3).
-    assert "3" in warnings[0], (
-        f"terminal warning should mention count 3: {warnings[0]!r}"
-    )
+    assert "3" in warnings[0], f"terminal warning should mention count 3: {warnings[0]!r}"
     # And it lands AWAITING_USER/approve_plan_no_execution, not FINISHED.
     assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
 

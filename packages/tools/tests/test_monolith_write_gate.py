@@ -108,9 +108,7 @@ async def test_new_source_file_over_line_cap_refused():
 @pytest.mark.asyncio
 async def test_new_source_file_over_byte_cap_refused():
     sbx = _FakeSandbox()
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="app.js", content=_OVER_BYTES), _ctx(sbx)
-    )
+    out = await FileWriteTool().run(FileWriteArgs(path="app.js", content=_OVER_BYTES), _ctx(sbx))
     assert out.success is False and out.error == "monolith_write"
     msg = out.content or ""
     assert "KB cap" in msg  # the byte tripwire is named
@@ -121,9 +119,7 @@ async def test_new_source_file_over_byte_cap_refused():
 @pytest.mark.asyncio
 async def test_under_cap_source_file_allowed():
     sbx = _FakeSandbox()
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="index.html", content=_UNDER_CAP), _ctx(sbx)
-    )
+    out = await FileWriteTool().run(FileWriteArgs(path="index.html", content=_UNDER_CAP), _ctx(sbx))
     assert out.success is True
 
 
@@ -140,9 +136,7 @@ async def test_non_source_extension_exempt():
     }
     for path, content in cases.items():
         assert len(content.encode()) > _MONOLITH_MAX_BYTES
-        out = await FileWriteTool().run(
-            FileWriteArgs(path=path, content=content), _ctx(sbx)
-        )
+        out = await FileWriteTool().run(FileWriteArgs(path=path, content=content), _ctx(sbx))
         assert out.success is True, f"{path} should be exempt: {out.content}"
 
 
@@ -158,9 +152,7 @@ async def test_shrinking_an_over_cap_file_allowed():
     # ground the rewrite (read-before-write gate) then shrink by one line
     await FileReadTool().run(FileReadArgs(path="index.html"), _ctx(sbx))
     smaller = "<div></div>\n" * _MONOLITH_MAX_LINES  # still over? == cap → under
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="index.html", content=smaller), _ctx(sbx)
-    )
+    out = await FileWriteTool().run(FileWriteArgs(path="index.html", content=smaller), _ctx(sbx))
     assert out.success is True
 
 
@@ -184,9 +176,7 @@ async def test_append_crossing_cap_refused():
     base = ("y" * 1024 + "\n") * 40  # ~40KB, 40 lines — under both caps
     sbx = _FakeSandbox(existing={"app.js": base.encode()})
     chunk = ("z" * 1024 + "\n") * 10  # +10KB → crosses 48KB
-    out = await FileAppendTool().run(
-        FileAppendArgs(path="app.js", content=chunk), _ctx(sbx)
-    )
+    out = await FileAppendTool().run(FileAppendArgs(path="app.js", content=chunk), _ctx(sbx))
     assert out.success is False and out.error == "monolith_write"
 
 

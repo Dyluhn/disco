@@ -84,9 +84,7 @@ async def test_replace_lines_refuses_empty_new_text():
 async def test_replace_lines_still_works_with_real_text():
     sbx = _FakeSandbox("A = 1\nB = 2\nC = 3\nD = 4\n")
     out = await FileReplaceLinesTool().run(
-        FileReplaceLinesArgs(
-            path="config.py", start_line=2, end_line=2, new_text="B = 20"
-        ),
+        FileReplaceLinesArgs(path="config.py", start_line=2, end_line=2, new_text="B = 20"),
         _Ctx(sbx),
     )
     assert out.success is True
@@ -428,10 +426,7 @@ async def test_file_write_identical_bytes_refused_with_content_and_escalates():
 
     assert first.success is False
     assert first.error == "no_op_write"
-    assert (
-        "file_write refused: config.py already contains exactly this content"
-        in first.content
-    )
+    assert "file_write refused: config.py already contains exactly this content" in first.content
     assert "Fresh full current file for config.py" in first.content
     assert "\tx = 1" in first.content
     assert "Repeated no-op write" not in first.content

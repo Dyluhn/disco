@@ -29,9 +29,14 @@ from disco.agent_server.verify.appkit_dashboard import (
 def _verify_observation(*, passed: bool, failing: list[str] | None = None) -> dict[str, Any]:
     failing = failing or []
     seven = [
-        "design_lint_clean", "schema_sql_valid", "drizzle_schema_valid",
-        "worker_contract", "lead_form_posts", "local_api_roundtrip",
-        "route_coverage", "section_coverage",
+        "design_lint_clean",
+        "schema_sql_valid",
+        "drizzle_schema_valid",
+        "worker_contract",
+        "lead_form_posts",
+        "local_api_roundtrip",
+        "route_coverage",
+        "section_coverage",
     ]
     checks = [{"name": n, "passed": n not in failing, "evidence": ""} for n in seven]
     return {
@@ -123,18 +128,28 @@ def test_collect_only_appkit_dossiers(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_appkit",
+        verify_root,
+        "run_appkit",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED", "passed": True,
-                "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation(), _verify_observation(passed=True)],
     )
     # A non-AppKit dossier — must be excluded.
     _write_dossier(
-        verify_root, "run_slides",
+        verify_root,
+        "run_slides",
         scenario={"id": "slides_from_research_report"},
-        result={"scenario_id": "slides_from_research_report", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "slides_from_research_report",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
     )
     rows = collect_appkit_rows(verify_root, out_dir=out_dir)
     assert len(rows) == 1
@@ -148,10 +163,15 @@ def test_collect_surfaces_first_failing_check(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_fail",
+        verify_root,
+        "run_fail",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED", "passed": False,
-                "validator_problems": ["expect_appkit_verify: did NOT pass"]},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": False,
+            "validator_problems": ["expect_appkit_verify: did NOT pass"],
+        },
         events=[
             _app_create_observation(),
             _verify_observation(passed=False, failing=["worker_contract"]),
@@ -169,10 +189,15 @@ def test_collect_handles_missing_verdict(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_noverify",
+        verify_root,
+        "run_noverify",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "ERROR", "passed": False,
-                "validator_problems": ["no verify"]},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "ERROR",
+            "passed": False,
+            "validator_problems": ["no verify"],
+        },
         events=[_app_create_observation()],  # verifier never ran
     )
     rows = collect_appkit_rows(verify_root, out_dir=out_dir)
@@ -184,10 +209,15 @@ def test_collect_rows_sorted_by_run_id(tmp_path: Path) -> None:
     out_dir = tmp_path / "dash"
     for rid in ("run_c", "run_a", "run_b"):
         _write_dossier(
-            verify_root, rid,
+            verify_root,
+            rid,
             scenario=_appkit_scenario(),
-            result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                    "passed": True, "validator_problems": []},
+            result={
+                "scenario_id": "appkit_live_golden",
+                "terminal_status": "FINISHED",
+                "passed": True,
+                "validator_problems": [],
+            },
             events=[_verify_observation(passed=True)],
         )
     rows = collect_appkit_rows(verify_root, out_dir=out_dir)
@@ -199,10 +229,15 @@ def test_collect_links_ui_screenshots_by_cid(tmp_path: Path) -> None:
     out_dir = tmp_path / "dash"
     e2e_root = tmp_path / "e2e"
     _write_dossier(
-        verify_root, "run_ui",
+        verify_root,
+        "run_ui",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         cid="conv_ui_42",
         events=[_verify_observation(passed=True)],
     )
@@ -224,17 +259,27 @@ def test_generate_dashboard_writes_summary_and_html(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_pass",
+        verify_root,
+        "run_pass",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation(), _verify_observation(passed=True)],
     )
     _write_dossier(
-        verify_root, "run_fail",
+        verify_root,
+        "run_fail",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": False, "validator_problems": ["worker_contract failed"]},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": False,
+            "validator_problems": ["worker_contract failed"],
+        },
         events=[
             _app_create_observation(),
             _verify_observation(passed=False, failing=["worker_contract"]),
@@ -278,10 +323,15 @@ def test_false_green_when_verify_missing(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_falsegreen_missing",
+        verify_root,
+        "run_falsegreen_missing",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation()],  # verifier NEVER ran
     )
     summary = generate_dashboard(verify_root, out_dir)
@@ -302,12 +352,19 @@ def test_false_green_when_verify_failed(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_falsegreen_failed",
+        verify_root,
+        "run_falsegreen_failed",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
-        events=[_app_create_observation(), _verify_observation(passed=False,
-                                                               failing=["worker_contract"])],
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
+        events=[
+            _app_create_observation(),
+            _verify_observation(passed=False, failing=["worker_contract"]),
+        ],
     )
     summary = generate_dashboard(verify_root, out_dir)
     assert summary.passed == 0
@@ -320,10 +377,15 @@ def test_green_only_when_both_pass(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_green",
+        verify_root,
+        "run_green",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation(), _verify_observation(passed=True)],
     )
     summary = generate_dashboard(verify_root, out_dir)
@@ -343,32 +405,38 @@ def _run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verify_root: Path
     return int(exc.value.code or 0)
 
 
-def test_main_exits_nonzero_on_false_green(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_exits_nonzero_on_false_green(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """P1: a passed-but-verify-missing dossier must make the gate (main) exit non-zero —
     a silent false-green would otherwise exit 0 and pass CI."""
     verify_root = tmp_path / "disco-verify"
     _write_dossier(
-        verify_root, "run_falsegreen",
+        verify_root,
+        "run_falsegreen",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation()],  # verify missing
     )
     assert _run_main(tmp_path, monkeypatch, verify_root) == 1
 
 
-def test_main_exits_zero_when_all_green(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_exits_zero_when_all_green(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """P1 control: a fully-passing dossier exits 0."""
     verify_root = tmp_path / "disco-verify"
     _write_dossier(
-        verify_root, "run_green",
+        verify_root,
+        "run_green",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": True, "validator_problems": []},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": True,
+            "validator_problems": [],
+        },
         events=[_app_create_observation(), _verify_observation(passed=True)],
     )
     assert _run_main(tmp_path, monkeypatch, verify_root) == 0
@@ -378,10 +446,15 @@ def test_render_html_escapes_problem_text(tmp_path: Path) -> None:
     verify_root = tmp_path / "disco-verify"
     out_dir = tmp_path / "dash"
     _write_dossier(
-        verify_root, "run_xss",
+        verify_root,
+        "run_xss",
         scenario=_appkit_scenario(),
-        result={"scenario_id": "appkit_live_golden", "terminal_status": "FINISHED",
-                "passed": False, "validator_problems": ["<script>alert(1)</script>"]},
+        result={
+            "scenario_id": "appkit_live_golden",
+            "terminal_status": "FINISHED",
+            "passed": False,
+            "validator_problems": ["<script>alert(1)</script>"],
+        },
         events=[_verify_observation(passed=False, failing=["worker_contract"])],
     )
     rows = collect_appkit_rows(verify_root, out_dir=out_dir)

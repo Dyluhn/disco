@@ -26,9 +26,7 @@ def _vmrss_kb() -> int:
 
 def _has_malloc_trim() -> bool:
     try:
-        libc = ctypes.CDLL(
-            ctypes.util.find_library("c") or "libc.so.6", use_errno=True
-        )
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
         return hasattr(libc, "malloc_trim")
     except OSError:
         return False
@@ -58,8 +56,7 @@ def test_release_returns_freed_pages_to_os() -> None:
     after = _vmrss_kb()
     # At least 250 MB of the 400 MB returned to the OS.
     assert high - after > 250 * 1024, (
-        f"RSS not released: high={high}kB after={after}kB "
-        f"(expected a drop > 256MB)"
+        f"RSS not released: high={high}kB after={after}kB (expected a drop > 256MB)"
     )
 
 

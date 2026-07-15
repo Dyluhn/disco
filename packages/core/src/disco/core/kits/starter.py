@@ -35,8 +35,14 @@ def lead_form_appspec(title: str) -> AppSpec:
     return AppSpec(
         title=title,
         sections=(
-            AppSection(id="hero", kind="hero", fields={"headline": title, "subhead": "", "cta_text": "Get started"}),
-            AppSection(id="lead", kind="lead_form", fields={"title": "Contact us", "submit_text": "Send"}),
+            AppSection(
+                id="hero",
+                kind="hero",
+                fields={"headline": title, "subhead": "", "cta_text": "Get started"},
+            ),
+            AppSection(
+                id="lead", kind="lead_form", fields={"title": "Contact us", "submit_text": "Send"}
+            ),
         ),
     )
 
@@ -58,7 +64,8 @@ _APP_SHELL_HTML = """<!doctype html>
 <style>
 :root{{--fg:#1a1a1a;--bg:#fcfcfa;--accent:#4077a3}}
 *{{box-sizing:border-box}}
-body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--fg);background:var(--bg)}}
+body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;\
+color:var(--fg);background:var(--bg)}}
 main{{max-width:720px;margin:0 auto;padding:4rem 1.5rem}}
 h1{{font-size:2.25rem;margin:0 0 .5rem}}
 p{{font-size:1.1rem;line-height:1.6;color:#444}}

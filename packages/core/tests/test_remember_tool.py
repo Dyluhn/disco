@@ -78,9 +78,7 @@ async def test_remembered_fact_survives_condensation_via_pinning():
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={})]},
             {
                 "tool_calls": [
-                    ProposedToolCall(
-                        tool_name="remember", arguments={"fact": "API base is /v2"}
-                    )
+                    ProposedToolCall(tool_name="remember", arguments={"fact": "API base is /v2"})
                 ]
             },
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "x"})]},

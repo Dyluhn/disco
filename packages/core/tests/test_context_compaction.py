@@ -20,7 +20,6 @@ from disco.core.events import (
     LLMConvertible,
 )
 from disco.core.view import View
-
 from event_fakes import user_msg, with_seqs
 
 
@@ -146,7 +145,9 @@ def test_pressure_gate_below_threshold_skips() -> None:
     # pressure under the cap → defer
     assert context_compact_if_needed(events, pol, pressure_chars=pol.max_history_chars - 1) == []
     # pressure over the cap → execute
-    assert len(context_compact_if_needed(events, pol, pressure_chars=pol.max_history_chars + 1)) == 1
+    assert (
+        len(context_compact_if_needed(events, pol, pressure_chars=pol.max_history_chars + 1)) == 1
+    )
 
 
 # --- projection into CXT-1 metadata -------------------------------------------

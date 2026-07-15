@@ -40,6 +40,7 @@ async def main() -> None:
         SandboxSpec(memory_mb=512), owner_id="local", conversation_id="bp01-verify"
     )
     try:
+
         async def get_inst():
             return inst
 

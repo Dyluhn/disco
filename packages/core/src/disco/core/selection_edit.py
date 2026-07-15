@@ -143,7 +143,7 @@ def build_scoped_edit_directive(
     fully robust fix would re-verify the ref against the host's own stamp registry.
     """
     instruction = instruction.strip()
-    label = f' ({human_label.strip()})' if human_label and human_label.strip() else ""
+    label = f" ({human_label.strip()})" if human_label and human_label.strip() else ""
 
     if isinstance(ref, DeckSelectionRef):
         where = (
@@ -161,9 +161,7 @@ def build_scoped_edit_directive(
     else:
         # No usable anchor — fall back to the human label so the model can locate it.
         desc = (
-            human_label.strip()
-            if human_label and human_label.strip()
-            else "the selected element"
+            human_label.strip() if human_label and human_label.strip() else "the selected element"
         )
         where = (
             f"The user selected {desc} in the preview (no precise source anchor was "

@@ -55,9 +55,7 @@ async def test_healthcheck_typed_named_error_when_unreachable_and_bounded():
 
     No injected client → the real docker-py client attempts the (closed) localhost
     port and fails with ECONNREFUSED; client_timeout_s caps the socket."""
-    cfg = SandboxConfig(
-        backend="gvisor", docker_socket="tcp://127.0.0.1:1", client_timeout_s=2
-    )
+    cfg = SandboxConfig(backend="gvisor", docker_socket="tcp://127.0.0.1:1", client_timeout_s=2)
     svc = GvisorSandboxService(cfg)
     with pytest.raises(SandboxUnavailableError) as ei:
         await asyncio.wait_for(svc.healthcheck(), _BOUND_S)
@@ -77,6 +75,7 @@ async def test_local_backend_healthcheck_checks_runtime_present():
 async def test_podman_healthcheck_ok_with_injected_client():
     """Podman's healthcheck pings the native-remote socket; an injected client
     (test seam) short-circuits the real SSH transport and proves the ok path."""
+
     class _FakePodman:
         def ping(self) -> bool:
             return True

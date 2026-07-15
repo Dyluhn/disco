@@ -239,9 +239,7 @@ def render_skills_for_prompt(
     """
     import fnmatch
 
-    enabled = [
-        s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)
-    ]
+    enabled = [s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)]
     if not enabled:
         return ""
     paths = active_paths or []

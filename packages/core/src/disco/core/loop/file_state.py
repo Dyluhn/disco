@@ -88,11 +88,7 @@ class FileStateTracker:
         """
         if not isinstance(path, str) or not path:
             return
-        byt = (
-            content.encode("utf-8", "replace")
-            if isinstance(content, str)
-            else content
-        )
+        byt = content.encode("utf-8", "replace") if isinstance(content, str) else content
         sha = hashlib.sha256(byt).hexdigest()
         self._snaps[path] = FileSnap(last_seen_seq=seq, sha=sha, mtime=mtime)
 

@@ -46,7 +46,9 @@ async def _read(inst, path):
 async def test_single_replace_applies():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"hello world\n")
-    res = await ExactReplaceTool().run(_a(path="a.txt", edits=[{"old_string": "world", "new_string": "there"}]), ctx)
+    res = await ExactReplaceTool().run(
+        _a(path="a.txt", edits=[{"old_string": "world", "new_string": "there"}]), ctx
+    )
     assert res.success, res.content
     assert await _read(inst, "a.txt") == "hello there\n"
     await inst.destroy()
@@ -67,7 +69,9 @@ async def test_multi_true_replaces_all_occurrences():
 async def test_no_match_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"hello\n")
-    res = await ExactReplaceTool().run(_a(path="a.txt", edits=[{"old_string": "NOPE", "new_string": "x"}]), ctx)
+    res = await ExactReplaceTool().run(
+        _a(path="a.txt", edits=[{"old_string": "NOPE", "new_string": "x"}]), ctx
+    )
     assert not res.success and res.error == "EXACT_REPLACE_NO_MATCH"
     assert await _read(inst, "a.txt") == "hello\n"
     await inst.destroy()
@@ -76,7 +80,9 @@ async def test_no_match_no_change():
 async def test_duplicate_without_multi_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"x x\n")
-    res = await ExactReplaceTool().run(_a(path="a.txt", edits=[{"old_string": "x", "new_string": "y"}]), ctx)
+    res = await ExactReplaceTool().run(
+        _a(path="a.txt", edits=[{"old_string": "x", "new_string": "y"}]), ctx
+    )
     assert not res.success and res.error == "EXACT_REPLACE_DUPLICATE_MATCH"
     assert await _read(inst, "a.txt") == "x x\n"  # untouched
     await inst.destroy()
@@ -87,10 +93,13 @@ async def test_one_failed_edit_in_batch_is_atomic_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"alpha beta\n")
     res = await ExactReplaceTool().run(
-        _a(path="a.txt", edits=[
-            {"old_string": "alpha", "new_string": "ALPHA"},
-            {"old_string": "MISSING", "new_string": "x"},
-        ]),
+        _a(
+            path="a.txt",
+            edits=[
+                {"old_string": "alpha", "new_string": "ALPHA"},
+                {"old_string": "MISSING", "new_string": "x"},
+            ],
+        ),
         ctx,
     )
     assert not res.success and res.error == "EXACT_REPLACE_NO_MATCH"
@@ -102,10 +111,13 @@ async def test_overlapping_edits_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"abcdef\n")
     res = await ExactReplaceTool().run(
-        _a(path="a.txt", edits=[
-            {"old_string": "abcd", "new_string": "X"},
-            {"old_string": "cdef", "new_string": "Y"},
-        ]),
+        _a(
+            path="a.txt",
+            edits=[
+                {"old_string": "abcd", "new_string": "X"},
+                {"old_string": "cdef", "new_string": "Y"},
+            ],
+        ),
         ctx,
     )
     assert not res.success and res.error == "EXACT_REPLACE_BATCH_FAILED"
@@ -117,7 +129,11 @@ async def test_stale_expected_sha256_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"hello\n")
     res = await ExactReplaceTool().run(
-        _a(path="a.txt", edits=[{"old_string": "hello", "new_string": "hi"}], expected_sha256="deadbeef" * 8),
+        _a(
+            path="a.txt",
+            edits=[{"old_string": "hello", "new_string": "hi"}],
+            expected_sha256="deadbeef" * 8,
+        ),
         ctx,
     )
     assert not res.success and res.error == "STALE_FILE_CONTEXT"
@@ -130,8 +146,11 @@ async def test_correct_expected_sha256_applies():
     body = b"hello\n"
     await inst.write_file("a.txt", body)
     res = await ExactReplaceTool().run(
-        _a(path="a.txt", edits=[{"old_string": "hello", "new_string": "hi"}],
-           expected_sha256=hashlib.sha256(body).hexdigest()),
+        _a(
+            path="a.txt",
+            edits=[{"old_string": "hello", "new_string": "hi"}],
+            expected_sha256=hashlib.sha256(body).hexdigest(),
+        ),
         ctx,
     )
     assert res.success, res.content
@@ -143,7 +162,8 @@ async def test_elision_marker_in_new_no_change():
     ctx, inst = await _ctx()
     await inst.write_file("a.txt", b"hello\n")
     res = await ExactReplaceTool().run(
-        _a(path="a.txt", edits=[{"old_string": "hello", "new_string": "x <4500 chars elided> y"}]), ctx
+        _a(path="a.txt", edits=[{"old_string": "hello", "new_string": "x <4500 chars elided> y"}]),
+        ctx,
     )
     assert not res.success and res.error == "ELISION_MARKER_REJECTED"
     assert await _read(inst, "a.txt") == "hello\n"
@@ -192,7 +212,10 @@ async def test_large_file_after_fresh_read_applies():
     await inst.write_file("big.py", body)
     await FileReadTool().run(FileReadTool.definition.args_model(path="big.py"), ctx)  # ground it
     res = await ExactReplaceTool().run(
-        _a(path="big.py", edits=[{"old_string": "line 40 " + "z" * 40, "new_string": "line FORTY"}]), ctx
+        _a(
+            path="big.py", edits=[{"old_string": "line 40 " + "z" * 40, "new_string": "line FORTY"}]
+        ),
+        ctx,
     )
     assert res.success, res.content
     assert "line FORTY" in await _read(inst, "big.py")
@@ -215,9 +238,12 @@ async def test_offset_past_eof_does_not_grant_grounding():
 
 
 async def test_small_file_needs_no_read():
-    # a small file (<=1500B) is always in context → no fresh read required even with default require_fresh_read.
+    # a small file (<=1500B) is always in context → no fresh read required even
+    # with default require_fresh_read.
     ctx, inst = await _ctx()
     await inst.write_file("s.txt", b"tiny content here\n")
-    res = await ExactReplaceTool().run(_a(path="s.txt", edits=[{"old_string": "tiny", "new_string": "small"}]), ctx)
+    res = await ExactReplaceTool().run(
+        _a(path="s.txt", edits=[{"old_string": "tiny", "new_string": "small"}]), ctx
+    )
     assert res.success, res.content
     await inst.destroy()

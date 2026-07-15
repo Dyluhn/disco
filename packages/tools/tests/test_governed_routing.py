@@ -34,8 +34,12 @@ def _clean():
 async def _ctx():
     inst = FakeSandboxInstance(owner_id="local", conversation_id="c")
     ctx = ToolContext(
-        sandbox=inst, workspace_path=".", timeout_s=30,
-        capabilities={Capability.FILESYSTEM}, owner_id="local", conversation_id="c",
+        sandbox=inst,
+        workspace_path=".",
+        timeout_s=30,
+        capabilities={Capability.FILESYSTEM},
+        owner_id="local",
+        conversation_id="c",
     )
     return ctx, inst
 
@@ -165,9 +169,9 @@ async def test_governed_guard_works_through_sandbox_session():
         async def list_dir(self, path: str) -> list[str]:
             prefix = "" if path in ("", ".") else path.rstrip("/") + "/"
             return sorted(
-                key[len(prefix):]
+                key[len(prefix) :]
                 for key in self._fs
-                if key.startswith(prefix) and "/" not in key[len(prefix):]
+                if key.startswith(prefix) and "/" not in key[len(prefix) :]
             )
 
         async def atomic_write(self, path: str, data: bytes) -> None:
@@ -194,8 +198,12 @@ async def test_governed_guard_works_through_sandbox_session():
 
     session = SandboxSession(_DelegatingService(), owner_id="o", conversation_id="c")
     ctx = ToolContext(
-        sandbox=session, workspace_path=".", timeout_s=30,
-        capabilities={Capability.FILESYSTEM}, owner_id="o", conversation_id="c",
+        sandbox=session,
+        workspace_path=".",
+        timeout_s=30,
+        capabilities={Capability.FILESYSTEM},
+        owner_id="o",
+        conversation_id="c",
     )
     await session.write_file(".disco/appspec.json", b'{"real":1}')
     inst = await session._ensure()  # type: ignore[attr-defined]

@@ -72,11 +72,13 @@ def _ctx(sessions=None) -> ToolContext:
 async def test_busy_session_names_running_command():
     """SessionBusy message names the session, the occupant command, and all
     three recovery options."""
-    mgr = _manager({
-        "has-session": (0, ""),
-        "capture-pane": (0, "python3 server.py\n"),  # no PS1 marker → running
-        "list-panes": (0, "python3\n"),
-    })
+    mgr = _manager(
+        {
+            "has-session": (0, ""),
+            "capture-pane": (0, "python3 server.py\n"),  # no PS1 marker → running
+            "list-panes": (0, "python3\n"),
+        }
+    )
     try:
         await mgr.exec("backend", "ls", None)
         raise AssertionError("expected SessionBusy")
@@ -91,11 +93,13 @@ async def test_busy_session_names_running_command():
 
 async def test_busy_session_fallback_when_list_panes_fails():
     """If list-panes fails the old generic wording is used — no crash."""
-    mgr = _manager({
-        "has-session": (0, ""),
-        "capture-pane": (0, "sleep 99\n"),
-        "list-panes": (1, ""),  # failure → fall back
-    })
+    mgr = _manager(
+        {
+            "has-session": (0, ""),
+            "capture-pane": (0, "sleep 99\n"),
+            "list-panes": (1, ""),  # failure → fall back
+        }
+    )
     try:
         await mgr.exec("main", "ls", None)
         raise AssertionError("expected SessionBusy")

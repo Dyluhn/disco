@@ -88,11 +88,11 @@ def test_run_reliability_metrics_marks_stalled_terminal_statuses() -> None:
         "stuck_escapes": 0,
         "probe_spin_trips": 0,
         "export_refusals": 0,
-            "export_releases": 0,
-            "host_verify_refusals": 0,
-            "blocked_landings": 0,
-            "terminal_status": "STUCK",
-            "stalled": True,
+        "export_releases": 0,
+        "host_verify_refusals": 0,
+        "blocked_landings": 0,
+        "terminal_status": "STUCK",
+        "stalled": True,
     }
     assert run_reliability_metrics([_status("ERROR", None)])["stalled"] is False
 

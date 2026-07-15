@@ -46,6 +46,7 @@ def _do_live_model_probe(
         It is NEVER folded into the base_url-keyed props cache: that would pin one
         model's window onto every model at the same base_url (the codex P1 bug)."""
     from .runtime import _LIVE_MODEL_PROBE_CACHE  # late-bound: shared cache with _probe_live_model
+
     out: dict[str, Any] = {"model_id": None, "n_ctx": None}
     try:
         import httpx
@@ -94,9 +95,7 @@ def _do_live_model_probe(
     return out
 
 
-def _models_context_length(
-    base_url: str, api_key: str | None, model_id: str | None
-) -> int | None:
+def _models_context_length(base_url: str, api_key: str | None, model_id: str | None) -> int | None:
     """Best-effort MODEL-SPECIFIC context window from the OpenAI-compatible
     `GET {base_url}/models` listing. OpenRouter exposes `context_length` per model;
     MiniMax omits it. BLOCKING httpx — must run OFF the event loop, same constraint
@@ -109,6 +108,7 @@ def _models_context_length(
     MiniMax stops re-probing within the TTL); only a transport failure is left
     uncached so it self-heals. Never raises."""
     from .runtime import _MODELS_CTX_CACHE, _PROBE_TTL_S  # late-bound: shared cache
+
     if not base_url or not model_id:
         return None
     cached = _MODELS_CTX_CACHE.get(base_url)

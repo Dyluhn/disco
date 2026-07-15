@@ -15,6 +15,8 @@ from disco.core.loop import HostVerificationDeliverable
 from disco.tools.builtin.verify_app import (
     VerifyWebAppArgs,
     VerifyWebAppTool,
+)
+from disco.tools.builtin.verify_app import (
     compute_verdict as verify_app_compute_verdict,
 )
 
@@ -67,9 +69,7 @@ class HostWebAppVerifier:
 
         return self._unavailable_verdict(deliverable, "no host verifier context available")
 
-    async def _verify_via_client(
-        self, deliverable: HostVerificationDeliverable
-    ) -> dict[str, Any]:
+    async def _verify_via_client(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
         client = self._client
         if client is None:  # caller guards; keep the method total for the checker
             return self._unavailable_verdict(deliverable, "no client")

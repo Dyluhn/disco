@@ -66,9 +66,7 @@ APPKIT_MUTATORS: frozenset[str] = frozenset(
 # allowlist (so it is callable + advertised in strict AppKit mode) but in NO
 # normal surface scope, so its presence in the executor's tool set is exactly the
 # finish gate's "strict AppKit mode" signal (normal Build keeps verify_web_app).
-APPKIT_PROBES: frozenset[str] = frozenset(
-    {"design_lint", "verify_web_app", "verify_appkit_app"}
-)
+APPKIT_PROBES: frozenset[str] = frozenset({"design_lint", "verify_web_app", "verify_appkit_app"})
 
 # EPIC H3 — lifecycle tools available in the BUILD phase only. app_snapshot_version
 # versions the specs + generated tree (writing ONLY a `.disco/app_snapshots/` record,
@@ -127,13 +125,7 @@ def appkit_allowed_tools(
         return APPKIT_READ_TOOLS | _PLAN_TOOL | hatch
     # Execution mode:
     if phase == AppKitPhase.BUILD:
-        return (
-            APPKIT_READ_TOOLS
-            | APPKIT_PROBES
-            | APPKIT_MUTATORS
-            | APPKIT_LIFECYCLE
-            | hatch
-        )
+        return APPKIT_READ_TOOLS | APPKIT_PROBES | APPKIT_MUTATORS | APPKIT_LIFECYCLE | hatch
     # phase == PLANNING in execution mode → bootstrap: only app_create unlocked.
     return APPKIT_READ_TOOLS | _BOOTSTRAP | hatch
 
@@ -156,14 +148,10 @@ def appkit_effective_scope(
     """
     if phase == AppKitPhase.CUSTOM_BUILD:
         return base_scope
-    allowed = appkit_allowed_tools(
-        loop_mode=loop_mode, phase=phase, autonomous=autonomous
-    )
+    allowed = appkit_allowed_tools(loop_mode=loop_mode, phase=phase, autonomous=autonomous)
     preset = (
         "appkit_planning"
-        if loop_mode is None
-        or loop_mode == OperatingMode.PLANNING
-        or phase == AppKitPhase.PLANNING
+        if loop_mode is None or loop_mode == OperatingMode.PLANNING or phase == AppKitPhase.PLANNING
         else "appkit_build"
     )
     return ToolScope(allowed_tools=allowed, preset=preset)

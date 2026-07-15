@@ -31,9 +31,7 @@ def test_process_never_targets_reserved_control_port_even_if_owned():
         8000: PortOwnership(pid=111, session="disco-other999-preview"),
         8080: PortOwnership(pid=222, session="disco-conv_abc-preview"),
     }
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == 8080
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == 8080
 
 
 def test_process_prefers_conversation_owned_over_foreign():
@@ -42,9 +40,7 @@ def test_process_prefers_conversation_owned_over_foreign():
         3000: PortOwnership(pid=111, session="disco-sibling1-dev"),
         8080: PortOwnership(pid=222, session="disco-conv_abc-dev"),
     }
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == 8080
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == 8080
 
 
 def test_process_unattributed_owned_port_is_undetectable_not_guessed():
@@ -72,9 +68,7 @@ def test_process_unattributed_owned_port_is_undetectable_not_guessed():
 def test_process_only_8000_owned_returns_none_not_8000():
     # The ONLY listener is the agent-server on 8000 → undetectable, NEVER 8000.
     owned = {8000: PortOwnership(pid=111, session="disco-other-preview")}
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
 
 
 def test_process_frontend_5173_and_agent_8000_reachable_but_foreign_returns_none():
@@ -85,18 +79,14 @@ def test_process_frontend_5173_and_agent_8000_reachable_but_foreign_returns_none
         8000: PortOwnership(pid=111, session="disco-other-preview"),
         5173: PortOwnership(pid=222, session=None),
     }
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
 
 
 def test_process_conversation_owned_5173_is_reserved_not_targeted():
     # Even if THIS conversation somehow owns 5173, it is a reserved infra port (the
     # UI's Vite) → not a verify target. Undetectable rather than verify the UI port.
     owned = {5173: PortOwnership(pid=9, session="disco-conv_abc-preview")}
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) is None
 
 
 def test_process_nothing_owned_returns_none():
@@ -108,22 +98,17 @@ def test_process_nothing_owned_returns_none():
 
 def test_container_keeps_8000_as_canonical_app():
     owned = {8000: PortOwnership(pid=5, session=None)}
-    assert (
-        resolve_preview_port(host_shared=False, owned=owned, conversation_id=CID) == 8000
-    )
+    assert resolve_preview_port(host_shared=False, owned=owned, conversation_id=CID) == 8000
 
 
 def test_container_first_owned_else_canonical_default():
     # nothing owned → default to the canonical first preview port (8000) inside box.
     assert (
-        resolve_preview_port(host_shared=False, owned={}, conversation_id=CID)
-        == PREVIEW_PORTS[0]
+        resolve_preview_port(host_shared=False, owned={}, conversation_id=CID) == PREVIEW_PORTS[0]
     )
     # first OWNED port wins in preference order.
     owned = {3000: PortOwnership(pid=7, session=None)}
-    assert (
-        resolve_preview_port(host_shared=False, owned=owned, conversation_id=CID) == 3000
-    )
+    assert resolve_preview_port(host_shared=False, owned=owned, conversation_id=CID) == 3000
 
 
 # ---- process-safe default + reserved set ------------------------------------
@@ -165,24 +150,16 @@ def test_explicit_target_rejected_for_reserved_or_foreign_on_shared_host():
     assert not explicit_target_allowed(
         port=3000, host_shared=True, owned=foreign, conversation_id=CID
     )
-    assert not explicit_target_allowed(
-        port=4321, host_shared=True, owned={}, conversation_id=CID
-    )
-    assert not explicit_target_allowed(
-        port=None, host_shared=True, owned=conv, conversation_id=CID
-    )
+    assert not explicit_target_allowed(port=4321, host_shared=True, owned={}, conversation_id=CID)
+    assert not explicit_target_allowed(port=None, host_shared=True, owned=conv, conversation_id=CID)
 
 
 def test_explicit_target_honored_for_conversation_owned_and_on_isolated():
     conv = {8080: PortOwnership(pid=9, session="disco-conv_abc-preview")}
     # this conversation's own non-reserved served port → honored
-    assert explicit_target_allowed(
-        port=8080, host_shared=True, owned=conv, conversation_id=CID
-    )
+    assert explicit_target_allowed(port=8080, host_shared=True, owned=conv, conversation_id=CID)
     # isolated backend → any explicit target honored (8000 is the box's app)
-    assert explicit_target_allowed(
-        port=8000, host_shared=False, owned={}, conversation_id=CID
-    )
+    assert explicit_target_allowed(port=8000, host_shared=False, owned={}, conversation_id=CID)
 
 
 # ---- ownership probe parsing ------------------------------------------------
@@ -244,9 +221,9 @@ def test_reserved_port_command_violation_blocks_kills():
 def test_reserved_port_command_violation_allows_safe_commands():
     r = reserved_control_ports()
     for cmd in (
-        "python3 -m http.server 8080",          # non-reserved preview port
-        "vite --port 5174",                     # non-reserved (5173 IS reserved)
-        "head -c 8000 file.bin",                # 8000 as a byte count, not a port
+        "python3 -m http.server 8080",  # non-reserved preview port
+        "vite --port 5174",  # non-reserved (5173 IS reserved)
+        "head -c 8000 file.bin",  # 8000 as a byte count, not a port
         "echo serving 8000 items",
         "python3 -c 'print(8000)'",
         "ls -la",
@@ -265,10 +242,10 @@ def test_reserved_port_violation_message_is_actionable():
     safe = str(process_safe_preview_port(reserved=r))
     bind_msg = reserved_port_command_violation("python3 -m http.server 8000", r)
     assert bind_msg is not None
-    assert "8000" in bind_msg                       # the rejected port
-    for p in r:                                      # the whole reserved set
+    assert "8000" in bind_msg  # the rejected port
+    for p in r:  # the whole reserved set
         assert str(p) in bind_msg
-    assert safe in bind_msg                          # a safe replacement
+    assert safe in bind_msg  # a safe replacement
     assert "refused:" in bind_msg
     kill_msg = reserved_port_command_violation("fuser -k 8000/tcp", r)
     assert kill_msg is not None and safe in kill_msg and "8000" in kill_msg
@@ -373,6 +350,4 @@ def test_remap_then_resolver_targets_the_conversation_owned_safe_port():
     assert out == f"python3 -m http.server {safe}"
     assert safe not in r
     owned = {safe: PortOwnership(pid=4242, session="disco-conv_abc-preview")}
-    assert (
-        resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == safe
-    )
+    assert resolve_preview_port(host_shared=True, owned=owned, conversation_id=CID) == safe

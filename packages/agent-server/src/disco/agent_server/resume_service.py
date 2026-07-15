@@ -46,9 +46,7 @@ class ResumeService:
     def __init__(self, rt: Any) -> None:
         self._rt = rt
 
-    def _condense_trailing_degeneracy(
-        self, events: list
-    ) -> CondensationEvent | None:
+    def _condense_trailing_degeneracy(self, events: list) -> CondensationEvent | None:
         """Pure-on-the-event-list detector for trailing degenerate segments.
         No model call (call-site: resume_conversation).
 
@@ -156,9 +154,7 @@ class ResumeService:
             reason="hard_reset",
         )
 
-    async def _reconstruct_resume_context(
-        self, conversation_id: str, events: list
-    ) -> list:
+    async def _reconstruct_resume_context(self, conversation_id: str, events: list) -> list:
         """Build the events to append before a resume status flip (DC-05b / DEFECT-4).
 
         Returns a list that may contain:
@@ -203,9 +199,7 @@ class ResumeService:
         # 2. Environment reality block.
         # Starts with "Resumed by user." so existing checks that test for that
         # literal substring continue to pass.
-        parts: list[str] = [
-            "Resumed by user. Current environment reality after interruption:"
-        ]
+        parts: list[str] = ["Resumed by user. Current environment reality after interruption:"]
 
         # The sandbox sentence must match reality: a PAUSED landed by an in-loop
         # valve (dc-05a actionless/noop breakers) leaves the executor — and its

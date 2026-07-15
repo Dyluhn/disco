@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ import pytest
 # Skip guard: detect Kokoro availability before importing anything heavy.
 # ---------------------------------------------------------------------------
 
+
 def _kokoro_available() -> tuple[bool, str]:
     """Return (available, reason). Checks the Python package AND model files."""
     # Package check
@@ -55,6 +57,7 @@ def _kokoro_available() -> tuple[bool, str]:
         return False, "lameenc not installed (bundled TTS is core — run `uv sync`)"
     # Model-file check — mirrors tts_local._data_dir() logic
     from disco.core.env import disco_env
+
     base = disco_env("TTS_DIR") or os.path.expanduser("~/.cache/disco-tts")
     model_dir = Path(base)
     model = model_dir / "kokoro-v1.0.onnx"
@@ -300,49 +303,171 @@ _MEDIUM_REPORT_DICT: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 # 5-turn podcast script for the small 3-section RRF report
-_PODCAST_SCRIPT_SMALL = """[
-  {"speaker": "A", "text": "Today we're covering reciprocal rank fusion, a clever technique for merging search results."},
-  {"speaker": "B", "text": "Right. Instead of comparing raw scores, RRF only looks at where each result ranks."},
-  {"speaker": "A", "text": "That sidesteps a big headache in hybrid search: BM25 scores and dense vector scores live on completely different scales."},
-  {"speaker": "B", "text": "Exactly. You just sum one over k plus rank across all your retrieval lists, and the consistently-high results float to the top."},
-  {"speaker": "A", "text": "The k parameter — usually sixty — keeps low-ranked results from dominating. Simple, robust, and fast to implement."}
-]"""
+_PODCAST_SCRIPT_SMALL = json.dumps(
+    [
+        {
+            "speaker": "A",
+            "text": (
+                "Today we're covering reciprocal rank fusion, a clever technique for "
+                "merging search results."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "Right. Instead of comparing raw scores, RRF only looks at where each result ranks."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "That sidesteps a big headache in hybrid search: BM25 scores and dense "
+                "vector scores live on completely different scales."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "Exactly. You just sum one over k plus rank across all your retrieval "
+                "lists, and the consistently-high results float to the top."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "The k parameter — usually sixty — keeps low-ranked results from "
+                "dominating. Simple, robust, and fast to implement."
+            ),
+        },
+    ]
+)
 
 # 4-turn single-voice script for the same report
-_SINGLE_SCRIPT_SMALL = """[
-  {"speaker": "A", "text": "Reciprocal rank fusion is a straightforward way to merge results from multiple retrieval systems."},
-  {"speaker": "A", "text": "Instead of normalizing incompatible scores, RRF only uses rank positions to compute a combined score."},
-  {"speaker": "A", "text": "The formula is simple: sum one over k plus rank across all lists, where k is a smoothing constant usually set to sixty."},
-  {"speaker": "A", "text": "This makes RRF especially useful in hybrid search combining BM25 with vector similarity, where score scales differ completely."}
-]"""
+_SINGLE_SCRIPT_SMALL = json.dumps(
+    [
+        {
+            "speaker": "A",
+            "text": (
+                "Reciprocal rank fusion is a straightforward way to merge results from "
+                "multiple retrieval systems."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "Instead of normalizing incompatible scores, RRF only uses rank "
+                "positions to compute a combined score."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "The formula is simple: sum one over k plus rank across all lists, where "
+                "k is a smoothing constant usually set to sixty."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "This makes RRF especially useful in hybrid search combining BM25 with "
+                "vector similarity, where score scales differ completely."
+            ),
+        },
+    ]
+)
 
 # 4-turn podcast script for the minimal 1-section hash-function report
-_PODCAST_SCRIPT_MINIMAL = """[
-  {"speaker": "A", "text": "Hash functions are fundamental to modern computing. They map any input to a fixed-size fingerprint."},
-  {"speaker": "B", "text": "And the key property is determinism: the same input always gives the same output."},
-  {"speaker": "A", "text": "Cryptographic hash functions go further: they're designed so you can't reverse them or find two inputs with the same hash."},
-  {"speaker": "B", "text": "That's what makes them useful for checksums, digital signatures, and integrity verification throughout the security stack."}
-]"""
+_PODCAST_SCRIPT_MINIMAL = json.dumps(
+    [
+        {
+            "speaker": "A",
+            "text": (
+                "Hash functions are fundamental to modern computing. They map any input "
+                "to a fixed-size fingerprint."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "And the key property is determinism: the same input always gives the same output."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "Cryptographic hash functions go further: they're designed so you can't "
+                "reverse them or find two inputs with the same hash."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "That's what makes them useful for checksums, digital signatures, and "
+                "integrity verification throughout the security stack."
+            ),
+        },
+    ]
+)
 
 # 6-turn podcast script for the medium 6-section encoder-only models report
 # (includes two empty-markdown sections — the LLM would summarize around them)
-_PODCAST_SCRIPT_MEDIUM = """[
-  {"speaker": "A", "text": "Encoder-only models like BERT are still very relevant in 2024, despite all the buzz around large language models."},
-  {"speaker": "B", "text": "Especially for tasks like classification, named entity recognition, and semantic embedding retrieval."},
-  {"speaker": "A", "text": "ModernBERT is a standout: it extends the context to eight thousand tokens and trains on two trillion tokens."},
-  {"speaker": "B", "text": "And BGE-M3 from BAAI is leading the MTEB embedding benchmarks. Open-source is catching up fast."},
-  {"speaker": "A", "text": "One limitation worth noting: these models don't generate text, so they can't do open-ended question answering."},
-  {"speaker": "B", "text": "True. But for structured classification and retrieval, the encoder-only approach remains more efficient than a full decoder."}
-]"""
+_PODCAST_SCRIPT_MEDIUM = json.dumps(
+    [
+        {
+            "speaker": "A",
+            "text": (
+                "Encoder-only models like BERT are still very relevant in 2024, despite "
+                "all the buzz around large language models."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "Especially for tasks like classification, named entity recognition, "
+                "and semantic embedding retrieval."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "ModernBERT is a standout: it extends the context to eight thousand "
+                "tokens and trains on two trillion tokens."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "And BGE-M3 from BAAI is leading the MTEB embedding benchmarks. "
+                "Open-source is catching up fast."
+            ),
+        },
+        {
+            "speaker": "A",
+            "text": (
+                "One limitation worth noting: these models don't generate text, so they "
+                "can't do open-ended question answering."
+            ),
+        },
+        {
+            "speaker": "B",
+            "text": (
+                "True. But for structured classification and retrieval, the encoder-only "
+                "approach remains more efficient than a full decoder."
+            ),
+        },
+    ]
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_report(data: dict[str, Any]):
     """Deserialise a report dict into a ReportEvent model."""
     from disco.core import ReportEvent
+
     return ReportEvent.model_validate(data)
 
 
@@ -350,15 +475,13 @@ def _mp3_frame_sync(mp3: bytes) -> bool:
     """True iff `mp3` carries an MPEG-1/2/2.5 Layer III frame sync in the
     first 128 bytes (lameenc writes a LAME header before data frames)."""
     head = mp3[:128]
-    return any(
-        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0
-        for i in range(len(head) - 1)
-    )
+    return any(head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1))
 
 
 def _mp3_duration(mp3: bytes) -> float | None:
     """Parse MP3 frame headers and compute playback duration in seconds."""
     from disco.tools.builtin._audio_mixer import mp3_duration_seconds
+
     return mp3_duration_seconds(mp3)
 
 
@@ -375,6 +498,7 @@ def _install_llm_stub(monkeypatch: pytest.MonkeyPatch, script_json: str) -> None
 def _tts_settings(voice_a: str = "af_heart", voice_b: str = "af_bella"):
     """A minimal TTS settings object with Kokoro bundled provider enabled."""
     from disco.core.llm import TtsSettings
+
     return TtsSettings(enabled=True, provider="bundled", voice_a=voice_a, voice_b=voice_b)
 
 
@@ -397,6 +521,7 @@ def test_small_report_podcast_mode_real_kokoro(monkeypatch, tmp_path) -> None:
     tts = _tts_settings()
 
     from disco.agent_server import report_audio as _ra
+
     mp3_path, tr_path = asyncio.run(
         _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
     )
@@ -412,7 +537,9 @@ def test_small_report_podcast_mode_real_kokoro(monkeypatch, tmp_path) -> None:
     # Duration sanity: 5 turns × ~0.5 s minimum = 2.5 s; allow up to 120 s
     dur = _mp3_duration(mp3_bytes)
     assert dur is not None, "mp3_duration_seconds found no decodable frames"
-    assert dur >= 2.0, f"MP3 too short ({dur:.2f}s) for a 5-turn overview — synthesis may have failed"
+    assert dur >= 2.0, (
+        f"MP3 too short ({dur:.2f}s) for a 5-turn overview — synthesis may have failed"
+    )
     assert dur < 120.0, f"MP3 suspiciously long ({dur:.2f}s) — possible silence injection bug"
 
     # Transcript: Host A AND Host B labels (podcast = two voices)
@@ -442,6 +569,7 @@ def test_small_report_single_mode_real_kokoro(monkeypatch, tmp_path) -> None:
 
     # Track which voices are used in real synthesis.
     from disco.tools.builtin import audio_overview as _ao
+
     original_local = _ao._synthesize_local
     voices_used: list[str] = []
 
@@ -452,6 +580,7 @@ def test_small_report_single_mode_real_kokoro(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(_ao, "_synthesize_local", _tracking_local)
 
     from disco.agent_server import report_audio as _ra
+
     mp3_path, tr_path = asyncio.run(
         _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="single")
     )
@@ -488,6 +617,7 @@ def test_minimal_1_section_report_real_kokoro(monkeypatch, tmp_path) -> None:
     tts = _tts_settings()
 
     from disco.agent_server import report_audio as _ra
+
     mp3_path, tr_path = asyncio.run(
         _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
     )
@@ -520,6 +650,7 @@ def test_medium_report_with_empty_sections_real_kokoro(monkeypatch, tmp_path) ->
     tts = _tts_settings()
 
     from disco.agent_server import report_audio as _ra
+
     mp3_path, tr_path = asyncio.run(
         _ra.generate_report_audio(report, tts_settings=tts, out_dir=out_dir, mode="podcast")
     )
@@ -591,9 +722,7 @@ def test_podcast_vs_single_mode_separate_files_real_kokoro(monkeypatch, tmp_path
     # `report_audio._authenticated_call_llm` takes the short-circuit path
     # (it checks `__name__ == "_fake_llm"` to skip real HTTP).
     async def _fake_llm(payload: dict, llm_url: str) -> str:  # noqa: ARG001
-        content = " ".join(
-            m.get("content", "") for m in payload.get("messages", [])
-        ).lower()
+        content = " ".join(m.get("content", "") for m in payload.get("messages", [])).lower()
         if "narrator" in content or "single-voice" in content or "honest" in content:
             return _SINGLE_SCRIPT_SMALL
         return _PODCAST_SCRIPT_SMALL
@@ -706,7 +835,7 @@ def test_many_turns_real_pcm_no_crash(tmp_path) -> None:
 
     # Synthesise all 10 turns: A, B, A, B, ... alternating
     pcm_turns = []
-    for a_text, b_text in zip(texts_a, texts_b):
+    for a_text, b_text in zip(texts_a, texts_b, strict=True):
         pcm_turns.append(asyncio.run(tts_local.synthesize(a_text, "af_heart")))
         pcm_turns.append(asyncio.run(tts_local.synthesize(b_text, "af_bella")))
 
@@ -716,9 +845,7 @@ def test_many_turns_real_pcm_no_crash(tmp_path) -> None:
     mixed = mix_pcm(pcm_turns, silence_ms=SILENCE_MS, sample_rate=SAMPLE_RATE)
     gap_samples = int(SAMPLE_RATE * SILENCE_MS / 1000)
     expected = sum(t.size for t in pcm_turns) + 9 * gap_samples
-    assert mixed.size == expected, (
-        f"10-turn mix size {mixed.size} != expected {expected}"
-    )
+    assert mixed.size == expected, f"10-turn mix size {mixed.size} != expected {expected}"
 
     # No NaN or +/-Inf in the mixed PCM
     assert not np.any(np.isnan(mixed)), "NaN in mixed real-PCM output"

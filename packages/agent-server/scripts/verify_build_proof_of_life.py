@@ -59,13 +59,17 @@ def _print_new(events: list, shown: int) -> int:
                 print(f"      thought: {e.thought.strip()[:120]}")
         elif isinstance(e, ObservationEvent):
             r = e.tool_result
-            print(f"      ✓ obs (exit {(_get(r.structured, 'exit_code'))}): {r.content.strip()[:120]!r}")
+            print(
+                f"      ✓ obs (exit {(_get(r.structured, 'exit_code'))}): {r.content.strip()[:120]!r}"
+            )
         elif isinstance(e, AgentErrorEvent):
             print(f"      ✗ {e.error[:120]}")
         elif isinstance(e, ErrorEvent):
             print(f"  [FATAL ERROR] {str(getattr(e, 'error', e))[:300]}")
         elif isinstance(e, CondensationEvent):
-            print(f"  ~ CONDENSED seq {e.forgotten_start_seq}-{e.forgotten_end_seq}: {e.summary[:80]}")
+            print(
+                f"  ~ CONDENSED seq {e.forgotten_start_seq}-{e.forgotten_end_seq}: {e.summary[:80]}"
+            )
         elif isinstance(e, StatusEvent):
             print(f"  [status] {e.status.value}{(' · ' + e.detail) if e.detail else ''}")
     return len(events)
@@ -119,7 +123,11 @@ async def main() -> None:
 
         if state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION:
             pending = next(
-                (e for e in events if isinstance(e, ActionEvent) and e.id == state.pending_action_id),
+                (
+                    e
+                    for e in events
+                    if isinstance(e, ActionEvent) and e.id == state.pending_action_id
+                ),
                 None,
             )
             risk = _get(pending.meta.get("risk_assessment") if pending else None, "risk")
@@ -139,9 +147,13 @@ async def main() -> None:
     print("\n--- result ---")
     print(f"  final status : {final.execution_status.value}")
     print(f"  tool actions : {actions}")
-    print(f"  gates fired  : {gates_seen} (the ConfirmRisky gate paused execution, then confirm ran it)")
+    print(
+        f"  gates fired  : {gates_seen} (the ConfirmRisky gate paused execution, then confirm ran it)"
+    )
     ok = final.execution_status == ConversationStatus.FINISHED and actions >= 2
-    print(f"\n  [{'PASS' if ok else 'CHECK'}] proof of life: real model + real tools + real sandbox drove a multi-step task to {final.execution_status.value}")
+    print(
+        f"\n  [{'PASS' if ok else 'CHECK'}] proof of life: real model + real tools + real sandbox drove a multi-step task to {final.execution_status.value}"
+    )
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TypeVar
 
 from .judge import ClaimVerdict, fraction_supported, weak_claims
 
@@ -32,7 +32,7 @@ EmitFn = Callable[[str, dict[str, object]], Awaitable[None]]
 
 
 @dataclass
-class IterationResult(Generic[S]):
+class IterationResult[S]:
     sections: list[S]
     rounds: int  # refinement rounds actually run (0 = converged on the first judging)
     final_supported: float  # fraction SUPPORTED across all claims at the end
@@ -43,7 +43,7 @@ async def _noop_emit(_phase: str, _data: dict[str, object]) -> None:
     return None
 
 
-async def run_iterative_refinement(
+async def run_iterative_refinement[S](
     sections: list[S],
     *,
     judge_section: JudgeFn[S],
@@ -114,7 +114,7 @@ async def run_iterative_refinement(
     )
 
 
-async def _judge_all(sections: list[S], judge_section: JudgeFn[S]) -> list[list[ClaimVerdict]]:
+async def _judge_all[S](sections: list[S], judge_section: JudgeFn[S]) -> list[list[ClaimVerdict]]:
     out: list[list[ClaimVerdict]] = []
     for sec in sections:
         out.append(await judge_section(sec))

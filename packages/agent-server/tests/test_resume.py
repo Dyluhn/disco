@@ -347,14 +347,17 @@ async def test_second_actionless_pause_reenters_resume_endpoint_for_synthetic_fi
 
     resume.assert_awaited_once_with(cid)
     events = await store.get_events(cid)
-    assert sum(
-        1
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.ENVIRONMENT
-        and e.message is not None
-        and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
-    ) == 1
+    assert (
+        sum(
+            1
+            for e in events
+            if isinstance(e, MessageEvent)
+            and e.source == EventSource.ENVIRONMENT
+            and e.message is not None
+            and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+        )
+        == 1
+    )
 
 
 async def test_resume_from_error_is_legal_and_preserves_history():
@@ -384,8 +387,7 @@ async def test_resume_from_error_is_legal_and_preserves_history():
     assert CID in rt._loops
     # The conversation is back in RUNNING (a RUNNING StatusEvent was appended).
     assert any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING
-        for e in events_after
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING for e in events_after
     )
 
 
@@ -475,7 +477,8 @@ async def test_resume_appends_environment_message_exactly_once():
 
     events_before = await store.get_events(CID)
     resume_msgs_before = [
-        e for e in events_before
+        e
+        for e in events_before
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "Resumed by user." in e.message.content
@@ -487,7 +490,8 @@ async def test_resume_appends_environment_message_exactly_once():
 
     events_after = await store.get_events(CID)
     resume_msgs_after = [
-        e for e in events_after
+        e
+        for e in events_after
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "Resumed by user." in e.message.content
@@ -628,9 +632,7 @@ async def test_http_resume_finished_returns_409():
 
 async def _append_productive_work(store: SqliteEventStore, cid: str) -> None:
     tool_call = ToolCall(tool_name="file_append", arguments={"path": "index.html", "content": "x"})
-    action = await store.append(
-        cid, ActionEvent(thought="progress", tool_call=tool_call)
-    )
+    action = await store.append(cid, ActionEvent(thought="progress", tool_call=tool_call))
     await store.append(
         cid,
         ObservationEvent(
@@ -672,9 +674,12 @@ async def test_auto_resume_fires_again_after_productive_work_between_pauses(monk
 
     events = await store.get_events(cid)
     nudges = [
-        e for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
-        and e.message is not None and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message is not None
+        and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
     ]
     assert len(nudges) == 2
 

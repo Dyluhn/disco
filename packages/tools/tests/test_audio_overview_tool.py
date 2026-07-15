@@ -75,11 +75,13 @@ def test_extract_json_no_code_block_fallback():
 
 
 def test_validate_valid_script():
-    raw = json.dumps([
-        {"speaker": "A", "text": "Welcome to the show."},
-        {"speaker": "B", "text": "Thanks for having me."},
-        {"speaker": "A", "text": "Let's dive into it."},
-    ])
+    raw = json.dumps(
+        [
+            {"speaker": "A", "text": "Welcome to the show."},
+            {"speaker": "B", "text": "Thanks for having me."},
+            {"speaker": "A", "text": "Let's dive into it."},
+        ]
+    )
     turns, error = _validate_turn_script(raw)
     assert error is None
     assert len(turns) == 3
@@ -107,10 +109,12 @@ def test_validate_too_few_turns():
 
 def test_validate_bad_speaker():
     turns, error = _validate_turn_script(
-        json.dumps([
-            {"speaker": "A", "text": "Good"},
-            {"speaker": "C", "text": "Bad speaker"},
-        ])
+        json.dumps(
+            [
+                {"speaker": "A", "text": "Good"},
+                {"speaker": "C", "text": "Bad speaker"},
+            ]
+        )
     )
     assert turns is None
     assert "speaker" in error.lower()
@@ -119,10 +123,12 @@ def test_validate_bad_speaker():
 
 def test_validate_missing_text():
     turns, error = _validate_turn_script(
-        json.dumps([
-            {"speaker": "A", "text": "Good"},
-            {"speaker": "B"},
-        ])
+        json.dumps(
+            [
+                {"speaker": "A", "text": "Good"},
+                {"speaker": "B"},
+            ]
+        )
     )
     assert turns is None
     assert "text" in error.lower()
@@ -130,10 +136,12 @@ def test_validate_missing_text():
 
 def test_validate_empty_text():
     turns, error = _validate_turn_script(
-        json.dumps([
-            {"speaker": "A", "text": "Good"},
-            {"speaker": "B", "text": "   "},
-        ])
+        json.dumps(
+            [
+                {"speaker": "A", "text": "Good"},
+                {"speaker": "B", "text": "   "},
+            ]
+        )
     )
     assert turns is None
     assert "non-empty" in error.lower() or "empty" in error.lower()
@@ -153,11 +161,13 @@ def test_validate_non_dict_turn():
 def test_validate_single_accepts_all_a():
     """All-'A' script passes the single-mode validator — that is the expected output
     from the single-speaker prompt (WALK-21 / D3)."""
-    raw = json.dumps([
-        {"speaker": "A", "text": "Welcome to this honest walkthrough."},
-        {"speaker": "A", "text": "The main finding is quite clear."},
-        {"speaker": "A", "text": "However, there are some important caveats."},
-    ])
+    raw = json.dumps(
+        [
+            {"speaker": "A", "text": "Welcome to this honest walkthrough."},
+            {"speaker": "A", "text": "The main finding is quite clear."},
+            {"speaker": "A", "text": "However, there are some important caveats."},
+        ]
+    )
     turns, error = _validate_turn_script_single(raw)
     assert error is None, f"Expected no error; got: {error!r}"
     assert turns is not None
@@ -176,25 +186,27 @@ def test_validate_single_accepts_one_turn():
 def test_validate_single_coerces_b_to_a():
     """Single mode coerces any stray 'B' speaker to 'A' (LLM sometimes ignores prompts).
     All turns end up with speaker 'A', using voice_a for the entire overview."""
-    raw = json.dumps([
-        {"speaker": "A", "text": "Main point."},
-        {"speaker": "B", "text": "Stray B speaker that LLM accidentally emitted."},
-        {"speaker": "A", "text": "Wrap up."},
-    ])
+    raw = json.dumps(
+        [
+            {"speaker": "A", "text": "Main point."},
+            {"speaker": "B", "text": "Stray B speaker that LLM accidentally emitted."},
+            {"speaker": "A", "text": "Wrap up."},
+        ]
+    )
     turns, error = _validate_turn_script_single(raw)
     assert error is None
     assert turns is not None
-    assert all(t.speaker == "A" for t in turns), (
-        "Single mode must coerce all speakers to 'A'"
-    )
+    assert all(t.speaker == "A" for t in turns), "Single mode must coerce all speakers to 'A'"
 
 
 def test_validate_single_rejects_empty_text():
     """Empty / whitespace-only text is still invalid in single mode."""
-    raw = json.dumps([
-        {"speaker": "A", "text": "Good line."},
-        {"speaker": "A", "text": "   "},
-    ])
+    raw = json.dumps(
+        [
+            {"speaker": "A", "text": "Good line."},
+            {"speaker": "A", "text": "   "},
+        ]
+    )
     turns, error = _validate_turn_script_single(raw)
     assert turns is None
     assert error is not None
@@ -217,9 +229,7 @@ def test_validate_single_rejects_empty_list():
 
 def test_build_payload_podcast_mode_uses_podcast_prompt(monkeypatch):
     """Default (podcast) mode uses the two-host prompt."""
-    monkeypatch.setattr(
-        "disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False
-    )
+    monkeypatch.setattr("disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False)
     payload = _build_llm_payload("Report text here.", mode="podcast")
     content = payload["messages"][0]["content"]
     assert "two-host" in content or "Host A" in content or "Host B" in content, (
@@ -229,9 +239,7 @@ def test_build_payload_podcast_mode_uses_podcast_prompt(monkeypatch):
 
 def test_build_payload_single_mode_uses_single_prompt(monkeypatch):
     """Single mode uses the narrator/walkthrough prompt (all-A speakers expected)."""
-    monkeypatch.setattr(
-        "disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False
-    )
+    monkeypatch.setattr("disco.agent_server.audio_config.LLM_MODEL", "test-model", raising=False)
     payload = _build_llm_payload("Report text here.", mode="single")
     content = payload["messages"][0]["content"]
     # Single prompt must NOT steer toward B speakers.
@@ -329,9 +337,9 @@ def test_encode_mp3_produces_valid_frames():
     # MPEG audio frame sync: 0xFF followed by top 3 bits set (0xE0). Some encoders
     # emit an ID3/info header first; scan a small prefix for the sync word.
     head = mp3[:64]
-    assert any(
-        head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)
-    ), "no MPEG frame sync found in MP3 head"
+    assert any(head[i] == 0xFF and (head[i + 1] & 0xE0) == 0xE0 for i in range(len(head) - 1)), (
+        "no MPEG frame sync found in MP3 head"
+    )
 
 
 def test_encode_mp3_clips_out_of_range():

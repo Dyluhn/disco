@@ -51,24 +51,26 @@ def test_normalize_for_tts_strips_markdown():
     fences, inline code, and [[id]] chips — but not collapse the text content."""
     from disco.agent_server.report_audio import _normalize_for_tts
 
-    raw = "\n".join([
-        "## Section Heading",
-        "",
-        "**bold text** and *italic* and ***both***",
-        "",
-        "[link text](https://example.com)",
-        "",
-        "- bullet one",
-        "- bullet two",
-        "",
-        "```python",
-        "code here",
-        "```",
-        "",
-        "Inline `code` word.",
-        "",
-        "Citation chip [[p0]] in prose.",
-    ])
+    raw = "\n".join(
+        [
+            "## Section Heading",
+            "",
+            "**bold text** and *italic* and ***both***",
+            "",
+            "[link text](https://example.com)",
+            "",
+            "- bullet one",
+            "- bullet two",
+            "",
+            "```python",
+            "code here",
+            "```",
+            "",
+            "Inline `code` word.",
+            "",
+            "Citation chip [[p0]] in prose.",
+        ]
+    )
 
     result = _normalize_for_tts(raw)
 

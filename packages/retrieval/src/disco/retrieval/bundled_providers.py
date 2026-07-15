@@ -20,7 +20,6 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
-
 from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted_url
 
 from .models import ExtractedDoc, Passage, SearchHit
@@ -65,6 +64,7 @@ def chunk_passages(url: str, title: str, content: str) -> list[Passage]:
             )
         )
     return passages
+
 
 _UA = "Mozilla/5.0 (compatible; disco/1.0; +https://disco.local)"
 _TIMEOUT = httpx.Timeout(20.0)
@@ -134,9 +134,7 @@ class DdgsSearchProvider:
             )
         return hits
 
-    def _blocking_search(
-        self, query: str, limit: int, timelimit: str | None = None
-    ) -> list[dict]:
+    def _blocking_search(self, query: str, limit: int, timelimit: str | None = None) -> list[dict]:
         # DuckDuckGo rate-limits aggressively; a rate-limited call raises OR returns
         # an empty list — INDISTINGUISHABLE from a genuine no-results one to the
         # caller (both surface as "No sources"). Retry a few times with backoff so a
@@ -392,8 +390,12 @@ class LocalExtractionProvider:
         if not passages:  # JS-only / empty page — honest failure, not a silent 0-passage doc
             _LOG.info("local extract %s → 0 usable passages (empty/JS-only)", url[:80])
             return ExtractedDoc(
-                url=url, title=title, content=md, fetched_ok=False,
-                error="no readable content", status="error",
+                url=url,
+                title=title,
+                content=md,
+                fetched_ok=False,
+                error="no readable content",
+                status="error",
             )
         _LOG.info("local extract %s → %d chars, %d passages", url[:80], len(md), len(passages))
         return ExtractedDoc(url=url, title=title, content=md, passages=passages, fetched_ok=True)
@@ -414,8 +416,12 @@ class FirecrawlExtractionProvider:
     async def extract(self, url: str) -> ExtractedDoc:
         if not self._key:
             return ExtractedDoc(
-                url=url, title="", content="", fetched_ok=False,
-                error="no firecrawl key configured", status="error",
+                url=url,
+                title="",
+                content="",
+                fetched_ok=False,
+                error="no firecrawl key configured",
+                status="error",
             )
         try:
             validate_untrusted_url(url)
@@ -439,8 +445,12 @@ class FirecrawlExtractionProvider:
         passages = chunk_passages(url, title, content)
         if not passages:
             return ExtractedDoc(
-                url=url, title=title, content=content, fetched_ok=False,
-                error="no readable content", status="error",
+                url=url,
+                title=title,
+                content=content,
+                fetched_ok=False,
+                error="no readable content",
+                status="error",
             )
         return ExtractedDoc(
             url=url, title=title, content=content, passages=passages, fetched_ok=True

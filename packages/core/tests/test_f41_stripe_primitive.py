@@ -500,9 +500,7 @@ def test_role_grants_are_source_aware_and_revocation_is_stripe_scoped() -> None:
             "stripe_events",
             "stripe_fulfillments",
             "user_role_grants",
-        } <= {
-            row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        } <= {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     finally:
         db.close()
 
@@ -561,9 +559,7 @@ def test_runtime_probe_is_admin_only_and_webhooks_pause_during_rotation() -> Non
     _, tree = _filled_tree()
     worker = tree["worker/index.ts"]
     probe = worker[
-        worker.index("async function stripeRuntimeProbe") : worker.index(
-            "interface RouteHandlers"
-        )
+        worker.index("async function stripeRuntimeProbe") : worker.index("interface RouteHandlers")
     ]
     assert "await isAdminAuthorized(request, env)" in probe
     assert "ready: await stripeHostReady(env)" in probe

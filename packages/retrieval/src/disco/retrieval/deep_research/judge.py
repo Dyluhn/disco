@@ -18,13 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from disco.core.think import strip_think_spans
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
     LLMMessage,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
 
 Verdict = Literal["SUPPORTED", "PARTIAL", "UNSUPPORTED"]
 
@@ -93,7 +93,9 @@ async def judge_claim(
 ) -> ClaimVerdict:
     """Judge ONE claim against its cited passages. Reuses the same RAG_ANSWERER
     router path synthesis uses (temperature 0; tiny max_tokens — one word out)."""
-    prompt = _JUDGE_PROMPT.format(claim=claim_text.strip(), passages=_format_passages(passage_texts))
+    prompt = _JUDGE_PROMPT.format(
+        claim=claim_text.strip(), passages=_format_passages(passage_texts)
+    )
     # BUDGET TRAP (4th live instance): a reasoning model spends a tiny budget
     # entirely inside <think>, the stripped text is empty, and the conservative
     # default marks EVERY claim UNSUPPORTED — the judge grades maximally harsh

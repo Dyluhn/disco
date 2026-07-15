@@ -47,9 +47,7 @@ def test_c9_unknown_window_still_uses_the_budget():
 def test_c9_explicit_overrides_win_over_derived_ceiling():
     """Explicit max_tokens / hard_max_tokens are authoritative (tests rely on this).
     Even on a 1M-window model, the user-supplied value wins."""
-    c = LLMSummarizingCondenser(
-        context_window=1_048_576, max_tokens=50, hard_max_tokens=60
-    )
+    c = LLMSummarizingCondenser(context_window=1_048_576, max_tokens=50, hard_max_tokens=60)
     assert c._max == 50  # NOT 96_000
     assert c._hard == 60  # NOT 128_000
 

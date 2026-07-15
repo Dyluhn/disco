@@ -40,8 +40,7 @@ _EMPTY_REASONING_REPAIR_REMINDER = (
 )
 _PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
 _PROSE_NOOP_REPAIR_REMINDER = (
-    "You described the next action instead of performing it — call the tool for it "
-    "in THIS turn."
+    "You described the next action instead of performing it — call the tool for it in THIS turn."
 )
 _READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
 
@@ -92,10 +91,7 @@ def _read_churn_diagnostic_events(events: list):
 
 
 def _tool_specs(*names: str) -> list[ToolSpec]:
-    return [
-        ToolSpec(name=name, description=name, parameters_schema={})
-        for name in names
-    ]
+    return [ToolSpec(name=name, description=name, parameters_schema={}) for name in names]
 
 
 def _tool_step(tool_name: str, arguments: dict) -> dict:
@@ -142,9 +138,7 @@ async def _seed_approved_incomplete_plan(store):
         ),
     )
     await store.append(CID, PlanEvent(summary="build it", steps=[{"title": "ship"}]))
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
 
 
 async def test_loop_router_event_contracts_compose():
@@ -363,10 +357,7 @@ async def test_prose_noop_retry_prose_again_counts_into_actionless_breaker():
         for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.AGENT
-        and (
-            e.message.content.startswith("Still")
-            or e.message.content.startswith("ordinary")
-        )
+        and (e.message.content.startswith("Still") or e.message.content.startswith("ordinary"))
     ] == ["Still about to inspect.", "ordinary no-op 2", "ordinary no-op 3"]
     assert any(
         isinstance(e, StatusEvent)
@@ -379,9 +370,7 @@ async def test_prose_noop_retry_prose_again_counts_into_actionless_breaker():
 
 
 async def test_same_path_small_file_reads_warn_then_feed_actionless_ladder():
-    provider = SequenceProvider(
-        [_small_read_step(offset=i) for i in range(1, 24)]
-    )
+    provider = SequenceProvider([_small_read_step(offset=i) for i in range(1, 24)])
     router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
     agent = BuildAgent(router, conversation_id=CID)
     executor = FakeExecutor(tools=_tool_specs("file_read"))
@@ -545,11 +534,14 @@ async def test_second_prose_noop_in_same_execution_segment_gets_no_second_nudge(
     assert [c.tool_name for c in executor.calls] == ["shell", "shell"]
     events = await store.get_events(CID)
     assert len(_prose_noop_diagnostic_events(events)) == 1
-    assert sum(
-        1
-        for req in provider.seen
-        if req.messages and req.messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
-    ) == 1
+    assert (
+        sum(
+            1
+            for req in provider.seen
+            if req.messages and req.messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+        )
+        == 1
+    )
     assert any(
         isinstance(e, MessageEvent)
         and e.source == EventSource.AGENT
@@ -583,9 +575,7 @@ async def test_planning_mode_prose_turn_gets_no_prose_noop_nudge():
     events = await store.get_events(CID)
     assert _prose_noop_diagnostic_events(events) == []
     assert not any(
-        _PROSE_NOOP_REPAIR_REMINDER in m.content
-        for req in provider.seen
-        for m in req.messages
+        _PROSE_NOOP_REPAIR_REMINDER in m.content for req in provider.seen for m in req.messages
     )
     assert any(
         isinstance(e, MessageEvent)
@@ -652,9 +642,7 @@ async def test_ordinary_prose_noop_does_not_empty_reasoning_retry():
     events = await store.get_events(CID)
     assert _diagnostic_events(events) == []
     assert not any(
-        _EMPTY_REASONING_REPAIR_REMINDER in m.content
-        for req in provider.seen
-        for m in req.messages
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content for req in provider.seen for m in req.messages
     )
 
 
@@ -714,9 +702,7 @@ async def test_finish_length_empty_turn_uses_existing_truncation_repair():
         for e in events
     )
     assert not any(
-        _EMPTY_REASONING_REPAIR_REMINDER in m.content
-        for req in provider.seen
-        for m in req.messages
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content for req in provider.seen for m in req.messages
     )
 
 

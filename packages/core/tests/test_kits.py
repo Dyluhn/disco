@@ -3,17 +3,13 @@ the contract↔starter coherence invariant."""
 
 from __future__ import annotations
 
-import json
-
 import pytest
-
 from disco.core.appkit import AppSpec, render_html
 from disco.core.contract import BuildContractRegistry, ContractKind
 from disco.core.kits import (
     BRAND_NAMES,
     StarterKitRegistry,
     appkit_brand,
-    brand_to_appkit_tokens,
     lead_form_appspec,
 )
 
@@ -21,14 +17,16 @@ from disco.core.kits import (
 # --- starter registry ---------------------------------------------------------
 def test_registry_resolves_builtins() -> None:
     reg = StarterKitRegistry.default()
-    expected = frozenset({
-        "app_shell",
-        "lead_form",
-        "game_loop_vanilla",
-        "pwa_shell",
-        "device_frames",
-        "ui_kit_dense",
-    })
+    expected = frozenset(
+        {
+            "app_shell",
+            "lead_form",
+            "game_loop_vanilla",
+            "pwa_shell",
+            "device_frames",
+            "ui_kit_dense",
+        }
+    )
     assert reg.ids() == expected
     assert len(reg.ids()) == 6
     assert reg.get("app_shell") is not None

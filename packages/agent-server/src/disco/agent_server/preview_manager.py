@@ -858,8 +858,10 @@ class PreviewManager:
         """Current status of one preview (by name) or all. Re-probes health first."""
         async with self._lock:
             targets = (
-                [self._sessions[name]] if name is not None and name in self._sessions
-                else list(self._sessions.values()) if name is None
+                [self._sessions[name]]
+                if name is not None and name in self._sessions
+                else list(self._sessions.values())
+                if name is None
                 else []
             )
             for session in targets:
@@ -886,8 +888,10 @@ class PreviewManager:
         """Stop one preview (by name) or all. Returns the names stopped."""
         async with self._lock:
             names = (
-                [name] if name is not None and name in self._sessions
-                else list(self._sessions.keys()) if name is None
+                [name]
+                if name is not None and name in self._sessions
+                else list(self._sessions.keys())
+                if name is None
                 else []
             )
             stopped: list[str] = []

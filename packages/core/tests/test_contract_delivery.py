@@ -5,11 +5,15 @@ from __future__ import annotations
 from disco.core.contract import (
     BuildContractRegistry,
     ContractKind,
-    delivery_mode_for_kind,
     deliverable_kind_matches_contract,
+    delivery_mode_for_kind,
 )
 
-_APP_KINDS = {ContractKind.APPKIT_LEADGEN, ContractKind.STATIC_SITE, ContractKind.INTERACTIVE_PROTOTYPE}
+_APP_KINDS = {
+    ContractKind.APPKIT_LEADGEN,
+    ContractKind.STATIC_SITE,
+    ContractKind.INTERACTIVE_PROTOTYPE,
+}
 
 
 def test_delivery_mode_for_every_kind() -> None:

@@ -4,8 +4,6 @@ and SourcePriority/CompactionPolicy semantics."""
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from disco.core.context import (
     ArtifactMemoryKind,
     ArtifactMemoryRef,
@@ -21,6 +19,7 @@ from disco.core.context import (
     SourcePriority,
     VerifierFailureRef,
 )
+from pydantic import BaseModel, ValidationError
 
 
 def _roundtrip(m: BaseModel) -> None:
@@ -29,15 +28,29 @@ def _roundtrip(m: BaseModel) -> None:
 
 
 def test_all_models_roundtrip() -> None:
-    amr = ArtifactMemoryRef(kind=ArtifactMemoryKind.TODO, rel_path=".disco/context/todo.md", sha256="abc")
+    amr = ArtifactMemoryRef(
+        kind=ArtifactMemoryKind.TODO, rel_path=".disco/context/todo.md", sha256="abc"
+    )
     models: list[BaseModel] = [
         amr,
         SourcePriority.default(),
         CompactionPolicy.default(),
         ResolvedContextRange(reason="explored, dead end", event_ids=("evt_1", "evt_2")),
-        DirectEditRef(target_id="hero-cta", rel_path="index.html", kind=DirectEditKind.TEXT, summary="reworded"),
-        VerifierFailureRef(kind="console_error", message="ReferenceError: x", rel_path="app.js", severity=Severity.BLOCKER),
-        ResourceRef(rel_path="assets/logo.svg", source="github://o/r/logo.svg", sha256="d", license="MIT"),
+        DirectEditRef(
+            target_id="hero-cta",
+            rel_path="index.html",
+            kind=DirectEditKind.TEXT,
+            summary="reworded",
+        ),
+        VerifierFailureRef(
+            kind="console_error",
+            message="ReferenceError: x",
+            rel_path="app.js",
+            severity=Severity.BLOCKER,
+        ),
+        ResourceRef(
+            rel_path="assets/logo.svg", source="github://o/r/logo.svg", sha256="d", license="MIT"
+        ),
         HandoffRef(kind="owner", rel_path="owner_handoff/"),
         ContextLedger.empty("conv_1", "/ws/conv_1"),
     ]

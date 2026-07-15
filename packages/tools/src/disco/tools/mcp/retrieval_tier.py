@@ -32,6 +32,7 @@ class _MCPRetrievalSearchProvider:
     The MCP tool must accept `{"query": str}` and return results with
     `{results: [{id, title, url}, ...]}`.
     """
+
     name: str
 
     def __init__(
@@ -60,9 +61,7 @@ class _MCPRetrievalSearchProvider:
         try:
             raw = await self._call(self._server, self._tool_name, {"query": query})
         except Exception as exc:
-            _LOG.warning(
-                "MCP search %r failed: %s", self.name, exc
-            )
+            _LOG.warning("MCP search %r failed: %s", self.name, exc)
             return []
         if raw.get("isError") or raw.get("is_error"):
             _LOG.warning("MCP search %r returned an error result", self.name)
@@ -110,6 +109,7 @@ class _MCPRetrievalExtractionProvider:
     The MCP tool must accept `{"id": str}` or `{"url": str}` and return
     document content.
     """
+
     name: str
 
     def __init__(
@@ -130,13 +130,9 @@ class _MCPRetrievalExtractionProvider:
     async def extract(self, url: str) -> ExtractedDoc:
         """Call the MCP extraction tool and return an ExtractedDoc."""
         try:
-            raw = await self._call(
-                self._server, self._tool_name, {self._argument_name: url}
-            )
+            raw = await self._call(self._server, self._tool_name, {self._argument_name: url})
         except Exception as exc:
-            _LOG.warning(
-                "MCP extract %r failed: %s", self.name, exc
-            )
+            _LOG.warning("MCP extract %r failed: %s", self.name, exc)
             return ExtractedDoc(
                 url=url,
                 title="",
@@ -265,26 +261,26 @@ def build_retrieval_providers(
 
         if _tool_matches_search_shape(tool_obj, tool_name):
             provider = _MCPRetrievalSearchProvider(
-                server, tool_name, call_fn,
+                server,
+                tool_name,
+                call_fn,
                 description=getattr(tool_obj, "description", "") or "",
             )
             search_providers.append(provider)
-            _LOG.debug(
-                "MCP retrieval: registered search provider %r", provider.name
-            )
+            _LOG.debug("MCP retrieval: registered search provider %r", provider.name)
 
         if _tool_matches_fetch_shape(tool_obj, tool_name):
             fields = _tool_input_fields(tool_obj)
             argument_name = "id" if "id" in fields else "url"
             provider = _MCPRetrievalExtractionProvider(
-                server, tool_name, call_fn,
+                server,
+                tool_name,
+                call_fn,
                 description=getattr(tool_obj, "description", "") or "",
                 argument_name=argument_name,
             )
             extraction_providers.append(provider)
-            _LOG.debug(
-                "MCP retrieval: registered extraction provider %r", provider.name
-            )
+            _LOG.debug("MCP retrieval: registered extraction provider %r", provider.name)
 
     return search_providers, extraction_providers
 
@@ -332,7 +328,8 @@ class CompositeSearchProvider:
             except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
                 _LOG.warning(
                     "Composite search: provider %r failed: %s",
-                    getattr(provider, "name", "?"), exc,
+                    getattr(provider, "name", "?"),
+                    exc,
                 )
                 continue
             batches.append((provider, hits))
@@ -387,7 +384,8 @@ class CompositeExtractionProvider:
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning(
                     "Composite extract: provider %r failed: %s",
-                    getattr(provider, "name", "?"), exc,
+                    getattr(provider, "name", "?"),
+                    exc,
                 )
                 continue
             last = doc
@@ -447,9 +445,7 @@ def compose_with_mcp(
     server with search/fetch-shaped tools is actually configured.
     """
     search = (
-        CompositeSearchProvider(primary_search, mcp_searches)
-        if mcp_searches
-        else primary_search
+        CompositeSearchProvider(primary_search, mcp_searches) if mcp_searches else primary_search
     )
     extraction = (
         CompositeExtractionProvider(primary_extraction, mcp_extractions)

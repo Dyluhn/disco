@@ -13,9 +13,8 @@ import html
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
-
 from disco.core.appkit import semantic_metadata as _md  # canonical data-disco-* vocabulary (P8B)
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # Strip characters that could break OUT of a CSS declaration / the <style> element
 # (a design-token value is interpolated into inline CSS, so it must not carry these).
@@ -24,6 +23,7 @@ _CSS_UNSAFE = re.compile(r"""[<>{};"'\\\n\r]""")
 
 def _css_safe(v: str) -> str:
     return _CSS_UNSAFE.sub("", v)
+
 
 # The section kinds the renderer knows how to draw.
 SECTION_KINDS: frozenset[str] = frozenset(
@@ -93,7 +93,9 @@ class AppSpec(BaseModel):
         i = self._index_of(section_id)
         sec = self.sections[i]
         new_sec = sec.model_copy(update={"fields": {**sec.fields, field: value}})
-        return self.model_copy(update={"sections": (*self.sections[:i], new_sec, *self.sections[i + 1 :])})
+        return self.model_copy(
+            update={"sections": (*self.sections[:i], new_sec, *self.sections[i + 1 :])}
+        )
 
     def with_section_added(self, section: AppSection, *, index: int | None = None) -> AppSpec:
         if any(s.id == section.id for s in self.sections):
@@ -142,15 +144,16 @@ def _render_section(sec: AppSection) -> str:
     if sec.kind == "hero":
         return (
             f'<section class="hero"{_sec_attrs(sec)}>'
-            f'<h1{_field("headline")}>{_esc(f.get("headline", ""))}</h1>'
-            f'<p{_field("subhead")}>{_esc(f.get("subhead", ""))}</p>'
-            f'<a class="cta" href="#lead"{_field("cta_text")}>{_esc(f.get("cta_text", "Get started"))}</a>'
+            f"<h1{_field('headline')}>{_esc(f.get('headline', ''))}</h1>"
+            f"<p{_field('subhead')}>{_esc(f.get('subhead', ''))}</p>"
+            f'<a class="cta" href="#lead"{_field("cta_text")}>'
+            f"{_esc(f.get('cta_text', 'Get started'))}</a>"
             f"</section>"
         )
     if sec.kind == "lead_form":
         return (
             f'<section class="lead" id="lead"{_sec_attrs(sec)}>'
-            f'<h2{_field("title")}>{_esc(f.get("title", "Contact us"))}</h2>'
+            f"<h2{_field('title')}>{_esc(f.get('title', 'Contact us'))}</h2>"
             f'<form method="post" action="/lead">'
             f'<input name="name" placeholder="Name" required>'
             f'<input name="email" type="email" placeholder="Email" required>'
@@ -160,14 +163,14 @@ def _render_section(sec: AppSection) -> str:
     if sec.kind == "about":
         return (
             f'<section class="about"{_sec_attrs(sec)}>'
-            f'<h2{_field("title")}>{_esc(f.get("title", "About"))}</h2>'
-            f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
+            f"<h2{_field('title')}>{_esc(f.get('title', 'About'))}</h2>"
+            f"<p{_field('body')}>{_esc(f.get('body', ''))}</p></section>"
         )
     # features / cta / footer + any future-but-known kind: a generic titled block.
     return (
         f'<section class="{_esc(sec.kind)}"{_sec_attrs(sec)}>'
-        f'<h2{_field("title")}>{_esc(f.get("title", sec.kind.title()))}</h2>'
-        f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
+        f"<h2{_field('title')}>{_esc(f.get('title', sec.kind.title()))}</h2>"
+        f"<p{_field('body')}>{_esc(f.get('body', ''))}</p></section>"
     )
 
 
@@ -189,7 +192,8 @@ def render_html(spec: AppSpec) -> str:
     ver = _md.attr(_md.DataDiscoAttr.VERSION, _md.METADATA_VERSION)
     return (
         f'<!doctype html>\n<html lang="en"{ver}>\n<head>\n'
-        '<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         f"<title>{_esc(spec.title)}</title>\n<style>{css}</style>\n</head>\n"
         f"<body>\n{body}\n</body>\n</html>\n"
     )

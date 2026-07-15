@@ -177,8 +177,10 @@ def microcompact(events: list[Event]) -> list[CondensationEvent]:
 def _call_key(a: ActionEvent) -> str:
     """A stable identity for a tool call: tool name + canonical args. Two calls with
     the same key are 'the same call' for supersession purposes."""
-    return a.tool_call.tool_name + "\x00" + json.dumps(
-        a.tool_call.arguments or {}, sort_keys=True, default=str
+    return (
+        a.tool_call.tool_name
+        + "\x00"
+        + json.dumps(a.tool_call.arguments or {}, sort_keys=True, default=str)
     )
 
 
@@ -369,12 +371,7 @@ def _recitation_message(
         else:
             current = "Current step: all plan steps are marked done."
             drift_gate = "Drift gate: verify the result, then finish."
-        body = (
-            "<current-objective>\n"
-            f"{current}\n"
-            f"{drift_gate}\n"
-            "</current-objective>"
-        )
+        body = f"<current-objective>\n{current}\n{drift_gate}\n</current-objective>"
         return LLMMessage(role="user", content=body)
     nxt = (
         f"\nNext incomplete step: {next_pending}. {plan.steps[next_pending - 1].title}"
@@ -463,31 +460,19 @@ class View(BaseModel):
         def result_for_action(
             e: ActionEvent,
         ) -> ObservationEvent | AgentErrorEvent | None:
-            return result_by_action_id.get(e.id) or result_by_call_id.get(
-                e.tool_call.call_id
-            )
+            return result_by_action_id.get(e.id) or result_by_call_id.get(e.tool_call.call_id)
 
         def action_for_result(
             e: ObservationEvent | AgentErrorEvent,
         ) -> ActionEvent | None:
             if isinstance(e, ObservationEvent):
-                action = (
-                    action_by_id.get(e.action_id)
-                    if isinstance(e.action_id, str)
-                    else None
-                )
+                action = action_by_id.get(e.action_id) if isinstance(e.action_id, str) else None
                 return action or action_by_call_id.get(e.tool_result.call_id)
-            action = (
-                action_by_id.get(e.action_id)
-                if isinstance(e.action_id, str)
-                else None
-            )
+            action = action_by_id.get(e.action_id) if isinstance(e.action_id, str) else None
             if action is not None:
                 return action
             return (
-                action_by_call_id.get(e.tool_call_id)
-                if isinstance(e.tool_call_id, str)
-                else None
+                action_by_call_id.get(e.tool_call_id) if isinstance(e.tool_call_id, str) else None
             )
 
         def pair_omitted(e: Event) -> bool:
@@ -526,9 +511,7 @@ class View(BaseModel):
         visible_obs = [
             e.seq
             for e in events
-            if isinstance(e, ObservationEvent)
-            and e.seq is not None
-            and is_visible(e)
+            if isinstance(e, ObservationEvent) and e.seq is not None and is_visible(e)
         ]
         recent_obs_seqs = set(visible_obs[-_MASK_KEEP_RECENT:])
 
@@ -696,9 +679,7 @@ class Summarizer(Protocol):
     async def summarize(self, messages: list[LLMMessage]) -> str: ...
 
 
-def _build_pointer_manifest(
-    span: list[Event], artifact_paths: list[str]
-) -> str:
+def _build_pointer_manifest(span: list[Event], artifact_paths: list[str]) -> str:
     """C16 — pointer-only summary used by the hard_reset path. Categorize the
     paths the engine collected so the model sees what kind of artifact each
     pointer is (deliverable / spill / memory) without having to guess. Pure:
@@ -904,9 +885,7 @@ class LLMSummarizingCondenser:
         self._keep_recent = keep_recent
         self._min_forget = min_forget
 
-    def should_condense(
-        self, view: View, *, token_count: int | None
-    ) -> CondensationRequest | None:
+    def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
         if token_count is None:
             return None
         if token_count >= self._hard:

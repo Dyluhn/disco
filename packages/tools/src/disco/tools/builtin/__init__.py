@@ -111,6 +111,7 @@ __all__ = [
     "build_default_registry",
 ]
 
+
 def _trusted_registry_nonempty() -> bool:
     from disco.core.trusted_components.registry import TrustedComponentRegistry
 

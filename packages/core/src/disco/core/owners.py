@@ -14,4 +14,4 @@ def install_owner_id() -> str:
     the operator's original install owner and are only exposed through explicit
     admin gates at the server edge.
     """
-    return (disco_env("INSTALL_OWNER", DEFAULT_OWNER_ID).strip() or DEFAULT_OWNER_ID)
+    return disco_env("INSTALL_OWNER", DEFAULT_OWNER_ID).strip() or DEFAULT_OWNER_ID

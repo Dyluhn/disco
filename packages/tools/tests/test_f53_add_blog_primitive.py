@@ -48,9 +48,7 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
 
 async def _create_lead_gen_app(sbx: FakeSandboxInstance):
     return await AppCreateTool().run(
-        AppCreateArgs(
-            recipe_id="editorial-ledger", primitive_id="lead_gen", brief="Acme Studio"
-        ),
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id="lead_gen", brief="Acme Studio"),
         _ctx(sbx),
     )
 

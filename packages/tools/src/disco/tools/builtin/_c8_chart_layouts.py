@@ -41,8 +41,8 @@ if TYPE_CHECKING:
 _SLIDE_W = 12_192_000
 _SLIDE_H = 6_858_000
 _MARGIN = 457_200
-_CW = _SLIDE_W - 2 * _MARGIN   # 11 277 600
-_CH = _SLIDE_H - 2 * _MARGIN   # 5 943 600
+_CW = _SLIDE_W - 2 * _MARGIN  # 11 277 600
+_CH = _SLIDE_H - 2 * _MARGIN  # 5 943 600
 _TITLE_H = 914_400
 
 
@@ -50,9 +50,11 @@ _TITLE_H = 914_400
 # Tiny PPTX helpers (mirrored to avoid circular import with _pptx_render)
 # ---------------------------------------------------------------------------
 
+
 def _rgb(hex_color: str):  # type: ignore[return]
     """RGBColor from a #rrggbb string (lazy pptx import)."""
     from pptx.dml.color import RGBColor
+
     h = hex_color.lstrip("#")
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
@@ -63,6 +65,7 @@ def _first_font(stack: str) -> str:
 
 def _add_tb(slide: Any, left: int, top: int, w: int, h: int) -> Any:
     from pptx.util import Emu
+
     shape = slide.shapes.add_textbox(Emu(left), Emu(top), Emu(w), Emu(h))
     tf = shape.text_frame
     tf.word_wrap = True
@@ -71,6 +74,7 @@ def _add_tb(slide: Any, left: int, top: int, w: int, h: int) -> Any:
 
 def _run(run: Any, text: str, font: str, pt: float, color: str, bold: bool = False) -> None:
     from pptx.util import Pt
+
     run.text = text
     run.font.name = font
     run.font.size = Pt(pt)
@@ -80,6 +84,7 @@ def _run(run: Any, text: str, font: str, pt: float, color: str, bold: bool = Fal
 
 def _accent_bar(slide: Any, left: int, top: int, w: int, color: str) -> None:
     from pptx.util import Emu
+
     bar = slide.shapes.add_shape(1, Emu(left), Emu(top), Emu(w), Emu(91_440))
     bar.fill.solid()
     bar.fill.fore_color.rgb = _rgb(color)
@@ -94,6 +99,7 @@ def _set_bg(slide: Any, color: str) -> None:
 def _title_strip(prs_slide: Any, title: str, theme: Theme) -> int:
     """Render title textbox + accent rule; return y-coord for content area."""
     from pptx.enum.text import PP_ALIGN
+
     _set_bg(prs_slide, theme.bg)
     tf = _add_tb(prs_slide, _MARGIN, _MARGIN, _CW, _TITLE_H)
     p = tf.paragraphs[0]
@@ -102,7 +108,7 @@ def _title_strip(prs_slide: Any, title: str, theme: Theme) -> int:
     _run(r, title, _first_font(theme.font_ui), 28, theme.text, bold=True)
     bar_top = _MARGIN + _TITLE_H + 45_720
     _accent_bar(prs_slide, _MARGIN, bar_top, _CW, theme.accent)
-    return bar_top + 91_440 + 91_440   # bar height (0.1 in) + 0.1 in gap
+    return bar_top + 91_440 + 91_440  # bar height (0.1 in) + 0.1 in gap
 
 
 def _maybe_notes(prs_slide: Any, slide: Any) -> None:
@@ -115,6 +121,7 @@ def _maybe_notes(prs_slide: Any, slide: Any) -> None:
 # Bridge: ChartSpec → chart_svg.py dict format
 # ---------------------------------------------------------------------------
 
+
 def _to_svg_dict(spec: ChartSpec) -> dict[str, Any]:
     """Convert ChartSpec → {chart_type, data, title, x_label, y_label} for render_chart_svg."""
     data: list[dict[str, Any]] = []
@@ -125,17 +132,21 @@ def _to_svg_dict(spec: ChartSpec) -> dict[str, Any]:
             for pt in s.get("data", []):
                 try:
                     if isinstance(pt, dict):
-                        data.append({
-                            "x": float(pt.get("x") or 0),
-                            "y": float(pt.get("y") or 0),
-                            "group": grp,
-                        })
+                        data.append(
+                            {
+                                "x": float(pt.get("x") or 0),
+                                "y": float(pt.get("y") or 0),
+                                "group": grp,
+                            }
+                        )
                     elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                        data.append({
-                            "x": float(pt[0]),  # type: ignore[arg-type]
-                            "y": float(pt[1]),  # type: ignore[arg-type]
-                            "group": grp,
-                        })
+                        data.append(
+                            {
+                                "x": float(pt[0]),  # type: ignore[arg-type]
+                                "y": float(pt[1]),  # type: ignore[arg-type]
+                                "group": grp,
+                            }
+                        )
                     # flat scalar — no positional meaning for scatter; skip
                 except (TypeError, ValueError):
                     pass
@@ -162,6 +173,7 @@ def _to_svg_dict(spec: ChartSpec) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # HTML content generators
 # ---------------------------------------------------------------------------
+
 
 def html_chart_content(title: str, spec: ChartSpec, theme: Theme) -> str:
     """Inner HTML for a chart slide.
@@ -198,15 +210,9 @@ def html_table_content(title: str, spec: TableSpec, theme: Theme) -> str:
         else ""
     )
     tbody_rows = "".join(
-        "<tr>" + "".join(f"<td>{_html.escape(str(c))}</td>" for c in row) + "</tr>"
-        for row in rows
+        "<tr>" + "".join(f"<td>{_html.escape(str(c))}</td>" for c in row) + "</tr>" for row in rows
     )
-    table_html = (
-        f'<table class="slide-table">'
-        f"{thead}"
-        f"<tbody>{tbody_rows}</tbody>"
-        f"</table>"
-    )
+    table_html = f'<table class="slide-table">{thead}<tbody>{tbody_rows}</tbody></table>'
     return (
         f'<h2 class="slide-heading">{_html.escape(title)}</h2>\n'
         f'<div class="slide-rule"></div>\n'
@@ -217,6 +223,7 @@ def html_table_content(title: str, spec: TableSpec, theme: Theme) -> str:
 # ---------------------------------------------------------------------------
 # PPTX helpers — chart slide internals
 # ---------------------------------------------------------------------------
+
 
 def _add_category_chart(
     prs_slide: Any, spec: ChartSpec, left: int, top: int, w: int, h: int
@@ -361,6 +368,7 @@ def _chart_empty_placeholder(
 # PPTX layout — chart slide
 # ---------------------------------------------------------------------------
 
+
 def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     """Title-strip + native python-pptx chart.
 
@@ -390,15 +398,14 @@ def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
         ok = False
 
     if not ok:
-        _chart_fallback_pptx_table(
-            prs_slide, spec, _MARGIN, content_top, _CW, chart_h, theme
-        )
+        _chart_fallback_pptx_table(prs_slide, spec, _MARGIN, content_top, _CW, chart_h, theme)
     _maybe_notes(prs_slide, slide)
 
 
 # ---------------------------------------------------------------------------
 # PPTX layout — table slide
 # ---------------------------------------------------------------------------
+
 
 def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     """Title-strip + native python-pptx table (real, editable table shape).
@@ -421,7 +428,8 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     has_header = bool(spec and spec.headers)
     data_rows = list(spec.rows) if spec and spec.rows else []
     n_cols = (
-        len(spec.headers) if spec is not None and spec.headers
+        len(spec.headers)
+        if spec is not None and spec.headers
         else max((len(r) for r in data_rows), default=0)
     )
     if spec is None or n_cols == 0 or (not has_header and not data_rows):
@@ -433,8 +441,12 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     n_rows = len(data_rows) + row_offset
 
     tbl = prs_slide.shapes.add_table(
-        n_rows, n_cols,
-        Emu(_MARGIN), Emu(content_top), Emu(_CW), Emu(tbl_h),
+        n_rows,
+        n_cols,
+        Emu(_MARGIN),
+        Emu(content_top),
+        Emu(_CW),
+        Emu(tbl_h),
     )
     table = tbl.table
 

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin import design_lint as design_lint_module
 from disco.tools.builtin._deck_patch import DeckPatchTool

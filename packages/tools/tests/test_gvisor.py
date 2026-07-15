@@ -357,9 +357,7 @@ async def test_sealed_host_service_box_gets_only_internal_relay_network(tmp_path
         host_service_upstream="https://agent.internal:8443",
     )
     svc = GvisorSandboxService(cfg, client=client)
-    inst = await svc.create(
-        SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
-    )
+    inst = await svc.create(SandboxSpec(host_services=True), owner_id="o", conversation_id="c")
     sidecar, sandbox = client.runs
     net = client.networks.created[0]
     assert net.attrs["internal"] is True
@@ -396,9 +394,7 @@ async def test_required_host_service_relay_readiness_failure_aborts_and_cleans(t
     )
     svc = GvisorSandboxService(cfg, client=client)
     with pytest.raises(SandboxUnavailableError, match="relay failed readiness"):
-        await svc.create(
-            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
-        )
+        await svc.create(SandboxSpec(host_services=True), owner_id="o", conversation_id="c")
     assert client.runs[0].removed
     assert client.networks.created[0].removed
     assert client.last is None  # sandbox never started
@@ -412,9 +408,7 @@ async def test_container_relay_rejects_sidecar_loopback_http_before_resources(tm
     )
     svc = GvisorSandboxService(cfg, client=client)
     with pytest.raises(SandboxUnavailableError, match="sidecar loopback"):
-        await svc.create(
-            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
-        )
+        await svc.create(SandboxSpec(host_services=True), owner_id="o", conversation_id="c")
     assert client.runs == [] and client.networks.created == []
 
 

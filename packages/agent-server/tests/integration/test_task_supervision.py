@@ -84,9 +84,9 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
     await asyncio.sleep(0.2)  # let the supervisor's terminalize task run
 
     state = await store.get_state(cid)
-    assert (
-        state.execution_status == ConversationStatus.ERROR
-    ), "crashed run must end ERROR, not hang RUNNING"
+    assert state.execution_status == ConversationStatus.ERROR, (
+        "crashed run must end ERROR, not hang RUNNING"
+    )
     events = await store.get_events(cid)
     assert any(
         isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR for e in events
@@ -133,9 +133,9 @@ async def test_terminalize_is_idempotent(monkeypatch):
     await asyncio.sleep(0.2)
 
     state = await store.get_state(cid)
-    assert (
-        state.execution_status == ConversationStatus.FINISHED
-    ), "must not clobber an already-terminal status"
+    assert state.execution_status == ConversationStatus.FINISHED, (
+        "must not clobber an already-terminal status"
+    )
 
 
 # --- W11: clean RETURN at RUNNING (the silent MiniMax-build stall) -------------------
@@ -172,13 +172,11 @@ async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
 
     runtime.kick(cid)
-    state = await _drain_until(
-        store, cid, lambda s: s.execution_status == ConversationStatus.STUCK
-    )
+    state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)
 
-    assert (
-        state.execution_status == ConversationStatus.STUCK
-    ), "a run that ends at RUNNING without concluding must become visibly STUCK"
+    assert state.execution_status == ConversationStatus.STUCK, (
+        "a run that ends at RUNNING without concluding must become visibly STUCK"
+    )
     assert calls["n"] >= 2, "must re-kick once (transient-drop recovery) before giving up"
     events = await store.get_events(cid)
     assert any(
@@ -200,9 +198,7 @@ async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypa
     class _TransientStall:
         async def run(self):
             seq["n"] += 1
-            status = (
-                ConversationStatus.RUNNING if seq["n"] == 1 else ConversationStatus.FINISHED
-            )
+            status = ConversationStatus.RUNNING if seq["n"] == 1 else ConversationStatus.FINISHED
             await store.append(cid, StatusEvent(status=status))
             return await store.get_state(cid)
 
@@ -265,9 +261,7 @@ async def test_stranded_running_swept_to_recovery(monkeypatch):
     acted = await runtime.sweep_stranded_runs_once()
     assert acted == 1, "the stranded RUNNING conversation must be detected"
 
-    state = await _drain_until(
-        store, cid, lambda s: s.execution_status == ConversationStatus.STUCK
+    state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)
+    assert state.execution_status == ConversationStatus.STUCK, (
+        "a stranded RUNNING run must self-heal to a visible terminal status"
     )
-    assert (
-        state.execution_status == ConversationStatus.STUCK
-    ), "a stranded RUNNING run must self-heal to a visible terminal status"

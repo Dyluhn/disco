@@ -35,6 +35,7 @@ from disco.core.llm import ConfigStore, SecretBox, SecretStore
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+
 def _rt(tmp_path, monkeypatch) -> ConversationRuntime:
     monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
     return ConversationRuntime(
@@ -45,9 +46,7 @@ def _rt(tmp_path, monkeypatch) -> ConversationRuntime:
 
 
 def _user_msg(content: str = "hello") -> MessageEvent:
-    return MessageEvent(
-        source=EventSource.USER, message=LLMMessage(role="user", content=content)
-    )
+    return MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=content))
 
 
 def _env_msg(content: str = "uploaded: foo.txt") -> MessageEvent:
@@ -68,6 +67,7 @@ def _datasource_event() -> DatasourceEvent:
 
 
 # ── _conversation_is_pristine unit tests ───────────────────────────────────────
+
 
 async def test_pristine_on_empty_conversation(tmp_path, monkeypatch):
     """A freshly-created conversation with no events is pristine."""
@@ -149,6 +149,7 @@ async def test_not_pristine_after_finished_status(tmp_path, monkeypatch):
 
 # ── compose-gap tests (in-memory _loops / _tasks) ──────────────────────────────
 
+
 async def test_not_pristine_when_loop_registered(tmp_path, monkeypatch):
     """Loop composed (_loops[cid] set) but RUNNING not yet emitted → non-pristine.
     This is the compose-gap: _loop_for registers the loop before create_task runs it."""
@@ -189,6 +190,7 @@ async def test_pristine_when_task_is_done(tmp_path, monkeypatch):
 
 
 # ── apply_settings_change unit tests ───────────────────────────────────────────
+
 
 async def test_apply_settings_change_on_pristine(tmp_path, monkeypatch):
     """Pristine conversation: apply_settings_change returns True and applies both fields."""
@@ -245,6 +247,7 @@ async def test_apply_settings_change_pristine_after_uploads(tmp_path, monkeypatc
 
 # ── no-deadlock concurrent test ────────────────────────────────────────────────
 
+
 async def test_concurrent_apply_settings_change_no_deadlock(tmp_path, monkeypatch):
     """Two concurrent apply_settings_change calls on the same cid don't deadlock.
     The lock serializes them; the inner setters never re-acquire the lock."""
@@ -252,6 +255,7 @@ async def test_concurrent_apply_settings_change_no_deadlock(tmp_path, monkeypatc
     rt._store.create_conversation("c1")
 
     results: list[bool] = []
+
     async def patch_assist(value: bool) -> None:
         ok = await rt.apply_settings_change("c1", assist=value)
         results.append(ok)
@@ -318,6 +322,7 @@ async def test_patch_and_kick_no_deadlock(tmp_path, monkeypatch):
 
 # ── PATCH route integration tests ─────────────────────────────────────────────
 
+
 async def test_patch_route_model_override_on_pristine(tmp_path, monkeypatch):
     """PATCH /settings model_override on a pristine conversation → 200 OK."""
     from disco.agent_server.app import create_app
@@ -330,9 +335,7 @@ async def test_patch_route_model_override_on_pristine(tmp_path, monkeypatch):
     client = TestClient(app)
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
-    r = client.patch(
-        f"/conversations/{cid}/settings", json={"model_override": "or-test-model"}
-    )
+    r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "or-test-model"})
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
@@ -354,9 +357,7 @@ async def test_patch_route_assist_on_pristine(tmp_path, monkeypatch):
     assert rt.is_assist(cid) is True
 
 
-async def test_patch_route_deep_research_settings_preserves_upload_cid(
-    tmp_path, monkeypatch
-):
+async def test_patch_route_deep_research_settings_preserves_upload_cid(tmp_path, monkeypatch):
     """A pristine upload cid accepts the final DR controls before kickoff."""
     from disco.agent_server.app import create_app
     from fastapi.testclient import TestClient
@@ -442,9 +443,7 @@ async def _seed_terminal(rt, cid: str, status: ConversationStatus) -> None:
     from disco.core import ToolCall
 
     rt._store.create_conversation(cid)
-    await rt._store.append(
-        cid, PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1)
-    )
+    await rt._store.append(cid, PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1))
     await rt._store.append(
         cid, ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
     )
@@ -499,9 +498,7 @@ async def test_not_settable_in_gate_state(tmp_path, monkeypatch):
     """A gate-awaiting state (mid-run, waiting on the user) is NOT settable."""
     rt = _rt(tmp_path, monkeypatch)
     rt._store.create_conversation("c1")
-    await rt._store.append(
-        "c1", StatusEvent(status=ConversationStatus.WAITING_FOR_CONFIRMATION)
-    )
+    await rt._store.append("c1", StatusEvent(status=ConversationStatus.WAITING_FOR_CONFIRMATION))
     settable, _ = await rt._settings._settable_kind("c1")
     assert settable is False
 
@@ -512,9 +509,7 @@ async def test_settable_idle_with_unfinished_plan(tmp_path, monkeypatch):
 
     rt = _rt(tmp_path, monkeypatch)
     rt._store.create_conversation("c1")
-    await rt._store.append(
-        "c1", PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1)
-    )
+    await rt._store.append("c1", PlanEvent(summary="p", steps=[PlanStep(title="s1")], revision=1))
     await rt._store.append(
         "c1", ActionEvent(thought="t", tool_call=ToolCall(tool_name="shell", arguments={}))
     )
@@ -723,9 +718,7 @@ async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
     rt.set_model_override("c1", model_a)
 
     # A run that errored out (research surface ERROR is resumable).
-    await rt._store.append(
-        "c1", _agent_msg("partial answer before the driver died")
-    )
+    await rt._store.append("c1", _agent_msg("partial answer before the driver died"))
     await rt._store.append("c1", StatusEvent(status=ConversationStatus.ERROR))
 
     # Neutralize the spawned run task — kick still composes _loops[cid] via _loop_for

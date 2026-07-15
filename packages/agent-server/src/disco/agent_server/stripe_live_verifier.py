@@ -578,8 +578,7 @@ class _WorkerdApp:
             proc = self._proc
             if proc is not None and proc.poll() is not None:
                 raise StripeLiveVerifierError(
-                    f"wrangler dev exited early with code {proc.returncode}\n"
-                    f"{self.dev_log_tail()}"
+                    f"wrangler dev exited early with code {proc.returncode}\n{self.dev_log_tail()}"
                 )
             try:
                 self.get("/api/leads")
@@ -735,9 +734,7 @@ class _MiniflareRuntimeProbe:
         if self._port is None:
             raise StripeLiveVerifierError("local workerd runtime probe has not been started")
         try:
-            status, body = self.request(
-                "GET", "/api/stripe/runtime-probe", token=admin_token
-            )
+            status, body = self.request("GET", "/api/stripe/runtime-probe", token=admin_token)
             return status == 200 and json.loads(body) == {"ready": True}
         except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
             return False
@@ -1114,8 +1111,7 @@ def _run_checked(
         stdout = _coerce_output(exc.stdout)
         stderr = _coerce_output(exc.stderr)
         raise StripeLiveVerifierError(
-            f"{label} exceeded {timeout_s:g}s and was killed\n"
-            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            f"{label} exceeded {timeout_s:g}s and was killed\nstdout:\n{stdout}\nstderr:\n{stderr}"
         ) from exc
     except OSError as exc:
         raise StripeLiveVerifierError(f"failed to launch {label}: {exc}") from exc
@@ -1436,9 +1432,7 @@ async def _check_forged_signature_rejected(
 ) -> VerifyCheck:
     """Forged or stale signatures must return 400 with zero writes."""
     now = int(time.time())
-    forged_body = _checkout_event(
-        "evt_forged", now, app_binding, plan_selector, binding_secret, 1
-    )
+    forged_body = _checkout_event("evt_forged", now, app_binding, plan_selector, binding_secret, 1)
     forged_status, _ = await worker.request_async(
         "POST",
         "/api/stripe/webhook",
@@ -1522,9 +1516,7 @@ async def _check_replay_deduped(
             f"test user login failed (status {login_status})",
         )
     now = int(time.time())
-    body = _checkout_event(
-        "evt_replay", now, app_binding, plan_selector, binding_secret, 1
-    )
+    body = _checkout_event("evt_replay", now, app_binding, plan_selector, binding_secret, 1)
     header = _signed_header(webhook_secret, body, now)
     first_status, _ = await worker.request_async(
         "POST",
@@ -1904,9 +1896,7 @@ class _StripeVerifyRun:
                     self.worker = None
         except StripeLiveVerifierError as exc:
             _LOG.warning("Stripe live verifier failed: %s", exc)
-            checks.extend(
-                _check_result(name, False, str(exc)) for name in _REQUIRED_CHECKS
-            )
+            checks.extend(_check_result(name, False, str(exc)) for name in _REQUIRED_CHECKS)
         finally:
             await self._cleanup()
 
@@ -2089,8 +2079,7 @@ _REQUIRED_CHECKS = (
 def _result(checks: list[VerifyCheck]) -> PrimitiveVerifyResult:
     by_name = {check.name: check for check in checks}
     ordered = [
-        by_name.get(name, _check_result(name, False, "check missing"))
-        for name in _REQUIRED_CHECKS
+        by_name.get(name, _check_result(name, False, "check missing")) for name in _REQUIRED_CHECKS
     ]
     passed = all(check.passed for check in ordered)
     return PrimitiveVerifyResult(

@@ -275,7 +275,9 @@ async def test_loop_clean_browse_finishes_first_try():
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
-            action_step(tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}),
+            action_step(
+                tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}
+            ),
             finish_step(),
         ]
     )
@@ -298,7 +300,9 @@ async def test_loop_error_console_quotes_error_in_nudge():
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
-            action_step(tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}),
+            action_step(
+                tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}
+            ),
             finish_step(),
         ]
     )
@@ -326,7 +330,9 @@ async def test_loop_post_browse_edit_still_quotes_seen_error():
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
-            action_step(tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}),
+            action_step(
+                tool="browser", args={"action": "navigate", "url": "http://127.0.0.1:8000/"}
+            ),
             action_step(tool="file_write", args={"path": "notes.txt", "content": "tried stuff"}),
             finish_step(),
         ]
@@ -430,9 +436,7 @@ def test_browser_content_meaningful_pure():
     # blank: sparse title/text + no elements → NOT meaningful
     assert not _browser_content_meaningful({"title": "t", "text": "", "elements": []})
     # interactive structure (non-empty elements) → meaningful even with sparse text
-    assert _browser_content_meaningful(
-        {"title": "", "text": "", "elements": ["1[:] <a>Home</a>"]}
-    )
+    assert _browser_content_meaningful({"title": "", "text": "", "elements": ["1[:] <a>Home</a>"]})
     # explicit links/forms count fields honored
     assert _browser_content_meaningful({"title": "", "text": "", "forms": 1})
     # _latest_browser_structured picks the latest qualifying :8000 obs
@@ -556,9 +560,7 @@ async def test_active_probe_not_counted_as_agent_work():
     probe_actions = [
         e
         for e in events
-        if isinstance(e, ActionEvent)
-        and e.tool_call
-        and e.tool_call.tool_name == "browser"
+        if isinstance(e, ActionEvent) and e.tool_call and e.tool_call.tool_name == "browser"
     ]
     assert probe_actions, "the gate should have driven a browser probe"
     assert all(e.meta.get("verify_probe") for e in probe_actions)
@@ -678,9 +680,7 @@ async def test_active_probe_foreign_port_observation_is_rejected():
     events = await store.get_events("conv")
     env = _env_messages(events)
     nudges = [
-        m
-        for m in env
-        if m.startswith("Before finishing:") and "http://127.0.0.1:54321/" in m
+        m for m in env if m.startswith("Before finishing:") and "http://127.0.0.1:54321/" in m
     ]
     assert len(nudges) == 3, f"foreign-port obs must be rejected + nudge at :54321: {env}"
     assert not any("8000" in m for m in nudges)  # never the dead fixed port

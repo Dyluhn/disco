@@ -103,12 +103,14 @@ def test_in_planning_for_revision_planning_never_approved_is_pending():
 
 
 async def _build_rev1_then_enter_planning(**loop_kwargs):
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {"command": "echo build the site"}),  # productive work
-        action_step("plan_step", {"index": 1, "state": "done"}),  # rev-1 complete
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo build the site"}),  # productive work
+            action_step("plan_step", {"index": 1, "state": "done"}),  # rev-1 complete
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, **loop_kwargs)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -227,8 +229,7 @@ async def test_pending_first_plan_never_submitting_halts_at_ceiling():
     after = await store.get_events(CID)
     assert_blocked_question_landing(after, legacy_detail="actionless")
     assert not any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in after
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in after
     )
 
 
@@ -251,13 +252,15 @@ def _planning_seq(events):
 
 async def test_pending_revision_blank_planning_turns_harvest_fallback_plan():
     blank = AgentStep(thought="", tool_call=None, finished=False)
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {"command": "echo build the site"}),  # productive work
-        action_step("plan_step", {"index": 1, "state": "done"}),  # rev-1 complete
-        finish_step(),
-        blank,  # ScriptedAgent repeats the last step → the planning spin
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo build the site"}),  # productive work
+            action_step("plan_step", {"index": 1, "state": "done"}),  # rev-1 complete
+            finish_step(),
+            blank,  # ScriptedAgent repeats the last step → the planning spin
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -289,13 +292,8 @@ async def test_pending_revision_blank_planning_turns_harvest_fallback_plan():
     # PROOF this stayed event-derived: blank turns still do not move the noop
     # counter, but the durable force marker + harvest marker landed.
     assert signals.consecutive_noops(events) == 0
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "force_submit_plan" for e in events
-    )
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested"
-        for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "force_submit_plan" for e in events)
+    assert any(isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested" for e in events)
 
     # No NEW terminal FINISH was emitted after the re-plan re-entered planning
     # (the rev-1 FINISHED in the log is the prior, legitimately-completed build).
@@ -316,25 +314,27 @@ async def test_pending_revision_blank_planning_turns_harvest_fallback_plan():
 
 
 async def test_valve_finishes_again_after_revision_approved():
-    agent = ScriptedAgent([
-        # revision 1
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {"command": "echo build v1"}),
-        action_step("plan_step", {"index": 1, "state": "done"}),
-        finish_step(),
-        # revision 2 (after enter_planning; approved below → release)
-        action_step(
-            "submit_plan",
-            {"summary": "p2", "steps": [{"title": "1"}, {"title": "2"}]},
-        ),
-        action_step("shell", {"command": "echo build v2"}),  # productive work
-        action_step("plan_step", {"index": 1, "state": "done"}),
-        action_step("plan_step", {"index": 2, "state": "done"}),  # rev-2 complete
-        _notify("Dark mode added and verified."),
-        _notify("Everything is in place."),
-        _notify("All done — the revised build is complete."),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            # revision 1
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo build v1"}),
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            finish_step(),
+            # revision 2 (after enter_planning; approved below → release)
+            action_step(
+                "submit_plan",
+                {"summary": "p2", "steps": [{"title": "1"}, {"title": "2"}]},
+            ),
+            action_step("shell", {"command": "echo build v2"}),  # productive work
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            action_step("plan_step", {"index": 2, "state": "done"}),  # rev-2 complete
+            _notify("Dark mode added and verified."),
+            _notify("Everything is in place."),
+            _notify("All done — the revised build is complete."),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -363,15 +363,17 @@ async def test_valve_finishes_again_after_revision_approved():
 
 
 async def test_normal_build_still_finishes_via_completed_via_notify():
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {"command": "echo build the site"}),  # productive work
-        action_step("plan_step", {"index": 1, "state": "done"}),  # plan complete
-        _notify("All files are in place, the site is built."),
-        _notify("The static site is fully built and served."),
-        _notify("All set! The build is complete."),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo build the site"}),  # productive work
+            action_step("plan_step", {"index": 1, "state": "done"}),  # plan complete
+            _notify("All files are in place, the site is built."),
+            _notify("The static site is fully built and served."),
+            _notify("All set! The build is complete."),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -398,9 +400,7 @@ async def test_no_plan_noop_limit_still_finishes():
 
     # No plan at all, no planning marker → not pending; the noop backstop governs.
     agent = ScriptedAgent([_notify(f"musing {i}") for i in range(8)])
-    loop, store = build_loop(
-        agent, stuck_thresholds=StuckThresholds(agent_monologue=100)
-    )
+    loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(agent_monologue=100))
     await loop.send_message("go")
     state = await loop.run()
     events = await store.get_events(CID)

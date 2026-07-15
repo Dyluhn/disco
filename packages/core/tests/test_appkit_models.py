@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from disco.core.appkit import AppSection, AppSpec, render_html
+from pydantic import ValidationError
 
 
 def _spec() -> AppSpec:
     return AppSpec(
         title="Acme Roofing",
         sections=(
-            AppSection(id="hero", kind="hero", fields={"headline": "Roofs done right", "cta_text": "Quote"}),
+            AppSection(
+                id="hero", kind="hero", fields={"headline": "Roofs done right", "cta_text": "Quote"}
+            ),
             AppSection(id="form", kind="lead_form", fields={"title": "Get a quote"}),
         ),
     )
@@ -78,7 +79,10 @@ def test_render_is_self_contained_and_deterministic() -> None:
 
 
 def test_render_escapes_content() -> None:
-    s = AppSpec(title="x", sections=(AppSection(id="h", kind="hero", fields={"headline": "<script>bad</script>"}),))
+    s = AppSpec(
+        title="x",
+        sections=(AppSection(id="h", kind="hero", fields={"headline": "<script>bad</script>"}),),
+    )
     out = render_html(s)
     assert "<script>bad" not in out
     assert "&lt;script&gt;" in out
@@ -101,4 +105,7 @@ def test_render_sanitizes_design_token_css_injection() -> None:
 
 def test_duplicate_section_ids_rejected_at_construction() -> None:
     with pytest.raises(ValidationError):
-        AppSpec(title="x", sections=(AppSection(id="dup", kind="hero"), AppSection(id="dup", kind="about")))
+        AppSpec(
+            title="x",
+            sections=(AppSection(id="dup", kind="hero"), AppSection(id="dup", kind="about")),
+        )

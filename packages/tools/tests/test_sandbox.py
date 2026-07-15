@@ -144,10 +144,10 @@ async def test_process_child_receives_real_workspace_capability_path():
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c-browser-env")
     command = (
         "python3 -c 'import os,pathlib; "
-        "pathlib.Path(os.environ[\"DISCO_WORKSPACE\"], \".pmx\", \"browser-probe\")"
+        'pathlib.Path(os.environ["DISCO_WORKSPACE"], ".pmx", "browser-probe")'
         ".parent.mkdir(parents=True, exist_ok=True); "
-        "pathlib.Path(os.environ[\"DISCO_WORKSPACE\"], \".pmx\", \"browser-probe\")"
-        ".write_text(\"ok\")'"
+        'pathlib.Path(os.environ["DISCO_WORKSPACE"], ".pmx", "browser-probe")'
+        '.write_text("ok")\''
     )
     res = await inst.exec_shell(command, timeout_s=10)
     assert res.exit_code == 0, res.stderr
@@ -162,9 +162,7 @@ async def test_process_exec_shell_cancellation_reaps_command_group():
 
     svc = ProcessSandboxService()
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c-cancel")
-    task = asyncio.create_task(
-        inst.exec_shell("echo $$ > worker.pid; sleep 60", timeout_s=60)
-    )
+    task = asyncio.create_task(inst.exec_shell("echo $$ > worker.pid; sleep 60", timeout_s=60))
     for _ in range(100):
         if await inst.file_exists("worker.pid"):
             break

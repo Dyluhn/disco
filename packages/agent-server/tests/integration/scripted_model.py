@@ -137,9 +137,7 @@ class ScriptedProvider:
             routing=None,  # router attaches RoutingDecision (RT1)
         )
 
-    async def complete(
-        self, req: CompletionRequest, *, model: str
-    ) -> CompletionResponse:
+    async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
         return self._response_for(req, model)
 
     async def stream_complete(

@@ -72,9 +72,7 @@ async def test_unset_budget_is_byte_identical_to_constant():
     body = _big_file_body(1_000)
     ctx_none, inst1 = await _ctx(None)
     await inst1.write_file("f.py", body)
-    out_none = await FileReadTool().run(
-        FileReadTool().definition.args_model(path="f.py"), ctx_none
-    )
+    out_none = await FileReadTool().run(FileReadTool().definition.args_model(path="f.py"), ctx_none)
     ctx_const, inst2 = await _ctx(_READ_CHAR_BUDGET)
     await inst2.write_file("f.py", body)
     out_const = await FileReadTool().run(

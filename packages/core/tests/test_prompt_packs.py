@@ -4,7 +4,6 @@ invariant (every contract's prompt_pack id resolves to a complete pack)."""
 from __future__ import annotations
 
 import pytest
-
 from disco.core.contract import BuildContractRegistry, ContractKind
 from disco.core.workflows import (
     REQUIRED_SECTIONS,
@@ -165,6 +164,7 @@ def test_every_contract_pack_mentions_its_finalizer() -> None:
 def test_packs_loadable_via_importlib_resources() -> None:
     # production-safe accessor (works from an installed wheel, not just src)
     from importlib.resources import files
+
     res = files("disco.core.workflows.prompt_packs") / "build_static_site.md"
     assert res.is_file()
     assert "## Role" in res.read_text(encoding="utf-8")

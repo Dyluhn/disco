@@ -31,6 +31,7 @@ class ShellExecArgs(BaseModel):
     exec_dir: str = Field(default="", description="Directory to run the command in.")
     command: str = Field(..., description="The shell command to execute.")
 
+
 class ShellExecTool:
     definition = ToolDef(
         name="shell_exec",
@@ -84,12 +85,12 @@ class ShellExecTool:
 class ShellViewArgs(BaseModel):
     session: str = Field(..., description="Name of the shell session to view.")
 
+
 class ShellViewTool:
     definition = ToolDef(
         name="shell_view",
         description=(
-            "View the recent output and status of a persistent shell session. "
-            "Can view anytime."
+            "View the recent output and status of a persistent shell session. Can view anytime."
         ),
         args_model=ShellViewArgs,
         needs=frozenset({Capability.SHELL}),
@@ -115,6 +116,7 @@ class ShellViewTool:
 class ShellWaitArgs(BaseModel):
     session: str = Field(..., description="Name of the shell session.")
     seconds: int = Field(default=30, description="Max seconds to wait.")
+
 
 class ShellWaitTool:
     definition = ToolDef(
@@ -146,6 +148,7 @@ class ShellWriteArgs(BaseModel):
     input: str = Field(..., description="Text to write to the session.")
     press_enter: bool = Field(default=True, description="Whether to press Enter after writing.")
 
+
 class ShellWriteTool:
     definition = ToolDef(
         name="shell_write_to_process",
@@ -171,6 +174,7 @@ class ShellWriteTool:
 
 class ShellKillArgs(BaseModel):
     session: str = Field(..., description="Name of the shell session.")
+
 
 class ShellKillTool:
     definition = ToolDef(

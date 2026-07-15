@@ -49,9 +49,7 @@ def _configured(
         enabled=True,
         secret_store=secret_store,
     )
-    approvals = OriginApprovalStore(
-        tmp_path / "approvals.json", secret_store=secret_store
-    )
+    approvals = OriginApprovalStore(tmp_path / "approvals.json", secret_store=secret_store)
     return configs, secret_store, approvals, config.secret_ref
 
 

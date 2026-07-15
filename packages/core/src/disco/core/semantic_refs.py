@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -75,9 +75,9 @@ class CommentAnchorLocator(BaseModel):
     anchor_id: str
 
 
-SemanticTarget = Union[
-    FieldLocator, SectionLocator, IndexedLocator, SlideLocator, CommentAnchorLocator
-]
+SemanticTarget = (
+    FieldLocator | SectionLocator | IndexedLocator | SlideLocator | CommentAnchorLocator
+)
 
 
 def target_id(t: SemanticTarget) -> str:
@@ -205,7 +205,18 @@ def normalize_screen_label(label: str) -> str:
 _ORDINAL_WORDS: dict[str, int] = {
     w: i + 1
     for i, w in enumerate(
-        ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+        [
+            "first",
+            "second",
+            "third",
+            "fourth",
+            "fifth",
+            "sixth",
+            "seventh",
+            "eighth",
+            "ninth",
+            "tenth",
+        ]
     )
 }
 _DIGIT_ORDINAL = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\b")
@@ -277,7 +288,9 @@ def _section_of(target: SemanticTarget) -> str | None:
     return None
 
 
-def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -> ReferenceResolution:
+def resolve_human_reference(
+    phrase: str, *, context: SemanticReferenceContext
+) -> ReferenceResolution:
     """Resolve a human reference phrase to a typed target, or reject (ambiguous / no_match /
     invalid_ordinal / out_of_range). Deterministic and GLOBALLY ambiguity-rejecting: it gathers
     every matching target across kinds and only resolves when exactly one survives subsumption.
@@ -295,7 +308,9 @@ def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -
     toks = _tokens(norm)
 
     candidates: list[SemanticTarget] = []
-    out_of_range = False  # a label matched but the ordinal exceeded its range — only wins if nothing else does
+    out_of_range = (
+        False  # a label matched but the ordinal exceeded its range — only wins if nothing else does
+    )
 
     # SLIDE — "slide N" / "Nth slide": resolve by explicit ordinal equality.
     if "slide" in toks and n is not None:
@@ -347,8 +362,7 @@ def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -
     # cross-kind matches (e.g. a section AND a comment anchor sharing a label) survive → ambiguous.
     refined = {sid for t in candidates if (sid := _section_of(t)) is not None} | claimed_sections
     survivors = [
-        t for t in candidates
-        if not (isinstance(t, SectionLocator) and t.section_id in refined)
+        t for t in candidates if not (isinstance(t, SectionLocator) and t.section_id in refined)
     ]
     uniq = _dedupe(survivors)
     if len(uniq) == 1:

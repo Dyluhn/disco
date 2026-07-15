@@ -17,7 +17,9 @@ from disco.tools import ProcessSandboxService
 
 
 def _runtime() -> ConversationRuntime:
-    return ConversationRuntime(SqliteEventStore(":memory:"), router=MagicMock(), sandbox_service=ProcessSandboxService())
+    return ConversationRuntime(
+        SqliteEventStore(":memory:"), router=MagicMock(), sandbox_service=ProcessSandboxService()
+    )
 
 
 def test_default_conversation_uses_custom_contract() -> None:
@@ -100,7 +102,9 @@ def test_note_verify_result_advances_export_and_repair() -> None:
     _c, tracker = rt._build_trackers["c5"]
     rt.note_build_verify_result("c5", passed=False)
     assert tracker.current() is Phase.REPAIR
-    assert guard is not None and guard.check("file_write", is_mutating=True).allowed is True  # repair allows
+    assert (
+        guard is not None and guard.check("file_write", is_mutating=True).allowed is True
+    )  # repair allows
     rt.note_build_verify_result("c5", passed=True)
     assert tracker.current() is Phase.EXPORT
     # no tracker for an unknown conversation → no-op, never raises
@@ -225,8 +229,18 @@ def test_brief_activation_unmapped_kinds_resolve_custom() -> None:
     # Medium-blind kinds are deliberately unmapped (codex defect #5: a
     # "text-based terminal game" classifies `game`; a browser contract's
     # required_files would mis-gate finish) — they record the CUSTOM sentinel.
-    for kind in ("api", "cli", "data_tool", "mobile_app", "game", "dashboard",
-                 "ecommerce", "chat_app", "unknown", ""):
+    for kind in (
+        "api",
+        "cli",
+        "data_tool",
+        "mobile_app",
+        "game",
+        "dashboard",
+        "ecommerce",
+        "chat_app",
+        "unknown",
+        "",
+    ):
         cid = f"c-{kind or 'blank'}"
         rt.activate_contract_for_brief(cid, BuildBrief(app_kind=kind))
         assert rt._build_kind.get(cid) == "custom", kind
@@ -274,20 +288,14 @@ def _success_pair(tool: str):
 @pytest.mark.asyncio
 async def test_fold_restores_kind_and_phase_after_restart() -> None:
     store = SqliteEventStore(":memory:")
-    rt1 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt1 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt1.set_surface("cd1", "build")
     # The durable record a real run leaves: brief env message + a successful
     # bootstrap tool (app_create advances appkit BOOTSTRAP→EDIT).
-    await store.append_many(
-        "cd1", [_brief_event("web_app"), *_success_pair("scaffold_starter")]
-    )
+    await store.append_many("cd1", [_brief_event("web_app"), *_success_pair("scaffold_starter")])
 
     # "Restart": a FRESH runtime over the same store — all in-memory maps empty.
-    rt2 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     # Surface durability is the EXISTING sidecar/DB-column mechanism (B0); with a
     # :memory: store it is disabled, so restore it explicitly — the fold under
     # test starts strictly after surface recovery in production.
@@ -309,15 +317,11 @@ async def test_fold_restores_kind_and_phase_after_restart() -> None:
 @pytest.mark.asyncio
 async def test_fold_unmapped_brief_records_custom_sentinel() -> None:
     store = SqliteEventStore(":memory:")
-    rt1 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt1 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt1.set_surface("cd2", "build")
     await store.append_many("cd2", [_brief_event("cli")])
 
-    rt2 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd2", "build")
     await rt2._fold_contract_from_history("cd2")
     # Unmapped kind → CUSTOM sentinel, same as live activation (first-wins real).
@@ -327,9 +331,7 @@ async def test_fold_unmapped_brief_records_custom_sentinel() -> None:
 @pytest.mark.asyncio
 async def test_fold_no_brief_is_a_noop_and_runs_once() -> None:
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt.set_surface("cd3", "build")
     await rt._fold_contract_from_history("cd3")
     assert "cd3" not in rt._build_kind
@@ -342,16 +344,10 @@ async def test_fold_normal_build_restores_kind_only() -> None:
     """Live parity (codex finding #2): a NORMAL build's tracker never advances via
     tool success, so the fold restores the KIND but leaves no advanced tracker."""
     store = SqliteEventStore(":memory:")
-    rt1 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt1 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt1.set_surface("cd4", "build")
-    await store.append_many(
-        "cd4", [_brief_event("web_app"), *_success_pair("scaffold_starter")]
-    )
-    rt2 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    await store.append_many("cd4", [_brief_event("web_app"), *_success_pair("scaffold_starter")])
+    rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd4", "build")
     await rt2._fold_contract_from_history("cd4")
     assert rt2._build_kind["cd4"] == ContractKind.INTERACTIVE_PROTOTYPE.value
@@ -366,9 +362,7 @@ async def test_fold_ignores_pre_brief_work_and_forged_context() -> None:
     from disco.core import EventSource, LLMMessage, MessageEvent
 
     store = SqliteEventStore(":memory:")
-    rt1 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt1 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt1.set_surface("cd5", "build")
     forged = MessageEvent(
         source=EventSource.ENVIRONMENT,
@@ -380,9 +374,7 @@ async def test_fold_ignores_pre_brief_work_and_forged_context() -> None:
         "cd5",
         [forged, *_success_pair("scaffold_starter"), _brief_event("web_app")],
     )
-    rt2 = ConversationRuntime(
-        store, router=MagicMock(), sandbox_service=ProcessSandboxService()
-    )
+    rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd5", "build")
     rt2.set_artifact_mode("cd5", True)
     await rt2._fold_contract_from_history("cd5")

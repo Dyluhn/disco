@@ -263,9 +263,7 @@ async def test_kill_and_restart_produces_one_coalesced_run():
 
     # The second run (the catch-up) must be marked coalesced.
     catch_up = ev_post[1]
-    assert catch_up.coalesced is True, (
-        "the post-restart catch-up run must be marked coalesced=True"
-    )
+    assert catch_up.coalesced is True, "the post-restart catch-up run must be marked coalesced=True"
 
     # Verify next_run is now past T+10 (future), so the loop won't fire again immediately.
     sched_rows = store.list_schedules(owner_id="local", conversation_id=cid)
@@ -276,8 +274,7 @@ async def test_kill_and_restart_produces_one_coalesced_run():
         next_run_dt = next_run_dt.replace(tzinfo=UTC)
 
     assert next_run_dt > clock[0], (
-        f"next_run ({next_run_dt}) must be in the future after catch-up "
-        f"(current time: {clock[0]})"
+        f"next_run ({next_run_dt}) must be in the future after catch-up (current time: {clock[0]})"
     )
 
     # A third tick at the same T+10 must NOT fire again.
@@ -289,9 +286,7 @@ async def test_kill_and_restart_produces_one_coalesced_run():
 
     print("\nKill+restart event stream:")
     for ev in ev_post:
-        print(
-            f"  ScheduleRunEvent(schedule_id={ev.schedule_id!r}, coalesced={ev.coalesced})"
-        )
+        print(f"  ScheduleRunEvent(schedule_id={ev.schedule_id!r}, coalesced={ev.coalesced})")
     print(f"  → next_run after catch-up: {next_run_dt.isoformat()}")
 
 
@@ -396,10 +391,7 @@ async def test_scheduled_fire_re_runs_query_and_opens_engine_work_gate():
     )
 
     # The re-injected message carries the ORIGINAL query verbatim.
-    user_msgs = [
-        e for e in after
-        if isinstance(e, MessageEvent) and e.source == EventSource.USER
-    ]
+    user_msgs = [e for e in after if isinstance(e, MessageEvent) and e.source == EventSource.USER]
     assert user_msgs[-1].message.content == "Summarize today's ML papers"
 
     # (b) saved settings reproduced before the kick.

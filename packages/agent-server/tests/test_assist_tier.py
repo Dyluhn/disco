@@ -13,6 +13,7 @@ def test_completion_request_assist_field():
     req = CompletionRequest(profile=profile, messages=[])
     assert req.assist is False
 
+
 def test_tool_context_assist_field():
     sandbox = MagicMock()
     ctx = ToolContext(
@@ -27,6 +28,7 @@ def test_tool_context_assist_field():
         conversation_id="",
     )
     assert ctx.assist is False
+
 
 def test_agent_loop_assist_field():
     """AgentLoop._assist is now a property delegating to _model_policy.assist.
@@ -46,6 +48,7 @@ def test_agent_loop_assist_field():
         model_policy=ModelExecutionPolicy(tier="weak"),
     )
     assert loop._assist is True
+
 
 def _model_entry(base_url: str) -> MagicMock:
     """Minimal model-entry mock.
@@ -120,9 +123,9 @@ def test_create_body_sets_assist_and_state_extras(tmp_path):
         client = TestClient(app)
 
         # create-body assist=True → set_assist wired → is_assist True
-        cid = client.post(
-            "/conversations", json={"surface": "build", "assist": True}
-        ).json()["conversation_id"]
+        cid = client.post("/conversations", json={"surface": "build", "assist": True}).json()[
+            "conversation_id"
+        ]
         assert rt.is_assist(cid) is True
         # /state surfaces extras.assist
         st = client.get(f"/conversations/{cid}/state").json()
@@ -132,9 +135,9 @@ def test_create_body_sets_assist_and_state_extras(tmp_path):
         # probed default would be ON. G3 flagged this: the original test only
         # ever sent assist=True, so `body.assist is not None` could have ignored
         # an explicit False and the override-honoring path would pass silently.
-        cid_off = client.post(
-            "/conversations", json={"surface": "build", "assist": False}
-        ).json()["conversation_id"]
+        cid_off = client.post("/conversations", json={"surface": "build", "assist": False}).json()[
+            "conversation_id"
+        ]
         assert rt.is_assist(cid_off) is False
 
 
@@ -149,7 +152,7 @@ def test_runtime_assist_explicit_override(tmp_path):
         router._config.model_for.return_value = "local-model"
         entry_local = MagicMock(base_url="http://127.0.0.1:8080/v1")
         router._config.models = {"local-model": entry_local}
-        
+
         # But explicitly set assist to False
         rt.set_assist("c1", False)
         assert rt.is_assist("c1") is False
@@ -164,7 +167,7 @@ def test_runtime_assist_explicit_override(tmp_path):
         rt.set_assist("c2", True)
         assert rt.is_assist("c2") is True
         assert rt._effective_assist("c2") is True
-        
+
         # Check sidecar was created and is valid
         assert os.path.exists(rt._assist_path)
         rt2 = ConversationRuntime(store=MagicMock())

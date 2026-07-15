@@ -156,9 +156,7 @@ def _write_workspace(tmp_path: Path, server_js: str) -> Path:
         target = workspace / "src" / "trusted" / "database-kit" / relpath
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    (workspace / "package.json").write_text(
-        json.dumps({"type": "module"}) + "\n", encoding="utf-8"
-    )
+    (workspace / "package.json").write_text(json.dumps({"type": "module"}) + "\n", encoding="utf-8")
     (workspace / "server.js").write_text(server_js, encoding="utf-8")
     return workspace
 
@@ -204,8 +202,10 @@ def _read_port(proc: subprocess.Popen) -> int:
             m = _PORT_LINE_RE.search(line)
             if m:
                 return int(m.group(1))
-    raise TimeoutError(f"node server.js did not print a PORT line within {_BOOT_TIMEOUT_S}s "
-                        f"(stdout so far: {buf!r})")
+    raise TimeoutError(
+        f"node server.js did not print a PORT line within {_BOOT_TIMEOUT_S}s "
+        f"(stdout so far: {buf!r})"
+    )
 
 
 def _wait_http_ready(port: int) -> None:

@@ -79,11 +79,7 @@ async def test_verify_fails_then_finish_is_refused_and_loop_continues():
     # ...but the failed verify was recorded as an error (the agent saw it)...
     assert any(isinstance(e, AgentErrorEvent) for e in events)
     # ...and there is exactly ONE FINISHED status (the first finish did NOT land).
-    finishes = [
-        e
-        for e in events
-        if getattr(e, "status", None) == ConversationStatus.FINISHED
-    ]
+    finishes = [e for e in events if getattr(e, "status", None) == ConversationStatus.FINISHED]
     assert len(finishes) == 1
 
 
@@ -100,9 +96,7 @@ async def test_hard_denied_verify_is_refused_without_running():
     # The dangerous command NEVER reached the executor.
     assert executor.calls == []
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, AgentErrorEvent) and "hard-denied" in e.error for e in events
-    )
+    assert any(isinstance(e, AgentErrorEvent) and "hard-denied" in e.error for e in events)
 
 
 async def test_verify_needing_confirmation_is_refused_not_silently_run():
@@ -124,9 +118,7 @@ async def test_verify_needing_confirmation_is_refused_not_silently_run():
     assert state.execution_status == ConversationStatus.FINISHED
     assert executor.calls == []  # never silently executed
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, AgentErrorEvent) and "needs confirmation" in e.error for e in events
-    )
+    assert any(isinstance(e, AgentErrorEvent) and "needs confirmation" in e.error for e in events)
 
 
 async def test_finish_without_verify_is_unchanged():

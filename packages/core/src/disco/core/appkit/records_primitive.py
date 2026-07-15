@@ -663,9 +663,7 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
     stripe_enabled = app.stripe is not None
     webhook_enabled = app.webhooks is not None
     svc_import = (
-        'import { svc } from "./disco-client";\n'
-        if stripe_enabled or webhook_enabled
-        else ""
+        'import { svc } from "./disco-client";\n' if stripe_enabled or webhook_enabled else ""
     )
     if stripe_enabled:
         from .stripe_worker import emit_stripe_env_ts, emit_stripe_worker_ts
@@ -745,7 +743,9 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         "const ROUTES: Record<string, RouteHandlers> = {\n"
         + _emit_auth_route_table(ordered, funcs)
         + "\n};\n\n"
-        + _emit_auth_fetch_ts(include_stripe=stripe_enabled, webhook_app=app if webhook_enabled else None)
+        + _emit_auth_fetch_ts(
+            include_stripe=stripe_enabled, webhook_app=app if webhook_enabled else None
+        )
     )
 
 
@@ -1145,9 +1145,7 @@ def _emit_auth_endpoints_ts() -> str:
     )
 
 
-def _emit_auth_fetch_ts(
-    *, include_stripe: bool = False, webhook_app: AppSpec | None = None
-) -> str:
+def _emit_auth_fetch_ts(*, include_stripe: bool = False, webhook_app: AppSpec | None = None) -> str:
     if include_stripe:
         from .stripe_worker import (
             emit_stripe_browser_routes_ts,

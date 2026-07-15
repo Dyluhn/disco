@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -21,7 +21,6 @@ from disco.core import (
 from disco.tools.projects import ProjectStore
 from disco.tools.sandbox.base import ExecResult
 from fastapi import FastAPI
-
 
 CID = "conv_versions"
 
@@ -53,7 +52,7 @@ class _MemorySession:
         for rel in self.files:
             if not rel.startswith(prefix):
                 continue
-            rest = rel[len(prefix):]
+            rest = rel[len(prefix) :]
             if rest:
                 children.add(rest.split("/", 1)[0])
         if not children and norm and norm not in self.files:
@@ -168,7 +167,9 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert notice.source == EventSource.ENVIRONMENT
     assert notice.message.role == "user"
     assert notice.message.content.startswith("<system-reminder>")
-    assert f"workspace back to version {old.seq} (digest {old.tree_digest})" in notice.message.content
+    assert (
+        f"workspace back to version {old.seq} (digest {old.tree_digest})" in notice.message.content
+    )
     assert "NO LONGER EXIST on disk" in notice.message.content
     assert notice.message.content.endswith("</system-reminder>")
     versions = ps.list_versions(CID)
@@ -179,9 +180,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert versions[2].pinned is True
 
     assert listed.status_code == 200
-    listed_old = next(
-        row for row in listed.json()["versions"] if row["seq"] == old.seq
-    )
+    listed_old = next(row for row in listed.json()["versions"] if row["seq"] == old.seq)
     assert listed_old["pinned"] is True
 
 
@@ -230,6 +229,7 @@ async def test_preview_version_query_404_for_unknown_version(tmp_path: Path) -> 
         resp = await client.get(f"/conversations/{CID}/preview-app/?version=404")
 
     assert resp.status_code == 404
+
 
 class _LivePreviewRuntime(_PreviewRuntime):
     """Sandbox AWAKE: wake_for_preview resolves an upstream. A ?version request

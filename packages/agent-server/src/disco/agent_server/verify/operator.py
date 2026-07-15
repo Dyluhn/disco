@@ -191,11 +191,13 @@ class OperatorClient:
                     answer = content or answer
                     sources = st.get("sources") or st.get("citations") or sources
             elif k == "deliverable":
-                deliverables.append({
-                    "kind": e.get("artifact_kind"),
-                    "path": e.get("path"),
-                    "url": e.get("deployment_url"),
-                })
+                deliverables.append(
+                    {
+                        "kind": e.get("artifact_kind"),
+                        "path": e.get("path"),
+                        "url": e.get("deployment_url"),
+                    }
+                )
             elif k == "message" and e.get("source") == "agent":
                 msg = e.get("message", {}).get("content")
                 if msg:
@@ -288,9 +290,7 @@ class OperatorClient:
             "conversations": out,
         }
 
-    async def start(
-        self, surface: str, prompt: str, *, model: str | None = None
-    ) -> dict[str, Any]:
+    async def start(self, surface: str, prompt: str, *, model: str | None = None) -> dict[str, Any]:
         """Create a conversation on `surface` and submit the opening prompt — the operator
         kicking off a run (e.g. a build) it will then drive via wait/view/respond."""
         async with httpx.AsyncClient(base_url=self.base, timeout=30.0) as hc:

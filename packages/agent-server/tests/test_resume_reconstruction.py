@@ -82,9 +82,7 @@ class _FakeProvider:
         return True
 
 
-def _runtime(
-    store: SqliteEventStore, *, projects_root: str | None = None
-) -> ConversationRuntime:
+def _runtime(store: SqliteEventStore, *, projects_root: str | None = None) -> ConversationRuntime:
     cfg = RouterConfig.model_validate(
         {
             "models": {"m": {"model_id": "m", "provider": "fake", "context_window": 8192}},
@@ -388,10 +386,7 @@ async def test_defect4_replay():
         for i, e in enumerate(raw_events)
         if e.get("kind") == "status" and e.get("status") == "PAUSED"
     )
-    events = [
-        event_from_json_dict(migrate_event(e))
-        for e in raw_events[: first_paused_idx + 1]
-    ]
+    events = [event_from_json_dict(migrate_event(e)) for e in raw_events[: first_paused_idx + 1]]
 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")

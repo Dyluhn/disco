@@ -18,8 +18,6 @@ import hashlib
 import json
 
 import pytest
-
-from disco.core.appkit.spec import AppSpec
 from disco.core.appkit import (
     DIRECTORY_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
@@ -35,6 +33,7 @@ from disco.core.appkit import (
     primitive_ids,
     resolve_primitive,
 )
+from disco.core.appkit.spec import AppSpec
 
 
 def _design():
@@ -195,9 +194,7 @@ def test_directory_app_tsx_is_route_aware():
 def test_directory_listing_component_is_searchable():
     app = default_directory_app_spec("Dir", get_recipe("editorial-ledger"))
     tree = generate(app, _design())
-    listing = next(
-        tree[p] for p in tree if p.endswith("ListingsSection.tsx")
-    )
+    listing = next(tree[p] for p in tree if p.endswith("ListingsSection.tsx"))
     assert "useState" in listing
     assert "<input" in listing
     assert "onChange={(e) => setQuery(e.target.value)}" in listing
@@ -305,8 +302,7 @@ def test_static_verify_fails_on_run_worker_first_leftover():
     wrangler = files["wrangler.toml"] or ""
     files["wrangler.toml"] = wrangler.replace(
         'not_found_handling = "single-page-application"\n',
-        'not_found_handling = "single-page-application"\n'
-        'run_worker_first = ["/api/*"]\n',
+        'not_found_handling = "single-page-application"\nrun_worker_first = ["/api/*"]\n',
     )
     res = cloudflare_export_ready_static(files)
     assert not res.passed
@@ -315,9 +311,7 @@ def test_static_verify_fails_on_run_worker_first_leftover():
 
 def test_static_verify_fails_on_create_table_schema_leftover():
     files = _clean_static_export_files()
-    files["schema.sql"] = (
-        "CREATE TABLE leads (id INTEGER PRIMARY KEY, email TEXT NOT NULL);\n"
-    )
+    files["schema.sql"] = "CREATE TABLE leads (id INTEGER PRIMARY KEY, email TEXT NOT NULL);\n"
     res = cloudflare_export_ready_static(files)
     assert not res.passed
     assert "CREATE TABLE" in res.evidence

@@ -63,9 +63,7 @@ def test_resolve_empty_autocreates_and_is_ok(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
 
     effective = resolve_projects_root("")
-    assert effective == str(xdg / "disco" / "projects"), (
-        "effective root should be the XDG default"
-    )
+    assert effective == str(xdg / "disco" / "projects"), "effective root should be the XDG default"
     assert Path(effective).is_dir(), "resolve_projects_root must mkdir the default"
     assert validate_root(effective) == StorageStatus.OK, (
         "a freshly created default root must validate as OK"
@@ -115,9 +113,7 @@ def test_resolve_nonempty_missing_but_creatable_is_created(tmp_path):
     missing = str(tmp_path / "does_not_exist")
     result = resolve_projects_root(missing)
     assert result == missing
-    assert Path(missing).is_dir(), (
-        "resolve_projects_root must create a creatable explicit path"
-    )
+    assert Path(missing).is_dir(), "resolve_projects_root must create a creatable explicit path"
     assert validate_root(missing) == StorageStatus.OK
 
 

@@ -56,9 +56,7 @@ def reserved_control_ports() -> frozenset[int]:
     servers read so a non-default deployment stays consistent. (Inside an isolated
     container these are the box's own loopback and are NOT reserved — see
     `host_shared`.)"""
-    return frozenset(
-        {_int_env("AGENT_PORT", 8000), _int_env("APP_PORT", 8800), _FRONTEND_DEV_PORT}
-    )
+    return frozenset({_int_env("AGENT_PORT", 8000), _int_env("APP_PORT", 8800), _FRONTEND_DEV_PORT})
 
 
 def backend_shares_host_network(sandbox: object) -> bool:
@@ -332,9 +330,7 @@ def parse_port_ownership(stdout: str) -> dict[int, PortOwnership]:
     out: dict[int, PortOwnership] = {}
     try:
         for data in json.loads(stdout or "[]"):
-            out[int(data["port"])] = PortOwnership(
-                pid=data.get("pid"), session=data.get("session")
-            )
+            out[int(data["port"])] = PortOwnership(pid=data.get("pid"), session=data.get("session"))
     except Exception:  # noqa: BLE001 — malformed probe output → no owners
         return {}
     return out
@@ -372,17 +368,17 @@ def reserved_port_command_violation(
     for p in sorted(reserved):
         ps = re.escape(str(p))
         bind_patterns = (
-            rf"http\.server\s+{ps}\b",                 # python3 -m http.server 8000
-            rf"--port[=\s]+{ps}\b",                    # --port 8000 / --port=8000
-            rf"\bport[=\s]+{ps}\b",                    # PORT=8000 / port 8000
-            rf"-p[=\s]+{ps}\b",                        # -p 8000 (flask/uvicorn/serve)
-            rf"\blisten\s+{ps}\b",                     # nginx/`listen 8000`
+            rf"http\.server\s+{ps}\b",  # python3 -m http.server 8000
+            rf"--port[=\s]+{ps}\b",  # --port 8000 / --port=8000
+            rf"\bport[=\s]+{ps}\b",  # PORT=8000 / port 8000
+            rf"-p[=\s]+{ps}\b",  # -p 8000 (flask/uvicorn/serve)
+            rf"\blisten\s+{ps}\b",  # nginx/`listen 8000`
             # :8000 / host:8000 as a bind argument (serve -l 0.0.0.0:8000, ` :8000`)
             rf"(?:^|[\s=])(?:0\.0\.0\.0|127\.0\.0\.1|localhost|\[::1\]|::1)?:{ps}\b",
         )
         kill_patterns = (
-            rf"\bfuser\b[^\n]*\b{ps}\b",               # fuser -k 8000/tcp
-            rf"\blsof\b[^\n]*:{ps}\b",                 # lsof -ti:8000 | xargs kill
+            rf"\bfuser\b[^\n]*\b{ps}\b",  # fuser -k 8000/tcp
+            rf"\blsof\b[^\n]*:{ps}\b",  # lsof -ti:8000 | xargs kill
         )
         for pat in bind_patterns:
             if re.search(pat, low):
@@ -447,9 +443,7 @@ def remap_reserved_preview_serve(
     refuse-with-guidance — safer than risking a rewrite of quoted text. Kills + other
     reserved binds are likewise not a leading `http.server` serve and are refused."""
     reserved = reserved_control_ports() if reserved is None else reserved
-    safe_port = (
-        process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
-    )
+    safe_port = process_safe_preview_port(reserved=reserved) if safe_port is None else safe_port
 
     def _sub(m: re.Match[str]) -> str:
         port = int(m.group("port"))

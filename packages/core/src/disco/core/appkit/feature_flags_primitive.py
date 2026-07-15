@@ -91,8 +91,7 @@ class FeatureFlag(BaseModel):
             )
         if value in _RESERVED_KEYS:
             raise ValueError(
-                f"feature flag key {value!r} is reserved for JS object safety; "
-                "choose another key"
+                f"feature flag key {value!r} is reserved for JS object safety; choose another key"
             )
         return value
 
@@ -177,9 +176,7 @@ def apply_feature_flags_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
     section. Re-applying updates that section in place, so app_add_primitive's
     no-op check naturally catches identical specs."""
     if not isinstance(spec, FeatureFlagsSpec):
-        raise TypeError(
-            f"apply_spec for {FEATURE_FLAGS_PRIMITIVE_ID!r} needs a FeatureFlagsSpec"
-        )
+        raise TypeError(f"apply_spec for {FEATURE_FLAGS_PRIMITIVE_ID!r} needs a FeatureFlagsSpec")
 
     base = resolve_primitive(app.app_kind)
     if base.id != LEAD_GEN_PRIMITIVE_ID:
@@ -214,10 +211,7 @@ def apply_feature_flags_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
         )
     if found:
         page_index, section_index, current = found[0]
-        if (
-            current.get("kind") != "custom"
-            or current.get("content_ref") != _FLAGS_CONTENT_REF
-        ):
+        if current.get("kind") != "custom" or current.get("content_ref") != _FLAGS_CONTENT_REF:
             raise ValueError(
                 f"section id {_FLAGS_SECTION_ID!r} is already taken by a non-flags "
                 "section; choose or move that section before adding feature_flags"
@@ -253,21 +247,19 @@ def lower_feature_flags_schema_sql(base: str, flags: tuple[FeatureFlag, ...]) ->
         for flag in flags
     )
     return (
-        base
-        + "\n"
-        + "-- Feature flags primitive (Epic 6.2): D1-backed runtime toggles.\n"
+        base + "\n" + "-- Feature flags primitive (Epic 6.2): D1-backed runtime toggles.\n"
         f'CREATE TABLE IF NOT EXISTS "{_FLAGS_TABLE}" (\n'
         '  "key" TEXT PRIMARY KEY,\n'
         '  "description" TEXT,\n'
         '  "enabled" INTEGER NOT NULL DEFAULT 0 CHECK ("enabled" IN (0, 1)),\n'
-        '  "updated_at" TEXT NOT NULL DEFAULT (datetime(\'now\'))\n'
+        "  \"updated_at\" TEXT NOT NULL DEFAULT (datetime('now'))\n"
         ");\n"
         f'INSERT INTO "{_FLAGS_TABLE}" ("key", "description", "enabled") VALUES\n'
         f"{values}\n"
         'ON CONFLICT("key") DO UPDATE SET\n'
         '  "description" = excluded."description",\n'
         '  "enabled" = excluded."enabled",\n'
-        '  "updated_at" = datetime(\'now\');\n'
+        "  \"updated_at\" = datetime('now');\n"
     )
 
 
@@ -277,9 +269,7 @@ def lower_feature_flags_drizzle_ts(base: str, flags: tuple[FeatureFlag, ...]) ->
     if not flags:
         return base
     return (
-        base
-        + "\n"
-        + "/* Feature flags primitive (Epic 6.2): D1-backed runtime toggles. */\n"
+        base + "\n" + "/* Feature flags primitive (Epic 6.2): D1-backed runtime toggles. */\n"
         f"export const featureFlags = sqliteTable({_ts(_FLAGS_TABLE)}, {{\n"
         '  key: text("key").primaryKey(),\n'
         '  description: text("description"),\n'
@@ -309,8 +299,7 @@ def _feature_flags_worker_defs(flags: tuple[FeatureFlag, ...]) -> str:
     keys = [flag.key for flag in flags]
     select_enabled_sql = 'SELECT "key" FROM "_flags" WHERE "enabled" = 1 ORDER BY "key"'
     update_flag_sql = (
-        'UPDATE "_flags" SET "enabled" = ?, "updated_at" = datetime(\'now\') '
-        'WHERE "key" = ?'
+        'UPDATE "_flags" SET "enabled" = ?, "updated_at" = datetime(\'now\') WHERE "key" = ?'
     )
     return (
         "// ---- Feature flags primitive (Epic 6.2): D1-backed flags ----------------\n"
@@ -507,7 +496,7 @@ def emit_feature_flags_admin_component(
         "    void refreshFlags();\n"
         "  }, []);\n\n"
         "  async function toggleFlag(key: string, nextEnabled: boolean) {\n"
-        '    if (!token.trim()) {\n'
+        "    if (!token.trim()) {\n"
         '      setMessage("Enter the admin token to change flags.");\n'
         "      return;\n"
         "    }\n"
@@ -551,7 +540,7 @@ def emit_feature_flags_admin_component(
         "                  ) : null}\n"
         "                </span>\n"
         '                <label className="flag-toggle">\n'
-        "                  <span>{isEnabled ? \"Enabled\" : \"Disabled\"}</span>\n"
+        '                  <span>{isEnabled ? "Enabled" : "Disabled"}</span>\n'
         '                  <input type="checkbox" checked={isEnabled}\n'
         "                    onChange={(event) => toggleFlag(flag.key, event.target.checked)} />\n"
         "                </label>\n"
@@ -652,12 +641,9 @@ def _verify_seeded_table(
     expected = sorted((f.key, f.description, 1 if f.enabled else 0) for f in flags)
     ok = rows == expected
     evidence = (
-        f'{_FLAGS_TABLE} contains the spec keys ({", ".join(f.key for f in flags)}).'
+        f"{_FLAGS_TABLE} contains the spec keys ({', '.join(f.key for f in flags)})."
         if ok
-        else (
-            f"{_FLAGS_TABLE} rows do not match the spec "
-            f"(rows={rows!r}, expected={expected!r})."
-        )
+        else (f"{_FLAGS_TABLE} rows do not match the spec (rows={rows!r}, expected={expected!r}).")
     )
     return (
         VerifyCheck(
@@ -672,9 +658,7 @@ def _verify_seeded_table(
 def _verify_public_route(worker_ts: str | None) -> VerifyCheck:
     if worker_ts is None:
         return VerifyCheck("feature_flags_public_route", False, "missing worker/index.ts.")
-    enabled_filter = (
-        'WHERE "enabled" = 1' in worker_ts or 'WHERE \\"enabled\\" = 1' in worker_ts
-    )
+    enabled_filter = 'WHERE "enabled" = 1' in worker_ts or 'WHERE \\"enabled\\" = 1' in worker_ts
     ok = (
         f'url.pathname === "{_FLAGS_GET_ROUTE}" && request.method === "GET"' in worker_ts
         and enabled_filter
@@ -708,8 +692,7 @@ def _verify_toggle_route(worker_ts: str | None) -> VerifyCheck:
         "before reading the body."
         if ok
         else (
-            "POST /api/_flags/toggle is missing or does not guard with ADMIN_TOKEN "
-            "before mutation."
+            "POST /api/_flags/toggle is missing or does not guard with ADMIN_TOKEN before mutation."
         ),
     )
 

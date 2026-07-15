@@ -48,9 +48,7 @@ _ERROR_DETAIL_CAP = 600
 _DELIVERED_DETAIL_CAP = 80_000
 
 
-def _error_detail(
-    err: str, content: str | None, *, carries_delivery: bool = False
-) -> str | None:
+def _error_detail(err: str, content: str | None, *, carries_delivery: bool = False) -> str | None:
     """[REL-RC-E] The tool's human-readable recovery guidance (ToolOutcome.content), capped, iff it
     adds information beyond the bare error CODE. Carried on AgentErrorEvent.detail so a domain error
     like bad_range shows the model the valid range/line-count instead of just 'ERROR: bad_range'.
@@ -132,9 +130,7 @@ def _recover_elided_file_write_content(
     return None
 
 
-def _has_confirmed_prior_append(
-    events: list[Event], path: str, *, before_id: str | None
-) -> bool:
+def _has_confirmed_prior_append(events: list[Event], path: str, *, before_id: str | None) -> bool:
     """K1 (file_append): True iff a prior `file_append` to the SAME `path` was CONFIRMED
     executed (an ActionEvent + a SUCCESSFUL ObservationEvent for its call_id + no
     AgentErrorEvent for it) — i.e. the content the model is now copying back AS an elision
@@ -167,6 +163,7 @@ def _has_confirmed_prior_append(
         if cid in confirmed and cid not in failed:
             return True
     return False
+
 
 # The helper's input is the driver's `question` + `context` joined into one
 # prompt. Bound the size of each so a driver cannot grow the helper's input
@@ -480,8 +477,7 @@ class Observer:
                     return  # NO (action, error) pair → breaks repeated_action_error → STUCK
             if _k1_bad:
                 _LOG.info(
-                    "K1 guard: rejected %s — arg(s) %s carry an elision placeholder "
-                    "(call_id=%s)",
+                    "K1 guard: rejected %s — arg(s) %s carry an elision placeholder (call_id=%s)",
                     action.tool_call.tool_name,
                     _k1_bad,
                     action.tool_call.call_id,
@@ -509,8 +505,7 @@ class Observer:
                             "is a context-saving stand-in for content you ALREADY wrote "
                             "— it is NOT the content itself, and it was NOT executed. Do "
                             "not copy the placeholder into a tool call. Re-issue the "
-                            "call with real content, or read the "
-                            + _k1_recover
+                            "call with real content, or read the " + _k1_recover
                         ),
                         action_id=action.id,
                         tool_call_id=action.tool_call.call_id,
@@ -600,9 +595,7 @@ class Observer:
             )
         )
 
-    async def run_fanout(
-        self, args: dict, events: list[Event], *, call_id: str = ""
-    ) -> ToolResult:
+    async def run_fanout(self, args: dict, events: list[Event], *, call_id: str = "") -> ToolResult:
         """C20 — dispatch the read-only Explore/Plan helper task and return the
         joined result as a `ToolResult` (the caller — the `delegate_explore`
         intercept path — folds it back as a paired `ObservationEvent`).
@@ -669,7 +662,7 @@ class Observer:
             content=(
                 f"[C20 fan-out #{self._loop._fanout_count}/{self._loop._fanout_max}] "
                 f"helper dispatched: "
-                f"question=\"{question[:80]}{'…' if len(question) > 80 else ''}\""
+                f'question="{question[:80]}{"…" if len(question) > 80 else ""}"'
                 + (f" context={len(context)} chars" if context else "")
                 + ". (Default stub — override `_run_fanout` for a real subagent.)"
             ),

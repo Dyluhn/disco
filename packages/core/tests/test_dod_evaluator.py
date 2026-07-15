@@ -191,9 +191,7 @@ async def test_met_dod_fingerprint_is_stable_across_construction(
     )
     assert spec_fingerprint(spec) == spec_fingerprint(spec)
     # Round-trip through JSON preserves the fingerprint.
-    assert spec_fingerprint(DoDSpec.from_json_dict(spec.to_json_dict())) == spec_fingerprint(
-        spec
-    )
+    assert spec_fingerprint(DoDSpec.from_json_dict(spec.to_json_dict())) == spec_fingerprint(spec)
 
 
 # ---- Test 2: unmet DoD fails AND names the specific predicate --------------
@@ -276,9 +274,7 @@ async def test_unmet_http_predicate_is_named_in_verdict(tmp_path: Path) -> None:
 
     async def _spy(url: str, expected: int) -> HttpProbeResult:
         captured.append((url, expected))
-        return HttpProbeResult(
-            status_code=500, error_message="", duration_seconds=0.001
-        )
+        return HttpProbeResult(status_code=500, error_message="", duration_seconds=0.001)
 
     spec = DoDSpec(
         predicates=[
@@ -423,9 +419,7 @@ async def test_fake_judge_is_invoked_with_fresh_context(tmp_path: Path) -> None:
     `SubjectiveJudgeRequest` has no `events` / `view` / `transcript`
     field; the test asserts that. The fresh-context discipline is
     structural, not just behavioural."""
-    judge = ScriptedJudge(
-        scripted=[SubjectiveVerdict(passed=True, reason="looks right")]
-    )
+    judge = ScriptedJudge(scripted=[SubjectiveVerdict(passed=True, reason="looks right")])
     spec = DoDSpec(
         predicates=[
             FileExistsPredicate(path="a"),
@@ -444,7 +438,7 @@ async def test_fake_judge_is_invoked_with_fresh_context(tmp_path: Path) -> None:
         workspace_root=str(tmp_path),
         evidence_excerpt="",
     )
-    verdict = (await judge.judge(req))
+    verdict = await judge.judge(req)
     # Judge produced a verdict.
     assert verdict.passed is True
     assert judge.requests == 1

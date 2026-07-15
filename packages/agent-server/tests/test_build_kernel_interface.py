@@ -103,9 +103,7 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
         ("garbage", "disco"),
     ],
 )
-def test_resolve_kernel_kind(
-    selected: str | None, expected: BuildKernelKind
-) -> None:
+def test_resolve_kernel_kind(selected: str | None, expected: BuildKernelKind) -> None:
     assert resolve_kernel_kind(selected) == expected
 
 
@@ -235,4 +233,3 @@ async def test_runtime_control_ops_route_through_disco_kernel(store: SqliteEvent
 
     await ConversationRuntime.request_plan(rt, CID, "replan please")
     rt._control.request_plan.assert_awaited_once_with(CID, "replan please")
-

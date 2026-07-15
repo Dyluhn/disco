@@ -244,9 +244,7 @@ def _ai_chat_callback(
 
     async def complete(payload: dict[str, Any]) -> dict[str, Any]:
         messages = [LLMMessage.model_validate(value) for value in payload["messages"]]
-        response = await runtime._router_now(
-            conversation_id=record.conversation_id
-        ).complete(
+        response = await runtime._router_now(conversation_id=record.conversation_id).complete(
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=messages,
@@ -435,9 +433,7 @@ def make_host_service_bus_router(
             result = await asyncio.wait_for(
                 call_host_service(validated_service, payload, ctx),
                 timeout=(
-                    definition.timeout_s
-                    if _HANDLER_TIMEOUT_S is None
-                    else _HANDLER_TIMEOUT_S
+                    definition.timeout_s if _HANDLER_TIMEOUT_S is None else _HANDLER_TIMEOUT_S
                 ),
             )
         except TimeoutError:

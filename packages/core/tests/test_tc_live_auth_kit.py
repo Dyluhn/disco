@@ -181,9 +181,7 @@ def _write_workspace(
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         cfg.update(config_override)
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    (workspace / "package.json").write_text(
-        json.dumps({"type": "module"}) + "\n", encoding="utf-8"
-    )
+    (workspace / "package.json").write_text(json.dumps({"type": "module"}) + "\n", encoding="utf-8")
     (workspace / "server.js").write_text(server_js, encoding="utf-8")
     return workspace
 
@@ -435,8 +433,14 @@ def test_auth_kit_blocks_path_confusion_and_survives_malformed_input(tmp_path: P
         _kill(proc)
 
 
-def _raw_headers(port: int, method: str, path: str, *, body: bytes | None = None,
-                 headers: dict[str, str] | None = None) -> tuple[int, dict[str, str]]:
+def _raw_headers(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str]]:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
     try:
         hdrs = dict(headers or {})

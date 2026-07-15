@@ -22,17 +22,13 @@ class PortOwner:
 _PROBE_SRC = PORT_OWNER_PROBE_SRC
 
 
-async def port_owners(
-    instance: SandboxInstance, ports: list[int]
-) -> dict[int, PortOwner | None]:
+async def port_owners(instance: SandboxInstance, ports: list[int]) -> dict[int, PortOwner | None]:
     """Probe many ports in ONE in-container exec (single /proc pass) — the UI
     polls this; per-port execs would multiply SSH round-trips."""
     if not ports:
         return {}
     arg = " ".join(str(p) for p in ports)
-    res = await instance.exec_shell(
-        f"python3 -c {shlex.quote(_PROBE_SRC)} {arg}", timeout_s=15
-    )
+    res = await instance.exec_shell(f"python3 -c {shlex.quote(_PROBE_SRC)} {arg}", timeout_s=15)
     out: dict[int, PortOwner | None] = {p: None for p in ports}
     if res.exit_code != 0:
         return out

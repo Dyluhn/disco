@@ -30,7 +30,7 @@ class _FakeSession:
 
     async def list_dir(self, path: str) -> list[str]:
         prefix = path.rstrip("/") + "/"
-        return [k[len(prefix):] for k in self._files if k.startswith(prefix)]
+        return [k[len(prefix) :] for k in self._files if k.startswith(prefix)]
 
     async def read_file(self, path: str) -> bytes:
         return self._files.get(path, b"")
@@ -94,8 +94,7 @@ def _make_client() -> tuple[TestClient, str, _FakeSession, _FakeRuntime]:
 
 def _upload(client: TestClient, cid: str, files: list[tuple[str, bytes, str]]) -> Any:
     parts = [
-        ("files", (fname, io.BytesIO(data), "application/octet-stream"))
-        for _, data, fname in files
+        ("files", (fname, io.BytesIO(data), "application/octet-stream")) for _, data, fname in files
     ]
     return client.post(f"/conversations/{cid}/files", files=parts)
 
@@ -214,11 +213,13 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws/research") as ws:
-            ws.send_json({
-                "query": "test question",
-                "conversation_id": "conv_abc123",
-                "sources": ["arxiv", "ddgs"],
-            })
+            ws.send_json(
+                {
+                    "query": "test question",
+                    "conversation_id": "conv_abc123",
+                    "sources": ["arxiv", "ddgs"],
+                }
+            )
             frames = []
             try:
                 while True:
@@ -384,10 +385,9 @@ async def test_seed_passages_in_stream_research_answer() -> None:
     assert "error" not in frame_types, f"unexpected error frame: {frames}"
     assert "token" in frame_types, f"no token frame in {frames}"
     assert "final" in frame_types, f"no final frame in {frames}"
-    assert any(
-        f.get("type") == "state" and f.get("status") == "finished"
-        for f in frames
-    ), f"no finished state frame in {frames}"
+    assert any(f.get("type") == "state" and f.get("status") == "finished" for f in frames), (
+        f"no finished state frame in {frames}"
+    )
 
 
 # ── DR run receives upload passages ───────────────────────────────────────────
@@ -421,6 +421,7 @@ async def test_dr_run_extra_passages_seeded_into_legs() -> None:
         extra_passages = extra_passages or []
         seen_extra.extend(extra_passages)
         from disco.retrieval.deep_research.gather import SubQuestionResult
+
         return SubQuestionResult(subq=subq, passages=list(extra_passages))
 
     # Patch the name as imported into engine.py (not the original in gather.py)
@@ -474,6 +475,7 @@ async def _noop_emit(kind: str, payload: dict[str, Any]) -> None:
 
 async def _fake_synth(*args: Any, **kwargs: Any) -> Any:
     from disco.retrieval.deep_research.synthesis import SectionResult
+
     return SectionResult(
         title="Sub-question 1",
         markdown="Synthesized.",

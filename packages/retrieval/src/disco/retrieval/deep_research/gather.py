@@ -70,6 +70,7 @@ class _RouterWithCtx(Protocol):
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse: ...
 
+
 # A small async hook the agent-server installs to write Action/Observation
 # events to the conversation log as the gather progresses. The engine never
 # touches the store directly — the agent-server owns persistence.
@@ -169,12 +170,8 @@ async def _gap_reason(
         return False, [subq.title], "no passages gathered yet"
     # short summaries — first ~140 chars of each, capped at 12 so the prompt
     # doesn't bloat. The reasoner only needs a sense of what's been covered.
-    summaries = "\n".join(
-        f"- [{p.id}] {p.text[:140].strip()}" for p in passages[:12]
-    )
-    instruction = _GAP_PROMPT.format(
-        subq=subq.title, n_passages=len(passages), summaries=summaries
-    )
+    summaries = "\n".join(f"- [{p.id}] {p.text[:140].strip()}" for p in passages[:12])
+    instruction = _GAP_PROMPT.format(subq=subq.title, n_passages=len(passages), summaries=summaries)
     # Build the message list INDEPENDENTLY for this call (no shared mutable
     # list). Seeded with this leg's task only — system framing is added by
     # the router's `_inject_prompt`. No sibling leg's messages appear here.

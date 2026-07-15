@@ -46,9 +46,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(le, "_embedding_model", None)
     monkeypatch.setattr(le, "_cross_encoder", None)
     monkeypatch.setattr(le, "_embedding_factory", lambda _model_name: _FakeEmbedder)
-    monkeypatch.setattr(
-        "fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder
-    )
+    monkeypatch.setattr("fastembed.rerank.cross_encoder.TextCrossEncoder", _FakeEncoder)
     # Ensure no stale explicit-model vars bleed in from the process env
     monkeypatch.delenv("PMX_EMBED_MODEL", raising=False)
     monkeypatch.delenv("PMX_RERANK_MODEL", raising=False)

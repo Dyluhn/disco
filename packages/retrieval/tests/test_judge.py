@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.retrieval.deep_research.judge import (
     ClaimVerdict,
     fraction_supported,
@@ -60,7 +59,9 @@ def test_parse_unknown_defaults_conservative() -> None:
 @pytest.mark.asyncio
 async def test_judge_claim_calls_router_and_returns_verdict() -> None:
     router = _FakeRouter(["SUPPORTED"])
-    v = await judge_claim("The sky is blue.", ["Rayleigh scattering makes the sky blue."], router=router)
+    v = await judge_claim(
+        "The sky is blue.", ["Rayleigh scattering makes the sky blue."], router=router
+    )
     assert v == ClaimVerdict(claim="The sky is blue.", verdict="SUPPORTED")
     # The prompt carried the claim + the cited passage.
     assert "The sky is blue." in router.prompts[0]

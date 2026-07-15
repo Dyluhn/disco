@@ -8,6 +8,7 @@ file is opened, so any exception (disk full, signal, bug) leaves a 0-byte /
 truncated file. These tests pin the guarantee for the three sibling saves
 that the plan calls out: `_save_autonomous`, `_save_overrides`, `_save_surfaces`.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,8 +38,10 @@ def _crash_json_dump(monkeypatch):
     monkeypatch.setattr auto-restores the real json.dump at test teardown so
     the failure mode stays scoped to the test that requested it.
     """
+
     def boom(*a, **kw):
         raise RuntimeError("simulated mid-write crash")
+
     monkeypatch.setattr(json, "dump", boom)
 
 

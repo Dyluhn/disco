@@ -143,6 +143,7 @@ def _truncate_think_block(content: str) -> str:
     marker so the model (or the engine) can recognize what was dropped. Pure
     + deterministic (same input → same output) so the request payload stays
     cache-stable across retries."""
+
     def _maybe(m: re.Match) -> str:
         inner = m.group(1)
         if len(inner) <= _F5_THINK_BUDGET_CHARS:
@@ -196,9 +197,9 @@ def _requires_user_after_tool_result(base_url: str) -> bool:
     from urllib.parse import urlsplit
 
     parsed = urlsplit(base_url)
-    return (parsed.hostname or "").lower() == "opencode.ai" and parsed.path.rstrip(
-        "/"
-    ).endswith("/zen/go/v1")
+    return (parsed.hostname or "").lower() == "opencode.ai" and parsed.path.rstrip("/").endswith(
+        "/zen/go/v1"
+    )
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -309,10 +310,7 @@ class OpenAIProvider:
         self._base (base_url) and self.name are checked so an operator who
         names a provider "openrouter-free" without changing the base_url still
         gets the block — and vice versa."""
-        return (
-            "openrouter" in self._base.lower()
-            or "openrouter" in self.name.lower()
-        )
+        return "openrouter" in self._base.lower() or "openrouter" in self.name.lower()
 
     # -- request shaping ------------------------------------------------------
 
@@ -409,11 +407,7 @@ class OpenAIProvider:
         # render-time only (not persisted before storage).
         def _shape(m: LLMMessage) -> LLMMessage:
             content = m.content
-            if (
-                m.role == "assistant"
-                and "<think>" in content
-                and "</think>" in content
-            ):
+            if m.role == "assistant" and "<think>" in content and "</think>" in content:
                 content = _F5_THINK_BLOCK_RE.sub("", content)
             if req.assist and "<think>" in content and "</think>" in content:
                 content = _truncate_think_block(content)
@@ -432,11 +426,7 @@ class OpenAIProvider:
         # user turn after the tool result. Previously the generic repair path
         # appended an alarming "provider rejected" prompt and paid for a second
         # request. Add the neutral continuation on the first request instead.
-        if (
-            _requires_user_after_tool_result(self._base)
-            and msgs
-            and msgs[-1].get("role") == "tool"
-        ):
+        if _requires_user_after_tool_result(self._base) and msgs and msgs[-1].get("role") == "tool":
             msgs.append(
                 {
                     "role": "user",
@@ -631,11 +621,7 @@ class OpenAIProvider:
         OpenAI's `prompt_tokens_details.cached_tokens` and Anthropic's
         `cache_read_input_tokens`. 0 when not reported."""
         details = usage.get("prompt_tokens_details") or {}
-        return int(
-            details.get("cached_tokens", 0)
-            or usage.get("cache_read_input_tokens", 0)
-            or 0
-        )
+        return int(details.get("cached_tokens", 0) or usage.get("cache_read_input_tokens", 0) or 0)
 
     @staticmethod
     def _empty_reasoning_only_metadata(
@@ -645,11 +631,7 @@ class OpenAIProvider:
         reasoning_len: int,
         tool_call_count: int,
     ) -> dict:
-        if (
-            finish_reason == "stop"
-            and content_len == 0
-            and tool_call_count == 0
-        ):
+        if finish_reason == "stop" and content_len == 0 and tool_call_count == 0:
             return {
                 EMPTY_REASONING_ONLY_METADATA_KEY: {
                     "finish_reason": finish_reason,
@@ -722,6 +704,7 @@ class OpenAIProvider:
         # Escape raw control characters (0x00-0x1F) which are forbidden in JSON strings
         def _escape_ctrl(m):
             return f"\\u{ord(m.group(0)):04x}"
+
         return re.sub(r"[\x00-\x1f]", _escape_ctrl, raw)
 
     @staticmethod
@@ -772,10 +755,10 @@ class OpenAIProvider:
         for tc in raw or []:
             fn = tc.get("function") or {}
             name = fn.get("name", "")
-            
+
             # Sanitize echoed name (DEFECT-6: strip prefix/dots)
             clean_name = _sanitize_tool_name(name)
-            
+
             args_raw = fn.get("arguments")
             parsed = {}
             if isinstance(args_raw, str):
@@ -799,7 +782,7 @@ class OpenAIProvider:
                 # as unparseable JSON: validation refuses with feedback the
                 # model can act on, the run never dies.
                 parsed = {"_raw": args_raw if isinstance(args_raw, str) else json.dumps(parsed)}
-            
+
             # Rung 5: (c) type-coercing validation
             # Find the spec. Match original or sanitized name.
             spec = spec_map.get(name) or sanitized_map.get(clean_name)
@@ -953,9 +936,7 @@ class OpenAIProvider:
                             else:
                                 idx = 0
                             last_idx = idx
-                            slot = tool_buf.setdefault(
-                                idx, {"id": None, "name": "", "args": ""}
-                            )
+                            slot = tool_buf.setdefault(idx, {"id": None, "name": "", "args": ""})
                             if tc_id:
                                 slot["id"] = tc_id
                                 id_to_idx[tc_id] = idx

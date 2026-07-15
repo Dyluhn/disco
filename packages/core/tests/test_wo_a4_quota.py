@@ -111,9 +111,12 @@ def test_app_total_and_exact_service_limits_both_apply(tmp_path: Path) -> None:
     aggregate_denial = _reserve(store, "mail-3", service="email.send")
     assert not aggregate_denial.allowed
     assert aggregate_denial.limiting_service is None
-    assert store.get_usage(
-        owner_id="owner-a", audience="app-a", service="ai.chat", now=NOW
-    ).request_count == 1
+    assert (
+        store.get_usage(
+            owner_id="owner-a", audience="app-a", service="ai.chat", now=NOW
+        ).request_count
+        == 1
+    )
     assert store.get_usage(owner_id="owner-a", audience="app-a", now=NOW).request_count == 3
 
 
@@ -223,14 +226,10 @@ def test_stale_reservation_is_abandoned_during_usage_sweep(tmp_path: Path) -> No
         reservation_ttl_seconds=10,
     )
     assert _reserve(store, "crashed", input_tokens=6, output_tokens=4).allowed
-    before = store.get_usage(
-        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=9)
-    )
+    before = store.get_usage(owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=9))
     assert (before.request_count, before.total_tokens) == (1, 10)
 
-    after = store.get_usage(
-        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=10)
-    )
+    after = store.get_usage(owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=10))
     assert (after.request_count, after.total_tokens) == (1, 0)
     reservation = store.get_reservation("owner-a", "app-a", "crashed")
     assert reservation is not None
@@ -255,9 +254,7 @@ def test_stale_dispatched_reservation_retains_estimated_spend(tmp_path: Path) ->
     with pytest.raises(ReservationStateError, match="settled"):
         store.release(owner_id="owner-a", audience="app-a", reservation_id="accepted")
 
-    usage = store.get_usage(
-        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5)
-    )
+    usage = store.get_usage(owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5))
     assert (usage.request_count, usage.total_tokens) == (1, 10)
     abandoned = store.get_reservation("owner-a", "app-a", "accepted")
     assert abandoned is not None and abandoned.state == "abandoned"
@@ -313,9 +310,7 @@ def test_expiry_during_admission_releases_tokens_for_new_request(tmp_path: Path)
         now=NOW + timedelta(seconds=5),
     )
     assert admitted.allowed
-    usage = store.get_usage(
-        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5)
-    )
+    usage = store.get_usage(owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5))
     assert (usage.request_count, usage.total_tokens) == (2, 10)
 
 
@@ -324,9 +319,7 @@ def test_expiry_sweep_is_scoped_to_one_owner_and_audience(tmp_path: Path) -> Non
     assert _reserve(store, "a", owner="owner-a", app="app-a", input_tokens=3).allowed
     assert _reserve(store, "b", owner="owner-b", app="app-b", input_tokens=4).allowed
 
-    usage_a = store.get_usage(
-        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5)
-    )
+    usage_a = store.get_usage(owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5))
     assert (usage_a.request_count, usage_a.total_tokens) == (1, 0)
     reservation_a = store.get_reservation("owner-a", "app-a", "a")
     reservation_b = store.get_reservation("owner-b", "app-b", "b")
@@ -476,8 +469,7 @@ def test_expiry_and_admission_are_atomic_across_connections(tmp_path: Path) -> N
     path = tmp_path / "expiry-race.db"
     limits = QuotaConfig(window_seconds=60, max_total_tokens=10)
     stores = [
-        SqliteQuotaStore(path, default_config=limits, reservation_ttl_seconds=5)
-        for _ in range(10)
+        SqliteQuotaStore(path, default_config=limits, reservation_ttl_seconds=5) for _ in range(10)
     ]
     assert _reserve(stores[0], "crashed", input_tokens=5, output_tokens=5).allowed
     barrier = Barrier(len(stores))
@@ -532,9 +524,7 @@ def test_config_reservations_and_reconciliation_persist_across_reopen(tmp_path: 
     assert reservation is not None
     assert reservation.state == "completed"
     assert (reservation.actual_input_tokens, reservation.actual_output_tokens) == (7, 4)
-    usage = reopened.get_usage(
-        owner_id="owner-a", audience="app-a", service="ai.chat", now=NOW
-    )
+    usage = reopened.get_usage(owner_id="owner-a", audience="app-a", service="ai.chat", now=NOW)
     assert (usage.request_count, usage.total_tokens) == (1, 11)
 
 

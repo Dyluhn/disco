@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -430,9 +429,7 @@ async def test_non_web_deliverable_skips_host_verify() -> None:
         for e in events
     )
     assert not any(
-        isinstance(e, ActionEvent)
-        and e.tool_call
-        and e.tool_call.tool_name == "verify_web_app"
+        isinstance(e, ActionEvent) and e.tool_call and e.tool_call.tool_name == "verify_web_app"
         for e in events
     )
     assert not any(

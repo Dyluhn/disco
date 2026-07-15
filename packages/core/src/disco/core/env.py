@@ -53,8 +53,7 @@ def disco_env(suffix: str, default: str | None = None) -> str | None:
         if suffix not in _DEPRECATION_LOGGED:
             _DEPRECATION_LOGGED.add(suffix)
             _LOG.warning(
-                "%s%s is deprecated; set %s%s instead (the legacy name is "
-                "still honored for now).",
+                "%s%s is deprecated; set %s%s instead (the legacy name is still honored for now).",
                 _OLD_PREFIX,
                 suffix,
                 _NEW_PREFIX,

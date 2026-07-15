@@ -12,7 +12,6 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..think import strip_think_spans
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -27,6 +26,7 @@ from ..events import (
     StatusEvent,
 )
 from ..llm import OperatingMode
+from ..think import strip_think_spans
 from ..view import effective_plan_progress
 
 if TYPE_CHECKING:
@@ -203,9 +203,7 @@ def productive_action_since_approval(events: list[Event]) -> bool:
 
 def _plan_approval_seqs(events: list[Event]) -> list[int]:
     return [
-        e.seq or 0
-        for e in events
-        if isinstance(e, StatusEvent) and e.detail == "plan_approved"
+        e.seq or 0 for e in events if isinstance(e, StatusEvent) and e.detail == "plan_approved"
     ]
 
 
@@ -257,24 +255,17 @@ def finish_intent_replan_after_prior_productive_work(events: list[Event]) -> boo
         return False
 
     remaining = [
-        step
-        for index, step in enumerate(plan.steps, start=1)
-        if states.get(index) != "done"
+        step for index, step in enumerate(plan.steps, start=1) if states.get(index) != "done"
     ]
     return bool(remaining) and all(_step_is_finish_intent(step) for step in remaining)
 
 
-def _is_successful_productive_action(
-    event: Event, successful_actions: set[str]
-) -> bool:
+def _is_successful_productive_action(event: Event, successful_actions: set[str]) -> bool:
     if not isinstance(event, ActionEvent) or event.tool_call is None:
         return False
     if event.meta.get("verify_probe"):
         return False
-    return (
-        event.id in successful_actions
-        and event.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS
-    )
+    return event.id in successful_actions and event.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS
 
 
 _SYNTHETIC_FINISH_RESET_STATUSES = frozenset(
@@ -330,10 +321,7 @@ def actionless_pause_count_current_execution_segment(events: list[Event]) -> int
         if _is_successful_productive_action(event, successful_actions):
             break
         if isinstance(event, StatusEvent):
-            if (
-                event.status == ConversationStatus.PAUSED
-                and event.detail == "actionless"
-            ):
+            if event.status == ConversationStatus.PAUSED and event.detail == "actionless":
                 count += 1
                 continue
             if event.status == ConversationStatus.RUNNING:
@@ -373,10 +361,7 @@ def synthetic_finish_attempted_for_current_pause(events: list[Event]) -> bool:
     for idx, event in enumerate(events, start=1):
         if _event_seq(event, idx) <= latest_pause:
             continue
-        if (
-            isinstance(event, StatusEvent)
-            and event.detail == SYNTHETIC_FINISH_ATTEMPT_DETAIL
-        ):
+        if isinstance(event, StatusEvent) and event.detail == SYNTHETIC_FINISH_ATTEMPT_DETAIL:
             return True
     return False
 
@@ -460,19 +445,23 @@ def recovery_requested_since_reset(events: list[Event]) -> bool:
 
 
 # [REL-RC-E] Re-groundable edit error codes: repeating any of these on the same path means the model
-# is editing against a stale view of the file, which one real file_read fixes. FRESH_READ_REQUIRED is
+# is editing against a stale view of the file, which one real file_read fixes.
+# FRESH_READ_REQUIRED is
 # the read-before-write gate; bad_range / bad_line are line-target edits (file_replace_lines /
-# file_insert_lines) whose numbers fell outside the current file — a fresh read shows the true lines.
+# file_insert_lines) whose numbers fell outside the current file — a fresh read
+# shows the true lines.
 _AUTOGROUND_ERROR_CODES = frozenset({"FRESH_READ_REQUIRED", "bad_range", "bad_line"})
 
 
 def fresh_read_autoground_target(events: list[Event]) -> str | None:
     """[REL-RC-B/REL-RC-E] The workspace path the build is LOOPING on at an edit gate — the path to
-    auto-read once to break a repeating FRESH_READ_REQUIRED / bad_range / bad_line edit loop, or None.
+    auto-read once to break a repeating FRESH_READ_REQUIRED / bad_range / bad_line
+    edit loop, or None.
 
     Returns the path of the most-recent FRESH_READ_REQUIRED edit error IFF that path has produced
     >= 2 such errors since the last successful Observation or USER message (the streak), AND no
-    ``auto_ground_read:{path}`` marker exists since the last USER message (the durable one-auto-read-
+    ``auto_ground_read:{path}`` marker exists since the last USER message (the
+    durable one-auto-read-
     per-path-per-revision sentinel). The marker scan stops only at the USER message, so it SURVIVES
     the injected read's own success Observation — a file that STILL fails after one genuine read
     falls through to the circuit breaker and STUCKs cleanly, never re-arming the auto-read.
@@ -790,11 +779,7 @@ def auto_continue_attempts(events: list[Event]) -> int:
     for e in reversed(events):
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             return count
-        if (
-            isinstance(e, StatusEvent)
-            and e.detail
-            and e.detail.startswith("auto_continue:")
-        ):
+        if isinstance(e, StatusEvent) and e.detail and e.detail.startswith("auto_continue:"):
             count += 1
     return count
 
@@ -898,9 +883,7 @@ def effective_mode(
                 planning_seq = event.seq or 0
             elif event.detail == "plan_approved":
                 approved_seq = event.seq or 0
-    if approved_seq is not None and (
-        planning_seq is None or approved_seq > planning_seq
-    ):
+    if approved_seq is not None and (planning_seq is None or approved_seq > planning_seq):
         return execution
     if planning_seq is not None:
         return planning
@@ -1054,23 +1037,17 @@ def strip_element_mention(text: str) -> str:
     end = text.find(_MENTION_CLOSE, body_start)
     if end < 0:
         return text[:start].strip()
-    return f"{text[:start]}{text[end + len(_MENTION_CLOSE):]}".strip()
+    return f"{text[:start]}{text[end + len(_MENTION_CLOSE) :]}".strip()
 
 
 def revision_planning_has_prior_approval(events: list[Event]) -> bool:
     """True for a re-plan after an approved plan, false for initial planning."""
-    return any(
-        isinstance(e, StatusEvent) and e.detail == "plan_approved"
-        for e in events
-    )
+    return any(isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events)
 
 
 def harvested_revision_plan_from_user(events: list[Event]) -> PlanEvent | None:
     """Build the one-step forced revision plan from the triggering user text."""
-    if (
-        not in_planning_for_revision(events)
-        or not revision_planning_has_prior_approval(events)
-    ):
+    if not in_planning_for_revision(events) or not revision_planning_has_prior_approval(events):
         return None
     instruction = current_revision_instruction(events) or latest_user_text(events) or ""
     title = strip_element_mention(instruction)[:200].strip()
@@ -1206,9 +1183,7 @@ def prose_plan_harvested(events: list[Event]) -> bool:
     return False
 
 
-_PROSE_PLAN_STEP_RE = re.compile(
-    r"^\s*(?:[-*+]\s+|(?:\d{1,2}|[A-Za-z])[\.)]\s+)(.+?)\s*$"
-)
+_PROSE_PLAN_STEP_RE = re.compile(r"^\s*(?:[-*+]\s+|(?:\d{1,2}|[A-Za-z])[\.)]\s+)(.+?)\s*$")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 _MD_EMPH_RE = re.compile(r"(\*\*|__|\*|_)([^*_].*?)\1")
 

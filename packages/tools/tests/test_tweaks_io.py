@@ -4,7 +4,6 @@ merge_tweak_defaults reconciliation (defaults fill, present-value coercion, Twea
 from __future__ import annotations
 
 import pytest
-
 from disco.core.tweaks import TweakEditor, TweakField, TweakSpec
 from disco.tools.builtin.tweaks_io import (
     TWEAKS_PATH,
@@ -14,19 +13,38 @@ from disco.tools.builtin.tweaks_io import (
     require_tweakspec,
     write_tweakspec,
 )
-
 from tool_fakes import FakeSandboxInstance
 
 
 def _spec() -> TweakSpec:
-    return TweakSpec(fields=(
-        TweakField(key="lead.phone", label="Phone", editor=TweakEditor.BOOLEAN,
-                   affects=("lead_form.phone",), default=False),
-        TweakField(key="hero.count", label="CTAs", editor=TweakEditor.INT, min=1, max=5, step=1,
-                   affects=("hero.ctas",), default=2),
-        TweakField(key="brand.accent", label="Accent", editor=TweakEditor.PALETTE,
-                   colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),  # no default
-    ))
+    return TweakSpec(
+        fields=(
+            TweakField(
+                key="lead.phone",
+                label="Phone",
+                editor=TweakEditor.BOOLEAN,
+                affects=("lead_form.phone",),
+                default=False,
+            ),
+            TweakField(
+                key="hero.count",
+                label="CTAs",
+                editor=TweakEditor.INT,
+                min=1,
+                max=5,
+                step=1,
+                affects=("hero.ctas",),
+                default=2,
+            ),
+            TweakField(
+                key="brand.accent",
+                label="Accent",
+                editor=TweakEditor.PALETTE,
+                colors=("#0a84ff", "#e2725b"),
+                affects=("design.accent",),
+            ),  # no default
+        )
+    )
 
 
 # --- IO round-trip ------------------------------------------------------------
@@ -76,7 +94,10 @@ async def test_require_absent_raises_tweaks_error() -> None:
 def test_merge_fills_defaults_and_coerces_present_values() -> None:
     spec = _spec()
     merged = merge_tweak_defaults(spec, {"lead.phone": "true", "hero.count": "4"})
-    assert merged == {"hero.count": 4, "lead.phone": True}  # coerced + sorted; brand.accent has no default
+    assert merged == {
+        "hero.count": 4,
+        "lead.phone": True,
+    }  # coerced + sorted; brand.accent has no default
 
 
 def test_merge_present_value_not_overwritten_by_default() -> None:

@@ -4,15 +4,13 @@ write rejection, invalid kind/action, list determinism, and real scope visibilit
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import agent_scope, build_default_registry
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin.context_memory import ContextMemoryArgs, ContextMemoryTool
 from disco.tools.registry import artifact_scope
 from disco.tools.secrets import CapabilityBroker
-
+from pydantic import ValidationError
 from tool_fakes import FakeSandboxInstance
 
 
@@ -60,7 +58,9 @@ async def test_list_returns_sorted_durable_kinds() -> None:
 async def test_write_then_read_narrative_kind() -> None:
     sbx = FakeSandboxInstance()
     tool = ContextMemoryTool()
-    w = await tool.run(ContextMemoryArgs(action="write", kind="current_goal", content="ship it"), _ctx(sbx))
+    w = await tool.run(
+        ContextMemoryArgs(action="write", kind="current_goal", content="ship it"), _ctx(sbx)
+    )
     assert w.success and w.structured["rel_path"].endswith("current_goal.md")
     r = await tool.run(ContextMemoryArgs(action="read", kind="current_goal"), _ctx(sbx))
     assert r.success and r.content == "ship it"

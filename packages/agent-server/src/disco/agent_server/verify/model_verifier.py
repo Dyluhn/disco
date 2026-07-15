@@ -107,10 +107,7 @@ def _normalise_verdict_payload(obj: dict[str, Any]) -> dict[str, Any]:
 def _structural_failure_cause(exc: Exception) -> str:
     """Describe response failures without retaining model output or credentials."""
     if isinstance(exc, json.JSONDecodeError):
-        return (
-            f"JSONDecodeError: {exc.msg} at line {exc.lineno} "
-            f"column {exc.colno}"
-        )
+        return f"JSONDecodeError: {exc.msg} at line {exc.lineno} column {exc.colno}"
     if isinstance(exc, ValidationError):
         error_types = sorted(
             {
@@ -118,10 +115,7 @@ def _structural_failure_cause(exc: Exception) -> str:
                 for error in exc.errors(include_url=False, include_input=False)
             }
         )
-        return (
-            f"ValidationError: {exc.error_count()} field error(s) "
-            f"[{','.join(error_types[:8])}]"
-        )
+        return f"ValidationError: {exc.error_count()} field error(s) [{','.join(error_types[:8])}]"
     if isinstance(exc, LLMError):
         # OpenAIProvider deliberately raises this bounded form without the raw
         # response body. Retain it when it matches that structural contract.

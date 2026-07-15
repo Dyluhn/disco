@@ -63,8 +63,16 @@ def _make_sample_report() -> ReportEvent:
             ),
         ],
         passages=[
-            {"id": "p0", "source_title": "Avian Speed Database", "source_url": "https://birds.example.com/p0"},
-            {"id": "p1", "source_title": "European Ornithology Journal", "source_url": "https://birds.example.com/p1"},
+            {
+                "id": "p0",
+                "source_title": "Avian Speed Database",
+                "source_url": "https://birds.example.com/p0",
+            },
+            {
+                "id": "p1",
+                "source_title": "European Ornithology Journal",
+                "source_url": "https://birds.example.com/p1",
+            },
         ],
         all_hits=[],
         unsupported_count=1,
@@ -124,8 +132,7 @@ def test_markdown_byte_parity() -> None:
     report = _make_sample_report()
     result = serialize_markdown(report)
     assert result == CAPTURED_MARKDOWN, (
-        f"Byte-parity failed.\n--- EXPECTED ---\n{CAPTURED_MARKDOWN!r}\n"
-        f"--- GOT ---\n{result!r}"
+        f"Byte-parity failed.\n--- EXPECTED ---\n{CAPTURED_MARKDOWN!r}\n--- GOT ---\n{result!r}"
     )
 
 
@@ -256,6 +263,7 @@ def _create_conversation(client: TestClient, owner_id: str = "local") -> str:
 def _seed_event(store: SqliteEventStore, cid: str, ev) -> None:
     """Append an event through the store directly."""
     import asyncio
+
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(store.append(cid, ev))
@@ -327,9 +335,7 @@ def test_endpoint_md_export_with_report(
 def test_serialize_pdf_imports_and_returns_bytes_if_present() -> None:
     """If weasyprint is installed, serialize_pdf returns non-empty PDF bytes."""
     # Try importing weasyprint — if absent, skip cleanly.
-    pytest.importorskip(
-        "weasyprint", reason="WeasyPrint not installed (image rebuild needed)"
-    )
+    pytest.importorskip("weasyprint", reason="WeasyPrint not installed (image rebuild needed)")
     report = _make_sample_report()
     result = serialize_pdf(report)
     assert isinstance(result, bytes)
@@ -508,15 +514,22 @@ def test_endpoint_md_export_with_follow_up_seqs(
 
     # Fetch events to discover the user-message seq
     import asyncio as _a
+
     loop2 = _a.new_event_loop()
     try:
         events = loop2.run_until_complete(store.get_events(cid))
     finally:
         loop2.close()
     from disco.core import MessageEvent as ME
+
     user_msg = next(
-        (e for e in events if isinstance(e, ME) and e.message.role == "user"
-         and "Elaborate" in (e.message.content or "")),
+        (
+            e
+            for e in events
+            if isinstance(e, ME)
+            and e.message.role == "user"
+            and "Elaborate" in (e.message.content or "")
+        ),
         None,
     )
     assert user_msg is not None, "User message not found in event log"
@@ -578,6 +591,7 @@ def test_templates_endpoint_lists_catalog() -> None:
             disco = next(t for t in tpls if t["id"] == "disco-light")
             assert disco["default"] is True
             assert disco["accent"].startswith("#") and disco["label"]
+
     asyncio.run(run())
 
 

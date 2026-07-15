@@ -426,9 +426,7 @@ async def test_run_browser_unavailable_is_terminal_not_degraded(monkeypatch):
     assert out.structured["verdict"] != "degraded"
     assert out.structured["passed"] is False
     assert out.structured["failure_fingerprint"] == "browser_unavailable"
-    assert out.structured["startup_diagnostic"] == (
-        "exit=1; chromium launch failed"
-    )
+    assert out.structured["startup_diagnostic"] == ("exit=1; chromium launch failed")
     assert out.content.startswith("VERIFY_WEB_APP: UNVERIFIABLE")
     assert "Browser rendering remains unverified" in out.content
     assert "report the missing browser proof explicitly" in out.content
@@ -550,9 +548,7 @@ async def test_explicit_reserved_port_rejected_on_shared_host():
         "http://127.0.0.1:8000/",
         "http://127.0.0.1:8800/",
     ):
-        out = await VerifyWebAppTool().run(
-            VerifyWebAppArgs(url=bad), _ctx(_ProcessLikeSandbox())
-        )
+        out = await VerifyWebAppTool().run(VerifyWebAppArgs(url=bad), _ctx(_ProcessLikeSandbox()))
         assert out.structured["passed"] is False, bad
         assert out.structured["verdict"] == "fail", bad
         assert "reserved" in out.structured["summary"].lower(), out.structured["summary"]
@@ -592,9 +588,7 @@ async def test_explicit_conversation_owned_port_is_honored_on_shared_host(monkey
         return (False, 0)
 
     monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
-    await VerifyWebAppTool().run(
-        VerifyWebAppArgs(url="http://127.0.0.1:8080/"), _ctx(sbx)
-    )
+    await VerifyWebAppTool().run(VerifyWebAppArgs(url="http://127.0.0.1:8080/"), _ctx(sbx))
     assert sbx.probed_url == "http://127.0.0.1:8080/", sbx.probed_url
 
 

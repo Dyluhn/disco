@@ -34,9 +34,9 @@ from disco.core.llm import (
     OperatingMode,
 )
 from disco.core.llm.prompts import (
-    _MENTIONED_ELEMENT_GUIDANCE,
     _EXECUTION_DRIVER_PROMPT,
     _EXECUTION_DRIVER_PROMPT_SMALL,
+    _MENTIONED_ELEMENT_GUIDANCE,
 )
 from llm_fakes import FakeModelProvider, simple_config
 
@@ -157,7 +157,7 @@ def test_assist_off_byte_identical_under_autonomous_prefix():
         "to `finish` yourself; if something is genuinely impossible, call `finish` "
         "and explain what is blocked in the summary.\n\n"
     )
-    assert off[len(autonomous_prefix):] == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
+    assert off[len(autonomous_prefix) :] == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_assist_off_byte_identical_under_skills_block():
@@ -173,8 +173,7 @@ def test_assist_off_byte_identical_under_skills_block():
         assist=False,
     )
     assert off == (
-        f"{skills_block}\n\n---\n\n"
-        f"{_EXECUTION_DRIVER_PROMPT}{_MENTIONED_ELEMENT_GUIDANCE}"
+        f"{skills_block}\n\n---\n\n{_EXECUTION_DRIVER_PROMPT}{_MENTIONED_ELEMENT_GUIDANCE}"
     )
 
 
@@ -270,9 +269,7 @@ async def test_router_injects_small_model_prompt_when_assist_true():
     )
     await router.complete(
         CompletionRequest(
-            profile=CapabilityProfile(
-                role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON
-            ),
+            profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON),
             messages=[LLMMessage(role="user", content="hello")],
             assist=True,
         )
@@ -294,9 +291,7 @@ async def test_router_injects_original_prompt_when_assist_false():
     )
     await router.complete(
         CompletionRequest(
-            profile=CapabilityProfile(
-                role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON
-            ),
+            profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON),
             messages=[LLMMessage(role="user", content="hello")],
             assist=False,
         )
@@ -320,9 +315,7 @@ async def test_router_injects_original_prompt_when_assist_default():
         prompt_provider=DriverPrompts(),
     )
     req = CompletionRequest(
-        profile=CapabilityProfile(
-            role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON
-        ),
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER, mode=OperatingMode.LONG_HORIZON),
         messages=[LLMMessage(role="user", content="hello")],
     )
     # Sanity: the field defaults to False on the wire today.

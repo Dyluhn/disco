@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from disco.core.contract import (
+    PHASE_NEUTRAL_TOOLS,
     ArtifactContract,
     BuildContract,
     BuildContractRegistry,
     ContractKind,
     ContractToolScopes,
     EditContract,
-    PHASE_NEUTRAL_TOOLS,
     Phase,
     ToolPack,
     VerificationContract,
@@ -17,7 +17,9 @@ from disco.core.contract import (
 )
 
 
-def _contract(*, bootstrap=(), edit=(), repair=(), rewrite=False, finalizer="ready_for_artifact_verification"):
+def _contract(
+    *, bootstrap=(), edit=(), repair=(), rewrite=False, finalizer="ready_for_artifact_verification"
+):
     return BuildContract(
         kind=ContractKind.CUSTOM,
         artifact=ArtifactContract(kind=ContractKind.CUSTOM),
@@ -155,4 +157,6 @@ def test_every_builtin_compiles() -> None:
             assert c.verify.finalizer in s.for_phase(phase)
             assert "verify_web_app" in s.for_phase(phase)
             assert "update_plan_progress" in s.for_phase(phase)
-        assert not ({"file_write", "exact_replace", "safe_write_file", "shell", "browser"} & s.verify)
+        assert not (
+            {"file_write", "exact_replace", "safe_write_file", "shell", "browser"} & s.verify
+        )

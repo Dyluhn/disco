@@ -110,6 +110,7 @@ def _default_secrets_path() -> Path:
         return legacy
     return new
 
+
 # OpenRouter models use this as their `api_key_env`. The agent-server overlays the
 # DECRYPTED OpenRouter key into the provider env under this name at build time, so
 # the existing api_key_env mechanism carries the secret without it touching disk.

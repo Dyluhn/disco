@@ -173,7 +173,7 @@ def _detect_cargo_toml(workspace: Path) -> list[str]:
             out.append(f"  cargo build/test/run: package = {name.strip()}")
     bins = data.get("bin")
     if isinstance(bins, list):
-        for b in bins[: _F4_MAX_SCRIPTS_PER_MANIFEST]:
+        for b in bins[:_F4_MAX_SCRIPTS_PER_MANIFEST]:
             if isinstance(b, dict):
                 bn = b.get("name")
                 if isinstance(bn, str) and bn.strip():
@@ -191,7 +191,7 @@ def _detect_go_mod(workspace: Path) -> list[str]:
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("module "):
-            mod = line[len("module "):].strip()
+            mod = line[len("module ") :].strip()
             if mod:
                 return [f"  go test/build/run: module = {mod}"]
     return []
@@ -223,20 +223,20 @@ def _detect_project_bootstrap(workspace_path: str | os.PathLike[str]) -> str | N
     sections: list[str] = []
     pkg = _detect_package_json(root)
     if pkg:
-        sections.append("package.json scripts:\n" + "\n".join(pkg[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("package.json scripts:\n" + "\n".join(pkg[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     pyp = _detect_pyproject_toml(root)
     if pyp:
-        scripts_text = "\n".join(pyp[: _F4_MAX_SCRIPTS_PER_MANIFEST])
+        scripts_text = "\n".join(pyp[:_F4_MAX_SCRIPTS_PER_MANIFEST])
         sections.append("pyproject.toml scripts:\n" + scripts_text)
     mk = _detect_makefile(root)
     if mk:
-        sections.append("Makefile targets:\n" + "\n".join(mk[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("Makefile targets:\n" + "\n".join(mk[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     cargo = _detect_cargo_toml(root)
     if cargo:
-        sections.append("Cargo.toml:\n" + "\n".join(cargo[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("Cargo.toml:\n" + "\n".join(cargo[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     gomod = _detect_go_mod(root)
     if gomod:
-        sections.append("go.mod:\n" + "\n".join(gomod[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("go.mod:\n" + "\n".join(gomod[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
 
     if not sections:
         return None

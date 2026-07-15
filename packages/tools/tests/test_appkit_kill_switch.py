@@ -64,7 +64,8 @@ async def test_lead_form_starter_refuses_when_disabled(
     monkeypatch.setenv(APPKIT_ENABLED_ENV, "0")
     ctx = SimpleNamespace(sandbox=object(), starter_kit=None)
     outcome = await ScaffoldStarterTool().run(
-        ScaffoldStarterArgs(title="t", kind="lead_form"), ctx  # type: ignore[arg-type]
+        ScaffoldStarterArgs(title="t", kind="lead_form"),
+        ctx,  # type: ignore[arg-type]
     )
     assert outcome.success is False
     assert outcome.error == "appkit_disabled"

@@ -27,9 +27,9 @@ import importlib.resources
 import io
 import re
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
 from disco.core.brand.tokens import Theme
@@ -68,8 +68,8 @@ class DeckSlide:
     layout: LayoutHint = "bullets"
     image_url: str | None = None
     notes: str | None = None
-    chart: ChartSpec | None = None   # C8: chart data → routes to c8 chart layout
-    table: TableSpec | None = None   # C8: table data → routes to c8 table layout
+    chart: ChartSpec | None = None  # C8: chart data → routes to c8 chart layout
+    table: TableSpec | None = None  # C8: table data → routes to c8 table layout
 
 
 @dataclass
@@ -92,20 +92,22 @@ def _minimal_to_authored(deck: MinimalDeck) -> AuthoredDeck:
         "bullets": "bullets",
         "section": "section_header",
         "image_right": "image_right",
-        "chart": "metrics",    # C8: chart → metrics layout
-        "table": "table",      # C8: table → table layout
+        "chart": "metrics",  # C8: chart → metrics layout
+        "table": "table",  # C8: table → table layout
     }
     slides = []
     for ds in deck.slides:
-        slides.append(AuthoredSlide(
-            type=_LAYOUT_MAP.get(ds.layout, "bullets"),
-            title=ds.title,
-            body=ds.bullets,
-            image_prompt=None,  # image_url is a path, not a prompt
-            notes=ds.notes,
-            chart=ds.chart,    # C8: propagate chart spec
-            table=ds.table,    # C8: propagate table spec
-        ))
+        slides.append(
+            AuthoredSlide(
+                type=_LAYOUT_MAP.get(ds.layout, "bullets"),
+                title=ds.title,
+                body=ds.bullets,
+                image_prompt=None,  # image_url is a path, not a prompt
+                notes=ds.notes,
+                chart=ds.chart,  # C8: propagate chart spec
+                table=ds.table,  # C8: propagate table spec
+            )
+        )
     theme_str = f"{deck.theme_name}-{deck.theme_mode}"
     if theme_str not in ("disco-light", "disco-dark", "neutral-light"):
         theme_str = "disco-light"
@@ -123,28 +125,30 @@ def _minimal_to_authored(deck: MinimalDeck) -> AuthoredDeck:
 # EMU geometry — 16:9 canvas matching C1 spec (12 192 000 × 6 858 000 EMU)
 # ---------------------------------------------------------------------------
 
-_SLIDE_W = 12_192_000   # 13.33 inches
-_SLIDE_H = 6_858_000    # 7.5 inches
+_SLIDE_W = 12_192_000  # 13.33 inches
+_SLIDE_H = 6_858_000  # 7.5 inches
 
 # Margins / safe-area (0.5 in = 457 200 EMU)
 _MARGIN = 457_200
 _PIPELINE_GENERATOR_MARKER = "disco-slides-generate:pipeline-html"
 
 # Content width / height (canvas minus symmetric margins)
-_CW = _SLIDE_W - 2 * _MARGIN            # 11 277 600
-_CH = _SLIDE_H - 2 * _MARGIN            # 5 943 600
+_CW = _SLIDE_W - 2 * _MARGIN  # 11 277 600
+_CH = _SLIDE_H - 2 * _MARGIN  # 5 943 600
 
 # Title-strip height (≈15% of canvas)
-_TITLE_H = 914_400                       # ≈ 1 in
+_TITLE_H = 914_400  # ≈ 1 in
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _rgb_from_hex(hex_color: str):  # type: ignore[return]
     """Return a pptx RGBColor from a ``#rrggbb`` string."""
     from pptx.dml.color import RGBColor  # lazy import — avoids load-time dep
+
     h = hex_color.lstrip("#")
     return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
@@ -182,6 +186,7 @@ def _add_textbox(slide, left: int, top: int, w: int, h: int):  # type: ignore[re
     """
     from pptx.enum.text import MSO_AUTO_SIZE
     from pptx.util import Emu
+
     shape = slide.shapes.add_textbox(Emu(left), Emu(top), Emu(w), Emu(h))
     tf = shape.text_frame
     tf.word_wrap = True
@@ -200,6 +205,7 @@ def _set_run_style(
 ) -> None:
     """Apply text + font styling to a python-pptx run."""
     from pptx.util import Pt
+
     run.text = text
     run.font.name = font_name
     run.font.size = Pt(size_pt)
@@ -216,7 +222,7 @@ def _add_accent_bar(slide, left: int, top: int, w: int, hex_color: str) -> None:
     bar = slide.shapes.add_shape(1, Emu(left), Emu(top), Emu(w), Emu(91_440))
     bar.fill.solid()
     bar.fill.fore_color.rgb = _rgb_from_hex(hex_color)
-    bar.line.fill.background()   # no border line
+    bar.line.fill.background()  # no border line
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +248,8 @@ def _draw_wordmark(prs_slide, theme: Theme) -> None:  # type: ignore[type-arg]
 
     dot = _BRAND_DOT
     box_w = 1_500_000
-    box_h = 259_080            # 0.283in
-    top = 91_440              # 0.1in  → bottom 0.383in, clear of the 0.5in title line
+    box_h = 259_080  # 0.283in
+    top = 91_440  # 0.1in  → bottom 0.383in, clear of the 0.5in title line
     right = _SLIDE_W - _MARGIN
     text_box_right = right - dot - 36_576  # leave room for the trailing dot
     tf = _add_textbox(prs_slide, text_box_right - box_w, top, box_w, box_h)
@@ -277,8 +283,11 @@ def _draw_cover_colophon(prs_slide, theme: Theme) -> None:  # type: ignore[type-
     _set_run_style(r_hw, "disco   ", _first_font(theme.font_display), 16.0, theme.text)
     r_pos = para.add_run()
     _set_run_style(
-        r_pos, "LATIN · VERB    /ˈdɪs.koː/",
-        _first_font(theme.font_ui), 8.5, theme.text_faint,
+        r_pos,
+        "LATIN · VERB    /ˈdɪs.koː/",
+        _first_font(theme.font_ui),
+        8.5,
+        theme.text_faint,
     )
 
     # Italic gloss.
@@ -286,8 +295,12 @@ def _draw_cover_colophon(prs_slide, theme: Theme) -> None:  # type: ignore[type-
     tf2 = _add_textbox(prs_slide, _MARGIN, gloss_top, _CW, 330_000)
     r_gloss = tf2.paragraphs[0].add_run()
     _set_run_style(
-        r_gloss, "“I learn; I become acquainted with.”",
-        _first_font(theme.font_reading), 12.0, theme.text_muted, italic=True,
+        r_gloss,
+        "“I learn; I become acquainted with.”",
+        _first_font(theme.font_reading),
+        12.0,
+        theme.text_muted,
+        italic=True,
     )
 
     # Etymology root.
@@ -295,8 +308,11 @@ def _draw_cover_colophon(prs_slide, theme: Theme) -> None:  # type: ignore[type-
     tf3 = _add_textbox(prs_slide, _MARGIN, root_top, _CW, 300_000)
     r_root = tf3.paragraphs[0].add_run()
     _set_run_style(
-        r_root, "from discere — to learn",
-        _first_font(theme.font_ui), 8.5, theme.text_faint,
+        r_root,
+        "from discere — to learn",
+        _first_font(theme.font_ui),
+        8.5,
+        theme.text_faint,
     )
 
 
@@ -317,6 +333,7 @@ def _draw_brand_marks(prs_slide, slide: Slide, theme: Theme) -> None:  # type: i
 # Per-layout PPTX render functions (each ≤ 200 LOC — arch budget)
 # ---------------------------------------------------------------------------
 
+
 def _layout_title_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  # type: ignore[type-arg]
     """Title-slide layout: large centered display title + optional subtitle.
 
@@ -336,15 +353,13 @@ def _layout_title_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  # t
     v_origin = int(_SLIDE_H * 0.28)
 
     # Accent bar
-    bar_w = 2_286_000   # 2.5 in
+    bar_w = 2_286_000  # 2.5 in
     _add_accent_bar(prs_slide, _MARGIN, v_origin, bar_w, theme.accent)
 
     # Title textbox
-    title_top = v_origin + 182_880   # 0.2 in below bar
-    title_h = 1_828_800              # 2 in
-    tf_title = _add_textbox(
-        prs_slide, _MARGIN, title_top, _CW, title_h
-    )
+    title_top = v_origin + 182_880  # 0.2 in below bar
+    title_h = 1_828_800  # 2 in
+    tf_title = _add_textbox(prs_slide, _MARGIN, title_top, _CW, title_h)
     p = tf_title.paragraphs[0]
     p.alignment = PP_ALIGN.LEFT
     run = p.add_run()
@@ -360,7 +375,7 @@ def _layout_title_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  # t
     # Subtitle (first bullet, if any)
     if slide.bullets:
         sub_top = title_top + title_h
-        sub_h = 914_400              # 1 in
+        sub_h = 914_400  # 1 in
         tf_sub = _add_textbox(prs_slide, _MARGIN, sub_top, _CW, sub_h)
         p_sub = tf_sub.paragraphs[0]
         p_sub.alignment = PP_ALIGN.LEFT
@@ -392,9 +407,7 @@ def _layout_bullets_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
     _set_slide_bg(prs_slide, theme.bg)
 
     # Title
-    tf_title = _add_textbox(
-        prs_slide, _MARGIN, _MARGIN, _CW, _TITLE_H
-    )
+    tf_title = _add_textbox(prs_slide, _MARGIN, _MARGIN, _CW, _TITLE_H)
     p_title = tf_title.paragraphs[0]
     p_title.alignment = PP_ALIGN.LEFT
     run_title = p_title.add_run()
@@ -408,15 +421,13 @@ def _layout_bullets_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
     )
 
     # Accent bar under title (thin, full width)
-    bar_top = _MARGIN + _TITLE_H + 45_720    # 0.05 in gap
+    bar_top = _MARGIN + _TITLE_H + 45_720  # 0.05 in gap
     _add_accent_bar(prs_slide, _MARGIN, bar_top, _CW, theme.accent)
 
     # Bullets textbox — occupies remaining vertical space
-    bullet_top = bar_top + 91_440 + 91_440   # 0.1 in bar + 0.1 in gap
+    bullet_top = bar_top + 91_440 + 91_440  # 0.1 in bar + 0.1 in gap
     bullet_h = _SLIDE_H - bullet_top - _MARGIN
-    tf_bullets = _add_textbox(
-        prs_slide, _MARGIN + 228_600, bullet_top, _CW - 228_600, bullet_h
-    )
+    tf_bullets = _add_textbox(prs_slide, _MARGIN + 228_600, bullet_top, _CW - 228_600, bullet_h)
     tf_bullets.word_wrap = True
 
     for i, bullet in enumerate(slide.bullets):
@@ -451,12 +462,12 @@ def _layout_section_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
     v_center = _SLIDE_H // 2
 
     # Accent bar (left-aligned, 1.5 in wide)
-    bar_w = 1_371_600   # 1.5 in
-    bar_top = v_center - 228_600    # 0.25 in above center
+    bar_w = 1_371_600  # 1.5 in
+    bar_top = v_center - 228_600  # 0.25 in above center
     _add_accent_bar(prs_slide, _MARGIN, bar_top, bar_w, theme.accent)
 
     # Section label (small allcaps kicker above the title)
-    kicker_top = bar_top - 457_200   # 0.5 in above bar
+    kicker_top = bar_top - 457_200  # 0.5 in above bar
     tf_kicker = _add_textbox(prs_slide, _MARGIN, kicker_top, _CW, 457_200)
     p_kicker = tf_kicker.paragraphs[0]
     p_kicker.alignment = PP_ALIGN.LEFT
@@ -471,8 +482,8 @@ def _layout_section_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None:  #
     )
 
     # Title (Fraunces, 40 pt)
-    title_top = bar_top + 182_880   # 0.2 in below bar
-    title_h = 1_371_600             # 1.5 in
+    title_top = bar_top + 182_880  # 0.2 in below bar
+    title_h = 1_371_600  # 1.5 in
     tf_title = _add_textbox(prs_slide, _MARGIN, title_top, _CW, title_h)
     p_title = tf_title.paragraphs[0]
     p_title.alignment = PP_ALIGN.LEFT
@@ -516,7 +527,7 @@ def _layout_image_right_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None
 
     _set_slide_bg(prs_slide, theme.bg)
 
-    half_w = _CW // 2 - 91_440     # slight gap between halves
+    half_w = _CW // 2 - 91_440  # slight gap between halves
 
     # Left half: title + bullets
     tf_title = _add_textbox(prs_slide, _MARGIN, _MARGIN, half_w, _TITLE_H)
@@ -537,15 +548,13 @@ def _layout_image_right_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None
 
     bullet_top = bar_top + 182_880
     bullet_h = _SLIDE_H - bullet_top - _MARGIN
-    tf_b = _add_textbox(prs_slide, _MARGIN + 228_600, bullet_top,
-                        half_w - 228_600, bullet_h)
+    tf_b = _add_textbox(prs_slide, _MARGIN + 228_600, bullet_top, half_w - 228_600, bullet_h)
     tf_b.word_wrap = True
     for i, bullet in enumerate(slide.bullets):
         p = tf_b.paragraphs[0] if i == 0 else tf_b.add_paragraph()
         p.alignment = PP_ALIGN.LEFT
         run = p.add_run()
-        _set_run_style(run, f"• {bullet}", _first_font(theme.font_reading),
-                       18, theme.text)
+        _set_run_style(run, f"• {bullet}", _first_font(theme.font_reading), 18, theme.text)
 
     # Right half: image or placeholder
     img_left = _MARGIN + half_w + 182_880
@@ -556,7 +565,10 @@ def _layout_image_right_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None
         try:
             prs_slide.shapes.add_picture(
                 slide.image_url,
-                Emu(img_left), Emu(_MARGIN), Emu(img_w), Emu(img_h),
+                Emu(img_left),
+                Emu(_MARGIN),
+                Emu(img_w),
+                Emu(img_h),
             )
         except Exception:
             # Fall back to placeholder if image can't be loaded
@@ -588,13 +600,14 @@ def _image_placeholder(prs_slide, left: int, top: int, w: int, h: int, theme: Th
     # Deterministic per-slot variant; distinct primes mix the geometry so a
     # cover slot and a side slot land on different compositions.
     variant = (left * 7 + top * 13 + w * 3 + h * 5) // 9_525 % 3
-    cx, cy = left + w // 2, top + h // 2
     r_big = min(w, h) * 2 // 3
     r_mid = r_big // 2
     r_dot = max(r_big // 7, 91_440)
 
     def _circle(x: int, y: int, r: int, hex_color: str, outline: bool = False) -> None:
-        c = prs_slide.shapes.add_shape(MSO_SHAPE.OVAL, Emu(x - r // 2), Emu(y - r // 2), Emu(r), Emu(r))
+        c = prs_slide.shapes.add_shape(
+            MSO_SHAPE.OVAL, Emu(x - r // 2), Emu(y - r // 2), Emu(r), Emu(r)
+        )
         if outline:
             c.fill.background()
             c.line.color.rgb = _rgb_from_hex(hex_color)
@@ -613,7 +626,9 @@ def _image_placeholder(prs_slide, left: int, top: int, w: int, h: int, theme: Th
     if variant == 0:
         # Off-center large disc + outlined echo + accent dot.
         _circle(left + w * 2 // 3, top + h // 3, r_big, theme.surface_2)
-        _circle(left + w * 2 // 3, top + h // 3, r_big + r_mid // 2, theme.hairline_strong, outline=True)
+        _circle(
+            left + w * 2 // 3, top + h // 3, r_big + r_mid // 2, theme.hairline_strong, outline=True
+        )
         _circle(left + w // 4, top + h * 3 // 4, r_dot, theme.accent)
         _bar(left + w // 8, top + h * 5 // 6, w // 3, 27_432, theme.hairline_strong)
     elif variant == 1:
@@ -624,7 +639,13 @@ def _image_placeholder(prs_slide, left: int, top: int, w: int, h: int, theme: Th
     else:
         # Column rhythm + accent square.
         for i in range(4):
-            _bar(left + w * (2 * i + 1) // 9, top + h // 5, w // 18 + 9_525, h * 3 // 5, theme.surface_2)
+            _bar(
+                left + w * (2 * i + 1) // 9,
+                top + h // 5,
+                w // 18 + 9_525,
+                h * 3 // 5,
+                theme.surface_2,
+            )
         sq = max(r_dot, 137_160)
         _bar(left + w * 3 // 4, top + h * 2 // 3, sq, sq, theme.accent)
 
@@ -644,6 +665,7 @@ _MINIMAL_LAYOUT_FNS = {
 # ---------------------------------------------------------------------------
 # C1 Element renderer — maps each Element to a python-pptx shape
 # ---------------------------------------------------------------------------
+
 
 def _is_bullet_el(el: Element) -> bool:
     """A bullet body Element: a text Element whose text carries the "• " prefix.
@@ -696,7 +718,8 @@ def _render_bullet_group(prs_slide, group: list[Element], theme: Theme) -> None:
         p.space_after = Pt(6)
         run = p.add_run()
         _set_run_style(
-            run, el.text,
+            run,
+            el.text,
             el.font_name or "Helvetica",
             el.font_size_pt,
             el.hex_color or "#1a1813",
@@ -756,7 +779,10 @@ def _render_text_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
     _ALIGN_MAP = {"LEFT": PP_ALIGN.LEFT, "CENTER": PP_ALIGN.CENTER, "RIGHT": PP_ALIGN.RIGHT}
     tf = _add_textbox(
         prs_slide,
-        int(el.left), int(el.top), int(el.width), int(el.height),
+        int(el.left),
+        int(el.top),
+        int(el.width),
+        int(el.height),
     )
     tf.word_wrap = el.word_wrap
     p = tf.paragraphs[0]
@@ -767,7 +793,8 @@ def _render_text_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
     # font is installed on the host OS. The base64 data-URI embedding in
     # font_face_css() fixes HTML/PDF output; PPTX fonts are NOT fixed here.
     _set_run_style(
-        run, el.text,
+        run,
+        el.text,
         el.font_name or "Helvetica",
         el.font_size_pt,
         el.hex_color or "#1a1813",
@@ -780,7 +807,9 @@ def _render_accent_bar_element(prs_slide, el: Element) -> None:  # type: ignore[
     """Render an accent_bar Element as a thin filled rectangle."""
     _add_accent_bar(
         prs_slide,
-        int(el.left), int(el.top), int(el.width),
+        int(el.left),
+        int(el.top),
+        int(el.width),
         el.fill_hex,
     )
 
@@ -798,8 +827,10 @@ def _render_image_element(prs_slide, el: Element, theme: Theme) -> None:  # type
         try:
             prs_slide.shapes.add_picture(
                 source,
-                Emu(int(el.left)), Emu(int(el.top)),
-                Emu(int(el.width)), Emu(int(el.height)),
+                Emu(int(el.left)),
+                Emu(int(el.top)),
+                Emu(int(el.width)),
+                Emu(int(el.height)),
             )
             return
         except Exception:
@@ -808,8 +839,10 @@ def _render_image_element(prs_slide, el: Element, theme: Theme) -> None:  # type
     # Styled placeholder box (visible "image" label)
     _image_placeholder(
         prs_slide,
-        int(el.left), int(el.top),
-        int(el.width), int(el.height),
+        int(el.left),
+        int(el.top),
+        int(el.width),
+        int(el.height),
         theme,
     )
 
@@ -820,8 +853,10 @@ def _render_rect_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
 
     box = prs_slide.shapes.add_shape(
         1,
-        Emu(int(el.left)), Emu(int(el.top)),
-        Emu(int(el.width)), Emu(int(el.height)),
+        Emu(int(el.left)),
+        Emu(int(el.top)),
+        Emu(int(el.width)),
+        Emu(int(el.height)),
     )
     box.fill.solid()
     box.fill.fore_color.rgb = _rgb_from_hex(el.fill_hex)
@@ -1154,6 +1189,7 @@ def _render_archetype_pptx(prs_slide, slide: Slide, theme: Theme) -> bool:  # ty
 # render_pptx — accepts Deck (C1) or MinimalDeck (compat)
 # ---------------------------------------------------------------------------
 
+
 def render_pptx(deck: Deck | MinimalDeck) -> bytes:
     """Render *deck* to native editable .pptx bytes (python-pptx, real text boxes).
 
@@ -1189,9 +1225,11 @@ def _render_pptx_c1(deck: Deck) -> bytes:
         # C8: chart/table slides delegate to native chart/table shapes
         if slide.chart is not None:
             from disco.tools.builtin._c8_chart_layouts import layout_chart_slide_pptx
+
             layout_chart_slide_pptx(prs_slide, slide, deck.theme)
         elif slide.table is not None:
             from disco.tools.builtin._c8_chart_layouts import layout_table_slide_pptx
+
             layout_table_slide_pptx(prs_slide, slide, deck.theme)
         else:
             if not _render_archetype_pptx(prs_slide, slide, deck.theme):
@@ -1215,6 +1253,7 @@ def _render_pptx_c1(deck: Deck) -> bytes:
 # ---------------------------------------------------------------------------
 # render_html — 16:9 brand HTML (accepts Deck or MinimalDeck)
 # ---------------------------------------------------------------------------
+
 
 def _img_src(el: Element) -> str | None:
     """C7 wire: the HTML <img src> for an image Element — an inline data-URI from
@@ -1241,7 +1280,8 @@ def _art_fallback_svg(variant: int = 0, *, style: str = "") -> str:
     if v == 0:
         art = (
             '<circle cx="66" cy="30" r="24" fill="var(--surface-2)"/>'
-            '<circle cx="66" cy="30" r="30" fill="none" stroke="var(--hairline-strong)" stroke-width="0.6"/>'
+            '<circle cx="66" cy="30" r="30" fill="none" '
+            'stroke="var(--hairline-strong)" stroke-width="0.6"/>'
             '<circle cx="25" cy="68" r="4" fill="var(--accent)"/>'
             '<rect x="12" y="82" width="34" height="1.2" fill="var(--hairline-strong)"/>'
         )
@@ -1293,7 +1333,7 @@ def _brand_marks_html(slide: Slide, theme: Theme) -> str:
         '<div class="bc-rule"></div>'
         '<div class="bc-gloss">“I learn; I become acquainted with.”</div>'
         '<div class="bc-root">from <em>discere</em> — to learn</div>'
-        '</div>'
+        "</div>"
     )
     return wordmark + colophon
 
@@ -1308,12 +1348,10 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
 
     sections_html: list[str] = []
     for i, slide in enumerate(deck.slides):
-        active = ' active' if i == 0 else ''
+        active = " active" if i == 0 else ""
         bg = theme.surface_1 if slide.layout == "section_header" else theme.bg
         archetype = _slide_archetype(slide)
-        archetype_attr = (
-            f'data-archetype="{html.escape(archetype)}" ' if archetype else ""
-        )
+        archetype_attr = f'data-archetype="{html.escape(archetype)}" ' if archetype else ""
 
         inner = _html_for_c1_slide(slide, theme, slide_idx=i)
         brand = _brand_marks_html(slide, theme)
@@ -1321,7 +1359,7 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
             f'<section class="slide{active}" id="slide-{i}" '
             f'data-slide-id="slide-{i}" '
             f'data-layout="{html.escape(slide.layout)}" '
-            f'{archetype_attr}'
+            f"{archetype_attr}"
             f'style="background:{html.escape(bg)}">\n{inner}\n{brand}\n</section>'
         )
 
@@ -1410,7 +1448,8 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
   border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;
   color:var(--text-faint);font-family:var(--ui);font-size:1.2vw;}}
 .slide-image-scrim{{position:absolute;inset:0;background:
-  linear-gradient(90deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.52) 38%,rgba(0,0,0,.12) 72%,rgba(0,0,0,0) 100%);}}
+  linear-gradient(90deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.52) 38%,\
+rgba(0,0,0,.12) 72%,rgba(0,0,0,0) 100%);}}
 .slide-full-image-copy{{position:absolute;left:5%;bottom:8%;max-width:68%;z-index:1;}}
 .slide-full-image-copy .slide-heading,
 .slide-full-image-copy .slide-title{{color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);}}
@@ -1516,6 +1555,7 @@ def strip_element_ids(html_str: str) -> str:
     SelectionOverlay can read them; callers needing a clean downloadable variant
     must call this explicitly.
     """
+
     def _clean_tag(m: re.Match[str]) -> str:
         tag = _STRIP_ELEMENT_ID_RE.sub("", m.group(0))
         return _STRIP_SLIDE_ID_RE.sub("", tag)
@@ -1542,18 +1582,16 @@ def _html_big_number(
     figure = (
         f'<div class="slide-big-number-figure" data-element-id="{body_eid(0)}" '
         f'data-slide-id="{sid}">{_html_body_text(figure_el)}</div>'
-        if figure_el is not None else ""
+        if figure_el is not None
+        else ""
     )
     support = (
         f'<p class="slide-big-number-support" data-element-id="{body_eid(1)}" '
         f'data-slide-id="{sid}">{_html_body_text(support_el)}</p>'
-        if support_el is not None else ""
+        if support_el is not None
+        else ""
     )
-    return (
-        '<div class="slide-big-number-layout">'
-        f'{title_html}{figure}{support}'
-        '</div>'
-    )
+    return f'<div class="slide-big-number-layout">{title_html}{figure}{support}</div>'
 
 
 def _html_quote(
@@ -1567,18 +1605,20 @@ def _html_quote(
     quote = (
         f'<blockquote class="slide-quote-text" data-element-id="{body_eid(0)}" '
         f'data-slide-id="{sid}">{_html_body_text(quote_el)}</blockquote>'
-        if quote_el is not None else ""
+        if quote_el is not None
+        else ""
     )
     attribution = (
         f'<figcaption class="slide-quote-attribution" data-element-id="{body_eid(1)}" '
         f'data-slide-id="{sid}">{_html_body_text(attr_el)}</figcaption>'
-        if attr_el is not None else ""
+        if attr_el is not None
+        else ""
     )
     return (
         '<figure class="slide-quote-layout">'
         '<div class="slide-quote-mark" aria-hidden="true">“</div>'
-        f'{quote}{attribution}'
-        '</figure>'
+        f"{quote}{attribution}"
+        "</figure>"
     )
 
 
@@ -1597,21 +1637,19 @@ def _html_timeline(
         x = 8.0 + (j * (100.0 - 16.0) / denom if len(items) > 1 else 42.0)
         head, detail = _split_timeline_label(_plain_element_text(el))
         label_cls = "above" if j % 2 == 0 else "below"
-        nodes.append(
-            f'<div class="slide-timeline-node" style="left:{x:.2f}%"></div>'
-        )
+        nodes.append(f'<div class="slide-timeline-node" style="left:{x:.2f}%"></div>')
         labels.append(
             f'<div class="slide-timeline-label {label_cls}" style="left:{x:.2f}%" '
             f'data-element-id="{body_eid(j)}" data-slide-id="{sid}">'
-            f'<strong>{html.escape(head)}</strong>{html.escape(detail)}</div>'
+            f"<strong>{html.escape(head)}</strong>{html.escape(detail)}</div>"
         )
     return (
         '<div class="slide-timeline-layout">'
         f'{title_html}<div class="slide-rule"></div>'
         '<div class="slide-timeline">'
         '<div class="slide-timeline-spine"></div>'
-        f'{"".join(nodes)}{"".join(labels)}'
-        '</div></div>'
+        f"{''.join(nodes)}{''.join(labels)}"
+        "</div></div>"
     )
 
 
@@ -1648,9 +1686,65 @@ def _html_two_by_two(
         '<div class="slide-two-by-two-layout">'
         f'{title_html}<div class="slide-rule"></div>'
         '<div class="slide-two-by-two-grid">'
-        f'{axis_html}'
-        f'{"".join(cell_html)}'
-        '</div></div>'
+        f"{axis_html}"
+        f"{''.join(cell_html)}"
+        "</div></div>"
+    )
+
+
+def _html_image_layout(
+    layout: str,
+    texts_sorted: list[Element],
+    images: list[Element],
+    title_tag: Callable[[Element, str], str],
+    bullet_li: Callable[[Element, int], str],
+) -> str:
+    title_el = texts_sorted[0] if texts_sorted else None
+    body_els = texts_sorted[1:]
+    title_html = title_tag(title_el, "slide-heading") if title_el else ""
+    bullet_items = "".join(bullet_li(el, j) for j, el in enumerate(body_els))
+    bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
+
+    if layout == "full_image":
+        img_html = _art_fallback_svg(0, style="position:absolute;inset:0;width:100%;height:100%;")
+        if images:
+            img_src = _img_src(images[0])
+            if img_src:
+                img_html = f'<img class="slide-full-image-bg" src="{img_src}" alt="">'
+        return (
+            '<div class="slide-full-image-wrap">'
+            f"{img_html}"
+            '<div class="slide-image-scrim" aria-hidden="true"></div>'
+            f'<div class="slide-full-image-copy">{title_html}{bullets_html}</div>'
+            "</div>"
+        )
+
+    img_html = ""
+    if images:
+        img_src = _img_src(images[0])
+        if img_src:
+            img_html = (
+                f'<img src="{img_src}" alt="" style="max-width:48%;max-height:90%;'
+                'object-fit:contain;">'
+            )
+        else:
+            img_html = _art_fallback_svg(
+                2, style="width:46%;height:80%;border:1px solid var(--hairline);"
+            )
+
+    text_div = (
+        '<div style="flex:1;display:flex;flex-direction:column;">'
+        f'{title_html}<div class="slide-rule"></div>{bullets_html}'
+        "</div>"
+    )
+    if layout == "image_left":
+        return (
+            '<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">'
+            f"{img_html}{text_div}</div>"
+        )
+    return (
+        '<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">'
+        f"{text_div}{img_html}</div>"
     )
 
 
@@ -1670,10 +1764,12 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
     # writing /slides/N/title). Charts/tables are edited via their own tools.
     if slide.chart is not None:
         from disco.tools.builtin._c8_chart_layouts import html_chart_content
+
         inner = html_chart_content(slide.title, slide.chart, theme)
         return f'<div data-slide-id="{sid}">{inner}</div>'
     if slide.table is not None:
         from disco.tools.builtin._c8_chart_layouts import html_table_content
+
         inner = html_table_content(slide.title, slide.table, theme)
         return f'<div data-slide-id="{sid}">{inner}</div>'
 
@@ -1690,19 +1786,19 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
     layout = slide.layout
 
     def _title_tag(el: Element, cls: str, tag: str = "h2") -> str:
-        eid = f'{sid}:title'
+        eid = f"{sid}:title"
         return (
             f'<{tag} class="{cls}" '
             f'data-element-id="{eid}" data-slide-id="{sid}">'
-            f'{html.escape(el.text)}</{tag}>'
+            f"{html.escape(el.text)}</{tag}>"
         )
 
     def _sub_tag(el: Element, cls: str) -> str:
-        eid = f'{sid}:subtitle'
+        eid = f"{sid}:subtitle"
         return (
             f'<p class="{cls}" '
             f'data-element-id="{eid}" data-slide-id="{sid}">'
-            f'{html.escape(el.text)}</p>'
+            f"{html.escape(el.text)}</p>"
         )
 
     # BW-13: map a rendered bullet's POSITION (its index among this slide's body
@@ -1718,19 +1814,16 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         return body_index_map[render_pos] if render_pos < len(body_index_map) else render_pos
 
     def _body_eid(render_pos: int) -> str:
-        return f'{sid}:body:{_orig_bidx(render_pos)}'
+        return f"{sid}:body:{_orig_bidx(render_pos)}"
 
     def _bullet_li(el: Element, render_pos: int) -> str:
         return (
             f'<li data-element-id="{_body_eid(render_pos)}" data-slide-id="{sid}">'
-            f'{_html_body_text(el)}</li>'
+            f"{_html_body_text(el)}</li>"
         )
 
     def _archetype_body_els(title_el: Element | None) -> list[Element]:
-        return [
-            el for el in texts
-            if el is not title_el and el.text.strip()
-        ]
+        return [el for el in texts if el is not title_el and el.text.strip()]
 
     archetype = _slide_archetype(slide)
     archetype_title = _title_element(slide)
@@ -1763,54 +1856,17 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         head_texts = [t for t in texts if t.font_size_pt > 12]
         kicker_sorted = sorted(kicker_texts, key=lambda e: e.font_size_pt)
         head_sorted = sorted(head_texts, key=lambda e: e.font_size_pt, reverse=True)
-        kicker = f'<p class="slide-section-kicker">{html.escape(kicker_sorted[0].text)}</p>' if kicker_sorted else ""
+        kicker = (
+            f'<p class="slide-section-kicker">{html.escape(kicker_sorted[0].text)}</p>'
+            if kicker_sorted
+            else ""
+        )
         title = _title_tag(head_sorted[0], "slide-section-title", "h2") if head_sorted else ""
         sub = "\n".join(_sub_tag(el, "slide-subtitle") for el in head_sorted[1:])
         return f'{kicker}<div class="slide-title-bar"></div>\n{title}\n{sub}'
 
     if layout in ("image_right", "image_left", "full_image"):
-        title_el = texts_sorted[0] if texts_sorted else None
-        body_els = texts_sorted[1:]
-
-        title_html = _title_tag(title_el, "slide-heading") if title_el else ""
-        bullet_items = "".join(_bullet_li(el, j) for j, el in enumerate(body_els))
-        bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
-
-        if layout == "full_image":
-            # Themed art fallback (not a dead '[image]' box) — full-bleed slot.
-            img_html = _art_fallback_svg(0, style="position:absolute;inset:0;width:100%;height:100%;")
-            if images:
-                img_src = _img_src(images[0])
-                if img_src:
-                    img_html = f'<img class="slide-full-image-bg" src="{img_src}" alt="">'
-            return (
-                '<div class="slide-full-image-wrap">'
-                f'{img_html}'
-                '<div class="slide-image-scrim" aria-hidden="true"></div>'
-                f'<div class="slide-full-image-copy">{title_html}{bullets_html}</div>'
-                '</div>'
-            )
-
-        img_html = ""
-        if images:
-            img_el = images[0]
-            img_src = _img_src(img_el)  # C7: data-URI from bytes, else the path
-            if img_src:
-                img_html = f'<img src="{img_src}" alt="" style="max-width:48%;max-height:90%;object-fit:contain;">'
-            else:
-                # Themed art fallback (not a dead '[image]' box) — side slot.
-                img_html = _art_fallback_svg(
-                    2, style="width:46%;height:80%;border:1px solid var(--hairline);"
-                )
-
-        text_div = (
-            f'<div style="flex:1;display:flex;flex-direction:column;">'
-            f'{title_html}<div class="slide-rule"></div>{bullets_html}'
-            f'</div>'
-        )
-        if layout == "image_left":
-            return f'<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">{img_html}{text_div}</div>'
-        return f'<div style="display:flex;gap:4%;width:100%;height:100%;align-items:center;">{text_div}{img_html}</div>'
+        return _html_image_layout(layout, texts_sorted, images, _title_tag, _bullet_li)
 
     if layout == "closing":
         primary = texts_sorted[0] if texts_sorted else None
@@ -1835,7 +1891,7 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
             f'<div style="display:flex;gap:4%;width:100%;">'
             f'<div style="flex:1">{left_ul}</div>'
             f'<div style="flex:1">{right_ul}</div>'
-            f'</div>'
+            f"</div>"
         )
 
     # Default: bullets
@@ -1854,13 +1910,11 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
     if slide.layout == "title":
         subtitle = ""
         if slide.bullets:
-            subtitle = (
-                f'<p class="slide-subtitle">{html.escape(slide.bullets[0])}</p>'
-            )
+            subtitle = f'<p class="slide-subtitle">{html.escape(slide.bullets[0])}</p>'
         return (
             f'<div class="slide-title-bar"></div>\n'
             f'<h1 class="slide-title">{title_esc}</h1>\n'
-            f'{subtitle}'
+            f"{subtitle}"
         )
 
     if slide.layout == "section":
@@ -1868,13 +1922,13 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
         if slide.bullets:
             subtitle = (
                 f'<p class="slide-subtitle" style="margin-top:1.5%">'
-                f'{html.escape(slide.bullets[0])}</p>'
+                f"{html.escape(slide.bullets[0])}</p>"
             )
         return (
             f'<p class="slide-section-kicker">Section</p>\n'
             f'<div class="slide-title-bar"></div>\n'
             f'<h2 class="slide-section-title">{title_esc}</h2>\n'
-            f'{subtitle}'
+            f"{subtitle}"
         )
 
     if slide.layout == "image_right":
@@ -1887,15 +1941,17 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
             )
         else:
             # Themed art fallback (not a dead '[image]' box) — side slot.
-            img_html = _art_fallback_svg(1, style="width:46%;height:80%;border:1px solid var(--hairline);")
+            img_html = _art_fallback_svg(
+                1, style="width:46%;height:80%;border:1px solid var(--hairline);"
+            )
         return (
             f'<div style="display:flex;gap:4%;width:100%;height:100%;'
             f'align-items:center;">'
             f'<div style="flex:1;display:flex;flex-direction:column;">'
             f'<h2 class="slide-heading">{title_esc}</h2>'
             f'<div class="slide-rule"></div>'
-            f'{bullets_html}</div>'
-            f'{img_html}</div>'
+            f"{bullets_html}</div>"
+            f"{img_html}</div>"
         )
 
     # Default: bullets layout
@@ -1903,7 +1959,7 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
     return (
         f'<h2 class="slide-heading">{title_esc}</h2>\n'
         f'<div class="slide-rule"></div>\n'
-        f'{bullets_html}'
+        f"{bullets_html}"
     )
 
 
@@ -1918,6 +1974,7 @@ def _bullets_html(bullets: list[str]) -> str:
 # ---------------------------------------------------------------------------
 # convert_to_pdf — LibreOffice headless (sandbox-jailed)
 # ---------------------------------------------------------------------------
+
 
 async def convert_to_pdf(ctx: ToolContext, pptx_name: str) -> tuple[bool, str]:
     """Convert *pptx_name* (workspace-relative) to PDF via ``soffice`` inside the sandbox.
@@ -1950,10 +2007,7 @@ async def convert_to_pdf(ctx: ToolContext, pptx_name: str) -> tuple[bool, str]:
         )
 
     # 2. Convert (--outdir . → PDF lands in cwd = workspace)
-    cmd = (
-        "soffice --headless --convert-to pdf --outdir . "
-        + shlex.quote(pptx_name)
-    )
+    cmd = "soffice --headless --convert-to pdf --outdir . " + shlex.quote(pptx_name)
     try:
         res = await ctx.sandbox.exec_shell(cmd, timeout_s=120)
     except Exception as exc:
@@ -1971,6 +2025,7 @@ async def convert_to_pdf(ctx: ToolContext, pptx_name: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # render_deck — convenience orchestrator
 # ---------------------------------------------------------------------------
+
 
 def render_deck(deck: Deck | MinimalDeck) -> dict[str, bytes | str]:
     """Render *deck* to pptx_bytes + html_str.

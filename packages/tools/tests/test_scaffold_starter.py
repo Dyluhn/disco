@@ -5,18 +5,20 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin.scaffold_starter import ScaffoldStarterArgs, ScaffoldStarterTool
 from disco.tools.secrets import CapabilityBroker
-
 from tool_fakes import FakeSandboxInstance
 
 
 def _ctx(sbx, starter_kit):
     return ToolContext(
-        sandbox=sbx, workspace_path=".", timeout_s=30,
-        capabilities=CapabilityBroker().grant(frozenset()), owner_id="t", conversation_id="c",
+        sandbox=sbx,
+        workspace_path=".",
+        timeout_s=30,
+        capabilities=CapabilityBroker().grant(frozenset()),
+        owner_id="t",
+        conversation_id="c",
         starter_kit=starter_kit,
     )
 
@@ -32,7 +34,9 @@ async def test_scaffolds_app_shell() -> None:
 @pytest.mark.asyncio
 async def test_scaffolds_lead_form_files() -> None:
     sbx = FakeSandboxInstance()
-    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Roof Co"), _ctx(sbx, "lead_form"))
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="Roof Co"), _ctx(sbx, "lead_form")
+    )
     assert out.success
     assert ".disco/appspec.json" in sbx._fs and "index.html" in sbx._fs
 
@@ -65,9 +69,13 @@ def _text(sbx: FakeSandboxInstance, path: str) -> str:
         ("ui_kit_dense", {"index.html", "styles.css", "app.js", "NOTES.md"}),
     ],
 )
-async def test_new_starters_materialize_files_and_return_notes(starter: str, paths: set[str]) -> None:
+async def test_new_starters_materialize_files_and_return_notes(
+    starter: str, paths: set[str]
+) -> None:
     sbx = FakeSandboxInstance()
-    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Wave Three"), _ctx(sbx, starter))
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="Wave Three"), _ctx(sbx, starter)
+    )
     assert out.success
     assert paths <= set(sbx._fs)
     assert out.structured is not None
@@ -79,7 +87,9 @@ async def test_new_starters_materialize_files_and_return_notes(starter: str, pat
 @pytest.mark.asyncio
 async def test_game_loop_vanilla_contains_clean_room_juice_primitives() -> None:
     sbx = FakeSandboxInstance()
-    await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Game"), _ctx(sbx, "game_loop_vanilla"))
+    await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="Game"), _ctx(sbx, "game_loop_vanilla")
+    )
     game_js = _text(sbx, "game.js")
     assert "const FIXED_DT = 1 / 60" in game_js
     assert "const sceneStack = []" in game_js
@@ -164,13 +174,17 @@ async def test_never_clobbers_existing_files() -> None:
 
 @pytest.mark.asyncio
 async def test_no_starter_is_structured_error() -> None:
-    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="X"), _ctx(FakeSandboxInstance(), None))
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="X"), _ctx(FakeSandboxInstance(), None)
+    )
     assert not out.success and out.error == "no_starter"
 
 
 @pytest.mark.asyncio
 async def test_unknown_starter_is_structured_error() -> None:
-    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="X"), _ctx(FakeSandboxInstance(), "ghost"))
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="X"), _ctx(FakeSandboxInstance(), "ghost")
+    )
     assert not out.success and out.error == "unknown_starter"
 
 
@@ -207,7 +221,11 @@ async def test_executor_threads_active_contract_starter_to_ctx() -> None:
     res = await ex.execute(call("scaffold_starter", title="Acme"))
     assert res.success and "index.html" in sbx._fs  # ctx.starter_kit reached the tool
     # with no starter bound, the tool reports no_starter (not a silent success)
-    ex2 = DefaultToolExecutor(build_default_registry(), agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=FakeSandboxInstance())
+    ex2 = DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=FakeSandboxInstance(),
+    )
     res2 = await ex2.execute(call("scaffold_starter", title="Acme"))
     assert not res2.success and res2.error == "no_starter"
 
@@ -219,7 +237,10 @@ def test_registered_and_in_scopes() -> None:
 
     reg = build_default_registry()
     assert "scaffold_starter" in reg.names()
-    agent = {t.definition.name for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))}
+    agent = {
+        t.definition.name
+        for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))
+    }
     artifact = {t.definition.name for t in reg.in_scope(artifact_scope())}
     assert "scaffold_starter" in agent and "scaffold_starter" in artifact
 
@@ -271,7 +292,13 @@ def test_catalog_guidance_travels_in_the_tool_description() -> None:
     """The when-to-use catalog is part of the SCHEMA the model sees (the
     Claude-design pattern), not tribal knowledge in a prompt pack."""
     desc = ScaffoldStarterTool.definition.description
-    for kind in ("app_shell", "lead_form", "game_loop_vanilla", "pwa_shell",
-                 "device_frames", "ui_kit_dense"):
+    for kind in (
+        "app_shell",
+        "lead_form",
+        "game_loop_vanilla",
+        "pwa_shell",
+        "device_frames",
+        "ui_kit_dense",
+    ):
         assert kind in desc
     assert "Precedence" in desc  # the funnel: design system > starter > hand-rolling

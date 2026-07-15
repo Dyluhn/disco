@@ -38,9 +38,7 @@ from .host_service_bus import is_bus_route_raw
 _LOG = logging.getLogger(__name__)
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
-_PATH_PREVIEW_RE = re.compile(
-    r"^/conversations/(?P<cid>conv_[A-Za-z0-9_-]+)/preview-app(?:/|$)"
-)
+_PATH_PREVIEW_RE = re.compile(r"^/conversations/(?P<cid>conv_[A-Za-z0-9_-]+)/preview-app(?:/|$)")
 # Derived LIVE from the shared session secret at each use: identical to the
 # app-server's token and stable across restarts, so ONE pasted token pairs both
 # origins. See disco.core.auth.pairing_token. Re-usable (secret is the root of
@@ -218,9 +216,7 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             return owner_check
         return await call_next(request)
 
-    async def _authenticate_path_preview(
-        self, request: Request
-    ) -> tuple[bool, Response | None]:
+    async def _authenticate_path_preview(self, request: Request) -> tuple[bool, Response | None]:
         """Accept only a signed, path-scoped static-preview capability.
 
         The bool identifies this route family. A ``None`` response means its

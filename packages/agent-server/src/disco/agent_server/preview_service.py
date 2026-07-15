@@ -34,9 +34,7 @@ class PreviewService:
         """Full conversation id whose uuid part starts with cid8 — live executors only
         (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
         matches = [
-            cid
-            for cid in self._rt._executors.keys()
-            if cid.removeprefix("conv_").startswith(cid8)
+            cid for cid in self._rt._executors.keys() if cid.removeprefix("conv_").startswith(cid8)
         ]
         if len(matches) == 1:
             return matches[0]
@@ -167,7 +165,7 @@ class PreviewService:
         def _owner_json(o):  # bound ports only; normalized session name
             sess = o.session
             if sess and sess.startswith(ns):
-                sess = sess[len(ns):]
+                sess = sess[len(ns) :]
             return {"pid": o.pid, "cmdline": o.cmdline, "session": sess}
 
         ports_payload = [

@@ -36,10 +36,13 @@ def _make_store() -> SqliteEventStore:
 async def _seed_query(store: SqliteEventStore, cid: str, text: str = "What's new?") -> None:
     """Seed the original USER query + a prior agent reply so a scheduled fire has
     something to re-run (the fire re-injects this query as a fresh user turn)."""
-    await store.append(cid, MessageEvent(source=EventSource.USER,
-                                         message=LLMMessage(role="user", content=text)))
-    await store.append(cid, MessageEvent(source=EventSource.AGENT,
-                                         message=LLMMessage(role="assistant", content="...")))
+    await store.append(
+        cid, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=text))
+    )
+    await store.append(
+        cid,
+        MessageEvent(source=EventSource.AGENT, message=LLMMessage(role="assistant", content="...")),
+    )
 
 
 def _make_runtime(store: SqliteEventStore) -> MagicMock:
@@ -346,12 +349,15 @@ def test_local_schedule_has_explicit_dst_gap_and_fold_policy():
 
 
 def test_invalid_schedule_timezone_fails_closed():
-    assert next_n_runs(
-        "0 9 * * 1",
-        n=1,
-        after=datetime(2026, 7, 12, tzinfo=UTC),
-        timezone="Mars/Olympus_Mons",
-    ) == []
+    assert (
+        next_n_runs(
+            "0 9 * * 1",
+            n=1,
+            after=datetime(2026, 7, 12, tzinfo=UTC),
+            timezone="Mars/Olympus_Mons",
+        )
+        == []
+    )
 
 
 def test_invalid_rrule_returns_empty():

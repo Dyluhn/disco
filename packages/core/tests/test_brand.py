@@ -13,6 +13,8 @@ Covers:
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 from disco.core.brand import (
     THEMES,
@@ -169,10 +171,24 @@ def test_all_theme_fields_non_empty() -> None:
     """Every field in every registered theme is a non-empty string or bool."""
     for (name, mode), t in THEMES.items():
         for field in (
-            "bg", "surface_1", "surface_2", "hairline", "hairline_strong",
-            "text", "text_muted", "text_faint", "accent", "link",
-            "verify_supported", "verify_weak", "verify_unsupported", "warn",
-            "font_display", "font_ui", "font_reading", "font_mono",
+            "bg",
+            "surface_1",
+            "surface_2",
+            "hairline",
+            "hairline_strong",
+            "text",
+            "text_muted",
+            "text_faint",
+            "accent",
+            "link",
+            "verify_supported",
+            "verify_weak",
+            "verify_unsupported",
+            "warn",
+            "font_display",
+            "font_ui",
+            "font_reading",
+            "font_mono",
         ):
             val = getattr(t, field)
             assert val, f"{name}/{mode}.{field} is empty"
@@ -240,12 +256,24 @@ def test_font_face_css_italic_variants() -> None:
 def test_theme_css_vars_contains_all_vars() -> None:
     css = theme_css_vars(DISCO_LIGHT)
     for var in (
-        "--bg", "--surface-1", "--surface-2",
-        "--hairline", "--hairline-strong",
-        "--text", "--text-muted", "--text-faint",
-        "--accent", "--link",
-        "--verify-supported", "--verify-weak", "--verify-unsupported",
-        "--warn", "--display", "--ui", "--reading", "--mono",
+        "--bg",
+        "--surface-1",
+        "--surface-2",
+        "--hairline",
+        "--hairline-strong",
+        "--text",
+        "--text-muted",
+        "--text-faint",
+        "--accent",
+        "--link",
+        "--verify-supported",
+        "--verify-weak",
+        "--verify-unsupported",
+        "--warn",
+        "--display",
+        "--ui",
+        "--reading",
+        "--mono",
     ):
         assert var in css, f"Missing CSS var {var}"
 
@@ -367,9 +395,9 @@ def test_definition_mark_html_all_scales() -> None:
 
 
 def test_definition_mark_html_scale_class() -> None:
-    assert 's-lg' in definition_mark_html("masthead")
-    assert 's-md' in definition_mark_html("colophon")
-    assert 's-sm' in definition_mark_html("footer")
+    assert "s-lg" in definition_mark_html("masthead")
+    assert "s-md" in definition_mark_html("colophon")
+    assert "s-sm" in definition_mark_html("footer")
 
 
 def test_definition_mark_html_has_ipa() -> None:
@@ -425,7 +453,7 @@ def test_brand_package_importable() -> None:
 
 def test_theme_is_frozen_dataclass() -> None:
     t = resolve_theme("disco", "light")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         t.bg = "#000000"  # type: ignore[misc]
 
 

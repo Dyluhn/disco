@@ -294,7 +294,9 @@ class ArtifactMemoryStore:
                 f"schema mismatch: {exc}",
             ) from exc
 
-    async def record_verifier_failures(self, failures: tuple[VerifierFailureRef, ...]) -> ArtifactMemoryRef:
+    async def record_verifier_failures(
+        self, failures: tuple[VerifierFailureRef, ...]
+    ) -> ArtifactMemoryRef:
         return await self._write_json(
             ArtifactMemoryKind.VERIFIER_FAILURES, [f.model_dump(mode="json") for f in failures]
         )
@@ -329,7 +331,9 @@ class ArtifactMemoryStore:
             ) from exc
 
     async def write_source_priority(self, sp: SourcePriority) -> ArtifactMemoryRef:
-        return await self._write_json(ArtifactMemoryKind.SOURCE_PRIORITY, sp.model_dump(mode="json"))
+        return await self._write_json(
+            ArtifactMemoryKind.SOURCE_PRIORITY, sp.model_dump(mode="json")
+        )
 
     async def read_source_priority(self) -> SourcePriority:
         raw = await self.read_json_raw(ArtifactMemoryKind.SOURCE_PRIORITY)

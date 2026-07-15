@@ -165,15 +165,11 @@ def test_save_search_ddgs_clears_stale_base_url(tmp_path):
     so a stale searxng LAN address cannot silently re-engage later."""
     store = _store(tmp_path)
     # Simulate a prior searxng selection with a LAN URL
-    store.save_search(
-        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
-    )
+    store.save_search(SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888"))
     assert store.load().search.base_url == "http://192.168.1.202:8888"
 
     # Flip to bundled — even if the caller passes the old URL it must be cleared
-    store.save_search(
-        SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888")
-    )
+    store.save_search(SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888"))
     cfg = store.load()
     assert cfg.search.provider == "ddgs"
     assert cfg.search.base_url == ""
@@ -182,9 +178,7 @@ def test_save_search_ddgs_clears_stale_base_url(tmp_path):
 def test_save_search_selfhost_preserves_base_url(tmp_path):
     """Switching TO searxng (self-host) must keep the supplied base_url intact."""
     store = _store(tmp_path)
-    store.save_search(
-        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
-    )
+    store.save_search(SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888"))
     cfg = store.load()
     assert cfg.search.provider == "searxng"
     assert cfg.search.base_url == "http://192.168.1.202:8888"

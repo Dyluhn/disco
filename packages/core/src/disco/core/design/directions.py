@@ -291,9 +291,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="2px",
                 shadow_level="none",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 18%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 18%, transparent)"),
             ),
         ),
         motion=_SUBTLE_MOTION,
@@ -375,9 +373,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="8px",
                 shadow_level="soft-2",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 12%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 12%, transparent)"),
             ),
         ),
         motion=_SUBTLE_MOTION,
@@ -420,9 +416,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="4px",
                 shadow_level="none",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 24%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 24%, transparent)"),
             ),
         ),
         motion=_NO_MOTION,
@@ -466,9 +460,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="4px",
                 shadow_level="none",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 16%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 16%, transparent)"),
             ),
         ),
         motion=_SUBTLE_MOTION,
@@ -508,9 +500,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="8px",
                 shadow_level="soft-1",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 10%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 10%, transparent)"),
             ),
         ),
         motion=_EXPRESSIVE_MOTION,
@@ -595,9 +585,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             tokens=SurfaceTokens(
                 radius="8px",
                 shadow_level="soft-1",
-                border_style=(
-                    "1px solid color-mix(in oklch, currentColor 18%, transparent)"
-                ),
+                border_style=("1px solid color-mix(in oklch, currentColor 18%, transparent)"),
             ),
         ),
         motion=_SUBTLE_MOTION,
@@ -622,7 +610,10 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
     DesignDirection(
         id="console-dense",
         label="Console Dense",
-        summary="operations-console density with semantic status color, hairline tables, and signal-first layout",
+        summary=(
+            "operations-console density with semantic status color, hairline tables, "
+            "and signal-first layout"
+        ),
         font_pairing=FontPairing(
             heading=_font("Geist", "system-ui", "sans-serif"),
             body=_font("Geist", "system-ui", "sans-serif"),
@@ -643,15 +634,29 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="operational dashboards, time-series charts, status tiles, muted grid, high data-ink",
+        image_art_direction=(
+            "operational dashboards, time-series charts, status tiles, muted grid, high data-ink"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="dense",
-        keywords=("observability", "monitoring", "telemetry", "ops", "incident", "metrics", "uptime", "alerting"),
+        keywords=(
+            "observability",
+            "monitoring",
+            "telemetry",
+            "ops",
+            "incident",
+            "metrics",
+            "uptime",
+            "alerting",
+        ),
     ),
     DesignDirection(
         id="enterprise-navy",
         label="Institutional",
-        summary="institutional B2B authority with navy structure, outlined cards, and dense records tables",
+        summary=(
+            "institutional B2B authority with navy structure, outlined cards, and "
+            "dense records tables"
+        ),
         font_pairing=FontPairing(
             heading=_font("Archivo", "Helvetica Neue", "system-ui", "sans-serif"),
             body=_font("Public Sans", "system-ui", "sans-serif"),
@@ -672,15 +677,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="corporate documentary photography, boardroom neutrals, structured grids, restrained flag-blue accents",
+        image_art_direction=(
+            "corporate documentary photography, boardroom neutrals, structured grids, "
+            "restrained flag-blue accents"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="dense",
-        keywords=("enterprise", "institutional", "government", "compliance", "procurement", "erp", "records", "b2b"),
+        keywords=(
+            "enterprise",
+            "institutional",
+            "government",
+            "compliance",
+            "procurement",
+            "erp",
+            "records",
+            "b2b",
+        ),
     ),
     DesignDirection(
         id="clinical-calm",
         label="Clean Room",
-        summary="calm clinical clarity with aqua accents, generous spacing, flat surfaces, and legible type",
+        summary=(
+            "calm clinical clarity with aqua accents, generous spacing, flat surfaces, "
+            "and legible type"
+        ),
         font_pairing=FontPairing(
             heading=_font("Lexend", "system-ui", "sans-serif"),
             body=_font("Mulish", "system-ui", "sans-serif"),
@@ -701,15 +721,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="clean healthcare imagery, soft daylight, uncluttered rooms, reassuring human warmth, no clutter",
+        image_art_direction=(
+            "clean healthcare imagery, soft daylight, uncluttered rooms, reassuring "
+            "human warmth, no clutter"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="spacious",
-        keywords=("healthcare", "clinical", "medical", "patient", "telehealth", "care", "pharmacy", "hospital"),
+        keywords=(
+            "healthcare",
+            "clinical",
+            "medical",
+            "patient",
+            "telehealth",
+            "care",
+            "pharmacy",
+            "hospital",
+        ),
     ),
     DesignDirection(
         id="trust-fintech",
         label="Ledger & Copper",
-        summary="fintech trust in pine and copper with soft depth, tabular numerics, and quiet confidence",
+        summary=(
+            "fintech trust in pine and copper with soft depth, tabular numerics, and "
+            "quiet confidence"
+        ),
         font_pairing=FontPairing(
             heading=_font("Hanken Grotesk", "system-ui", "sans-serif"),
             body=_font("Figtree", "system-ui", "sans-serif"),
@@ -730,15 +765,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="financial still life, copper and evergreen tones, ledgers and coin macro, warm trustworthy light",
+        image_art_direction=(
+            "financial still life, copper and evergreen tones, ledgers and coin macro, "
+            "warm trustworthy light"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
-        keywords=("fintech", "banking", "ledger", "payments", "invoicing", "treasury", "accounting", "wallet"),
+        keywords=(
+            "fintech",
+            "banking",
+            "ledger",
+            "payments",
+            "invoicing",
+            "treasury",
+            "accounting",
+            "wallet",
+        ),
     ),
     DesignDirection(
         id="premium-consumer",
         label="Porcelain & Vermilion",
-        summary="premium consumer minimalism on porcelain with a single vermilion strike and editorial calm",
+        summary=(
+            "premium consumer minimalism on porcelain with a single vermilion strike "
+            "and editorial calm"
+        ),
         font_pairing=FontPairing(
             heading=_font("Instrument Sans", "system-ui", "sans-serif"),
             body=_font("Onest", "system-ui", "sans-serif"),
@@ -759,15 +809,29 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="premium product photography, porcelain backdrops, single vermilion prop, soft studio gradient, generous negative space",
+        image_art_direction=(
+            "premium product photography, porcelain backdrops, single vermilion prop, "
+            "soft studio gradient, generous negative space"
+        ),
         art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="spacious",
-        keywords=("premium", "consumer", "lifestyle", "dtc", "boutique", "retail", "ecommerce", "flagship"),
+        keywords=(
+            "premium",
+            "consumer",
+            "lifestyle",
+            "dtc",
+            "boutique",
+            "retail",
+            "ecommerce",
+            "flagship",
+        ),
     ),
     DesignDirection(
         id="signal-noir",
         label="Signal Noir",
-        summary="dark command-center HUD with cyan signal, hairline glow panels, and tactical density",
+        summary=(
+            "dark command-center HUD with cyan signal, hairline glow panels, and tactical density"
+        ),
         font_pairing=FontPairing(
             heading=_font("Space Grotesk", "system-ui", "sans-serif"),
             body=_font("Chivo", "system-ui", "sans-serif"),
@@ -788,15 +852,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="dark HUD interfaces, cyan wireframe overlays, scanlines, tactical readouts, neon signal on near-black",
+        image_art_direction=(
+            "dark HUD interfaces, cyan wireframe overlays, scanlines, tactical readouts, "
+            "neon signal on near-black"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="compact",
-        keywords=("cyber", "hud", "gaming", "esports", "streaming", "command-center", "tactical", "nightmode"),
+        keywords=(
+            "cyber",
+            "hud",
+            "gaming",
+            "esports",
+            "streaming",
+            "command-center",
+            "tactical",
+            "nightmode",
+        ),
     ),
     DesignDirection(
         id="lab-precise",
         label="Instrument",
-        summary="scientific-instrument precision, monochrome with one signal orange, no motion, tight grid",
+        summary=(
+            "scientific-instrument precision, monochrome with one signal orange, no "
+            "motion, tight grid"
+        ),
         font_pairing=FontPairing(
             heading=_font("Libre Franklin", "Helvetica Neue", "system-ui", "sans-serif"),
             body=_font("Libre Franklin", "Helvetica Neue", "system-ui", "sans-serif"),
@@ -817,15 +896,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_NO_MOTION,
-        image_art_direction="laboratory instrument close-ups, calibration marks, monochrome precision, single orange indicator",
+        image_art_direction=(
+            "laboratory instrument close-ups, calibration marks, monochrome precision, "
+            "single orange indicator"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="dense",
-        keywords=("scientific", "laboratory", "research", "measurement", "precision", "calibration", "biotech", "sensor"),
+        keywords=(
+            "scientific",
+            "laboratory",
+            "research",
+            "measurement",
+            "precision",
+            "calibration",
+            "biotech",
+            "sensor",
+        ),
     ),
     DesignDirection(
         id="literate-docs",
         label="Literate",
-        summary="developer-docs reading comfort with serif body, teal links, and calm reference hierarchy",
+        summary=(
+            "developer-docs reading comfort with serif body, teal links, and calm "
+            "reference hierarchy"
+        ),
         font_pairing=FontPairing(
             heading=_font("Fraunces", "Georgia", "serif"),
             body=_font("Source Serif 4", "Georgia", "serif"),
@@ -846,15 +940,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="documentation diagrams, annotated schematics, calm serif specimen, restrained teal call-outs",
+        image_art_direction=(
+            "documentation diagrams, annotated schematics, calm serif specimen, "
+            "restrained teal call-outs"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="editorial",
-        keywords=("documentation", "docs", "knowledge-base", "wiki", "handbook", "tutorial", "manual", "whitepaper"),
+        keywords=(
+            "documentation",
+            "docs",
+            "knowledge-base",
+            "wiki",
+            "handbook",
+            "tutorial",
+            "manual",
+            "whitepaper",
+        ),
     ),
     DesignDirection(
         id="noir-deco",
         label="Noir Deco",
-        summary="dark art-deco luxe with antique gold, geometric caps, emerald and oxblood, symmetrical grandeur",
+        summary=(
+            "dark art-deco luxe with antique gold, geometric caps, emerald and oxblood, "
+            "symmetrical grandeur"
+        ),
         font_pairing=FontPairing(
             heading=_font("Marcellus", "Georgia", "serif"),
             body=_font("Josefin Sans", "system-ui", "sans-serif"),
@@ -875,7 +984,10 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="art-deco fan motifs, gold linework on charcoal, symmetrical geometry, 1920s hotel glamour",
+        image_art_direction=(
+            "art-deco fan motifs, gold linework on charcoal, symmetrical geometry, "
+            "1920s hotel glamour"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
         keywords=("deco", "artdeco", "gatsby", "luxe", "nightlife", "jazz", "hotel", "speakeasy"),
@@ -883,7 +995,10 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
     DesignDirection(
         id="inkline-sketch",
         label="Inkline",
-        summary="hand-drawn ink character on paper with sketch borders, warm neutrals, and friendly imperfection",
+        summary=(
+            "hand-drawn ink character on paper with sketch borders, warm neutrals, and "
+            "friendly imperfection"
+        ),
         font_pairing=FontPairing(
             heading=_font("Shantell Sans", "Comic Sans MS", "system-ui", "sans-serif"),
             body=_font("Nunito Sans", "system-ui", "sans-serif"),
@@ -904,15 +1019,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="hand-drawn ink illustration, loose pen strokes, cross-hatching, margin doodles, sketchbook paper texture",
+        image_art_direction=(
+            "hand-drawn ink illustration, loose pen strokes, cross-hatching, margin "
+            "doodles, sketchbook paper texture"
+        ),
         art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
-        keywords=("handdrawn", "sketch", "doodle", "illustrated", "whiteboard", "journal", "notebook", "playful"),
+        keywords=(
+            "handdrawn",
+            "sketch",
+            "doodle",
+            "illustrated",
+            "whiteboard",
+            "journal",
+            "notebook",
+            "playful",
+        ),
     ),
     DesignDirection(
         id="controlled-maximalism",
         label="Controlled Maximalism",
-        summary="dark jewel-tone maximalism, layered saturated color with disciplined grid and expressive motion",
+        summary=(
+            "dark jewel-tone maximalism, layered saturated color with disciplined grid "
+            "and expressive motion"
+        ),
         font_pairing=FontPairing(
             heading=_font("Bricolage Grotesque", "system-ui", "sans-serif"),
             body=_font("Albert Sans", "system-ui", "sans-serif"),
@@ -933,15 +1063,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_EXPRESSIVE_MOTION,
-        image_art_direction="maximalist jewel-tone collage, layered saturated shapes, bold editorial energy on deep ground",
+        image_art_direction=(
+            "maximalist jewel-tone collage, layered saturated shapes, bold editorial "
+            "energy on deep ground"
+        ),
         art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="balanced",
-        keywords=("maximalist", "bold", "campaign", "expressive", "vibrant", "agency", "statement", "editorial-brand"),
+        keywords=(
+            "maximalist",
+            "bold",
+            "campaign",
+            "expressive",
+            "vibrant",
+            "agency",
+            "statement",
+            "editorial-brand",
+        ),
     ),
     DesignDirection(
         id="gradient-mesh-warm",
         label="Warm Mesh",
-        summary="tasteful warm mesh-gradient landing style, terracotta to marigold, grain, generous space",
+        summary=(
+            "tasteful warm mesh-gradient landing style, terracotta to marigold, grain, "
+            "generous space"
+        ),
         font_pairing=FontPairing(
             heading=_font("Sora", "system-ui", "sans-serif"),
             body=_font("Be Vietnam Pro", "system-ui", "sans-serif"),
@@ -962,15 +1107,30 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_EXPRESSIVE_MOTION,
-        image_art_direction="controlled two-to-three-stop warm mesh gradient (terracotta, coral, marigold) with fine grain, one soft focal glow, never purple SaaS blur",
+        image_art_direction=(
+            "controlled two-to-three-stop warm mesh gradient (terracotta, coral, "
+            "marigold) with fine grain, one soft focal glow, never purple SaaS blur"
+        ),
         art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="spacious",
-        keywords=("gradient", "mesh", "sunset", "warm", "launch", "hero", "marketing-landing", "vibrant"),
+        keywords=(
+            "gradient",
+            "mesh",
+            "sunset",
+            "warm",
+            "launch",
+            "hero",
+            "marketing-landing",
+            "vibrant",
+        ),
     ),
     DesignDirection(
         id="pressed-botanical",
         label="Pressed Botanical",
-        summary="organic herbarium feel with sage and clay, pressed-plant art, and unhurried editorial rhythm",
+        summary=(
+            "organic herbarium feel with sage and clay, pressed-plant art, and "
+            "unhurried editorial rhythm"
+        ),
         font_pairing=FontPairing(
             heading=_font("Spectral", "Georgia", "serif"),
             body=_font("Karla", "system-ui", "sans-serif"),
@@ -991,10 +1151,22 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             ),
         ),
         motion=_SUBTLE_MOTION,
-        image_art_direction="pressed botanical specimens, herbarium plates, sage and clay tones, natural paper, delicate leaf detail",
+        image_art_direction=(
+            "pressed botanical specimens, herbarium plates, sage and clay tones, "
+            "natural paper, delicate leaf detail"
+        ),
         art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="editorial",
-        keywords=("botanical", "herbarium", "organic", "garden", "floral", "naturalist", "apothecary", "artisan"),
+        keywords=(
+            "botanical",
+            "herbarium",
+            "organic",
+            "garden",
+            "floral",
+            "naturalist",
+            "apothecary",
+            "artisan",
+        ),
     ),
 )
 
@@ -1019,7 +1191,7 @@ def _keyword_score(brief_text: str, direction: DesignDirection) -> int:
 
 
 def _tie_break(direction_id: str, seed: str | int) -> int:
-    digest = hashlib.sha256(f"{seed}:{direction_id}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{seed}:{direction_id}".encode()).hexdigest()
     return int(digest[:16], 16)
 
 
@@ -1226,8 +1398,7 @@ def render_design_direction(direction: DesignDirection) -> str:
             "- Commit to this named direction before writing sections or components.",
             "- Tailor the theme and design tokens to THIS direction before generating any "
             "component — never ship default shadcn / component-library styling.",
-            "- Derive the full palette from the seed in OKLCH-friendly tokens; "
-            "keep accents named.",
+            "- Derive the full palette from the seed in OKLCH-friendly tokens; keep accents named.",
             "- A ready-to-use tokens file exists at .disco/context/direction_tokens.css; "
             "import or copy those CSS variables instead of hand-picking values.",
             "- Use one coherent surface treatment across the project.",

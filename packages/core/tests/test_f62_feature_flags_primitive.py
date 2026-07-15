@@ -70,10 +70,7 @@ def _folded_app() -> AppSpec:
 
 def _flag_section(app: AppSpec) -> Section:
     return next(
-        section
-        for page in app.pages
-        for section in page.sections
-        if section.id == "feature_flags"
+        section for page in app.pages for section in page.sections if section.id == "feature_flags"
     )
 
 

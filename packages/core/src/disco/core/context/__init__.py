@@ -9,7 +9,13 @@ or loop-runtime dependencies — these are stable domain models only.
 from __future__ import annotations
 
 from .artifact_memory import ArtifactMemoryKind, ArtifactMemoryRef
-from .compaction import CompactionPolicy
+from .compaction import (
+    CompactionPolicy,
+    context_compact_if_needed,
+    context_mark_resolved,
+    context_write_summary,
+    resolved_ranges_from_events,
+)
 from .ledger import (
     ContextLedger,
     DirectEditKind,
@@ -19,12 +25,6 @@ from .ledger import (
     ResourceRef,
     Severity,
     VerifierFailureRef,
-)
-from .compaction import (
-    context_compact_if_needed,
-    context_mark_resolved,
-    context_write_summary,
-    resolved_ranges_from_events,
 )
 from .pack import ContextPack
 from .source_priority import SourceKind, SourcePriority

@@ -64,11 +64,14 @@ def test_all_directions_are_valid_records() -> None:
             direction.font_pairing.mono.family,
         )
         assert not ({name.lower() for name in primaries} & BANNED_PRIMARY_FONTS)
-        assert all(stack.fallbacks for stack in (
-            direction.font_pairing.heading,
-            direction.font_pairing.body,
-            direction.font_pairing.mono,
-        ))
+        assert all(
+            stack.fallbacks
+            for stack in (
+                direction.font_pairing.heading,
+                direction.font_pairing.body,
+                direction.font_pairing.mono,
+            )
+        )
 
 
 def test_dark_glass_matches_h2_defaults() -> None:

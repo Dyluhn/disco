@@ -164,9 +164,7 @@ def test_preview_app_normalizes_double_slash_and_forwards_query() -> None:
     try:
         rt = FakeRuntime(wake_result=upstream_url)
         client, _ = _make_client(rt)
-        resp = client.get(
-            "/conversations/conv_query001/preview-app//assets/app.js?v=7&mode=full"
-        )
+        resp = client.get("/conversations/conv_query001/preview-app//assets/app.js?v=7&mode=full")
         assert resp.status_code == 200
         assert _FixedResponseHandler.seen_paths == ["/assets/app.js?v=7&mode=full"]
     finally:

@@ -37,8 +37,8 @@ from ..llm import Difficulty, OverflowSignal
 from ..obs import log_event
 from ..view import View, microcompact
 from . import signals
-from .context_builder import build_context_pack, render_context_pack
 from .context_budget import ContextCaps, derive_context_caps
+from .context_builder import build_context_pack, render_context_pack
 from .context_live import context_pack_enabled, protected_context_compaction_seqs
 from .dedup import (
     _F8_PREFIX_CHARS,
@@ -309,12 +309,7 @@ async def workspace_snapshot_message(
         # across turns until a file actually changes, so prompt caching rebills it
         # at ~10%. The tracker is STILL updated below (so external-change staleness
         # detection keeps working); only the pointer shortcut is skipped.
-        if (
-            not pin_full
-            and tracker is not None
-            and tracker.is_known(path)
-            and path not in _stale
-        ):
+        if not pin_full and tracker is not None and tracker.is_known(path) and path not in _stale:
             # CW P1-c — this pointer only renders when NOT pin_full (assist-ON), where
             # the pre-CW-3 wording is byte-identical for the tail-placed block.
             pointer = f"✓ {path} — current, shown earlier"
@@ -387,9 +382,7 @@ async def workspace_snapshot_message(
     return LLMMessage(role="user", content=preamble + "\n\n".join(blocks) + notice)
 
 
-def f8_shrink_file_write_args(
-    messages: list[LLMMessage], events: list[Event]
-) -> list[LLMMessage]:
+def f8_shrink_file_write_args(messages: list[LLMMessage], events: list[Event]) -> list[LLMMessage]:
     """F8 — GATED render-time transform. For every assistant message
     whose tool_call is a ``file_write`` that was CONFIRMED successful
     (per :func:`_f8_confirmed_file_writes`), replace the long
@@ -432,11 +425,7 @@ def f8_shrink_file_write_args(
                 new_tcs.append(tc)
                 continue
             cid = tc.get("id")
-            if (
-                tc.get("name") == "file_write"
-                and isinstance(cid, str)
-                and cid in confirmed
-            ):
+            if tc.get("name") == "file_write" and isinstance(cid, str) and cid in confirmed:
                 path, content = confirmed[cid]
                 # Only shrink when the ORIGINAL content is long
                 # enough that a prefix is meaningful. Short writes
@@ -448,10 +437,9 @@ def f8_shrink_file_write_args(
                     args = tc.get("arguments")
                     if isinstance(args, dict):
                         new_args = dict(args)
-                        new_args["content"] = (
-                            content[:_F8_PREFIX_CHARS]
-                            + _F8_TRUNCATION_MARKER_TEMPLATE.format(path=path)
-                        )
+                        new_args["content"] = content[
+                            :_F8_PREFIX_CHARS
+                        ] + _F8_TRUNCATION_MARKER_TEMPLATE.format(path=path)
                         new_tc = dict(tc)
                         new_tc["arguments"] = new_args
                         new_tcs.append(new_tc)
@@ -556,9 +544,7 @@ class ViewBuilder:
         )
         return LLMMessage(role="user", content=render_context_pack(pack))
 
-    async def _project_view(
-        self, events: list[Event], *, include_context_pack: bool
-    ) -> View:
+    async def _project_view(self, events: list[Event], *, include_context_pack: bool) -> View:
         view = View.of(events)
         if not include_context_pack:
             return view
@@ -611,9 +597,7 @@ class ViewBuilder:
                 await self._loop._emit(tomb)
             events = await self._loop._events()
         context_pack_active = context_pack_enabled()
-        view = await self._project_view(
-            events, include_context_pack=context_pack_active
-        )
+        view = await self._project_view(events, include_context_pack=context_pack_active)
         # W2 — stale check before snapshot: identify files whose disk SHA
         # diverged from what the snapshot last showed (externally changed).
         # This runs first so the snapshot can mark those files as full-body
@@ -680,9 +664,7 @@ class ViewBuilder:
                 for snip in snips:
                     await self._loop._emit(snip)
                 events = await self._loop._events()
-                view = await self._project_view(
-                    events, include_context_pack=context_pack_active
-                )
+                view = await self._project_view(events, include_context_pack=context_pack_active)
                 est = signals.estimate_tokens(view) + snap_tokens
                 req = self._loop.condenser.should_condense(view, token_count=est)
         if req is not None:
@@ -692,9 +674,7 @@ class ViewBuilder:
             if tombstone is not None:
                 await self._loop._emit(tombstone)
                 events = await self._loop._events()
-                view = await self._project_view(
-                    events, include_context_pack=context_pack_active
-                )
+                view = await self._project_view(events, include_context_pack=context_pack_active)
             # Soft trigger with no tombstone this step: proceed uncondensed and
             # retry next iteration (§8). Non-fatal.
         # Append the snapshot AFTER any condensation (so it is never rebuilt away by
@@ -706,9 +686,7 @@ class ViewBuilder:
         # snapshot. The gate never touches the snapshot; the snapshot
         # is appended AFTER the gate regardless of the gate's verdict
         # (it's authoritative on-disk content the model needs).
-        view = self._loop._gate_recitation(
-            view, events, context_pack_active=context_pack_active
-        )
+        view = self._loop._gate_recitation(view, events, context_pack_active=context_pack_active)
         # W2 — collapse superseded reads (ALL tiers, NOT assist-gated).
         # Rewrite every earlier file_read tool-result for a path to a short
         # "[superseded...]" stub; keep only the most-recent result in full.
@@ -735,9 +713,7 @@ class ViewBuilder:
         # neutralizes it for the prefix-placed block. assist-ON keeps the directional
         # marker (correct for its tail-placed block + byte-identical to pre-CW-3).
         if not self._loop._assist:
-            view = view.model_copy(
-                update={"messages": retarget_elided_arg_markers(view.messages)}
-            )
+            view = view.model_copy(update={"messages": retarget_elided_arg_markers(view.messages)})
         # F8 — GATED mid-turn arg truncation (assist-tier context-window
         # reclaim). When assist is ON, replace the long `content` argument
         # in any past assistant message whose `file_write` tool call was
@@ -788,7 +764,5 @@ class ViewBuilder:
             prefix = [snapshot] if snapshot is not None else []
             tail = [stale_msg] if stale_msg is not None else []
             if prefix or tail:
-                view = view.model_copy(
-                    update={"messages": [*prefix, *view.messages, *tail]}
-                )
+                view = view.model_copy(update={"messages": [*prefix, *view.messages, *tail]})
         return view

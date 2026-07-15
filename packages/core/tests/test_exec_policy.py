@@ -40,29 +40,53 @@ def test_anchored_edit_capability_is_independent_of_tier():
 
 def test_resolve_precedence_override_wins():
     # explicit per-conversation toggle beats everything
-    assert resolve_policy(
-        assist_override=False, entry_tier="weak", hosting_weak_default=True, anchored_edit=True
-    ).tier == "standard"
-    assert resolve_policy(
-        assist_override=True, entry_tier="standard", hosting_weak_default=False, anchored_edit=True
-    ).tier == "weak"
+    assert (
+        resolve_policy(
+            assist_override=False, entry_tier="weak", hosting_weak_default=True, anchored_edit=True
+        ).tier
+        == "standard"
+    )
+    assert (
+        resolve_policy(
+            assist_override=True,
+            entry_tier="standard",
+            hosting_weak_default=False,
+            anchored_edit=True,
+        ).tier
+        == "weak"
+    )
 
 
 def test_resolve_precedence_entry_tier_then_hosting():
     # no override → explicit ModelEntry.tier wins over the hosting heuristic
-    assert resolve_policy(
-        assist_override=None, entry_tier="standard", hosting_weak_default=True, anchored_edit=True
-    ).tier == "standard"
+    assert (
+        resolve_policy(
+            assist_override=None,
+            entry_tier="standard",
+            hosting_weak_default=True,
+            anchored_edit=True,
+        ).tier
+        == "standard"
+    )
     # no override, no entry tier → fall back to the hosting heuristic (back-compat)
-    assert resolve_policy(
-        assist_override=None, entry_tier=None, hosting_weak_default=True, anchored_edit=False
-    ).tier == "weak"
-    assert resolve_policy(
-        assist_override=None, entry_tier=None, hosting_weak_default=False, anchored_edit=True
-    ).tier == "standard"
+    assert (
+        resolve_policy(
+            assist_override=None, entry_tier=None, hosting_weak_default=True, anchored_edit=False
+        ).tier
+        == "weak"
+    )
+    assert (
+        resolve_policy(
+            assist_override=None, entry_tier=None, hosting_weak_default=False, anchored_edit=True
+        ).tier
+        == "standard"
+    )
 
 
 def test_anchored_edit_threaded_through_resolve():
-    assert resolve_policy(
-        assist_override=None, entry_tier="weak", hosting_weak_default=True, anchored_edit=False
-    ).anchored_edit is False
+    assert (
+        resolve_policy(
+            assist_override=None, entry_tier="weak", hosting_weak_default=True, anchored_edit=False
+        ).anchored_edit
+        is False
+    )

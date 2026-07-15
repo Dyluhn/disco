@@ -133,13 +133,9 @@ async def test_successful_create_grounds_second_write():
     sbx = _FakeSandbox(existing={})
     ctx = _ctx(sbx)
     # First write: new file → allowed
-    first = await FileWriteTool().run(
-        FileWriteArgs(path="main.js", content="const x = 1;\n"), ctx
-    )
+    first = await FileWriteTool().run(FileWriteArgs(path="main.js", content="const x = 1;\n"), ctx)
     assert first.success is True
-    second = await FileWriteTool().run(
-        FileWriteArgs(path="main.js", content="const x = 2;\n"), ctx
-    )
+    second = await FileWriteTool().run(FileWriteArgs(path="main.js", content="const x = 2;\n"), ctx)
     assert second.success is True, second.content
     assert "applied — lines 1-1 now read:" in second.content
     assert sbx._fs["main.js"] == b"const x = 2;\n"
@@ -216,9 +212,7 @@ async def test_read_of_preexisting_file_lifts_guard():
     sbx = _FakeSandbox({"app.py": b"old body\n"})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="app.py"), ctx)
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="app.py", content="new body\n"), ctx
-    )
+    out = await FileWriteTool().run(FileWriteArgs(path="app.py", content="new body\n"), ctx)
     assert out.success is True
     assert sbx._fs["app.py"] == b"new body\n"
 
@@ -234,13 +228,9 @@ async def test_file_append_grounds_read_bit():
     # Create file, read it (bit set), then append
     await FileWriteTool().run(FileWriteArgs(path="log.txt", content="line1\n"), ctx)
     await FileReadTool().run(FileReadArgs(path="log.txt"), ctx)
-    append_out = await FileAppendTool().run(
-        FileAppendArgs(path="log.txt", content="line2\n"), ctx
-    )
+    append_out = await FileAppendTool().run(FileAppendArgs(path="log.txt", content="line2\n"), ctx)
     assert append_out.success is True
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="log.txt", content="overwrite\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="log.txt", content="overwrite\n"), ctx)
     assert write_out.success is True, write_out.content
     assert sbx._fs["log.txt"] == b"overwrite\n"
 
@@ -252,13 +242,9 @@ async def test_file_edit_grounds_read_bit():
     ctx = _ctx(sbx)
     # Read (bit set), then edit
     await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
-    edit_out = await FileEditTool().run(
-        FileEditArgs(path="a.py", old="x = 1", new="x = 2"), ctx
-    )
+    edit_out = await FileEditTool().run(FileEditArgs(path="a.py", old="x = 1", new="x = 2"), ctx)
     assert edit_out.success is True
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="a.py", content="x = 99\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="a.py", content="x = 99\n"), ctx)
     assert write_out.success is True, write_out.content
     assert sbx._fs["a.py"] == b"x = 99\n"
 
@@ -274,9 +260,7 @@ async def test_file_replace_lines_grounds_read_bit():
         ctx,
     )
     assert replace_out.success is True
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="a.py", content="overwrite\n"), ctx)
     assert write_out.success is True, write_out.content
     assert sbx._fs["a.py"] == b"overwrite\n"
 
@@ -291,9 +275,7 @@ async def test_file_insert_lines_grounds_read_bit():
         FileInsertLinesArgs(path="a.py", after_line=1, text="y = 2"), ctx
     )
     assert insert_out.success is True
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="a.py", content="overwrite\n"), ctx)
     assert write_out.success is True, write_out.content
     assert sbx._fs["a.py"] == b"overwrite\n"
 
@@ -308,9 +290,7 @@ async def test_file_str_replace_grounds_read_bit():
         FileStrReplaceArgs(path="a.py", old_str="x = 1", new_str="x = 42"), ctx
     )
     assert replace_out.success is True
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="a.py", content="overwrite\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="a.py", content="overwrite\n"), ctx)
     assert write_out.success is True, write_out.content
     assert sbx._fs["a.py"] == b"overwrite\n"
 
@@ -328,9 +308,7 @@ async def test_path_alias_collapse_workspace_prefix():
     read_out = await FileReadTool().run(FileReadArgs(path="workspace/x.py"), ctx)
     assert read_out.success is True
     # Write via the bare path — should be allowed because aliases collapse
-    write_out = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="replacement\n"), ctx
-    )
+    write_out = await FileWriteTool().run(FileWriteArgs(path="x.py", content="replacement\n"), ctx)
     assert write_out.success is True
     # Write again: the prior write's success observation grounds the canonical path.
     sbx._fs["x.py"] = b"new\n"  # sandbox updated
@@ -353,9 +331,7 @@ async def test_path_alias_collapse_dot_slash():
     sbx._fs["x.py"] = b"original\nmore\n"
     # Comparable-size content: this test is about path-alias grounding, not the
     # >50%-shrink guard (which would rightly refuse a tiny replacement).
-    w = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="z = 3  # kept\n"), ctx
-    )
+    w = await FileWriteTool().run(FileWriteArgs(path="x.py", content="z = 3  # kept\n"), ctx)
     assert w.success is True, w.content
     assert sbx._fs["x.py"] == b"z = 3  # kept\n"
 
@@ -369,9 +345,7 @@ async def test_path_alias_abs_prefix_read_lifts_bare_write():
     # Read the absolute form
     await FileReadTool().run(FileReadArgs(path="/workspace/foo.py"), ctx)
     # Write the bare form — allowed
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="foo.py", content="new\n"), ctx
-    )
+    out = await FileWriteTool().run(FileWriteArgs(path="foo.py", content="new\n"), ctx)
     assert out.success is True
     assert sbx._fs["foo.py"] == b"new\n"
 
@@ -385,15 +359,11 @@ async def test_no_second_attempt_bypass():
     on an existing unread file are BOTH refused."""
     sbx = _FakeSandbox({"cfg.py": b"OLD\n"})
     ctx = _ctx(sbx)
-    first = await FileWriteTool().run(
-        FileWriteArgs(path="cfg.py", content="ATTEMPT_1\n"), ctx
-    )
+    first = await FileWriteTool().run(FileWriteArgs(path="cfg.py", content="ATTEMPT_1\n"), ctx)
     assert first.success is False
     assert first.error == "read_before_write"
     # Second attempt — still refused (no bypass)
-    second = await FileWriteTool().run(
-        FileWriteArgs(path="cfg.py", content="ATTEMPT_2\n"), ctx
-    )
+    second = await FileWriteTool().run(FileWriteArgs(path="cfg.py", content="ATTEMPT_2\n"), ctx)
     assert second.success is False
     assert second.error == "read_before_write"
     # workspace unchanged

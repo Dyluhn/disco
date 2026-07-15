@@ -4,14 +4,13 @@ justification rules, exact numeric bounds, canonical hex, and validate_value coe
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from disco.core.tweaks import (
     TweakEditor,
     TweakField,
     TweakSpec,
     canonical_hex,
 )
+from pydantic import ValidationError
 
 
 def _f(**kw) -> TweakField:
@@ -97,7 +96,9 @@ def test_nan_inf_bool_rejected_in_bounds() -> None:
 # --- grounded / justification rule --------------------------------------------
 def test_ungrounded_field_rejected() -> None:
     with pytest.raises(ValidationError):
-        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+        TweakField(
+            key="k", label="L", editor=TweakEditor.BOOLEAN
+        )  # no controls_behavior, no affects
 
 
 def test_text_color_need_behavior_or_two_fields() -> None:
@@ -120,7 +121,9 @@ def test_affects_paths_must_be_lexical() -> None:
 
 def test_duplicate_affects_rejected_so_text_cannot_fake_two_fields() -> None:
     with pytest.raises(ValidationError):  # duplicate paths don't satisfy ">=2 fields"
-        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.title", "hero.title"))
+        TweakField(
+            key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.title", "hero.title")
+        )
 
 
 def test_palette_set_input_rejected_not_silently_uncanonicalized() -> None:
@@ -155,12 +158,31 @@ def test_canonical_hex() -> None:
 
 
 # --- TweakSpec + validate_value -----------------------------------------------
-SPEC = TweakSpec(fields=(
-    _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
-    _f(key="hero.cta_count", editor=TweakEditor.INT, min=1, max=5, step=1, affects=("hero.ctas",)),
-    _f(key="brand.tone", editor=TweakEditor.ENUM, options=("calm", "bold"), affects=("design.tone",)),
-    _f(key="brand.accent", editor=TweakEditor.PALETTE, colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),
-))
+SPEC = TweakSpec(
+    fields=(
+        _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
+        _f(
+            key="hero.cta_count",
+            editor=TweakEditor.INT,
+            min=1,
+            max=5,
+            step=1,
+            affects=("hero.ctas",),
+        ),
+        _f(
+            key="brand.tone",
+            editor=TweakEditor.ENUM,
+            options=("calm", "bold"),
+            affects=("design.tone",),
+        ),
+        _f(
+            key="brand.accent",
+            editor=TweakEditor.PALETTE,
+            colors=("#0a84ff", "#e2725b"),
+            affects=("design.accent",),
+        ),
+    )
+)
 
 
 def test_spec_unique_keys() -> None:
@@ -178,12 +200,12 @@ def test_validate_value_coerces_per_editor() -> None:
 
 def test_validate_value_rejects_bad() -> None:
     for key, bad in [
-        ("lead_form.include_phone", "yes"),       # not true/false
-        ("hero.cta_count", "9"),                  # out of range
-        ("hero.cta_count", True),                 # bool not int
-        ("brand.tone", "spicy"),                  # not an option
-        ("brand.accent", "#000000"),              # not a swatch
-        ("nope.key", "x"),                        # unknown tweak
+        ("lead_form.include_phone", "yes"),  # not true/false
+        ("hero.cta_count", "9"),  # out of range
+        ("hero.cta_count", True),  # bool not int
+        ("brand.tone", "spicy"),  # not an option
+        ("brand.accent", "#000000"),  # not a swatch
+        ("nope.key", "x"),  # unknown tweak
     ]:
         with pytest.raises(ValueError):
             SPEC.validate_value(key, bad)

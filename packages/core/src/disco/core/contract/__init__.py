@@ -12,6 +12,12 @@ runtime dependencies — stable value objects only (same discipline as disco.cor
 
 from __future__ import annotations
 
+from .enforce import (
+    DANGEROUS_TOOLS,
+    ContractScopeGuard,
+    ScopeDecision,
+    decide_tool_in_scope,
+)
 from .models import (
     ArtifactContract,
     BuildContract,
@@ -22,14 +28,8 @@ from .models import (
     ToolPack,
     VerificationContract,
     VerificationLevel,
-    delivery_mode_for_kind,
     deliverable_kind_matches_contract,
-)
-from .enforce import (
-    DANGEROUS_TOOLS,
-    ContractScopeGuard,
-    ScopeDecision,
-    decide_tool_in_scope,
+    delivery_mode_for_kind,
 )
 from .phase import BuildPhaseTracker
 from .registry import APP_KIND_TO_CONTRACT, BuildContractRegistry, contract_kind_for_app_kind

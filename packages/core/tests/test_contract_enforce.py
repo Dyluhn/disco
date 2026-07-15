@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.core.contract import (
     BuildContractRegistry,
     ContractKind,
@@ -94,7 +93,9 @@ def test_unlisted_mutator_gated_via_metadata_not_name() -> None:
     # list never learned about) is still gated when the dispatch boundary reports it
     # mutates — enforcement is metadata-driven, so there is no name-list bypass.
     s = compile_tool_scopes(_appkit())
-    assert decide_tool_in_scope(s, Phase.EDIT, "totally_new_writer", is_mutating=True).allowed is False
+    assert (
+        decide_tool_in_scope(s, Phase.EDIT, "totally_new_writer", is_mutating=True).allowed is False
+    )
     # and a read-only tool the contract doesn't scope is ungoverned → passes
     assert decide_tool_in_scope(s, Phase.EDIT, "some_reader", is_mutating=False).allowed is True
 

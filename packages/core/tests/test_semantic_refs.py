@@ -5,8 +5,6 @@ Negative/ambiguous phrases sourced from the DeepSeek scout fixture."""
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from disco.core.semantic_refs import (
     AnchorEntry,
     CollectionEntry,
@@ -27,6 +25,7 @@ from disco.core.semantic_refs import (
     resolve_human_reference,
     target_id,
 )
+from pydantic import ValidationError
 
 CTX = SemanticReferenceContext(
     sections=(
@@ -41,7 +40,9 @@ CTX = SemanticReferenceContext(
     ),
     collections=(
         CollectionEntry(id="services.cards", item_kind="card", length=3, labels=("service card",)),
-        CollectionEntry(id="pricing.columns", item_kind="column", length=4, labels=("pricing column",)),
+        CollectionEntry(
+            id="pricing.columns", item_kind="column", length=4, labels=("pricing column",)
+        ),
     ),
     slides=tuple(SlideEntry(id=f"slide-{i}", title=f"Slide {i}", ordinal=i) for i in range(1, 7)),
     comment_anchors=(AnchorEntry(id="cmt-intro", label="intro note"),),
@@ -67,7 +68,9 @@ def test_second_service_card_is_index_1() -> None:
 
 
 def test_third_pricing_column_is_index_2() -> None:
-    assert _r("third pricing column").resolved == IndexedLocator(collection_id="pricing.columns", index=2)
+    assert _r("third pricing column").resolved == IndexedLocator(
+        collection_id="pricing.columns", index=2
+    )
 
 
 def test_slide_5_is_fifth_slide_index_4() -> None:
@@ -145,7 +148,9 @@ def test_resolution_invariants_enforced() -> None:
     with pytest.raises(ValidationError):  # RESOLVED needs a target
         ReferenceResolution(reason=ResolutionReason.RESOLVED)
     with pytest.raises(ValidationError):  # a reject must not carry a target
-        ReferenceResolution(resolved=SectionLocator(section_id="x"), reason=ResolutionReason.NO_MATCH)
+        ReferenceResolution(
+            resolved=SectionLocator(section_id="x"), reason=ResolutionReason.NO_MATCH
+        )
     with pytest.raises(ValidationError):  # ambiguous needs candidates
         ReferenceResolution(ambiguous=True, reason=ResolutionReason.AMBIGUOUS)
 
@@ -184,7 +189,9 @@ def test_sparse_and_out_of_order_ordinals_resolve_by_value() -> None:
         )
     )
     assert resolve_human_reference("slide 20", context=ctx).resolved == SlideLocator(slide_id="end")
-    assert resolve_human_reference("slide 10", context=ctx).resolved == SlideLocator(slide_id="body")
+    assert resolve_human_reference("slide 10", context=ctx).resolved == SlideLocator(
+        slide_id="body"
+    )
     # an ordinal with no matching slide → OUT_OF_RANGE, not a wrong positional guess
     assert resolve_human_reference("slide 2", context=ctx).reason is ResolutionReason.OUT_OF_RANGE
 
@@ -223,7 +230,9 @@ def test_inverse_invariants_rejected() -> None:
         ReferenceResolution(reason=ResolutionReason.NO_MATCH, candidates=("x",))
     with pytest.raises(ValidationError):  # RESOLVED carrying candidates
         ReferenceResolution(
-            reason=ResolutionReason.RESOLVED, resolved=SectionLocator(section_id="x"), candidates=("x",)
+            reason=ResolutionReason.RESOLVED,
+            resolved=SectionLocator(section_id="x"),
+            candidates=("x",),
         )
 
 

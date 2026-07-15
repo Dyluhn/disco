@@ -87,6 +87,7 @@ class SlidesGenerationIncompleteError(RuntimeError):
         self.stage = stage
         self.finish_reason = finish_reason
 
+
 # Prompt templates below intentionally preserve JSON examples and schema alternations.
 # ruff: noqa: E501
 
@@ -134,9 +135,7 @@ def _resolve_slides_llm() -> tuple[str, str, str | None]:
         if (
             entry
             and entry.base_url
-            and store.origin_approved(
-                entry.base_url, f"model:{entry.provider}", entry.api_key_env
-            )
+            and store.origin_approved(entry.base_url, f"model:{entry.provider}", entry.api_key_env)
             and secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url)
         ):
             return entry.base_url.rstrip("/"), entry.model_id, _resolve_llm_key(entry.api_key_env)
@@ -390,6 +389,7 @@ Return the COMPLETE AuthoredDeck JSON with ALL fields filled in.
 Output ONLY valid JSON.
 """
 
+
 def _retry_msg(err: str) -> str:
     """Build a targeted retry prompt that names the specific parse error and
     lists ALL valid theme values.  The theme enum is the most common mismatch
@@ -402,6 +402,7 @@ def _retry_msg(err: str) -> str:
         "Please fix all errors and output ONLY valid JSON matching the AuthoredDeck schema.\n"
         "No markdown, no prose — only the raw JSON object."
     )
+
 
 # ---------------------------------------------------------------------------
 # LLM call helper
@@ -479,8 +480,7 @@ def _complete_response_content(response: LLMResponseLike, *, stage: str) -> str:
         return response
     if not isinstance(response, LLMResponse):
         raise TypeError(
-            f"Slide LLM adapter returned unsupported response type "
-            f"{type(response).__name__}"
+            f"Slide LLM adapter returned unsupported response type {type(response).__name__}"
         )
     finish_reason = (response.finish_reason or "").strip().lower()
     if finish_reason == "length":
@@ -549,7 +549,9 @@ def _null_invalid_layout_hints(data: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _theme_defaults(theme: str) -> tuple[list[AccentSpec], FontPairingSpec, LightDarkTokenPair, str]:
+def _theme_defaults(
+    theme: str,
+) -> tuple[list[AccentSpec], FontPairingSpec, LightDarkTokenPair, str]:
     """Return conservative craft metadata for legacy/partial model output."""
     by_theme: dict[str, tuple[list[AccentSpec], FontPairingSpec, LightDarkTokenPair, str]] = {
         "disco-light": (
@@ -726,10 +728,7 @@ def _image_slot_type(slide: AuthoredSlide, index: int) -> str | None:
 
 def _compose_image_prompt(art_direction: str, subject: str, slot_type: str) -> str:
     subject_clean = " ".join(subject.split())
-    return (
-        f"{art_direction}; subject: {subject_clean}; slot: {slot_type}; "
-        "no words, no lettering"
-    )
+    return f"{art_direction}; subject: {subject_clean}; slot: {slot_type}; no words, no lettering"
 
 
 def _ensure_image_slot_prompts(deck: AuthoredDeck) -> AuthoredDeck:
@@ -742,7 +741,11 @@ def _ensure_image_slot_prompts(deck: AuthoredDeck) -> AuthoredDeck:
         if slide.body:
             subject = f"{subject} — {slide.body[0]}"
         slide.image_prompt = _compose_image_prompt(art_direction, subject, slot_type)
-        if i == 0 or slide.archetype in _SECTION_ARCHETYPES or slide.archetype in _IMAGE_SLOT_ARCHETYPES:
+        if (
+            i == 0
+            or slide.archetype in _SECTION_ARCHETYPES
+            or slide.archetype in _IMAGE_SLOT_ARCHETYPES
+        ):
             slide.layout_hint = "full_image"
     return deck
 
@@ -852,9 +855,12 @@ async def _stage_outline(
     """
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": _OUTLINE_USER_TMPL.format(
-            goal=goal, n=slide_count, archetypes=_ARCHETYPES_STR
-        )},
+        {
+            "role": "user",
+            "content": _OUTLINE_USER_TMPL.format(
+                goal=goal, n=slide_count, archetypes=_ARCHETYPES_STR
+            ),
+        },
     ]
     try:
         response = await _call_llm(messages, llm_url, model, api_key=api_key)
@@ -1195,9 +1201,7 @@ async def generate_deck(
     if ctx.sandbox is not None:
         sidecar = f"{filename}.authored.json"
         try:
-            await ctx.sandbox.write_file(
-                sidecar, filled.model_dump_json(indent=2).encode()
-            )
+            await ctx.sandbox.write_file(sidecar, filled.model_dump_json(indent=2).encode())
             authored_sidecar = sidecar
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Failed to persist authored.json for %s: %s", filename, e)

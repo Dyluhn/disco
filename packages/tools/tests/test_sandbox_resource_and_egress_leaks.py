@@ -1,19 +1,19 @@
 """Completeness-sweep hardening (NEW beyond prior rounds):
 
-  P1 #1 — resource bounds must not be disablable via a mis-set CONFIG. The deployment
-          MAXIMA (default_* and sidecar_*) are the host-protection ceiling, so a
-          0/negative/NaN/inf value is a DISABLED cap (Docker reads 0 as "unlimited";
-          a non-finite maximum makes resolve_bounds' clamp a no-op). Construction must
-          reject it, and resolve_bounds refuses a non-finite/<=0 maximum at the last gate.
+P1 #1 — resource bounds must not be disablable via a mis-set CONFIG. The deployment
+        MAXIMA (default_* and sidecar_*) are the host-protection ceiling, so a
+        0/negative/NaN/inf value is a DISABLED cap (Docker reads 0 as "unlimited";
+        a non-finite maximum makes resolve_bounds' clamp a no-op). Construction must
+        reject it, and resolve_bounds refuses a non-finite/<=0 maximum at the last gate.
 
-  P1 #2 — filtered-egress setup (`_setup_filtered_egress`) runs BEFORE the guarded
-          sandbox create, so a partial failure (connect/start/proxy inject) must not
-          strand the internal network + proxy sidecar. The method now owns its cleanup
-          on EVERY exception, on all three container backends (gVisor / local / podman).
+P1 #2 — filtered-egress setup (`_setup_filtered_egress`) runs BEFORE the guarded
+        sandbox create, so a partial failure (connect/start/proxy inject) must not
+        strand the internal network + proxy sidecar. The method now owns its cleanup
+        on EVERY exception, on all three container backends (gVisor / local / podman).
 
-  P2 #3 — podman orphan reconciliation (`destroy_by_conversation`) must remove the
-          labeled `disco-egr-*` egress networks too, not only the labeled containers —
-          mirroring the gVisor path — else a crash/restart strands them.
+P2 #3 — podman orphan reconciliation (`destroy_by_conversation`) must remove the
+        labeled `disco-egr-*` egress networks too, not only the labeled containers —
+        mirroring the gVisor path — else a crash/restart strands them.
 """
 
 from __future__ import annotations

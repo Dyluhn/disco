@@ -11,34 +11,37 @@ from disco.core.view import View
 async def test_prefill_masking_behavior():
     """B9: Assistant prefill is set correctly based on mode and env var."""
     router = MagicMock()
-    
+
     # We want to capture the CompletionRequest sent to the router
     captured_req = None
+
     async def mock_stream(req, **kwargs):
         nonlocal captured_req
         captured_req = req
         from disco.core.llm import CompletionResponse, StreamChunk, TokenUsage
+
         yield StreamChunk(
             done=True,
             final=CompletionResponse(
                 text=" doing something.",
                 usage=TokenUsage(input_tokens=10, output_tokens=5),
                 finish_reason="stop",
-                model_used="test-model"
-            )
+                model_used="test-model",
+            ),
         )
+
     router.stream_complete = mock_stream
-    
+
     agent = RouterAgent(router)
     view = View(messages=[], visible_seqs=[], total_events=0, forgotten_count=0)
-    
+
     # Case 1: PLANNING mode, enabled
     with patch.dict(os.environ, {"PMX_PLAN_PREFILL": "1"}):
         await agent.step(
             view,
             tools=[],
             mode=OperatingMode.PLANNING,
-            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE)
+            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE),
         )
         assert captured_req.assistant_prefill is not None
         assert "I've analyzed" in captured_req.assistant_prefill
@@ -49,7 +52,7 @@ async def test_prefill_masking_behavior():
             view,
             tools=[],
             mode=OperatingMode.PLANNING,
-            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE)
+            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE),
         )
         assert captured_req.assistant_prefill is None
 
@@ -59,6 +62,6 @@ async def test_prefill_masking_behavior():
             view,
             tools=[],
             mode=OperatingMode.LONG_HORIZON,
-            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE)
+            overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE),
         )
         assert captured_req.assistant_prefill is None

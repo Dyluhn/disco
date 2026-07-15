@@ -133,9 +133,7 @@ async def test_completed_preview_uses_selected_entry_and_all_relative_assets(
             f"/conversations/{cid}/preview-app/assets/theme.css?v=7#ignored-by-http"
         )
         script = await client.get(f"/conversations/{cid}/preview-app//scripts/app.js")
-        image = await client.get(
-            f"/conversations/{cid}/preview-app/media/hero%20image.svg"
-        )
+        image = await client.get(f"/conversations/{cid}/preview-app/media/hero%20image.svg")
         font = await client.get(f"/conversations/{cid}/preview-app/fonts/app.woff2")
         nested = await client.get(f"/conversations/{cid}/preview-app/docs/")
 
@@ -180,9 +178,7 @@ async def test_later_revision_and_historical_version_keep_their_own_entries(
     transport = httpx.ASGITransport(app=_app(store, runtime))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         current = await client.get(f"/conversations/{cid}/preview-app/")
-        historical = await client.get(
-            f"/conversations/{cid}/preview-app/?version={v1}"
-        )
+        historical = await client.get(f"/conversations/{cid}/preview-app/?version={v1}")
 
     assert current.status_code == 200 and b"SELECTED VERSION TWO" in current.content
     assert historical.status_code == 200 and b"SELECTED VERSION ONE" in historical.content
@@ -205,9 +201,7 @@ async def test_missing_selected_entry_never_falls_back_and_traversal_stays_close
     transport = httpx.ASGITransport(app=_app(store, runtime))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         missing = await client.get(f"/conversations/{cid}/preview-app/")
-        traversal = await client.get(
-            f"/conversations/{cid}/preview-app/%2e%2e/%2e%2e/etc/passwd"
-        )
+        traversal = await client.get(f"/conversations/{cid}/preview-app/%2e%2e/%2e%2e/etc/passwd")
         encoded_once = await client.get(
             f"/conversations/{cid}/preview-app/%252e%252e/not-a-traversal"
         )

@@ -33,9 +33,9 @@ if TYPE_CHECKING:
     from ..runtime import ConversationRuntime
 
 # ---- upload limits (files route) ----------------------------------------------
-_MAX_FILE_BYTES = 25 * 1024 * 1024      # 25 MB per file
+_MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _MAX_FILES_PER_REQUEST = 20
-_MAX_CONV_BYTES = 100 * 1024 * 1024    # 100 MB per conversation (uploads/ total)
+_MAX_CONV_BYTES = 100 * 1024 * 1024  # 100 MB per conversation (uploads/ total)
 
 # ---- misc route constants -----------------------------------------------------
 _MAX_SESSION_TAIL_CHARS = 100_000
@@ -138,9 +138,9 @@ async def require_owned_conversation(
 
 def _sanitize_name(raw: str) -> str | None:
     """Return a safe filename for uploads/, or None if the result is empty."""
-    name = Path(raw).name            # kills traversal (../../etc/passwd → passwd)
+    name = Path(raw).name  # kills traversal (../../etc/passwd → passwd)
     name = unicodedata.normalize("NFC", name)
-    name = name.lstrip(".")          # strip leading dots (dotfiles)
+    name = name.lstrip(".")  # strip leading dots (dotfiles)
     name = re.sub(r"\s+", "-", name.strip())  # strip surrounding whitespace, runs → hyphen
     return name or None
 

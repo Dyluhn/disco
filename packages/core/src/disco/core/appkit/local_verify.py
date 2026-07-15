@@ -154,9 +154,7 @@ def check_schema_sql(schema_sql: str, lead: Entity) -> CheckResult:
         col_list = ", ".join(f'"{c}"' for c in cols)
         values = [_representative_value(f.name, f.type) for f in lead.fields]
         try:
-            conn.execute(
-                f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})', values
-            )
+            conn.execute(f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})', values)
         except sqlite3.Error as exc:
             return CheckResult(
                 "schema_sql_valid", False, f"a representative lead row failed to insert: {exc}"
@@ -319,12 +317,10 @@ def _is_authorized(header: str | None, env_token: str | None, auth: WorkerAuthMo
         return not auth.fail_closed_without_token  # unset token → deny iff fail-closed
     if not header or not header.startswith("Bearer "):
         return False
-    return header[len("Bearer "):] == env_token
+    return header[len("Bearer ") :] == env_token
 
 
-def local_api_roundtrip(
-    schema_sql: str, lead: Entity, auth: WorkerAuthModel
-) -> CheckResult:
+def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) -> CheckResult:
     """Run a MODEL of the Worker's request handling against in-memory sqlite from
     `schema.sql` + the resolved lead entity. This does NOT execute the generated
     Worker — it exercises the behaviour implied by the inspected structural flags
@@ -510,6 +506,7 @@ def main_points_at_worker_entry(main: object) -> bool:
         return False
     return parts == _CF_WORKER_ENTRY_PARTS
 
+
 # The static-asset/SPA fallback the export MUST declare so client-side routes resolve
 # to index.html (without it the deep links 404 instead of hydrating the SPA).
 _CF_SPA_NOT_FOUND: str = "single-page-application"
@@ -644,13 +641,14 @@ def _looks_like_real_secret(value: str) -> bool:
     for marker in _CF_PLACEHOLDER_MARKERS:
         idx = residue.lower().find(marker)
         while idx != -1:
-            residue = residue[:idx] + residue[idx + len(marker):]
+            residue = residue[:idx] + residue[idx + len(marker) :]
             idx = residue.lower().find(marker)
     # A real secret is a single contiguous high-entropy token. Split the residue on
     # non-alphanumeric separators so the connective words of a legit placeholder
     # (`me`, `with`, `token`) don't accrete into one long pseudo-secret; if ANY single
     # leftover token is long + high-entropy, the value carries a real secret.
     return any(_is_high_entropy_token(tok) for tok in re.split(r"[^A-Za-z0-9]+", residue))
+
 
 # Deploy steps the OWNER_GUIDE must document (Disco never runs them — it documents
 # them). Substring-checked so the guide stays the single source of the deploy flow.
@@ -714,7 +712,7 @@ def cloudflare_export_ready(files: Mapping[str, str | None]) -> CheckResult:
         return CheckResult(
             name,
             False,
-            'wrangler.toml Worker entry main does not EXACTLY name the worker '
+            "wrangler.toml Worker entry main does not EXACTLY name the worker "
             f'(main = "{_CF_WORKER_ENTRY}") — a non-canonical main (an absolute path, a '
             "'..' escape, or a look-alike dir like '....worker/index.ts') would deploy a "
             "DIFFERENT, unchecked Worker while /api/* + /admin never reach the generated "
@@ -808,9 +806,7 @@ def cloudflare_export_ready(files: Mapping[str, str | None]) -> CheckResult:
     # Scan EVERY assignment's value (every occurrence of every key), not just the first
     # ADMIN_TOKEN: a real secret hidden after a placeholder line — or on any other KEY —
     # must never escape, regardless of position, order, or duplication.
-    leaked_key = next(
-        (key for key, val in assignments if _looks_like_real_secret(val)), None
-    )
+    leaked_key = next((key for key, val in assignments if _looks_like_real_secret(val)), None)
     if leaked_key is not None:
         return CheckResult(
             name,
@@ -903,7 +899,7 @@ def cloudflare_export_ready_static(files: Mapping[str, str | None]) -> CheckResu
         return CheckResult(
             name,
             False,
-            'wrangler.toml Worker entry main does not point at the worker '
+            "wrangler.toml Worker entry main does not point at the worker "
             f'(main = "{_CF_WORKER_ENTRY}") — the static-asset Worker would not serve.',
         )
 

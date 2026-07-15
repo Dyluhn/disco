@@ -310,9 +310,7 @@ async def test_limits_and_no_env_leak_in_create(monkeypatch):
     fs: dict[str, bytes] = {}
     client = FakePodmanClient(has_image=True, fs=fs)
     cli = FakeCli(fs)
-    cfg = SandboxConfig(
-        backend="podman", runtime="crun", default_cpu=4.0, workspace_uid=1234
-    )
+    cfg = SandboxConfig(backend="podman", runtime="crun", default_cpu=4.0, workspace_uid=1234)
     svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
     await svc.create(SandboxSpec(cpu=2.0, memory_mb=512), owner_id="o", conversation_id="c")
     kw = client.last.create_kwargs
@@ -499,9 +497,7 @@ async def test_podman_sealed_host_service_box_has_capability_only_relay():
         host_service_upstream="https://agent.internal:8443",
     )
     svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
-    inst = await svc.create(
-        SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
-    )
+    inst = await svc.create(SandboxSpec(host_services=True), owner_id="o", conversation_id="c")
     sidecar, sandbox = client.created
     net = client.networks.created[0]
     assert net.attrs["internal"] is True
@@ -531,9 +527,7 @@ async def test_podman_relay_failure_fails_creation_and_cleans_sidecar():
     )
     svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
     with pytest.raises(SandboxUnavailableError, match="relay failed readiness"):
-        await svc.create(
-            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
-        )
+        await svc.create(SandboxSpec(host_services=True), owner_id="o", conversation_id="c")
     assert client.created[0].removed
     assert client.networks.created[0].removed
     assert len(client.created) == 1

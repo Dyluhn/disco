@@ -51,7 +51,11 @@ def test_plan_step_only_unbroken():
 
 def test_latest_wins_can_undo_done():
     """A later update_plan_progress moving a step done→active wins (latest-state)."""
-    events = [_plan(2, seq=1), _ps(1, "done", seq=2), _upp([{"index": 1, "state": "active"}], seq=3)]
+    events = [
+        _plan(2, seq=1),
+        _ps(1, "done", seq=2),
+        _upp([{"index": 1, "state": "active"}], seq=3),
+    ]
     _, states = effective_plan_progress(events)
     assert states[1] == "active"
     assert plan_is_incomplete(events)[0] is True
@@ -80,7 +84,10 @@ def test_replan_resets_progress():
 
 def test_out_of_range_indices_ignored():
     """A stale/out-of-range index in a snapshot is bounded out (plan has 2 steps)."""
-    events = [_plan(2, seq=1), _upp([{"index": 5, "state": "done"}, {"index": 1, "state": "done"}], seq=2)]
+    events = [
+        _plan(2, seq=1),
+        _upp([{"index": 5, "state": "done"}, {"index": 1, "state": "done"}], seq=2),
+    ]
     _, states = effective_plan_progress(events)
     assert states == {1: "done"}
 

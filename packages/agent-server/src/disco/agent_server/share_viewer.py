@@ -188,4 +188,3 @@ _SHARE_VIEWER_HTML = """<!doctype html>
   </script>
 </body>
 </html>"""
-

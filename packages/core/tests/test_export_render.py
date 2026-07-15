@@ -94,6 +94,7 @@ def _pdf_bytes(n_pages: int, *, pad: int = 4096) -> bytes:
 
 # ── HTML ────────────────────────────────────────────────────────────────────
 
+
 def test_html_good_deck_ok() -> None:
     f = check_export_render("html", text=_html_deck(5), declared_units=5)
     assert f.valid_header and f.unit_count == 5 and f.non_blank and not f.truncated
@@ -127,6 +128,7 @@ def test_html_single_page_non_deck_ok() -> None:
 
 
 # ── PPTX ────────────────────────────────────────────────────────────────────
+
 
 def test_pptx_good_ok() -> None:
     f = check_export_render("pptx", _pptx_bytes(3), declared_units=3)
@@ -168,7 +170,7 @@ def test_render_placeholders_are_pinned_and_stripped() -> None:
     # RENDER_PLACEHOLDERS must match the renderer literals; a deck of only these is BLANK.
     assert RENDER_PLACEHOLDERS == ("[image]", "(no table data)", "[no data]")
     deck = (
-        '<html><body>'
+        "<html><body>"
         '<section data-slide-id="s1"><div>[image]</div></section>'
         '<section data-slide-id="s2"><p>(no table data)</p></section>'
         '<section data-slide-id="s3"><div>[no data]</div></section>'
@@ -180,13 +182,19 @@ def test_render_placeholders_are_pinned_and_stripped() -> None:
 
 def test_chrome_token_does_not_strip_real_words() -> None:
     # Regression: bare "disco" must NOT gut "discovery"/"disconnect" (word-boundary match).
-    deck = '<html><body><section data-slide-id="s"><h1>Discovery Plan for Q3</h1></section></body></html>'
+    deck = (
+        '<html><body><section data-slide-id="s"><h1>Discovery Plan for Q3</h1>'
+        "</section></body></html>"
+    )
     f = check_export_render("html", text=deck, declared_units=1)
     assert f.non_blank is True and f.ok is True  # a real "Discovery Plan" deck is content
     # but the standalone wordmark/headword still strips
     f2 = check_export_render(
         "html",
-        text='<html><body><section data-slide-id="s"><div class="brand-wordmark">Disco</div><span>disco</span></section></body></html>',
+        text=(
+            '<html><body><section data-slide-id="s"><div class="brand-wordmark">'
+            "Disco</div><span>disco</span></section></body></html>"
+        ),
         declared_units=1,
     )
     assert f2.non_blank is False
@@ -320,7 +328,10 @@ def test_truncation_heuristic_tolerates_one_gap_but_exact_does_not() -> None:
 
 def test_object_data_media_counts_as_content() -> None:
     # <object data="..."> uses data=, not src= — a real embedded visual, not blank.
-    html = '<html><body><section data-slide-id="s"><object data="chart.svg"></object></section></body></html>'
+    html = (
+        '<html><body><section data-slide-id="s"><object data="chart.svg"></object>'
+        "</section></body></html>"
+    )
     f = check_export_render("html", text=html, declared_units=1)
     assert f.non_blank is True and f.ok is True
 
@@ -362,7 +373,8 @@ def test_chrome_strip_is_bounded_on_many_unclosed_opens() -> None:
 
         pytest.skip("SIGALRM unavailable")
     html = "<html><body>" + "".join(
-        f'<div class="bc-x">{"a" * 5000}' for _ in range(400)  # 400 UNCLOSED chrome opens
+        f'<div class="bc-x">{"a" * 5000}'
+        for _ in range(400)  # 400 UNCLOSED chrome opens
     )
 
     def _boom(*_):
@@ -414,13 +426,16 @@ def test_script_style_strip_is_linear_on_many_unclosed() -> None:
 def test_count_refusals_only_environment_source() -> None:
     # P10-2: a USER/AGENT message quoting the token must not advance the cap.
     def m(src: EventSource) -> MessageEvent:
-        return MessageEvent(source=src, message=LLMMessage(role="user", content=f"{EXPORT_GATE_TOKEN} x"))
+        return MessageEvent(
+            source=src, message=LLMMessage(role="user", content=f"{EXPORT_GATE_TOKEN} x")
+        )
 
     events = [m(EventSource.USER), m(EventSource.AGENT), m(EventSource.ENVIRONMENT)]
     assert count_export_gate_refusals(events) == 1
 
 
 # ── PDF ─────────────────────────────────────────────────────────────────────
+
 
 def test_pdf_good_ok() -> None:
     f = check_export_render("pdf", _pdf_bytes(4), declared_units=4)
@@ -473,6 +488,7 @@ def test_pdf_near_empty_blank() -> None:
 
 # ── unknown / round-trip / event reader ─────────────────────────────────────
 
+
 def test_unknown_format_unverifiable() -> None:
     f = check_export_render("xlsx", b"PK\x03\x04stuff")
     assert f.ok is False and "no render validator" in f.detail
@@ -510,7 +526,9 @@ def test_latest_export_render_facts_picks_newest() -> None:
         MessageEvent(source=EventSource.AGENT, message=LLMMessage(role="assistant", content="hi")),
         _obs("slides_generate", {"filename": "a", EXPORT_RENDER_KEY: good.model_dump(mode="json")}),
         _obs("file_write", {"path": "notes.txt"}),  # no export_render → skipped
-        _obs("slides_generate", {"filename": "b", EXPORT_RENDER_KEY: blank.model_dump(mode="json")}),
+        _obs(
+            "slides_generate", {"filename": "b", EXPORT_RENDER_KEY: blank.model_dump(mode="json")}
+        ),
     ]
     facts = latest_export_render_facts(events)
     assert facts == blank  # newest stamped wins
@@ -531,10 +549,13 @@ def test_latest_export_render_facts_skips_failed_obs() -> None:
 
 # ── gate helpers (pure) ─────────────────────────────────────────────────────
 
+
 def _refusal_msg() -> MessageEvent:
     return MessageEvent(
         source=EventSource.ENVIRONMENT,
-        message=LLMMessage(role="user", content=f"<system-reminder>\n{EXPORT_GATE_TOKEN}: x\n</system-reminder>"),
+        message=LLMMessage(
+            role="user", content=f"<system-reminder>\n{EXPORT_GATE_TOKEN}: x\n</system-reminder>"
+        ),
     )
 
 

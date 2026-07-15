@@ -58,6 +58,7 @@ from disco.core.llm.openai_provider import (
     _F5_THINK_BUDGET_HEAD,
     _F5_THINK_BUDGET_TAIL,
     OpenAIProvider,
+    _host_speaks_chat_template_kwargs,
     _truncate_think_block,
 )
 from disco.core.llm.types import (
@@ -93,6 +94,7 @@ def _provider(captured: list[dict], handler=None) -> OpenAIProvider:
     """A provider whose mock transport captures the request body the provider
     would send. Tests assert on `captured[0]` (non-streaming) or the SSE
     request (streaming)."""
+
     def _h(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else {}
         captured.append(body)
@@ -303,9 +305,7 @@ async def test_user_and_tool_literal_think_is_NOT_stripped():
         content="",
         tool_calls=[{"id": "c1", "name": "shell", "arguments": {}}],
     )
-    tool = LLMMessage(
-        role="tool", content="<think>x</think>y", tool_call_id="c1"
-    )
+    tool = LLMMessage(role="tool", content="<think>x</think>y", tool_call_id="c1")
     req = _req(messages=[user, caller, tool], assist=False)
     captured: list[dict] = []
     await _provider(captured).complete(req, model="m1")
@@ -348,18 +348,14 @@ async def test_assist_truncation_still_fires_for_non_assistant_role():
         content="",
         tool_calls=[{"id": "c1", "name": "shell", "arguments": {}}],
     )
-    tool = LLMMessage(
-        role="tool", content=f"{big_think}\nobserved", tool_call_id="c1"
-    )
+    tool = LLMMessage(role="tool", content=f"{big_think}\nobserved", tool_call_id="c1")
     req = _req(
         messages=[caller, tool, LLMMessage(role="user", content="continue")],
         assist=True,
     )
     captured: list[dict] = []
     await _provider(captured).complete(req, model="m1")
-    on_wire = next(
-        m for m in captured[0]["messages"] if m.get("role") == "tool"
-    )["content"]
+    on_wire = next(m for m in captured[0]["messages"] if m.get("role") == "tool")["content"]
     # Truncated (head+tail+marker), NOT stripped — the tags survive.
     assert "<think>" in on_wire and "</think>" in on_wire
     assert "F5 truncated" in on_wire
@@ -387,14 +383,17 @@ async def test_assist_on_attempt1_keeps_thinking_per_provider_default():
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -415,14 +414,17 @@ async def test_assist_on_attempt2_disables_thinking_overriding_provider_default(
         name="fake",
         enable_thinking=True,  # provider default = ON
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -463,14 +465,17 @@ async def test_assist_on_attempt3_keeps_thinking_disabled():
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -491,14 +496,17 @@ async def test_assist_off_attempt2_does_NOT_disable_thinking():
         name="fake",
         enable_thinking=True,
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -524,14 +532,17 @@ async def test_streaming_assist_on_overlong_assistant_think_is_stripped():
     # Drive the stream to its terminal chunk so the call returns cleanly.
     chunks = _sse(
         {"model": "m", "choices": [{"delta": {"content": "ok"}}]},
-        {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        {
+            "model": "m",
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        },
     )
+
     def _handler(request: httpx.Request) -> httpx.Response:
         captured.append(json.loads(request.content) if request.content else {})
-        return httpx.Response(
-            200, content=chunks, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
+
     p = OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(_handler))
     async for ch in p.stream_complete(req, model="m"):
         if ch.done:
@@ -552,14 +563,17 @@ async def test_streaming_assist_on_attempt2_disables_thinking():
     captured: list[dict] = []
     chunks = _sse(
         {"model": "m", "choices": [{"delta": {"content": "ok"}}]},
-        {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        {
+            "model": "m",
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        },
     )
+
     def _handler(request: httpx.Request) -> httpx.Response:
         captured.append(json.loads(request.content) if request.content else {})
-        return httpx.Response(
-            200, content=chunks, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
+
     p = OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(_handler))
     async for ch in p.stream_complete(req, model="m"):
         if ch.done:
@@ -584,16 +598,21 @@ async def test_streaming_assist_off_attempt2_strips_history_but_keeps_thinking()
     captured: list[dict] = []
     chunks = _sse(
         {"model": "m", "choices": [{"delta": {"content": "ok"}}]},
-        {"model": "m", "choices": [{"delta": {}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        {
+            "model": "m",
+            "choices": [{"delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        },
     )
+
     def _handler(request: httpx.Request) -> httpx.Response:
         captured.append(json.loads(request.content) if request.content else {})
-        return httpx.Response(
-            200, content=chunks, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, content=chunks, headers={"content-type": "text/event-stream"})
+
     p = OpenAIProvider(
-        "http://fake/v1", name="fake", enable_thinking=True,
+        "http://fake/v1",
+        name="fake",
+        enable_thinking=True,
         transport=httpx.MockTransport(_handler),
     )
     async for ch in p.stream_complete(req, model="m"):
@@ -631,16 +650,21 @@ async def test_assist_on_overlong_assistant_think_AND_attempt2_both_gates_fire()
     )
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1", name="fake", enable_thinking=True,
+        "http://fake/v1",
+        name="fake",
+        enable_thinking=True,
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -676,16 +700,21 @@ async def test_default_attempt_is_one_thinking_unchanged():
     )
     captured: list[dict] = []
     p = OpenAIProvider(
-        "http://fake/v1", name="fake", enable_thinking=True,
+        "http://fake/v1",
+        name="fake",
+        enable_thinking=True,
         transport=httpx.MockTransport(
-            lambda r: (captured.append(json.loads(r.content)), httpx.Response(
-                200,
-                json={
-                    "model": "m1",
-                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            ))[1]
+            lambda r: (
+                captured.append(json.loads(r.content)),
+                httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                ),
+            )[1]
         ),
     )
     await p.complete(req, model="m1")
@@ -698,8 +727,6 @@ async def test_default_attempt_is_one_thinking_unchanged():
 # `chat_template_kwargs` is a llama.cpp/vLLM extension; strict clouds (Fireworks
 # behind OpenCode Go) 400 the whole request over it. The provider must send it
 # only to self-hosted-looking hosts.
-
-from disco.core.llm.openai_provider import _host_speaks_chat_template_kwargs
 
 
 def test_ctk_gate_public_hosts_refused():

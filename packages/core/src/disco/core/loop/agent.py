@@ -186,8 +186,7 @@ class RouterAgent:
         prefill = None
         if mode == OperatingMode.PLANNING and disco_env("PLAN_PREFILL") == "1":
             prefill = (
-                "I've analyzed the request and current workspace state. "
-                "To advance, I will now"
+                "I've analyzed the request and current workspace state. To advance, I will now"
             )
         # C13: Mirror the B9 prefill pattern for the EXECUTION phase
         # (LONG_HORIZON mode in the engine: `execution_mode: OperatingMode =
@@ -198,8 +197,7 @@ class RouterAgent:
         # contract — flag OFF is byte-identical to today (prefill stays None).
         elif mode == OperatingMode.LONG_HORIZON and disco_env("EXEC_PREFILL") == "1":
             prefill = (
-                "Given the current workspace state and the last tool result, "
-                "my next action is to"
+                "Given the current workspace state and the last tool result, my next action is to"
             )
 
         req = CompletionRequest(

@@ -126,7 +126,11 @@ def test_render_omits_empty_sections() -> None:
 
 def test_render_caps_via_policy() -> None:
     led = ContextLedger.empty("c").model_copy(
-        update={"resource_manifest": tuple(ResourceRef(rel_path=f"a{i}.png", source="u") for i in range(10))}
+        update={
+            "resource_manifest": tuple(
+                ResourceRef(rel_path=f"a{i}.png", source="u") for i in range(10)
+            )
+        }
     )
     pol = CompactionPolicy(max_resource_refs=2)
     out = render_context_pack(build_context_pack([_plan("g")], base_ledger=led, policy=pol))

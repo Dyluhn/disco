@@ -55,6 +55,7 @@ from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, agent_scope, artif
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
+
 def _sample_authored_dict() -> dict:
     """A minimal two-slide AuthoredDeck as a plain dict (the JSON round-trip form)."""
     return {
@@ -96,6 +97,7 @@ def _make_tool_ctx(authored_dict: dict) -> tuple[DeckPatchTool, MagicMock]:
 
 
 # ─── 1–5: apply_patch unit tests ──────────────────────────────────────────────
+
 
 class TestApplyPatch:
     def test_replace_title(self):
@@ -182,6 +184,7 @@ class TestApplyPatch:
 
 
 # ─── 6–9: DeckPatchTool.run integration tests ─────────────────────────────────
+
 
 class TestDeckPatchToolRun:
     @pytest.mark.asyncio
@@ -301,6 +304,7 @@ class TestDeckPatchToolRun:
 
 # ─── 10–11: DeckResolver Python side ──────────────────────────────────────────
 
+
 class TestDeckResolverPython:
     """
     The Python-side 'resolver' is the lower_deck_for_editor() mapping from element_id
@@ -334,9 +338,7 @@ class TestDeckResolverPython:
         lowered = lower_deck_for_editor(authored)
 
         # Simulate the editor: find the title element → get its pointer
-        title_el = next(
-            e for e in lowered.slides[0].elements if e.element_id == "slide-0:title"
-        )
+        title_el = next(e for e in lowered.slides[0].elements if e.element_id == "slide-0:title")
         pointer = title_el.json_pointer  # "/slides/0/title"
 
         # Apply a patch via that pointer
@@ -373,6 +375,7 @@ class TestDeckResolverPython:
 
 
 # ─── 12–13: data-element-id in HTML + strip ───────────────────────────────────
+
 
 class TestHtmlElementIds:
     def _make_html(self) -> str:
@@ -436,6 +439,7 @@ class TestHtmlElementIds:
 
 # ─── 12b: strip_element_ids pure helper ───────────────────────────────────────
 
+
 class TestStripElementIds:
     """Tests for the pure ``strip_element_ids`` helper.
 
@@ -464,9 +468,7 @@ class TestStripElementIds:
         assert out == "<section>x</section>"
 
     def test_strips_both_attrs_in_one_tag(self):
-        html_str = (
-            '<h2 data-element-id="slide-0:title" data-slide-id="slide-0">Hi</h2>'
-        )
+        html_str = '<h2 data-element-id="slide-0:title" data-slide-id="slide-0">Hi</h2>'
         out = strip_element_ids(html_str)
         assert "data-element-id" not in out
         assert "data-slide-id" not in out
@@ -521,10 +523,10 @@ class TestStripElementIds:
             '<pre>sample: data-element-id="z"</pre>'
         )
         out = strip_element_ids(html_str)
-        assert "<p>" in out                      # real start-tag attrs removed
-        assert 'data-element-id="x"' in out      # literal in text preserved
-        assert 'data-slide-id="y"' in out        # literal in <script> preserved
-        assert 'data-element-id="z"' in out      # literal in <pre> preserved
+        assert "<p>" in out  # real start-tag attrs removed
+        assert 'data-element-id="x"' in out  # literal in text preserved
+        assert 'data-slide-id="y"' in out  # literal in <script> preserved
+        assert 'data-element-id="z"' in out  # literal in <pre> preserved
 
     def test_idempotent_on_already_clean_string(self):
         html_str = "<h2>Hi</h2><p>no attrs here</p>"
@@ -591,6 +593,7 @@ class TestStripElementIds:
 
 # ─── 14: Registry membership ──────────────────────────────────────────────────
 
+
 class TestRegistryMembership:
     def test_deck_patch_in_agent_tools(self):
         assert "deck_patch" in AGENT_TOOLS
@@ -608,6 +611,7 @@ class TestRegistryMembership:
 
     def test_deck_patch_registered_in_default_registry(self):
         from disco.tools.builtin import build_default_registry
+
         reg = build_default_registry()
         scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
         tool = reg.get("deck_patch", scope=scope)
@@ -631,6 +635,7 @@ class TestRegistryMembership:
 
 
 # ─── 15–16: deck_schema lower functions ───────────────────────────────────────
+
 
 class TestDeckSchema:
     def test_lower_deck_element_geometry(self):
@@ -662,9 +667,7 @@ class TestDeckSchema:
             ],
         )
         lowered = lower_deck_for_editor(deck)
-        chart_el = next(
-            (e for e in lowered.slides[0].elements if e.kind == "chart"), None
-        )
+        chart_el = next((e for e in lowered.slides[0].elements if e.kind == "chart"), None)
         assert chart_el is not None
         assert "Revenue" in chart_el.content or "chart" in chart_el.content.lower()
 
@@ -681,9 +684,7 @@ class TestDeckSchema:
             ],
         )
         lowered = lower_deck_for_editor(deck)
-        img_el = next(
-            (e for e in lowered.slides[0].elements if e.kind == "image_prompt"), None
-        )
+        img_el = next((e for e in lowered.slides[0].elements if e.kind == "image_prompt"), None)
         assert img_el is not None
         assert "futuristic" in img_el.content
 
@@ -720,9 +721,13 @@ async def test_deck_patch_preserves_generated_images_on_edit():
     from tool_fakes import FakeSandboxInstance
 
     # a deck with one image slide + its on-disk generated image
-    authored = AuthoredDeck(title="T", theme="disco-light", slides=[
-        AuthoredSlide(type="full_image", title="Cover", body=[], image_prompt="a tree"),
-    ])
+    authored = AuthoredDeck(
+        title="T",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(type="full_image", title="Cover", body=[], image_prompt="a tree"),
+        ],
+    )
     buf = _io.BytesIO()
     Image.new("RGB", (64, 36), (10, 160, 60)).save(buf, format="PNG")
     png = buf.getvalue()
@@ -731,13 +736,21 @@ async def test_deck_patch_preserves_generated_images_on_edit():
     await sandbox.write_file("deck.authored.json", authored.model_dump_json().encode())
     await sandbox.write_file("deck_img_0.png", png)  # the generated asset, by convention
 
-    ctx = ToolContext(sandbox=sandbox, workspace_path=".", timeout_s=60,
-                      capabilities=None, owner_id="o", conversation_id="c")
+    ctx = ToolContext(
+        sandbox=sandbox,
+        workspace_path=".",
+        timeout_s=60,
+        capabilities=None,
+        owner_id="o",
+        conversation_id="c",
+    )
     tool = DeckPatchTool()
     # a no-op-ish patch (change the title) to trigger a re-render
     from disco.tools.builtin._deck_patch import DeckPatchArgs
-    args = DeckPatchArgs(deck_file="deck.authored.json",
-                         patch=[{"op": "replace", "path": "/title", "value": "T2"}])
+
+    args = DeckPatchArgs(
+        deck_file="deck.authored.json", patch=[{"op": "replace", "path": "/title", "value": "T2"}]
+    )
     out = await tool.run(args, ctx)
     assert out.success, out.error
 

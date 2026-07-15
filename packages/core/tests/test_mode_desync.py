@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from _buildsoak_fakes import PROD_PLANNING_TOOLS, BuildExecutor, build_plan_loop
 from disco.core import ConversationStatus, PlanEvent, PlanStep, StatusEvent
 from disco.core.llm import (
     DefaultLLMRouter,
@@ -13,9 +14,6 @@ from disco.core.llm import (
 from disco.core.loop import BuildAgent
 from llm_fakes import simple_config
 from loop_fakes import SequenceProvider
-
-from _buildsoak_fakes import BuildExecutor, PROD_PLANNING_TOOLS, build_plan_loop
-
 
 CID = "conv-mode-desync"
 
@@ -81,14 +79,10 @@ async def _assert_next_driver_request_is_execution(loop, store, provider) -> Non
     loop.mode = OperatingMode.PLANNING
     events = await store.get_events(CID)
     assert any(
-        isinstance(event, StatusEvent) and event.detail == "plan_approved"
-        for event in events
+        isinstance(event, StatusEvent) and event.detail == "plan_approved" for event in events
     )
     view = await loop._materialize_view(events)
-    assert any(
-        "<current-objective>" in (message.content or "")
-        for message in view.messages
-    )
+    assert any("<current-objective>" in (message.content or "") for message in view.messages)
 
     step, _disp = await loop._driver.drive_step(view, events)
     assert step is not None

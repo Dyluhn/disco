@@ -35,6 +35,7 @@ def client() -> TestClient:
 
 def _seed(store: SqliteEventStore, cid: str) -> None:
     """A small build-like log: user msg → action → paired observation → finished."""
+
     async def go() -> None:
         store.create_conversation(cid, owner_id="local", title="My build", surface="build")
         await store.append(

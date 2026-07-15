@@ -19,7 +19,9 @@ class FakeSearchProvider:
         self._hits = hits
         self.queries: list[str] = []
 
-    async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None, time_filter=None):
+    async def search(
+        self, query, *, limit=10, domains_allow=None, domains_deny=None, time_filter=None
+    ):
         self.queries.append(query)
         hits = self._hits
         if domains_allow is not None:

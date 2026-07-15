@@ -49,8 +49,7 @@ def _extract_markdown(doc: Any) -> tuple[str, bool, str | None]:
         body = doc.strip()
         if len(body) > _EXTRACT_CHAR_BUDGET:
             body = (
-                body[:_EXTRACT_CHAR_BUDGET]
-                + f"\n\n…[truncated at {_EXTRACT_CHAR_BUDGET:,} chars]"
+                body[:_EXTRACT_CHAR_BUDGET] + f"\n\n…[truncated at {_EXTRACT_CHAR_BUDGET:,} chars]"
             )
         return (body, True, None)
     d = doc if isinstance(doc, dict) else {}
@@ -62,8 +61,7 @@ def _extract_markdown(doc: Any) -> tuple[str, bool, str | None]:
     content = str(d.get("content", "")).strip()
     if len(content) > _EXTRACT_CHAR_BUDGET:
         content = (
-            content[:_EXTRACT_CHAR_BUDGET]
-            + f"\n\n…[truncated at {_EXTRACT_CHAR_BUDGET:,} chars — "
+            content[:_EXTRACT_CHAR_BUDGET] + f"\n\n…[truncated at {_EXTRACT_CHAR_BUDGET:,} chars — "
             "re-extract a deeper section if you need more]"
         )
     body = f"# {title}\n<{url}>\n\n{content}" if url else f"# {title}\n\n{content}"
@@ -78,7 +76,11 @@ class SearchArgs(BaseModel):
 class SearchTool:
     definition = ToolDef(
         name="search",
-        description="Search the web via the configured provider (SearXNG + optional APIs). Returns titles + URLs + snippets — follow up with `extract` on a chosen URL for full readable content.",
+        description=(
+            "Search the web via the configured provider (SearXNG + optional APIs). "
+            "Returns titles + URLs + snippets — follow up with `extract` on a chosen "
+            "URL for full readable content."
+        ),
         args_model=SearchArgs,
         needs=_NET,
         uses_capabilities=frozenset({"search"}),
@@ -102,7 +104,10 @@ class ExtractArgs(BaseModel):
 class ExtractTool:
     definition = ToolDef(
         name="extract",
-        description="Extract clean, LLM-ready content from ONE URL (via Firecrawl) — the follow-up to `search` when a snippet is not enough.",
+        description=(
+            "Extract clean, LLM-ready content from ONE URL (via Firecrawl) — the "
+            "follow-up to `search` when a snippet is not enough."
+        ),
         args_model=ExtractArgs,
         needs=_NET,
         uses_capabilities=frozenset({"extract"}),

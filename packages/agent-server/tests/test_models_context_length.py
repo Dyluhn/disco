@@ -66,9 +66,7 @@ _OR_MODELS = _FakeResp(
     },
 )
 # MiniMax-shaped /models payload: NO context_length field anywhere.
-_MINIMAX_MODELS = _FakeResp(
-    200, {"data": [{"id": "abab6.5-chat"}, {"id": "minimax-m2"}]}
-)
+_MINIMAX_MODELS = _FakeResp(200, {"data": [{"id": "abab6.5-chat"}, {"id": "minimax-m2"}]})
 # llama.cpp /props payload: a server-wide n_ctx.
 _LLAMA_PROPS = _FakeResp(
     200, {"default_generation_settings": {"n_ctx": 131072}, "model_path": "Qwen.gguf"}

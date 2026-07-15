@@ -29,15 +29,13 @@ from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from ..runtime import ConversationRuntime
 from ..auth import current_owner_id
+from ..runtime import ConversationRuntime
 from ._common import _declared_artifacts, require_owned_conversation
 from .files import _read_artifact_bytes
 
 
-async def _sidecar_is_current(
-    store: SqliteEventStore, conversation_id: str, base: str
-) -> bool:
+async def _sidecar_is_current(store: SqliteEventStore, conversation_id: str, base: str) -> bool:
     """True iff the MOST RECENT ``slides_generate`` that produced this base still
     advertises the editable AuthoredDeck sidecar.
 
@@ -97,9 +95,7 @@ async def _reload_deck_image_assets(
 async def _direction_brand_override(
     runtime: ConversationRuntime, conversation_id: str
 ) -> Theme | None:
-    raw = await _read_artifact_bytes(
-        runtime, conversation_id, ".disco/context/design_direction.md"
-    )
+    raw = await _read_artifact_bytes(runtime, conversation_id, ".disco/context/design_direction.md")
     if raw is None:
         return None
     direction = direction_from_markdown(raw.decode("utf-8", errors="replace"))
@@ -134,9 +130,7 @@ class _SofficeUnavailable(RuntimeError):
     generic render failure — and the OPS fix is to rebuild/redeploy the image."""
 
 
-async def _probe_soffice_in_sandbox(
-    runtime: ConversationRuntime, *, owner_id: str
-) -> bool:
+async def _probe_soffice_in_sandbox(runtime: ConversationRuntime, *, owner_id: str) -> bool:
     """Spin a THROWAWAY sandbox and probe ``command -v soffice`` — the HONEST capability
     check for deck→PDF export (BW-10). Returns True iff LibreOffice is on PATH in the
     deployed image. Any spin/probe error → False (treated as unavailable, never a false
@@ -149,9 +143,7 @@ async def _probe_soffice_in_sandbox(
         return False
     cid = f"probe-soffice-{_uuid.uuid4().hex[:12]}"
     try:
-        instance = await svc.create(
-            runtime._sandbox_spec, owner_id=owner_id, conversation_id=cid
-        )
+        instance = await svc.create(runtime._sandbox_spec, owner_id=owner_id, conversation_id=cid)
     except Exception:  # noqa: BLE001 — cannot spin a box → not available
         return False
     try:
@@ -234,7 +226,7 @@ class DeckPatchBody(BaseModel):
     patch: list[dict[str, Any]]
 
 
-def _coerce_patch_ops(patch: object) -> "list[dict[str, Any]]":
+def _coerce_patch_ops(patch: object) -> list[dict[str, Any]]:
     """apply_patch's engine consumes plain dicts; the route body may carry
     typed JsonPatchOperation models (advertised-schema typing) or raw dicts."""
     out: list[dict[str, Any]] = []
@@ -425,16 +417,12 @@ async def _export_deck_with_template_response(
             ext = "html"
         elif fmt == "pdf":
             pptx_bytes = render_pptx(deck)
-            body = await _render_deck_pdf_in_sandbox(
-                live_runtime, pptx_bytes, owner_id=owner_id
-            )
+            body = await _render_deck_pdf_in_sandbox(live_runtime, pptx_bytes, owner_id=owner_id)
             media = "application/pdf"
             ext = "pdf"
         else:
             body = render_pptx(deck)
-            media = (
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            )
+            media = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             ext = "pptx"
     except HTTPException:
         raise
@@ -528,8 +516,7 @@ async def _patch_deck_response(
         (pptx_rel, pptx_bytes),
     ]
     prior: dict[str, bytes | None] = {
-        rel: await _read_artifact_bytes(live_runtime, conversation_id, rel)
-        for rel, _ in targets
+        rel: await _read_artifact_bytes(live_runtime, conversation_id, rel) for rel, _ in targets
     }
     try:
         for rel, data in targets:
@@ -548,9 +535,7 @@ async def _patch_deck_response(
         ) from exc
 
     pdf_rel = f"{base}.pdf"
-    pdf_stale = (
-        await _read_artifact_bytes(live_runtime, conversation_id, pdf_rel)
-    ) is not None
+    pdf_stale = (await _read_artifact_bytes(live_runtime, conversation_id, pdf_rel)) is not None
     lowered = lower_deck_for_editor(authored_deck)
     return {
         "ok": True,
@@ -630,9 +615,7 @@ def make_deck_editor_router(
         )
 
     @router.get("/conversations/{conversation_id}/deck/export/capabilities")
-    async def deck_export_capabilities(
-        conversation_id: str, request: Request
-    ) -> dict[str, Any]:
+    async def deck_export_capabilities(conversation_id: str, request: Request) -> dict[str, Any]:
         """Report which export formats this conversation's sandbox can ACTUALLY produce.
 
         BW-10: deck→PDF needs LibreOffice. Rather than the FE guessing from the backend

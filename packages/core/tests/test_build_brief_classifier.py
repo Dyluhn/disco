@@ -15,7 +15,11 @@ from disco.core.appkit import BuildBrief, classify_build_brief
 
 _GOLDEN = (
     Path(__file__).resolve().parents[1]
-    / "src" / "disco" / "core" / "appkit" / "build_brief_golden.json"
+    / "src"
+    / "disco"
+    / "core"
+    / "appkit"
+    / "build_brief_golden.json"
 )
 
 

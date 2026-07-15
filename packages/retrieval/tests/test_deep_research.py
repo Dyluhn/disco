@@ -135,9 +135,7 @@ class _FakeExtraction:
 
 
 class _FakeReranker:
-    async def rerank(
-        self, query: str, passages: list[Passage], *, top_k: int
-    ) -> list[Passage]:
+    async def rerank(self, query: str, passages: list[Passage], *, top_k: int) -> list[Passage]:
         # rerank is a no-op for the fake — order by id for determinism.
         return sorted(passages, key=lambda p: p.id)[:top_k]
 
@@ -193,7 +191,8 @@ class _ScriptedRouter(LLMRouter):
         self, request: CompletionRequest, *, context: Any = None
     ) -> CompletionResponse:
         role = (
-            request.profile.role.value if hasattr(request.profile.role, "value")
+            request.profile.role.value
+            if hasattr(request.profile.role, "value")
             else str(request.profile.role)
         )
         # snapshot what the LAST user message was for assertions
@@ -227,6 +226,7 @@ class _ScriptedRouter(LLMRouter):
     ) -> AsyncIterator[StreamChunk]:
         async def gen() -> AsyncIterator[StreamChunk]:
             yield StreamChunk(done=True, final=await self.complete(request, context=context))
+
         return gen()
 
 
@@ -247,11 +247,11 @@ def _collect_events() -> tuple[list[tuple[str, dict]], Any]:
 
 
 async def test_decompose_returns_sub_questions() -> None:
-    router = _ScriptedRouter({
-        "query_rewriter": [
-            "What is X?\nHow does X work today?\nWhere is X going?"
-        ],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["What is X?\nHow does X work today?\nWhere is X going?"],
+        }
+    )
     subqs = await decompose_query(router, "the state of X", max_subq=6)
     assert [s.title for s in subqs] == [
         "What is X?",
@@ -279,27 +279,40 @@ async def test_gather_iterates_multiple_rounds_until_sufficient() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter({
-        "query_rewriter": [
-            "GAP: missing recent data\nlatest 2024 numbers",  # round 1 → refine
-            "SUFFICIENT\nnone",  # round 2 → stop
-        ],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": [
+                "GAP: missing recent data\nlatest 2024 numbers",  # round 1 → refine
+                "SUFFICIENT\nnone",  # round 2 → stop
+            ],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     bound = DepthBound(
-        max_sources=20, max_rounds_per_subq=3, max_wall_clock_s=60,
-        max_subquestions=6, discover_limit=8, extract_cap=4, rerank_top_k=4,
+        max_sources=20,
+        max_rounds_per_subq=3,
+        max_wall_clock_s=60,
+        max_subquestions=6,
+        discover_limit=8,
+        extract_cap=4,
+        rerank_top_k=4,
     )
     captured, emit = _collect_events()
     result: SubQuestionResult = await gather_for_subquestion(
         SubQuestion(title="What is X?"),
-        engine=engine, router=router, embedder=embedder,
-        vector_store=vector_store, namespace="conv_test",
-        bound=bound, emit=emit, remaining_source_budget=20,
+        engine=engine,
+        router=router,
+        embedder=embedder,
+        vector_store=vector_store,
+        namespace="conv_test",
+        bound=bound,
+        emit=emit,
+        remaining_source_budget=20,
         leg_context=GatherLegContext(
-            subq_id="s_test", namespace="conv_test",
+            subq_id="s_test",
+            namespace="conv_test",
             call_context=CallContext(conversation_id="conv_test/s_test"),
         ),
     )
@@ -312,9 +325,9 @@ async def test_gather_iterates_multiple_rounds_until_sufficient() -> None:
     # C14: the router's gap_reasoner call was scoped to this leg's
     # CallContext, not the shared default (which would have no
     # conversation_id set).
-    assert any(
-        ctx == "conv_test/s_test" for ctx in router.call_contexts
-    ), f"expected per-leg conversation_id in call contexts, got {router.call_contexts}"
+    assert any(ctx == "conv_test/s_test" for ctx in router.call_contexts), (
+        f"expected per-leg conversation_id in call contexts, got {router.call_contexts}"
+    )
 
 
 async def test_gather_stops_at_round_cap_with_bounded_by_rounds() -> None:
@@ -325,29 +338,41 @@ async def test_gather_stops_at_round_cap_with_bounded_by_rounds() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter({
-        # always says GAP — would loop forever without the cap
-        "query_rewriter": [
-            "GAP: still incomplete\nmore data please",
-            "GAP: still incomplete\nyet more data",
-        ],
-    })
+    router = _ScriptedRouter(
+        {
+            # always says GAP — would loop forever without the cap
+            "query_rewriter": [
+                "GAP: still incomplete\nmore data please",
+                "GAP: still incomplete\nyet more data",
+            ],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     bound = DepthBound(
-        max_sources=20, max_rounds_per_subq=2,  # tiny: 2 rounds max
-        max_wall_clock_s=60, max_subquestions=6,
-        discover_limit=8, extract_cap=4, rerank_top_k=4,
+        max_sources=20,
+        max_rounds_per_subq=2,  # tiny: 2 rounds max
+        max_wall_clock_s=60,
+        max_subquestions=6,
+        discover_limit=8,
+        extract_cap=4,
+        rerank_top_k=4,
     )
     captured, emit = _collect_events()
     result = await gather_for_subquestion(
         SubQuestion(title="What is X?"),
-        engine=engine, router=router, embedder=embedder,
-        vector_store=vector_store, namespace="conv_test",
-        bound=bound, emit=emit, remaining_source_budget=20,
+        engine=engine,
+        router=router,
+        embedder=embedder,
+        vector_store=vector_store,
+        namespace="conv_test",
+        bound=bound,
+        emit=emit,
+        remaining_source_budget=20,
         leg_context=GatherLegContext(
-            subq_id="s_test", namespace="conv_test",
+            subq_id="s_test",
+            namespace="conv_test",
             call_context=CallContext(conversation_id="conv_test/s_test"),
         ),
     )
@@ -367,25 +392,27 @@ async def test_full_run_produces_multi_section_report() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter({
-        "query_rewriter": [
-            # round-1 gap reasoner for each subq says SUFFICIENT (1 round each)
-            "SUFFICIENT\nnone",
-            "SUFFICIENT\nnone",
-            "SUFFICIENT\nnone",
-        ],
-        # synthesis: one body per section + coherence summary (4 total)
-        # Each section retrieves up to top_k passages from the in-memory vector
-        # store. Section 1 sees passages from the first sub-q's search (p0,p1,
-        # p2), section 2 from the second (p3-onwards). We cite at least one
-        # known id in each so cited_passage_ids is populated.
-        "rag_answerer": [
-            "The basics of X are well-established [[p0]]. Sources cite consistent data [[p1]].",
-            "Today, X works via mechanism Y [[p3]]. Systems demonstrate this [[p4]].",
-            "Future directions point to Z [[p6]]. The field expects progress [[p7]].",
-            "This report surveys X — its basics, present state, and outlook.",
-        ],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": [
+                # round-1 gap reasoner for each subq says SUFFICIENT (1 round each)
+                "SUFFICIENT\nnone",
+                "SUFFICIENT\nnone",
+                "SUFFICIENT\nnone",
+            ],
+            # synthesis: one body per section + coherence summary (4 total)
+            # Each section retrieves up to top_k passages from the in-memory vector
+            # store. Section 1 sees passages from the first sub-q's search (p0,p1,
+            # p2), section 2 from the second (p3-onwards). We cite at least one
+            # known id in each so cited_passage_ids is populated.
+            "rag_answerer": [
+                "The basics of X are well-established [[p0]]. Sources cite consistent data [[p1]].",
+                "Today, X works via mechanism Y [[p3]]. Systems demonstrate this [[p4]].",
+                "Future directions point to Z [[p6]]. The field expects progress [[p7]].",
+                "This report surveys X — its basics, present state, and outlook.",
+            ],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
@@ -394,9 +421,13 @@ async def test_full_run_produces_multi_section_report() -> None:
     # passages from sub-q i's gather, which are sequentially `p{i*3..}`).
     run = DeepResearchRun(
         query="the state of X",
-        router=router, retrieval_engine=engine,
-        embedder=None, vector_store=vector_store, nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_e2e",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=vector_store,
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_e2e",
     )
     plan_steps = ["What is X?", "How does X work today?", "Where is X going?"]
     captured, emit = _collect_events()
@@ -438,18 +469,24 @@ async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     run = DeepResearchRun(
         query="the state of X",
-        router=router, retrieval_engine=engine,
-        embedder=None, vector_store=vector_store, nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_stop",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=vector_store,
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_stop",
     )
     plan_steps = ["What is X?", "How does X work?", "Where is X going?", "Risks?"]
     _, emit = _collect_events()
@@ -485,14 +522,21 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
 
     # ---- run 1: stop after the first sub-question is gathered+synthesized ----
     search1, eng1 = _engine()
-    router1 = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-    })
+    router1 = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+        }
+    )
     run1 = DeepResearchRun(
-        query="the state of X", router=router1, retrieval_engine=eng1,
-        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_resume",
+        query="the state of X",
+        router=router1,
+        retrieval_engine=eng1,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_resume",
     )
     _, emit = _collect_events()
     n = {"c": 0}
@@ -508,18 +552,26 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
 
     # ---- run 2: resume — carry the completed section, finish the rest --------
     search2, eng2 = _engine()
-    router2 = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-        "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-    })
+    router2 = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
+            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
+        }
+    )
     run2 = DeepResearchRun(
-        query="the state of X", router=router2, retrieval_engine=eng2,
-        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_resume",
+        query="the state of X",
+        router=router2,
+        retrieval_engine=eng2,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_resume",
     )
     _, emit2 = _collect_events()
     final = await run2.run(
-        plan_steps, emit=emit2,
+        plan_steps,
+        emit=emit2,
         resume_sections=partial.sections,
         resume_passages=partial.cited_passages,
         resume_all_hits=partial.all_hits,
@@ -537,19 +589,29 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
 async def test_no_should_cancel_runs_to_completion() -> None:
     """Without a cancel hook the run is uninterruptible (baseline) — every section."""
     search, extraction, reranker, embedder = (
-        _FakeSearch(), _FakeExtraction(), _FakeReranker(), _FakeEmbedder()
+        _FakeSearch(),
+        _FakeExtraction(),
+        _FakeReranker(),
+        _FakeEmbedder(),
     )
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 4,
-        "rag_answerer": ["body [[p0]]"] * 4 + ["summary"],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 4,
+            "rag_answerer": ["body [[p0]]"] * 4 + ["summary"],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     run = DeepResearchRun(
-        query="X", router=router, retrieval_engine=engine, embedder=None,
-        vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_nostop",
+        query="X",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_nostop",
     )
     _, emit = _collect_events()
     result = await run.run(["a", "b"], emit=emit)  # no should_cancel
@@ -563,16 +625,22 @@ async def test_cap_hit_produces_bounded_by_subquestions() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 10,
-        "rag_answerer": ["body [[p0]]"] * 10 + ["summary"],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 10,
+            "rag_answerer": ["body [[p0]]"] * 10 + ["summary"],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     run = DeepResearchRun(
-        query="overview", router=router, retrieval_engine=engine,
-        embedder=embedder, vector_store=vector_store, nli=_FakeNLI(),
+        query="overview",
+        router=router,
+        retrieval_engine=engine,
+        embedder=embedder,
+        vector_store=vector_store,
+        nli=_FakeNLI(),
         depth=DepthTier.QUICK,  # cap = 3 sub-questions
         conversation_id="conv_cap",
     )
@@ -653,7 +721,8 @@ class _GapRecordingRouter(LLMRouter):
         self, request: CompletionRequest, *, context: Any = None
     ) -> CompletionResponse:
         role = (
-            request.profile.role.value if hasattr(request.profile.role, "value")
+            request.profile.role.value
+            if hasattr(request.profile.role, "value")
             else str(request.profile.role)
         )
         # snapshot the message list (NOT a shared reference) — the snapshot
@@ -666,9 +735,7 @@ class _GapRecordingRouter(LLMRouter):
             if context is not None and getattr(context, "conversation_id", None)
             else None
         )
-        self.records.append(
-            {"role": role, "last_msg": last_msg, "conversation_id": ctx_id}
-        )
+        self.records.append({"role": role, "last_msg": last_msg, "conversation_id": ctx_id})
         if ctx_id == self._fail_when_conv_id:
             raise RuntimeError(self._fail_message)
         queue = self._scripts.get(role, [])
@@ -692,9 +759,8 @@ class _GapRecordingRouter(LLMRouter):
         self, request: CompletionRequest, *, context: Any = None
     ) -> AsyncIterator[StreamChunk]:
         async def gen() -> AsyncIterator[StreamChunk]:
-            yield StreamChunk(
-                done=True, final=await self.complete(request, context=context)
-            )
+            yield StreamChunk(done=True, final=await self.complete(request, context=context))
+
         return gen()
 
 
@@ -730,23 +796,29 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     # Scripted: gap reasoner SUFFICIENT for all legs (1 round each), one
     # synthesis body per section, one coherence summary. Distinctive
     # subq titles let us assert which leg's task appears in which call.
-    router = _GapRecordingRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 3,
-        "rag_answerer": [
-            "Basics of ALPHA-QUESTION are clear [[p0]]. Source confirms [[p1]].",
-            "BETA-QUESTION today looks like this [[p3]]. Evidence shows [[p4]].",
-            "GAMMA-QUESTION trends toward Z [[p6]]. The field expects [[p7]].",
-            "This report surveys the ALPHA, BETA, and GAMMA space.",
-        ],
-    })
+    router = _GapRecordingRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 3,
+            "rag_answerer": [
+                "Basics of ALPHA-QUESTION are clear [[p0]]. Source confirms [[p1]].",
+                "BETA-QUESTION today looks like this [[p3]]. Evidence shows [[p4]].",
+                "GAMMA-QUESTION trends toward Z [[p6]]. The field expects [[p7]].",
+                "This report surveys the ALPHA, BETA, and GAMMA space.",
+            ],
+        }
+    )
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     run = DeepResearchRun(
         query="the state of X",
-        router=router, retrieval_engine=engine,
-        embedder=None, vector_store=vector_store, nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_c14",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=vector_store,
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_c14",
     )
     plan_steps = [
         "ALPHA-QUESTION: what is it?",
@@ -771,7 +843,8 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
         # sha256 of each title, first 8 hex chars, prefixed with "s".
         # We don't hard-code the hashes; instead we derive them so the
         # test stays robust to any change in the engine's hashing scheme.
-        f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}" for t in plan_steps
+        f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}"
+        for t in plan_steps
     }
     seen_leg_ids = {r["conversation_id"] for r in gap_calls}
     # Each conversation_id is of the form "conv_c14/<leg_id>".
@@ -780,9 +853,7 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
         assert cid is not None, "shared default CallContext was used (isolation broken)"
         assert cid.startswith("conv_c14/s"), f"unexpected conv_id format: {cid}"
     leg_ids = {cid.split("/", 1)[1] for cid in seen_leg_ids}
-    assert leg_ids == expected_leg_ids, (
-        f"leg ids {leg_ids} != expected {expected_leg_ids}"
-    )
+    assert leg_ids == expected_leg_ids, f"leg ids {leg_ids} != expected {expected_leg_ids}"
 
     # ---- (b) per-leg message list — sibling messages do NOT bleed in ------
     # For each gap_reasoner call, the user message must contain that
@@ -793,8 +864,7 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
         leg_id = r["conversation_id"].split("/", 1)[1]
         # find the title this leg corresponds to
         own_title = next(
-            t for t in plan_steps
-            if f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}" == leg_id
+            t for t in plan_steps if f"s{hashlib.sha256(t.encode()).hexdigest()[:8]}" == leg_id
         )
         assert own_title in msg, (
             f"leg {leg_id} message did not contain its own title: {own_title!r} in {msg[:120]!r}"
@@ -813,8 +883,7 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     assert len(router.message_snapshots) >= 1
     first_snap = router.message_snapshots[0]
     assert all(
-        snap is not first_snap or i == 0
-        for i, snap in enumerate(router.message_snapshots)
+        snap is not first_snap or i == 0 for i, snap in enumerate(router.message_snapshots)
     ), "message snapshots are aliased — same list object reused across calls"
 
     # ---- (d) synthesis also uses the per-leg CallContext ------------------
@@ -887,8 +956,13 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
     bound = DepthBound(
-        max_sources=20, max_rounds_per_subq=2, max_wall_clock_s=60,
-        max_subquestions=6, discover_limit=8, extract_cap=4, rerank_top_k=4,
+        max_sources=20,
+        max_rounds_per_subq=2,
+        max_wall_clock_s=60,
+        max_subquestions=6,
+        discover_limit=8,
+        extract_cap=4,
+        rerank_top_k=4,
     )
 
     # Custom emit: raises for the FAILING leg's sub-question title. This
@@ -900,9 +974,7 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
     async def emit(kind: str, payload: dict) -> None:
         events.append((kind, payload))
         if payload.get("subquestion") == subq_a_title:
-            raise RuntimeError(
-                f"simulated emit failure for {subq_a_title}"
-            )
+            raise RuntimeError(f"simulated emit failure for {subq_a_title}")
 
     leg_a_context = GatherLegContext(
         subq_id=f"s{subq_a_hash}",
@@ -921,27 +993,35 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
     async def run_leg_a() -> SubQuestionResult:
         return await gather_for_subquestion(
             SubQuestion(title=subq_a_title),
-            engine=engine, router=router, embedder=embedder,
-            vector_store=vector_store, namespace=leg_a_context.namespace,
-            bound=bound, emit=emit, remaining_source_budget=20,
+            engine=engine,
+            router=router,
+            embedder=embedder,
+            vector_store=vector_store,
+            namespace=leg_a_context.namespace,
+            bound=bound,
+            emit=emit,
+            remaining_source_budget=20,
             leg_context=leg_a_context,
         )
 
     async def run_leg_b() -> SubQuestionResult:
         return await gather_for_subquestion(
             SubQuestion(title=subq_b_title),
-            engine=engine, router=router, embedder=embedder,
-            vector_store=vector_store, namespace=leg_b_context.namespace,
-            bound=bound, emit=emit, remaining_source_budget=20,
+            engine=engine,
+            router=router,
+            embedder=embedder,
+            vector_store=vector_store,
+            namespace=leg_b_context.namespace,
+            bound=bound,
+            emit=emit,
+            remaining_source_budget=20,
             leg_context=leg_b_context,
         )
 
     # Use return_exceptions=True so the surviving leg's result is
     # observable even when its sibling raises. This is the "sibling
     # still completes" claim at the leg level.
-    outcomes = await asyncio.gather(
-        run_leg_a(), run_leg_b(), return_exceptions=True
-    )
+    outcomes = await asyncio.gather(run_leg_a(), run_leg_b(), return_exceptions=True)
     leg_a_outcome, leg_b_outcome = outcomes
 
     # ---- (a) failing leg raised; surviving leg completed normally --------
@@ -949,8 +1029,7 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
         f"expected failing leg to raise, got {leg_a_outcome!r}"
     )
     assert isinstance(leg_b_outcome, SubQuestionResult), (
-        f"expected surviving leg to return a SubQuestionResult, got "
-        f"{leg_b_outcome!r}"
+        f"expected surviving leg to return a SubQuestionResult, got {leg_b_outcome!r}"
     )
     surviving: SubQuestionResult = leg_b_outcome
     # Surviving leg had at least one search round and accumulated passages.
@@ -959,9 +1038,7 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
     assert surviving.passages, "surviving leg should have gathered passages"
     # None of the surviving leg's queries mention the failing leg's title.
     for q in surviving.issued_queries:
-        assert subq_a_title not in q, (
-            f"surviving leg's query bleeds failing leg's title: {q!r}"
-        )
+        assert subq_a_title not in q, f"surviving leg's query bleeds failing leg's title: {q!r}"
 
     # ---- (b) the surviving leg's leg_context was not corrupted ------------
     assert id(leg_b_context) == leg_b_context_id, (
@@ -970,9 +1047,7 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
     # Frozen dataclass: still hashable, attributes unchanged.
     assert leg_b_context.subq_id == f"s{subq_b_hash}"
     assert leg_b_context.namespace == f"conv_c14b/{subq_b_hash}"
-    assert leg_b_context.call_context.conversation_id == (
-        f"conv_c14b/s{subq_b_hash}"
-    )
+    assert leg_b_context.call_context.conversation_id == (f"conv_c14b/s{subq_b_hash}")
 
     # ---- (c) the surviving leg's accumulated state is its OWN ------------
     # The surviving leg's passages come from the SURVIVING sub-question,
@@ -984,9 +1059,7 @@ async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
         )
     # The events captured show two independent legs' event streams; the
     # surviving leg's events do not reference the failing leg's title.
-    surviving_events = [
-        (k, p) for k, p in events if p.get("subquestion") == subq_b_title
-    ]
+    surviving_events = [(k, p) for k, p in events if p.get("subquestion") == subq_b_title]
     assert surviving_events, "no events captured for the surviving leg"
     for _, p in surviving_events:
         assert subq_a_title not in str(p), (
@@ -1029,21 +1102,27 @@ async def _run_with_cap(cap: int | None) -> int:
         reranker=_FakeReranker(),
         embedder=_FakeEmbedder(),
     )
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 4,  # 1 round per leg
-        "rag_answerer": [
-            "Body one [[p0]].",
-            "Body two [[p3]].",
-            "Body three [[p6]].",
-            "Body four [[p9]].",
-            "Coherence summary across all four.",
-        ],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 4,  # 1 round per leg
+            "rag_answerer": [
+                "Body one [[p0]].",
+                "Body two [[p3]].",
+                "Body three [[p6]].",
+                "Body four [[p9]].",
+                "Coherence summary across all four.",
+            ],
+        }
+    )
     run = DeepResearchRun(
         query="cap test",
-        router=router, retrieval_engine=engine,
-        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_cap",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_cap",
         gather_concurrency=cap,
     )
     plan_steps = ["Q one", "Q two", "Q three", "Q four"]
@@ -1074,25 +1153,32 @@ async def test_memory_bounded_gather_is_surfaced_not_silent() -> None:
     AND an honest observation explains the reduced parallelism — never silent."""
     search = _FakeSearch()
     engine = DefaultRetrievalEngine(
-        search=search, extraction=_FakeExtraction(),
-        reranker=_FakeReranker(), embedder=_FakeEmbedder(),
+        search=search,
+        extraction=_FakeExtraction(),
+        reranker=_FakeReranker(),
+        embedder=_FakeEmbedder(),
     )
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 4,
-        "rag_answerer": ["A [[p0]].", "B [[p3]].", "C [[p6]].", "D [[p9]].", "Summary."],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 4,
+            "rag_answerer": ["A [[p0]].", "B [[p3]].", "C [[p6]].", "D [[p9]].", "Summary."],
+        }
+    )
     run = DeepResearchRun(
-        query="q", router=router, retrieval_engine=engine,
-        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_mb",
+        query="q",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_mb",
         gather_concurrency=2,
     )
     captured, emit = _collect_events()
     await run.run(["q1", "q2", "q3", "q4"], emit=emit)
 
-    gather_phase = next(
-        p for k, p in captured if k == "phase" and p.get("phase") == "gather"
-    )
+    gather_phase = next(p for k, p in captured if k == "phase" and p.get("phase") == "gather")
     assert gather_phase["concurrency"] == 2
     assert gather_phase["memory_bounded"] is True
     # the honest, human-readable backpressure observation fired
@@ -1106,24 +1192,31 @@ async def test_unbounded_gather_reports_not_memory_bounded() -> None:
     meaningful, not always-on noise."""
     search = _FakeSearch()
     engine = DefaultRetrievalEngine(
-        search=search, extraction=_FakeExtraction(),
-        reranker=_FakeReranker(), embedder=_FakeEmbedder(),
+        search=search,
+        extraction=_FakeExtraction(),
+        reranker=_FakeReranker(),
+        embedder=_FakeEmbedder(),
     )
-    router = _ScriptedRouter({
-        "query_rewriter": ["SUFFICIENT\nnone"] * 2,
-        "rag_answerer": ["A [[p0]].", "B [[p3]].", "Summary."],
-    })
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 2,
+            "rag_answerer": ["A [[p0]].", "B [[p3]].", "Summary."],
+        }
+    )
     run = DeepResearchRun(
-        query="q", router=router, retrieval_engine=engine,
-        embedder=None, vector_store=InMemoryVectorStore(), nli=_FakeNLI(),
-        depth=DepthTier.STANDARD_DEEP, conversation_id="conv_unb",
+        query="q",
+        router=router,
+        retrieval_engine=engine,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        nli=_FakeNLI(),
+        depth=DepthTier.STANDARD_DEEP,
+        conversation_id="conv_unb",
         gather_concurrency=None,
     )
     captured, emit = _collect_events()
     await run.run(["q1", "q2"], emit=emit)
-    gather_phase = next(
-        p for k, p in captured if k == "phase" and p.get("phase") == "gather"
-    )
+    gather_phase = next(p for k, p in captured if k == "phase" and p.get("phase") == "gather")
     assert gather_phase["concurrency"] is None
     assert gather_phase["memory_bounded"] is False
     notes = [p.get("detail", "") for k, p in captured if k == "observation"]

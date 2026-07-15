@@ -107,9 +107,7 @@ def _serve_forever(listener: socket.socket, dest_host: str, dest_port: int) -> N
             client, _addr = listener.accept()
         except OSError:
             break
-        threading.Thread(
-            target=_handle, args=(client, dest_host, dest_port), daemon=True
-        ).start()
+        threading.Thread(target=_handle, args=(client, dest_host, dest_port), daemon=True).start()
 
 
 def _serve(dest_host: str, listen_port: int, dest_port: int | None = None) -> None:

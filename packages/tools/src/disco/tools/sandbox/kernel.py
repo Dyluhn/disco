@@ -125,9 +125,7 @@ def _rewrite_process_workspace_literals(code: str, workspace: Path) -> str:
             return value
         target = (root / suffix).resolve()
         if target != root and root not in target.parents:
-            raise SandboxError(
-                f"process-kernel /workspace path escapes workspace: {value!r}"
-            )
+            raise SandboxError(f"process-kernel /workspace path escapes workspace: {value!r}")
         rendered = str(target)
         # In an f-string the literal segment often ends at `/workspace/` and
         # the next segment is a formatted value. Preserve that separator;
@@ -302,8 +300,7 @@ class ProcessKernel(KernelSession):
 
             # Setup memory limit: 4GiB as required by BP-08
             setup_cell = (
-                "import resource; "
-                "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+                "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
             )
             await self.execute(setup_cell, timeout_s=10)
         except BaseException:

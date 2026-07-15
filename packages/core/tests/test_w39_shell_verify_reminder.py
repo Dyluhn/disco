@@ -260,9 +260,7 @@ async def test_assist_on_failed_prior_run_does_not_remind():
     loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     events = await _drive_execute(loop, _shell_action("call_shell_1", "ls -la"))
     # First run failed → an AgentErrorEvent, no success observation.
-    assert not any(
-        isinstance(e, ObservationEvent) and e.tool_result.success for e in events
-    )
+    assert not any(isinstance(e, ObservationEvent) and e.tool_result.success for e in events)
     events = await _drive_execute(loop, _shell_action("call_shell_2", "ls -la"))
     # No "already passed" reminder — the earlier run did NOT pass.
     assert _reminders(events) == []
@@ -287,9 +285,7 @@ async def test_command_always_executes_when_reminder_fires():
     shell_calls = [c for c in ex.calls if c.tool_name == "shell"]
     assert len(shell_calls) == 2
     shell_obs = [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
+        e for e in events if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
     ]
     assert len(shell_obs) == 2
     assert all(o.tool_result.content == "command output" for o in shell_obs)
@@ -369,9 +365,7 @@ def test_helper_byte_identical_passed_no_mutation_reminds():
     first = _shell_action("c1", "ls -la")
     current = _shell_action("c2", "ls -la")
     events = with_seqs([user_msg("hi"), first, _shell_obs(first), current])
-    remind, prior_seq, text = _w39_shell_verify_reminder(
-        "shell", {"command": "ls -la"}, events
-    )
+    remind, prior_seq, text = _w39_shell_verify_reminder("shell", {"command": "ls -la"}, events)
     assert remind is True
     # with_seqs assigns seqs to COPIES; the prior shell action is events[1].
     assert prior_seq == events[1].seq
@@ -382,9 +376,7 @@ def test_helper_byte_identical_passed_no_mutation_reminds():
 def test_helper_failed_prior_does_not_remind():
     first = _shell_action("c1", "ls -la")
     current = _shell_action("c2", "ls -la")
-    events = with_seqs(
-        [user_msg("hi"), first, _shell_obs(first, success=False), current]
-    )
+    events = with_seqs([user_msg("hi"), first, _shell_obs(first, success=False), current])
     remind, _, _ = _w39_shell_verify_reminder("shell", {"command": "ls -la"}, events)
     assert remind is False
 

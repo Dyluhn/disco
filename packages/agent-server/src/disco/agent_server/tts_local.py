@@ -40,7 +40,9 @@ _LOG = logging.getLogger(__name__)
 # caching garbage. Checksums computed from the downloaded artifacts 2026-06-12.
 _MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 _MODEL_SHA = "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"
-_VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+_VOICES_URL = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+)
 _VOICES_SHA = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
 
 # Output format is fixed by the Kokoro v1.0 model.
@@ -167,9 +169,7 @@ def _fetch(
             urllib.request.urlretrieve(url, tmp, reporthook=_hook)  # noqa: S310 — pinned GitHub release URL
             got = _sha256(tmp)
             if got != sha:
-                raise RuntimeError(
-                    f"TTS weight checksum mismatch for {url}: got {got}, want {sha}"
-                )
+                raise RuntimeError(f"TTS weight checksum mismatch for {url}: got {got}, want {sha}")
             os.replace(tmp, dest)  # atomic publish of the verified file
         finally:
             # Never leave a partial/failed temp behind (corruption guard). The

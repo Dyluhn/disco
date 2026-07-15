@@ -76,8 +76,7 @@ def _catalog_lines() -> str:
 class ScaffoldStarterArgs(BaseModel):
     title: str = Field(
         description=(
-            "The artifact/site title the starter frame should carry "
-            "(page <title> and header)."
+            "The artifact/site title the starter frame should carry (page <title> and header)."
         )
     )
     kind: StarterKind | None = Field(
@@ -141,9 +140,7 @@ class ScaffoldStarterTool:
             return ToolOutcome(
                 success=False,
                 error="unknown_starter",
-                content=(
-                    f"no starter kit {starter_id!r} — available: " + ", ".join(_CATALOG)
-                ),
+                content=(f"no starter kit {starter_id!r} — available: " + ", ".join(_CATALOG)),
             )
         try:
             files = kit.scaffold(args.title)
@@ -170,6 +167,7 @@ class ScaffoldStarterTool:
             structured["notes_path"] = "NOTES.md"
             structured["notes"] = notes
         return ToolOutcome(
-            success=True, content=msg,
+            success=True,
+            content=msg,
             structured=structured,
         )

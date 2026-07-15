@@ -11,9 +11,7 @@ from disco.tools.builtin import audio_overview as audio
 
 
 def _requested_range(payload: dict[str, Any]) -> tuple[int, int]:
-    content = "\n".join(
-        str(message.get("content", "")) for message in payload["messages"]
-    )
+    content = "\n".join(str(message.get("content", "")) for message in payload["messages"])
     match = re.search(r"contiguous turn indexes (\d+) through (\d+)", content)
     assert match is not None, content
     return int(match.group(1)), int(match.group(2))
@@ -33,11 +31,13 @@ def _batch_response(
             if long_text
             else "evidence-backed source detail"
         )
-        turns.append({
-            "index": index,
-            "speaker": "A" if index % 2 else "B",
-            "text": f"Turn {index}: {detail}.",
-        })
+        turns.append(
+            {
+                "index": index,
+                "speaker": "A" if index % 2 else "B",
+                "text": f"Turn {index}: {detail}.",
+            }
+        )
     return audio.LLMResponse(
         content=json.dumps({"total_turns": total, "turns": turns}),
         finish_reason="stop",
@@ -52,10 +52,12 @@ async def test_http_adapter_preserves_length_finish_reason(monkeypatch) -> None:
 
         def json(self) -> dict[str, Any]:
             return {
-                "choices": [{
-                    "message": {"content": '[{"speaker":"A","text":"cut'},
-                    "finish_reason": "length",
-                }]
+                "choices": [
+                    {
+                        "message": {"content": '[{"speaker":"A","text":"cut'},
+                        "finish_reason": "length",
+                    }
+                ]
             }
 
     class _Client:
@@ -212,10 +214,12 @@ async def test_legacy_array_malformed_retry_remains_supported() -> None:
         calls += 1
         if calls == 1:
             return "not json"
-        return json.dumps([
-            {"speaker": "A", "text": "First complete turn."},
-            {"speaker": "B", "text": "Second complete turn."},
-        ])
+        return json.dumps(
+            [
+                {"speaker": "A", "text": "First complete turn."},
+                {"speaker": "B", "text": "Second complete turn."},
+            ]
+        )
 
     turns = await audio._generate_segmented_turn_script(
         "report", "legacy-test-adapter", mode="podcast", call_llm=call

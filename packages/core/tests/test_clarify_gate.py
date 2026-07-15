@@ -54,7 +54,9 @@ async def test_clarify_yields_awaiting_user_question():
         ]
     )
     loop, store = build_loop(
-        agent, mode=OperatingMode.PLANNING, planning_tools={"file_read", "file_list"},
+        agent,
+        mode=OperatingMode.PLANNING,
+        planning_tools={"file_read", "file_list"},
         conversation_id=CID,
     )
     await loop.send_message("build a landing page")
@@ -104,7 +106,9 @@ async def test_clarify_is_not_mistaken_for_finished_plan():
         ]
     )
     loop, store = build_loop(
-        agent, mode=OperatingMode.PLANNING, planning_tools={"file_read", "file_list"},
+        agent,
+        mode=OperatingMode.PLANNING,
+        planning_tools={"file_read", "file_list"},
         conversation_id=CID,
     )
     await loop.send_message("build a site")
@@ -202,7 +206,9 @@ async def test_clarify_falls_back_to_free_form_on_empty_questions():
         ]
     )
     loop, store = build_loop(
-        agent, mode=OperatingMode.PLANNING, planning_tools={"file_read", "file_list"},
+        agent,
+        mode=OperatingMode.PLANNING,
+        planning_tools={"file_read", "file_list"},
         conversation_id=CID,
     )
     await loop.send_message("build a landing page")
@@ -215,8 +221,10 @@ async def test_clarify_falls_back_to_free_form_on_empty_questions():
     assert len(clarify_events) == 0
     # But there should be a MessageEvent with the question
     msg_events = [e for e in events if e.kind == "message"]
-    assert any("target audience" in str(e.message.content if hasattr(e, "message") else "")
-               for e in msg_events)
+    assert any(
+        "target audience" in str(e.message.content if hasattr(e, "message") else "")
+        for e in msg_events
+    )
 
 
 def test_reconstruct_clarify_then_ask_does_not_shadow():
@@ -282,7 +290,9 @@ async def _run_clarify(arguments: dict) -> ClarifyEvent:
         ]
     )
     loop, store = build_loop(
-        agent, mode=OperatingMode.PLANNING, planning_tools={"file_read", "file_list"},
+        agent,
+        mode=OperatingMode.PLANNING,
+        planning_tools={"file_read", "file_list"},
         conversation_id=CID,
     )
     await loop.send_message("build it")

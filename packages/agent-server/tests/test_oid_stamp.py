@@ -29,7 +29,10 @@ def test_skips_non_visual_tags() -> None:
     )
     out = stamp_oids(html, "page.html")
     # head/title/script/style/html never get a data-oid; the h1 does.
-    assert "<script" in out and "data-oid" not in out.split("</body>")[0].split("<script")[1].split(">")[0]
+    assert (
+        "<script" in out
+        and "data-oid" not in out.split("</body>")[0].split("<script")[1].split(">")[0]
+    )
     assert any(o.startswith("page.html:") for o in _oids(out))
     # The script/style/title tags themselves carry no oid.
     for tag in ("<script", "<style", "<title", "<head"):

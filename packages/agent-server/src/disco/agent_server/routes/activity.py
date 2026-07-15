@@ -9,9 +9,7 @@ from ..auth import current_owner_id
 from ..runtime import ConversationRuntime
 
 
-def make_activity_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/activity")

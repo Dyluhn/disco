@@ -11,10 +11,7 @@ _PASSAGES = {
 
 
 def test_extracts_claim_text_and_cited_passage_texts() -> None:
-    md = (
-        "The African swallow flies at about 11 m/s [[p0]]. "
-        "The European swallow is slower [[p1]]."
-    )
+    md = "The African swallow flies at about 11 m/s [[p0]]. The European swallow is slower [[p1]]."
     claims = extract_section_claims(md, _PASSAGES)
     assert len(claims) == 2
     c0_text, c0_passages = claims[0]

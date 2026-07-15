@@ -126,7 +126,9 @@ def test_non_anchored_standard_withholds_exactly_exact_replace():
     standard_names = _tool_names(_STANDARD)
     non_anchored_names = _tool_names(_STANDARD_NO_ANCHORED)
     dropped = standard_names - non_anchored_names
-    assert dropped == {"exact_replace"}, f"non-anchored standard should drop exact_replace, got: {dropped}"
+    assert dropped == {"exact_replace"}, (
+        f"non-anchored standard should drop exact_replace, got: {dropped}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +224,7 @@ def test_standard_planning_prompt_keeps_other_meta_tools():
         assist=False,
     )
     for tool in ("preview_start", "serve", "server_status"):
-        assert f"`{tool}`" in prompt, (
-            f"standard planning prompt should still advertise {tool}"
-        )
+        assert f"`{tool}`" in prompt, f"standard planning prompt should still advertise {tool}"
 
 
 def test_non_anchored_prompt_does_not_mention_file_str_replace():

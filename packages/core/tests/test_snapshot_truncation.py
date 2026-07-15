@@ -29,6 +29,7 @@ class FakeSandboxInstance:
             raise FileNotFoundError(path)
         return self._files[path]
 
+
 class SandboxExecutor:
     def __init__(self, sandbox: FakeSandboxInstance | None):
         self.sandbox = sandbox
@@ -39,6 +40,7 @@ class SandboxExecutor:
     async def execute(self, call):
         raise NotImplementedError
 
+
 def _events_with_file_writes(paths: Iterable[str]) -> list[ActionEvent]:
     return [
         ActionEvent(
@@ -47,6 +49,7 @@ def _events_with_file_writes(paths: Iterable[str]) -> list[ActionEvent]:
         )
         for p in paths
     ]
+
 
 def _loop_with_sandbox(sandbox: FakeSandboxInstance | None) -> AgentLoop:
     from disco.core import SqliteEventStore
@@ -64,6 +67,7 @@ def _loop_with_sandbox(sandbox: FakeSandboxInstance | None) -> AgentLoop:
     )
     return loop
 
+
 def _snapshot_text(sandbox: FakeSandboxInstance | None, paths: Iterable[str]) -> str | None:
     loop = _loop_with_sandbox(sandbox)
     msg = asyncio.run(loop._workspace_snapshot_message(_events_with_file_writes(paths)))
@@ -71,6 +75,7 @@ def _snapshot_text(sandbox: FakeSandboxInstance | None, paths: Iterable[str]) ->
         return None
     assert isinstance(msg, LLMMessage)
     return msg.content
+
 
 def test_large_file_truncation_guidance():
     # File ABOVE the cap
@@ -83,12 +88,13 @@ def test_large_file_truncation_guidance():
     # The old "do NOT call file_write" wording is REPLACED by a file_read
     # offset/limit hint + file_edit, which stops the read-loop without
     # forbidding writes.
-    assert "more chars" in content           # truncation indicator still present
-    assert "file_read" in content            # windowed-read hint present
-    assert "offset" in content              # offset param named
-    assert "file_edit" in content           # file_edit mentioned
+    assert "more chars" in content  # truncation indicator still present
+    assert "file_read" in content  # windowed-read hint present
+    assert "offset" in content  # offset param named
+    assert "file_edit" in content  # file_edit mentioned
     # Old "do NOT call file_write" wording MUST be gone (the loop generator)
     assert "do NOT call file_write" not in content
+
 
 def test_small_file_no_truncation_guidance():
     # File BELOW the cap

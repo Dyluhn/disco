@@ -98,7 +98,7 @@ class FakeSandbox:
             if not path.startswith(prefix):
                 continue
             matched = True
-            remainder = path[len(prefix):]
+            remainder = path[len(prefix) :]
             children.add(remainder.split("/", 1)[0] if "/" in remainder else remainder)
         if not matched and rel != "":
             raise FileNotFoundError(rel)  # a leaf file probed as a dir → not a dir
@@ -263,9 +263,7 @@ def test_check_schema_sql_closes_connection_when_schema_application_fails(monkey
             self.closed = True
 
     connection = _BrokenConnection()
-    monkeypatch.setattr(
-        "disco.core.appkit.local_verify.sqlite3.connect", lambda _path: connection
-    )
+    monkeypatch.setattr("disco.core.appkit.local_verify.sqlite3.connect", lambda _path: connection)
 
     with pytest.raises(ValueError, match="synthetic schema failure"):
         check_schema_sql("broken", _lead())
@@ -293,9 +291,7 @@ def test_check_drizzle_schema_passes_on_generated_tree():
 
 def test_check_drizzle_schema_fails_when_column_missing():
     tree, _ = _build_tree()
-    schema_ts = tree["src/db/schema.ts"].decode().replace(
-        '  message: text("message"),\n', ""
-    )
+    schema_ts = tree["src/db/schema.ts"].decode().replace('  message: text("message"),\n', "")
     tree["src/db/schema.ts"] = schema_ts.encode()
     res = check_drizzle_schema(tree)
     assert not res.passed
@@ -362,11 +358,11 @@ def test_inspect_worker_detects_dropped_admin_guard():
     src = tree["worker/index.ts"].decode()
     # Remove the /admin auth guard only (leave GET /api/leads gated).
     broken = src.replace(
-        "    if (url.pathname === \"/admin\" && request.method === \"GET\") {\n"
+        '    if (url.pathname === "/admin" && request.method === "GET") {\n'
         "      if (!isAuthorized(request, env)) {\n"
         "        return adminLoginPage();\n"
         "      }\n",
-        "    if (url.pathname === \"/admin\" && request.method === \"GET\") {\n",
+        '    if (url.pathname === "/admin" && request.method === "GET") {\n',
     )
     assert broken != src
     post_ok, model, reasons = inspect_worker(broken, lead)
@@ -402,9 +398,7 @@ def test_vite_tree_detection_requires_vite_devdep_and_config():
 
 def test_served_preview_detection_distinguishes_source_from_built_vite():
     assert (
-        _served_preview_uses_built_bundle(
-            '<script type="module" src="/src/main.tsx"></script>'
-        )
+        _served_preview_uses_built_bundle('<script type="module" src="/src/main.tsx"></script>')
         is False
     )
     assert (
@@ -425,9 +419,7 @@ async def test_vite_build_cache_skips_npm_ci_when_package_unchanged():
     tree[".disco/appkit-vite-package.sha256"] = (package_sha + "\n").encode()
 
     sandbox = BuildTrackingSandbox(tree)
-    result = await VerifyAppKitAppTool()._ensure_vite_platform_build(
-        _ctx(sandbox), package_json
-    )
+    result = await VerifyAppKitAppTool()._ensure_vite_platform_build(_ctx(sandbox), package_json)
 
     assert result.ok, result.evidence
     assert "npm ci --no-audit --no-fund" not in sandbox.commands
@@ -484,8 +476,7 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
     assert manager.stops == ["appkit-built-vite"]
     assert stub_browser["urls"]
     assert all(
-        url == "http://127.0.0.1:9134"
-        or url.startswith("http://127.0.0.1:9134/")
+        url == "http://127.0.0.1:9134" or url.startswith("http://127.0.0.1:9134/")
         for url in stub_browser["urls"]
     )
 
@@ -540,8 +531,10 @@ async def test_known_good_passes_all_checks(stub_browser):
 @pytest.mark.asyncio
 async def test_broken_design_fails_design_lint(stub_browser):
     tree, _ = _build_tree()
-    css = tree["src/styles.css"].decode().replace(
-        "--color-primary:", "--color-primary: #7c3aed; --bad:"
+    css = (
+        tree["src/styles.css"]
+        .decode()
+        .replace("--color-primary:", "--color-primary: #7c3aed; --bad:")
     )
     tree["src/styles.css"] = css.encode()
     out = await VerifyAppKitAppTool().run(
@@ -587,8 +580,10 @@ async def test_route_console_error_fails_route_coverage(stub_browser):
 @pytest.mark.asyncio
 async def test_form_wrong_submit_path_fails_lead_form(stub_browser):
     tree, _ = _build_tree()
-    form = tree["src/components/HomeContactSection.tsx"].decode().replace(
-        'useSubmit("/api/leads")', 'useSubmit("/api/wrong")'
+    form = (
+        tree["src/components/HomeContactSection.tsx"]
+        .decode()
+        .replace('useSubmit("/api/leads")', 'useSubmit("/api/wrong")')
     )
     tree["src/components/HomeContactSection.tsx"] = form.encode()
     out = await VerifyAppKitAppTool().run(
@@ -606,11 +601,11 @@ async def test_dropped_admin_guard_fails_worker_and_roundtrip(stub_browser):
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
-        "    if (url.pathname === \"/admin\" && request.method === \"GET\") {\n"
+        '    if (url.pathname === "/admin" && request.method === "GET") {\n'
         "      if (!isAuthorized(request, env)) {\n"
         "        return adminLoginPage();\n"
         "      }\n",
-        "    if (url.pathname === \"/admin\" && request.method === \"GET\") {\n",
+        '    if (url.pathname === "/admin" && request.method === "GET") {\n',
     )
     assert broken != src
     tree["worker/index.ts"] = broken.encode()
@@ -710,9 +705,7 @@ async def test_auth_guard_result_ignored_fails(stub_browser):
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
-        "      if (!isAuthorized(request, env)) {\n"
-        "        return adminLoginPage();\n"
-        "      }\n",
+        "      if (!isAuthorized(request, env)) {\n        return adminLoginPage();\n      }\n",
         "      const _ok = isAuthorized(request, env);\n",
     )
     assert broken != src
@@ -750,8 +743,7 @@ def test_inspect_worker_raw_sql_insert_fails():
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
         "db.insert(leads).values(leadValues(rec)).run()",
-        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)")'
-        '.bind(rec["name"]).run()',
+        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)").bind(rec["name"]).run()',
     )
     assert broken != src
     post_ok, model, reasons = inspect_worker(broken, lead)
@@ -766,8 +758,7 @@ async def test_raw_sql_insert_fails_worker_contract(stub_browser):
     src = tree["worker/index.ts"].decode()
     tree["worker/index.ts"] = src.replace(
         "db.insert(leads).values(leadValues(rec)).run()",
-        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)")'
-        '.bind(rec["name"]).run()',
+        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)").bind(rec["name"]).run()',
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -813,9 +804,7 @@ def test_inspect_submit_support_field_body_dropped_fails():
     _ = resolve_lead_entity(app)
     client = tree["src/api/client.ts"].decode()
     hook = tree["src/hooks/useSubmit.ts"].decode()
-    broken = client.replace(
-        "body: JSON.stringify(body)", 'body: JSON.stringify({ name: "Ada" })'
-    )
+    broken = client.replace("body: JSON.stringify(body)", 'body: JSON.stringify({ name: "Ada" })')
     assert broken != client
     ok, reasons = inspect_submit_support(broken, hook)
     assert not ok
@@ -931,8 +920,7 @@ def test_inspect_lead_form_inert_string_submit_fails():
     form = tree["src/components/HomeContactSection.tsx"].decode()
     broken = form.replace(
         'useSubmit("/api/leads")',
-        'useSubmit("/api/wrong"); '
-        'const note = `see useSubmit("/api/leads") for docs`',
+        'useSubmit("/api/wrong"); const note = `see useSubmit("/api/leads") for docs`',
     )
     assert broken != form
     assert 'useSubmit("/api/leads")' in broken  # the inert string is present
@@ -947,8 +935,7 @@ async def test_inert_string_submit_fails_lead_form(stub_browser):
     form = tree["src/components/HomeContactSection.tsx"].decode()
     tree["src/components/HomeContactSection.tsx"] = form.replace(
         'useSubmit("/api/leads")',
-        'useSubmit("/api/wrong"); '
-        'const note = `see useSubmit("/api/leads") for docs`',
+        'useSubmit("/api/wrong"); const note = `see useSubmit("/api/leads") for docs`',
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -1058,8 +1045,7 @@ async def test_verdict_makes_no_runtime_overclaim(stub_browser):
     v = out.structured
     assert v["passed"] is True, v["summary"]
     text = " ".join(
-        [v["summary"], str(v["next_action"]), out.content]
-        + [c["evidence"] for c in v["checks"]]
+        [v["summary"], str(v["next_action"]), out.content] + [c["evidence"] for c in v["checks"]]
     ).lower()
     for overclaim in ("reaches", "verified working", " works"):
         assert overclaim not in text, f"runtime overclaim {overclaim!r} in: {text}"
@@ -1144,7 +1130,7 @@ def test_cloudflare_export_ready_fails_when_real_dev_vars_present():
 def test_cloudflare_export_ready_fails_on_invalid_toml():
     tree, _ = _build_tree()
     files = _cf_files(tree)
-    files["wrangler.toml"] = "name = \"x\"\n[assets\n"  # malformed
+    files["wrangler.toml"] = 'name = "x"\n[assets\n'  # malformed
     res = cloudflare_export_ready(files)
     assert not res.passed
     assert "TOML" in res.evidence
@@ -1183,9 +1169,7 @@ def test_cloudflare_export_ready_fails_when_d1_database_name_empty():
     files = _cf_files(tree)
     wt = files["wrangler.toml"] or ""
     assert 'database_name = "' in wt
-    files["wrangler.toml"] = re.sub(
-        r'database_name = "[^"]*"', 'database_name = ""', wt
-    )
+    files["wrangler.toml"] = re.sub(r'database_name = "[^"]*"', 'database_name = ""', wt)
     res = cloudflare_export_ready(files)
     assert not res.passed
     assert "database_name" in res.evidence
@@ -1195,9 +1179,7 @@ def test_cloudflare_export_ready_fails_when_d1_database_name_missing():
     # The database_name line dropped entirely → still must fail.
     tree, _ = _build_tree()
     files = _cf_files(tree)
-    files["wrangler.toml"] = re.sub(
-        r'database_name = "[^"]*"\n', "", files["wrangler.toml"] or ""
-    )
+    files["wrangler.toml"] = re.sub(r'database_name = "[^"]*"\n', "", files["wrangler.toml"] or "")
     res = cloudflare_export_ready(files)
     assert not res.passed
     assert "database_name" in res.evidence
@@ -1360,9 +1342,7 @@ def test_cloudflare_export_ready_fails_when_marker_prefixes_real_secret():
     # secret escaped. The marker no longer short-circuits the entropy check.
     tree, _ = _build_tree()
     files = _cf_files(tree)
-    files[".dev.vars.example"] = (
-        "ADMIN_TOKEN=replace-me-Zk9rT2pQ7xW3mB1nH5vC8sD4fG6yL0aE\n"
-    )
+    files[".dev.vars.example"] = "ADMIN_TOKEN=replace-me-Zk9rT2pQ7xW3mB1nH5vC8sD4fG6yL0aE\n"
     res = cloudflare_export_ready(files)
     assert not res.passed
     assert "ADMIN_TOKEN" in res.evidence or "secret" in res.evidence.lower()
@@ -1373,9 +1353,7 @@ def test_cloudflare_export_ready_fails_when_marker_suffixes_real_secret():
     # (`<secret>-your-token-here`) is just as much a leak as a marker prefix.
     tree, _ = _build_tree()
     files = _cf_files(tree)
-    files[".dev.vars.example"] = (
-        "ADMIN_TOKEN=Zk9rT2pQ7xW3mB1nH5vC8sD4fG6yL0aE-your-token-here\n"
-    )
+    files[".dev.vars.example"] = "ADMIN_TOKEN=Zk9rT2pQ7xW3mB1nH5vC8sD4fG6yL0aE-your-token-here\n"
     res = cloudflare_export_ready(files)
     assert not res.passed
     assert "ADMIN_TOKEN" in res.evidence or "secret" in res.evidence.lower()

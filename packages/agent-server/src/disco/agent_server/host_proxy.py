@@ -420,6 +420,7 @@ class HostPreviewProxyMiddleware:
         The iterator is a one-shot async generator over the ASGI receive channel,
         so the body must be buffered in memory to support connect retries.
         """
+
         async def body_iterator():
             more_body = True
             while more_body:

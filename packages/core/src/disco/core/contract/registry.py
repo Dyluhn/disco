@@ -23,7 +23,6 @@ from .models import (
     VerificationLevel,
 )
 
-
 # CONTRACT-ACTIVATE harvest (2026-07-10, harness/build_soak/harvest_scopes.py over
 # 35 live soak dossiers): the original 3-tool packs would have DENIED the bulk of
 # real site-building work — shell 143×/30 runs, file_write 42×/18, browser 19×/12,
@@ -38,19 +37,43 @@ from .models import (
 # context_memory list — advances the phase, and the starter must not be
 # stranded behind that flip; the tool is no-clobber, so late calls are safe).
 _SITE_BOOTSTRAP_TOOLS = (
-    "scaffold_starter", "file_write", "file_edit", "preview_start", "shell",
-    "context_memory", "image_generate",
+    "scaffold_starter",
+    "file_write",
+    "file_edit",
+    "preview_start",
+    "shell",
+    "context_memory",
+    "image_generate",
 )
 _SITE_EDIT_TOOLS = (
-    "file_edit", "file_replace_lines", "file_insert_lines", "file_append",
-    "file_write", "shell", "shell_exec", "shell_kill_process", "browser",
-    "code_exec", "run_project_script", "context_memory", "image_generate",
-    "delegate_explore", "scaffold_starter",
+    "file_edit",
+    "file_replace_lines",
+    "file_insert_lines",
+    "file_append",
+    "file_write",
+    "shell",
+    "shell_exec",
+    "shell_kill_process",
+    "browser",
+    "code_exec",
+    "run_project_script",
+    "context_memory",
+    "image_generate",
+    "delegate_explore",
+    "scaffold_starter",
 )
 _SITE_REPAIR_TOOLS = (
-    "file_write", "file_edit", "file_replace_lines", "file_insert_lines",
-    "file_append", "shell", "shell_exec", "shell_kill_process", "browser",
-    "context_memory", "scaffold_starter",
+    "file_write",
+    "file_edit",
+    "file_replace_lines",
+    "file_insert_lines",
+    "file_append",
+    "shell",
+    "shell_exec",
+    "shell_kill_process",
+    "browser",
+    "context_memory",
+    "scaffold_starter",
 )
 
 
@@ -64,7 +87,9 @@ def _static_site() -> BuildContract:
         bootstrap=ToolPack(name="static.site.bootstrap", tools=_SITE_BOOTSTRAP_TOOLS),
         edit=EditContract(edit_tools=_SITE_EDIT_TOOLS, repair_tools=_SITE_REPAIR_TOOLS),
         verify=VerificationContract(finalizer="ready_for_static_site_verification"),
-        export=ExportContract(name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")),
+        export=ExportContract(
+            name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")
+        ),
         prompt_pack="build_static_site",
         ui_card="SiteCard",
     )
@@ -95,8 +120,12 @@ def _appkit_leadgen() -> BuildContract:
             ),
             repair_tools=("file_write", "file_edit"),
         ),
-        verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
-        export=ExportContract(name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")),
+        verify=VerificationContract(
+            finalizer="ready_for_app_verification", level=VerificationLevel.STRICT
+        ),
+        export=ExportContract(
+            name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")
+        ),
         prompt_pack="build_appkit_leadgen",
         ui_card="AppCard",
         skills=("appkit.leadgen", "cloudflare_export", "design_recipe"),
@@ -147,7 +176,9 @@ def _interactive_prototype() -> BuildContract:
     return BuildContract(
         kind=ContractKind.INTERACTIVE_PROTOTYPE,
         artifact=ArtifactContract(
-            kind=ContractKind.INTERACTIVE_PROTOTYPE, required_files=("index.html",), starter_kit="app_shell"
+            kind=ContractKind.INTERACTIVE_PROTOTYPE,
+            required_files=("index.html",),
+            starter_kit="app_shell",
         ),
         # Raw-file kind: same evidenced working set as static.site (see the
         # harvest note above) — prototypes/games are shell/browser-heavy too.

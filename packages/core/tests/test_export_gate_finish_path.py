@@ -12,7 +12,6 @@ steer and never finishes. The A/B isolates the gate as the cause.
 from __future__ import annotations
 
 import pytest
-
 from disco.core import ConversationStatus, StatusEvent, ToolResult
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN,

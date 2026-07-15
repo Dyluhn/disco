@@ -344,9 +344,7 @@ async def test_site_scoped_injects_site_operators_and_domains_allow():
     )
 
     assert inner.query == "vector stores (site:example.com OR site:docs.example.org)"
-    assert inner.domains_allow == frozenset(
-        {"example.com", "docs.example.org", "already.test"}
-    )
+    assert inner.domains_allow == frozenset({"example.com", "docs.example.org", "already.test"})
     assert inner.domains_deny == frozenset({"deny.test"})
     assert inner.time_filter == "week"
     assert hits == [

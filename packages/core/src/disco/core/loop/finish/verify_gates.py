@@ -72,9 +72,7 @@ _SAFE_MODEL_VERIFIER_CAUSE_RE = re.compile(
 
 
 def _bounded_model_verifier_cause(value: object) -> str:
-    clean = "".join(
-        char for char in str(value or "") if char in "\n\t" or ord(char) >= 32
-    )
+    clean = "".join(char for char in str(value or "") if char in "\n\t" or ord(char) >= 32)
     clean = _STARTUP_DIAGNOSTIC_SECRET_RE.sub("<redacted>", clean)
     clean = clean[:256]
     if _SAFE_MODEL_VERIFIER_CAUSE_RE.fullmatch(clean):
@@ -82,9 +80,7 @@ def _bounded_model_verifier_cause(value: object) -> str:
     return "model verifier unavailable (unclassified structural failure)"
 
 
-def _model_verifier_fallback(
-    base: dict[str, Any], *, status: str, cause: object
-) -> dict[str, Any]:
+def _model_verifier_fallback(base: dict[str, Any], *, status: str, cause: object) -> dict[str, Any]:
     out = dict(base)
     out.update(
         {
@@ -997,9 +993,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         startup_diagnostic = str(host_verdict.get("startup_diagnostic") or "").strip()
         if startup_diagnostic:
             startup_diagnostic = "".join(
-                char
-                for char in startup_diagnostic
-                if char in "\n\t" or ord(char) >= 32
+                char for char in startup_diagnostic if char in "\n\t" or ord(char) >= 32
             )
             startup_diagnostic = _STARTUP_DIAGNOSTIC_SECRET_RE.sub(
                 "<redacted>", startup_diagnostic

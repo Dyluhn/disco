@@ -208,9 +208,7 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
 
     # First kick: the driver is healthy → THIS (conversation, role, model) is proven.
     assert await rt._preflight_driver("c1") is None
-    assert any(
-        k[0] == "c1" and k[1] == ModelRole.AGENT_DRIVER for k in rt._driver_proven
-    )
+    assert any(k[0] == "c1" and k[1] == ModelRole.AGENT_DRIVER for k in rt._driver_proven)
 
     # Simulate a later kick after the success cache's TTL has lapsed (30 turns in):
     rt._driver_preflight_ok.clear()  # force a real re-probe
@@ -446,9 +444,7 @@ async def test_deep_research_preflights_rag_answerer_role():
 async def test_preflight_driver_skipped_when_router_injected():
     """A pinned (test/dev) router has no real endpoint — preflight is a no-op."""
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
-    )
+    rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     assert await rt._preflight_driver("c1") is None
 
 
@@ -456,9 +452,7 @@ async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
     """The integration chokepoint: a failed pre-flight emits StatusEvent(ERROR)
     with the named reason AND the loop never runs."""
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
-    )
+    rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     rt.set_surface("c1", "build")
 
     async def _fail(cid, **kw):
@@ -479,9 +473,7 @@ async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
 
     events = await store.get_events("c1")
     errs = [
-        e
-        for e in events
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
+        e for e in events if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
     ]
     assert errs and "unreachable" in (errs[-1].detail or "")
 
@@ -491,9 +483,7 @@ async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
 
 async def test_preflight_encoders_names_unreachable_reranker():
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
-    )
+    rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     deps = {"reranker": _dead_reranker(), "nli": _FakeNLI()}
     reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
     assert reason is not None
@@ -502,9 +492,7 @@ async def test_preflight_encoders_names_unreachable_reranker():
 
 async def test_preflight_encoders_names_missing_nli():
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
-    )
+    rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     # bundled/fake reranker (no probe) present, but NLI is None (declined encoder).
     deps = {"reranker": _FakeNLI(), "nli": None}
     reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
@@ -513,9 +501,7 @@ async def test_preflight_encoders_names_missing_nli():
 
 async def test_preflight_encoders_passes_when_all_present():
     store = SqliteEventStore(":memory:")
-    rt = ConversationRuntime(
-        store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()})
-    )
+    rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     # Bundled encoders have no probe() → treated as present (raise on RAM fail).
     deps = {"reranker": _FakeNLI(), "nli": _FakeNLI()}
     assert await rt._dr._preflight_encoders(deps, required=("reranker", "nli")) is None
@@ -568,14 +554,9 @@ async def test_execute_deep_research_blocks_on_dead_encoder():
     await rt._dr._execute_deep_research("c1", plan)
 
     events = await store.get_events("c1")
-    assert any(
-        isinstance(e, ErrorEvent) and e.code == "deep_research_preflight"
-        for e in events
-    )
+    assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_preflight" for e in events)
     errs = [
-        e
-        for e in events
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
+        e for e in events if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
     ]
     assert errs and "reranker" in (errs[-1].detail or "")
     # the engine never produced a report

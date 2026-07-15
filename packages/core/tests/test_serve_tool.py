@@ -62,9 +62,7 @@ async def test_serve_emits_a_deliverable_event_and_continues():
     # serve was INTERCEPTED — the executor never saw it, no ActionEvent for it.
     assert all(c.tool_name != "serve" for c in executor.calls)
     events = await store.get_events(CID)
-    assert not any(
-        isinstance(e, ActionEvent) and e.tool_call.tool_name == "serve" for e in events
-    )
+    assert not any(isinstance(e, ActionEvent) and e.tool_call.tool_name == "serve" for e in events)
     # The handoff is a DeliverableEvent with the title/path/kind, sourced to AGENT.
     delivs = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(delivs) == 1
@@ -142,9 +140,7 @@ async def test_serve_malformed_arguments_are_explicit_and_actionable(arguments, 
     events = await store.get_events(CID)
     assert not any(isinstance(event, DeliverableEvent) for event in events)
     feedback = [
-        event
-        for event in _environment_messages(events)
-        if expected in event.message.content
+        event for event in _environment_messages(events) if expected in event.message.content
     ]
     assert len(feedback) == 1
 

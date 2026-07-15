@@ -45,13 +45,7 @@ def _shell_args(cmd="big"):
     return ShellTool.definition.args_model(command=cmd)
 
 
-PAYLOAD_ANCHORED = (
-    "HEADBLOCK-START"
-    + "A" * 80
-    + "X" * 6_000
-    + "B" * 80
-    + "TAILBLOCK-END"
-)
+PAYLOAD_ANCHORED = "HEADBLOCK-START" + "A" * 80 + "X" * 6_000 + "B" * 80 + "TAILBLOCK-END"
 
 
 async def test_shell_caps_large_output_and_spills_full_evidence():

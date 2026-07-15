@@ -167,9 +167,7 @@ def _upsert_dashboard_page(data: dict[str, Any], title: str) -> None:
             if i != page_idx
             for section in other.get("sections", [])
         ):
-            raise ValueError(
-                f"section id {_DASHBOARD_SECTION_ID!r} already exists on another page"
-            )
+            raise ValueError(f"section id {_DASHBOARD_SECTION_ID!r} already exists on another page")
         sections.append(section_json)
     else:
         existing = dict(sections[section_idx])
@@ -226,13 +224,12 @@ def lower_analytics_schema_sql(base: str, app: AppSpec) -> str:
     if not analytics_enabled(app):
         return base
     return (
-        base.rstrip()
-        + "\n\n"
+        base.rstrip() + "\n\n"
         "-- Analytics primitive (Epic 6.1): first-party page hits.\n"
         'CREATE TABLE IF NOT EXISTS "_hits" (\n'
         '  "id" INTEGER PRIMARY KEY AUTOINCREMENT,\n'
         '  "path" TEXT NOT NULL,\n'
-        '  "ts" TEXT NOT NULL DEFAULT (datetime(\'now\')),\n'
+        "  \"ts\" TEXT NOT NULL DEFAULT (datetime('now')),\n"
         '  "referrer" TEXT,\n'
         '  "ua_class" TEXT NOT NULL\n'
         ");\n"
@@ -319,7 +316,7 @@ _ANALYTICS_WORKER_DEFS = (
     "      .bind(\n"
     "        check.path,\n"
     "        check.referrer,\n"
-    "        uaClass(request.headers.get(\"User-Agent\") ?? \"\")\n"
+    '        uaClass(request.headers.get("User-Agent") ?? "")\n'
     "      )\n"
     "      .run();\n"
     "  } catch {\n"
@@ -374,27 +371,26 @@ def lower_analytics_main_tsx(base: str, app: AppSpec) -> str:
     if not analytics_enabled(app):
         return base
     return (
-        base.rstrip()
-        + "\n\n"
-        "const ANALYTICS_BEACON_PATH = \"/api/_hits\";\n\n"
+        base.rstrip() + "\n\n"
+        'const ANALYTICS_BEACON_PATH = "/api/_hits";\n\n'
         "function analyticsCurrentPath(): string {\n"
         "  return window.location.pathname + window.location.search;\n"
         "}\n\n"
         "function sendAnalyticsHit(path: string): void {\n"
         "  const payload = JSON.stringify({ path, referrer: document.referrer || null });\n"
         "  if (navigator.sendBeacon) {\n"
-        "    const blob = new Blob([payload], { type: \"application/json\" });\n"
+        '    const blob = new Blob([payload], { type: "application/json" });\n'
         "    if (navigator.sendBeacon(ANALYTICS_BEACON_PATH, blob)) return;\n"
         "  }\n"
         "  void fetch(ANALYTICS_BEACON_PATH, {\n"
-        "    method: \"POST\",\n"
-        "    headers: { \"Content-Type\": \"application/json\" },\n"
+        '    method: "POST",\n'
+        '    headers: { "Content-Type": "application/json" },\n'
         "    body: payload,\n"
         "    keepalive: true,\n"
         "  }).catch(() => undefined);\n"
         "}\n\n"
         "function installAnalyticsBeacon(): void {\n"
-        "  let lastPath = \"\";\n"
+        '  let lastPath = "";\n'
         "  const emit = () => {\n"
         "    const path = analyticsCurrentPath();\n"
         "    if (path === lastPath) return;\n"
@@ -417,16 +413,14 @@ def lower_analytics_main_tsx(base: str, app: AppSpec) -> str:
         "    queueMicrotask(emit);\n"
         "    return ret;\n"
         "  };\n"
-        "  window.addEventListener(\"popstate\", emit);\n"
+        '  window.addEventListener("popstate", emit);\n'
         "  emit();\n"
         "}\n\n"
         "installAnalyticsBeacon();\n"
     )
 
 
-def lower_analytics_app_tsx(
-    base: str, app: AppSpec, names: dict[tuple[str, str], str]
-) -> str:
+def lower_analytics_app_tsx(base: str, app: AppSpec, names: dict[tuple[str, str], str]) -> str:
     """Make the lead-gen shell route-aware once analytics adds `/analytics`."""
     if not analytics_enabled(app):
         return base
@@ -445,13 +439,7 @@ def lower_analytics_app_tsx(
         )
         body = (renders + "\n") if renders else ""
         page_funcs.append(
-            f"function {fn}(): ReactElement {{\n"
-            "  return (\n"
-            "    <>\n"
-            f"{body}"
-            "    </>\n"
-            "  );\n"
-            "}\n"
+            f"function {fn}(): ReactElement {{\n  return (\n    <>\n{body}    </>\n  );\n}}\n"
         )
         route_entries.append(f"  {_ts(page.route.rstrip('/') or '/')}: {fn},")
     fallback = "Page0" if app.pages else "() => null"
@@ -503,69 +491,69 @@ def emit_analytics_dashboard_component(comp: str, section: Section) -> str:
         "  hits?: HitAggregate[];\n"
         "}\n\n"
         "type LoadState =\n"
-        "  | { kind: \"idle\" }\n"
-        "  | { kind: \"loading\" }\n"
-        "  | { kind: \"ready\" }\n"
-        "  | { kind: \"error\"; message: string };\n\n"
+        '  | { kind: "idle" }\n'
+        '  | { kind: "loading" }\n'
+        '  | { kind: "ready" }\n'
+        '  | { kind: "error"; message: string };\n\n'
         f"export default function {comp}() {{\n"
         f"  const c = CONTENT[{_ts(comp)}] ?? {{}};\n"
-        "  const [token, setToken] = useState(\"\");\n"
+        '  const [token, setToken] = useState("");\n'
         "  const [rows, setRows] = useState<HitAggregate[]>([]);\n"
-        "  const [state, setState] = useState<LoadState>({ kind: \"idle\" });\n\n"
+        '  const [state, setState] = useState<LoadState>({ kind: "idle" });\n\n'
         "  async function loadDashboard(e: FormEvent<HTMLFormElement>) {\n"
         "    e.preventDefault();\n"
-        "    setState({ kind: \"loading\" });\n"
+        '    setState({ kind: "loading" });\n'
         "    try {\n"
         "      const response = await fetch(SUMMARY_PATH, {\n"
         "        headers: { Authorization: `Bearer ${token}` },\n"
         "      });\n"
         "      if (!response.ok) {\n"
         "        setState({\n"
-        "          kind: \"error\",\n"
+        '          kind: "error",\n'
         "          message: response.status === 401\n"
-        "            ? \"Unauthorized\"\n"
-        "            : \"Could not load analytics\",\n"
+        '            ? "Unauthorized"\n'
+        '            : "Could not load analytics",\n'
         "        });\n"
         "        return;\n"
         "      }\n"
         "      const data = (await response.json()) as SummaryResponse;\n"
         "      setRows(Array.isArray(data.hits) ? data.hits : []);\n"
-        "      setState({ kind: \"ready\" });\n"
+        '      setState({ kind: "ready" });\n'
         "    } catch (error: unknown) {\n"
         "      setState({\n"
-        "        kind: \"error\",\n"
-        "        message: error instanceof Error ? error.message : \"Network error\",\n"
+        '        kind: "error",\n'
+        '        message: error instanceof Error ? error.message : "Network error",\n'
         "      });\n"
         "    }\n"
         "  }\n\n"
         "  return (\n"
         f"    <section className={_ts(classes)} id={_ts(section.id)}"
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
-        "      <div className=\"app-main\">\n"
-        "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
+        '      <div className="app-main">\n'
+        '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
         f"        {{c.heading ? <h2{heading_attr}>{{c.heading}}</h2> : null}}\n"
-        f"        {{c.subheading ? <p className=\"subheading\"{subheading_attr}>"
+        f'        {{c.subheading ? <p className="subheading"{subheading_attr}>'
         "{c.subheading}</p> : null}\n"
-        "        <form className=\"lead-form analytics-auth\" onSubmit={loadDashboard}>\n"
-        "          <label htmlFor=\"analytics-token\">Admin token\n"
-        "            <input id=\"analytics-token\" type=\"password\" value={token}\n"
-        "              autoComplete=\"off\" onChange={(e) => setToken(e.target.value)} />\n"
+        '        <form className="lead-form analytics-auth" onSubmit={loadDashboard}>\n'
+        '          <label htmlFor="analytics-token">Admin token\n'
+        '            <input id="analytics-token" type="password" value={token}\n'
+        '              autoComplete="off" onChange={(e) => setToken(e.target.value)} />\n'
         "          </label>\n"
-        "          <button className=\"btn\" type=\"submit\"\n"
-        "            disabled={state.kind === \"loading\"}>\n"
-        "            {state.kind === \"loading\" ? \"Loading...\" : \"View analytics\"}\n"
+        '          <button className="btn" type="submit"\n'
+        '            disabled={state.kind === "loading"}>\n'
+        '            {state.kind === "loading" ? "Loading..." : "View analytics"}\n'
         "          </button>\n"
         "        </form>\n"
-        "        <div className=\"form-feedback\" aria-live=\"polite\">\n"
-        "          {state.kind === \"error\" ? (\n"
-        "            <p className=\"form-status form-status-error\">{state.message}</p>\n"
+        '        <div className="form-feedback" aria-live="polite">\n'
+        '          {state.kind === "error" ? (\n'
+        '            <p className="form-status form-status-error">{state.message}</p>\n'
         "          ) : null}\n"
-        "          {state.kind === \"ready\" && rows.length === 0 ? (\n"
+        '          {state.kind === "ready" && rows.length === 0 ? (\n'
         "            <p>No hits recorded yet.</p>\n"
         "          ) : null}\n"
         "        </div>\n"
         "        {rows.length > 0 ? (\n"
-        "          <table className=\"analytics-table\">\n"
+        '          <table className="analytics-table">\n'
         "            <thead><tr><th>Page</th><th>Day</th><th>Hits</th></tr></thead>\n"
         "            <tbody>\n"
         "              {rows.map((row) => (\n"
@@ -612,7 +600,7 @@ def _schema_verify(schema_sql: str | None) -> VerifyCheck:
             return VerifyCheck(
                 "analytics_schema",
                 False,
-                f'_hits table is missing column(s): {", ".join(missing)}.',
+                f"_hits table is missing column(s): {', '.join(missing)}.",
             )
         not_null = {name for name, row in columns.items() if int(row[3]) == 1}
         if not {"path", "ts", "ua_class"} <= not_null:

@@ -31,9 +31,7 @@ class _Runtime:
 
 async def test_direction_brand_override_reads_committed_context() -> None:
     markdown = render_design_direction(DIRECTION_BY_ID["warm-craft"])
-    runtime = _Runtime(
-        _Session({".disco/context/design_direction.md": markdown.encode("utf-8")})
-    )
+    runtime = _Runtime(_Session({".disco/context/design_direction.md": markdown.encode("utf-8")}))
 
     theme = await _direction_brand_override(cast(Any, runtime), "conv")
 

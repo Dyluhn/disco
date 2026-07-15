@@ -176,9 +176,7 @@ def test_registry_pins_match_shipped_bytes() -> None:
         m = comp.manifest
         for relpath, expected in m.files.items():
             assert pin(comp.read_file(relpath)) == expected, f"{m.name}: stale pin {relpath}"
-        core_files = {
-            p for p in comp.install_tree() if p.startswith("core/")
-        }
+        core_files = {p for p in comp.install_tree() if p.startswith("core/")}
         assert core_files == set(m.files), f"{m.name}: unpinned/extra core files"
         assert comp.probe_source() is not None or m.probe is None
         assert comp.read_file(m.guide), f"{m.name}: missing guide"
@@ -193,9 +191,9 @@ def test_shipped_requires_edges_resolve_in_registry() -> None:
             req = parse_requirement(entry)
             versions = reg.versions(req.name)
             assert versions, f"{comp.manifest.name} requires unknown {req.name}"
-            assert any(
-                req.satisfied_by(req.name, v) for v in versions
-            ), f"{comp.manifest.name}: no shipped version satisfies {entry}"
+            assert any(req.satisfied_by(req.name, v) for v in versions), (
+                f"{comp.manifest.name}: no shipped version satisfies {entry}"
+            )
 
 
 def test_manifest_requires_full_validation() -> None:

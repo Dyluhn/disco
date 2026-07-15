@@ -22,14 +22,11 @@ async def test_browser_render_observation():
         "title": "Example Domain",
         "console": [
             {"level": "error", "text": "Uncaught TypeError"},
-            {"level": "warning", "text": "Deprecation warning"}
+            {"level": "warning", "text": "Deprecation warning"},
         ],
-        "elements": [
-            "1[:]<button>Click me</button>",
-            "2[:]<a>Link</a>"
-        ],
+        "elements": ["1[:]<button>Click me</button>", "2[:]<a>Link</a>"],
         "text": "Hello world",
-        "screenshot_path": ".pmx/screenshots/0001-navigate.png"
+        "screenshot_path": ".pmx/screenshots/0001-navigate.png",
     }
     rendered = tool._render_observation(data)
     assert "[UNTRUSTED WEB CONTENT" in rendered
@@ -42,6 +39,7 @@ async def test_browser_render_observation():
     assert "TEXT:\nHello world" in rendered
     assert "[END UNTRUSTED WEB CONTENT]" in rendered
     assert "screenshot: .pmx/screenshots/0001-navigate.png" in rendered
+
 
 class _FakeConsoleMessage:
     """A Playwright-like ConsoleMessage: .type / .text / .location."""
@@ -252,8 +250,7 @@ def test_render_observation_stack_truncated_to_cap():
     # Only the first _MAX_STACK_LINES frames are kept, then a truncation marker.
     assert "at frame0 (app.js:0:1)" in rendered
     omitted_frame = (
-        f"at frame{browser_mod._MAX_STACK_LINES} "
-        f"(app.js:{browser_mod._MAX_STACK_LINES}:1)"
+        f"at frame{browser_mod._MAX_STACK_LINES} (app.js:{browser_mod._MAX_STACK_LINES}:1)"
     )
     assert omitted_frame not in rendered
     assert "stack truncated" in rendered
@@ -505,20 +502,22 @@ async def test_browser_ensure_daemon_restart_on_failure():
     ctx = MagicMock(spec=ToolContext)
     ctx.sandbox = AsyncMock()
     ctx.sessions = AsyncMock()
-    
+
     # First health check fails (exit 1), then succeeds (exit 0)
     ctx.sandbox.exec_shell.side_effect = [
-        ExecResult(exit_code=1, stdout="", stderr=""), # health check 1
-        ExecResult(exit_code=0, stdout="", stderr=""), # health check 2 (after start)
+        ExecResult(exit_code=1, stdout="", stderr=""),  # health check 1
+        ExecResult(exit_code=0, stdout="", stderr=""),  # health check 2 (after start)
     ]
-    
+
     await tool._ensure_daemon(ctx)
 
     # Verify it tried to write the daemon and start it
     assert ctx.sandbox.write_file.called
     assert ctx.sessions.exec.called
     assert ctx.sessions.exec.call_args[0] == (
-        "__browser", "python3 /workspace/.pmx/_browser_daemon.py", None
+        "__browser",
+        "python3 /workspace/.pmx/_browser_daemon.py",
+        None,
     )
 
 
@@ -598,9 +597,7 @@ async def test_browser_unavailable_is_terminal_not_retryable(monkeypatch):
     out = await tool.run(BrowserArgs(action="navigate", url="http://127.0.0.1:8000/"), ctx)
     assert out.success is False
     assert out.structured["browser_unavailable"] is True
-    assert out.structured["startup_diagnostic"] == (
-        "chromium launch failed: missing runtime"
-    )
+    assert out.structured["startup_diagnostic"] == ("chromium launch failed: missing runtime")
     assert out.error == BROWSER_UNAVAILABLE_MSG
     assert "do not retry" in out.error
     assert "Browser rendering remains unverified" in out.error
@@ -617,9 +614,7 @@ async def test_browser_early_daemon_exit_preserves_bounded_diagnostic(monkeypatc
     ctx.sandbox = AsyncMock()
     ctx.sessions = AsyncMock()
     ctx.timeout_s = 30
-    ctx.sandbox.exec_shell.return_value = ExecResult(
-        exit_code=1, stdout="", stderr=""
-    )
+    ctx.sandbox.exec_shell.return_value = ExecResult(exit_code=1, stdout="", stderr="")
     ctx.sessions.exec.return_value = ExecOutcome(
         running=False,
         exit_code=1,
@@ -704,6 +699,7 @@ def test_browser_startup_diagnostic_redacts_secret_shaped_output():
     assert "do-not-retain" not in diagnostic
     assert "also-secret" not in diagnostic
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_browser_daemon_integration_real_chromium(tmp_path):
@@ -750,7 +746,7 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
                 self.send_response(404)
                 self.end_headers()
 
-    fixture_server = HTTPServer(('127.0.0.1', 0), FixtureHandler)
+    fixture_server = HTTPServer(("127.0.0.1", 0), FixtureHandler)
     fixture_port = fixture_server.server_port
     fixture_thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
     fixture_thread.start()
@@ -763,7 +759,7 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         env={
             **os.environ,
             "PYTHONPATH": str(pathlib.Path(daemon_mod.__file__).parents[5]),
-            "PMX_WORKSPACE": str(tmp_path)
+            "PMX_WORKSPACE": str(tmp_path),
         },
         cwd=str(tmp_path),
         start_new_session=True,
@@ -801,6 +797,7 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         # (b) click by index, then screenshot WITHOUT navigate → updated counter text
         # Find index of button
         import re
+
         btn_index = None
         for el in data["elements"]:
             m = re.match(r"(\d+)\[:\] <button>", el)
@@ -812,7 +809,7 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         res = await client.post("/", json={"action": "click", "index": btn_index})
         data = res.json()
         assert data["ok"]
-        assert "1" in data["text"] # counter incremented
+        assert "1" in data["text"]  # counter incremented
 
         # (c) page sets a cookie; re-navigate; cookie text still present
         # Our fixture sets a cookie. We can check if it's there via document.cookie
@@ -823,6 +820,7 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         # (d) BP-00: include_screenshot_b64 → response carries base64 that decodes
         # byte-for-byte to the PNG the daemon wrote on disk.
         import base64
+
         res = await client.post(
             "/",
             json={"action": "navigate", "url": fixture_url, "include_screenshot_b64": True},
@@ -916,15 +914,11 @@ async def test_process_browser_uses_workspace_owned_ephemeral_port():
         )
         if not outcome.success:
             daemon_view = await sessions.view("__browser")
-            pytest.fail(
-                f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}"
-            )
+            pytest.fail(f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}")
         assert outcome.structured is not None
         assert "workspace-owned browser" in str(outcome.structured.get("text"))
 
-        daemon_port = int(
-            (await inst.read_file("/workspace/.pmx/browser-port")).decode().strip()
-        )
+        daemon_port = int((await inst.read_file("/workspace/.pmx/browser-port")).decode().strip())
         assert 1 <= daemon_port <= 65535
         assert daemon_port != 8901
         screenshot = str(outcome.structured["screenshot_path"])
@@ -994,9 +988,7 @@ async def test_process_browser_uses_runtime_through_production_session_wrapper()
         )
         if not outcome.success:
             daemon_view = await session.sessions.view("__browser")
-            pytest.fail(
-                f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}"
-            )
+            pytest.fail(f"{outcome.error}\n--- browser daemon pane ---\n{daemon_view.output}")
         assert outcome.structured is not None
         assert "wrapped browser runtime" in str(outcome.structured.get("text"))
         assert session.shares_host_network is True
@@ -1065,9 +1057,7 @@ async def test_process_browser_recovers_stale_busy_daemon_session():
         with socket.socket() as stale_probe:
             stale_probe.bind(("127.0.0.1", 0))
             stale_port = int(stale_probe.getsockname()[1])
-        await session.write_file(
-            "/workspace/.pmx/browser-port", str(stale_port).encode("ascii")
-        )
+        await session.write_file("/workspace/.pmx/browser-port", str(stale_port).encode("ascii"))
 
         recovered = await BrowserTool().run(
             BrowserArgs(action="navigate", url=f"http://127.0.0.1:{fixture_port}/"),

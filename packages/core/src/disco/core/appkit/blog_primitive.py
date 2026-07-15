@@ -50,9 +50,7 @@ from .spec import (
 )
 
 _BLOG_INDEX_ROUTE = "/blog"
-_SUPPORTED_HOSTS = frozenset(
-    {LEAD_GEN_PRIMITIVE_ID, DIRECTORY_PRIMITIVE_ID, RECORDS_PRIMITIVE_ID}
-)
+_SUPPORTED_HOSTS = frozenset({LEAD_GEN_PRIMITIVE_ID, DIRECTORY_PRIMITIVE_ID, RECORDS_PRIMITIVE_ID})
 
 
 class BlogPostSpec(BaseModel):
@@ -199,7 +197,7 @@ def _parse_inlines(text: str) -> list[BlogInline]:
     cursor = 0
     for match in _INLINE_RE.finditer(text):
         if match.start() > cursor:
-            nodes.append(_inline("text", text[cursor:match.start()]))
+            nodes.append(_inline("text", text[cursor : match.start()]))
         token = match.group(0)
         link = _LINK_RE.match(token)
         if link is not None:
@@ -227,9 +225,7 @@ def _markdown_blocks(markdown: str) -> list[BlogBlock]:
 
     def flush_paragraph() -> None:
         if paragraph:
-            blocks.append(
-                {"kind": "paragraph", "inlines": _parse_inlines(" ".join(paragraph))}
-            )
+            blocks.append({"kind": "paragraph", "inlines": _parse_inlines(" ".join(paragraph))})
             paragraph.clear()
 
     i = 0
@@ -260,9 +256,7 @@ def _markdown_blocks(markdown: str) -> list[BlogBlock]:
             kind: BlogBlockKind = "ul" if ul is not None else "ol"
             items: list[list[BlogInline]] = []
             while i < len(lines):
-                item_match = (
-                    _UL_RE.match(lines[i]) if kind == "ul" else _OL_RE.match(lines[i])
-                )
+                item_match = _UL_RE.match(lines[i]) if kind == "ul" else _OL_RE.match(lines[i])
                 if item_match is None:
                     break
                 items.append(_parse_inlines(item_match.group(1).strip()))
@@ -289,9 +283,7 @@ def emit_blog_files(app: AppSpec) -> dict[str, str]:
         "public/rss.xml": _emit_rss_xml(app),
     }
     for i, post in enumerate(blog.posts):
-        files[f"src/blog/{names[post.slug]}.tsx"] = _emit_blog_post_page_tsx(
-            names[post.slug], i
-        )
+        files[f"src/blog/{names[post.slug]}.tsx"] = _emit_blog_post_page_tsx(names[post.slug], i)
     return files
 
 
@@ -396,10 +388,10 @@ def _emit_blog_post_page_tsx(component: str, post_index: int) -> str:
         "  return (\n"
         '    <main className="blog-page blog-post">\n'
         '      <article className="blog-shell">\n'
-        "        <p><a className=\"blog-back\" href=\"/blog\">All posts</a></p>\n"
+        '        <p><a className="blog-back" href="/blog">All posts</a></p>\n'
         "        <h1>{POST.title}</h1>\n"
         "        <time dateTime={POST.date}>{POST.date}</time>\n"
-        "        {POST.summary ? <p className=\"blog-summary\">{POST.summary}</p> : null}\n"
+        '        {POST.summary ? <p className="blog-summary">{POST.summary}</p> : null}\n'
         "        <BlogBody blocks={POST.blocks} />\n"
         "      </article>\n"
         "    </main>\n"
@@ -501,9 +493,7 @@ def _emit_blog_css() -> str:
     )
 
 
-def emit_app_tsx_with_blog_routes(
-    app: AppSpec, names: dict[tuple[str, str], str]
-) -> str:
+def emit_app_tsx_with_blog_routes(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
     """A route-aware app shell for host pages plus the generated blog routes."""
     from .generator import _comp_name, _iter_sections, _ts
 
@@ -564,13 +554,7 @@ def _host_page_routes(
         )
         body = (renders + "\n") if renders else ""
         page_funcs.append(
-            f"function {fn}(): ReactElement {{\n"
-            "  return (\n"
-            "    <>\n"
-            f"{body}"
-            "    </>\n"
-            "  );\n"
-            "}\n"
+            f"function {fn}(): ReactElement {{\n  return (\n    <>\n{body}    </>\n  );\n}}\n"
         )
         norm_route = page.route.rstrip("/") or "/"
         route_entries.append(f"  {_ts(norm_route)}: {fn},")
@@ -609,7 +593,7 @@ def _emit_rss_xml(app: AppSpec) -> str:
             "    <item>\n"
             f"      <title>{_xml_text(post.title)}</title>\n"
             f"      <link>{_xml_text(url)}</link>\n"
-            f"      <guid isPermaLink=\"true\">{_xml_text(url)}</guid>\n"
+            f'      <guid isPermaLink="true">{_xml_text(url)}</guid>\n'
             f"      <pubDate>{_rss_date(post.date)}</pubDate>\n"
             f"      <description>{_xml_text(description)}</description>\n"
             "    </item>\n"

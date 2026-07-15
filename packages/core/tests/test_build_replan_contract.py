@@ -51,9 +51,7 @@ async def test_followup_after_approval_enters_planning():
         and "revise the hero" in (e.message.content or "")
     )
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == "planning"
-        and (e.seq or 0) > followup_seq
+        isinstance(e, StatusEvent) and e.detail == "planning" and (e.seq or 0) > followup_seq
         for e in events
     )
 
@@ -93,17 +91,13 @@ async def test_agent_cannot_write_before_revised_plan_approval():
     loop, store = await _approved_first_build("replan-write")
     executor: BuildExecutor = loop.executor  # type: ignore[assignment]
     # Re-enter planning, then the agent tries to write before submitting/approving.
-    loop.agent = ScriptedAgent(
-        [action_step("file_write", {"path": "index.html", "content": "x"})]
-    )
+    loop.agent = ScriptedAgent([action_step("file_write", {"path": "index.html", "content": "x"})])
     await loop.enter_planning("revise the heading")
     await loop.run()
 
     events = await store.get_events("replan-write")
     revised_approvals = [
-        e.seq
-        for e in events
-        if isinstance(e, StatusEvent) and e.detail == "plan_approved"
+        e.seq for e in events if isinstance(e, StatusEvent) and e.detail == "plan_approved"
     ]
     # only the FIRST build's approval exists; the write must not have run.
     write_obs = [

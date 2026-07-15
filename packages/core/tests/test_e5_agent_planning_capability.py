@@ -75,8 +75,15 @@ def test_agent_planning_prompt_mentions_execution_tools():
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    for tool in ("shell", "file_write", "code_exec", "slides_generate", "sheet_generate",
-                 "image_generate", "audio_overview"):
+    for tool in (
+        "shell",
+        "file_write",
+        "code_exec",
+        "slides_generate",
+        "sheet_generate",
+        "image_generate",
+        "audio_overview",
+    ):
         assert tool in got, f"agent planning prompt must mention '{tool}'"
 
 
@@ -130,12 +137,8 @@ def test_build_planning_prompt_is_constant_plus_block():
         role=ModelRole.AGENT_DRIVER,
     )
     assert got == (
-        _PLANNING_DRIVER_PROMPT
-        + _MENTIONED_ELEMENT_GUIDANCE
-        + _AGENT_PLANNING_CAPABILITY_BLOCK
-    ), (
-        "[R6] build planning must be the base constant + mention guidance + capability block"
-    )
+        _PLANNING_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE + _AGENT_PLANNING_CAPABILITY_BLOCK
+    ), "[R6] build planning must be the base constant + mention guidance + capability block"
 
 
 # ---------------------------------------------------------------------------

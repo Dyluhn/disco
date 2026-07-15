@@ -58,35 +58,48 @@ async def probe_openai_auth(
         return False, "unreachable", f"Request to {root} failed: {exc}."
 
     if resp.status_code in (401, 403):
-        return False, "unauthorized", (
-            f"{root} answered {resp.status_code} — the key was rejected. "
-            "Check the stored value."
+        return (
+            False,
+            "unauthorized",
+            (f"{root} answered {resp.status_code} — the key was rejected. Check the stored value."),
         )
     if resp.status_code == 200:
-        return True, "ok", (
-            f"{root} accepted an authenticated completion with model "
-            f"‘{model_id}’ — the key works."
+        return (
+            True,
+            "ok",
+            (
+                f"{root} accepted an authenticated completion with model "
+                f"‘{model_id}’ — the key works."
+            ),
         )
     if resp.status_code in (400, 404, 422):
         # The key passed auth but the model/route was rejected — still proves the
         # credential is valid against this endpoint; flag the model issue honestly.
-        return True, "ok", (
-            f"{root} authenticated the key (answered {resp.status_code} on a probe "
-            f"with model ‘{model_id}’ — the model id may need updating, but the key works)."
+        return (
+            True,
+            "ok",
+            (
+                f"{root} authenticated the key (answered {resp.status_code} on a probe "
+                f"with model ‘{model_id}’ — the model id may need updating, but the key works)."
+            ),
         )
     if resp.status_code == 429:
-        return True, "ok", (
-            f"{root} answered 429 (rate-limited) — the key authenticated; you're "
-            "just over a rate limit right now."
+        return (
+            True,
+            "ok",
+            (
+                f"{root} answered 429 (rate-limited) — the key authenticated; you're "
+                "just over a rate limit right now."
+            ),
         )
-    return False, "error", (
-        f"{root} answered {resp.status_code} on an authenticated completion probe."
+    return (
+        False,
+        "error",
+        (f"{root} answered {resp.status_code} on an authenticated completion probe."),
     )
 
 
-async def probe_reachable(
-    url: str, *, api_key: str | None = None
-) -> tuple[bool, str, str]:
+async def probe_reachable(url: str, *, api_key: str | None = None) -> tuple[bool, str, str]:
     """Lightweight reachability check for a non-LLM HTTP service (search /
     extraction endpoints). A GET that treats ANY HTTP response as "reachable"
     (the host answered) — only a connect/timeout/DNS failure is "unreachable".
@@ -105,8 +118,9 @@ async def probe_reachable(
     except httpx.HTTPError as exc:
         return False, "unreachable", f"Request to {url} failed: {exc}."
     if resp.status_code in (401, 403):
-        return False, "unauthorized", (
-            f"{url} answered {resp.status_code} — reachable, but the credential "
-            "was rejected."
+        return (
+            False,
+            "unauthorized",
+            (f"{url} answered {resp.status_code} — reachable, but the credential was rejected."),
         )
     return True, "ok", f"{url} answered {resp.status_code} — reachable."

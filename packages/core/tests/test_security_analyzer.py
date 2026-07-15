@@ -113,6 +113,7 @@ def _fake_scorer(risk: SecurityRisk, *, counter: list[int] | None = None):
         if counter is not None:
             counter.append(1)
         return RiskAssessment(risk=risk, rationale="fake llm", analyzer="llm_based")
+
     return scorer
 
 

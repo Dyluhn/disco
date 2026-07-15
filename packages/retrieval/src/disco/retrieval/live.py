@@ -97,9 +97,7 @@ class SearxngSearchProvider:
                 trust_env=False,
                 follow_redirects=False,
             ) as client:
-                resp = await client.get(
-                    f"{self._base}/search", params=params
-                )
+                resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
                 results = resp.json().get("results", [])
         except (httpx.HTTPError, ValueError):

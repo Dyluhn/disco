@@ -132,8 +132,7 @@ async def test_run_with_persistence_emits_typed_error_and_skips_loop():
 
     events = await store.get_events("c1")
     errs = [
-        e for e in events
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
+        e for e in events if isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR
     ]
     assert errs and "unreachable" in (errs[-1].detail or "")
     assert "ssh://sandbox@host" in (errs[-1].detail or "")  # endpoint NAMED

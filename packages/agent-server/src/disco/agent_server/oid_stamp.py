@@ -60,7 +60,5 @@ def stamp_oids(html: str, relpath: str) -> str:
         return html
     # Re-serialize as a full document, preserving the doctype. encoding="unicode"
     # yields str at runtime; coerce for the typechecker (tostring is typed str|bytes).
-    out = lhtml.tostring(
-        doc, encoding="unicode", method="html", doctype="<!DOCTYPE html>"
-    )
+    out = lhtml.tostring(doc, encoding="unicode", method="html", doctype="<!DOCTYPE html>")
     return out if isinstance(out, str) else out.decode("utf-8")

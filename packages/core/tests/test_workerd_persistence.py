@@ -5,14 +5,15 @@ import socket
 import uuid
 
 import pytest
-from disco.core.appkit import default_lead_gen_app_spec, generate, get_recipe
-
 from _workerd_harness import WorkerdApp, wrangler_available
+from disco.core.appkit import default_lead_gen_app_spec, generate, get_recipe
 
 pytestmark = pytest.mark.integration
 
 if not wrangler_available():
-    pytest.skip("wrangler is required for the local workerd persistence proof", allow_module_level=True)
+    pytest.skip(
+        "wrangler is required for the local workerd persistence proof", allow_module_level=True
+    )
 
 
 def test_lead_survives_worker_cold_restart() -> None:

@@ -193,8 +193,7 @@ def test_records_fold_persists_non_secret_metadata_and_secured_docs() -> None:
         "webhook_fulfillment_events",
     ]
     assert all(
-        section.content is not None
-        and section.content.subheading == WEBHOOK_SECURED_MARKER
+        section.content is not None and section.content.subheading == WEBHOOK_SECURED_MARKER
         for section in docs.sections
     )
 
@@ -208,14 +207,10 @@ def test_records_generation_emits_trusted_inbound_outbound_schema_and_bus_shim()
     assert 'request.headers.get("Disco-Webhook-Signature")' in worker
     assert 'crypto.subtle.verify("HMAC"' in worker
     assert "JSON.parse" in worker
-    assert worker.index('crypto.subtle.verify("HMAC"') < worker.index(
-        "parseWebhookEnvelope(body)"
-    )
+    assert worker.index('crypto.subtle.verify("HMAC"') < worker.index("parseWebhookEnvelope(body)")
     assert 'env.DB.withSession("first-primary")' in worker
     assert "await db.batch([" in worker
-    assert worker.index("INSERT INTO webhook_events") < worker.index(
-        "INSERT INTO webhook_effects"
-    )
+    assert worker.index("INSERT INTO webhook_events") < worker.index("INSERT INTO webhook_effects")
     assert 'svc(env, "webhook.emit"' in worker
     assert 'import { svc } from "./disco-client"' in worker
     assert "WEBHOOK_SIGNING_SECRET?: string" in worker
@@ -229,8 +224,7 @@ def test_records_generation_emits_trusted_inbound_outbound_schema_and_bus_shim()
     try:
         db.executescript(schema)
         assert {"webhook_events", "webhook_effects"} <= {
-            str(row[0])
-            for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
     finally:
         db.close()

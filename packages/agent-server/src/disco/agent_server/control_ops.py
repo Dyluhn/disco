@@ -55,17 +55,19 @@ _SHIP_IT_CONTAINS: tuple[str, ...] = (
 # WHOLE-MESSAGE only: shorter phrases that could false-match mid-sentence inside a real
 # change request ("you're done with the header, now add a footer"), so they only count
 # when they ARE the entire message.
-_SHIP_IT_EXACT: frozenset[str] = frozenset({
-    "you're done",
-    "you are done",
-    "that's done",
-    "we're done",
-    "we are done",
-    "it's done",
-    "done",
-    "ship it",
-    "call it",
-})
+_SHIP_IT_EXACT: frozenset[str] = frozenset(
+    {
+        "you're done",
+        "you are done",
+        "that's done",
+        "we're done",
+        "we are done",
+        "it's done",
+        "done",
+        "ship it",
+        "call it",
+    }
+)
 
 
 def _is_ship_it_intent(text: str) -> bool:
@@ -173,8 +175,7 @@ class ControlOps:
         `_unpin_if_current_generation` so the kill path stays consistent with the
         clean-return / crash / abandoned-gate terminalizers."""
         return (
-            generation is not None
-            and self._rt._run_generation.get(conversation_id) != generation
+            generation is not None and self._rt._run_generation.get(conversation_id) != generation
         )
 
     async def kill(self, conversation_id: str, generation: int | None = None) -> None:
@@ -234,7 +235,5 @@ class ControlOps:
             return
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(
-                source=EventSource.SYSTEM, status=ConversationStatus.IDLE, detail="killed"
-            ),
+            StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.IDLE, detail="killed"),
         )

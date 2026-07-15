@@ -97,9 +97,7 @@ class TrustedComponentsResult:
     def fingerprint_material(self) -> str:
         """Stable string folded into the verifier failure_fingerprint so the
         finish gate's STUCK detection keys on component state too."""
-        return json.dumps(
-            [(c.name, c.status) for c in sorted(self.checks, key=lambda c: c.name)]
-        )
+        return json.dumps([(c.name, c.status) for c in sorted(self.checks, key=lambda c: c.name)])
 
 
 async def verify_trusted_components(
@@ -155,9 +153,7 @@ async def verify_trusted_components(
             if data is None or pin(data) != expected:
                 diverged.append(relpath)
         if diverged:
-            record_eject(
-                lock, name, "core-edit-detected", now_iso, diverged_files=diverged
-            )
+            record_eject(lock, name, "core-edit-detected", now_iso, diverged_files=diverged)
             result.newly_ejected.append(name)
             result.checks.append(
                 ComponentCheck(

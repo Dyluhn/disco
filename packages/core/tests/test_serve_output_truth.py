@@ -28,19 +28,21 @@ def _deliverable_paths(events) -> list[str]:
 
 
 def _feedback(events) -> str:
-    return "\n".join(
-        e.message.content or "" for e in events if isinstance(e, MessageEvent)
-    )
+    return "\n".join(e.message.content or "" for e in events if isinstance(e, MessageEvent))
 
 
 async def test_serve_missing_path_refused_no_deliverable():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx({"real.html"})  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),  # real work first (serve gate requires it)
-        action_step("serve", {"title": "Ghost", "path": "ghost.html"}),  # does not exist → refused
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),  # real work first (serve gate requires it)
+            action_step(
+                "serve", {"title": "Ghost", "path": "ghost.html"}
+            ),  # does not exist → refused
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -54,11 +56,13 @@ async def test_serve_missing_path_refused_no_deliverable():
 async def test_serve_existing_path_emits_deliverable():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx({"real.html"})  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "Real", "path": "real.html"}),  # exists → handed off
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "Real", "path": "real.html"}),  # exists → handed off
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -69,11 +73,13 @@ async def test_serve_existing_path_emits_deliverable():
 async def test_serve_workspace_root_auto_coerces_to_index_when_present():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx({"index.html"})  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "Site", "path": "/workspace"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "Site", "path": "/workspace"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -87,11 +93,13 @@ async def test_serve_workspace_root_auto_coerces_to_index_when_present():
 async def test_serve_workspace_root_without_entry_gets_entry_file_recipe():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx(set())  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "Site", "path": "/workspace/"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "Site", "path": "/workspace/"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -108,11 +116,13 @@ async def test_serve_workspace_root_without_entry_gets_entry_file_recipe():
 async def test_serve_workspace_absolute_path_normalizes_and_serves():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx({"sub/file.html"})  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "Subpage", "path": "/workspace/sub/file.html"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "Subpage", "path": "/workspace/sub/file.html"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -125,11 +135,13 @@ async def test_serve_workspace_absolute_path_normalizes_and_serves():
 async def test_serve_missing_workspace_absolute_path_reports_normalized_path():
     ex = FakeExecutor()
     ex.sandbox = _FakeSbx(set())  # type: ignore[attr-defined]
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "Missing", "path": "/workspace/missing.html"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "Missing", "path": "/workspace/missing.html"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent, executor=ex)
     await loop.send_message("go")
     await loop.run()
@@ -145,11 +157,13 @@ async def test_serve_missing_workspace_absolute_path_reports_normalized_path():
 async def test_serve_no_sandbox_fails_open():
     # FakeExecutor has no sandbox → _serve_path_missing returns False → handoff proceeds (the
     # output-truth check never blocks an unverifiable environment; existing behavior preserved).
-    agent = ScriptedAgent([
-        action_step("shell", {}),
-        action_step("serve", {"title": "App", "path": "index.html"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "App", "path": "index.html"}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     await loop.run()

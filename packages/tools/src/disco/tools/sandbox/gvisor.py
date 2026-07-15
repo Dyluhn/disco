@@ -167,9 +167,7 @@ def _probe_local_socket_reachable(docker_socket: str, timeout_s: float) -> None:
         return
     path = urllib.parse.unquote(parsed.path or parsed.netloc)
     if not path:
-        raise SandboxUnavailableError(
-            f"Docker local socket endpoint has no path: {docker_socket}"
-        )
+        raise SandboxUnavailableError(f"Docker local socket endpoint has no path: {docker_socket}")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
             probe.settimeout(timeout_s)
@@ -270,9 +268,7 @@ class GvisorSandboxService:
                     _probe_ssh_reachable(base_url)
                     kwargs["use_ssh_client"] = True
                 else:
-                    _probe_local_socket_reachable(
-                        base_url, float(self._cfg.client_timeout_s)
-                    )
+                    _probe_local_socket_reachable(base_url, float(self._cfg.client_timeout_s))
                 client = docker.DockerClient(**kwargs)
                 client.ping()
             except Exception as exc:  # noqa: BLE001 — map to a typed infra error

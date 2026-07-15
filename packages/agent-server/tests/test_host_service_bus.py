@@ -271,9 +271,7 @@ def test_bus_context_cannot_broaden_app_service_or_origin_scope(store, token_sto
         ("generation", -1),
     ],
 )
-def test_bus_malformed_persisted_credential_fails_auth(
-    store, token_store, column, value
-):
+def test_bus_malformed_persisted_credential_fails_auth(store, token_store, column, value):
     _create_conversation(store, "conv_1")
     token = token_store.mint(
         "conv_1",

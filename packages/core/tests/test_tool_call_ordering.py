@@ -26,7 +26,9 @@ def _asst(cid: str, name: str = "do_thing") -> dict:
     return {
         "role": "assistant",
         "content": "",
-        "tool_calls": [{"id": cid, "type": "function", "function": {"name": name, "arguments": "{}"}}],
+        "tool_calls": [
+            {"id": cid, "type": "function", "function": {"name": name, "arguments": "{}"}}
+        ],
     }
 
 
@@ -66,7 +68,11 @@ def test_spliced_message_pulls_result_adjacent() -> None:
 
 def test_orphan_tool_result_is_dropped() -> None:
     # The declaring assistant turn was condensed away; the bare result remains.
-    msgs = [{"role": "user", "content": "q"}, _tool("ghost"), {"role": "assistant", "content": "hi"}]
+    msgs = [
+        {"role": "user", "content": "q"},
+        _tool("ghost"),
+        {"role": "assistant", "content": "hi"},
+    ]
     out = _normalize_tool_call_ordering(msgs)
     assert _roles(out) == ["user", "assistant"]
     assert all(m.get("tool_call_id") != "ghost" for m in out)
@@ -108,7 +114,11 @@ def test_payload_wires_the_normalizer() -> None:
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
-            json={"model": "m1", "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}},
+            json={
+                "model": "m1",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {},
+            },
         )
 
     provider = OpenAIProvider("http://fake/v1", name="fake", transport=httpx.MockTransport(handler))
@@ -116,7 +126,11 @@ def test_payload_wires_the_normalizer() -> None:
         profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
         messages=[
             LLMMessage(role="user", content="q"),
-            LLMMessage(role="assistant", content="", tool_calls=[{"id": "a1", "name": "do_thing", "arguments": {}}]),
+            LLMMessage(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "a1", "name": "do_thing", "arguments": {}}],
+            ),
             LLMMessage(role="user", content="[spliced environment update]"),
             LLMMessage(role="tool", content="result-body", tool_call_id="a1"),
         ],

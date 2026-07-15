@@ -126,9 +126,7 @@ class WorkflowScheduleRow(BaseModel):
             owner_id=str(data.get("owner_id") or install_owner_id()),
             spec=ScheduleSpec.model_validate(data["spec"]),
             created_at=_parse_dt(str(data.get("created_at") or "")) or _now(),
-            next_run=_parse_dt(
-                str(data["next_run"]) if data.get("next_run") is not None else None
-            ),
+            next_run=_parse_dt(str(data["next_run"]) if data.get("next_run") is not None else None),
         )
 
 
@@ -228,9 +226,7 @@ class JsonWorkflowScheduleStore:
 
     def list_enabled_schedules(self) -> list[WorkflowScheduleRow]:
         return [
-            row
-            for row in self.list_schedules(include_unclaimed_legacy=True)
-            if row.spec.enabled
+            row for row in self.list_schedules(include_unclaimed_legacy=True) if row.spec.enabled
         ]
 
     def update_next_run(self, schedule_id: str, next_run: datetime | None) -> None:

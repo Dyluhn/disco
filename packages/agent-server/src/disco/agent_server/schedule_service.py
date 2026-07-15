@@ -32,6 +32,7 @@ class ScheduleService:
         after _start_schedule_manager is called at lifespan start)."""
         if not hasattr(self._rt, "_sched_manager"):
             from .schedule import ScheduleManager
+
             self._rt._sched_manager = ScheduleManager(self._rt._store, self._rt)
         return self._rt._sched_manager
 
@@ -64,9 +65,7 @@ class ScheduleService:
         )
         return sched.model_dump(mode="json")
 
-    def list_schedules(
-        self, *, owner_id: str, conversation_id: str | None = None
-    ) -> list[dict]:
+    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
         """List schedules, optionally filtered to one conversation."""
         return [
             s.model_dump(mode="json")
@@ -81,9 +80,7 @@ class ScheduleService:
 
     async def fire_now(self, schedule_id: str, *, owner_id: str) -> bool:
         """Run a schedule immediately, out of band. False if not found."""
-        return await self._schedule_manager().fire_now(
-            schedule_id, owner_id=owner_id
-        )
+        return await self._schedule_manager().fire_now(schedule_id, owner_id=owner_id)
 
     def create_workflow_schedule(
         self,
@@ -163,9 +160,7 @@ class ScheduleService:
             )
         ]
 
-    def list_recent_schedule_runs(
-        self, *, owner_id: str, limit: int = 50
-    ) -> list[dict]:
+    def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[dict]:
         """Owner-scoped recent scheduled-run history for the activity dashboard
         (delegates to the store; newest first, with schedule description + title)."""
         fn = getattr(self._rt._store, "list_recent_schedule_runs", None)

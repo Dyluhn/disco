@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.retrieval.deep_research.iterate import run_iterative_refinement
 from disco.retrieval.deep_research.judge import ClaimVerdict
 

@@ -165,6 +165,7 @@ def _normalize_to_png_or_jpeg(raw: bytes) -> bytes:
     img.convert("RGB").save(buf, format="PNG")
     return buf.getvalue()
 
+
 # A small, bounded size cap. The procedural backend renders pixel-by-pixel
 # (cheap) and any real model backend will respect it. Keeps a misbehaving
 # call from rendering a 16384x16384 texture and OOMing the box.
@@ -727,7 +728,7 @@ def select_image_backend() -> ImageBackend:
             raise ImageGenNotConfigured(
                 "Image generation endpoint is not operator-approved. Save the Image "
                 "generation settings to approve this exact origin."
-        )
+            )
         # Look up the secret from SecretStore by secret-ref id only.
         if api_key_env:
             if not secret_ref_allowed_for_origin(api_key_env, base_url):
@@ -759,9 +760,7 @@ def select_image_backend() -> ImageBackend:
             # this tier, so any persisted base_url can only be stale config left over from
             # another provider — and we must never send the OpenRouter Bearer key to an
             # unintended host. Ignore settings.base_url entirely.
-            return _OpenRouterImageBackend(
-                openrouter_base, api_key, model=settings.model
-            )
+            return _OpenRouterImageBackend(openrouter_base, api_key, model=settings.model)
         # No OpenRouter key stored, or no image model id set — NOT configured.
         raise ImageGenNotConfigured()
 
@@ -853,8 +852,7 @@ class ImageGenTool:
             return ToolOutcome(
                 success=False,
                 content=(
-                    f"unsupported format {args.format!r}; supported: "
-                    f"{sorted(_SUPPORTED_FORMATS)}"
+                    f"unsupported format {args.format!r}; supported: {sorted(_SUPPORTED_FORMATS)}"
                 ),
                 error="unsupported_format",
             )
@@ -884,9 +882,7 @@ class ImageGenTool:
         except Exception as e:  # noqa: BLE001 — tool failure surfaces as an observation
             return ToolOutcome(
                 success=False,
-                content=_with_svg_fallback_hint(
-                    f"image generation failed ({backend.name}): {e}"
-                ),
+                content=_with_svg_fallback_hint(f"image generation failed ({backend.name}): {e}"),
                 error=f"backend_error: {type(e).__name__}",
             )
 

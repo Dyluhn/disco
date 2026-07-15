@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
@@ -33,6 +33,7 @@ from ..registry import Tool
 from ._outcomes import fail_outcome
 
 # ─── RFC-6902 minimal implementation ─────────────────────────────────────────
+
 
 class PatchError(ValueError):
     """Raised when a patch operation fails."""
@@ -67,8 +68,8 @@ def _get_parent(doc: Any, parts: list[str]) -> tuple[Any, str | int]:
         elif isinstance(cur, list):
             try:
                 idx = int(part)
-            except ValueError:
-                raise PatchError(f"Path segment {part!r} is not an integer for array")
+            except ValueError as exc:
+                raise PatchError(f"Path segment {part!r} is not an integer for array") from exc
             if idx < 0 or idx >= len(cur):
                 raise PatchError(f"Array index {idx} out of range (len={len(cur)})")
             cur = cur[idx]
@@ -100,9 +101,7 @@ def _apply_op(doc: Any, op: dict[str, Any]) -> Any:
         else:
             raise PatchError(f"test: cannot navigate into {type(parent).__name__}")
         if actual != value:
-            raise PatchError(
-                f"test failed at {path!r}: expected {value!r}, got {actual!r}"
-            )
+            raise PatchError(f"test failed at {path!r}: expected {value!r}, got {actual!r}")
         return doc
 
     if operation == "replace":
@@ -210,7 +209,7 @@ def _patch_operation_dict(op: object) -> dict[str, Any]:
     raise PatchError(f"operation must be an object, got {type(op).__name__}")
 
 
-PatchInput: TypeAlias = dict[str, Any] | BaseModel
+type PatchInput = dict[str, Any] | BaseModel
 
 
 def apply_patch(doc: Any, patch: list[PatchInput]) -> Any:
@@ -231,6 +230,7 @@ def apply_patch(doc: Any, patch: list[PatchInput]) -> Any:
 
 
 # ─── Tool args model ──────────────────────────────────────────────────────────
+
 
 class _JsonPatchOpBase(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -273,7 +273,7 @@ class JsonPatchTestOp(_JsonPatchOpBase):
     value: Any = Field(description="Required RFC-6902 comparison value.")
 
 
-JsonPatchOpModel: TypeAlias = (
+type JsonPatchOpModel = (
     JsonPatchAddOp
     | JsonPatchRemoveOp
     | JsonPatchReplaceOp
@@ -281,7 +281,7 @@ JsonPatchOpModel: TypeAlias = (
     | JsonPatchCopyOp
     | JsonPatchTestOp
 )
-JsonPatchOperation: TypeAlias = Annotated[JsonPatchOpModel, Field(discriminator="op")]
+type JsonPatchOperation = Annotated[JsonPatchOpModel, Field(discriminator="op")]
 
 
 class DeckPatchArgs(BaseModel):
@@ -320,6 +320,7 @@ class DeckPatchArgs(BaseModel):
 
 # ─── DeckPatchTool ────────────────────────────────────────────────────────────
 
+
 class DeckPatchTool:
     """Apply an RFC-6902 JSON Patch to a stored deck, validate + re-render.
 
@@ -356,8 +357,8 @@ class DeckPatchTool:
     async def run(self, args: DeckPatchArgs, ctx: ToolContext) -> ToolOutcome:
         """Execute the deck_patch: read → patch → validate → render → write."""
         # C1 imports — use lower_deck (Deck) directly; no MinimalDeck shim
-        from disco.tools.builtin._direction_brand import direction_brand_override
         from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
+        from disco.tools.builtin._direction_brand import direction_brand_override
         from disco.tools.builtin._pptx_render import render_html, render_pptx
 
         assert ctx.sandbox is not None, "deck_patch requires a sandbox context"
@@ -379,7 +380,10 @@ class DeckPatchTool:
             # apply_patch's engine consumes plain dicts.
             patched_json = apply_patch(
                 authored_json,
-                [op.model_dump(exclude_none=True) if hasattr(op, "model_dump") else op for op in args.patch],
+                [
+                    op.model_dump(exclude_none=True) if hasattr(op, "model_dump") else op
+                    for op in args.patch
+                ],
             )
         except PatchError as exc:
             return fail_outcome(f"Patch application failed: {exc}")
@@ -389,10 +393,8 @@ class DeckPatchTool:
             authored_deck = AuthoredDeck.model_validate(patched_json)
         except Exception as exc:
             return fail_outcome(
-                (
-                    f"Patched document fails AuthoredDeck schema validation: {exc}. "
-                    "Workspace NOT modified — patch reverted."
-                )
+                f"Patched document fails AuthoredDeck schema validation: {exc}. "
+                "Workspace NOT modified — patch reverted."
             )
 
         # ── 4. Determine the deck stem (needed to reload image assets) ────────
@@ -426,8 +428,8 @@ class DeckPatchTool:
                 image_assets=image_assets,
                 brand_override=await direction_brand_override(ctx),
             )  # AuthoredDeck → C1
-            html_str = render_html(deck)           # Deck → HTML string
-            pptx_bytes = render_pptx(deck)         # Deck → PPTX bytes
+            html_str = render_html(deck)  # Deck → HTML string
+            pptx_bytes = render_pptx(deck)  # Deck → PPTX bytes
         except Exception as exc:
             return fail_outcome(f"Re-render failed: {exc}. Workspace NOT modified.")
 

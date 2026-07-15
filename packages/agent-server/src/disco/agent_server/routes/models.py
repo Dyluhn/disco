@@ -8,9 +8,7 @@ from fastapi import APIRouter
 from ..runtime import ConversationRuntime
 
 
-def make_models_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_models_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/models")

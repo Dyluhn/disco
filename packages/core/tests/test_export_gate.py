@@ -10,6 +10,8 @@ releases with a loud UNVERIFIED warning rather than trapping the run.
 from __future__ import annotations
 
 import pytest
+from disco.core.context import ArtifactMemoryStore
+from disco.core.context.ledger import ArtifactRecord
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN as _EXPORT_GATE_TOKEN,
 )
@@ -17,8 +19,6 @@ from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
 )
-from disco.core.context import ArtifactMemoryStore
-from disco.core.context.ledger import ArtifactRecord
 from disco.core.events import (
     DeliverableEvent,
     EventSource,
@@ -54,7 +54,10 @@ def _deck_obs(facts_fmt: str, **kw) -> ObservationEvent:
             tool_name="slides_generate",
             success=True,
             content="deck written",
-            structured={"filename": "deck." + facts_fmt, EXPORT_RENDER_KEY: facts.model_dump(mode="json")},
+            structured={
+                "filename": "deck." + facts_fmt,
+                EXPORT_RENDER_KEY: facts.model_dump(mode="json"),
+            },
         ),
     )
 
@@ -98,7 +101,13 @@ async def test_no_export_falls_through() -> None:
     loop, _ = build_loop(ScriptedAgent([]))
     obs = ObservationEvent(
         action_id="a1",
-        tool_result=ToolResult(call_id="c1", tool_name="file_write", success=True, content="", structured={"path": "notes.txt"}),
+        tool_result=ToolResult(
+            call_id="c1",
+            tool_name="file_write",
+            success=True,
+            content="",
+            structured={"path": "notes.txt"},
+        ),
     )
     disp = await _gate(loop)(finish_step(), [obs])
     assert disp is Disp.FALLTHROUGH
@@ -112,7 +121,8 @@ async def test_blank_export_refuses_with_steer() -> None:
     assert disp is Disp.CONTINUE
     emitted = await loop._events()
     steer = [
-        e for e in emitted
+        e
+        for e in emitted
         if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
     ]
     assert len(steer) == 1
@@ -124,10 +134,17 @@ async def test_blank_export_refuses_with_steer() -> None:
 async def test_truncated_export_refuses() -> None:
     loop, _ = build_loop(ScriptedAgent([]))
     # declared 8 slides, only 2 rendered
-    events = [_deck_obs("html", **{"text": _good_html(2)["text"], "declared_units": 8}), _files_deliverable()]
+    events = [
+        _deck_obs("html", **{"text": _good_html(2)["text"], "declared_units": 8}),
+        _files_deliverable(),
+    ]
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.CONTINUE
-    steer = [e for e in await loop._events() if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")]
+    steer = [
+        e
+        for e in await loop._events()
+        if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
+    ]
     assert steer and "truncated" in steer[0].message.content
 
 
@@ -164,7 +181,8 @@ async def test_files_deliverable_after_app_after_deck_is_gated() -> None:
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.CONTINUE
     steer = [
-        e for e in await loop._events()
+        e
+        for e in await loop._events()
         if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
     ]
     assert steer, "newer files deliverable wrongly bypassed the bad deck"
@@ -183,7 +201,8 @@ async def test_stale_app_deliverable_does_not_mask_later_bad_deck() -> None:
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.CONTINUE
     steer = [
-        e for e in await loop._events()
+        e
+        for e in await loop._events()
         if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
     ]
     assert steer, "stale app deliverable wrongly masked the bad deck"
@@ -230,8 +249,7 @@ async def test_refusal_cap_releases_with_warning() -> None:
     emitted = await loop._events()
     assert any(isinstance(e, StatusEvent) and e.detail == "unverified_export" for e in emitted)
     assert any(
-        isinstance(e, MessageEvent) and "UNVERIFIED" in (e.message.content or "")
-        for e in emitted
+        isinstance(e, MessageEvent) and "UNVERIFIED" in (e.message.content or "") for e in emitted
     )
 
 
@@ -287,7 +305,8 @@ async def test_manifest_shown_export_path_gates_that_file_without_deliverable() 
 
     assert disp is Disp.CONTINUE
     steer = [
-        e for e in await loop._events()
+        e
+        for e in await loop._events()
         if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
     ]
     assert steer and "content-empty" in steer[0].message.content

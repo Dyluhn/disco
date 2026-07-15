@@ -28,21 +28,21 @@ class ServerStatusTool:
         assert ctx.sandbox is not None
         from ..sandbox._container import USER_PORTS
         from ..sandbox.port_owner import port_owners
-        
+
         # Get sessions
         sessions = await ctx.sandbox.sessions.list()
-        
+
         out_lines = ["SERVER STATUS", "sessions:"]
         for s in sessions:
             state = "running" if s.busy else "idle"
             last = s.last_lines.split("\n")[-1] if s.last_lines else ""
             out_lines.append(f"  - {s.name}: {state} — last: {last}")
-            
+
         if not sessions:
             out_lines.append("  (none)")
-            
+
         out_lines.append("ports:")
-        
+
         ports = sorted(USER_PORTS)
         owners = await port_owners(ctx.sandbox, ports)
         # Strip the manager's session prefix for display. Dual-read both the
@@ -51,9 +51,7 @@ class ServerStatusTool:
         from disco.tools.sandbox.shell_sessions import _LEGACY_PREFIX, _PREFIX
 
         ns = ctx.sandbox.sessions.namespace
-        prefixes = tuple(
-            f"{p}-{ns}" if ns else f"{p}-" for p in (_PREFIX, _LEGACY_PREFIX)
-        )
+        prefixes = tuple(f"{p}-{ns}" if ns else f"{p}-" for p in (_PREFIX, _LEGACY_PREFIX))
 
         for p in ports:
             owner = owners.get(p)
@@ -62,18 +60,14 @@ class ServerStatusTool:
                 if sess_name:
                     for pref in prefixes:
                         if sess_name.startswith(pref):
-                            sess_name = sess_name[len(pref):]
+                            sess_name = sess_name[len(pref) :]
                             break
-                    
+
                 sess_part = f" [session: {sess_name}]" if sess_name else " [session: null]"
                 out_lines.append(
-                    f"  - {p}: OWNED by pid {owner.pid} "
-                    f"({owner.cmdline or ''}){sess_part}"
+                    f"  - {p}: OWNED by pid {owner.pid} ({owner.cmdline or ''}){sess_part}"
                 )
             else:
                 out_lines.append(f"  - {p}: FREE")
-                
-        return ToolOutcome(
-            success=True,
-            content="\n".join(out_lines)
-        )
+
+        return ToolOutcome(success=True, content="\n".join(out_lines))

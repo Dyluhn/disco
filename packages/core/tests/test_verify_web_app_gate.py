@@ -441,9 +441,9 @@ async def test_matching_url_pass_is_accepted_without_driving():
     # exactly ONE verify call (the agent's) — the gate accepted the bound verdict
     # and did not drive its own probe.
     assert execu.verify_calls == 1, f"gate should not drive a fresh verify: {execu.verify_calls}"
-    assert not any(
-        isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events
-    ), "gate must not drive a verify_probe when a bound verdict exists"
+    assert not any(isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events), (
+        "gate must not drive a verify_probe when a bound verdict exists"
+    )
     assert ("FINISHED", None) in _statuses(events)
 
 
@@ -477,9 +477,9 @@ async def test_foreign_url_pass_is_not_accepted_drives_fresh_verify():
         f"foreign-url verdict must not satisfy the gate; expected a driven verify: "
         f"{execu.verify_calls}"
     )
-    assert any(
-        isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events
-    ), "the gate must drive its own verify_probe when the cached verdict is foreign"
+    assert any(isinstance(e, ActionEvent) and e.meta.get("verify_probe") for e in events), (
+        "the gate must drive its own verify_probe when the cached verdict is foreign"
+    )
     assert ("FINISHED", None) in _statuses(events)
 
 
@@ -689,9 +689,7 @@ async def test_process_browser_unavailable_static_build_finishes_not_stuck():
         ]
     )
     sbx = _ProcessGateSandbox(conv_owns_8080=False, index_exists=True)
-    execu = _ProcessVerifyExecutor(
-        [_not_serving_verdict()], sandbox=sbx, has_browser=False
-    )
+    execu = _ProcessVerifyExecutor([_not_serving_verdict()], sandbox=sbx, has_browser=False)
     loop, store = _gate_loop(agent, execu)
     await loop.send_message("build me a page")
     await loop.run()
@@ -729,9 +727,7 @@ async def test_process_browser_unavailable_but_no_deliverable_does_not_finish():
         ]
     )
     sbx = _ProcessGateSandbox(conv_owns_8080=False, index_exists=False)
-    execu = _ProcessVerifyExecutor(
-        [_not_serving_verdict()], sandbox=sbx, has_browser=False
-    )
+    execu = _ProcessVerifyExecutor([_not_serving_verdict()], sandbox=sbx, has_browser=False)
     loop, store = _gate_loop(agent, execu)
     await loop.send_message("build me a page")
     await loop.run()

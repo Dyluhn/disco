@@ -170,9 +170,7 @@ async def test_c16_hard_reset_manifest_paths_resolve_to_real_files(tmp_path):
     # Every path in the manifest resolves to a real file in the test workspace.
     for p in relative_paths:
         assert p in tomb.summary
-        assert (tmp_path / p).exists(), (
-            f"manifest references {p!r} but no such file exists on disk"
-        )
+        assert (tmp_path / p).exists(), f"manifest references {p!r} but no such file exists on disk"
 
 
 async def test_c16_hard_reset_no_artifacts_means_no_progress():
@@ -233,9 +231,7 @@ async def test_c16_soft_condense_still_summarizes_default_path():
     # No `reason` and no `artifact_paths` — i.e. the soft path. This is the
     # shape the loop's `if req is not None: condense(...)` call site uses
     # after the C16 change (it still doesn't pass either kwarg).
-    tomb = await condenser.condense(
-        events, View.of(events), summarizer=summarizer
-    )
+    tomb = await condenser.condense(events, View.of(events), summarizer=summarizer)
     assert isinstance(tomb, CondensationEvent)
     # The summarizer WAS called (prose path active).
     assert summarizer.calls == 1
@@ -337,9 +333,7 @@ async def test_c16_engine_hard_reset_emits_pointer_manifest_tombstone(tmp_path):
             finish_step(),
         ]
     )
-    loop, store = build_loop(
-        agent, executor=executor, condenser=condenser, summarizer=summarizer
-    )
+    loop, store = build_loop(agent, executor=executor, condenser=condenser, summarizer=summarizer)
     # Seed the event log with enough live events for the condenser's span
     # selection to find a forgettable middle. The condenser's guards
     # require at least keep_head + min_forget live events + keep_recent
@@ -383,6 +377,7 @@ async def test_c16_engine_hard_reset_emits_pointer_manifest_tombstone(tmp_path):
 
     # The run finished (the post-reset finish_step) → no error terminal.
     from disco.core import ConversationStatus
+
     assert state.execution_status == ConversationStatus.FINISHED
 
     events = await store.get_events(CID)
@@ -448,9 +443,7 @@ async def test_c16_engine_hard_reset_collects_only_existing_paths(tmp_path):
             finish_step(),
         ]
     )
-    loop, store = build_loop(
-        agent, executor=executor, condenser=condenser, summarizer=summarizer
-    )
+    loop, store = build_loop(agent, executor=executor, condenser=condenser, summarizer=summarizer)
     # Seed the event log with enough live events for span selection to pass.
     await store.append(
         CID,
@@ -529,7 +522,8 @@ class _ManifestSandboxInstance:
 
     async def read_file(self, path: str) -> bytes:
         self.read_calls[path] = (
-            self._raises[path] if path in self._raises
+            self._raises[path]
+            if path in self._raises
             else self._files.get(path, FileNotFoundError(path))
         )
         if path in self._raises:

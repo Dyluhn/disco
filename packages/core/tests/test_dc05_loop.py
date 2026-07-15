@@ -27,6 +27,7 @@ CID = "conv"
 
 def noop_step(thought="just talking"):
     from disco.core.loop import AgentStep
+
     return AgentStep(thought=thought, tool_call=None, finished=False)
 
 
@@ -44,14 +45,16 @@ def _last_status_detail(events):
 @pytest.mark.asyncio
 async def test_actionless_breaker_halts():
     """3 counted no-tool-call steps with an incomplete plan ask the user."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        noop_step("a"),
-        noop_step("b"),
-        noop_step("c"),
-        noop_step("d"),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            noop_step("a"),
+            noop_step("b"),
+            noop_step("c"),
+            noop_step("d"),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -64,8 +67,7 @@ async def test_actionless_breaker_halts():
     events = await store.get_events(CID)
     assert_blocked_question_landing(events, legacy_detail="actionless")
     msgs = [
-        e for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert any(
         "3 consecutive responses without doing any real work"
@@ -77,16 +79,18 @@ async def test_actionless_breaker_halts():
 @pytest.mark.asyncio
 async def test_actionless_breaker_reset():
     """2 noops + real action + 2 more noops + real action → breaker never fires."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        noop_step("a"),
-        noop_step("b"),
-        action_step("shell", {}),   # resets the breaker
-        noop_step("c"),
-        noop_step("d"),
-        action_step("shell", {}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            noop_step("a"),
+            noop_step("b"),
+            action_step("shell", {}),  # resets the breaker
+            noop_step("c"),
+            noop_step("d"),
+            action_step("shell", {}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -108,18 +112,20 @@ async def test_actionless_breaker_inert_when_plan_complete():
     clean FINISHED instead. B5: with every plan step marked done, the actionless
     valve recognizes the build as finished at the cap (the model signaled done
     via noop turns instead of finish()) and terminates FINISHED."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {"command": "echo do the work"}),  # real productive work
-        action_step("plan_step", {"index": 1, "state": "done"}),
-        noop_step("a"),
-        noop_step("b"),
-        noop_step("c"),
-        noop_step("d"),
-        noop_step("e"),
-        noop_step("f"),   # _max_consecutive_noops = 6
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {"command": "echo do the work"}),  # real productive work
+            action_step("plan_step", {"index": 1, "state": "done"}),
+            noop_step("a"),
+            noop_step("b"),
+            noop_step("c"),
+            noop_step("d"),
+            noop_step("e"),
+            noop_step("f"),  # _max_consecutive_noops = 6
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -150,11 +156,9 @@ async def test_finish_incomplete_plan_lands_finished_no_bounce():
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
     )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "1"}], revision=1))
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
 
-    agent = ScriptedAgent([finish_step()])   # repeats forever
+    agent = ScriptedAgent([finish_step()])  # repeats forever
     loop, _ = build_loop(agent, store=store)
     loop._auto_continue_cap = 3
 
@@ -163,12 +167,10 @@ async def test_finish_incomplete_plan_lands_finished_no_bounce():
     events = await store.get_events(CID)
     assert _last_status_detail(events) != "partial_plan"
     msgs = [
-        e for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        e for e in events if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
     ]
     assert not any(
-        "finishing was blocked" in (m.message.content if m.message else "")
-        for m in msgs
+        "finishing was blocked" in (m.message.content if m.message else "") for m in msgs
     )
 
 
@@ -182,9 +184,7 @@ async def test_finish_with_actions_and_incomplete_plan_finishes_cleanly():
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
     )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "1"}], revision=1))
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
 
     # Shell action first (productive, counts as actions_since), then finish repeats.
     agent = ScriptedAgent([action_step("shell", {}), finish_step()])
@@ -203,29 +203,32 @@ async def test_finish_with_actions_and_incomplete_plan_finishes_cleanly():
 @pytest.mark.asyncio
 async def test_dedup_remember():
     """Same fact × multiple calls → exactly 1 KnowledgeEvent; dups get 'Already recorded'."""
-    agent = ScriptedAgent([
-        # Real work first — the fresh-session backstop refuses a zero-work remember.
-        action_step("shell", {}),
-        action_step("remember", {"fact": "foo", "scope": "bar"}),
-        action_step("remember", {"fact": "foo", "scope": "bar"}),       # dup
-        action_step("remember", {"fact": "foo  ", "scope": "bar"}),     # dup (trailing space)
-        action_step("remember", {"fact": "foo2", "scope": "bar"}),      # new fact
-        action_step("remember", {"fact": "foo", "scope": "baz"}),       # new scope
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            # Real work first — the fresh-session backstop refuses a zero-work remember.
+            action_step("shell", {}),
+            action_step("remember", {"fact": "foo", "scope": "bar"}),
+            action_step("remember", {"fact": "foo", "scope": "bar"}),  # dup
+            action_step("remember", {"fact": "foo  ", "scope": "bar"}),  # dup (trailing space)
+            action_step("remember", {"fact": "foo2", "scope": "bar"}),  # new fact
+            action_step("remember", {"fact": "foo", "scope": "baz"}),  # new scope
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     await loop.run()
 
     events = await store.get_events(CID)
     knowledges = [e for e in events if isinstance(e, KnowledgeEvent)]
-    assert len(knowledges) == 3   # foo/bar, foo2/bar, foo/baz
+    assert len(knowledges) == 3  # foo/bar, foo2/bar, foo/baz
 
     obs = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "remember"
     ]
-    assert len(obs) == 2          # the two duplicate calls
+    assert len(obs) == 2  # the two duplicate calls
     assert "Already recorded" in obs[0].tool_result.content
 
 
@@ -245,12 +248,14 @@ async def test_transient_error_retry_succeeds(monkeypatch):
     monkeypatch.setattr(driver_module, "_sleep", mock_sleep)
 
     # Indices 0 and 1 raise; index 2 returns the shell action; index 3 finishes.
-    agent = ScriptedAgent([
-        LLMTransientError("unavailable"),
-        LLMTransientError("unavailable"),
-        action_step("shell", {}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            LLMTransientError("unavailable"),
+            LLMTransientError("unavailable"),
+            action_step("shell", {}),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     await loop.run()
@@ -293,12 +298,14 @@ async def test_transient_error_persistent_pauses(monkeypatch):
 @pytest.mark.asyncio
 async def test_deliverable_guard():
     """Empty serve payload → no DeliverableEvent; non-empty → one event."""
-    agent = ScriptedAgent([
-        action_step("shell", {}),   # real work first — serve gate requires it
-        action_step("serve", {}),                           # empty → skipped
-        action_step("serve", {"title": "x", "path": "y"}), # real deliverable
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),  # real work first — serve gate requires it
+            action_step("serve", {}),  # empty → skipped
+            action_step("serve", {"title": "x", "path": "y"}),  # real deliverable
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     await loop.run()
@@ -335,15 +342,17 @@ async def _approved_plan_loop(agent):
 async def test_serve_spam_trips_valve():
     """Distinct serve calls with no real action in between → asks with actionless
     at the cap (3 DeliverableEvents max), not a 50-event spam run."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {}),   # real work first — serve gate requires it
-        action_step("serve", {"title": "a", "path": "pa"}),
-        action_step("serve", {"title": "b", "path": "pb"}),
-        action_step("serve", {"title": "c", "path": "pc"}),
-        action_step("serve", {"title": "d", "path": "pd"}),  # must never run
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {}),  # real work first — serve gate requires it
+            action_step("serve", {"title": "a", "path": "pa"}),
+            action_step("serve", {"title": "b", "path": "pb"}),
+            action_step("serve", {"title": "c", "path": "pc"}),
+            action_step("serve", {"title": "d", "path": "pd"}),  # must never run
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -358,14 +367,18 @@ async def test_serve_spam_trips_valve():
 async def test_duplicate_serve_suppressed_and_trips_valve():
     """Re-serving the same (path, kind) → ONE DeliverableEvent total; the
     invisible-step counter still trips the valve."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {}),   # real work first — serve gate requires it
-        action_step("serve", {"title": "app", "path": "p"}),
-        action_step("serve", {"title": "app", "path": "p"}),       # dup → invisible
-        action_step("serve", {"title": "app again", "path": "p"}),  # dup (title spin) → invisible
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {}),  # real work first — serve gate requires it
+            action_step("serve", {"title": "app", "path": "p"}),
+            action_step("serve", {"title": "app", "path": "p"}),  # dup → invisible
+            action_step(
+                "serve", {"title": "app again", "path": "p"}
+            ),  # dup (title spin) → invisible
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -383,10 +396,7 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
     ]
     assert len(duplicate_guidance) == 2
     assert all("call `finish`" in e.message.content for e in duplicate_guidance)
-    assert any(
-        "Handoff recorded" in message.content
-        for message in agent.seen_views[3].messages
-    )
+    assert any("Handoff recorded" in message.content for message in agent.seen_views[3].messages)
     assert any(
         "duplicate `serve` call was ignored" in message.content
         for message in agent.seen_views[4].messages
@@ -397,14 +407,16 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
 async def test_empty_serve_spam_trips_valve():
     """Empty-args serve persists NOTHING to the log — the instance counter is
     the only witness, and it must still trip the valve."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {}),
-        action_step("serve", {}),
-        action_step("serve", {}),
-        action_step("serve", {}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {}),
+            action_step("serve", {}),
+            action_step("serve", {}),
+            action_step("serve", {}),
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -426,16 +438,18 @@ async def test_empty_serve_spam_trips_valve():
 async def test_duplicate_remember_spam_trips_valve():
     """Duplicate remember calls (the dedup ActionEvent pair) count toward the
     actionless streak instead of resetting it."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        # Real work first — the fresh-session backstop refuses a zero-work remember.
-        action_step("shell", {}),
-        action_step("remember", {"fact": "foo", "scope": "s"}),   # fresh → neutral
-        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
-        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → counts
-        action_step("remember", {"fact": "foo", "scope": "s"}),   # dup → trips cap
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            # Real work first — the fresh-session backstop refuses a zero-work remember.
+            action_step("shell", {}),
+            action_step("remember", {"fact": "foo", "scope": "s"}),  # fresh → neutral
+            action_step("remember", {"fact": "foo", "scope": "s"}),  # dup → counts
+            action_step("remember", {"fact": "foo", "scope": "s"}),  # dup → counts
+            action_step("remember", {"fact": "foo", "scope": "s"}),  # dup → trips cap
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -450,13 +464,15 @@ async def test_duplicate_remember_spam_trips_valve():
 async def test_notify_user_spam_trips_valve():
     """notify_user prose spam (the 'I'm back!' degeneration) → AWAITING_USER
     actionless at the cap — the intercept no longer bypasses the valve."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("notify_user", {"message": "I'm back after the restart!"}),
-        action_step("notify_user", {"message": "Resuming work now!"}),
-        action_step("notify_user", {"message": "Picking up where I left off!"}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("notify_user", {"message": "I'm back after the restart!"}),
+            action_step("notify_user", {"message": "Resuming work now!"}),
+            action_step("notify_user", {"message": "Picking up where I left off!"}),
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -469,17 +485,19 @@ async def test_notify_user_spam_trips_valve():
 async def test_real_action_resets_intercept_streak():
     """Serves interleaved with real actions never trip the valve — the streak
     (event-derived AND invisible counter) resets on a real ActionEvent."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("shell", {}),   # real work first — serve gate requires it
-        action_step("serve", {"title": "a", "path": "pa"}),
-        action_step("serve", {"title": "a", "path": "pa"}),  # dup → invisible +1
-        action_step("shell", {}),                            # real action → reset
-        action_step("serve", {"title": "b", "path": "pb"}),
-        action_step("serve", {"title": "c", "path": "pc"}),
-        action_step("shell", {}),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("shell", {}),  # real work first — serve gate requires it
+            action_step("serve", {"title": "a", "path": "pa"}),
+            action_step("serve", {"title": "a", "path": "pa"}),  # dup → invisible +1
+            action_step("shell", {}),  # real action → reset
+            action_step("serve", {"title": "b", "path": "pb"}),
+            action_step("serve", {"title": "c", "path": "pc"}),
+            action_step("shell", {}),
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -506,12 +524,14 @@ async def test_real_action_resets_intercept_streak():
 async def test_serve_before_any_work_refused():
     """serve as the first move → refused with the actionable ENVIRONMENT
     message and NO DeliverableEvent; after one real action it goes through."""
-    agent = ScriptedAgent([
-        action_step("serve", {"title": "app", "path": "."}),  # zero work → refused
-        action_step("shell", {}),                              # real work
-        action_step("serve", {"title": "app", "path": "index.html"}),  # now allowed
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("serve", {"title": "app", "path": "."}),  # zero work → refused
+            action_step("shell", {}),  # real work
+            action_step("serve", {"title": "app", "path": "index.html"}),  # now allowed
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     state = await loop.run()
@@ -519,9 +539,10 @@ async def test_serve_before_any_work_refused():
     assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
-    assert len(deliverables) == 1   # only the post-work serve landed
+    assert len(deliverables) == 1  # only the post-work serve landed
     refusals = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "serve refused" in (e.message.content if e.message else "")
@@ -533,13 +554,15 @@ async def test_serve_before_any_work_refused():
 async def test_serve_before_work_spam_trips_valve():
     """Gate-refused serves count as invisible steps — three in a row trips
     the actionless valve, zero DeliverableEvents persisted."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        action_step("serve", {"title": "a", "path": "pa"}),  # refused (no work)
-        action_step("serve", {"title": "b", "path": "pb"}),  # refused
-        action_step("serve", {"title": "c", "path": "pc"}),  # refused → cap
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            action_step("serve", {"title": "a", "path": "pa"}),  # refused (no work)
+            action_step("serve", {"title": "b", "path": "pb"}),  # refused
+            action_step("serve", {"title": "c", "path": "pc"}),  # refused → cap
+            finish_step(),
+        ]
+    )
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
@@ -607,8 +630,7 @@ def test_tools_for_step_suppresses_meta_tools():
     full = {getattr(t, "name", None) for t in loop._tools_for_step()}
     assert _META_VIRTUALS <= full
 
-    lean = {getattr(t, "name", None) for t in
-            loop._tools_for_step(suppress_meta_tools=True)}
+    lean = {getattr(t, "name", None) for t in loop._tools_for_step(suppress_meta_tools=True)}
     assert not (_META_VIRTUALS & lean)
     assert {"finish", "shell"} <= lean
 
@@ -617,11 +639,13 @@ def test_tools_for_step_suppresses_meta_tools():
 async def test_meta_tools_withheld_until_first_real_action():
     """The run loop offers a lean tool set on the session's first turn and the
     full set once a real action has landed."""
-    agent = ScriptedAgent([
-        action_step("shell", {}),   # first turn: lean set offered
-        action_step("shell", {}),   # second turn: full set offered
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),  # first turn: lean set offered
+            action_step("shell", {}),  # second turn: full set offered
+            finish_step(),
+        ]
+    )
     loop, _ = build_loop(agent)
     await loop.send_message("go")
     await loop.run()
@@ -637,12 +661,14 @@ async def test_ask_user_before_any_work_refused():
     """ask_user as the session's first move (re-run #5's hallucinated-call
     shape) → refused with actionable feedback, NO question gate; after one
     real action the Ask-gate works normally."""
-    agent = ScriptedAgent([
-        action_step("ask_user", {"question": "should I rebuild?"}),  # refused
-        action_step("shell", {}),                                     # real work
-        action_step("ask_user", {"question": "sudo or not?"}),        # gated normally
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("ask_user", {"question": "should I rebuild?"}),  # refused
+            action_step("shell", {}),  # real work
+            action_step("ask_user", {"question": "sudo or not?"}),  # gated normally
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     await loop.send_message("go")
     state = await loop.run()
@@ -650,19 +676,21 @@ async def test_ask_user_before_any_work_refused():
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
     refusals = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and "ask_user refused" in (e.message.content if e.message else "")
     ]
     assert len(refusals) == 1
     questions = [
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.AGENT
         and "sudo or not?" in (e.message.content if e.message else "")
     ]
-    assert len(questions) == 1   # only the post-work question reached the gate
+    assert len(questions) == 1  # only the post-work question reached the gate
     assert not any(
         isinstance(e, MessageEvent)
         and e.source == EventSource.AGENT
@@ -679,12 +707,15 @@ async def test_failed_verify_probe_does_not_unlock_meta_tools():
     meta tools and the model can remember-spam (exactly what happened live)."""
     from disco.core import ToolResult
     from loop_fakes import FakeExecutor
-    agent = ScriptedAgent([
-        action_step("finish", {"summary": "done", "verify": "pytest -q"}),
-        action_step("remember", {"fact": "csv columns"}),  # turn 2: still lean
-        action_step("shell", {}),                          # real work at last
-        finish_step(),
-    ])
+
+    agent = ScriptedAgent(
+        [
+            action_step("finish", {"summary": "done", "verify": "pytest -q"}),
+            action_step("remember", {"fact": "csv columns"}),  # turn 2: still lean
+            action_step("shell", {}),  # real work at last
+            finish_step(),
+        ]
+    )
     failing = ToolResult(
         call_id="c", tool_name="shell", success=False, content="2 failed", error="exit 1"
     )
@@ -698,15 +729,14 @@ async def test_failed_verify_probe_does_not_unlock_meta_tools():
     # KnowledgeEvent landed before the real shell action.
     events = await store.get_events(CID)
     shell_seq = next(
-        e.seq for e in events
+        e.seq
+        for e in events
         if isinstance(e, ActionEvent)
         and e.tool_call is not None
         and e.tool_call.tool_name == "shell"
         and not e.meta.get("verify_probe")
     )
-    assert not any(
-        isinstance(e, KnowledgeEvent) and e.seq < shell_seq for e in events
-    )
+    assert not any(isinstance(e, KnowledgeEvent) and e.seq < shell_seq for e in events)
 
 
 # ---- Fix 3: in-loop exit invariant (no path carries RUNNING out of run()) ------
@@ -753,21 +783,21 @@ async def test_exit_invariant_no_spurious_stuck_on_finished():
 
     assert state.execution_status == ConversationStatus.FINISHED
     events = await store.get_events(CID)
-    assert not any(
-        isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events
-    )
+    assert not any(isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events)
 
 
 @pytest.mark.asyncio
 async def test_exit_invariant_no_spurious_stuck_on_parked():
     """The invariant must NOT add its own block on a legitimate actionless park."""
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
-        noop_step("a"),
-        noop_step("b"),
-        noop_step("c"),
-        finish_step(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+            noop_step("a"),
+            noop_step("b"),
+            noop_step("c"),
+            finish_step(),
+        ]
+    )
     loop, store = build_loop(agent)
     loop.mode = OperatingMode.PLANNING
     loop._planning_tools = frozenset(["file_read"])
@@ -779,6 +809,4 @@ async def test_exit_invariant_no_spurious_stuck_on_parked():
 
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert not any(
-        isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events
-    )
+    assert not any(isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events)

@@ -171,9 +171,7 @@ class VerifyWebAppTool:
                     if args.medium == "mobile"
                     else BrowserArgs(action="navigate", url=url)
                 )
-                browser_outcome = await BrowserTool().run(
-                    browser_args, ctx
-                )
+                browser_outcome = await BrowserTool().run(browser_args, ctx)
                 if browser_outcome.success and browser_outcome.structured:
                     structured = browser_outcome.structured
                     if args.medium == "game":
@@ -211,11 +209,7 @@ class VerifyWebAppTool:
                     return ToolOutcome(
                         success=True,
                         content=(
-                            "VERIFY_WEB_APP: "
-                            + (
-                                "UNVERIFIABLE (server reachable)"
-                            )
-                            + "\n"
+                            "VERIFY_WEB_APP: " + ("UNVERIFIABLE (server reachable)") + "\n"
                             f"url: {url}  http_status: {http_status}\n"
                             f"summary: {unverifiable['summary']}"
                             + (
@@ -270,18 +264,14 @@ class VerifyWebAppTool:
             # WO-TC3: fold the trusted-component checks into THIS verdict — the
             # finish gate consumes it, so components are enforced at every finish
             # with zero gate changes. Probes only run against a reachable server.
-            verdict = await self._fold_trusted_components(
-                ctx, verdict, probes_allowed=reachable
-            )
+            verdict = await self._fold_trusted_components(ctx, verdict, probes_allowed=reachable)
             return ToolOutcome(
                 success=True,  # the verdict ran; pass/fail lives in structured
                 content=_render(verdict),
                 structured=verdict,
             )
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
-            return fail_outcome(
-                f"verify_web_app error: {e}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
-            )
+            return fail_outcome(f"verify_web_app error: {e}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}")
 
     async def _fold_trusted_components(
         self, ctx: ToolContext, verdict: dict[str, Any], *, probes_allowed: bool
@@ -362,9 +352,7 @@ class VerifyWebAppTool:
             for relpath in comp.manifest.files:
                 target = install_path(name, relpath)
                 file_bytes[target] = (
-                    await sandbox.read_file(target)
-                    if await sandbox.file_exists(target)
-                    else None
+                    await sandbox.read_file(target) if await sandbox.file_exists(target) else None
                 )
 
         base_url = str(verdict.get("url") or "")
@@ -397,8 +385,7 @@ class VerifyWebAppTool:
                     await self._append_eject_banner(ctx, banner_lock, nm)
 
         checks_out.extend(
-            {"name": c.name, "status": c.status, "evidence": c.evidence}
-            for c in result.checks
+            {"name": c.name, "status": c.status, "evidence": c.evidence} for c in result.checks
         )
         # Skipped probes BLOCK on the finish-path verdict (fail-closed) whenever
         # probes were supposed to be runnable; on a probes-not-allowed call the
@@ -406,9 +393,9 @@ class VerifyWebAppTool:
         blocking = bool(result.failing) or (probes_allowed and bool(result.skipped_probes))
         if checks_out:
             material = (verdict.get("failure_fingerprint") or "") + result.fingerprint_material()
-            verdict["failure_fingerprint"] = hashlib.sha256(
-                material.encode("utf-8")
-            ).hexdigest()[:16]
+            verdict["failure_fingerprint"] = hashlib.sha256(material.encode("utf-8")).hexdigest()[
+                :16
+            ]
         return self._merge_component_checks(verdict, checks_out, blocking=blocking)
 
     @staticmethod
@@ -649,9 +636,7 @@ class VerifyWebAppTool:
             "    print(0)\n"
         )
         try:
-            res = await ctx.sandbox.exec_shell(
-                f"python3 -c {shlex.quote(script)}", timeout_s=15
-            )
+            res = await ctx.sandbox.exec_shell(f"python3 -c {shlex.quote(script)}", timeout_s=15)
         except Exception:  # noqa: BLE001 — sandbox/transport error → unreachable
             return False, 0
         out = (res.stdout or "").strip().splitlines()

@@ -152,7 +152,8 @@ async def test_failures_do_not_trigger_automatic_reminders():
     # that converts a dead-end into an explain+ask landing. Any other
     # <system-reminder> is a regression of the no-automatic-nudge invariant.
     non_escape_reminders = [
-        e for e in all_reminders
+        e
+        for e in all_reminders
         if "disco:escape-attempt=" not in (e.message.content or "")
         and "You are blocked because" not in (e.message.content or "")
     ]
@@ -169,8 +170,7 @@ async def test_failures_do_not_trigger_automatic_reminders():
     # positive half of the assertion: the escape reminder IS present
     # (the old assertion was too strict; the new design explicitly adds it).
     escape_reminders = [
-        e for e in all_reminders
-        if "disco:escape-attempt=" in (e.message.content or "")
+        e for e in all_reminders if "disco:escape-attempt=" in (e.message.content or "")
     ]
     assert len(escape_reminders) >= 1, (
         "expected the c97c1b3-bounded C7 escape reminder to fire after "
@@ -363,9 +363,7 @@ async def test_pick_alternative_runs_the_selected_option():
     assert len(synthesized) == 1
     # And the executor ran it (FakeExecutor returns success by default)
     obs = [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
     ]
     assert len(obs) == 1
 
@@ -440,9 +438,7 @@ async def test_pick_high_risk_alternative_is_gated_not_executed() -> None:
     from disco.core import ActionEvent, ConversationStatus, ObservationEvent
     from disco.core.loop import ConfirmRisky
 
-    loop, store = await _drive_to_risky_pick_gate(
-        ConfirmRisky(), _SudoHighAnalyzer()
-    )
+    loop, store = await _drive_to_risky_pick_gate(ConfirmRisky(), _SudoHighAnalyzer())
 
     state = await store.get_state(CID)
     # Parked on the confirm gate — NOT resumed to RUNNING, NOT finished.
@@ -463,13 +459,9 @@ async def test_pick_high_risk_alternative_is_gated_not_executed() -> None:
     assert state.pending_action_id == synthesized[0].id
     # CRITICAL: it did NOT execute — no observation, executor never ran `sudo true`.
     assert [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
     ] == []
-    assert all(
-        c.arguments.get("command") != "sudo true" for c in loop.executor.calls
-    )
+    assert all(c.arguments.get("command") != "sudo true" for c in loop.executor.calls)
 
 
 async def test_pick_high_risk_alternative_confirm_then_executes() -> None:
@@ -478,21 +470,15 @@ async def test_pick_high_risk_alternative_confirm_then_executes() -> None:
     from disco.core import ObservationEvent
     from disco.core.loop import ConfirmRisky
 
-    loop, store = await _drive_to_risky_pick_gate(
-        ConfirmRisky(), _SudoHighAnalyzer()
-    )
+    loop, store = await _drive_to_risky_pick_gate(ConfirmRisky(), _SudoHighAnalyzer())
     pending_id = (await store.get_state(CID)).pending_action_id
 
     await loop.confirm()
 
     events = await store.get_events(CID)
     # The pending option now executed (observation paired to the proposed action).
-    assert [
-        e for e in events if isinstance(e, ObservationEvent) and e.action_id == pending_id
-    ]
-    assert any(
-        c.arguments.get("command") == "sudo true" for c in loop.executor.calls
-    )
+    assert [e for e in events if isinstance(e, ObservationEvent) and e.action_id == pending_id]
+    assert any(c.arguments.get("command") == "sudo true" for c in loop.executor.calls)
 
 
 async def test_pick_high_risk_alternative_reject_does_not_execute() -> None:
@@ -501,26 +487,18 @@ async def test_pick_high_risk_alternative_reject_does_not_execute() -> None:
     from disco.core import AgentErrorEvent, ConversationStatus, ObservationEvent
     from disco.core.loop import ConfirmRisky
 
-    loop, store = await _drive_to_risky_pick_gate(
-        ConfirmRisky(), _SudoHighAnalyzer()
-    )
+    loop, store = await _drive_to_risky_pick_gate(ConfirmRisky(), _SudoHighAnalyzer())
     pending_id = (await store.get_state(CID)).pending_action_id
 
     await loop.reject("not approving sudo")
 
     events = await store.get_events(CID)
     # Denial recorded against the proposed action; it never executed.
-    assert [
-        e
-        for e in events
-        if isinstance(e, AgentErrorEvent) and e.action_id == pending_id
-    ]
+    assert [e for e in events if isinstance(e, AgentErrorEvent) and e.action_id == pending_id]
     assert [
         e for e in events if isinstance(e, ObservationEvent) and e.action_id == pending_id
     ] == []
-    assert all(
-        c.arguments.get("command") != "sudo true" for c in loop.executor.calls
-    )
+    assert all(c.arguments.get("command") != "sudo true" for c in loop.executor.calls)
     assert (await store.get_state(CID)).execution_status == ConversationStatus.RUNNING
 
 
@@ -532,9 +510,7 @@ async def test_pick_low_risk_alternative_executes_on_pick_no_regression() -> Non
     from disco.core.loop import ConfirmRisky
     from loop_fakes import FakeAnalyzer
 
-    loop, store = await _drive_to_risky_pick_gate(
-        ConfirmRisky(), FakeAnalyzer(SecurityRisk.LOW)
-    )
+    loop, store = await _drive_to_risky_pick_gate(ConfirmRisky(), FakeAnalyzer(SecurityRisk.LOW))
 
     # LOW < HIGH threshold → no gate; the option ran straight away.
     state = await store.get_state(CID)
@@ -549,13 +525,9 @@ async def test_pick_low_risk_alternative_executes_on_pick_no_regression() -> Non
     ]
     assert len(synthesized) == 1
     assert [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
     ]
-    assert any(
-        c.arguments.get("command") == "sudo true" for c in loop.executor.calls
-    )
+    assert any(c.arguments.get("command") == "sudo true" for c in loop.executor.calls)
 
 
 async def test_pick_hard_denied_alternative_is_refused_not_executed() -> None:
@@ -617,18 +589,14 @@ async def test_pick_hard_denied_alternative_is_refused_not_executed() -> None:
     assert len(synthesized) == 1
     # ...but it NEVER executed (no observation, executor never saw `rm -rf /`).
     assert [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
+        e for e in events if isinstance(e, ObservationEvent) and e.action_id == synthesized[0].id
     ] == []
     assert all(c.arguments.get("command") != "rm -rf /" for c in loop.executor.calls)
     # A REFUSED/hard-denied error was emitted so the agent sees it and adapts.
     refusals = [
         e
         for e in events
-        if isinstance(e, AgentErrorEvent)
-        and "REFUSED" in e.error
-        and "hard-denied" in e.error
+        if isinstance(e, AgentErrorEvent) and "REFUSED" in e.error and "hard-denied" in e.error
     ]
     assert len(refusals) == 1
     # The loop resumed (never parked at the confirm gate) and finished.
@@ -767,9 +735,7 @@ async def test_propose_plan_update_intercepts_and_halts_at_plan_approval():
                 {"title": "Test the new endpoint"},
                 {"title": "Update index.html with the new URL"},
             ],
-            "context": (
-                "yahoo.com returns 403 via corsproxy.io; allorigins is the working alt"
-            ),
+            "context": ("yahoo.com returns 403 via corsproxy.io; allorigins is the working alt"),
         },
         thought="my current plan is wrong; here's a course correction",
     )
@@ -874,9 +840,7 @@ async def test_finished_with_unmarked_plan_lands_finished_cleanly():
     await store.append(
         CID, PlanEvent(summary="p", steps=[{"title": "a"}, {"title": "b"}], revision=1)
     )
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     # A productive action so the execution-nudge gate is satisfied (the model
     # DID do something — it's just not marking the second step done).
     shell_action = ActionEvent(
@@ -900,9 +864,7 @@ async def test_finished_with_unmarked_plan_lands_finished_cleanly():
         CID,
         ActionEvent(
             thought="step 1 done",
-            tool_call=ToolCall(
-                tool_name="plan_step", arguments={"index": 1, "state": "done"}
-            ),
+            tool_call=ToolCall(tool_name="plan_step", arguments={"index": 1, "state": "done"}),
         ),
     )
 
@@ -954,21 +916,13 @@ async def test_auto_continue_budget_resets_on_new_user_message():
     # Build a synthetic event log: auto_continue fires twice, then a user
     # message arrives, then auto_continue fires once more.
     events = [
-        MessageEvent(
-            source=EventSource.USER, message=LLMMessage(role="user", content="hi")
-        ),
-        StatusEvent(
-            status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:1"
-        ),
-        StatusEvent(
-            status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:2"
-        ),
+        MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="hi")),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:1"),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:2"),
         MessageEvent(
             source=EventSource.USER, message=LLMMessage(role="user", content="keep going")
         ),
-        StatusEvent(
-            status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:1"
-        ),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="auto_continue:plan_incomplete:1"),
     ]
     # The counter should reflect ONLY events since the last user message.
     assert signals.auto_continue_attempts(events) == 1
@@ -1101,12 +1055,7 @@ async def test_workflow_router_read_cap_nudge_names_only_router_moves():
     from disco.core.llm import OperatingMode, ToolSpec
     from loop_fakes import FakeExecutor, action_step
 
-    agent = ScriptedAgent(
-        [
-            action_step("file_read", {"path": f"notes-{i}.md"})
-            for i in range(5)
-        ]
-    )
+    agent = ScriptedAgent([action_step("file_read", {"path": f"notes-{i}.md"}) for i in range(5)])
     executor = FakeExecutor(
         tools=[
             ToolSpec(
@@ -1376,12 +1325,8 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
         CID,
         ME(source=EventSource.USER, message=LLMMessage(role="user", content="build it")),
     )
-    await store.append(
-        CID, PlanEvent(summary="p", steps=[{"title": "only step"}], revision=1)
-    )
-    await store.append(
-        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-    )
+    await store.append(CID, PlanEvent(summary="p", steps=[{"title": "only step"}], revision=1))
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     # The plan is fully marked done (so _plan_is_incomplete is False and the
     # auto-continue ladder never engages) — but plan_step is non-productive, so
     # NOTHING productive has happened since approval. This is the exact livelock
@@ -1391,9 +1336,7 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
         CID,
         AE(
             thought="step 1 done",
-            tool_call=ToolCall(
-                tool_name="plan_step", arguments={"index": 1, "state": "done"}
-            ),
+            tool_call=ToolCall(tool_name="plan_step", arguments={"index": 1, "state": "done"}),
         ),
     )
 

@@ -64,7 +64,7 @@ def inject_element_mention_picker(
     matches = list(re.finditer(r"</body\s*>", html, flags=re.IGNORECASE))
     if matches:
         match = matches[-1]
-        html = f"{html[: match.start()]}{script_tag}\n{html[match.start():]}"
+        html = f"{html[: match.start()]}{script_tag}\n{html[match.start() :]}"
     else:
         html = f"{html}\n{script_tag}"
     return html.encode("utf-8")
@@ -89,7 +89,7 @@ def inject_selection_agent(
     matches = list(re.finditer(r"</body\s*>", html, flags=re.IGNORECASE))
     if matches:
         match = matches[-1]
-        html = f"{html[: match.start()]}{script_tag}\n{html[match.start():]}"
+        html = f"{html[: match.start()]}{script_tag}\n{html[match.start() :]}"
     else:
         html = f"{html}\n{script_tag}"
     return html.encode("utf-8")

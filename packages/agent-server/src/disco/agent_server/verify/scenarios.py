@@ -39,7 +39,7 @@ slides_from_research_report = Scenario(
         "deliverable_type": "deck",
     },
     forbid=[
-        "raw_html_default",        # deliverables must not be raw HTML only
+        "raw_html_default",  # deliverables must not be raw HTML only
         "procedural_image_provider",  # images must not come from the procedural tier
     ],
     auto_answer=_AUTO_ANSWER,

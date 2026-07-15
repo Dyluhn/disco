@@ -19,9 +19,7 @@ from disco.core.appkit import (
 from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
 _LEAD_GEN_ACME_DIGEST = "89fd638c3e192926ea5cc27d3a4f8bd43ca25a8b0b69c924f7750a2e23f59d21"
-_RECORDS_WORKER_SCHEMA_DIGEST = (
-    "88a20d2d82bcbbc5a32640d39b2496ad4ed013926096ca7b0f6b08622517af1d"
-)
+_RECORDS_WORKER_SCHEMA_DIGEST = "88a20d2d82bcbbc5a32640d39b2496ad4ed013926096ca7b0f6b08622517af1d"
 
 
 def _design():
@@ -85,10 +83,13 @@ def test_records_worker_has_per_entity_routes_and_imports() -> None:
 
 
 def test_records_worker_and_schema_outputs_stay_stable() -> None:
-    assert _digest_paths(
-        _tree(),
-        ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
-    ) == _RECORDS_WORKER_SCHEMA_DIGEST
+    assert (
+        _digest_paths(
+            _tree(),
+            ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
+        )
+        == _RECORDS_WORKER_SCHEMA_DIGEST
+    )
 
 
 def test_records_schema_sql_round_trips_with_fk_enforcement() -> None:
@@ -104,9 +105,7 @@ def test_records_schema_sql_round_trips_with_fk_enforcement() -> None:
             'INSERT INTO "shift" ("title", "starts_at", "member_id") VALUES (?, ?, ?)',
             ("Open", "2026-07-06T09:00:00Z", 1),
         )
-        row = con.execute(
-            'SELECT "title", "member_id" FROM "shift" WHERE "id" = 1'
-        ).fetchone()
+        row = con.execute('SELECT "title", "member_id" FROM "shift" WHERE "id" = 1').fetchone()
         assert row == ("Open", 1)
         with pytest.raises(sqlite3.IntegrityError):
             con.execute(
@@ -231,9 +230,7 @@ def _has_shift(payload: object, marker: str) -> bool:
     if not isinstance(rows, list):
         return False
     return any(
-        isinstance(row, dict)
-        and row.get("title") == marker
-        and row.get("member_id") == 1
+        isinstance(row, dict) and row.get("title") == marker and row.get("member_id") == 1
         for row in rows
     )
 

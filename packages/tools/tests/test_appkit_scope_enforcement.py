@@ -7,7 +7,6 @@ called by its QUALIFIED NAME is REFUSED (unknown_tool), never silently executed.
 
 from __future__ import annotations
 
-import pytest
 from disco.core import ActionEvent, SecurityRisk, ToolCall
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import BlastRadiusConfirm
@@ -52,6 +51,7 @@ class _FakeMcpTool:
 
     async def run(self, args, ctx) -> ToolOutcome:  # pragma: no cover - not executed
         return ToolOutcome(success=True, content="ok")
+
 
 _STANDARD = ModelExecutionPolicy.standard()
 _RAW_TOOLS = ("file_write", "shell", "code_exec", "exact_replace", "browser")
@@ -208,9 +208,12 @@ def test_request_custom_build_is_high_risk_and_gated():
     assert analyzer.assess(action) == SecurityRisk.HIGH
     # BlastRadiusConfirm gates an in_process HIGH-risk call (it is not sandboxed).
     gate = BlastRadiusConfirm()
-    assert gate.should_confirm_action(
-        SecurityRisk.HIGH, scope="in_process", tool_name="request_custom_build"
-    ) is True
+    assert (
+        gate.should_confirm_action(
+            SecurityRisk.HIGH, scope="in_process", tool_name="request_custom_build"
+        )
+        is True
+    )
 
 
 async def test_confirmed_request_custom_build_widens_to_agent_scope():

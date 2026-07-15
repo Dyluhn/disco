@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest import mock
+
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import ActionEvent, SecurityRisk, SqliteEventStore, ToolCall
 from disco.core.llm import DefaultLLMRouter, OperatingMode
@@ -115,9 +116,7 @@ def test_appkit_mode_flag_round_trips_from_body() -> None:
     router = make_conversations_router(store, runtime=rt)
     route = next(r for r in router.routes if getattr(r, "path", "") == "/conversations")
 
-    resp = asyncio.run(
-        route.endpoint(CreateConversationBody(surface="agent", appkit_mode=True))
-    )
+    resp = asyncio.run(route.endpoint(CreateConversationBody(surface="agent", appkit_mode=True)))
     cid = resp["conversation_id"]
     assert rt._effective_appkit_mode(cid) is True
 

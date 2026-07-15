@@ -28,8 +28,12 @@ async def _ctx():
     svc = ProcessSandboxService()
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
     ctx = ToolContext(
-        sandbox=inst, workspace_path=".", timeout_s=30,
-        capabilities={Capability.FILESYSTEM}, owner_id="local", conversation_id="c",
+        sandbox=inst,
+        workspace_path=".",
+        timeout_s=30,
+        capabilities={Capability.FILESYSTEM},
+        owner_id="local",
+        conversation_id="c",
     )
     return ctx, inst
 
@@ -59,7 +63,9 @@ async def test_overwrite_after_read_ok():
     ctx, inst = await _ctx()
     await inst.write_file("f.txt", b"original content that is long enough\n")
     await _ground(ctx, "f.txt")
-    res = await SafeWriteFileTool().run(_a(path="f.txt", content="replacement content equally long enough\n"), ctx)
+    res = await SafeWriteFileTool().run(
+        _a(path="f.txt", content="replacement content equally long enough\n"), ctx
+    )
     assert res.success, res.content
     await inst.destroy()
 
@@ -69,7 +75,9 @@ async def test_shrink_over_50pct_rejected_no_change():
     body = b"x" * 1000 + b"\n"
     await inst.write_file("big.txt", body)
     await _ground(ctx, "big.txt")
-    res = await SafeWriteFileTool().run(_a(path="big.txt", content="tiny\n"), ctx)  # 5 chars « 50% of 1001
+    res = await SafeWriteFileTool().run(
+        _a(path="big.txt", content="tiny\n"), ctx
+    )  # 5 chars « 50% of 1001
     assert not res.success and res.error == "SAFE_WRITE_SHRINK_REJECTED"
     assert (await inst.read_file("big.txt")) == body  # untouched
     await inst.destroy()
@@ -80,7 +88,9 @@ async def test_shrink_with_allow_shrink_applies():
     body = b"x" * 1000 + b"\n"
     await inst.write_file("big.txt", body)
     await _ground(ctx, "big.txt")
-    res = await SafeWriteFileTool().run(_a(path="big.txt", content="tiny\n", allow_shrink=True), ctx)
+    res = await SafeWriteFileTool().run(
+        _a(path="big.txt", content="tiny\n", allow_shrink=True), ctx
+    )
     assert res.success, res.content
     assert await _read(inst, "big.txt") == "tiny\n"
     await inst.destroy()
@@ -112,6 +122,7 @@ async def test_governed_via_symlink_rejected():
     await inst.write_file(".disco/appspec.json", b'{"real":1}')
     # create a symlink link.json -> .disco/appspec.json inside the jail
     import os
+
     ws = inst._workspace  # type: ignore[attr-defined]
     os.symlink(".disco/appspec.json", ws / "link.json")
     res = await SafeWriteFileTool().run(_a(path="link.json", content='{"x":2}'), ctx)
@@ -150,7 +161,9 @@ async def test_existing_binary_clobber_refused():
 async def test_overwrite_without_read_requires_fresh_read():
     ctx, inst = await _ctx()
     await inst.write_file("f.txt", b"some existing content here that is fine\n")
-    res = await SafeWriteFileTool().run(_a(path="f.txt", content="new content that is fine here too\n"), ctx)
+    res = await SafeWriteFileTool().run(
+        _a(path="f.txt", content="new content that is fine here too\n"), ctx
+    )
     assert not res.success and res.error == "FRESH_READ_REQUIRED"
     await inst.destroy()
 
@@ -172,9 +185,12 @@ async def test_predictable_tmp_symlink_cannot_clobber_governed(tmp_path):
     await inst.write_file("t.txt", b"some existing grounded content here\n")
     await _ground(ctx, "t.txt")
     import os
+
     ws = inst._workspace  # type: ignore[attr-defined]
     os.symlink(".disco/secret.json", ws / "t.txt.disco-tmp")  # the old predictable name
-    res = await SafeWriteFileTool().run(_a(path="t.txt", content="brand new grounded content here now\n"), ctx)
+    res = await SafeWriteFileTool().run(
+        _a(path="t.txt", content="brand new grounded content here now\n"), ctx
+    )
     assert res.success, res.content
     assert await _read(inst, "t.txt") == "brand new grounded content here now\n"
     assert (await inst.read_file(".disco/secret.json")) == b'{"real":1}'  # NOT clobbered

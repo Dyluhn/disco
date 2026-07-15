@@ -35,7 +35,7 @@ class _ToolSearchArgs(BaseModel):
 
 def _match_score(query_keywords: list[str], tool_desc: dict[str, Any]) -> int:
     """Cheap keyword-match score. Zero-cost; no embedding model needed."""
-    text = f"{tool_desc.get('name','')} {tool_desc.get('description','')}".lower()
+    text = f"{tool_desc.get('name', '')} {tool_desc.get('description', '')}".lower()
     return sum(1 for kw in query_keywords if kw in text)
 
 
@@ -52,9 +52,7 @@ async def _tool_search_handler(
     keywords = [w.strip().lower() for w in query.split() if w.strip()]
     if not keywords:
         return []
-    scored = [
-        (tool, _match_score(keywords, tool)) for tool in all_tools
-    ]
+    scored = [(tool, _match_score(keywords, tool)) for tool in all_tools]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [
         {

@@ -122,9 +122,7 @@ class ConversationState(BaseModel):
                     # stamps the agent message id instead — so gating on the detail
                     # (not just "the last clarify seen") stops a stale clarify card
                     # from shadowing a later ask_user question on reload/reconnect.
-                    st.pending_clarify_id = (
-                        last_clarify_id if e.detail == last_clarify_id else None
-                    )
+                    st.pending_clarify_id = last_clarify_id if e.detail == last_clarify_id else None
                     st.pending_questions_v2_id = (
                         last_questions_v2_id if e.detail == last_questions_v2_id else None
                     )

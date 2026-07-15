@@ -22,9 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # source of truth for both the manifest validator and parse_requirement(), so
 # the two can never drift (adversarial-review finding: a drifted parse regex
 # accepted `>=X.Y.Z` and silently discarded the patch digit).
-REQUIREMENT_RE = re.compile(
-    r"^(?P<name>[a-z0-9-]+)(?:>=(?P<ge>\d+\.\d+)|==(?P<eq>\d+\.\d+\.\d+))$"
-)
+REQUIREMENT_RE = re.compile(r"^(?P<name>[a-z0-9-]+)(?:>=(?P<ge>\d+\.\d+)|==(?P<eq>\d+\.\d+\.\d+))$")
 _PIN_SHAPE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _NAME_SHAPE = re.compile(r"^[a-z0-9-]+$")
 # No leading zeros: "01.2.3" and "1.2.3" would otherwise be two distinct,

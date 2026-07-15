@@ -168,10 +168,12 @@ async def test_replace_dod_spec_monotonic_extend_and_reject(store: SqliteEventSt
     await store.set_dod_spec(cid, base, set_by="first")
 
     # EXTEND: add contact.html (the steer scenario) → accepted, spec grows.
-    extended = DoDSpec(predicates=[
-        FileExistsPredicate(path="index.html"),
-        FileExistsPredicate(path="contact.html"),
-    ])
+    extended = DoDSpec(
+        predicates=[
+            FileExistsPredicate(path="index.html"),
+            FileExistsPredicate(path="contact.html"),
+        ]
+    )
     await store.replace_dod_spec(cid, extended, actor="system:plan_revision")
     read = await store.get_dod_spec(cid)
     assert {p.path for p in read.predicates} == {"index.html", "contact.html"}
@@ -179,17 +181,21 @@ async def test_replace_dod_spec_monotonic_extend_and_reject(store: SqliteEventSt
     # IDEMPOTENT: replacing with the same set is a no-op success.
     await store.replace_dod_spec(cid, extended, actor="again")
     assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
-        "index.html", "contact.html"
+        "index.html",
+        "contact.html",
     }
 
     # RENAME (tied): index.html → home.html via renamed_from → accepted.
-    renamed = DoDSpec(predicates=[
-        FileExistsPredicate(path="home.html", renamed_from="index.html"),
-        FileExistsPredicate(path="contact.html"),
-    ])
+    renamed = DoDSpec(
+        predicates=[
+            FileExistsPredicate(path="home.html", renamed_from="index.html"),
+            FileExistsPredicate(path="contact.html"),
+        ]
+    )
     await store.replace_dod_spec(cid, renamed, actor="rename")
     assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
-        "home.html", "contact.html"
+        "home.html",
+        "contact.html",
     }
 
     # WEAKEN: drop contact.html (no rename tie) → REJECTED, prior spec preserved.
@@ -197,15 +203,18 @@ async def test_replace_dod_spec_monotonic_extend_and_reject(store: SqliteEventSt
     with pytest.raises(DoDSpecAlreadySet):
         await store.replace_dod_spec(cid, weaker, actor="would-drop")
     assert {p.path for p in (await store.get_dod_spec(cid)).predicates} == {
-        "home.html", "contact.html"
+        "home.html",
+        "contact.html",
     }
 
     # FORGED RENAME: claim a rename from a path that was never committed → REJECTED.
-    forged = DoDSpec(predicates=[
-        FileExistsPredicate(path="home.html"),
-        FileExistsPredicate(path="evil.html", renamed_from="contact.html"),
-        FileExistsPredicate(path="x.html", renamed_from="never_existed.html"),
-    ])
+    forged = DoDSpec(
+        predicates=[
+            FileExistsPredicate(path="home.html"),
+            FileExistsPredicate(path="evil.html", renamed_from="contact.html"),
+            FileExistsPredicate(path="x.html", renamed_from="never_existed.html"),
+        ]
+    )
     with pytest.raises(DoDSpecAlreadySet):
         await store.replace_dod_spec(cid, forged, actor="forge")
 
@@ -274,6 +283,7 @@ def test_predicate_kinds_are_minimal_and_real() -> None:
     mode C1a exists to fix.
     """
     from disco.core.dod import CommandExitPredicate, FileExistsPredicate, HTTPOkPredicate
+
     real_kinds = {FileExistsPredicate, CommandExitPredicate, HTTPOkPredicate}
     # Round-trip each kind
     for kind_cls in real_kinds:
@@ -368,6 +378,7 @@ async def test_default_owner_id_used_when_conversation_doesnt_exist(
     assert read == spec
     # And the default owner was used.
     from disco.core.store.sqlite import DEFAULT_OWNER_ID
+
     row = store._conn.execute(  # type: ignore[attr-defined]
         "SELECT owner_id FROM conversations WHERE conversation_id = ?",
         (fresh_cid,),

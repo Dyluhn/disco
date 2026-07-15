@@ -4,7 +4,6 @@ the anchor validators (duplicate / invented) + stable screen labels."""
 from __future__ import annotations
 
 import pytest
-
 from disco.core.appkit import AppSection, AppSpec, render_html
 from disco.core.appkit.semantic_metadata import (
     METADATA_VERSION,
@@ -22,7 +21,11 @@ from disco.core.appkit.semantic_metadata import (
 SPEC = AppSpec(
     title="Acme Roofing",
     sections=(
-        AppSection(id="hero", kind="hero", fields={"headline": "Roofs", "subhead": "Done right", "cta_text": "Quote"}),
+        AppSection(
+            id="hero",
+            kind="hero",
+            fields={"headline": "Roofs", "subhead": "Done right", "cta_text": "Quote"},
+        ),
         AppSection(id="lead", kind="lead_form", fields={"title": "Contact us"}),
         AppSection(id="feat", kind="features", fields={"title": "Why us", "body": "Fast & fair"}),
     ),
@@ -63,7 +66,10 @@ def test_screen_labels_are_stable_across_renders() -> None:
 # --- indexed/repeated-item emit helper (P8A IndexedLocator) -------------------
 def test_item_attrs_emits_collection_index_kind_in_order() -> None:
     s = item_attrs("services.cards", 1, "card")
-    assert s == ' data-disco-collection="services.cards" data-disco-index="1" data-disco-item-kind="card"'
+    assert (
+        s == ' data-disco-collection="services.cards" data-disco-index="1" '
+        'data-disco-item-kind="card"'
+    )
     md = extract_metadata(f"<div{s}></div>")
     assert md[DataDiscoAttr.COLLECTION] == ["services.cards"]
     assert md[DataDiscoAttr.INDEX] == ["1"] and md[DataDiscoAttr.ITEM_KIND] == ["card"]
@@ -91,7 +97,9 @@ def test_duplicate_anchors_rejected_even_when_encoded_differently() -> None:
     with pytest.raises(SemanticMetadataError):
         validate_no_duplicate_anchors(dup)
     # encoded vs decoded forms of the SAME value are still duplicates
-    decoded_dup = '<a data-disco-comment-anchor="a&amp;b"></a><a data-disco-comment-anchor="a&b"></a>'
+    decoded_dup = (
+        '<a data-disco-comment-anchor="a&amp;b"></a><a data-disco-comment-anchor="a&b"></a>'
+    )
     with pytest.raises(SemanticMetadataError):
         validate_no_duplicate_anchors(decoded_dup)
 

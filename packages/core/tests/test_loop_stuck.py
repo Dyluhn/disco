@@ -237,10 +237,7 @@ async def test_barren_streak_identical_read_errors_marks_no_progress():
     disp = await loop._valve.gate_no_progress(events)
     assert disp is Disp.CONTINUE
     after = await store.get_events(CID)
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "no_progress"
-        for e in after
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "no_progress" for e in after)
 
 
 def test_barren_streak_varying_successful_reads_never_fires():
@@ -341,6 +338,7 @@ async def test_loop_tries_a_temp_escape_before_going_stuck():
     events = await store.get_events(CID)
     # the escape was attempted (a status marker on the log)…
     assert any(isinstance(e, StatusEvent) and e.detail == "stuck_escape" for e in events)
+
     # …and a C7 escape reminder WAS injected (it is the in-context half of the
     # anti-self-imitation pair; the temperature is the sampling half). The
     # reminder is a <system-reminder> MessageEvent and the FIRST one in the
@@ -365,7 +363,9 @@ async def test_loop_tries_a_temp_escape_before_going_stuck():
         f"first escape reminder must use attempt=0, got: {escape_reminders[0].message.content!r}"
     )
     # …and it still ended STUCK because the model kept repeating after the retry.
-    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse: interactive stuck lands explain+ask
+    assert (
+        state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    )  # terminal-collapse: interactive stuck lands explain+ask
 
 
 # ---- C7 — escape reminder rotation + serialization seed --------------------
@@ -419,9 +419,7 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     # model-authored explanation — supply 3 extra identical actions so turn 3
     # still repeats into the breaker instead of draining to finish_step.
     agent = ScriptedAgent([action_step()] * 15 + [finish_step()])
-    loop, store = build_loop(
-        agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3)
-    )
+    loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))
 
     # Turn 1: triggers escape 0 (pool[0]).
     await loop.send_message("turn 1: repeat please")
@@ -484,7 +482,7 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     contents = [r.message.content for r in reminders]
     for i in range(1, len(contents)):
         assert contents[i] != contents[i - 1], (
-            f"escape reminder {i} must differ in bytes from reminder {i-1} "
+            f"escape reminder {i} must differ in bytes from reminder {i - 1} "
             f"(anti-self-imitation), but both are:\n{contents[i]!r}"
         )
 
@@ -517,9 +515,9 @@ async def test_c7_non_escape_step_is_unchanged():
     )
 
     # And no `stuck_escape` marker either (the escape path never ran):
-    assert not any(
-        isinstance(e, StatusEvent) and e.detail == "stuck_escape" for e in events
-    ), "stuck_escape marker must be absent in a non-escape run"
+    assert not any(isinstance(e, StatusEvent) and e.detail == "stuck_escape" for e in events), (
+        "stuck_escape marker must be absent in a non-escape run"
+    )
 
     # And no <system-reminder> MessageEvent at all (the env reminder channel
     # is reserved for c97c1b3-bounded nudges — none should fire here):
@@ -548,6 +546,7 @@ def test_c7_stuck_escape_attempt_count_helper():
 
     # One escape marker: count is 1 (the marker we just emitted).
     from event_fakes import user_msg
+
     events = [
         user_msg("go"),
         action(thought="a"),
@@ -589,8 +588,7 @@ def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():
     # (b) bytes differ between consecutive attempts (anti-self-imitation).
     seen = [_stuck_escape_reminder(i) for i in range(n)]
     assert len(set(seen)) == n, (
-        f"the pool must have {n} distinct entries, got {len(set(seen))} unique "
-        f"contents: {seen!r}"
+        f"the pool must have {n} distinct entries, got {len(set(seen))} unique contents: {seen!r}"
     )
 
     # (c) cycling: attempt n must re-use the attempt-0 entry.
@@ -687,9 +685,7 @@ async def test_stuck_status_event_names_the_breaker():
     """When gate_stuck halts, it explains and asks with the old breaker detail
     retained as landing metadata."""
     agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
-    loop, store = build_loop(
-        agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3)
-    )
+    loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))
     await loop.send_message("repeat please")
     state = await loop.run()
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
@@ -756,7 +752,6 @@ async def test_bookkeeping_halt_caps_genuine_spam_on_tiny_plan():
     shuffles the plan tracker forever; it must still fire on this case."""
     from disco.core import ConversationStatus
     from disco.core import SqliteEventStore as Store
-    from disco.core.events import StatusEvent as CoreStatusEvent
     from disco.core.llm import OperatingMode
 
     store = Store(":memory:")
@@ -797,9 +792,7 @@ async def test_bookkeeping_halt_does_not_trip_legit_burst_on_long_plan():
     # semantically distinct — the StuckDetector wouldn't fire anyway, but
     # this matches what a real model would emit.
     steps = [
-        action_step(
-            "plan_step", {"index": i, "state": "done"}, thought=f"marking step {i}"
-        )
+        action_step("plan_step", {"index": i, "state": "done"}, thought=f"marking step {i}")
         for i in range(1, 9)
     ]
     agent = ScriptedAgent(steps + [finish_step()])
@@ -808,9 +801,7 @@ async def test_bookkeeping_halt_does_not_trip_legit_burst_on_long_plan():
 
     events = await store.get_events(CID)
     stuck_statuses = [
-        e
-        for e in events
-        if isinstance(e, CoreStatusEvent) and e.status == ConversationStatus.STUCK
+        e for e in events if isinstance(e, CoreStatusEvent) and e.status == ConversationStatus.STUCK
     ]
     bookkeeping_halts = [e for e in stuck_statuses if e.detail == "bookkeeping_only"]
     assert bookkeeping_halts == [], (
@@ -1232,9 +1223,9 @@ async def test_no_progress_gate_nudges_then_halts():
     disp = await loop._valve.gate_no_progress(events)
     assert disp is Disp.CONTINUE  # first trip → nudge, not halt
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "no_progress" for e in events
-    ), "first trip must drop a no_progress marker"
+    assert any(isinstance(e, StatusEvent) and e.detail == "no_progress" for e in events), (
+        "first trip must drop a no_progress marker"
+    )
     assert any(
         isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
@@ -1291,12 +1282,10 @@ async def test_t2_circuit_breaker_recovery_message_carries_search_and_environmen
     environment-vs-your-code distinction. Drives the real breaker (non-autonomous
     build_loop) with distinct failing actions and inspects the emitted recovery
     reminder in the log; detection/halt behavior is unchanged."""
-    from loop_fakes import FakeExecutor
     from disco.core import ToolResult
+    from loop_fakes import FakeExecutor
 
-    failing = ToolResult(
-        call_id="c", tool_name="shell", success=False, content="", error="boom"
-    )
+    failing = ToolResult(call_id="c", tool_name="shell", success=False, content="", error="boom")
     agent = ScriptedAgent(
         [
             action_step(args={"cmd": "a"}),
@@ -1356,10 +1345,7 @@ async def test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_s
     disp = await loop._valve.gate_no_progress(await store.get_events(CID))
     assert disp is Disp.CONTINUE
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "no_progress_finish_hint"
-        for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "no_progress_finish_hint" for e in events)
     assert not any(
         isinstance(e, StatusEvent)
         and e.status == ConversationStatus.AWAITING_USER_QUESTION
@@ -1524,6 +1510,7 @@ def test_plan_done_and_verified_discriminator():
         summary="s",
         steps=[PlanStep(title="a"), PlanStep(title="b")],
     )
+
     def obs(content: str) -> ObservationEvent:
         return ObservationEvent(
             source=EventSource.ENVIRONMENT,
@@ -1532,6 +1519,7 @@ def test_plan_done_and_verified_discriminator():
                 call_id="c1", tool_name="verify_web_app", success=True, content=content
             ),
         )
+
     from disco.core.events import ActionEvent, ToolCall
 
     done = [
@@ -1540,10 +1528,12 @@ def test_plan_done_and_verified_discriminator():
             thought="",
             tool_call=ToolCall(
                 tool_name="update_plan_progress",
-                arguments={"steps": [
-                    {"index": 1, "state": "done"},
-                    {"index": 2, "state": "done"},
-                ]},
+                arguments={
+                    "steps": [
+                        {"index": 1, "state": "done"},
+                        {"index": 2, "state": "done"},
+                    ]
+                },
                 call_id="p1",
             ),
         )
