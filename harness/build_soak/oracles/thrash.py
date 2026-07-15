@@ -13,7 +13,9 @@ classification of older frozen dossiers.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
+import shlex
 from collections import Counter
 from typing import Any
 
@@ -39,6 +41,30 @@ _THRASH_STUCK_DETAILS = {
     "repeated_noop",
     "verify_no_progress",
     "identical_plan_streak",
+}
+_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+_FILE_MUTATION_TOOLS = frozenset(
+    {
+        "exact_replace",
+        "file_append",
+        "file_edit",
+        "file_insert_lines",
+        "file_replace_lines",
+        "file_str_replace",
+        "file_write",
+        "safe_write_file",
+        "write_file",
+    }
+)
+_DIRECT_SCRIPT_RUNNERS: tuple[tuple[re.Pattern[str], str, frozenset[str]], ...] = (
+    (re.compile(r"python(?:\d+(?:\.\d+)?)?\Z"), "python", frozenset({".py"})),
+    (re.compile(r"node(?:js)?\Z"), "node", frozenset({".cjs", ".js", ".mjs"})),
+    (re.compile(r"ruby\Z"), "ruby", frozenset({".rb"})),
+    (re.compile(r"perl\Z"), "perl", frozenset({".pl", ".pm"})),
+    (re.compile(r"(?:ba|da|k|z)?sh\Z"), "shell", frozenset({".sh"})),
+)
+_SOURCE_SUFFIX_FAMILY = {
+    suffix: family for _pattern, family, suffixes in _DIRECT_SCRIPT_RUNNERS for suffix in suffixes
 }
 
 
@@ -104,6 +130,134 @@ def _longest_identical_streak(actions: list[dict[str, Any]]) -> tuple[int, str, 
         if len(current_seqs) > best_count:
             best_count, best_fp, best_seqs = len(current_seqs), fp, list(current_seqs)
     return best_count, best_fp, best_seqs
+
+
+def _shell_segments(command: str) -> list[list[str]]:
+    """Split a shell command conservatively at control operators.
+
+    ``shlex`` with punctuation support handles both spaced and unspaced forms of
+    ``&&``, ``;`` and pipelines.  Invalid/incomplete shell is deliberately opaque:
+    tool-error accounting handles it, while semantic-repeat accounting skips it.
+    """
+
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    segments: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token and set(token) <= {";", "&", "|"}:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _direct_script_invocations(command: str) -> list[tuple[str, str]]:
+    """Return conservative ``(fingerprint, runner_family)`` shell invocations.
+
+    This intentionally recognizes only an interpreter directly executing a
+    script with an explicit extension.  Module runners (``python -m pytest``),
+    inline programs, package managers, and arbitrary binaries remain opaque;
+    equating those would need dependency/intent knowledge and risks false FAILs.
+    Wrapper commands such as ``cd``, ``ls``, ``echo``, or a trailing pipeline do
+    not hide the direct invocation.
+    """
+
+    cwd = "/workspace"
+    invocations: list[tuple[str, str]] = []
+    for segment in _shell_segments(command):
+        if len(segment) == 2 and segment[0] == "cd":
+            destination = segment[1]
+            cwd = posixpath.normpath(
+                destination if destination.startswith("/") else posixpath.join(cwd, destination)
+            )
+            continue
+        executable = posixpath.basename(segment[0]).lower() if segment else ""
+        for pattern, family, suffixes in _DIRECT_SCRIPT_RUNNERS:
+            if not pattern.fullmatch(executable):
+                continue
+            # Flags may alter interpreter semantics or consume their own values;
+            # do not guess where the script operand begins.
+            if len(segment) < 2 or segment[1].startswith("-"):
+                break
+            script_arg = segment[1]
+            suffix = posixpath.splitext(script_arg)[1].lower()
+            if suffix not in suffixes:
+                break
+            script_path = posixpath.normpath(
+                script_arg if script_arg.startswith("/") else posixpath.join(cwd, script_arg)
+            )
+            fingerprint = json.dumps(
+                [family, script_path, segment[2:]], separators=(",", ":"), ensure_ascii=True
+            )
+            invocations.append((fingerprint, family))
+            break
+    return invocations
+
+
+def _explicit_mutation_path(action: dict[str, Any]) -> str | None:
+    if tool_name_of(action) not in _FILE_MUTATION_TOOLS:
+        return None
+    args = (action.get("tool_call") or {}).get("arguments") or {}
+    for key in ("path", "file_path"):
+        raw = args.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return posixpath.normpath(
+                raw if raw.startswith("/") else posixpath.join("/workspace", raw)
+            )
+    return None
+
+
+def _largest_semantic_shell_repeat_group(
+    actions: list[dict[str, Any]], outcomes: dict[str, tuple[bool, str]]
+) -> tuple[int, str, list[int]]:
+    """Find repeated successful direct-script executions between source edits.
+
+    Counts are non-contiguous because adding ``echo $?`` or surrounding a command
+    with ``ls`` must not erase the repeated core execution.  Product-generated
+    completion probes carry ``meta.verify_probe`` and are excluded: they are
+    independent verification, not a model retry.  A successful structured source
+    edit for the runner family starts a new generation; this covers dependencies,
+    not merely the directly executed script.
+    """
+
+    generations: Counter[str] = Counter()
+    groups: dict[tuple[str, int], list[int]] = {}
+    for action in actions:
+        mutation_path = _explicit_mutation_path(action)
+        mutation_succeeded, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome"))
+        if mutation_path is not None and mutation_succeeded:
+            family = _SOURCE_SUFFIX_FAMILY.get(posixpath.splitext(mutation_path)[1].lower())
+            if family is not None:
+                generations[family] += 1
+        if tool_name_of(action) not in _SHELL_TOOLS or (action.get("meta") or {}).get(
+            "verify_probe"
+        ):
+            continue
+        success, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome"))
+        if not success:
+            continue
+        args = (action.get("tool_call") or {}).get("arguments") or {}
+        command = args.get("command", args.get("cmd"))
+        if not isinstance(command, str):
+            continue
+        # One action may mention the same invocation more than once; count model
+        # decisions/actions, not textual duplication inside a single shell string.
+        for fingerprint, family in sorted(set(_direct_script_invocations(command))):
+            groups.setdefault((fingerprint, generations[family]), []).append(seq_of(action))
+    if not groups:
+        return 0, "", []
+    (fingerprint, _generation), seqs = max(groups.items(), key=lambda item: (len(item[1]), item[1]))
+    return len(seqs), fingerprint, seqs
 
 
 class ThrashOracle:
@@ -261,6 +415,24 @@ class ThrashOracle:
                 )
             ]
 
+        semantic_count, semantic_fingerprint, semantic_seqs = _largest_semantic_shell_repeat_group(
+            actions, outcomes
+        )
+        if semantic_count > limits["max_identical_action_repeats"]:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.TOOL_CALL_THRASH,
+                    first_broken_link="tool_call -> repeated_semantic_shell_verification",
+                    facts={
+                        "fingerprint": semantic_fingerprint,
+                        "count": semantic_count,
+                        "allowed": limits["max_identical_action_repeats"],
+                        "action_seqs": semantic_seqs,
+                    },
+                )
+            ]
+
         return [
             passing(
                 _ORACLE,
@@ -268,6 +440,7 @@ class ThrashOracle:
                     "action_count": len(actions),
                     "actionless_pauses": len(actionless),
                     "longest_identical_action_streak": streak,
+                    "largest_semantic_shell_repeat_group": semantic_count,
                     "largest_same_tool_error_group": max(failed_signatures.values(), default=0),
                     "model_repair_count": len(repairs),
                     "model_repair_counts": dict(repair_counts),
