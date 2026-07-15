@@ -181,20 +181,18 @@ async def test_active_kernel_is_not_culled(clock: _Clock, make_manager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_threshold_zero_culls_every_exec(clock: _Clock, make_manager) -> None:
-    """Threshold 0 -> cull on the very next exec, because `now - last_exec_end_at`
-    is always > 0 (clock advanced by the time of the next call). Set 0 in
-    production to effectively disable, but the contract is "anything past N"."""
+async def test_threshold_zero_disables_culling(clock: _Clock, make_manager) -> None:
+    """Threshold 0 is the documented disable sentinel: state persists regardless
+    of the idle interval, matching the environment and SandboxSession contract."""
     build, spawned = make_manager
     mgr = build(threshold=0.0)
     await mgr.execute("a = 1", timeout_s=5)
     clock.advance(0.5)
     await mgr.execute("a = 2", timeout_s=5)
-    assert mgr.cull_count == 1
-    assert len(spawned) == 2
-    # The new inner ran the second cell.
-    assert spawned[1].exec_calls == 1
-    assert spawned[0].was_shut_down is True
+    assert mgr.cull_count == 0
+    assert len(spawned) == 1
+    assert spawned[0].exec_calls == 2
+    assert spawned[0].was_shut_down is False
 
 
 @pytest.mark.asyncio

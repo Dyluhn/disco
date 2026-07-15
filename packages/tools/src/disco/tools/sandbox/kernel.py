@@ -23,6 +23,7 @@ from queue import Empty
 from typing import Any
 
 from .base import SandboxError
+from .shell_sessions import SessionBusy
 
 _LOG = logging.getLogger(__name__)
 
@@ -31,6 +32,8 @@ _LOG = logging.getLogger(__name__)
 _DEV_GATEWAY_SECRET = _secrets.token_bytes(32)
 
 _GATEWAY_DIAGNOSTIC_MAX_CHARS = 1200
+_GATEWAY_SESSION = "__kernel"
+_GATEWAY_SESSION_CLEANUP_S = 5.0
 _GATEWAY_SECRET_RE = re.compile(
     r"(?i)\b(?:kg_auth_token|authorization|api[_-]?key|token|secret)\b"
     r"(?:\s*[:=]\s*|\s+)(?:bearer\s+|token\s+)?[^\s;]+"
@@ -586,6 +589,50 @@ class GatewayKernel(KernelSession):
         sep = "&" if "?" in ws_url else "?"
         return f"{ws_url}{sep}token={self._token}"
 
+    async def _normalize_gateway_session(self) -> None:
+        """Boundedly return the internal gateway tmux session to an idle state.
+
+        A startup process can exit after the shell manager's observation window,
+        or remain alive after the readiness deadline.  In both cases a later
+        ``code_exec`` must not inherit a stale ``SessionBusy``.  The cleanup
+        result and exception text are deliberately ignored: either can contain
+        the echoed token-bearing launch line.  Class-only logging keeps the
+        original startup failure authoritative and token-free.
+        """
+        kill_foreground = getattr(self._sessions, "kill_foreground", None)
+        if not callable(kill_foreground):
+            _LOG.warning("kernel gateway session cleanup unavailable")
+            return
+        try:
+            await asyncio.wait_for(
+                self._sessions.kill_foreground(_GATEWAY_SESSION),
+                timeout=_GATEWAY_SESSION_CLEANUP_S,
+            )
+        except TimeoutError:
+            _LOG.warning("kernel gateway session cleanup timed out")
+        except Exception as exc:  # noqa: BLE001 — preserve the original startup failure
+            _LOG.warning(
+                "kernel gateway session cleanup failed (%s)",
+                _gateway_transport_state(exc),
+            )
+
+    async def _launch_gateway(self, command: str) -> Any:
+        """Launch once, recovering a stale internal-session busy state once."""
+        try:
+            return await self._sessions.exec(_GATEWAY_SESSION, command, None)
+        except SessionBusy:
+            # A prior failed startup may have left the reserved session occupied.
+            # Normalize and retry exactly once; never route code execution through
+            # an ordinary shell session or expose the token-bearing busy detail.
+            await self._normalize_gateway_session()
+            try:
+                return await self._sessions.exec(_GATEWAY_SESSION, command, None)
+            except SessionBusy:
+                raise SandboxError(
+                    "jupyter kernel gateway internal session remained busy after bounded "
+                    "cleanup; code_exec is unavailable for this sandbox session"
+                ) from None
+
     async def _ensure_gateway(self) -> str:
         """Start the gateway lazily in tmux and wait for ready."""
         # Check if already running (port 8899)
@@ -642,7 +689,7 @@ class GatewayKernel(KernelSession):
         budget_s = max(1, budget_s)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + budget_s
-        started = await self._sessions.exec("__kernel", cmd, None)
+        started = await self._launch_gateway(cmd)
         started_running = getattr(started, "running", None)
         started_exit = getattr(started, "exit_code", None)
         started_diagnostic = _bounded_gateway_diagnostic(
@@ -652,6 +699,7 @@ class GatewayKernel(KernelSession):
         )
         if started_running is False:
             diagnostic = started_diagnostic or "gateway process exited without startup output"
+            await self._normalize_gateway_session()
             raise SandboxError(
                 "jupyter kernel gateway exited during startup; "
                 f"diagnostic={diagnostic}. code_exec is unavailable for this sandbox session; "
@@ -688,7 +736,7 @@ class GatewayKernel(KernelSession):
         # letting diagnostics materially extend the advertised startup budget.
         final_diagnostic = started_diagnostic
         try:
-            view = await asyncio.wait_for(self._sessions.view("__kernel"), timeout=1.0)
+            view = await asyncio.wait_for(self._sessions.view(_GATEWAY_SESSION), timeout=1.0)
             viewed = _bounded_gateway_diagnostic(
                 getattr(view, "output", ""), auth_token=self._token
             )
@@ -698,6 +746,7 @@ class GatewayKernel(KernelSession):
             pass
         diagnostic_suffix = f"; diagnostic={final_diagnostic}" if final_diagnostic else ""
 
+        await self._normalize_gateway_session()
         raise SandboxError(
             f"jupyter kernel gateway failed to start within {budget_s}s; "
             f"final_readiness={last_readiness}{diagnostic_suffix}. "
@@ -1001,7 +1050,7 @@ class ManagedKernel(KernelSession):
             self._last_exec_end_at = self._time()
             return self._inner
 
-        if self._last_exec_end_at is not None:
+        if self._idle_timeout_s > 0 and self._last_exec_end_at is not None:
             idle_for = self._time() - self._last_exec_end_at
             if idle_for > self._idle_timeout_s:
                 # Idle past threshold — cull the stale inner and spawn a
