@@ -10,6 +10,7 @@ VM-201 check; here we prove the backend drives Docker correctly.
 from __future__ import annotations
 
 from collections import namedtuple
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +25,25 @@ from disco.tools.sandbox import (
 from docker.errors import ImageNotFound
 
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
+
+
+def test_sandbox_image_browser_bundle_is_shared_with_uid_1000_and_marp() -> None:
+    dockerfile = (
+        Path(__file__).resolve().parents[3] / "deploy" / "sandbox" / "Dockerfile"
+    ).read_text()
+
+    shared_path = "ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"
+    browser_install = "playwright install --with-deps chromium"
+    stable_executable = "/usr/local/bin/playwright-chromium"
+
+    assert shared_path in dockerfile
+    assert dockerfile.index(shared_path) < dockerfile.index(browser_install)
+    assert 'chromium_path="$(find "$PLAYWRIGHT_BROWSERS_PATH"' in dockerfile
+    assert 'chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"' in dockerfile
+    assert f'ln -sf "$chromium_path" {stable_executable}' in dockerfile
+    assert f"ENV CHROME_PATH={stable_executable}" in dockerfile
+    assert "useradd -m -u 1000" in dockerfile
+    assert "/root/.cache/ms-playwright" not in dockerfile
 
 
 class FakeContainer:

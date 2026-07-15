@@ -18,9 +18,10 @@ on VM 201) — keep them in sync.
   `jupyter_kernel_gateway` (the persistent `code_exec` kernel).
 - **Node.js 22 LTS** + npm + npx + corepack + pnpm (so `code_exec(language="node")`
   and JS/TS builds — vite/next/etc. — work in the box).
-- **Playwright + Chromium** (`--with-deps`), shared by browsing/verification and
-  by marp (`CHROME_PATH` symlink). `CHROME_NO_SANDBOX=true` — Chromium's own
-  sandbox can't nest; gVisor/runc is the boundary.
+- **Playwright + Chromium** (`--with-deps`) in the shared `/ms-playwright` bundle,
+  readable/executable by the non-root runtime user and shared with marp through
+  `CHROME_PATH=/usr/local/bin/playwright-chromium`. `CHROME_NO_SANDBOX=true` —
+  Chromium's own sandbox can't nest; gVisor/runc is the boundary.
 - **Renderers, jailed by design**: `@marp-team/marp-cli` (slide decks),
   `pandoc` (DOCX export), `libreoffice-impress` + fonts-liberation (PPTX→PDF).
   Agent-generated content renders inside the sandbox, never on the host.

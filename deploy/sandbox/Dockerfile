@@ -22,22 +22,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # integration covers state + interrupt; plot tests run on the process backend).
 RUN pip3 install --break-system-packages ipykernel jupyter_kernel_gateway
 
-# BP-04: Real rendering browser (Playwright + Chromium)
+# BP-04: Real rendering browser (Playwright + Chromium).  Sandboxes execute as
+# UID 1000, so the browser bundle must not land in root's private cache.  Keep
+# Playwright's lookup path in the image environment and explicitly make the
+# shared install traversable/readable/executable by every runtime user.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pip3 install --break-system-packages playwright \
     && playwright install --with-deps chromium \
+    && chromium_path="$(find "$PLAYWRIGHT_BROWSERS_PATH" -name chrome -type f -path '*chrome-linux*' -print -quit)" \
+    && test -n "$chromium_path" \
+    && ln -sf "$chromium_path" /usr/local/bin/playwright-chromium \
+    && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH" \
+    && test -x /usr/local/bin/playwright-chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # RP-10: Marp slide-deck rendering (HTML / PDF / PPTX), run INSIDE the sandbox by
 # the slides_generate tool via exec_shell — NOT on the agent-server host (the deck
 # markdown is agent-generated; a full Chromium over it belongs behind the jail).
-# Reuses the Playwright Chromium installed above; a stable symlink decouples
-# CHROME_PATH from the version-pinned playwright cache path. Verified: marp renders
+# Reuses the Playwright Chromium installed above; the stable shared symlink decouples
+# CHROME_PATH from the version-pinned Playwright bundle path. Verified: marp renders
 # PDF+PPTX+HTML with CHROME_NO_SANDBOX=true (Chromium's own sandbox can't nest;
 # gVisor/runc is the boundary).
 RUN npm install -g @marp-team/marp-cli \
-    && ln -sf "$(find /root/.cache/ms-playwright -name chrome -type f -path '*chrome-linux*' | head -1)" /usr/local/bin/marp-chromium \
     && rm -rf /root/.npm
-ENV CHROME_PATH=/usr/local/bin/marp-chromium \
+ENV CHROME_PATH=/usr/local/bin/playwright-chromium \
     CHROME_NO_SANDBOX=true
 
 # RP-07: DOCX export — pandoc, run INSIDE a transient render sandbox by the export
