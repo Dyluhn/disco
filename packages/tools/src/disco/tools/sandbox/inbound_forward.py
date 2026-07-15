@@ -1,5 +1,5 @@
-"""[FIX6 — live-proven on real gVisor/runsc] Inbound TCP forwarder for the
-filtered-egress sandbox preview.
+"""[FIX6 — live-proven on real gVisor/runsc] Inbound TCP forwarder for sandbox
+preview and internal control transport.
 
 THE PROBLEM. A filtered-egress sandbox sits on an INTERNAL no-NAT docker network
 (containment = no route out except the allowlisting proxy sidecar). gVisor (runsc)
@@ -8,13 +8,15 @@ publish its preview port on the host without putting it on a NAT bridge, and a N
 bridge IS raw egress = broken containment. So the sandbox publishes NOTHING and its
 preview is unreachable from the host.
 
-THE FIX (validated end-to-end on real runsc, all links incl. containment). Keep the
-sandbox INTERNAL-only. The dual-homed egress SIDECAR (already on bridge + internal)
-PUBLISHES the preview ports on the host (its bridge side) and runs THIS forwarder:
+THE FIX (validated end-to-end on real runsc for filtered preview). Keep the sandbox
+INTERNAL-only. The hardened dual-homed SIDECAR publishes curated ports on host
+loopback and runs THIS forwarder:
 it binds ``0.0.0.0:PORT`` on the sidecar and pipes every connection across the
 internal net to ``<sandbox_internal_ip>:PORT``. The host reaches the preview via the
-sidecar's published port; the sandbox keeps ZERO direct egress. The forward is a
-transparent byte pipe, so websockets / Vite HMR pass through unchanged.
+sidecar's published port; the sandbox keeps ZERO direct egress. Sealed mode selects
+only INTERNAL_PORTS and installs no egress proxy; filtered/public modes select the
+full curated set. The forward is a transparent byte pipe, so websockets / Vite HMR
+pass through unchanged.
 
 stdlib-only (the sandbox base image's ``python3`` runs it with no install, honoring
 the never-pull rule). Delivered onto the sidecar via ``put_archive`` (NOT piped on a

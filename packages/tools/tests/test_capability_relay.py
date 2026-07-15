@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -74,7 +75,14 @@ def _request(server: CapabilityRelayServer, request: bytes) -> tuple[int, bytes]
     host, port = server.server_address[:2]
     with socket.create_connection((host, port), timeout=2) as sock:
         sock.sendall(request)
-        sock.shutdown(socket.SHUT_WR)
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except OSError as exc:
+            # A fast fail-closed relay may send its complete 4xx response and
+            # close before the client half-closes. ENOTCONN is then expected;
+            # the buffered response remains readable and is still asserted.
+            if exc.errno != errno.ENOTCONN:
+                raise
         response = bytearray()
         while chunk := sock.recv(65536):
             response.extend(chunk)

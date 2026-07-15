@@ -1,8 +1,8 @@
 """EPIC H (P2 #5) — the LIVE sandbox-isolation escape suite.
 
-The fast escape-suite tests (`test_escape_suite.py`) assert ARGS/STRINGS (e.g.
-`network_mode="none"`, `pid_mode != "host"`) — they prove the backend ASKS for
-isolation, not that the kernel DELIVERS it. These tests drive ONE bounded REAL
+The fast escape-suite tests (`test_escape_suite.py`) assert topology/ARGS (e.g.
+one internal no-NAT guest network, `pid_mode != "host"`) — they prove the backend
+ASKS for isolation, not that the kernel DELIVERS it. These tests drive ONE bounded REAL
 container and inspect ACTUAL isolation:
 
   • the real `HostConfig.PidMode` (never "host"),

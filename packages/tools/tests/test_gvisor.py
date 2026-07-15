@@ -22,6 +22,7 @@ from disco.tools.sandbox import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
 from docker.errors import ImageNotFound
 
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
@@ -59,9 +60,7 @@ def test_sandbox_image_includes_asset_inspection_clis() -> None:
     common_cli_section = dockerfile.split("# Build toolchain + common CLIs", 1)[1].split(
         "# noVNC live-browser stack", 1
     )[0]
-    install_command = common_cli_section.split("RUN apt-get update", 1)[1].split(
-        "&& rm -rf", 1
-    )[0]
+    install_command = common_cli_section.split("RUN apt-get update", 1)[1].split("&& rm -rf", 1)[0]
     install_tokens = set(install_command.replace("\\", " ").split())
 
     assert {"file", "xxd"} <= install_tokens
@@ -73,6 +72,7 @@ class FakeContainer:
         self.stopped = False
         self.removed = False
         self.started = False
+        self.status = "created"
         self.attrs: dict = {}  # NetworkSettings populated on reload() if needed
         self.exec_calls: list[list[str]] = []
         # queued (exit_code, stdout_bytes, stderr_bytes) for shell execs; else echoes ok
@@ -84,6 +84,7 @@ class FakeContainer:
 
     def start(self):
         self.started = True
+        self.status = "running"
 
     def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
         pass
@@ -178,6 +179,7 @@ class FakeContainer:
 
     def stop(self, timeout=None):
         self.stopped = True
+        self.status = "exited"
 
     def remove(self, force=False):
         self.removed = True
@@ -236,6 +238,9 @@ class FakeNetwork:
 
     def connect(self, container, aliases=None):
         self.connected.append((container, aliases))
+        container.attrs = {
+            "NetworkSettings": {"Networks": {self.name: {"IPAddress": "172.28.0.2"}}}
+        }
 
     def remove(self):
         self.removed = True
@@ -280,12 +285,12 @@ class FakeDockerClient:
         c = FakeContainer(kwargs)
         # [FIX6] mirror reality: a sandbox joined to the internal egress net is
         # assigned an IP on it. `_launch_inbound_forwarder` reads this after
-        # reload() to target the inbound TCP forwarder. (Sealed/open boxes pass
-        # `network_mode`, not `network`, so they get no synthetic IP — correct.)
+        # reload() to target the inbound TCP forwarder in every container mode.
         net = kwargs.get("network")
         if net:
             c.attrs = {"NetworkSettings": {"Networks": {net: {"IPAddress": "172.28.0.5"}}}}
         self.runs.append(c)
+        c.status = "running"
         self.last = c
         return c
 
@@ -325,14 +330,72 @@ async def test_create_exec_close_session_model(tmp_path):
         await inst.exec_shell("echo", timeout_s=5)
 
 
+async def test_sealed_control_sidecar_start_failure_is_typed_and_leak_free(tmp_path, monkeypatch):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+
+    def fail_start(_self):
+        raise RuntimeError("raw daemon transport detail")
+
+    monkeypatch.setattr(FakeContainer, "start", fail_start)
+    with pytest.raises(SandboxUnavailableError) as raised:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+    assert str(raised.value) == "inbound control sidecar setup failed; refusing sandbox start"
+    assert "raw daemon" not in str(raised.value)
+    assert len(client.runs) == 1 and client.runs[0].removed
+    assert len(client.networks.created) == 1 and client.networks.created[0].removed
+    assert client.volumes.created == []
+
+
+@pytest.mark.parametrize("reload_behavior", ["missing", "raise", "stopped"])
+async def test_policy_sidecar_requires_a_verified_internal_ip(
+    tmp_path, monkeypatch, reload_behavior
+):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+
+    def hostile_reload(container):
+        if reload_behavior == "raise":
+            raise RuntimeError("raw daemon reload detail")
+        if reload_behavior == "stopped":
+            container.status = "exited"
+        else:
+            container.attrs = {}
+
+    monkeypatch.setattr(FakeContainer, "reload", hostile_reload)
+    with pytest.raises(
+        SandboxUnavailableError,
+        match="policy sidecar internal address is unavailable",
+    ) as raised:
+        await svc.create(
+            SandboxSpec(egress_allow=frozenset({"api.example.com"})),
+            owner_id="o",
+            conversation_id="c",
+        )
+
+    assert "raw daemon" not in str(raised.value)
+    assert len(client.runs) == 1 and client.runs[0].removed
+    assert len(client.networks.created) == 1 and client.networks.created[0].removed
+    assert client.volumes.created == []
+
+
 async def test_sealed_by_default_filtered_on_allowlist_open_on_capability(tmp_path):
     # The THREE-way egress posture (the fix for the old none|bridge binary that
     # silently gave an allowlisted box full network).
     client = FakeDockerClient()
     svc = _svc(tmp_path, client)
-    # 1) default spec → SEALED (no network at all)
+    # 1) default spec → SEALED guest on an internal no-NAT network. The
+    # control sidecar has no proxy/env and publishes only the kernel port.
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs["network_mode"] == "none"
+    sealed_sidecar, sealed_sandbox = client.runs[:2]
+    sealed_net = client.networks.created[0]
+    assert sealed_net.attrs["internal"] is True
+    assert sealed_sandbox.run_kwargs["network"] == sealed_net.name
+    assert "network_mode" not in sealed_sandbox.run_kwargs
+    assert sealed_sandbox.run_kwargs["environment"] == {}
+    assert sealed_sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
+    assert "/egress_proxy.py" not in sealed_sidecar.fs
     # 2) egress allowlist → FILTERED (proxy enforces the list) — NOT raw bridge.
     await svc.create(
         SandboxSpec(egress_allow=frozenset({"api.example.com"})), owner_id="o", conversation_id="c"
@@ -340,7 +403,7 @@ async def test_sealed_by_default_filtered_on_allowlist_open_on_capability(tmp_pa
     sandbox_kw = client.last.run_kwargs
     assert "network_mode" not in sandbox_kw  # NOT full bridge!
     assert sandbox_kw["network"].startswith("disco-egr-")  # the internal no-NAT net
-    assert sandbox_kw["environment"]["HTTPS_PROXY"].startswith("http://disco-egr-")
+    assert sandbox_kw["environment"]["HTTPS_PROXY"] == "http://172.28.0.2:8888"
     # 3) legacy NETWORK capability → public-only proxy, never a raw bridge.
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
@@ -384,6 +447,9 @@ async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
     assert any("egress_proxy.py" in p for p in sidecar.fs)
     launched = [c for c in sidecar.exec_calls if any("egress_proxy.py" in str(a) for a in c)]
     assert launched, "proxy was not launched in the sidecar"
+    assert launched[0][:2] == ["sh", "-c"]
+    assert launched[0][2].startswith("exec python3 /egress_proxy.py ")
+    assert "&" not in launched[0][2]
     joined = " ".join(launched[0])
     assert "api.example.com" in joined and ".pypi.org" in joined
     # destroy() tears down BOTH the sandbox and the egress aux (no orphans).
@@ -404,13 +470,17 @@ async def test_sealed_host_service_box_gets_only_internal_relay_network(tmp_path
     assert net.attrs["internal"] is True
     assert sandbox.run_kwargs["network"] == net.name
     assert "network_mode" not in sandbox.run_kwargs
-    # Sealed means the sidecar publishes no preview ports and the generic proxy's
-    # allowlist is empty; the relay is the one narrow route off the internal net.
-    assert sidecar.run_kwargs["ports"] is None
+    # Sealed means the sidecar publishes only the internal control port; no user
+    # preview is mapped. The relay remains the one narrow outbound capability.
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
     proxy_launch = next(c for c in sidecar.exec_calls if "egress_proxy.py" in " ".join(c))
     assert "--allow ''" in " ".join(proxy_launch)
     assert "/capability_relay.py" in sidecar.fs
-    assert inst.host_service_relay_url == f"http://{net.name}:3211"
+    relay_launch = next(c for c in sidecar.exec_calls if "capability_relay.py" in " ".join(c))
+    assert relay_launch[:2] == ["sh", "-c"]
+    assert relay_launch[2].startswith("exec python3 /capability_relay.py ")
+    assert "&" not in relay_launch[2]
+    assert inst.host_service_relay_url == "http://172.28.0.2:3211"
     await inst.destroy()
     assert sidecar.removed and net.removed
 

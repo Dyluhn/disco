@@ -23,6 +23,8 @@ import contextlib
 from typing import Any
 
 from ._container import (
+    INTERNAL_PORTS,
+    PUBLISHED_PORTS,
     ContainerInstance,
     _create_named_volume,
     _remove_container,
@@ -66,7 +68,8 @@ class LocalSandboxService(GvisorSandboxService):
         volume is the portable choice across local Docker and rootless Podman.
 
         Egress posture (E8): mirrors the parent's three-way mode.
-        • sealed   → `network_mode="none"`, no ports.
+        • sealed   → internal no-NAT net + control-only sidecar; only
+                     INTERNAL_PORTS are loopback-published.
         • filtered → allowlisting PROXY sidecar on an internal no-NAT net; the
                      allowlist is enforced by the proxy (not just a name). The
                      parent `_setup_filtered_egress` is reused unchanged (the
@@ -100,22 +103,30 @@ class LocalSandboxService(GvisorSandboxService):
         egress_network = egress_sidecar = None
         host_service_relay_url = None
         net_name = ""  # set in the filtered branch; used by the Fix6 forwarder launch
-        if mode in {"filtered", "public"} or spec.host_services:
-            # Reuse the gVisor proxy setup unchanged — same docker-py client, same
-            # internal-network + sidecar pattern (the local tier just differs in its
-            # workspace being a named volume, not a host bind).
+        inbound_only = mode == "sealed" and not spec.host_services
+        try:
             (
                 egress_network,
                 egress_sidecar,
                 environment,
                 net_name,
                 host_service_relay_url,
-            ) = self._setup_filtered_egress(client, spec, instance_id, conversation_id)
-            net_kwargs = {"network": net_name}
-            ports: dict[str, str | None] | None = None  # inbound preview on internal net
-        else:  # sealed
-            net_kwargs = {"network_mode": "none"}
-            ports = None
+            ) = self._setup_filtered_egress(
+                client,
+                spec,
+                instance_id,
+                conversation_id,
+                inbound_only=inbound_only,
+            )
+        except SandboxUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
+            operation = "inbound control" if inbound_only else "sandbox policy"
+            raise SandboxUnavailableError(
+                f"{operation} sidecar setup failed; refusing sandbox start"
+            ) from exc
+        net_kwargs = {"network": net_name}
+        ports: dict[str, str | None] | None = None
         # Bind `ports` at function-frame (the conditional expression above might
         # leave it unbound on an unrecognised mode — defense in depth).
         volume = None
@@ -134,8 +145,9 @@ class LocalSandboxService(GvisorSandboxService):
                 # keepalive
                 command=_keepalive_command(),
                 runtime=self._cfg.runtime,  # runc (a value, not a branch)
-                # The main container never publishes directly: networked boxes
-                # use the loopback-bound policy sidecar; sealed boxes expose none.
+                # The main container never publishes directly. Sealed boxes use
+                # the sidecar only for INTERNAL_PORTS; other modes use the full
+                # curated loopback set.
                 ports=ports,
                 # The limit goes through the LOCAL socket/daemon → it actually bites.
                 mem_limit=f"{mem_mb}m",
@@ -143,15 +155,29 @@ class LocalSandboxService(GvisorSandboxService):
                 pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 ulimits=nofile_ulimits(self._cfg),
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                # NO host env beyond capability-granted values. For a filtered box
-                # that's the proxy routing vars (defense in depth atop the no-route
-                # network). Sealed boxes pass an empty dict — no leaks.
+                # NO host env beyond capability-granted values. Filtered/public
+                # boxes receive only proxy routing vars; sealed passes an empty
+                # dict — no leaks.
                 environment=environment,
                 working_dir=self._cfg.container_workspace,
                 detach=True,
                 name=container_name,
                 labels=labels,
                 **net_kwargs,
+            )
+            forward_ports = INTERNAL_PORTS if mode == "sealed" else PUBLISHED_PORTS
+            self._launch_inbound_forwarder(
+                egress_sidecar,
+                container,
+                net_name,
+                forward_ports,
+            )
+            return (
+                container,
+                egress_network,
+                egress_sidecar,
+                volume,
+                host_service_relay_url,
             )
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
             if container is None:
@@ -175,19 +201,3 @@ class LocalSandboxService(GvisorSandboxService):
             if isinstance(exc, SandboxUnavailableError):
                 raise
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
-        # [FIX6 podman-parity] The parent gVisor `_start_container` launches the inbound
-        # preview forwarder on the sidecar after the sandbox starts; this override has
-        # to do the same or a FILTERED box's published preview port forwards to nothing
-        # (the sidecar publishes the port, but nothing listens on it → connection
-        # refused → preview 502). Live-proven on the workstation's rootless podman: with
-        # this call the host reaches the filtered box's preview via the sidecar; without
-        # it, 502. Best-effort (never raises), same as the parent.
-        if mode in {"filtered", "public"} and egress_sidecar is not None:
-            self._launch_inbound_forwarder(egress_sidecar, container, net_name)
-        return (
-            container,
-            egress_network,
-            egress_sidecar,
-            volume,
-            host_service_relay_url,
-        )

@@ -27,6 +27,8 @@ import tarfile
 import threading
 import time
 import urllib.parse
+from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import psutil
@@ -117,7 +119,7 @@ def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, i
 
 
 def bounded_sidecar_cap(name: str, value: float) -> float:
-    """Runtime LAST GATE for a filtered-egress PROXY SIDECAR resource cap (cpu / memory_mb
+    """Runtime LAST GATE for a policy/control SIDECAR resource cap (cpu / memory_mb
     / pids), the sidecar analogue of `_bounded`/`resolve_bounds` for the main sandbox.
 
     Unlike the main-sandbox path there is no model-shaped spec — the deployment config value
@@ -127,7 +129,7 @@ def bounded_sidecar_cap(name: str, value: float) -> float:
     (`cfg.sidecar_cpu = 0`). This is the last gate before the value is handed to
     Docker/Podman at create, where a 0 / negative / non-finite cap reads as UNLIMITED
     (`mem_limit` / `nano_cpus` / `cpu_quota` / `pids_limit` of 0 = no cap) — a silently
-    DISABLED host-protection bound on the egress proxy. Refuse it loudly instead of passing
+    DISABLED host-protection bound on the sidecar. Refuse it loudly instead of passing
     an unbounded sidecar through."""
     if not math.isfinite(value) or value <= 0:
         raise SandboxError(
@@ -440,17 +442,24 @@ INTERNAL_PORTS: frozenset[int] = frozenset({8899})
 PUBLISHED_PORTS: frozenset[int] = USER_PORTS | INTERNAL_PORTS
 
 
-def loopback_port_bindings(*, podman: bool = False) -> dict[str, tuple[str, None] | dict[str, str]]:
+def loopback_port_bindings(
+    ports: Iterable[int] = PUBLISHED_PORTS,
+    *,
+    podman: bool = False,
+) -> dict[str, tuple[str, None] | dict[str, str]]:
     """Publish curated ports on daemon loopback only, with random host ports.
 
     This closes sibling/tailnet/public-IP hairpins. INTERNAL_PORTS remain mapped
     solely for the host-side kernel client, but never on a non-loopback address.
     """
+    selected = frozenset(ports)
+    if not selected <= PUBLISHED_PORTS:
+        raise SandboxError("refusing to publish a port outside the curated sandbox set")
     if podman:
         # podman-py rejects Docker's (host_ip, None) random-port tuple. Its
         # native payload shape omits host_port while retaining host_ip.
-        return {f"{port}/tcp": {"ip": "127.0.0.1"} for port in sorted(PUBLISHED_PORTS)}
-    return {f"{port}/tcp": ("127.0.0.1", None) for port in sorted(PUBLISHED_PORTS)}
+        return {f"{port}/tcp": {"ip": "127.0.0.1"} for port in sorted(selected)}
+    return {f"{port}/tcp": ("127.0.0.1", None) for port in sorted(selected)}
 
 
 # The SINGLE source of truth for which sandbox backends can actually run the noVNC
@@ -483,7 +492,9 @@ def egress_mode(spec: SandboxSpec) -> str:
     """Resolve a spec's egress posture — the fix for the old
     binary (none|bridge) that silently gave an allowlisted box full network:
 
-      • "sealed"   — no allowlist, no NETWORK cap → no network at all.
+      • "sealed"   — no allowlist, no NETWORK cap → an internal no-NAT guest
+                     network plus a hardened loopback-only control sidecar. The
+                     guest has no proxy route; only INTERNAL_PORTS flow host→guest.
       • "filtered" — a non-empty `egress_allow` → an allowlisting PROXY sidecar
                      enforces the list per-connection; the box's only route out is
                      the proxy (internal, no-NAT network). THIS is what makes the
@@ -781,6 +792,32 @@ def proxy_readiness_argv(port: int = EGRESS_PROXY_PORT) -> list[str]:
     return ["python3", "-c", script, str(port)]
 
 
+def inbound_readiness_argv(ports: Iterable[int]) -> list[str]:
+    """Bounded proof that every selected inbound sidecar listener is live."""
+
+    selected = sorted(frozenset(ports))
+    if not selected or not set(selected) <= PUBLISHED_PORTS:
+        raise SandboxError("invalid inbound transport readiness port set")
+    script = (
+        "import socket,sys,time\n"
+        f"ports={selected!r}\n"
+        "deadline=time.monotonic()+5\n"
+        "def ready():\n"
+        "    for port in ports:\n"
+        "        with socket.socket() as sock:\n"
+        "            sock.settimeout(0.2)\n"
+        "            if sock.connect_ex(('127.0.0.1', port)) != 0:\n"
+        "                return False\n"
+        "    return True\n"
+        "while time.monotonic() < deadline:\n"
+        "    if ready():\n"
+        "        sys.exit(0)\n"
+        "    time.sleep(0.1)\n"
+        "sys.exit(1)\n"
+    )
+    return ["python3", "-c", script]
+
+
 class ContainerInstance:
     """A running container (gVisor or Podman). Tools execute against it; the
     workspace is reached only through the file methods (exec/cp), never a path."""
@@ -790,11 +827,10 @@ class ContainerInstance:
     #: ports are NOT reserved and 8000 is the canonical verifiable preview port.
     shares_host_network: bool = False
 
-    # Set by the service for a "filtered" box (allowlist + proxy sidecar + internal
-    # net); None otherwise. Class attrs (not __init__ params) so the destroy()
-    # teardown is inherited uniformly across every backend that supports the
-    # allowlisting aux (gVisor / Podman / local). The service mutates the INSTANCE
-    # attr in create() — that shadows the class attr with a real object.
+    # Set by the service for every container mode: sealed boxes own a control-only
+    # sidecar + internal net; filtered/public boxes own a policy sidecar + internal
+    # net. Class attrs keep teardown uniform and provide fail-safe defaults for
+    # partial/test instances. create() shadows them with real instance resources.
     _egress_sidecar: Any | None = None
     _egress_network: Any | None = None
     _host_service_relay_url: str | None = None
@@ -1298,7 +1334,7 @@ class ContainerInstance:
         """Resolve the published host mapping for an INTERNAL port only (BP-08).
         SECURITY: it must REFUSE USER_PORTS (the inverse gate) so it can never
         become a backdoor preview path."""
-        if sealed(self.spec) or port not in INTERNAL_PORTS:
+        if port not in INTERNAL_PORTS:
             return None
         return self._resolve_mapping(port)
 
@@ -1307,35 +1343,43 @@ class ContainerInstance:
         `_safe_reload` so a hung/raising client returns None (no URL) instead of
         wedging the loop. (Dispo #25 wedge-guard.)
 
-        [FIX6] For a FILTERED box (an egress sidecar is attached) the published
-        mapping lives on the SIDECAR, not the sandbox: the sandbox is on an
-        internal no-NAT net and publishes nothing, while the dual-homed sidecar
-        publishes the preview ports and forwards them inward. Sealed / open boxes
-        (no sidecar) keep the original sandbox-binding path."""
+        The published mapping lives on the SIDECAR, not the sandbox: every guest
+        is on an internal no-NAT net and publishes nothing directly. Sealed
+        sidecars publish only INTERNAL_PORTS; filtered/public sidecars publish the
+        full curated set. The sandbox fallback supports only older/minimal
+        ContainerInstance implementations without a sidecar."""
         if port not in PUBLISHED_PORTS:
             return None
         source = self._container if self._egress_sidecar is None else self._egress_sidecar
         try:
-            self._safe_reload(source)  # bounded; raises SandboxUnavailableError on hang/raise
+            if not self._safe_reload(source):
+                return None
             ports = source.attrs.get("NetworkSettings", {}).get("Ports") or {}
             binding = ports.get(f"{port}/tcp")
-            if not binding:
+            if not isinstance(binding, list) or len(binding) != 1:
                 return None
-            host_ip = str(binding[0].get("HostIp") or "")
-            if host_ip not in {"127.0.0.1", "::1"}:
-                # Fail closed if the daemon did not honor the loopback bind.
+            only_binding = binding[0]
+            if not isinstance(only_binding, dict):
+                return None
+            host_ip = str(only_binding.get("HostIp") or "")
+            if host_ip != "127.0.0.1":
+                # Bindings are requested on IPv4 loopback. Accepting IPv6 here
+                # would require bracketed URL construction and would advertise a
+                # transport shape this stack does not create.
+                return None
+            host_port = int(only_binding["HostPort"])
+            if not 1 <= host_port <= 65_535:
                 return None
             if self._loopback_tunnel is not None:
-                return self._loopback_tunnel.forward(int(binding[0]["HostPort"]))
-            return host_ip, int(binding[0]["HostPort"])
+                return self._loopback_tunnel.forward(host_port)
+            return host_ip, host_port
         except Exception:  # noqa: BLE001 — no mapping yet / box gone / wedged client
             return None
 
     def _teardown_egress_aux(self) -> None:
-        """Best-effort teardown of the filtered-egress aux (proxy sidecar + internal
-        network). Both refs default to None for sealed/open boxes, so this is a
-        no-op on those modes — only the filtered path sets them in the service's
-        create(). The order MATTERS: the sidecar is on the internal net, so we
+        """Best-effort teardown of the policy/control sidecar + internal network.
+        Refs may be None only for partial construction or a backend without this
+        topology. The order MATTERS: the sidecar is on the internal net, so we
         remove the sidecar first, then the net (else the net remove errors out on
         an attached endpoint)."""
         sidecar, network = self._egress_sidecar, self._egress_network
@@ -1358,11 +1402,11 @@ class ContainerInstance:
                 pass
 
     async def destroy(self) -> None:
-        """Stop + remove the container, then tear down the policy-egress aux (if
+        """Stop + remove the container, then tear down the policy/control aux (if
         any). Every container backend uses an ephemeral, quota-capped workspace
         volume which is explicitly removed during teardown. The aux
-        teardown is shared across every backend that supports the allowlisting
-        proxy (E8) — see `_teardown_egress_aux`."""
+        teardown is shared across every container backend — see
+        `_teardown_egress_aux`."""
         if self._destroyed:
             return
         self._destroyed = True
@@ -1421,6 +1465,175 @@ def _remove_volume(volume: Any, *, force: bool = True) -> None:
     except TypeError:
         pass
     volume.remove()
+
+
+_AUX_RECONCILE_GRACE_S = 300.0
+
+
+def _resource_created_epoch(resource: Any) -> float | None:
+    """Parse Docker/Podman network or volume creation time, failing closed."""
+
+    attrs = getattr(resource, "attrs", None) or {}
+    raw = attrs.get("CreatedAt") or attrs.get("Created") or attrs.get("created")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        created = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return created.timestamp()
+
+
+def _resource_labels(resource: Any) -> dict[str, str]:
+    attrs = getattr(resource, "attrs", None) or {}
+    labels = getattr(resource, "labels", None) or attrs.get("Labels") or attrs.get("labels")
+    return labels if isinstance(labels, dict) else {}
+
+
+def reconcile_orphan_aux_resources(
+    client: Any,
+    *,
+    workspace_volume_prefix: str,
+    now_s: float | None = None,
+) -> tuple[int, int]:
+    """Remove old detached sandbox networks/volumes left without a container.
+
+    Startup reconciliation previously considered only sandbox containers. If a
+    crash removed the container first, its labeled internal network and named
+    workspace volume became unreachable forever. This sweep is deliberately
+    conservative: a resource must have an exact current/legacy product prefix,
+    a recognized conversation label, a parseable age beyond the provisioning
+    grace, no attached endpoint/mount, and no matching sandbox or sidecar
+    container. Missing metadata or client errors retain the resource.
+    """
+
+    from .naming import (
+        EGR_NET_PREFIXES,
+        SBX_NAME_PREFIXES,
+        conv_id_from_labels,
+    )
+
+    now = time.time() if now_s is None else now_s
+    try:
+        all_containers = client.containers.list(all=True)
+        container_names = {
+            str(getattr(container, "name", "") or "").lstrip("/") for container in all_containers
+        }
+    except Exception as exc:  # noqa: BLE001 — fail closed; cleanup is maintenance
+        _LOG.warning(
+            "sandbox auxiliary reconciliation skipped: container inventory failed (%s)",
+            type(exc).__name__,
+        )
+        return 0, 0
+
+    def old_enough(resource: Any) -> bool:
+        created_s = _resource_created_epoch(resource)
+        return created_s is not None and now - created_s >= _AUX_RECONCILE_GRACE_S
+
+    def matching_container_exists(suffix: str) -> bool:
+        return any(
+            f"{prefix}{suffix}" in container_names
+            for prefix in (*SBX_NAME_PREFIXES, *EGR_NET_PREFIXES)
+        )
+
+    removed_networks = 0
+    try:
+        networks = client.networks.list()
+    except Exception as exc:  # noqa: BLE001 — fail closed; volumes remain independently safe
+        _LOG.warning(
+            "sandbox network reconciliation skipped: inventory failed (%s)",
+            type(exc).__name__,
+        )
+        networks = []
+    for network in networks:
+        name = str(getattr(network, "name", "") or "")
+        prefix = next((item for item in EGR_NET_PREFIXES if name.startswith(item)), None)
+        if prefix is None or not name.removeprefix(prefix):
+            continue
+        try:
+            reload_resource = getattr(network, "reload", None)
+            if callable(reload_resource):
+                reload_resource()
+        except Exception as exc:  # noqa: BLE001 — stale metadata is not removal authority
+            _LOG.warning(
+                "sandbox network reconciliation retained an unverifiable resource (%s)",
+                type(exc).__name__,
+            )
+            continue
+        attrs = getattr(network, "attrs", None) or {}
+        attached = attrs.get("Containers") or attrs.get("containers") or {}
+        suffix = name.removeprefix(prefix)
+        if (
+            not conv_id_from_labels(_resource_labels(network))
+            or bool(attached)
+            or matching_container_exists(suffix)
+            or not old_enough(network)
+        ):
+            continue
+        try:
+            network.remove()
+            removed_networks += 1
+        except Exception as exc:  # noqa: BLE001 — attached/gone resources remain safe
+            _LOG.warning(
+                "sandbox network reconciliation could not remove an orphan (%s)",
+                type(exc).__name__,
+            )
+
+    removed_volumes = 0
+    try:
+        volumes = client.volumes.list()
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        _LOG.warning(
+            "sandbox volume reconciliation skipped: inventory failed (%s)",
+            type(exc).__name__,
+        )
+        volumes = []
+    volume_prefixes = tuple(dict.fromkeys((f"{workspace_volume_prefix}-", "pmx-ws-")))
+    for volume in volumes:
+        name = str(getattr(volume, "name", "") or getattr(volume, "id", "") or "")
+        prefix = next((item for item in volume_prefixes if name.startswith(item)), None)
+        if prefix is None or not name.removeprefix(prefix):
+            continue
+        try:
+            reload_resource = getattr(volume, "reload", None)
+            if callable(reload_resource):
+                reload_resource()
+        except Exception as exc:  # noqa: BLE001 — stale metadata is not removal authority
+            _LOG.warning(
+                "sandbox volume reconciliation retained an unverifiable resource (%s)",
+                type(exc).__name__,
+            )
+            continue
+        attrs = getattr(volume, "attrs", None) or {}
+        mount_count = attrs.get("MountCount")
+        suffix = name.removeprefix(prefix)
+        if (
+            not conv_id_from_labels(_resource_labels(volume))
+            or (mount_count is not None and mount_count != 0)
+            or matching_container_exists(suffix)
+            or not old_enough(volume)
+        ):
+            continue
+        try:
+            # Never force startup garbage collection. A runtime-visible user
+            # safely wins a race by making the non-forced removal fail.
+            volume.remove()
+            removed_volumes += 1
+        except Exception as exc:  # noqa: BLE001 — attached/gone resources remain safe
+            _LOG.warning(
+                "sandbox volume reconciliation could not remove an orphan (%s)",
+                type(exc).__name__,
+            )
+
+    if removed_networks or removed_volumes:
+        _LOG.info(
+            "sandbox auxiliary reconciliation removed networks=%d volumes=%d",
+            removed_networks,
+            removed_volumes,
+        )
+    return removed_networks, removed_volumes
 
 
 def _create_named_volume(

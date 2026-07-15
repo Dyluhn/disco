@@ -16,8 +16,8 @@ real runsc (VM 202) is run by the orchestrator.
 
   (a) the SIDECAR is created WITH the published PUBLISHED_PORTS,
   (b) `inbound_forward.py` is injected + launched on the sidecar with the sandbox IP,
-  (c) `_resolve_mapping` reads the SIDECAR binding for a filtered box, the SANDBOX
-      binding when there is no sidecar (sealed/open),
+  (c) `_resolve_mapping` reads the SIDECAR binding for both filtered preview and
+      sealed internal-control transport,
   (d) `inbound_forward.py` itself — arg parse + a real localhost forward round-trip.
 """
 
@@ -27,9 +27,19 @@ import socket
 import threading
 
 import pytest
-from disco.tools.sandbox import GvisorSandboxService, SandboxConfig, SandboxSpec
+from disco.tools.sandbox import (
+    GvisorSandboxService,
+    SandboxConfig,
+    SandboxSpec,
+    SandboxUnavailableError,
+)
 from disco.tools.sandbox import inbound_forward as inbf
-from disco.tools.sandbox._container import PUBLISHED_PORTS, USER_PORTS, loopback_port_bindings
+from disco.tools.sandbox._container import (
+    INTERNAL_PORTS,
+    PUBLISHED_PORTS,
+    USER_PORTS,
+    loopback_port_bindings,
+)
 from test_gvisor import FakeContainer, FakeDockerClient
 
 
@@ -94,7 +104,7 @@ async def test_inbound_forwarder_injected_and_launched_on_sidecar(tmp_path):
 
 async def test_no_forwarder_without_sandbox_ip(tmp_path):
     """If the sandbox has no internal IP yet (reload returned nothing), the forwarder
-    is NOT launched (it would forward to nowhere) — best-effort, never raises."""
+    fails closed and every partially allocated resource is removed."""
     svc, client = _svc(tmp_path)
 
     # Force the sandbox container to report no internal IP.
@@ -106,18 +116,22 @@ async def test_no_forwarder_without_sandbox_ip(tmp_path):
         return c
 
     client.run = _run_no_ip  # type: ignore[method-assign]
-    await svc.create(
-        SandboxSpec(egress_allow=frozenset({"api.example.com"})),
-        owner_id="o",
-        conversation_id="c",
-    )
+    with pytest.raises(SandboxUnavailableError, match="no internal address"):
+        await svc.create(
+            SandboxSpec(egress_allow=frozenset({"api.example.com"})),
+            owner_id="o",
+            conversation_id="c",
+        )
     sidecar = client.runs[0]
-    assert not any("inbound_forward.py" in p for p in sidecar.fs)
+    assert not any("inbound_forward.py" in " ".join(call) for call in sidecar.exec_calls)
+    assert all(container.removed for container in client.runs)
+    assert client.networks.created[0].removed
+    assert all(volume.removed for volume in client.volumes.objects.values())
 
 
 # ---------------------------------------------------------------------------
-# (c) _resolve_mapping reads the SIDECAR binding when filtered, the SANDBOX binding
-#     when not (sealed/open).
+# (c) _resolve_mapping reads the SIDECAR binding for filtered preview and sealed
+#     internal control transport.
 # ---------------------------------------------------------------------------
 
 
@@ -143,16 +157,27 @@ async def test_resolve_mapping_reads_sidecar_binding_when_filtered(tmp_path):
     assert url == "http://127.0.0.1:49160"  # the SIDECAR's port, not the sandbox decoy
 
 
-async def test_sealed_sandbox_refuses_decoy_binding_without_sidecar(tmp_path):
+async def test_sealed_sandbox_maps_only_internal_control_port_from_sidecar(tmp_path):
     svc, client = _svc(tmp_path)
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert inst._egress_sidecar is None
-    sandbox = client.last
-    sandbox.attrs = {
-        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}]}}
+    sidecar, sandbox = client.runs
+    sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8899/tcp": [{"HostIp": "127.0.0.1", "HostPort": "38899"}]}}
     }
-    url = inst.expose_port(8000)
-    assert url is None
+    sandbox.attrs = {
+        "NetworkSettings": {
+            "Ports": {
+                "8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}],
+                "8899/tcp": [{"HostIp": "127.0.0.1", "HostPort": "1"}],
+            }
+        }
+    }
+    assert inst._egress_sidecar is sidecar
+    assert inst.internal_port_mapping(8899) == ("127.0.0.1", 38899)
+    assert inst.expose_port(8000) is None
+    assert inst.expose_port(8899) is None
+    assert inst.internal_port_mapping(next(iter(USER_PORTS))) is None
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
 
 
 async def test_resolve_mapping_refuses_nonloopback_daemon_binding(tmp_path):

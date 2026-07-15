@@ -646,9 +646,14 @@ class GatewayKernel(KernelSession):
             mapping = self._sandbox.internal_port_mapping(port)
 
         if not mapping:
-            # Not a container or not published? For process backend it shouldn't reach here.
-            # But just in case, if it's local, we might want localhost:8899
-            mapping = ("localhost", port)
+            # Never probe ambient host localhost as a hidden fallback: another
+            # process could answer there, and a sealed container would still have
+            # no transport to its own gateway. Container provisioning must provide
+            # the explicit loopback mapping or code_exec fails closed.
+            raise SandboxError(
+                "kernel gateway internal transport is unavailable; "
+                "code_exec cannot start for this sandbox session"
+            )
 
         self._url = f"http://{mapping[0]}:{mapping[1]}"
 

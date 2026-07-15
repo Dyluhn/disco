@@ -248,7 +248,15 @@ async def test_gvisor_filtered_path_unchanged_no_regression(tmp_path):
 async def test_gvisor_sealed_and_open_paths_remain_sibling_isolated(tmp_path):
     svc, client = _gvisor_svc(tmp_path)
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs["network_mode"] == "none"
+    sidecar, sandbox = client.runs[:2]
+    net = client.networks.created[0]
+    assert net.attrs.get("internal") is True
+    assert sandbox.run_kwargs["network"] == net.name
+    assert sandbox.run_kwargs["environment"] == {}
+    assert sandbox.run_kwargs["ports"] is None
+    from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
+
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})),
         owner_id="o",

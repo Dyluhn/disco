@@ -102,6 +102,30 @@ class _MappedSandbox:
         return ("127.0.0.1", 38899)
 
 
+@pytest.mark.asyncio
+async def test_gateway_missing_internal_mapping_fails_without_localhost_fallback(
+    monkeypatch,
+) -> None:
+    class _UnmappedSandbox:
+        id = "sbx_unmapped"
+
+        @staticmethod
+        def internal_port_mapping(_port: int):
+            return None
+
+    probed: list[str] = []
+
+    async def forbidden_probe(_self, url, **_kwargs):
+        probed.append(url)
+        raise AssertionError("ambient localhost must never be probed")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", forbidden_probe)
+    kernel = GatewayKernel(_UnmappedSandbox(), sessions=None)
+    with pytest.raises(SandboxError, match="internal transport is unavailable"):
+        await kernel._ensure_gateway()
+    assert probed == []
+
+
 class _FakeHTTPClient:
     def __init__(self, *, status: int | None = None) -> None:
         self.status = status
@@ -220,9 +244,7 @@ async def test_gateway_timeout_is_wall_clock_bounded_and_sanitized(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gateway_immediate_exit_normalizes_internal_session_for_retry(
-    monkeypatch, caplog
-):
+async def test_gateway_immediate_exit_normalizes_internal_session_for_retry(monkeypatch, caplog):
     """H208: even timed-out cleanup cannot leave a busy-only retry failure."""
 
     class _RetrySessions:

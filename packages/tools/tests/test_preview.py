@@ -1,20 +1,23 @@
 """Backend-aware preview exposure — hermetic (the additive expose_port + dispatch).
 
-Proves: only the dev-server port is exposed; the published host port becomes a reachable
-URL; the URL host follows the backend (localhost local, the remote tailnet IP for gVisor);
-the local backend publishes the port only when network is granted; Podman is a code stub.
+Proves: only curated user ports become preview URLs; internal control mappings never do;
+daemon bindings must be exact loopback bindings; and sealed boxes publish only the kernel
+control port through their sidecar while exposing no user preview.
 """
 
 from __future__ import annotations
 
+import pytest
 from disco.tools.anatomy import Capability
 from disco.tools.sandbox._container import (
+    INTERNAL_PORTS,
     PREVIEW_PORT,
+    PUBLISHED_PORTS,
     USER_PORTS,
     ContainerInstance,
     loopback_port_bindings,
 )
-from disco.tools.sandbox.base import SandboxSpec
+from disco.tools.sandbox.base import SandboxError, SandboxSpec
 from disco.tools.sandbox.gvisor import _preview_host
 
 
@@ -36,12 +39,16 @@ class _Container:
         pass
 
 
-def _inst(container, preview_host: str = "localhost") -> ContainerInstance:
+def _inst(
+    container,
+    preview_host: str = "localhost",
+    spec: SandboxSpec | None = None,
+) -> ContainerInstance:
     return ContainerInstance(
         id="x",
         owner_id="o",
         conversation_id="c",
-        spec=SandboxSpec(public_web=True),
+        spec=spec or SandboxSpec(public_web=True),
         container=container,
         container_workspace="/workspace",
         stop_timeout_s=5,
@@ -74,6 +81,60 @@ def test_internal_ports_are_never_exposed_to_user():
     assert inst.expose_port(8899) is None
 
 
+def test_sealed_internal_mapping_is_available_but_inverse_port_gates_hold():
+    inst = _inst(
+        _Container({8899: "32771", 8000: "32772"}),
+        spec=SandboxSpec(),
+    )
+    assert inst.internal_port_mapping(8899) == ("127.0.0.1", 32771)
+    assert inst.internal_port_mapping(8000) is None
+    assert inst.expose_port(8000) is None
+    assert inst.expose_port(8899) is None
+
+
+def test_mapping_rejects_stopped_or_ambiguously_bound_sidecar():
+    sidecar = _Container({8899: "32771"})
+    inst = _inst(_Container(), spec=SandboxSpec())
+    inst._egress_sidecar = sidecar
+    sidecar.status = "exited"
+    assert inst.internal_port_mapping(8899) is None
+
+    sidecar.status = "running"
+    sidecar.attrs["NetworkSettings"]["Ports"]["8899/tcp"].append(
+        {"HostIp": "0.0.0.0", "HostPort": "32772"}
+    )
+    assert inst.internal_port_mapping(8899) is None
+
+
+@pytest.mark.parametrize(
+    ("host_ip", "host_port"),
+    [
+        ("::1", "32771"),
+        ("0.0.0.0", "32771"),
+        ("127.0.0.1", None),
+        ("127.0.0.1", "not-a-port"),
+        ("127.0.0.1", "0"),
+        ("127.0.0.1", "-1"),
+        ("127.0.0.1", "65536"),
+    ],
+)
+def test_mapping_rejects_noncanonical_or_dead_binding(host_ip, host_port):
+    sidecar = _Container()
+    sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8899/tcp": [{"HostIp": host_ip, "HostPort": host_port}]}}
+    }
+    inst = _inst(_Container(), spec=SandboxSpec())
+    inst._egress_sidecar = sidecar
+    assert inst.internal_port_mapping(8899) is None
+
+
+def test_loopback_bindings_can_select_only_curated_internal_ports():
+    assert loopback_port_bindings(INTERNAL_PORTS) == {"8899/tcp": ("127.0.0.1", None)}
+    assert set(loopback_port_bindings()) == {f"{port}/tcp" for port in PUBLISHED_PORTS}
+    with pytest.raises(SandboxError, match="outside the curated"):
+        loopback_port_bindings({8899, 65_000})
+
+
 def test_only_curated_user_ports_are_exposed():
     # containment: any other port is NOT reachable as a user URL
     assert 9999 not in USER_PORTS
@@ -81,7 +142,7 @@ def test_only_curated_user_ports_are_exposed():
 
 
 def test_no_url_when_the_port_is_not_published():
-    # a sealed session publishes nothing → no preview (not a fake URL)
+    # no user-port binding means no preview URL (sealed control mapping is separate)
     assert _inst(_Container(None)).expose_port(PREVIEW_PORT) is None
 
 
@@ -115,8 +176,9 @@ def test_local_publishes_curated_ports_only_on_policy_sidecar():
     granted, sidecar = asyncio.run(_run(SandboxSpec(permitted=frozenset({Capability.NETWORK}))))
     assert granted["ports"] is None
     assert sidecar["ports"] == loopback_port_bindings()
-    sealed, _only_sandbox = asyncio.run(_run(SandboxSpec()))
-    assert sealed["ports"] is None  # sealed box exposes nothing
+    sealed, sealed_sidecar = asyncio.run(_run(SandboxSpec()))
+    assert sealed["ports"] is None  # sealed guest never publishes directly
+    assert sealed_sidecar["ports"] == loopback_port_bindings(INTERNAL_PORTS)
 
 
 def test_podman_expose_port_inherits_shared_impl():

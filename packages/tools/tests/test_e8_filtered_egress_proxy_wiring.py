@@ -26,6 +26,7 @@ from disco.tools.sandbox import (
     default_local_config,
     default_podman_config,
 )
+from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
 from test_gvisor import FakeDockerClient
 from test_local import FakeLocalClient
 
@@ -201,11 +202,21 @@ async def test_filtered_gvisor_spec_unchanged_no_regression(tmp_path):
 
 
 async def test_sealed_and_open_gvisor_paths_are_isolated(tmp_path):
-    """Sealed has no network; explicit raw egress gets a per-instance bridge."""
+    """Sealed has control-only ingress; public egress remains policy-mediated."""
     svc, client = _gvisor_svc(tmp_path)
-    # Default (sealed) — unchanged.
+    # Default: guest is internal-only, environment is empty, and the hardened
+    # control sidecar publishes only the kernel gateway port on host loopback.
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs["network_mode"] == "none"
+    sidecar, sandbox = client.runs[:2]
+    net = client.networks.created[0]
+    assert net.attrs.get("internal") is True
+    assert sandbox.run_kwargs["network"] == net.name
+    assert sandbox.run_kwargs["environment"] == {}
+    assert sandbox.run_kwargs["ports"] is None
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
+    assert sidecar.run_kwargs["cap_drop"] == ["ALL"]
+    assert sidecar.run_kwargs["sysctls"]["net.ipv4.ip_forward"] == "0"
+    assert "/egress_proxy.py" not in sidecar.fs
     # Legacy NETWORK capability is public-only through an internal proxy boundary.
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})),
@@ -267,7 +278,15 @@ async def test_filtered_local_spec_yields_proxied_network_not_none():
 async def test_sealed_and_open_local_paths_are_isolated():
     svc, client = _local_svc()
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs["network_mode"] == "none"
+    sidecar, sandbox = client.runs[:2]
+    net = client.networks.created[0]
+    assert net.attrs.get("internal") is True
+    assert sandbox.run_kwargs["network"] == net.name
+    assert sandbox.run_kwargs["environment"] == {}
+    assert sandbox.run_kwargs["ports"] is None
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
+    assert sidecar.run_kwargs["cap_drop"] == ["ALL"]
+    assert sidecar.run_kwargs["sysctls"]["net.ipv4.ip_forward"] == "0"
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})),
         owner_id="o",

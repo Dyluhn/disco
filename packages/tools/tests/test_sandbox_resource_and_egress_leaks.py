@@ -14,6 +14,9 @@ P1 #2 — filtered-egress setup (`_setup_filtered_egress`) runs BEFORE the guard
 P2 #3 — podman orphan reconciliation (`destroy_by_conversation`) must remove the
         labeled `disco-egr-*` egress networks too, not only the labeled containers —
         mirroring the gVisor path — else a crash/restart strands them.
+
+H220 — startup reconciliation must also remove old detached product-labeled auxiliary
+        networks/volumes when no sandbox container survives to supply a conversation ID.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from disco.tools.sandbox import (
     default_local_config,
     default_podman_config,
 )
-from disco.tools.sandbox._container import resolve_bounds
+from disco.tools.sandbox._container import reconcile_orphan_aux_resources, resolve_bounds
 from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
@@ -417,3 +420,174 @@ async def test_podman_destroy_by_conversation_removes_labeled_egress_networks() 
     # A network for a DIFFERENT conversation is left untouched.
     assert other_net.removed is False
     assert other_vol.removed is False
+
+
+class _GcResource:
+    def __init__(self, name: str, attrs: dict[str, Any]) -> None:
+        self.name = self.id = name
+        self.attrs = attrs
+        self.labels = attrs.get("Labels") or attrs.get("labels") or {}
+        self.remove_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def reload(self) -> None:
+        return None
+
+    def remove(self, *args: Any, **kwargs: Any) -> None:
+        self.remove_calls.append((args, kwargs))
+
+
+class _GcManager:
+    def __init__(self, resources: list[Any], *, fail: bool = False) -> None:
+        self.resources = resources
+        self.fail = fail
+
+    def list(self, *args: Any, **kwargs: Any) -> list[Any]:
+        if self.fail:
+            raise RuntimeError("inventory unavailable")
+        return list(self.resources)
+
+
+class _GcClient:
+    def __init__(
+        self,
+        *,
+        containers: list[Any],
+        networks: list[_GcResource],
+        volumes: list[_GcResource],
+        fail_containers: bool = False,
+    ) -> None:
+        self.containers = _GcManager(containers, fail=fail_containers)
+        self.networks = _GcManager(networks)
+        self.volumes = _GcManager(volumes)
+
+
+def _gc_network(
+    name: str,
+    *,
+    created: str = "2000-01-01T00:00:00+00:00",
+    labels: dict[str, str] | None = None,
+    attached: bool = False,
+) -> _GcResource:
+    return _GcResource(
+        name,
+        {
+            "created": created,
+            "labels": {_LABEL: _CONV} if labels is None else labels,
+            "containers": {"attached": {}} if attached else {},
+        },
+    )
+
+
+def _gc_volume(
+    name: str,
+    *,
+    created: str = "2000-01-01T00:00:00+00:00",
+    labels: dict[str, str] | None = None,
+    mount_count: int = 0,
+) -> _GcResource:
+    return _GcResource(
+        name,
+        {
+            "CreatedAt": created,
+            "Labels": {_LABEL: _CONV} if labels is None else labels,
+            "MountCount": mount_count,
+        },
+    )
+
+
+def test_startup_reconciliation_removes_only_owned_old_detached_auxiliaries() -> None:
+    current_net = _gc_network("disco-egr-orphan")
+    legacy_net = _gc_network("pmx-egr-legacy", labels={"pmx.conversation_id": _CONV})
+    fresh_net = _gc_network("disco-egr-fresh", created="2100-01-01T00:00:00+00:00")
+    unlabeled_net = _gc_network("disco-egr-unlabeled", labels={})
+    attached_net = _gc_network("disco-egr-attached", attached=True)
+    live_net = _gc_network("disco-egr-live")
+    user_net = _gc_network("user-network")
+
+    current_volume = _gc_volume("disco-ws-orphan")
+    legacy_volume = _gc_volume("pmx-ws-legacy", labels={"pmx.conversation_id": _CONV})
+    fresh_volume = _gc_volume("disco-ws-fresh", created="2100-01-01T00:00:00+00:00")
+    unlabeled_volume = _gc_volume("disco-ws-unlabeled", labels={})
+    mounted_volume = _gc_volume("disco-ws-mounted", mount_count=1)
+    live_volume = _gc_volume("disco-ws-live")
+    user_volume = _gc_volume("user-volume")
+    live_container = _ReconContainer("disco-sbx-live", {_LABEL: _CONV})
+
+    client = _GcClient(
+        containers=[live_container],
+        networks=[
+            current_net,
+            legacy_net,
+            fresh_net,
+            unlabeled_net,
+            attached_net,
+            live_net,
+            user_net,
+        ],
+        volumes=[
+            current_volume,
+            legacy_volume,
+            fresh_volume,
+            unlabeled_volume,
+            mounted_volume,
+            live_volume,
+            user_volume,
+        ],
+    )
+
+    assert reconcile_orphan_aux_resources(
+        client,
+        workspace_volume_prefix="disco-ws",
+        now_s=2_000_000_000,
+    ) == (2, 2)
+    assert current_net.remove_calls == [((), {})]
+    assert legacy_net.remove_calls == [((), {})]
+    assert current_volume.remove_calls == [((), {})]
+    assert legacy_volume.remove_calls == [((), {})]
+    for retained in (
+        fresh_net,
+        unlabeled_net,
+        attached_net,
+        live_net,
+        user_net,
+        fresh_volume,
+        unlabeled_volume,
+        mounted_volume,
+        live_volume,
+        user_volume,
+    ):
+        assert retained.remove_calls == []
+
+
+def test_startup_reconciliation_fails_closed_without_container_inventory() -> None:
+    network = _gc_network("disco-egr-orphan")
+    volume = _gc_volume("disco-ws-orphan")
+    client = _GcClient(
+        containers=[],
+        networks=[network],
+        volumes=[volume],
+        fail_containers=True,
+    )
+
+    assert reconcile_orphan_aux_resources(
+        client,
+        workspace_volume_prefix="disco-ws",
+        now_s=2_000_000_000,
+    ) == (0, 0)
+    assert network.remove_calls == []
+    assert volume.remove_calls == []
+
+
+@pytest.mark.parametrize("backend", ["gvisor", "podman"])
+async def test_list_live_instances_reconciles_owned_orphan_auxiliaries(backend: str) -> None:
+    network = _gc_network("disco-egr-public-boundary")
+    volume = _gc_volume("disco-ws-public-boundary")
+    client = _GcClient(containers=[], networks=[network], volumes=[volume])
+    if backend == "gvisor":
+        service = GvisorSandboxService(SandboxConfig(), client=client)
+    else:
+        service = PodmanSandboxService(default_podman_config(), client=client)
+
+    assert await service.list_live_instances() == []
+    assert network.remove_calls == [((), {})]
+    assert volume.remove_calls == [((), {})]

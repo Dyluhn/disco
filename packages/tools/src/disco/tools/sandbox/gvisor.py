@@ -30,6 +30,7 @@ from . import egress_proxy as _egress_proxy_mod
 from . import inbound_forward as _inbound_forward_mod
 from ._container import (
     EGRESS_PROXY_PORT,
+    INTERNAL_PORTS,
     PUBLISHED_PORTS,
     ContainerInstance,
     SshLoopbackTunnelManager,
@@ -41,11 +42,13 @@ from ._container import (
     discover_remote_host_ips,
     egress_mode,
     format_allow,
+    inbound_readiness_argv,
     loopback_port_bindings,
     nofile_ulimits,
     proxy_env,
     proxy_readiness_argv,
     proxy_run_argv,
+    reconcile_orphan_aux_resources,
     resolve_bounds,
     sealed,
 )
@@ -201,9 +204,11 @@ class GvisorSandboxInstance(ContainerInstance):
     workspace is an ephemeral, quota-capped daemon volume; file ops reach it only
     through the container and teardown removes it.
 
-    Filtered-egress boxes also own an allowlisting proxy SIDECAR and an internal
-    no-NAT network; both are torn down alongside the container so a run leaves no
-    orphaned infra. The aux teardown is inherited from ContainerInstance
+    Every box also owns an internal no-NAT network and a hardened SIDECAR. Sealed
+    boxes use it only for loopback-bound kernel control ingress; filtered/public
+    boxes additionally run the egress policy proxy. Both resources are torn down
+    alongside the container so a run leaves no orphaned infra. Aux teardown is
+    inherited from ContainerInstance
     (`_teardown_egress_aux`); the service sets `instance._egress_sidecar` /
     `instance._egress_network` in create()."""
 
@@ -310,16 +315,24 @@ class GvisorSandboxService:
             raise SandboxUnavailableError(f"could not query the sandbox image: {exc}") from exc
 
     def _setup_filtered_egress(
-        self, client: Any, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
+        self,
+        client: Any,
+        spec: SandboxSpec,
+        instance_id: str,
+        conversation_id: str = "",
+        *,
+        inbound_only: bool = False,
     ) -> Any:
-        """[HARDWARE-UNVERIFIED — live-verify on VM 201] Stand up the allowlisting
-        egress for a "filtered" box and return (network, sidecar, env, network_name).
+        """[HARDWARE-UNVERIFIED — live-verify on VM 201] Stand up the internal
+        network + policy/control sidecar and return its topology.
 
         Containment design: an INTERNAL (no-NAT) network whose ONLY member with an
         outside route is the proxy sidecar. The sandbox is attached to this network
         alone, so its sole path to the internet is through the proxy — which refuses
         any host the allowlist doesn't name. The HTTP(S)_PROXY env is belt-and-
-        suspenders; the no-route property is the real guarantee.
+        suspenders; the no-route property is the real guarantee. ``inbound_only``
+        omits resolver/proxy/relay setup and publishes only INTERNAL_PORTS for
+        host-to-guest kernel control.
 
         The proxy is the stdlib-only `egress_proxy.py`, injected into a sidecar built
         from the SAME base image (its python3 runs it — no extra image, honoring the
@@ -353,15 +366,20 @@ class GvisorSandboxService:
         sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
         sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
         sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
-        deny_ips = collect_host_deny_ips(
-            self._cfg.host_ip_blocklist,
-            self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
-            include_local_interfaces=not self._cfg.docker_socket.startswith("ssh://"),
-            additional_host_ips=(
-                discover_remote_host_ips(self._cfg.docker_socket)
-                if self._cfg.docker_socket.startswith("ssh://") and self._injected_client is None
-                else frozenset()
-            ),
+        deny_ips = (
+            frozenset()
+            if inbound_only
+            else collect_host_deny_ips(
+                self._cfg.host_ip_blocklist,
+                self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
+                include_local_interfaces=not self._cfg.docker_socket.startswith("ssh://"),
+                additional_host_ips=(
+                    discover_remote_host_ips(self._cfg.docker_socket)
+                    if self._cfg.docker_socket.startswith("ssh://")
+                    and self._injected_client is None
+                    else frozenset()
+                ),
+            )
         )
         # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
         # so if it creates the network/sidecar then fails partway (connect/start/proxy
@@ -388,7 +406,7 @@ class GvisorSandboxService:
                 command=["sh", "-c", "exec sleep infinity"],
                 runtime=self._cfg.runtime,
                 network="bridge",  # the route to the internet (the proxy's upstream)
-                ports=None if sealed(spec) else loopback_port_bindings(),
+                ports=loopback_port_bindings(INTERNAL_PORTS if sealed(spec) else PUBLISHED_PORTS),
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 mem_limit=f"{sidecar_memory_mb}m",
@@ -407,6 +425,11 @@ class GvisorSandboxService:
             )
             network.connect(sidecar)  # the internal net the sandbox shares with it
             sidecar.start()
+            if inbound_only:
+                # Default sealed boxes need host-to-guest kernel control only.
+                # No resolver, egress proxy, proxy environment, or relay is
+                # installed, so the sandbox retains zero outbound transport.
+                return network, sidecar, {}, net_name, None
             # (2) replace the dead embedded resolver with public DNS over the (working) route.
             sidecar.exec_run(
                 [
@@ -432,7 +455,12 @@ class GvisorSandboxService:
                 deny_hosts=deny_hosts,
             )
             sidecar.exec_run(
-                ["sh", "-c", f"{shlex.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True
+                [
+                    "sh",
+                    "-c",
+                    f"exec {shlex.join(argv)} >/var/log/egress.log 2>/var/log/egress.err.log",
+                ],
+                detach=True,
             )
             ready = sidecar.exec_run(proxy_readiness_argv(EGRESS_PROXY_PORT), demux=True)
             if ready[0] != 0:
@@ -440,13 +468,23 @@ class GvisorSandboxService:
                     "egress policy proxy failed its readiness check; refusing sandbox start"
                 )
             # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
-            sidecar.reload()
-            proxy_ip = (
-                sidecar.attrs.get("NetworkSettings", {})
-                .get("Networks", {})
-                .get(net_name, {})
-                .get("IPAddress", "")
-            ) or net_name  # fall back to the name (harmless for the fake/test path)
+            try:
+                sidecar.reload()
+                sidecar_running = getattr(sidecar, "status", "") == "running"
+                proxy_ip = (
+                    sidecar.attrs.get("NetworkSettings", {})
+                    .get("Networks", {})
+                    .get(net_name, {})
+                    .get("IPAddress", "")
+                )
+            except Exception as exc:  # noqa: BLE001 — fixed diagnostic + outer cleanup
+                raise SandboxUnavailableError(
+                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
+                ) from exc
+            if not sidecar_running or not proxy_ip:
+                raise SandboxUnavailableError(
+                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
+                )
             env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
             relay_url = self._launch_capability_relay(sidecar, proxy_ip, spec)
             return network, sidecar, env, net_name, relay_url
@@ -470,7 +508,9 @@ class GvisorSandboxService:
         _put_file(sidecar, "/", "capability_relay.py", script)
         authority = f"{sidecar_ip}:{HOST_SERVICE_RELAY_PORT}"
         argv = relay_run_argv(self._cfg.host_service_upstream, authority)
-        sidecar.exec_run(["sh", "-c", f"{shlex.join(argv)} >/dev/null 2>&1 &"], detach=True)
+        sidecar.exec_run(
+            ["sh", "-c", f"exec {shlex.join(argv)} >/dev/null 2>/dev/null"], detach=True
+        )
         ready = sidecar.exec_run(relay_readiness_argv(sidecar_ip), demux=True)
         if ready[0] != 0:
             raise SandboxUnavailableError(
@@ -478,7 +518,13 @@ class GvisorSandboxService:
             )
         return f"http://{authority}"
 
-    def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
+    def _launch_inbound_forwarder(
+        self,
+        sidecar: Any,
+        container: Any,
+        net_name: str,
+        ports: frozenset[int] = PUBLISHED_PORTS,
+    ) -> None:
         """[FIX6 — live-proven on real gVisor/runsc] Make a FILTERED box's preview
         ports host-reachable WITHOUT breaking containment. The sandbox is on an
         INTERNAL no-NAT net and runsc froze its netstack at boot (no NIC hot-plug),
@@ -490,9 +536,8 @@ class GvisorSandboxService:
         byte pipe → websockets / Vite HMR pass through; the sandbox keeps zero
         direct egress.
 
-        Best-effort: on ANY failure the preview is unreachable but the box still
-        works (the agent-server surfaces the honest no-URL state), so we never
-        raise here and leak the just-started sandbox.
+        Fail closed: a missing internal address, launch failure, or listener
+        readiness failure aborts provisioning. The caller owns complete cleanup.
 
         GOTCHA (found live): a detached `docker exec -d ... python3 -` drops stdin,
         so the script is delivered via `put_archive` (NOT piped on stdin) and only
@@ -506,10 +551,9 @@ class GvisorSandboxService:
                 .get("IPAddress", "")
             )
             if not sbx_ip:
-                _LOG.warning(
-                    "filtered sandbox has no internal IP on %s; preview unreachable", net_name
+                raise SandboxUnavailableError(
+                    "sandbox has no internal address; refusing dead inbound transport"
                 )
-                return
             script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
             # [FIX6 — live-found on real gVisor] Do NOT deliver the forwarder via a
             # separate `put_archive` + later `exec`: against a dual-homed runsc sidecar
@@ -520,7 +564,7 @@ class GvisorSandboxService:
             # there is no cross-exec gofer-visibility gap. `exec` makes python3 the
             # detached process itself (not a backgrounded child that gets reaped).
             b64 = base64.b64encode(script).decode("ascii")
-            ports_arg = " ".join(str(p) for p in sorted(PUBLISHED_PORTS))
+            ports_arg = " ".join(str(p) for p in sorted(ports))
             sidecar.exec_run(
                 [
                     "sh",
@@ -531,19 +575,25 @@ class GvisorSandboxService:
                 ],
                 detach=True,
             )
-        except Exception:  # noqa: BLE001 — best-effort; preview unreachable, box still works
-            _LOG.warning(
-                "failed to launch the inbound preview forwarder on the egress sidecar",
-                exc_info=True,
-            )
+            ready = sidecar.exec_run(inbound_readiness_argv(ports), demux=True)
+            if ready[0] != 0:
+                raise SandboxUnavailableError(
+                    "inbound transport forwarder failed readiness; refusing sandbox start"
+                )
+        except SandboxUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — fixed diagnostic, cleanup owned by caller
+            raise SandboxUnavailableError(
+                "inbound transport forwarder setup failed; refusing sandbox start"
+            ) from exc
 
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, host_workspace: str, conversation_id: str = ""
     ) -> Any:
         """All the blocking Docker work for `create`, run in a thread. Maps infra
         failures to typed errors with the real cause. `host_workspace` is a path on
-        the DAEMON host (not necessarily local). Returns (container, egress_aux),
-        where egress_aux is (network, sidecar) for a filtered box else (None, None)."""
+        the DAEMON host (not necessarily local). Returns the container plus its
+        policy/control network, sidecar, workspace volume, and optional relay URL."""
         client = self._client()
         self._require_runtime(client)
         self._require_image(client)  # never-pull guard, before any run
@@ -567,10 +617,9 @@ class GvisorSandboxService:
                     "container host-service relay requires a reachable HTTPS upstream; "
                     "sidecar loopback is not the agent-server host"
                 )
-        # Publish the curated port set (Docker can't add mappings to a running
-        # container, so the set is declared here), and only when network is
-        # granted — a sealed box has no port to reach.
-        ports = None if sealed(spec) else loopback_port_bindings()
+        # The sandbox never publishes directly. Every mode uses an internal
+        # no-NAT network and a loopback-bound policy/control sidecar.
+        ports = None
         command = _keepalive_command()
 
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
@@ -580,22 +629,31 @@ class GvisorSandboxService:
         egress_net_name = ""
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         host_service_relay_url = None
-        if mode in {"filtered", "public"} or spec.host_services:
+        inbound_only = mode == "sealed" and not spec.host_services
+        try:
             (
                 egress_network,
                 egress_sidecar,
                 environment,
                 net_name,
                 host_service_relay_url,
-            ) = self._setup_filtered_egress(client, spec, instance_id, conversation_id)
-            egress_net_name = net_name
-            net_kwargs = {"network": net_name}  # internal no-NAT net; proxy is the only route
-            # The sandbox itself publishes NOTHING (it's on an internal no-NAT net and
-            # runsc can't hot-plug a NIC). [FIX6] the preview is reached via the egress
-            # SIDECAR's published ports + an inbound forwarder, launched below.
-            ports = None
-        else:  # sealed
-            net_kwargs = {"network_mode": "none"}
+            ) = self._setup_filtered_egress(
+                client,
+                spec,
+                instance_id,
+                conversation_id,
+                inbound_only=inbound_only,
+            )
+        except SandboxUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
+            operation = "inbound control" if inbound_only else "sandbox policy"
+            raise SandboxUnavailableError(
+                f"{operation} sidecar setup failed; refusing sandbox start"
+            ) from exc
+        egress_net_name = net_name
+        # INTERNAL network: no bridge/NAT route is ever attached to the sandbox.
+        net_kwargs = {"network": net_name}
 
         volume = None
         container = None
@@ -619,8 +677,8 @@ class GvisorSandboxService:
                 pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
                 ulimits=nofile_ulimits(self._cfg),
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                # NO host env beyond capability-granted values. For a filtered box that's
-                # the proxy routing vars (defense in depth atop the no-route network).
+                # NO host env beyond capability-granted values. Filtered/public
+                # boxes receive only proxy routing vars; sealed receives none.
                 environment=environment,
                 # Run every model-controlled process as the configured workspace
                 # principal.  Merely owning the tmpfs mount as this UID is not
@@ -634,6 +692,14 @@ class GvisorSandboxService:
                 labels=labels,
                 **net_kwargs,
             )
+            forward_ports = INTERNAL_PORTS if mode == "sealed" else PUBLISHED_PORTS
+            self._launch_inbound_forwarder(
+                egress_sidecar,
+                container,
+                egress_net_name,
+                forward_ports,
+            )
+            return container, egress_network, egress_sidecar, volume, host_service_relay_url
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
             if container is None:
                 with contextlib.suppress(Exception):
@@ -647,12 +713,6 @@ class GvisorSandboxService:
             if isinstance(exc, SandboxUnavailableError):
                 raise
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
-        # [FIX6] sandbox is up and on the internal net — launch the inbound preview
-        # forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT). Best-effort: never
-        # raises, so it can't leak the just-started box.
-        if mode in {"filtered", "public"} and egress_sidecar is not None:
-            self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
-        return container, egress_network, egress_sidecar, volume, host_service_relay_url
 
     @staticmethod
     def _best_effort_cleanup(network: Any, sidecar: Any) -> None:
@@ -712,7 +772,7 @@ class GvisorSandboxService:
                 else None
             ),
         )
-        # Attach the filtered-egress aux so destroy() tears down the proxy + network.
+        # Attach the policy/control aux so destroy() tears down sidecar + network.
         instance._egress_network = egress_network
         instance._egress_sidecar = egress_sidecar
         instance._host_service_relay_url = host_service_relay_url
@@ -740,7 +800,7 @@ class GvisorSandboxService:
         await asyncio.to_thread(_probe)
 
     async def list_live_instances(self) -> list[str]:
-        """Return conversation_ids of all live pmx-sbx-* containers on this backend.
+        """Return conversation IDs for live current/legacy sandbox containers.
 
         Side effect (documented, deliberate): a pmx-sbx-* container WITHOUT a
         pmx.conversation_id label predates the label scheme — it cannot be
@@ -748,7 +808,9 @@ class GvisorSandboxService:
         construction (session handles are in-memory; recreation always builds a
         fresh instance). These legacy orphans are reaped on sight — they are
         exactly the population that OOM-wedged VM-201 (34 unlabeled containers,
-        2026-06-10); a label-only sweep would skip every one of them."""
+        2026-06-10); a label-only sweep would skip every one of them. H220 also
+        reconciles aged, detached, product-labeled auxiliary networks/volumes
+        whose sandbox and sidecar containers no longer exist."""
 
         def _list() -> list[str]:
             try:
@@ -777,6 +839,10 @@ class GvisorSandboxService:
                         _remove_container(c)
                     except Exception:  # noqa: BLE001 — best-effort
                         pass
+                reconcile_orphan_aux_resources(
+                    client,
+                    workspace_volume_prefix=self._cfg.workspace_volume_prefix,
+                )
                 return result
             except Exception:  # noqa: BLE001 — docker unreachable at startup is non-fatal
                 return []

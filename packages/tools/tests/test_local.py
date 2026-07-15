@@ -36,6 +36,7 @@ class FakeContainer:
     def __init__(self, run_kwargs: dict) -> None:
         self.run_kwargs = run_kwargs
         self.stopped = self.removed = self.started = False
+        self.status = "created"
         self.exec_calls: list[list[str]] = []
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}
@@ -117,12 +118,14 @@ class FakeContainer:
 
     def start(self):
         self.started = True
+        self.status = "running"
 
     def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
         pass
 
     def stop(self, timeout=None):
         self.stopped = True
+        self.status = "exited"
 
     def remove(self, force=False, v=False):
         self.removed = True
@@ -190,6 +193,9 @@ class _FakeLocalNetwork:
 
     def connect(self, container, aliases=None):
         self.connected.append((container, aliases))
+        container.attrs = {
+            "NetworkSettings": {"Networks": {self.name: {"IPAddress": "172.29.0.2"}}}
+        }
 
     def remove(self):
         self.removed = True
@@ -225,7 +231,11 @@ class FakeLocalClient:
 
     def run(self, **kwargs):
         c = FakeContainer(kwargs)
+        net = kwargs.get("network")
+        if net:
+            c.attrs = {"NetworkSettings": {"Networks": {net: {"IPAddress": "172.29.0.5"}}}}
         self.runs.append(c)
+        c.status = "running"
         self.last = c
         return c
 
@@ -275,11 +285,58 @@ async def test_never_pulls_when_image_absent():
     assert client.last is None and client.volumes.created == []  # nothing created
 
 
+async def test_sealed_control_sidecar_start_failure_is_typed_and_leak_free(monkeypatch):
+    client = FakeLocalClient()
+    svc = _svc(client)
+
+    def fail_start(_self):
+        raise RuntimeError("raw daemon transport detail")
+
+    monkeypatch.setattr(FakeContainer, "start", fail_start)
+    with pytest.raises(SandboxUnavailableError) as raised:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+    assert str(raised.value) == "inbound control sidecar setup failed; refusing sandbox start"
+    assert "raw daemon" not in str(raised.value)
+    assert len(client.runs) == 1 and client.runs[0].removed
+    assert len(client.networks.created) == 1 and client.networks.created[0].removed
+    assert client.volumes.created == []
+
+
+async def test_sealed_missing_internal_ip_fails_closed_and_removes_every_resource():
+    client = FakeLocalClient()
+    original_run = client.run
+
+    def run_without_ip(**kwargs):
+        container = original_run(**kwargs)
+        container.attrs = {}
+        return container
+
+    client.run = run_without_ip  # type: ignore[method-assign]
+    svc = _svc(client)
+    with pytest.raises(SandboxUnavailableError, match="no internal address"):
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+    assert all(container.removed for container in client.runs)
+    assert client.networks.created[0].removed
+    assert all(volume.removed for volume in client.volumes.objects.values())
+
+
 async def test_sealed_default_open_when_granted():
     client = FakeLocalClient()
     svc = _svc(client)
-    await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs["network_mode"] == "none"
+    sealed = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    sealed_sidecar, sealed_sandbox = client.runs[:2]
+    sealed_net = client.networks.created[0]
+    assert sealed_net.attrs["internal"] is True
+    assert sealed_sandbox.run_kwargs["network"] == sealed_net.name
+    assert "network_mode" not in sealed_sandbox.run_kwargs
+    assert sealed_sandbox.run_kwargs["environment"] == {}
+    from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
+
+    assert sealed_sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
+    assert "/egress_proxy.py" not in sealed_sidecar.fs
+    assert sealed.expose_port(8000) is None
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )

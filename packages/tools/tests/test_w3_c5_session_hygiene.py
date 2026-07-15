@@ -143,7 +143,7 @@ async def test_gateway_launch_passes_token_via_env_not_argv(monkeypatch):
         id = "sbx_42"
 
         def internal_port_mapping(self, port):  # noqa: ANN001
-            return None  # no container mapping → localhost fallback, still launches
+            return ("127.0.0.1", 38899)
 
     gk = GatewayKernel(_FakeSandbox(), sessions=_CaptureSessions())
     with pytest.raises(RuntimeError, match="stop after launch"):

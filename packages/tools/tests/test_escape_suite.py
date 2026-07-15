@@ -12,8 +12,9 @@ separate bounded-container check run during this epic):
       (`pid_mode` never "host"), so a discovered host PID is unreachable from inside.
   (c) workspace confinement — file ops reject `..`/absolute escapes on BOTH the
       container jail (`_container_path`) and the process jail (`_resolve`).
-  (d) network namespace isolation — a sealed box gets `network_mode="none"` (no shared
-      host loopback); an open box is on its own bridge netns, never the host's.
+  (d) network namespace isolation — a sealed guest gets one internal no-NAT network
+      and no proxy route; a hardened sidecar publishes only the internal control port
+      on host loopback. A public box also stays off the host network namespace.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from disco.tools.sandbox import (
     SandboxSpec,
     default_local_config,
 )
+from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
 from disco.tools.sandbox.process import (
     ProcessSandboxInstance,
     process_backend_signal_command_violation,
@@ -43,14 +45,21 @@ class _FakeContainer:
     def __init__(self, run_kwargs: dict[str, Any]) -> None:
         self.run_kwargs = run_kwargs
         self.attrs: dict[str, Any] = {}
+        self.status = "created"
+        self.started = False
+        self.removed = False
 
     def reload(self) -> None: ...
 
-    def start(self) -> None: ...
+    def start(self) -> None:
+        self.started = True
+        self.status = "running"
 
-    def stop(self, timeout=None) -> None: ...
+    def stop(self, timeout=None) -> None:
+        self.status = "exited"
 
-    def remove(self, **kwargs: Any) -> None: ...
+    def remove(self, **kwargs: Any) -> None:
+        self.removed = True
 
     def put_archive(self, path: str, data: bytes) -> bool:
         return True
@@ -73,7 +82,10 @@ class _FakeNetwork:
         self.name = name
         self.attrs = attrs
 
-    def connect(self, container: Any, aliases=None) -> None: ...
+    def connect(self, container: Any, aliases=None) -> None:
+        container.attrs = {
+            "NetworkSettings": {"Networks": {self.name: {"IPAddress": "172.30.0.2"}}}
+        }
 
     def remove(self) -> None: ...
 
@@ -95,6 +107,7 @@ class _FakeDocker:
         self.volumes = _FakeVolumes()
         self.networks = _FakeNetworks()
         self.last: _FakeContainer | None = None
+        self.runs: list[_FakeContainer] = []
 
     def ping(self) -> bool:
         return True
@@ -104,11 +117,18 @@ class _FakeDocker:
 
     def run(self, **kwargs: Any) -> _FakeContainer:
         c = _FakeContainer(kwargs)
+        network = kwargs.get("network")
+        if network:
+            c.attrs = {"NetworkSettings": {"Networks": {network: {"IPAddress": "172.30.0.5"}}}}
+        c.status = "running"
+        self.runs.append(c)
         self.last = c
         return c
 
-    def create(self, **kwargs: Any) -> _FakeContainer:  # egress sidecar (unused here)
-        return _FakeContainer(kwargs)
+    def create(self, **kwargs: Any) -> _FakeContainer:
+        container = _FakeContainer(kwargs)
+        self.runs.append(container)
+        return container
 
 
 def _local_svc(client: Any) -> LocalSandboxService:
@@ -354,10 +374,19 @@ async def test_process_jail_confines_writes_to_workspace(tmp_path):
 async def test_sealed_box_has_no_network_namespace_sharing():
     client = _FakeDocker()
     svc = _local_svc(client)
-    # default spec → SEALED: no network at all (network_mode="none"), so the box can't
-    # reach the host loopback (where the agent-server lives).
+    # Default spec: the guest has only one internal no-NAT interface and no proxy
+    # environment. The separate control sidecar publishes only 8899 on loopback.
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.run_kwargs.get("network_mode") == "none"
+    sidecar, sandbox = client.runs
+    net = client.networks.created[0]
+    assert net.attrs.get("internal") is True
+    assert sandbox.run_kwargs.get("network") == net.name
+    assert sandbox.run_kwargs.get("network_mode") != "host"
+    assert sandbox.run_kwargs["environment"] == {}
+    assert sandbox.run_kwargs["ports"] is None
+    assert sidecar.run_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS)
+    assert sidecar.run_kwargs["cap_drop"] == ["ALL"]
+    assert sidecar.run_kwargs["sysctls"]["net.ipv4.ip_forward"] == "0"
 
 
 async def test_open_box_is_on_its_own_bridge_not_host_netns():

@@ -89,8 +89,8 @@ class SandboxConfig(BaseModel):
     default_nofile_soft: int = 1024
     default_nofile_hard: int = 2048
 
-    # EPIC H (P1) — resource caps for the filtered-egress PROXY SIDECAR. A "filtered" box
-    # stands up a SECOND container (the allowlisting proxy). Before this it was capped on
+    # EPIC H (P1) — resource caps for the policy/control SIDECAR. Every container box
+    # stands up this second container. Before this it was capped on
     # MEMORY only (256m) and left UNBOUNDED on CPU + PIDs — so a wedged/compromised proxy
     # could burn host CPU or fork-bomb host PIDs with no ceiling. These apply the same
     # host-protection bounds to the sidecar; smaller than the sandbox's because the proxy
@@ -109,7 +109,7 @@ class SandboxConfig(BaseModel):
     # maximum makes `resolve_bounds`' clamp a no-op). A mis-set config must therefore fail
     # LOUD at construction, never silently ship an unbounded sandbox or sidecar. Both the
     # sandbox bounds (default_*) AND the sidecar bounds (sidecar_*) are guarded — the
-    # proxy sidecar is just as capable of burning host CPU / fork-bombing host PIDs.
+    # sidecar is just as capable of burning host CPU / fork-bombing host PIDs.
     @field_validator(
         "default_cpu",
         "default_memory_mb",

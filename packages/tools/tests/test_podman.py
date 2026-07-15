@@ -19,6 +19,11 @@ from disco.tools.sandbox import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+from disco.tools.sandbox._container import (
+    INTERNAL_PORTS,
+    PUBLISHED_PORTS,
+    loopback_port_bindings,
+)
 
 
 class FakeContainer:
@@ -26,6 +31,7 @@ class FakeContainer:
         self.create_kwargs = create_kwargs
         self.fs = fs  # shared with the CLI runner (write here, read there)
         self.started = self.stopped = self.removed = False
+        self.status = "created"
         self.attrs: dict = {}  # populated by reload() — E8 sidecar needs Networks
         # a queue of fake (exit_code, stdout, stderr) for exec_run; consumed FIFO.
         self.exec_results: list[tuple[int, bytes, bytes]] = []
@@ -38,6 +44,7 @@ class FakeContainer:
 
     def start(self):
         self.started = True
+        self.status = "running"
 
     def reload(self):  # no-op: the fake leaves attrs alone (callers set NetworkSettings)
         pass
@@ -62,6 +69,7 @@ class FakeContainer:
 
     def stop(self, timeout=None):
         self.stopped = True
+        self.status = "exited"
 
     def remove(self, force=False, v=False):
         self.removed = True
@@ -128,6 +136,7 @@ class FakePodmanNetwork:
 
     def connect(self, container, aliases=None):
         self.connected.append((container, aliases))
+        container.attrs = {"NetworkSettings": {"Networks": {self.name: {"IPAddress": "10.89.0.2"}}}}
 
     def remove(self):
         self.removed = True
@@ -144,7 +153,13 @@ class _FakeNetworks:
 
 
 class FakePodmanClient:
-    def __init__(self, *, has_image: bool = True, fs: dict | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        has_image: bool = True,
+        fs: dict | None = None,
+        sandbox_ip: str = "10.89.0.7",
+    ) -> None:
         self.images = _Images(has_image)
         self.volumes = _Volumes()
         self.networks = _FakeNetworks()
@@ -152,12 +167,17 @@ class FakePodmanClient:
         self.fs = fs if fs is not None else {}
         self.last: FakeContainer | None = None
         self.created: list[FakeContainer] = []  # every container create()'d (sidecar + sandbox)
+        self.sandbox_ip = sandbox_ip
 
     def ping(self):
         return True
 
     def create(self, **kwargs):
         c = FakeContainer(kwargs, self.fs)
+        networks = kwargs.get("networks") or {}
+        if kwargs.get("name", "").startswith("disco-sbx-") and networks and self.sandbox_ip:
+            net_name = next(iter(networks))
+            c.attrs = {"NetworkSettings": {"Networks": {net_name: {"IPAddress": self.sandbox_ip}}}}
         self.created.append(c)
         self.last = c
         return c
@@ -236,13 +256,15 @@ def _svc(
     has_image: bool = True, *, with_sandbox_ip: bool = True
 ) -> tuple[PodmanSandboxService, FakePodmanClient, FakeCli]:
     fs: dict[str, bytes] = {}
-    client = FakePodmanClient(has_image=has_image, fs=fs)
+    client = FakePodmanClient(
+        has_image=has_image,
+        fs=fs,
+        sandbox_ip="10.89.0.7" if with_sandbox_ip else "",
+    )
     cli = FakeCli(fs)
     svc = PodmanSandboxService(
         SandboxConfig(backend="podman", runtime="crun"), client=client, cli_runner=cli
     )
-    if with_sandbox_ip:
-        _wire_sandbox_ip(client, "10.89.0.7")
     return svc, client, cli
 
 
@@ -275,10 +297,70 @@ async def test_never_pulls_when_image_absent():
     assert client.images.pull_called is False and client.last is None
 
 
+async def test_sealed_control_sidecar_start_failure_is_typed_and_leak_free(monkeypatch):
+    svc, client, _cli = _svc()
+
+    def fail_start(_self):
+        raise RuntimeError("raw daemon transport detail")
+
+    monkeypatch.setattr(FakeContainer, "start", fail_start)
+    with pytest.raises(SandboxUnavailableError) as raised:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+    assert str(raised.value) == "inbound control sidecar setup failed; refusing sandbox start"
+    assert "raw daemon" not in str(raised.value)
+    assert len(client.created) == 1 and client.created[0].removed
+    assert len(client.networks.created) == 1 and client.networks.created[0].removed
+    assert client.volumes.created == []
+
+
+@pytest.mark.parametrize("reload_behavior", ["missing", "raise", "stopped"])
+async def test_policy_sidecar_requires_a_verified_internal_ip(monkeypatch, reload_behavior):
+    svc, client, _cli = _svc()
+
+    def hostile_reload(container):
+        if reload_behavior == "raise":
+            raise RuntimeError("raw daemon reload detail")
+        if reload_behavior == "stopped":
+            container.status = "exited"
+        else:
+            container.attrs = {}
+
+    monkeypatch.setattr(FakeContainer, "reload", hostile_reload)
+    with pytest.raises(
+        SandboxUnavailableError,
+        match="policy sidecar internal address is unavailable",
+    ) as raised:
+        await svc.create(
+            SandboxSpec(egress_allow=frozenset({"api.example.com"})),
+            owner_id="o",
+            conversation_id="c",
+        )
+
+    assert "raw daemon" not in str(raised.value)
+    assert len(client.created) == 1 and client.created[0].removed
+    assert len(client.networks.created) == 1 and client.networks.created[0].removed
+    assert client.volumes.created == []
+
+
 async def test_sealed_default_open_when_granted():
     svc, client, _ = _svc()
-    await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert client.last.create_kwargs["network_mode"] == "none"
+    sealed = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    sealed_sidecar, sealed_sandbox = client.created[:2]
+    sealed_net = client.networks.created[0]
+    assert sealed_net.attrs["internal"] is True
+    assert sealed_sandbox.create_kwargs["network_mode"] == "bridge"
+    assert sealed_sandbox.create_kwargs["networks"] == {sealed_net.name: {}}
+    assert sealed_sandbox.create_kwargs["environment"] == {}
+    assert "ports" not in sealed_sandbox.create_kwargs
+    assert sealed_sidecar.create_kwargs["ports"] == loopback_port_bindings(
+        INTERNAL_PORTS, podman=True
+    )
+    assert sealed_sidecar.create_kwargs["cap_drop"] == ["ALL"]
+    assert sealed_sidecar.create_kwargs["no_new_privileges"] is True
+    assert sealed_sidecar.create_kwargs["sysctls"]["net.ipv4.ip_forward"] == "0"
+    assert "/egress_proxy.py" not in client.fs
+    assert sealed.expose_port(8000) is None
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
@@ -469,7 +551,7 @@ def _wire_sandbox_ip(client: FakePodmanClient, ip: str) -> None:
         c = orig(**kwargs)
         if kwargs.get("name", "").startswith("disco-sbx-"):
             egr = next((x for x in client.created if x.name.startswith("disco-egr-")), None)
-            if egr is None:  # sealed sandbox: deliberately no sidecar/network
+            if egr is None:
                 return c
             c.attrs = {"NetworkSettings": {"Networks": {egr.name: {"IPAddress": ip}}}}
         return c
@@ -478,8 +560,6 @@ def _wire_sandbox_ip(client: FakePodmanClient, ip: str) -> None:
 
 
 async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
-    from disco.tools.sandbox._container import loopback_port_bindings
-
     svc, client, _ = _svc()
     await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
     # The SIDECAR (disco-egr-…, created first) carries the published preview set —
@@ -530,10 +610,10 @@ async def test_podman_sealed_host_service_box_has_capability_only_relay():
     sidecar, sandbox = client.created
     net = client.networks.created[0]
     assert net.attrs["internal"] is True
-    assert sidecar.create_kwargs["ports"] is None
+    assert sidecar.create_kwargs["ports"] == loopback_port_bindings(INTERNAL_PORTS, podman=True)
     assert sandbox.create_kwargs["networks"] == {net.name: {}}
     assert "/capability_relay.py" in fs
-    assert inst.host_service_relay_url == f"http://{net.name}:3211"
+    assert inst.host_service_relay_url == "http://10.89.0.2:3211"
     relay_launches = [call for call in cli.calls if "/capability_relay.py" in " ".join(call)]
     assert len(relay_launches) == 1
     relay_argv = relay_launches[0]
@@ -579,8 +659,6 @@ async def test_podman_relay_failure_fails_creation_and_cleans_sidecar():
 
 
 async def test_inbound_forwarder_uses_native_detached_exec_without_background_child():
-    from disco.tools.sandbox._container import PUBLISHED_PORTS
-
     svc, client, cli = _svc()
     _wire_sandbox_ip(client, "10.89.0.7")
     await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
@@ -625,6 +703,7 @@ async def test_no_forwarder_without_sandbox_ip():
     assert not any("inbound_forward.py" in str(a) for c in cli.calls for a in c)
     assert all(container.removed for container in client.created)
     assert client.networks.created[0].removed
+    assert all(volume.removed for volume in client.volumes.objects.values())
 
 
 async def test_expose_port_inherits_base_impl_no_stub():
@@ -652,15 +731,21 @@ async def test_expose_port_reads_sidecar_binding_for_filtered():
     assert url == "http://127.0.0.1:49160"  # sidecar's port, not decoy
 
 
-async def test_sealed_sandbox_has_no_sidecar_or_exposed_mapping():
+async def test_sealed_sandbox_maps_only_internal_control_port_from_sidecar():
     svc, client, _ = _svc()
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert inst._egress_sidecar is None
-    client.last.attrs = {
-        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}]}}
+    sidecar, sandbox = client.created
+    sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8899/tcp": [{"HostIp": "127.0.0.1", "HostPort": "38899"}]}}
     }
-    url = inst.expose_port(8000)
-    assert url is None
+    sandbox.attrs.setdefault("NetworkSettings", {})["Ports"] = {
+        "8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}],
+        "8899/tcp": [{"HostIp": "127.0.0.1", "HostPort": "1"}],
+    }
+    assert inst._egress_sidecar is sidecar
+    assert inst.internal_port_mapping(8899) == ("127.0.0.1", 38899)
+    assert inst.expose_port(8000) is None
+    assert inst.expose_port(8899) is None
 
 
 def test_preview_host_derived_from_cli_url():
