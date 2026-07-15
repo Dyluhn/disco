@@ -256,6 +256,9 @@ class InconclusiveRunError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.facts = facts or {}
+        # Populated by drive_scenario after it establishes the explicit diagnostic
+        # stop boundary and freezes every safely collectable evidence slice.
+        self.collected_run: CollectedRun | None = None
 
 
 class FollowupPickupError(Exception):
@@ -375,6 +378,19 @@ class CollectedRun:
     # attribute) so INVALID retention and replay share one typed evidence contract.
     # Appended for positional compatibility with every pre-existing fixture.
     product_evidence: dict[str, Any] = field(default_factory=dict)
+    # A harness-owned, non-product stop boundary used only for INVALID diagnostic
+    # retention.  It never makes a run promotion-eligible and is deliberately
+    # distinct from a real Build terminal or a confirmed live-thrash stop.
+    diagnostic_stop: str | None = None
+    # Explicit wall-clock boundary returned by the hard-cap stop.  Follow-up runs
+    # may retain an older FINISHED event, so provider accounting must never infer
+    # this boundary from the generic terminal-event scan.
+    diagnostic_stop_epoch: float | None = None
+    diagnostic_stop_seq: int | None = None
+    # True only when the kill endpoint acknowledged a 2xx killed+IDLE response.
+    # Cleanup uses this to avoid redundant teardown while leaving the finally
+    # fallback armed when the stop request was rejected or ambiguous.
+    diagnostic_release_confirmed: bool = False
 
 
 # ---- the live client --------------------------------------------------------

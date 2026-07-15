@@ -741,23 +741,165 @@ async def drive_scenario(
     mid_run = [f for f in followups if f.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE]
     after_terminal = [f for f in followups if f.get("trigger") != _TRIGGER_AFTER_FIRST_FILE_WRITE]
 
+    async def _freeze_progress_timeout(exc: InconclusiveRunError) -> None:
+        """Stop spend and retain the evidence behind an inconclusive hard-cap verdict."""
+        try:
+            pre_stop_events = client.collect_events(cid)
+            pre_stop_watermark_trusted = True
+        except Exception:  # noqa: BLE001 — the later collection records the retained gap
+            pre_stop_events = []
+            pre_stop_watermark_trusted = False
+        pre_stop_max_seq = max((int(event.get("seq", -1)) for event in pre_stop_events), default=-1)
+        kill_response: dict[str, Any] = {}
+        kill_response_epoch: float | None = None
+        kill_acknowledged = False
+        try:
+            kill_response = await client.kill(cid)
+            kill_response_epoch = time.time()
+            http_status = int(kill_response.get("http_status", 0))
+            kill_acknowledged = (
+                200 <= http_status < 300
+                and kill_response.get("killed") is True
+                and DiscoApiClient._status_of(kill_response.get("state") or {}) == "IDLE"
+            )
+            if not kill_acknowledged:
+                raise RuntimeError("diagnostic stop was not acknowledged as killed IDLE")
+            timeline.append(
+                "progress hard-cap diagnostic stop: killed active conversation "
+                f"(http {kill_response.get('http_status')})"
+            )
+        except Exception as kill_exc:  # noqa: BLE001 — retain partial evidence fail-closed
+            timeline.append(
+                "progress hard-cap diagnostic stop could not kill conversation: "
+                f"{type(kill_exc).__name__}"
+            )
+
+        try:
+            events = client.collect_events(cid)
+        except Exception as events_exc:  # noqa: BLE001 — retain all other slices fail-closed
+            events = pre_stop_events
+            timeline.append(
+                f"progress hard-cap event collection failed: {type(events_exc).__name__}"
+            )
+        durable_stops = [
+            (int(event.get("seq", -1)), epoch)
+            for event in events
+            if pre_stop_watermark_trusted
+            and int(event.get("seq", -1)) > pre_stop_max_seq
+            and _status_value_and_detail(event) == ("IDLE", "killed")
+            and (epoch := _event_epoch(event)) is not None
+        ]
+        durable_stop = min(durable_stops, default=None)
+        diagnostic_stop_seq = durable_stop[0] if durable_stop is not None else None
+        diagnostic_stop_epoch = durable_stop[1] if durable_stop is not None else None
+        release_confirmed = kill_acknowledged and durable_stop is not None
+        if release_confirmed and client.last_conversation_id == cid:
+            # Both the endpoint acknowledgement and the exact new durable kill
+            # event prove that this stop owns release.  Disarm the finally fallback.
+            client.last_conversation_id = None
+        try:
+            state_final = await client.get_state(cid)
+        except Exception as state_exc:  # noqa: BLE001
+            state_final = {"evidence_error": type(state_exc).__name__}
+            timeline.append(
+                f"progress hard-cap final-state collection failed: {type(state_exc).__name__}"
+            )
+        try:
+            workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
+        except Exception as workspace_exc:  # noqa: BLE001
+            workspace = {}
+            timeline.append(
+                f"progress hard-cap workspace collection failed: {type(workspace_exc).__name__}"
+            )
+        try:
+            browser_evidence = client.collect_browser_evidence(cid, events, workspace)
+        except Exception as browser_exc:  # noqa: BLE001
+            browser_evidence = {}
+            timeline.append(
+                "progress hard-cap browser-evidence collection failed: "
+                f"{type(browser_exc).__name__}"
+            )
+        preview: dict[str, Any] | None = None
+        if _preview_required(scenario):
+            try:
+                preview = await client.collect_preview(cid)
+            except Exception as preview_exc:  # noqa: BLE001
+                timeline.append(
+                    f"progress hard-cap preview collection failed: {type(preview_exc).__name__}"
+                )
+        try:
+            inspect_trace = await client.collect_inspect_trace(cid)
+        except Exception as inspect_exc:  # noqa: BLE001
+            inspect_trace = None
+            timeline.append(
+                f"progress hard-cap inspect collection failed: {type(inspect_exc).__name__}"
+            )
+        try:
+            client.observe_live_thrash_snapshot(
+                events,
+                inspect_trace,
+                terminal_status=DiscoApiClient._status_of(state_final),
+            )
+        except Exception as thrash_exc:  # noqa: BLE001 — retain the remaining dossier
+            timeline.append(
+                f"progress hard-cap thrash snapshot failed: {type(thrash_exc).__name__}"
+            )
+        exc.collected_run = CollectedRun(
+            conversation_id=cid,
+            events=events,
+            state_initial=state_initial,
+            state_final=state_final,
+            workspace_manifest=workspace,
+            preview=preview,
+            browser_evidence=browser_evidence,
+            inspect_trace=inspect_trace,
+            thrash_monitor=client.live_thrash_monitor,
+            timeline=timeline,
+            decision_resolutions=decisions,
+            declared_followup_seqs=declared_followup_seqs,
+            declared_followup_requires_revision=declared_followup_requires_revision,
+            harness_injected_user_seqs=harness_injected_user_seqs,
+            product_evidence={
+                "diagnostic_stop": {
+                    "kind": "progressing_hard_cap",
+                    "release_confirmed": release_confirmed,
+                    "boundary_epoch": diagnostic_stop_epoch,
+                    "boundary_seq": diagnostic_stop_seq,
+                    "boundary_source": (
+                        "durable_killed_status" if durable_stop is not None else "unconfirmed"
+                    ),
+                    "kill_acknowledged": kill_acknowledged,
+                    "kill_response_epoch": kill_response_epoch,
+                    "pre_stop_watermark_trusted": pre_stop_watermark_trusted,
+                }
+            },
+            diagnostic_stop="progressing_hard_cap",
+            diagnostic_stop_epoch=diagnostic_stop_epoch,
+            diagnostic_stop_seq=diagnostic_stop_seq,
+            diagnostic_release_confirmed=release_confirmed,
+        )
+
     # Phase 1: the initial build (+ any mid-run steer) to terminal.
-    initial_status = await _drive_to_terminal(
-        client,
-        cid,
-        autonomous=autonomous,
-        mid_run=mid_run,
-        cancel_at=cancel_at,
-        timeline=timeline,
-        inactivity_s=timeout_s,
-        hard_cap_s=hard_cap_s,
-        clarification_answer=clarification_answer,
-        decision_answer=decision_answer,
-        decisions=decisions,
-        injected_user_seqs=harness_injected_user_seqs,
-        declared_followup_seqs=declared_followup_seqs,
-        declared_followup_requires_revision=declared_followup_requires_revision,
-    )
+    try:
+        initial_status = await _drive_to_terminal(
+            client,
+            cid,
+            autonomous=autonomous,
+            mid_run=mid_run,
+            cancel_at=cancel_at,
+            timeline=timeline,
+            inactivity_s=timeout_s,
+            hard_cap_s=hard_cap_s,
+            clarification_answer=clarification_answer,
+            decision_answer=decision_answer,
+            decisions=decisions,
+            injected_user_seqs=harness_injected_user_seqs,
+            declared_followup_seqs=declared_followup_seqs,
+            declared_followup_requires_revision=declared_followup_requires_revision,
+        )
+    except InconclusiveRunError as exc:
+        await _freeze_progress_timeout(exc)
+        raise
 
     if initial_status == LIVE_THRASH_STOP:
         timeline.append(
@@ -840,20 +982,24 @@ async def drive_scenario(
         if new_user_seq > before_user_seq:
             declared_followup_seqs.append(new_user_seq)
             declared_followup_requires_revision.append(bool(f.get("requires_plan_revision")))
-        await _drive_to_terminal(
-            client,
-            cid,
-            autonomous=autonomous,
-            mid_run=[],
-            timeline=timeline,
-            inactivity_s=timeout_s,
-            hard_cap_s=hard_cap_s,
-            clarification_answer=clarification_answer,
-            decision_answer=decision_answer,
-            decisions=decisions,
-            injected_user_seqs=harness_injected_user_seqs,
-            min_seq=baseline_seq,
-        )
+        try:
+            await _drive_to_terminal(
+                client,
+                cid,
+                autonomous=autonomous,
+                mid_run=[],
+                timeline=timeline,
+                inactivity_s=timeout_s,
+                hard_cap_s=hard_cap_s,
+                clarification_answer=clarification_answer,
+                decision_answer=decision_answer,
+                decisions=decisions,
+                injected_user_seqs=harness_injected_user_seqs,
+                min_seq=baseline_seq,
+            )
+        except InconclusiveRunError as exc:
+            await _freeze_progress_timeout(exc)
+            raise
 
     # Collect (post-terminal, race-free DB read for events).
     events = client.collect_events(cid)
@@ -1206,11 +1352,25 @@ def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:
     relay_log = _relay_log_path()
     if not relay_log or not os.path.exists(relay_log):
         return None
+    if run.diagnostic_stop not in (None, "progressing_hard_cap"):
+        return None
+    if run.diagnostic_stop == "progressing_hard_cap" and (
+        not isinstance(run.diagnostic_stop_epoch, (int, float))
+        or isinstance(run.diagnostic_stop_epoch, bool)
+        or not isinstance(run.diagnostic_stop_seq, int)
+        or isinstance(run.diagnostic_stop_seq, bool)
+    ):
+        return None
     try:
         with open(relay_log, encoding="utf-8") as handle:
             records = parse_relay_log(handle.read())
-        terminal_epoch = _terminal_status_epoch(
-            run.events, allow_killed_idle=_confirmed_live_thrash_stop(run)
+        terminal_epoch = (
+            run.diagnostic_stop_epoch
+            if run.diagnostic_stop == "progressing_hard_cap"
+            else _terminal_status_epoch(
+                run.events,
+                allow_killed_idle=_confirmed_live_thrash_stop(run),
+            )
         )
         start_epoch = _min_event_epoch(run.events)
         if terminal_epoch is None or start_epoch is None:
@@ -1611,7 +1771,11 @@ def _terminal_status_epoch(
             # The first kill is the monitor's spend stop.  Later idempotent cleanup
             # kills must not move the provider-after-terminal boundary forward.
             first_confirmed_kill = ep
-    return best if best is not None else first_confirmed_kill
+    # When the caller has independently proven a monitor-owned kill, that kill is
+    # the spend-stop boundary even if the conversation history contains an older
+    # work terminal from a prior follow-up phase.  Ordinary terminal runs call with
+    # allow_killed_idle=False and retain the latest work-terminal behavior.
+    return first_confirmed_kill if first_confirmed_kill is not None else best
 
 
 def _min_event_epoch(events: list[dict[str, Any]]) -> float | None:
@@ -1663,8 +1827,10 @@ async def _collect_terminal_cleanup_evidence(
     # live mode) so a false 0 can't classify green. Release happens AFTER the grace window so the
     # token is live during the audited window.
     events = getattr(run, "events", []) or []
-    terminal_epoch = _terminal_status_epoch(
-        events, allow_killed_idle=_confirmed_live_thrash_stop(run)
+    terminal_epoch = (
+        getattr(run, "diagnostic_stop_epoch", None)
+        if getattr(run, "diagnostic_stop", None) == "progressing_hard_cap"
+        else _terminal_status_epoch(events, allow_killed_idle=_confirmed_live_thrash_stop(run))
     )
     run_start_epoch = _min_event_epoch(events)
     calls_after: int | None = None
@@ -1703,16 +1869,38 @@ async def _collect_terminal_cleanup_evidence(
             calls_after = None
 
     # release — destroy the sandbox + sidecar containers and workspace volumes
-    # (REL-4/REL-6 path), then measure orphans.
-    released_ok = False
+    # (REL-4/REL-6 path), then measure orphans.  A diagnostic/live-thrash stop may
+    # already have durably killed the conversation.  Treat that status event as the
+    # release proof instead of issuing redundant kill requests; otherwise perform the
+    # release here.  Once release is proven, disarm run_once's finally fallback.  A
+    # failed/unproven release deliberately leaves it armed for one best-effort retry.
     release_resp: dict[str, Any] = {}
-    with contextlib.suppress(Exception):
-        release_resp = await client.kill(cid)
-        released_ok = True
-        timeline.append(
-            f"REL-5 released {cid} for cleanup adjudication "
-            f"(http {release_resp.get('http_status')})"
-        )
+    released_ok = bool(
+        getattr(run, "diagnostic_stop", None) == "progressing_hard_cap"
+        and getattr(run, "diagnostic_release_confirmed", False)
+    )
+    if released_ok:
+        timeline.append("REL-5 cleanup observed the diagnostic stop's durable killed state")
+    else:
+        with contextlib.suppress(Exception):
+            release_resp = await client.kill(cid)
+            http_status = int(release_resp.get("http_status", 0))
+            released_ok = (
+                200 <= http_status < 300
+                and release_resp.get("killed") is True
+                and DiscoApiClient._status_of(release_resp.get("state") or {}) == "IDLE"
+            )
+            if released_ok:
+                timeline.append(
+                    f"REL-5 released {cid} for cleanup adjudication (http {http_status})"
+                )
+            else:
+                timeline.append(
+                    f"REL-5 cleanup release was not acknowledged as killed IDLE "
+                    f"(http {http_status})"
+                )
+    if released_ok and getattr(client, "last_conversation_id", None) == cid:
+        client.last_conversation_id = None
     await asyncio.sleep(4.0)
     after_container_names = _live_disco_container_names()
     after_volume_names = _disco_volume_names()
@@ -1830,6 +2018,35 @@ async def run_once(
         except InconclusiveRunError as exc:
             # Bug 15: the build was STILL PROGRESSING when the hard cap hit — the runner could
             # not obtain a terminal verdict. INVALID_RUN (inconclusive), NEVER a product fail.
+            frozen = exc.collected_run
+            if frozen is not None:
+                try:
+                    frozen.product_evidence = await _collect_terminal_cleanup_evidence(
+                        client,
+                        frozen.conversation_id,
+                        frozen,
+                        baseline_containers=baseline_containers,
+                        relay_log=_relay_log_path(),
+                        timeline=frozen.timeline,
+                        baseline_dangling_volumes=baseline_dangling_volumes,
+                    )
+                except Exception as cleanup_exc:  # noqa: BLE001 — retain partial dossier
+                    frozen.timeline.append(
+                        f"progress hard-cap cleanup evidence failed: {type(cleanup_exc).__name__}"
+                    )
+                provider_ledger = _provider_ledger_for_run(frozen)
+                assemble_dossier(
+                    out_root,
+                    run_id,
+                    scenario,
+                    frozen,
+                    model=model,
+                    autonomous=autonomous,
+                    commit=commit,
+                    kernel=kernel,
+                    started_at=run_started_at,
+                    provider_ledger=provider_ledger,
+                )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -1838,6 +2055,8 @@ async def run_once(
                 code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
                 first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
                 facts=exc.facts,
+                conversation_id=(frozen.conversation_id if frozen is not None else None),
+                timeline_markdown=(_timeline_md(scenario, frozen) if frozen is not None else None),
             )
         except FollowupPickupError as exc:
             # H1/V2: an after-terminal follow-up was never picked up by the engine (the

@@ -144,6 +144,7 @@ class FakeTransport:
         self.cid = cid
         self.ws_frames = []
         self.posts = []
+        self._killed = False
 
     async def health(self):
         if self.health_exc is not None:
@@ -154,6 +155,26 @@ class FakeTransport:
         self.posts.append((path, body))
         if path == "/conversations":
             return 200, {"conversation_id": self.cid, "surface": "build"}
+        if path.endswith("/kill"):
+            self._killed = True
+            try:
+                with sqlite3.connect(str(self.db_path)) as conn:
+                    row = conn.execute(
+                        "SELECT COALESCE(MAX(seq), 0) FROM events WHERE conversation_id = ?",
+                        (self.cid,),
+                    ).fetchone()
+                seq = int(row[0] if row else 0) + 1
+                killed = status(seq, "IDLE", "killed")
+                killed["timestamp"] = datetime.now(UTC).isoformat()
+                _insert_event(self.db_path, self.cid, killed)
+            except sqlite3.OperationalError:
+                # Some adapter-only tests intentionally provide no event schema.
+                pass
+            return 200, {
+                "killed": True,
+                "state": {"execution_status": "IDLE"},
+                "sandbox_instance_ids": [],
+            }
         if path.endswith("/resume"):
             # The REAL resume body carries a STATE string under "status" — a regression
             # guard for the http-int/state-string key collision (Bug 11): merging this
@@ -167,6 +188,8 @@ class FakeTransport:
             trace["conversation_id"] = self.cid
             return 200, trace
         if path.endswith("/state"):
+            if self._killed:
+                return 200, {"execution_status": "IDLE"}
             st = self._states[min(self._idx, len(self._states) - 1)]
             self._idx += 1
             return 200, {"execution_status": st}
@@ -381,7 +404,7 @@ def test_killed_idle_audit_boundary_requires_strict_live_thrash_monitor(malforma
     assert _run_mod._confirmed_live_thrash_stop(run) is False
 
 
-def test_killed_idle_boundary_prefers_real_build_terminal():
+def test_confirmed_killed_idle_boundary_ignores_prior_build_terminal():
     started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
     killed = status(1, "IDLE", "killed")
     killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
@@ -390,11 +413,11 @@ def test_killed_idle_boundary_prefers_real_build_terminal():
 
     assert _run_mod._terminal_status_epoch([killed]) is None
     assert _run_mod._terminal_status_epoch([killed], allow_killed_idle=True) == pytest.approx(
-        started.timestamp() + 10
+        started.timestamp() + 10, rel=0, abs=1e-6
     )
     assert _run_mod._terminal_status_epoch(
         [killed, finished], allow_killed_idle=True
-    ) == pytest.approx(started.timestamp() + 8)
+    ) == pytest.approx(started.timestamp() + 10, rel=0, abs=1e-6)
 
 
 @pytest.mark.asyncio
@@ -3701,6 +3724,14 @@ class _ProgressTransport(FakeTransport):
         return await super().get_json(path)
 
 
+class _RejectedKillProgressTransport(_ProgressTransport):
+    async def post_json(self, path, body):
+        if path.endswith("/kill"):
+            self.posts.append((path, body))
+            return 500, {"killed": False}
+        return await super().post_json(path, body)
+
+
 @pytest.mark.asyncio
 async def test_progress_aware_wait_does_not_cut_off_a_progressing_build(tmp_path):
     # The must_plan repro at the unit level: a TINY inactivity window (a blind wall-clock
@@ -3765,6 +3796,152 @@ async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
     assert record["code"] == "RUN_TIMEOUT_WHILE_PROGRESSING"
     assert record["code"] != "BUILD_DID_NOT_FINISH"
     assert record["status"] != "FAIL"
+    assert len([path for path, _body in transport.posts if path.endswith("/kill")]) == 1
+
+    base = tmp_path / "out" / "run_prog_001"
+    conv = base / "conversations" / _CID
+    assert record["conversation_id"] == _CID
+    for rel in (
+        "events.jsonl",
+        "state.initial.json",
+        "state.final.json",
+        "workspace-manifest.json",
+        "inspect-trace.json",
+        "thrash-monitor.json",
+        "product-evidence.json",
+    ):
+        assert (conv / rel).is_file(), rel
+    manifest = load_manifest(base)
+    assert {
+        "events.jsonl",
+        "inspect-trace.json",
+        "product-evidence.json",
+        "thrash-monitor.json",
+        "preview/health.json",
+        "preview/served.html",
+        "preview/metadata.json",
+    } <= set(manifest.evidence_files)
+    diagnostic = json.loads((conv / "product-evidence.json").read_text(encoding="utf-8"))[
+        "diagnostic_stop"
+    ]
+    assert diagnostic["release_confirmed"] is True
+    assert diagnostic["boundary_source"] == "durable_killed_status"
+    assert isinstance(diagnostic["boundary_seq"], int)
+    assert isinstance(diagnostic["boundary_epoch"], (int, float))
+    assert verify_evidence_unchanged(base, manifest).intact
+
+
+@pytest.mark.asyncio
+async def test_progressing_cutoff_pre_stop_read_failure_does_not_trust_old_kill(
+    tmp_path, monkeypatch
+):
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    started = datetime(2026, 7, 15, 20, 0, tzinfo=UTC)
+    events = [
+        msg(1, "user", "first turn"),
+        status(2, "IDLE", "killed"),
+        msg(3, "user", "continue"),
+        status(4, "RUNNING", "planning"),
+    ]
+    for offset, event in zip((0, 1, 2, 3), events, strict=True):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = _ProgressTransport(db, finish_after=None, start_seq=4)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    original_collect = client.collect_events
+
+    def fail_until_stop(conversation_id: str):
+        if not any(path.endswith("/kill") for path, _body in transport.posts):
+            raise sqlite3.OperationalError("injected pre-stop read failure")
+        return original_collect(conversation_id)
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(client, "collect_events", fail_until_stop)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_untrusted_watermark_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=10.0,
+        hard_cap_s=0.05,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    product = json.loads(
+        (
+            tmp_path
+            / "out"
+            / "run_untrusted_watermark_001"
+            / "conversations"
+            / _CID
+            / "product-evidence.json"
+        ).read_text(encoding="utf-8")
+    )
+    diagnostic = product["diagnostic_stop"]
+    assert diagnostic["kill_acknowledged"] is True
+    assert diagnostic["pre_stop_watermark_trusted"] is False
+    assert diagnostic["release_confirmed"] is False
+    assert diagnostic["boundary_seq"] is None
+    assert diagnostic["boundary_epoch"] is None
+    assert len([path for path, _body in transport.posts if path.endswith("/kill")]) == 2
+
+
+@pytest.mark.asyncio
+async def test_progressing_cutoff_rejected_kill_retains_retry_and_partial_dossier(
+    tmp_path, monkeypatch
+):
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    transport = _RejectedKillProgressTransport(db, finish_after=None)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    original_collect = client.collect_events
+
+    def fail_after_stop(conversation_id: str):
+        if any(path.endswith("/kill") for path, _body in transport.posts):
+            raise sqlite3.OperationalError("injected event read failure")
+        return original_collect(conversation_id)
+
+    def fail_thrash_snapshot(*_args, **_kwargs):
+        raise RuntimeError("injected thrash snapshot failure")
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(client, "collect_events", fail_after_stop)
+    monkeypatch.setattr(client, "observe_live_thrash_snapshot", fail_thrash_snapshot)
+
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_rejected_stop_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=10.0,
+        hard_cap_s=0.05,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    kills = [path for path, _body in transport.posts if path.endswith("/kill")]
+    assert len(kills) == 3  # stop, cleanup attempt, finally fallback
+    base = tmp_path / "out" / "run_rejected_stop_001"
+    conv = base / "conversations" / _CID
+    product = json.loads((conv / "product-evidence.json").read_text(encoding="utf-8"))
+    assert product["diagnostic_stop"]["release_confirmed"] is False
+    assert product["diagnostic_stop"]["boundary_epoch"] is None
+    timeline = (base / "timeline.md").read_text(encoding="utf-8")
+    assert "event collection failed: OperationalError" in timeline
+    assert "thrash snapshot failed: RuntimeError" in timeline
+    manifest = load_manifest(base)
+    assert verify_evidence_unchanged(base, manifest).intact
 
 
 @pytest.mark.asyncio
@@ -4885,6 +5062,114 @@ def test_confirmed_live_thrash_provider_boundary_is_scoped_and_tool_bearing(tmp_
     assert _run_mod._provider_ledger_for_run(run) is None
 
 
+def test_progress_timeout_diagnostic_stop_has_scoped_provider_boundary(tmp_path, monkeypatch):
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    first = msg(1, "user", "build")
+    first["timestamp"] = started.isoformat()
+    stale_terminal = status(2, "FINISHED")
+    stale_terminal["timestamp"] = datetime.fromtimestamp(started.timestamp() + 1, UTC).isoformat()
+    followup = msg(3, "user", "revise")
+    followup["timestamp"] = datetime.fromtimestamp(started.timestamp() + 2, UTC).isoformat()
+    killed = status(4, "IDLE", "killed")
+    killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=[first, stale_terminal, followup, killed],
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        diagnostic_stop="progressing_hard_cap",
+        diagnostic_stop_epoch=started.timestamp() + 10,
+        diagnostic_stop_seq=4,
+        diagnostic_release_confirmed=True,
+    )
+    ledger = tmp_path / "provider.jsonl"
+    records = [
+        {
+            "ts": started.timestamp() + 2,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+        {
+            "ts": started.timestamp() + 11,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+        {
+            "ts": started.timestamp() + 12,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": "conv_other",
+        },
+    ]
+    ledger.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(ledger))
+
+    scoped = _run_mod._provider_ledger_for_run(run)
+    assert scoped is not None
+    assert len(scoped) == 2
+    assert [record["after_terminal"] for record in scoped] == [False, True]
+
+    run.diagnostic_stop = "other_invalid_stop"
+    assert _run_mod._provider_ledger_for_run(run) is None
+    run.diagnostic_stop = "progressing_hard_cap"
+    run.diagnostic_stop_epoch = None
+    assert _run_mod._provider_ledger_for_run(run) is None
+
+
+def test_progress_timeout_boundary_ignores_earlier_cancel_kill(tmp_path, monkeypatch):
+    started = datetime(2026, 7, 15, 22, 0, tzinfo=UTC)
+    events = [
+        msg(1, "user", "build"),
+        status(2, "IDLE", "killed"),
+        msg(3, "user", "continue"),
+        status(4, "RUNNING", "planning"),
+        status(5, "IDLE", "killed"),
+    ]
+    for offset, event in zip((0, 2, 3, 4, 10), events, strict=True):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        diagnostic_stop="progressing_hard_cap",
+        diagnostic_stop_epoch=started.timestamp() + 10,
+        diagnostic_stop_seq=5,
+        diagnostic_release_confirmed=True,
+    )
+    ledger = tmp_path / "provider.jsonl"
+    ledger.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "ts": started.timestamp() + offset,
+                    "host": "opencode.ai",
+                    "model": "deepseek-v4-flash",
+                    "has_tools": True,
+                    "conversation_id": _CID,
+                }
+            )
+            + "\n"
+            for offset in (5, 11)
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(ledger))
+
+    scoped = _run_mod._provider_ledger_for_run(run)
+    assert scoped is not None
+    assert [record["after_terminal"] for record in scoped] == [False, True]
+
+
 @pytest.mark.asyncio
 async def test_confirmed_live_thrash_cleanup_requires_pre_stop_provider_call(tmp_path, monkeypatch):
     async def no_sleep(_seconds: float) -> None:
@@ -4945,9 +5230,13 @@ async def test_provider_calls_after_terminal_are_conversation_scoped(tmp_path, m
         def __init__(self) -> None:
             self.killed: list[str] = []
 
-        async def kill(self, cid: str) -> dict[str, int]:
+        async def kill(self, cid: str) -> dict[str, Any]:
             self.killed.append(cid)
-            return {"http_status": 200}
+            return {
+                "http_status": 200,
+                "killed": True,
+                "state": {"execution_status": "IDLE"},
+            }
 
     async def _no_sleep(_seconds: float) -> None:
         return None
@@ -5017,7 +5306,11 @@ async def test_provider_calls_after_terminal_are_conversation_scoped(tmp_path, m
 
 class _CleanupKillClient:
     def __init__(self, response=None) -> None:
-        self.response = response or {"http_status": 200}
+        self.response = response or {
+            "http_status": 200,
+            "killed": True,
+            "state": {"execution_status": "IDLE"},
+        }
         self.killed: list[str] = []
 
     async def kill(self, cid: str) -> dict:
@@ -5132,7 +5425,14 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
     ev = await _run_mod._collect_terminal_cleanup_evidence(
         cast(
             DiscoApiClient,
-            _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}),
+            _CleanupKillClient(
+                {
+                    "http_status": 200,
+                    "killed": True,
+                    "state": {"execution_status": "IDLE"},
+                    "sandbox_instance_ids": ["sbx_this_conv"],
+                }
+            ),
         ),
         "conv_terminal",
         run,
