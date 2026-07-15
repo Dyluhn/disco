@@ -171,6 +171,14 @@ def _followup_pickup_timeout_s() -> float:
 # number of files walked so a pathological workspace can't blow up the dossier.
 _WS_MANIFEST_MAX_BYTES = 5 * 1024 * 1024  # capture content for files up to 5 MiB
 _WS_MANIFEST_MAX_FILES = 2000
+# H190: screenshot bytes referenced by successful browser/verifier observations are
+# durable campaign evidence, not ordinary workspace text.  Keep the capture bounded,
+# but never truncate a PNG: an over-limit file/run is unadjudicable and therefore
+# INVALID_RUN rather than a misleading partial visual proof.
+_BROWSER_EVIDENCE_MAX_FILES = 64
+_BROWSER_EVIDENCE_MAX_FILE_BYTES = 16 * 1024 * 1024
+_BROWSER_EVIDENCE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_BROWSER_EVIDENCE_TOOLS = frozenset({"browser", "verify_web_app", "verify_appkit_app"})
 _SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
 # Consecutive identical reads required before a declared file with NO content-precise signal
 # (a partial mutator with no provable post-edit content — `present_unproven` — or no event
@@ -282,6 +290,21 @@ class SnapshotNotReadyError(Exception):
         self.facts = facts or {}
 
 
+class BrowserEvidenceCollectionError(Exception):
+    """A referenced browser screenshot could not be captured byte-for-byte.
+
+    Screenshot references are claims about visual evidence.  If their source path
+    escapes the authoritative workspace snapshot, is absent, exceeds a capture bound,
+    or no longer matches the workspace manifest identity, the run is not reproducible.
+    Callers turn this into INVALID_RUN; they must never silently omit the screenshot.
+    """
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
+
+
 class InfraProbeError(Exception):
     """A runner-side, pre-create infrastructure failure that matched an infra
     signature. Carries the matched signature id + a machine-readable detail so the
@@ -343,6 +366,10 @@ class CollectedRun:
     declared_followup_seqs: list[int] = field(default_factory=list)
     declared_followup_requires_revision: list[bool] = field(default_factory=list)
     harness_injected_user_seqs: list[int] = field(default_factory=list)
+    # Byte-identical browser screenshots explicitly referenced by successful
+    # browser/verifier observations. Empty by default and deliberately appended last
+    # so legacy positional CollectedRun construction retains its old field ordering.
+    browser_evidence: dict[str, bytes] = field(default_factory=dict)
 
 
 # ---- the live client --------------------------------------------------------
@@ -1166,6 +1193,109 @@ class DiscoApiClient:
         # generated/served bytes for source evidence or cross the preview auth boundary.
         return manifest
 
+    def collect_browser_evidence(
+        self,
+        conversation_id: str,
+        events: list[dict[str, Any]],
+        workspace_manifest: dict[str, Any],
+    ) -> dict[str, bytes]:
+        """Capture referenced screenshots from the authoritative ProjectStore snapshot.
+
+        Only paths carried by successful ``browser`` / structured verifier observations
+        are eligible.  Each path is jailed beneath this conversation's workspace, read in
+        full, and cross-checked against the already-collected workspace manifest size and
+        SHA256.  Missing, changing, escaping, or over-limit bytes raise
+        :class:`BrowserEvidenceCollectionError`; silently dropping visual evidence would
+        make a frozen replay look stronger than the live run.
+        """
+        references = _referenced_screenshot_paths(events)
+        if not references:
+            return {}
+        if len(references) > _BROWSER_EVIDENCE_MAX_FILES:
+            raise BrowserEvidenceCollectionError(
+                "referenced browser screenshot count exceeds the durable evidence bound",
+                {
+                    "conversation_id": conversation_id,
+                    "referenced_count": len(references),
+                    "max_files": _BROWSER_EVIDENCE_MAX_FILES,
+                },
+            )
+
+        ws = self._snapshot_workspace_dir(conversation_id)
+        if ws is None:
+            raise BrowserEvidenceCollectionError(
+                "referenced browser screenshot has no authoritative workspace snapshot",
+                {"conversation_id": conversation_id, "paths": references},
+            )
+
+        captured: dict[str, bytes] = {}
+        total = 0
+        for rel in references:
+            source = _jailed_browser_evidence_path(ws, rel, conversation_id=conversation_id)
+            entry = workspace_manifest.get(rel)
+            if not isinstance(entry, dict) or entry.get("present") is not True:
+                raise BrowserEvidenceCollectionError(
+                    "referenced browser screenshot is absent from the workspace manifest",
+                    {"conversation_id": conversation_id, "path": rel},
+                )
+            try:
+                data = source.read_bytes()
+            except OSError as exc:
+                raise BrowserEvidenceCollectionError(
+                    "referenced browser screenshot could not be read",
+                    {
+                        "conversation_id": conversation_id,
+                        "path": rel,
+                        "error": type(exc).__name__,
+                    },
+                ) from exc
+            if len(data) > _BROWSER_EVIDENCE_MAX_FILE_BYTES:
+                raise BrowserEvidenceCollectionError(
+                    "referenced browser screenshot exceeds the per-file evidence bound",
+                    {
+                        "conversation_id": conversation_id,
+                        "path": rel,
+                        "size": len(data),
+                        "max_file_bytes": _BROWSER_EVIDENCE_MAX_FILE_BYTES,
+                    },
+                )
+            total += len(data)
+            if total > _BROWSER_EVIDENCE_MAX_TOTAL_BYTES:
+                raise BrowserEvidenceCollectionError(
+                    "referenced browser screenshots exceed the total evidence bound",
+                    {
+                        "conversation_id": conversation_id,
+                        "path": rel,
+                        "total_bytes": total,
+                        "max_total_bytes": _BROWSER_EVIDENCE_MAX_TOTAL_BYTES,
+                    },
+                )
+
+            actual_sha = hashlib.sha256(data).hexdigest()
+            expected_size = entry.get("size")
+            expected_sha = entry.get("sha256")
+            if (
+                not isinstance(expected_size, int)
+                or isinstance(expected_size, bool)
+                or expected_size != len(data)
+                or not isinstance(expected_sha, str)
+                or not _RAW_SHA256_RE.fullmatch(expected_sha)
+                or expected_sha.lower() != actual_sha
+            ):
+                raise BrowserEvidenceCollectionError(
+                    "referenced browser screenshot does not match the workspace manifest",
+                    {
+                        "conversation_id": conversation_id,
+                        "path": rel,
+                        "expected_size": expected_size,
+                        "actual_size": len(data),
+                        "expected_sha256": expected_sha,
+                        "actual_sha256": actual_sha,
+                    },
+                )
+            captured[rel] = data
+        return captured
+
     async def _await_ready_snapshot(
         self, conversation_id: str, declared: list[str]
     ) -> tuple[dict[str, Any], Path | None]:
@@ -1424,6 +1554,104 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             return {}
     return p if isinstance(p, dict) else {}
+
+
+def _referenced_screenshot_paths(events: list[dict[str, Any]]) -> list[str]:
+    """Return sorted unique screenshot paths explicitly claimed by successful probes.
+
+    ``verify_appkit_app`` can carry interaction screenshots in nested dictionaries,
+    so keys named ``screenshot_path`` or ending in ``_screenshot_path`` are followed
+    recursively. Other strings (including human-readable ``content`` and base64
+    fields) are deliberately ignored.
+    """
+    found: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "screenshot_path" or key.endswith("_screenshot_path"):
+                    if child in (None, ""):
+                        continue
+                    if not isinstance(child, str):
+                        raise BrowserEvidenceCollectionError(
+                            "successful browser observation has a malformed screenshot path",
+                            {"field": key, "value_type": type(child).__name__},
+                        )
+                    found.add(validate_browser_evidence_relpath(child))
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    try:
+        normalized = normalize_events(events)
+    except NormalizationError as exc:
+        raise BrowserEvidenceCollectionError(
+            "browser screenshot references could not be read from the durable event log",
+            {"error": str(exc)},
+        ) from exc
+    for event in normalized:
+        if event.get("kind") != "observation":
+            continue
+        result = event.get("tool_result")
+        if not isinstance(result, dict):
+            continue
+        if result.get("tool_name") not in _BROWSER_EVIDENCE_TOOLS:
+            continue
+        if result.get("success") is not True:
+            continue
+        structured = result.get("structured")
+        if isinstance(structured, dict):
+            visit(structured)
+    return sorted(found)
+
+
+def validate_browser_evidence_relpath(path: str) -> str:
+    """Validate the product-owned screenshot namespace and exact POSIX spelling.
+
+    Browser evidence retention must not become an arbitrary workspace-file copier:
+    the product daemon owns only direct PNG children of ``.pmx/screenshots``.
+    """
+    parts = path.split("/")
+    if (
+        not path
+        or path.startswith("/")
+        or "\\" in path
+        or "\x00" in path
+        or any(part in {"", ".", ".."} for part in parts)
+        or len(parts) != 3
+        or parts[:2] != [".pmx", "screenshots"]
+        or not parts[2].endswith(".png")
+    ):
+        raise BrowserEvidenceCollectionError(
+            "successful browser observation references a path outside the product "
+            "screenshot namespace",
+            {"path": path},
+        )
+    return path
+
+
+def _jailed_browser_evidence_path(workspace: Path, rel: str, *, conversation_id: str) -> Path:
+    """Resolve one validated screenshot path without permitting symlink escape."""
+    validate_browser_evidence_relpath(rel)
+    try:
+        resolved = (workspace / rel).resolve(strict=True)
+    except OSError as exc:
+        raise BrowserEvidenceCollectionError(
+            "referenced browser screenshot is missing from the workspace snapshot",
+            {
+                "conversation_id": conversation_id,
+                "path": rel,
+                "error": type(exc).__name__,
+            },
+        ) from exc
+    if not resolved.is_relative_to(workspace) or not resolved.is_file():
+        raise BrowserEvidenceCollectionError(
+            "referenced browser screenshot escapes the workspace snapshot",
+            {"conversation_id": conversation_id, "path": rel},
+        )
+    return resolved
 
 
 def _successful_observation_refs(events: list[dict[str, Any]]) -> tuple[set[str], set[str]]:

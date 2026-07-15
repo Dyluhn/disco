@@ -43,6 +43,7 @@ from .adapters.disco_api import (
     PROGRESSING_TIMEOUT,
     TERMINAL_STATES,
     WAITING_FOR_CONFIRMATION,
+    BrowserEvidenceCollectionError,
     CollectedRun,
     DiscoApiClient,
     FollowupPickupError,
@@ -50,6 +51,7 @@ from .adapters.disco_api import (
     InfraProbeError,
     SnapshotNotReadyError,
     Transport,
+    validate_browser_evidence_relpath,
 )
 from .classify import CLASSIFICATION_NAME, classify
 from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
@@ -675,6 +677,7 @@ async def drive_scenario(
     events = client.collect_events(cid)
     state_final = await client.get_state(cid)
     workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
+    browser_evidence = client.collect_browser_evidence(cid, events, workspace)
     preview = await client.collect_preview(cid) if _preview_required(scenario) else None
     inspect_trace = await client.collect_inspect_trace(cid)
     client.observe_live_thrash_snapshot(
@@ -688,7 +691,10 @@ async def drive_scenario(
         f"{thrash_monitor['sample_count']} times and detected "
         f"{len(thrash_monitor['findings'])} threshold crossing(s)"
     )
-    timeline.append(f"collected {len(events)} events; workspace files={list(workspace)}")
+    timeline.append(
+        f"collected {len(events)} events; workspace files={list(workspace)}; "
+        f"browser evidence files={list(browser_evidence)}"
+    )
     return CollectedRun(
         conversation_id=cid,
         events=events,
@@ -696,6 +702,7 @@ async def drive_scenario(
         state_final=state_final,
         workspace_manifest=workspace,
         preview=preview,
+        browser_evidence=browser_evidence,
         inspect_trace=inspect_trace,
         thrash_monitor=thrash_monitor,
         timeline=timeline,
@@ -781,6 +788,20 @@ def assemble_dossier(
     (conv / "workspace-manifest.json").write_text(
         json.dumps(run.workspace_manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
+    # H190: retain exact screenshot bytes referenced by successful browser/verifier
+    # observations.  Preserve their workspace-relative spelling beneath a dedicated,
+    # conversation-scoped directory; never embed or truncate binary data in JSON.
+    browser_evidence_root = (conv / "browser-evidence").resolve()
+    for rel, data in sorted(run.browser_evidence.items()):
+        validate_browser_evidence_relpath(rel)
+        evidence_path = browser_evidence_root / rel
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        if not evidence_path.resolve(strict=False).is_relative_to(browser_evidence_root):
+            raise BrowserEvidenceCollectionError(
+                "browser evidence dossier destination escapes its conversation directory",
+                {"path": rel},
+            )
+        evidence_path.write_bytes(data)
     if run.preview is not None:
         preview_dir = conv / "preview"
         preview_dir.mkdir(exist_ok=True)
@@ -832,6 +853,9 @@ def assemble_dossier(
         "state.final.json": f"{conv_rel}/state.final.json",
         "workspace-manifest.json": f"{conv_rel}/workspace-manifest.json",
     }
+    for rel in sorted(run.browser_evidence):
+        label = f"browser-evidence/{rel}"
+        evidence_files[label] = f"{conv_rel}/{label}"
     if _pe:
         evidence_files[PRODUCT_EVIDENCE_NAME] = f"{conv_rel}/{PRODUCT_EVIDENCE_NAME}"
     if run.inspect_trace is not None:
@@ -1543,6 +1567,16 @@ async def run_once(
                 exc.reason,
                 code=fc.WORKSPACE_SNAPSHOT_NOT_READY,
                 first_broken_link="snapshot_flush -> snapshot_behind_agent_final_state",
+                facts=exc.facts,
+            )
+        except BrowserEvidenceCollectionError as exc:
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
+                code=fc.MISSING_REQUIRED_EVIDENCE,
+                first_broken_link="browser_observation -> durable_screenshot_evidence",
                 facts=exc.facts,
             )
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN

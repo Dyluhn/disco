@@ -25,6 +25,7 @@ from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKUP_TIMEOUT,
     FOLLOWUP_REPLANNED,
     LIVE_THRASH_STOP,
+    BrowserEvidenceCollectionError,
     CollectedRun,
     DiscoApiClient,
     HttpTransport,
@@ -597,6 +598,274 @@ def _plant_snapshot(root, cid, files):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
     return ws
+
+
+def _browser_screenshot_observation(
+    path: Any,
+    *,
+    seq: int = 11,
+    tool_name: str = "browser",
+    success: bool = True,
+) -> dict[str, Any]:
+    structured: dict[str, Any] = {"screenshot_path": path}
+    if tool_name in {"verify_web_app", "verify_appkit_app"}:
+        structured.update(
+            {
+                "passed": True,
+                "verdict": "pass",
+                "http_status": 200,
+                "meaningful_content": True,
+                "console_errors": [],
+                "network_failures": [],
+            }
+        )
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "observation",
+        "source": "environment",
+        "action_id": f"act_{seq - 1}",
+        "tool_result": {
+            "call_id": f"call_{seq - 1}",
+            "tool_name": tool_name,
+            "success": success,
+            "content": f"screenshot: {path}",
+            "structured": structured,
+        },
+    }
+
+
+def test_h190_referenced_browser_screenshot_is_retained_byte_identical_and_locked(tmp_path):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<h1>Build Smoke OK</h1>"
+    ws = _plant_snapshot(proj, _CID, {"index.html": content})
+    screenshot_rel = ".pmx/screenshots/0001-navigate.png"
+    screenshot = b"\x89PNG\r\n\x1a\n\x00visual-proof\xff\x00"
+    screenshot_path = ws / screenshot_rel
+    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+    screenshot_path.write_bytes(screenshot)
+    verifier_rel = ".pmx/screenshots/0002-verify.png"
+    verifier_screenshot = b"\x89PNG\r\n\x1a\nverifier-proof"
+    (ws / verifier_rel).write_bytes(verifier_screenshot)
+    events = clean_smoke_log()
+    events[-2]["seq"] = 15
+    events[-2]["id"] = "evt_15"
+    events[-1]["seq"] = 16
+    events[-1]["id"] = "evt_16"
+    events[-2:-2] = [
+        action(11, "browser", action_id="act_11"),
+        _browser_screenshot_observation(screenshot_rel, seq=12),
+        action(13, "verify_web_app", action_id="act_13"),
+        _browser_screenshot_observation(verifier_rel, seq=14, tool_name="verify_web_app"),
+    ]
+    _seed_db(db, _CID, events)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+    )
+    workspace = client._read_snapshot_manifest(_CID, ["index.html"], ws)
+
+    captured = client.collect_browser_evidence(_CID, events, workspace)
+
+    assert captured == {
+        screenshot_rel: screenshot,
+        verifier_rel: verifier_screenshot,
+    }
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest=workspace,
+        preview={
+            "health": {"status": 200},
+            "content": content,
+            "available": True,
+            "source": "isolated_path_capability",
+        },
+        browser_evidence=captured,
+        inspect_trace=_fake_inspect_trace(),
+    )
+    base = assemble_dossier(
+        tmp_path / "out",
+        "run_h190_browser_evidence",
+        _smoke_scenario(),
+        run,
+        model="m",
+        autonomous=False,
+    )
+    frozen = base / "conversations" / _CID / "browser-evidence" / screenshot_rel
+    manifest = load_manifest(base)
+    label = f"browser-evidence/{screenshot_rel}"
+
+    assert frozen.read_bytes() == screenshot
+    assert manifest.evidence_files[label] == (
+        f"conversations/{_CID}/browser-evidence/{screenshot_rel}"
+    )
+    assert manifest.evidence_hashes[label].startswith("sha256:")
+    verifier_label = f"browser-evidence/{verifier_rel}"
+    assert manifest.evidence_hashes[verifier_label].startswith("sha256:")
+    assert (
+        base / "conversations" / _CID / "browser-evidence" / verifier_rel
+    ).read_bytes() == verifier_screenshot
+    assert verify_evidence_unchanged(base, manifest).intact
+    assert classify_run_folder(base)["status"] == "PASS"
+
+    frozen.write_bytes(screenshot + b"tampered")
+    replayed = classify_run_folder(base)
+    assert replayed["status"] == "INVALID_RUN"
+    assert replayed["code"] == "EVIDENCE_HASH_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("path", "plant_rel"),
+    [
+        (".pmx/screenshots/missing.png", None),
+        ("../outside.png", "../outside.png"),
+        ("secrets.bin", "secrets.bin"),
+    ],
+)
+def test_h190_missing_or_escaping_screenshot_fails_closed(tmp_path, path, plant_rel):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    ws = _plant_snapshot(proj, _CID, {"index.html": "ok"})
+    if plant_rel is not None:
+        planted = ws / plant_rel
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.write_bytes(b"must-not-be-copied")
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        projects_root=str(proj),
+    )
+    manifest = client._read_snapshot_manifest(_CID, ["index.html"], ws)
+
+    with pytest.raises(BrowserEvidenceCollectionError):
+        client.collect_browser_evidence(_CID, [_browser_screenshot_observation(path)], manifest)
+
+
+@pytest.mark.parametrize(
+    ("constant", "limit", "paths"),
+    [
+        (
+            "_BROWSER_EVIDENCE_MAX_FILES",
+            1,
+            [".pmx/screenshots/a.png", ".pmx/screenshots/b.png"],
+        ),
+        ("_BROWSER_EVIDENCE_MAX_FILE_BYTES", 2, [".pmx/screenshots/a.png"]),
+        (
+            "_BROWSER_EVIDENCE_MAX_TOTAL_BYTES",
+            5,
+            [".pmx/screenshots/a.png", ".pmx/screenshots/b.png"],
+        ),
+    ],
+)
+def test_h190_screenshot_bounds_fail_closed_without_truncation(
+    tmp_path, monkeypatch, constant, limit, paths
+):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    ws = _plant_snapshot(proj, _CID, {path: "abc" for path in paths})
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        projects_root=str(proj),
+    )
+    manifest = client._read_snapshot_manifest(_CID, [], ws)
+    events = [_browser_screenshot_observation(path, seq=11 + i) for i, path in enumerate(paths)]
+    monkeypatch.setattr(_disco_mod, constant, limit)
+
+    with pytest.raises(BrowserEvidenceCollectionError):
+        client.collect_browser_evidence(_CID, events, manifest)
+
+
+def test_h190_screenshot_manifest_hash_mismatch_fails_closed(tmp_path):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    rel = ".pmx/screenshots/0001.png"
+    ws = _plant_snapshot(proj, _CID, {rel: "original"})
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        projects_root=str(proj),
+    )
+    manifest = client._read_snapshot_manifest(_CID, [], ws)
+    (ws / rel).write_bytes(b"changed-after-manifest")
+
+    with pytest.raises(BrowserEvidenceCollectionError, match="does not match"):
+        client.collect_browser_evidence(_CID, [_browser_screenshot_observation(rel)], manifest)
+
+
+def test_h190_legacy_run_without_screenshot_reference_needs_no_snapshot(tmp_path):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=[],
+        state_initial={},
+        state_final={},
+        workspace_manifest={},
+        preview=None,
+    )
+
+    assert client.collect_browser_evidence(_CID, [], {}) == {}
+    assert (
+        client.collect_browser_evidence(
+            _CID,
+            [_browser_screenshot_observation("../ignored-failed.png", success=False)],
+            {},
+        )
+        == {}
+    )
+    assert run.browser_evidence == {}
+    base = assemble_dossier(
+        tmp_path / "out", "legacy_no_browser", {"id": "legacy"}, run, model="m", autonomous=False
+    )
+    assert not (base / "conversations" / _CID / "browser-evidence").exists()
+
+
+@pytest.mark.asyncio
+async def test_h190_collection_error_is_recorded_as_invalid_run(tmp_path):
+    content = "<h1>Build Smoke OK</h1>"
+    events = clean_smoke_log()
+    events[-2]["seq"] = 13
+    events[-2]["id"] = "evt_13"
+    events[-1]["seq"] = 14
+    events[-1]["id"] = "evt_14"
+    events[-2:-2] = [
+        action(11, "browser", action_id="act_11"),
+        _browser_screenshot_observation(".pmx/screenshots/missing.png", seq=12),
+    ]
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(
+        db,
+        states=["RUNNING", "AWAITING_PLAN_APPROVAL", "FINISHED", "FINISHED"],
+        workspace={"index.html": content},
+        preview_html=content,
+    )
+    client = _client(transport, tmp_path)
+
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_h190_missing_invalid",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="a" * 40,
+        timeout_s=5,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert record["first_broken_link"] == ("browser_observation -> durable_screenshot_evidence")
 
 
 @pytest.mark.asyncio
