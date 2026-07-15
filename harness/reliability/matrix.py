@@ -64,6 +64,7 @@ class Suite:
     requires_env: tuple[str, ...]
     environment: dict[str, str]
     provider_evidence: bool
+    provider_conversation_manifest: bool
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
         required_env = item.get("requires_env") or []
         environment = item.get("environment") or {}
         provider_evidence = item.get("provider_evidence", False)
+        provider_conversation_manifest = item.get("provider_conversation_manifest", False)
         if not isinstance(required_env, list) or not all(
             isinstance(name, str) and name for name in required_env
         ):
@@ -188,6 +190,12 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             raise ValueError(f"{suite_id}.provider_evidence must be a boolean")
         if provider_evidence and proof != "live":
             raise ValueError(f"{suite_id}.provider_evidence is valid only for live proof")
+        if not isinstance(provider_conversation_manifest, bool):
+            raise ValueError(f"{suite_id}.provider_conversation_manifest must be a boolean")
+        if provider_conversation_manifest and not provider_evidence:
+            raise ValueError(
+                f"{suite_id}.provider_conversation_manifest requires provider_evidence"
+            )
 
         suites[suite_id] = Suite(
             id=suite_id,
@@ -202,6 +210,7 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             requires_env=tuple(required_env),
             environment=dict(environment),
             provider_evidence=provider_evidence,
+            provider_conversation_manifest=provider_conversation_manifest,
         )
 
     if not claims:

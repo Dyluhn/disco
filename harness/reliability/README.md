@@ -92,6 +92,7 @@ Four waves are needed because the most expensive deep-search and Agent/MCP suite
 | Build shape matrix | 300 | 100 | 3 |
 | Build revisions and mid-run steer | 100 | 100 | 1 |
 | Build pause/close/resume/export/rollback/continue | 100 | 50 | 2 |
+| Build and Agent multi-file preview manifest/assets | 4 | 1 | 4 |
 | Agent general promised tasks | 300 | 100 | 3 |
 | Agent workflow creation/current stack/MCP execution | 100 | 30 | 4 |
 | Agent gVisor/noVNC lifecycle | 30 | 10 | 3 |

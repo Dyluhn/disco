@@ -312,6 +312,12 @@ class Driver:
         except Exception:  # noqa: BLE001 — never let tool-listing crash the loop
             return None
 
+    def _available_tools(self, available_tools: list | None) -> list:
+        """Use one captured tool snapshot when the caller provides it."""
+        if available_tools is not None:
+            return available_tools
+        return self._loop.executor.available_tools()
+
     def planning_allowed_tool_names(self, available_tools: list | None = None) -> frozenset[str]:
         """The names a tool call may legitimately carry while in PLANNING mode —
         the SAME read-only-capability ∩ name-allowlist intersection that
@@ -349,11 +355,7 @@ class Driver:
             return True
 
         names: set[str] = set()
-        tools = (
-            available_tools
-            if available_tools is not None
-            else self._loop.executor.available_tools()
-        )
+        tools = self._available_tools(available_tools)
         for t in tools:
             name = getattr(t, "name", None)
             if isinstance(name, str) and _planner_ok(name):
@@ -412,11 +414,7 @@ class Driver:
         )
 
         effective_mode = mode or self._loop.mode
-        tools = (
-            available_tools
-            if available_tools is not None
-            else self._loop.executor.available_tools()
-        )
+        tools = self._available_tools(available_tools)
         if effective_mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
             # stuck prose-planning segment, narrow the offered

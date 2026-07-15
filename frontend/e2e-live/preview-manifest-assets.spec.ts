@@ -40,12 +40,47 @@ const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
 const SERVICE_WORKER_MARKER = "RELIABILITY SERVICE WORKER";
 const NESTED_MARKER = "NESTED ROUTE LOADED";
 const ISOLATED_PREVIEW_PREFIX = "/__disco/isolated-preview";
+const PROVIDER_CONVERSATION_MANIFEST_ENV =
+  "DISCO_RELIABILITY_PROVIDER_CONVERSATION_MANIFEST";
 const BACKGROUND = "rgb(12, 34, 56)";
 const FONT_PATH = path.resolve(
   process.cwd(),
   "node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-cyrillic-ext-wght-normal.woff2",
 );
 const FONT_BASE64 = fs.readFileSync(FONT_PATH).toString("base64");
+
+function writeProviderConversationManifest(conversationIds: string[]): void {
+  expect(conversationIds.length, "provider manifest must contain Build and Agent IDs").toBe(2);
+  expect(new Set(conversationIds).size, "provider manifest conversation IDs must be unique").toBe(
+    2,
+  );
+  expect(
+    conversationIds.every((cid) => cid.length > 0 && cid === cid.trim()),
+    "provider manifest conversation IDs must be exact nonempty strings",
+  ).toBe(true);
+
+  const configuredPath = process.env[PROVIDER_CONVERSATION_MANIFEST_ENV]?.trim() ?? "";
+  expect(
+    configuredPath,
+    `${PROVIDER_CONVERSATION_MANIFEST_ENV} must be provided by the reliability runner`,
+  ).toBeTruthy();
+  expect(path.isAbsolute(configuredPath), "provider manifest path must be absolute").toBe(true);
+
+  const suiteOut = process.env.DISCO_RELIABILITY_SUITE_OUT?.trim() ?? "";
+  expect(suiteOut, "DISCO_RELIABILITY_SUITE_OUT must be runner-provided").toBeTruthy();
+  const resolvedSuiteOut = path.resolve(suiteOut);
+  const resolvedManifest = path.resolve(configuredPath);
+  expect(
+    path.dirname(resolvedManifest),
+    "provider manifest must be suite-private",
+  ).toBe(resolvedSuiteOut);
+
+  fs.writeFileSync(
+    resolvedManifest,
+    `${JSON.stringify({ schema_version: 1, conversation_ids: conversationIds }, null, 2)}\n`,
+    { encoding: "utf-8", flag: "wx", mode: 0o600 },
+  );
+}
 
 function buildPrompt(surface: Surface): string {
   return `
@@ -501,48 +536,104 @@ async function openFromHandoff(
         "generated preview origin reached a credential endpoint",
       ).toBe(403);
       if (click === 0) {
-        const workerResponsePromise = context.waitForEvent("response", {
-          predicate: (response) => {
-            const responseUrl = new URL(response.url());
-            return (
-              response.request().method() === "GET" &&
-              responseUrl.origin === finalUrl.origin &&
-              responseUrl.pathname === "/sw.js"
-            );
-          },
-          timeout: 30_000,
-        });
-        const workerProbePromise = popup.evaluate(async () => {
+        const workerProbe = await popup.evaluate(async () => {
           if (!("serviceWorker" in navigator)) {
-            return { supported: false, registered: false, registrations: -1 };
+            return {
+              supported: false,
+              registrationSucceeded: false,
+              rejection: null,
+              registrationsAfterAttempt: -1,
+              registrationsAfterCleanup: -1,
+            };
           }
+          let registrationSucceeded = false;
+          let rejection: string | null = null;
           try {
-            const registration = await navigator.serviceWorker.register("/sw.js");
-            await registration.unregister();
-            return {
-              supported: true,
-              registered: true,
-              registrations: (await navigator.serviceWorker.getRegistrations()).length,
-            };
+            await navigator.serviceWorker.register("/sw.js");
+            registrationSucceeded = true;
           } catch (error) {
-            return {
-              supported: true,
-              registered: false,
-              error: error instanceof Error ? error.name : typeof error,
-              registrations: (await navigator.serviceWorker.getRegistrations()).length,
-            };
+            rejection = error instanceof Error ? error.name : typeof error;
           }
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          const registrationsAfterAttempt = registrations.length;
+          // A policy regression must fail below, but must not contaminate later
+          // assertions or runs with a service worker that unexpectedly registered.
+          await Promise.all(registrations.map((registration) => registration.unregister()));
+          return {
+            supported: true,
+            registrationSucceeded,
+            rejection,
+            registrationsAfterAttempt,
+            registrationsAfterCleanup: (await navigator.serviceWorker.getRegistrations()).length,
+          };
         });
-        const [workerResponse, workerProbe] = await Promise.all([
-          workerResponsePromise,
-          workerProbePromise,
-        ]);
-        expect(workerResponse.status(), "p3s service-worker policy did not return 403").toBe(403);
-        expect(workerResponse.headers()["cache-control"]).toContain("no-store");
-        expect(await workerResponse.text()).toBe("preview service workers disabled");
         expect(workerProbe.supported, "Firefox did not expose serviceWorker on p3s").toBe(true);
-        expect(workerProbe.registered, "p3s accepted a generated service worker").toBe(false);
-        expect(workerProbe.registrations, "p3s retained a service-worker registration").toBe(0);
+        expect(
+          workerProbe.registrationSucceeded,
+          "p3s accepted a generated service worker",
+        ).toBe(false);
+        expect(
+          typeof workerProbe.rejection === "string" && workerProbe.rejection.length > 0,
+          "Firefox service-worker registration did not reject with an error",
+        ).toBe(true);
+        expect(
+          workerProbe.registrationsAfterAttempt,
+          "p3s retained a service-worker registration after the rejected attempt",
+        ).toBe(0);
+        expect(
+          workerProbe.registrationsAfterCleanup,
+          "service-worker probe cleanup left a registration behind",
+        ).toBe(0);
+
+        // Firefox does not reliably expose a failed service-worker script fetch
+        // through BrowserContext's response event. Independently exercise the
+        // exact policy route with the popup's HttpOnly capability cookie. The
+        // cookie is path-scoped, so an explicit header is required for /sw.js;
+        // keep it only in memory in a fresh, untraced API context.
+        const capabilityCookieName = `disco_path_preview_${compactCid}`;
+        const capabilityCookies = (await context.cookies([popup.url()])).filter(
+          (cookie) => cookie.name === capabilityCookieName,
+        );
+        expect(
+          capabilityCookies.length,
+          "popup did not retain exactly one scoped preview capability cookie",
+        ).toBe(1);
+        const capabilityCookie = capabilityCookies[0];
+        expect(capabilityCookie.httpOnly, "preview capability cookie was not HttpOnly").toBe(true);
+        expect(capabilityCookie.domain, "preview capability cookie escaped its p3s host").toBe(
+          finalUrl.hostname,
+        );
+        expect(
+          capabilityCookie.path,
+          "preview capability cookie path was not conversation-scoped",
+        ).toBe(`${ISOLATED_PREVIEW_PREFIX}/${cid}/`);
+        expect(
+          capabilityCookie.value.length,
+          "preview capability cookie was empty",
+        ).toBeGreaterThan(0);
+
+        const workerUrl = new URL("/sw.js", finalUrl.origin).toString();
+        const workerRequest = await playwrightRequest.newContext({
+          extraHTTPHeaders: {
+            Cookie: `${capabilityCookie.name}=${capabilityCookie.value}`,
+          },
+        });
+        try {
+          const workerResponse = await workerRequest.get(workerUrl, {
+            headers: { "Service-Worker": "script" },
+            maxRedirects: 0,
+            timeout: 30_000,
+          });
+          expect(workerResponse.url(), "service-worker policy probe changed URL").toBe(workerUrl);
+          expect(
+            workerResponse.status(),
+            "p3s service-worker policy did not return 403",
+          ).toBe(403);
+          expect(workerResponse.headers()["cache-control"]).toBe("private, no-store");
+          expect(await workerResponse.text()).toBe("preview service workers disabled");
+        } finally {
+          await workerRequest.dispose();
+        }
       }
       const requestsFromPopup = popupNetworkRequests.filter((request) =>
         requestBelongsToPage(request, popup),
@@ -775,6 +866,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     const agentPage = await context.newPage();
     const agentCid = await createRun(request, "agent");
     cids.push(agentCid);
+    writeProviderConversationManifest([buildCid, agentCid]);
     await agentPage.goto(`/agent/${agentCid}`);
     const agentFirst = await waitForCommittedFinish(request, agentCid);
     const agentFirstVerifier = verifierEvidence(agentFirst.events);

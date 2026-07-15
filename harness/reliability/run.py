@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import importlib
 import json
+import math
 import os
 import re
 import signal
@@ -57,6 +58,16 @@ state_transaction = _state.state_transaction
 DEFAULT_MATRIX = Path(__file__).with_name("matrix.yaml")
 _EXPECTED_PROVIDER_HOST_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST"
 _EXPECTED_PROVIDER_MODEL_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL"
+_PROVIDER_CONVERSATION_MANIFEST_ENV = "DISCO_RELIABILITY_PROVIDER_CONVERSATION_MANIFEST"
+_PROVIDER_LEDGER_REQUIRED_KEYS = {
+    "ts",
+    "host",
+    "model",
+    "has_tools",
+    "conversation_id",
+}
+_PROVIDER_LEDGER_OPTIONAL_KEYS = {"purpose", "call_kind"}
+_PROVIDER_LEDGER_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
 
 
 def _utc_now() -> str:
@@ -262,8 +273,17 @@ def _provider_evidence_result(
     expected_host: str,
     expected_model: str,
     units: int,
+    conversation_manifest_path: Path | None = None,
 ) -> tuple[str, int, str]:
     """Fail closed on absent, malformed, or fallback provider-call evidence."""
+
+    manifest_conversations: frozenset[str] | None = None
+    if conversation_manifest_path is not None:
+        manifest_status, manifest_conversations, manifest_reason = (
+            _provider_conversation_manifest_result(conversation_manifest_path)
+        )
+        if manifest_status != PASS:
+            return manifest_status, 0, manifest_reason
 
     if not path.is_file():
         return INVALID, 0, "provider ledger was not produced"
@@ -287,22 +307,18 @@ def _provider_evidence_result(
         return INVALID, 0, "expected provider host/model is empty"
 
     conversations: set[str] = set()
+    tool_conversations: set[str] = set()
     auxiliary_calls = 0
     for index, record in enumerate(records):
-        host = str(record.get("host") or "").strip().lower()
-        model = str(record.get("model") or "").strip()
-        conversation_id = str(record.get("conversation_id") or "").strip()
-        if not host or not model:
-            return (
-                INVALID,
-                0,
-                f"provider ledger record {index} is missing host/model",
-            )
-        if required_host not in host:
+        record_status, normalized, record_reason = _provider_ledger_record_result(record, index)
+        if record_status != PASS or normalized is None:
+            return record_status, 0, record_reason
+        host, model, has_tools, conversation_id = normalized
+        if host != required_host:
             return (
                 FAIL,
                 0,
-                f"provider fallback detected: host {host!r} does not contain {required_host!r}",
+                f"provider fallback detected: host {host!r} != {required_host!r}",
             )
         if model != required_model:
             return (
@@ -310,13 +326,13 @@ def _provider_evidence_result(
                 0,
                 f"provider fallback detected: model {model!r} != {required_model!r}",
             )
-        if not conversation_id:
+        if conversation_id is None:
             # Preflight and async title/summarizer calls carry no conversation
             # metadata and no tools. They still must use the exact provider, but
             # must not invalidate otherwise scoped driver evidence. A tool-bearing
             # call without a conversation remains invalid: it cannot be assigned
             # to a trial or checked for post-terminal runaway.
-            if record.get("has_tools") is False:
+            if not has_tools:
                 auxiliary_calls += 1
                 continue
             return (
@@ -326,6 +342,25 @@ def _provider_evidence_result(
                 "but no conversation_id",
             )
         conversations.add(conversation_id)
+        if has_tools:
+            tool_conversations.add(conversation_id)
+    if manifest_conversations is not None and conversations != manifest_conversations:
+        missing = sorted(manifest_conversations - conversations)
+        extra = sorted(conversations - manifest_conversations)
+        details: list[str] = []
+        if missing:
+            details.append(f"missing manifest conversation ID(s): {missing}")
+        if extra:
+            details.append(f"extra provider-ledger conversation ID(s): {extra}")
+        return INVALID, 0, "; ".join(details)
+    if manifest_conversations is not None:
+        without_tools = sorted(manifest_conversations - tool_conversations)
+        if without_tools:
+            return (
+                INVALID,
+                0,
+                f"manifest conversation ID(s) have no tool-bearing provider call: {without_tools}",
+            )
     if len(conversations) < units:
         return (
             INVALID,
@@ -339,6 +374,105 @@ def _provider_evidence_result(
         f"{len(conversations)} conversation(s) "
         f"used {required_host}/{required_model}",
     )
+
+
+def _provider_ledger_record_result(
+    record: dict[str, Any], index: int
+) -> tuple[str, tuple[str, str, bool, str | None] | None, str]:
+    """Validate one sanitized provider record without coercing evidence types."""
+
+    keys = set(record)
+    missing = sorted(_PROVIDER_LEDGER_REQUIRED_KEYS - keys)
+    unexpected = sorted(keys - _PROVIDER_LEDGER_REQUIRED_KEYS - _PROVIDER_LEDGER_OPTIONAL_KEYS)
+    if missing or unexpected:
+        return (
+            INVALID,
+            None,
+            f"provider ledger record {index} has invalid fields "
+            f"(missing={missing}, unexpected={unexpected})",
+        )
+    timestamp = record["ts"]
+    if (
+        not isinstance(timestamp, (int, float))
+        or isinstance(timestamp, bool)
+        or not math.isfinite(timestamp)
+        or timestamp <= 0
+    ):
+        return INVALID, None, f"provider ledger record {index} has invalid ts"
+    host = record["host"]
+    if not isinstance(host, str) or not host or host != host.strip().lower():
+        return INVALID, None, f"provider ledger record {index} has invalid host"
+    model = record["model"]
+    if not isinstance(model, str) or not model or model != model.strip():
+        return INVALID, None, f"provider ledger record {index} has invalid model"
+    has_tools = record["has_tools"]
+    if not isinstance(has_tools, bool):
+        return INVALID, None, f"provider ledger record {index} has invalid has_tools"
+    conversation_id = record["conversation_id"]
+    if conversation_id is not None and (
+        not isinstance(conversation_id, str)
+        or not conversation_id
+        or conversation_id != conversation_id.strip()
+    ):
+        return INVALID, None, f"provider ledger record {index} has invalid conversation_id"
+    for label in _PROVIDER_LEDGER_OPTIONAL_KEYS & keys:
+        value = record[label]
+        if not isinstance(value, str) or _PROVIDER_LEDGER_LABEL_RE.fullmatch(value) is None:
+            return INVALID, None, f"provider ledger record {index} has invalid {label}"
+    return PASS, (host, model, has_tools, conversation_id), ""
+
+
+def _provider_conversation_manifest_result(
+    path: Path,
+) -> tuple[str, frozenset[str], str]:
+    """Parse the runner-owned exact provider conversation scope manifest."""
+
+    empty: frozenset[str] = frozenset()
+    if not path.is_absolute():
+        return INVALID, empty, "provider conversation manifest path is not absolute"
+    if not path.is_file():
+        return INVALID, empty, "provider conversation manifest was not produced"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            INVALID,
+            empty,
+            f"provider conversation manifest is unreadable: {type(exc).__name__}",
+        )
+    if not isinstance(manifest, dict):
+        return INVALID, empty, "provider conversation manifest must be an object"
+    expected_keys = {"schema_version", "conversation_ids"}
+    if set(manifest) != expected_keys:
+        return (
+            INVALID,
+            empty,
+            "provider conversation manifest must contain exactly "
+            "schema_version and conversation_ids",
+        )
+    if manifest.get("schema_version") != 1 or isinstance(manifest.get("schema_version"), bool):
+        return INVALID, empty, "provider conversation manifest schema_version must be 1"
+    raw_ids = manifest.get("conversation_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return (
+            INVALID,
+            empty,
+            "provider conversation manifest conversation_ids must be a nonempty list",
+        )
+    conversation_ids: list[str] = []
+    for index, value in enumerate(raw_ids):
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            return (
+                INVALID,
+                empty,
+                f"provider conversation manifest conversation_ids[{index}] "
+                "must be an exact nonempty string",
+            )
+        conversation_ids.append(value)
+    if len(set(conversation_ids)) != len(conversation_ids):
+        return INVALID, empty, "provider conversation manifest contains duplicate IDs"
+    parsed = frozenset(conversation_ids)
+    return PASS, parsed, f"provider conversation manifest declares {len(parsed)} ID(s)"
 
 
 def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:
@@ -418,6 +552,27 @@ def _structured_command(
     return command, None
 
 
+def _configure_provider_evidence_environment(
+    suite: Suite,
+    suite_out: Path,
+    env: dict[str, str],
+) -> tuple[Path, Path | None]:
+    """Own suite-private provider evidence paths and reject ambient manifests."""
+
+    provider_ledger_path = (suite_out / "provider-ledger.jsonl").resolve()
+    env.pop("DISCO_PROVIDER_LEDGER", None)
+    env.pop(_PROVIDER_CONVERSATION_MANIFEST_ENV, None)
+    conversation_manifest_path: Path | None = None
+    if suite.provider_evidence:
+        # Never inherit or share an ambient ledger across parallel suites. Each
+        # campaign-owned stack writes an isolated, auditable call stream.
+        env["DISCO_PROVIDER_LEDGER"] = str(provider_ledger_path)
+    if suite.provider_conversation_manifest:
+        conversation_manifest_path = (suite_out / "provider-conversations.json").resolve()
+        env[_PROVIDER_CONVERSATION_MANIFEST_ENV] = str(conversation_manifest_path)
+    return provider_ledger_path, conversation_manifest_path
+
+
 async def _run_suite(
     suite: Suite,
     *,
@@ -474,11 +629,9 @@ async def _run_suite(
     except ValueError as exc:
         return {**base, "status": INVALID, "reason": str(exc), "finished_at": _utc_now()}
     env["DISCO_RELIABILITY_SUITE_OUT"] = str(suite_out)
-    provider_ledger_path = suite_out / "provider-ledger.jsonl"
-    if suite.provider_evidence:
-        # Never inherit or share an ambient ledger across parallel suites. Each
-        # campaign-owned stack writes an isolated, auditable call stream.
-        env["DISCO_PROVIDER_LEDGER"] = str(provider_ledger_path)
+    provider_ledger_path, provider_conversation_manifest_path = (
+        _configure_provider_evidence_environment(suite, suite_out, env)
+    )
     command, structured_path = _structured_command(suite, command, suite_out, env)
     log_path = suite_out / "suite.log"
     exit_code = -1
@@ -550,6 +703,7 @@ async def _run_suite(
             expected_host=os.environ.get(_EXPECTED_PROVIDER_HOST_ENV, ""),
             expected_model=os.environ.get(_EXPECTED_PROVIDER_MODEL_ENV, ""),
             units=suite.units,
+            conversation_manifest_path=provider_conversation_manifest_path,
         )
         provider_evidence = {
             "status": provider_status,
@@ -557,6 +711,10 @@ async def _run_suite(
             "units_passed": provider_units,
             "path": str(provider_ledger_path),
         }
+        if provider_conversation_manifest_path is not None:
+            provider_evidence["conversation_manifest_path"] = str(
+                provider_conversation_manifest_path
+            )
         if status == PASS and provider_status != PASS:
             status, units_passed, reason = provider_status, 0, provider_reason
         elif status != PASS and provider_status != PASS:

@@ -68,6 +68,7 @@ def test_live_build_lanes_use_namespaced_podman_not_shared_host_process() -> Non
         "live-build-shapes",
         "live-build-revisions",
         "live-build-lifecycle",
+        "live-preview-manifest-assets",
     }
     for suite in suites:
         command = list(suite.command)
@@ -83,6 +84,36 @@ def test_live_build_lanes_use_namespaced_podman_not_shared_host_process() -> Non
     binding = loopback_port_bindings(podman=True)["8000/tcp"]
     assert binding == {"ip": "127.0.0.1"}
     assert "host_port" not in binding
+
+
+def test_preview_manifest_assets_suite_is_exact_single_wave_provider_proof() -> None:
+    matrix = load_matrix(MATRIX)
+    claim = matrix.claims["build.preview_manifest_assets_live"]
+    suite = matrix.suites["live-preview-manifest-assets"]
+    command = list(suite.command)
+
+    assert claim.target == 4
+    assert suite.units == 1
+    assert suite.kind == "playwright"
+    assert suite.provider_evidence is True
+    assert suite.provider_conversation_manifest is True
+    assert suite.environment == {"LIVE_WORKERS": "1"}
+    assert "--sandbox-backend" in command
+    assert command[command.index("--sandbox-backend") + 1] == "podman"
+    assert "playwright.live.config.ts" in command
+    assert "e2e-live/preview-manifest-assets.spec.ts" in command
+    for exact_argument in (
+        "--project=firefox",
+        "--repeat-each=1",
+        "--workers=1",
+        "--retries=0",
+        "--trace=off",
+        "--reporter=json",
+    ):
+        assert exact_argument in command
+
+    spec = MATRIX.parents[2] / "frontend/e2e-live/preview-manifest-assets.spec.ts"
+    assert 'test.use({ trace: "off" })' in spec.read_text(encoding="utf-8")
 
 
 def test_matrix_rejects_uncovered_claim(tmp_path: Path) -> None:
@@ -118,4 +149,37 @@ def test_matrix_rejects_duplicate_yaml_keys(tmp_path: Path) -> None:
     path.write_text("schema_version: 1\nschema_version: 2\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="duplicate YAML mapping key 'schema_version'"):
+        load_matrix(path)
+
+
+def test_matrix_rejects_provider_manifest_without_provider_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "matrix.yaml"
+    path.write_text(
+        """
+schema_version: 1
+claims:
+  - id: x
+    surface: build
+    proof: live
+    target: 1
+    description: exact provider scope
+suites:
+  - id: y
+    proof: live
+    kind: playwright
+    cwd: .
+    timeout_s: 1
+    memory_gib: 1
+    units: 1
+    provider_conversation_manifest: true
+    command: ["true"]
+    claims: [x]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="provider_conversation_manifest requires provider_evidence",
+    ):
         load_matrix(path)

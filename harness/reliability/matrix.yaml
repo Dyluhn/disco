@@ -94,6 +94,11 @@ claims:
     proof: live
     target: 100
     description: Close/reopen, pause/resume, steer, export, rollback, and build-after-rollback all work.
+  - id: build.preview_manifest_assets_live
+    surface: build
+    proof: live
+    target: 4
+    description: Build and Agent preserve the selected multi-file preview graph, isolated origins, and durable revisions.
   - id: agent.general_tasks_live
     surface: agent
     proof: live
@@ -475,6 +480,48 @@ suites:
       - "--out"
       - "{suite_out}/soak"
     claims: [agent.general_tasks_live]
+
+  - id: live-preview-manifest-assets
+    proof: live
+    kind: playwright
+    cwd: "{repo}"
+    timeout_s: 3600
+    memory_gib: 12
+    units: 1
+    provider_evidence: true
+    provider_conversation_manifest: true
+    requires_env: *provider_seed
+    environment: {LIVE_WORKERS: "1"}
+    command:
+      - "{python}"
+      - "-m"
+      - "harness.reliability.isolated_stack"
+      - "--root"
+      - "{suite_out}/stack"
+      - "--cwd"
+      - "{frontend}"
+      - "--agent-port"
+      - "18112"
+      - "--app-port"
+      - "18912"
+      - "--ui-port"
+      - "5302"
+      - "--sandbox-backend"
+      - "podman"
+      - "--"
+      - "npx"
+      - "playwright"
+      - "test"
+      - "--config"
+      - "playwright.live.config.ts"
+      - "e2e-live/preview-manifest-assets.spec.ts"
+      - "--project=firefox"
+      - "--repeat-each=1"
+      - "--workers=1"
+      - "--retries=0"
+      - "--trace=off"
+      - "--reporter=json"
+    claims: [build.preview_manifest_assets_live]
 
   - id: live-agent-workflow-mcp
     proof: live
