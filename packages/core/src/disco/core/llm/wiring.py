@@ -11,13 +11,16 @@ V2 (§2): async vision probes for providers that advertise modality metadata.
   - llama.cpp / self-host: GET {base_url − /v1}/props → modalities.vision bool.
   - OpenRouter: GET /api/v1/models → architecture.input_modalities includes "image".
   - Other: return None (defer to the static table in config.vision_table).
-Results are memoized per (base_url, model_id) for the process lifetime.
+Results are memoized per (probe protocol, base_url, model_id) for the process lifetime.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from collections.abc import Callable, Mapping
+from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -31,20 +34,75 @@ from .types import Requirement
 _LOG = logging.getLogger("disco.wiring")
 
 # V2 (§2): process-lifetime memo cache for vision probe results.
-# Key: (base_url, model_id) → bool | None (True/False/unknown).
-_VISION_PROBE_CACHE: dict[tuple[str, str], bool | None] = {}
+# Key: (probe kind, base_url, model_id) → bool | None (True/False/unknown).
+# Include the selected provider protocol so reclassifying an endpoint cannot reuse
+# an `unknown` result cached while the same URL was configured as a generic cloud.
+_VISION_PROBE_CACHE: dict[tuple[str, str, str], bool | None] = {}
+
+_VisionProbeKind = Literal["llamacpp", "openrouter"]
+
+
+def _is_self_hosted_endpoint(base_url: str) -> bool:
+    """Return whether an endpoint is plausibly on the operator's local network.
+
+    Generic OpenAI-compatible cloud APIs do not advertise vision capability, and
+    probing an invented ``/props`` route causes noisy, unsupported requests.  Keep
+    llama.cpp's runtime-authoritative probe to loopback, LAN, Tailscale/CGNAT, and
+    explicitly local hostnames.  A public llama.cpp deployment can still opt in by
+    naming its provider ``llamacpp`` (handled by `_vision_probe_kind`).
+    """
+    host = (urlsplit(base_url).hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    if host.endswith((".ts.net", ".local", ".lan", ".home.arpa", ".internal")):
+        return True
+    if "." not in host:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip in ipaddress.ip_network("100.64.0.0/10")
+    )
+
+
+def _vision_probe_kind(base_url: str, provider: str | None) -> _VisionProbeKind | None:
+    """Select only provider protocols with a documented capability endpoint."""
+    normalized_provider = (provider or "").strip().lower().replace("_", "-")
+    host = (urlsplit(base_url).hostname or "").lower().rstrip(".")
+
+    if (
+        normalized_provider == "openrouter"
+        or host == "openrouter.ai"
+        or host.endswith(".openrouter.ai")
+    ):
+        return "openrouter"
+    if normalized_provider in {"llama.cpp", "llama-cpp", "llamacpp"}:
+        return "llamacpp"
+    if _is_self_hosted_endpoint(base_url):
+        return "llamacpp"
+    return None
 
 
 async def probe_vision(
     base_url: str,
     model_id: str,
     client: httpx.AsyncClient,
+    *,
+    provider: str | None = None,
 ) -> bool | None:
     """V2 (§2): probe one endpoint for vision capability.
 
-    Provider detection (by URL):
-    - openrouter.ai → GET /api/v1/models, match model id, check input_modalities.
-    - else (llama.cpp / self-host) → GET {base_url − /v1}/props, read modalities.vision.
+    Provider detection:
+    - OpenRouter provider/host → GET /api/v1/models, match model id, check
+      input_modalities.
+    - llama.cpp provider or local/LAN endpoint → GET {base_url − /v1}/props,
+      read modalities.vision.
+    - other cloud providers → no request; return None and use the static table.
 
     Returns:
       True   — definitively vision-capable.
@@ -54,15 +112,19 @@ async def probe_vision(
 
     Fail-soft: never raises. Result memoized for the process lifetime.
     """
-    cache_key = (base_url, model_id)
+    probe_kind = _vision_probe_kind(base_url, provider)
+    if probe_kind is None:
+        return None
+
+    cache_key = (probe_kind, base_url, model_id)
     if cache_key in _VISION_PROBE_CACHE:
         return _VISION_PROBE_CACHE[cache_key]
 
     result: bool | None = None
     try:
-        if "openrouter.ai" in base_url:
+        if probe_kind == "openrouter":
             # OpenRouter advertises per-model input_modalities in /api/v1/models.
-            resp = await client.get(f"{base_url}/models", timeout=10.0)
+            resp = await client.get(f"{base_url.rstrip('/')}/models", timeout=10.0)
             if resp.status_code == 200:
                 data = resp.json()
                 for m in data.get("data", []):
@@ -118,7 +180,12 @@ async def probe_all_vision_with_approvals(
             if not origin_approved(entry.base_url, purpose, entry.api_key_env):
                 results[key] = None
                 continue
-            result = await probe_vision(entry.base_url, entry.model_id, client)
+            result = await probe_vision(
+                entry.base_url,
+                entry.model_id,
+                client,
+                provider=entry.provider,
+            )
             results[key] = result
     return results
 

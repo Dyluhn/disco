@@ -405,6 +405,89 @@ class TestProbeVision:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_openrouter_provider_uses_models_on_an_approved_custom_origin(self):
+        """The provider type, not a model-name special case, selects OpenRouter metadata."""
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
+
+        _VISION_PROBE_CACHE.clear()
+        model_id = "vendor/vision-model"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "data": [
+                {
+                    "id": model_id,
+                    "architecture": {"input_modalities": ["text", "image"]},
+                }
+            ]
+        }
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+
+        result = await probe_vision(
+            "https://router.example.test/api/v1/",
+            model_id,
+            mock_client,
+            provider="openrouter",
+        )
+
+        assert result is True
+        mock_client.get.assert_awaited_once_with(
+            "https://router.example.test/api/v1/models", timeout=10.0
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("base_url", "provider"),
+        [
+            ("https://api.openai.com/v1", "openai"),
+            ("https://api.anthropic.com/v1", "anthropic"),
+            ("https://opencode.ai/zen/go/v1", "opencode-go"),
+            ("https://openrouter.ai.attacker.example/v1", "generic-cloud"),
+        ],
+    )
+    async def test_other_cloud_providers_do_not_receive_invented_network_probes(
+        self, base_url: str, provider: str
+    ):
+        """Clouds without documented modality metadata defer directly to the table."""
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
+
+        _VISION_PROBE_CACHE.clear()
+        mock_client = AsyncMock()
+
+        result = await probe_vision(
+            base_url,
+            "opaque-model-id",
+            mock_client,
+            provider=provider,
+        )
+
+        assert result is None
+        mock_client.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_explicit_llamacpp_provider_probes_props_on_public_host(self):
+        """An explicit llama.cpp provider preserves `/props` on non-LAN deployments."""
+        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
+
+        _VISION_PROBE_CACHE.clear()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"modalities": {"vision": True}}
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+
+        result = await probe_vision(
+            "https://models.example.test/v1",
+            "Qwen.gguf",
+            mock_client,
+            provider="llama.cpp",
+        )
+
+        assert result is True
+        mock_client.get.assert_awaited_once_with("https://models.example.test/props", timeout=10.0)
+
+    @pytest.mark.asyncio
     async def test_network_error_returns_none_no_raise(self):
         """A network error during the probe must return None and never raise."""
         from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_vision
@@ -503,6 +586,41 @@ class TestProbeVision:
         assert result["local-model"] is True
         # NLI has no base_url → not in results
         assert "nli-model" not in result
+
+    @pytest.mark.asyncio
+    async def test_probe_all_vision_never_probes_unsupported_cloud_provider(self):
+        """Startup may inspect several models on one cloud without emitting `/props` calls."""
+        from disco.core.llm.wiring import (
+            _VISION_PROBE_CACHE,
+            probe_all_vision_with_approvals,
+        )
+
+        _VISION_PROBE_CACHE.clear()
+        base_url = "https://cloud-provider.example/v1"
+        models = {
+            f"cloud-{index}": ModelEntry(
+                model_id=f"model-{index}",
+                provider="generic-cloud",
+                base_url=base_url,
+                context_window=8192,
+            )
+            for index in range(3)
+        }
+        config = RouterConfig(models=models, default_model="cloud-0")
+
+        with patch("httpx.AsyncClient") as mock_async_client_cls:
+            mock_client = AsyncMock()
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = False
+            mock_async_client_cls.return_value = mock_client
+
+            result = await probe_all_vision_with_approvals(
+                config,
+                origin_approved=lambda *_args: True,
+            )
+
+        assert result == {"cloud-0": None, "cloud-1": None, "cloud-2": None}
+        mock_client.get.assert_not_awaited()
 
 
 # ===========================================================================
