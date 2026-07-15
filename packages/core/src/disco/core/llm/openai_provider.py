@@ -184,14 +184,14 @@ def _host_speaks_chat_template_kwargs(base_url: str) -> bool:
     return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
 
 
-def _requires_user_after_tool_result(base_url: str) -> bool:
-    """Whether this compatibility endpoint rejects a trailing ``tool`` turn.
+def _requires_user_after_terminal_response(base_url: str) -> bool:
+    """Whether this compatibility endpoint rejects a trailing response turn.
 
     OpenCode Go currently routes some models through a strict Fireworks chat
     template which returns HTTP 400 when the request ends immediately after a
-    tool result. The same history succeeds once followed by a user continuation.
-    Keep the shim pinned to that endpoint so conforming OpenAI-compatible hosts
-    retain their byte-identical payloads.
+    tool result or an assistant response. The same history succeeds once
+    followed by a user continuation. Keep the shim pinned to that endpoint so
+    conforming OpenAI-compatible hosts retain their byte-identical payloads.
     """
     from urllib.parse import urlsplit
 
@@ -420,16 +420,24 @@ class OpenAIProvider:
         # follows the assistant tool_call that declared it (MiniMax 2013; OpenAI
         # spec). No-op when the render pipeline already produced an adjacent list.
         msgs = _normalize_tool_call_ordering(msgs)
-        # Live reliability runs exposed a deterministic 400/requery pair after
-        # every tool on OpenCode Go: that endpoint's strict template requires a
-        # user turn after the tool result. Previously the generic repair path
-        # appended an alarming "provider rejected" prompt and paid for a second
-        # request. Add the neutral continuation on the first request instead.
-        if _requires_user_after_tool_result(self._base) and msgs and msgs[-1].get("role") == "tool":
+        # Live reliability runs exposed deterministic 400/requery pairs when an
+        # OpenCode Go request ended on a tool or assistant response. Previously
+        # the generic repair path appended an alarming "provider rejected"
+        # prompt and paid for a second request. Add a neutral continuation on
+        # the first request instead, before an intentional assistant prefill.
+        terminal_role = msgs[-1].get("role") if msgs else None
+        if _requires_user_after_terminal_response(self._base) and terminal_role in {
+            "assistant",
+            "tool",
+        }:
             msgs.append(
                 {
                     "role": "user",
-                    "content": "Continue from the tool result above.",
+                    "content": (
+                        "Continue from the tool result above."
+                        if terminal_role == "tool"
+                        else "Continue from the assistant response above."
+                    ),
                 }
             )
         # B9: Assistant prefill. Append as a trailing

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 from disco.core.events import LLMMessage
 from disco.core.llm.openai_provider import (
     OpenAIProvider,
@@ -172,3 +173,73 @@ def test_opencode_go_adds_neutral_user_continuation_after_tool_result() -> None:
     conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
     conforming_wire = conforming._payload(req, "m1", stream=False)["messages"]
     assert conforming_wire[-1]["role"] == "tool"
+
+
+def test_opencode_go_adds_neutral_user_continuation_after_assistant_response() -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(role="user", content="q"),
+            LLMMessage(role="assistant", content="I am ready to continue."),
+        ],
+    )
+
+    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go_wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
+    assert [message["role"] for message in go_wire[-2:]] == ["assistant", "user"]
+    assert go_wire[-1]["content"] == "Continue from the assistant response above."
+
+    conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
+    conforming_wire = conforming._payload(req, "m1", stream=False)["messages"]
+    assert conforming_wire == [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "I am ready to continue."},
+    ]
+
+
+@pytest.mark.parametrize("terminal_role", ["user", "system"])
+def test_opencode_go_does_not_append_after_nonresponse_terminal_role(terminal_role: str) -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role=terminal_role, content="terminal")],
+    )
+
+    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
+    assert wire == [{"role": terminal_role, "content": "terminal"}]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://opencode.ai/v1",
+        "https://opencode.ai/zen/go/v1beta",
+        "https://not-opencode.ai/zen/go/v1",
+    ],
+)
+def test_terminal_response_compatibility_is_exactly_endpoint_scoped(base_url: str) -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="assistant", content="terminal")],
+    )
+
+    provider = OpenAIProvider(base_url, name="other")
+    wire = provider._payload(req, "m1", stream=False)["messages"]
+    assert wire == [{"role": "assistant", "content": "terminal"}]
+
+
+def test_opencode_go_user_continuation_precedes_assistant_prefill() -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(role="user", content="q"),
+            LLMMessage(role="assistant", content="Prior response."),
+        ],
+        assistant_prefill="Next action:",
+    )
+
+    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
+    assert [message["role"] for message in wire[-3:]] == ["assistant", "user", "assistant"]
+    assert wire[-2]["content"] == "Continue from the assistant response above."
+    assert wire[-1]["content"] == "Next action:"
