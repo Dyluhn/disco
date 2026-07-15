@@ -831,9 +831,17 @@ class OpenAIProvider:
                     headers=self._headers(req),
                 )
         except httpx.TimeoutException as exc:
-            raise LLMTransientError(f"request timed out: {exc}", provider=self.name) from exc
+            raise LLMTransientError(
+                f"request timed out ({type(exc).__name__})", provider=self.name
+            ) from exc
         except httpx.HTTPError as exc:
-            raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
+            # HTTPX/h11 protocol errors may include the full malformed header
+            # value (including Authorization credentials).  Exception class is
+            # sufficient structural evidence; raw transport text must never
+            # cross into persisted StatusEvents, logs, or soak dossiers.
+            raise LLMTransientError(
+                f"connection error ({type(exc).__name__})", provider=self.name
+            ) from exc
         if resp.status_code >= 400:
             self._raise_typed(resp.status_code, resp.text)
         return self._to_response(req, model, resp.json())
@@ -946,9 +954,13 @@ class OpenAIProvider:
                         if ch.get("finish_reason"):
                             finish = ch["finish_reason"]
         except httpx.TimeoutException as exc:
-            raise LLMTransientError(f"request timed out: {exc}", provider=self.name) from exc
+            raise LLMTransientError(
+                f"request timed out ({type(exc).__name__})", provider=self.name
+            ) from exc
         except httpx.HTTPError as exc:
-            raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
+            raise LLMTransientError(
+                f"connection error ({type(exc).__name__})", provider=self.name
+            ) from exc
 
         accumulated_text = "".join(content)
         reasoning_content = "".join(reasoning_buf)

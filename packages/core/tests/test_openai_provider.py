@@ -16,6 +16,7 @@ from disco.core.llm.errors import (
     LLMAuthError,
     LLMContextWindowExceeded,
     LLMError,
+    LLMTransientError,
     is_context_window_exceeded,
 )
 from disco.core.llm.openai_provider import OpenAIProvider
@@ -133,6 +134,44 @@ async def test_generic_provider_error_uses_safe_summary():
         await _provider(handler).complete(_req(), model="m")
     assert str(exc.value) == "provider fake returned HTTP 400 type=invalid_request"
     assert "something specific broke" not in str(exc.value)
+
+
+class _SecretBearingProtocolFailure(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # A deterministic stand-in for h11's malformed-Authorization exception.
+        # These are fake sentinels; a regression must not echo either one.
+        first = "sk-" + "a" * 32
+        second = "sk-" + "b" * 32
+        raise httpx.LocalProtocolError(f"Illegal header value b'Bearer {first}\\n{second}'")
+
+
+async def test_nonstream_transport_error_never_reflects_header_credentials():
+    provider = OpenAIProvider(
+        "http://fake/v1", name="fake", transport=_SecretBearingProtocolFailure()
+    )
+
+    with pytest.raises(LLMTransientError) as exc:
+        await provider.complete(_req(), model="m")
+
+    detail = str(exc.value)
+    assert detail == "connection error (LocalProtocolError)"
+    assert "sk-" not in detail
+    assert "Bearer" not in detail
+
+
+async def test_stream_transport_error_never_reflects_header_credentials():
+    provider = OpenAIProvider(
+        "http://fake/v1", name="fake", transport=_SecretBearingProtocolFailure()
+    )
+
+    with pytest.raises(LLMTransientError) as exc:
+        async for _chunk in provider.stream_complete(_req(), model="m"):
+            pass
+
+    detail = str(exc.value)
+    assert detail == "connection error (LocalProtocolError)"
+    assert "sk-" not in detail
+    assert "Bearer" not in detail
 
 
 async def test_streaming_reassembles_and_final_matches():
