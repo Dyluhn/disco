@@ -15,8 +15,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import type { AgentEvent, ConversationStatus, PreviewInfo } from "@/types/agent";
 
-const { useBuildPreviewMock } = vi.hoisted(() => ({
+const { useBuildPreviewMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  previewBootstrapUrlMock: vi.fn((_cid: string, _port: number, targetPath = "/") =>
+    Promise.resolve({
+      url: "http://preview.test/__disco/preview-auth",
+      intent: `intent-${targetPath}`,
+    }),
+  ),
 }));
 
 vi.mock("@/hooks/useBuildPreview", () => ({
@@ -29,8 +35,7 @@ vi.mock("@/api/client", async () => {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
     previewHostUrl: () => "http://preview.test",
-    previewBootstrapUrl: (_cid: string, _port: number, targetPath = "/") =>
-      Promise.resolve(`http://preview.test${targetPath}`),
+    previewBootstrapUrl: previewBootstrapUrlMock,
   };
 });
 
@@ -54,12 +59,13 @@ function fileWrite(path: string, content: string): AgentEvent {
   } as AgentEvent;
 }
 
-function liveSrc(): string | null {
-  return screen.getByTitle("Live preview").getAttribute("src");
+function mintedTargets(): string[] {
+  return previewBootstrapUrlMock.mock.calls.map((call) => String(call[2]));
 }
 
 beforeEach(() => {
   useBuildPreviewMock.mockReturnValue({ data: LIVE });
+  previewBootstrapUrlMock.mockClear();
   vi.useFakeTimers();
 });
 afterEach(() => {
@@ -85,7 +91,7 @@ describe("PreviewPane — W-42 auto-refresh", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
 
     // Agent rewrites the file → new content → signature changes.
     const v2 = [fileWrite("index.html", "<h1>two — much longer now</h1>")];
@@ -96,14 +102,14 @@ describe("PreviewPane — W-42 auto-refresh", () => {
       vi.advanceTimersByTime(200);
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
 
     // After the debounce window the iframe reloads.
     await act(async () => {
       vi.advanceTimersByTime(600);
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=1");
+    expect(mintedTargets()).toEqual(["/?r=0", "/?r=1"]);
   });
 
   it("does NOT bump when the files are unchanged", async () => {
@@ -112,7 +118,7 @@ describe("PreviewPane — W-42 auto-refresh", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
 
     // Re-render with an equivalent file set (same path + content).
     rerender(
@@ -128,7 +134,7 @@ describe("PreviewPane — W-42 auto-refresh", () => {
       vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
   });
 
   it("does NOT auto-reload when not RUNNING (finished preview isn't fought)", async () => {
@@ -137,7 +143,7 @@ describe("PreviewPane — W-42 auto-refresh", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
 
     const v2 = [fileWrite("index.html", "<h1>two — much longer now</h1>")];
     rerender(withClient(<PreviewPane status="FINISHED" cid="conv_reload1" events={v2} />));
@@ -145,6 +151,6 @@ describe("PreviewPane — W-42 auto-refresh", () => {
       vi.advanceTimersByTime(1000);
       await Promise.resolve();
     });
-    expect(liveSrc()).toBe("http://preview.test/?r=0");
+    expect(mintedTargets()).toEqual(["/?r=0"]);
   });
 });

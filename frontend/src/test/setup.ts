@@ -39,6 +39,12 @@ if (!Element.prototype.hasPointerCapture) {
   Element.prototype.releasePointerCapture = () => {};
 }
 
+// Form navigation isn't implemented by jsdom. Product code intentionally uses
+// native form.submit() for body-only preview credentials; focused tests spy on
+// this method to inspect the serialized action/intent, while other component
+// tests need a quiet no-navigation stand-in.
+HTMLFormElement.prototype.submit = () => {};
+
 // jsdom lacks getContext; mock it so Chart.js doesn't crash during init
 Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   value: () => ({

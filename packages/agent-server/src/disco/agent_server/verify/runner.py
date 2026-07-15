@@ -30,11 +30,18 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import disco.tools.verify.artifact_validators as _av
 import httpx
-from disco.core.auth import CSRF_HEADER, SESSION_COOKIE
+from disco.core.auth import (
+    CSRF_HEADER,
+    ISOLATED_PATH_PREVIEW_PREFIX,
+    PATH_PREVIEW_BOOTSTRAP_PATH,
+    SESSION_COOKIE,
+)
 from disco.core.evidence.schema import redact
+from disco.tools.sandbox._container import PREVIEW_PORT
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 from websockets.typing import Origin
 
@@ -142,11 +149,14 @@ class AbstractVerifyClient(ABC):
         return None
 
     async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
-        """GET the conversation's LIVE PREVIEW (the `/preview-app/` proxy the UI iframes) →
-        (status, body_bytes). For a URL-less app handoff this is the REAL output the user sees
-        — probing it (not the declared-artifact jail) is the production boundary (codex r7).
-        Returning the BODY lets the validator reject a bare http.server directory listing that
-        the preview falls back to when there's no real app entry file (codex r8)."""
+        """Fetch the capability-isolated preview bytes a browser receives.
+
+        For a URL-less app handoff this is the real selected output, not the
+        declared-artifact jail. The production client mints a fresh path
+        capability, redeems it through a clean cookie jar, and fetches the
+        dedicated isolated route; a full application session is never sent to
+        generated content.
+        """
         return None
 
     async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
@@ -223,6 +233,33 @@ class HttpVerifyClient(AbstractVerifyClient):
     async def _mutation_headers(self) -> dict[str, str]:
         await self._ensure_session()
         return {CSRF_HEADER: self._csrf_token}
+
+    async def authenticated_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Issue one session-authenticated API request with CSRF when required."""
+
+        await self._ensure_session()
+        method_upper = method.upper()
+        headers = dict(kwargs.pop("headers", {}) or {})
+        if method_upper in {"POST", "PUT", "PATCH", "DELETE"}:
+            headers.setdefault(CSRF_HEADER, self._csrf_token)
+        async with self._client(timeout=timeout) as hc:
+            return await hc.request(method_upper, path, headers=headers, **kwargs)
+
+    async def websocket_credentials(self) -> tuple[Origin, dict[str, str]]:
+        """Return the authenticated browser-origin/cookie headers for one WS."""
+
+        await self._ensure_session()
+        session_cookie = self._cookies.get(SESSION_COOKIE)
+        if not session_cookie:
+            raise RuntimeError("agent-server WebSocket has no authenticated session cookie")
+        return self._origin, {"Cookie": f"{SESSION_COOKIE}={session_cookie}"}
 
     async def create_conversation(
         self, surface: str, model_override: str | None, *, appkit_mode: bool = False
@@ -423,13 +460,93 @@ class HttpVerifyClient(AbstractVerifyClient):
 
     async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
         try:
-            await self._ensure_session()
-            async with self._client(follow_redirects=True) as hc:
-                resp = await hc.get(f"/conversations/{cid}/preview-app/")
+            headers = await self._mutation_headers()
+            async with self._client() as hc:
+                minted = await hc.post(
+                    f"/conversations/{cid}/preview/capability",
+                    headers=headers,
+                    json={
+                        "port": PREVIEW_PORT,
+                        "target_path": "/",
+                        "transport": "path",
+                    },
+                )
+            if minted.status_code != 200:
+                return minted.status_code, minted.content
+            body = minted.json()
+            if (
+                body.get("transport") != "path"
+                or body.get("target_path") != "/"
+                or body.get("port") != PREVIEW_PORT
+            ):
+                return None
+            bootstrap_url = str(body.get("bootstrap_url") or "")
+            intent = str(body.get("bootstrap_intent") or "")
+            isolated_url = self._validated_isolated_preview_url(cid, bootstrap_url)
+            if not intent or isolated_url is None:
+                return None
+
+            # Deliberately clean: the verifier's full application session stays
+            # in self._cookies and can never cross into generated content. The
+            # bootstrap response installs only path-preview capability cookies.
+            async with httpx.AsyncClient(
+                timeout=30.0,
+                follow_redirects=False,
+                trust_env=False,
+                transport=self._transport,
+            ) as preview:
+                redeemed = await preview.post(
+                    bootstrap_url,
+                    data={"intent": intent},
+                    headers={"Origin": self._origin},
+                )
+                if redeemed.status_code != 200:
+                    return redeemed.status_code, redeemed.content
+                if any(cookie.name == SESSION_COOKIE for cookie in preview.cookies.jar):
+                    # A path bootstrap must install only its scoped preview
+                    # cookies. Fail closed if a route regression ever tries to
+                    # smuggle a full app session into generated content.
+                    return None
+                resp = await preview.get(isolated_url)
                 return resp.status_code, resp.content
         except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash
             log.warning("fetch_preview(%s) failed: %s", cid, exc)
             return None
+
+    def _validated_isolated_preview_url(self, cid: str, bootstrap_url: str) -> str | None:
+        """Validate the server-minted alternate origin before the verifier fetches it."""
+
+        base = urlsplit(self._base_url)
+        bootstrap = urlsplit(bootstrap_url)
+        cid8 = cid.removeprefix("conv_")[:8]
+        base_hostname = (base.hostname or "").lower()
+        if base_hostname in {"127.0.0.1", "::1"}:
+            expected_hostname = "localhost"
+        elif base_hostname == "localhost":
+            expected_hostname = "127.0.0.1"
+        else:
+            expected_hostname = f"p2-{cid8}-{PREVIEW_PORT}.{base_hostname}"
+        if (
+            not cid8
+            or bootstrap.scheme != base.scheme
+            or (bootstrap.hostname or "").lower() != expected_hostname
+            or bootstrap.port != base.port
+            or bootstrap.path != f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
+            or bootstrap.query
+            or bootstrap.fragment
+            or bootstrap.username is not None
+            or bootstrap.password is not None
+        ):
+            return None
+        return urlunsplit(
+            (
+                bootstrap.scheme,
+                bootstrap.netloc,
+                f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/",
+                "",
+                "",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -22,7 +22,6 @@ import type { DeliverableView } from "@/lib/buildTrace";
 export function DeliverablePanel({
   deliverable,
   cid,
-  appUrl,
   onOpen,
   onDownload,
   onExportManifest,
@@ -30,8 +29,6 @@ export function DeliverablePanel({
   deliverable: DeliverableView | null;
   /** Conversation id — required for the per-file artifact download route. */
   cid?: string | null;
-  /** Actual executable handoff target, pre-minted on an isolated preview origin. */
-  appUrl?: string | null;
   onOpen?: () => void;
   onDownload?: () => void;
   /** Export the project manifest JSON (files + deliverable metadata). */
@@ -41,10 +38,6 @@ export function DeliverablePanel({
 
   const isApp = deliverable.kind === "app";
   const deployUrl = deliverable.deploymentUrl;
-  // H083: the parent supplies the exact URL its Open callback will navigate to.
-  // Never derive an authenticated preview-app URL here; absent isolation leaves
-  // the action disabled, while a canonical deployment keeps its separate link.
-  const executableAppUrl = isApp ? (appUrl ?? undefined) : undefined;
 
   // F1: Detect directory vs file. A directory has no file extension (no '.' in the name).
   // Files get the per-file artifact route; directories fall back to onDownload (zip).
@@ -129,7 +122,6 @@ export function DeliverablePanel({
           aria-label={`${isApp ? "Open" : "Download"} the deliverable: ${deliverable.title}`}
           title={`${isApp ? "Open" : "Download"} ${deliverable.title}`}
           data-disco-control={isApp ? "build.open-app" : "build.download-artifact"}
-          data-app-url={executableAppUrl}
           className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isApp ? <ExternalLink className="size-3.5" aria-hidden /> : <Download className="size-3.5" aria-hidden />}

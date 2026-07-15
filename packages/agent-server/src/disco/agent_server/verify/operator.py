@@ -44,8 +44,10 @@ import sys
 import time
 from typing import Any
 
-import httpx
+from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from websockets.asyncio.client import connect as _ws_connect
+
+from .runner import AbstractVerifyClient, HttpVerifyClient
 
 # A conversation will not advance off these without operator action.
 _GATES: frozenset[str] = frozenset(
@@ -71,6 +73,9 @@ _FRAME = {
 
 
 def _status_of(frame: dict[str, Any]) -> str | None:
+    if frame.get("type") == "state":
+        state = frame.get("state") or {}
+        return state.get("execution_status") or state.get("status")
     ev = frame.get("event", frame)
     if ev.get("kind") == "status":
         return ev.get("status") or ev.get("execution_status")
@@ -80,24 +85,34 @@ def _status_of(frame: dict[str, Any]) -> str | None:
 class OperatorClient:
     """Watch + respond over the real HTTP/WS API."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000") -> None:
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8000",
+        *,
+        _auth_client: HttpVerifyClient | None = None,
+        _preview_client: AbstractVerifyClient | None = None,
+    ) -> None:
         self.base = base_url.rstrip("/")
         self.ws_base = self.base.replace("http://", "ws://").replace("https://", "wss://")
+        self._auth_client = _auth_client or HttpVerifyClient(self.base)
+        self._preview_client = _preview_client or self._auth_client
 
     async def _events(self, cid: str) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient(base_url=self.base, timeout=20.0) as hc:
-            r = await hc.get(f"/conversations/{cid}/events")
-            r.raise_for_status()
-            d = r.json()
-            return d if isinstance(d, list) else d.get("events", [])
+        r = await self._auth_client.authenticated_request(
+            "GET", f"/conversations/{cid}/events", timeout=20.0
+        )
+        r.raise_for_status()
+        d = r.json()
+        return d if isinstance(d, list) else d.get("events", [])
 
     async def _status(self, cid: str) -> str | None:
-        async with httpx.AsyncClient(base_url=self.base, timeout=20.0) as hc:
-            r = await hc.get(f"/conversations/{cid}/state")
-            if r.status_code != 200:
-                return None
-            d = r.json()
-            return d.get("execution_status") or d.get("status")
+        r = await self._auth_client.authenticated_request(
+            "GET", f"/conversations/{cid}/state", timeout=20.0
+        )
+        if r.status_code != 200:
+            return None
+        d = r.json()
+        return d.get("execution_status") or d.get("status")
 
     @staticmethod
     def _gate_context(status: str | None, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -222,8 +237,9 @@ class OperatorClient:
         GET /preview the UI polls (runtime.preview() → available/ports). Best-effort:
         any failure ⇒ False (the probe is additive, never a hard gate)."""
         try:
-            async with httpx.AsyncClient(base_url=self.base, timeout=6.0) as hc:
-                r = await hc.get(f"/conversations/{cid}/preview")
+            r = await self._auth_client.authenticated_request(
+                "GET", f"/conversations/{cid}/preview", timeout=6.0
+            )
             if r.status_code != 200:
                 return False
             d = r.json()
@@ -253,14 +269,15 @@ class OperatorClient:
             or await self._has_live_preview_port(cid)
         ):
             try:
-                async with httpx.AsyncClient(base_url=self.base, timeout=8.0) as hc:
-                    r = await hc.get(f"/conversations/{cid}/preview-app/")
-                    if r.status_code == 200 and r.content:
-                        body = r.text
+                fetched = await self._preview_client.fetch_preview(cid)
+                if fetched is not None:
+                    status, content = fetched
+                    if status == 200 and content:
+                        body = content.decode("utf-8", "replace")
                         view["preview"] = {
-                            "url": f"/conversations/{cid}/preview-app/",
-                            "status": r.status_code,
-                            "bytes": len(r.content),
+                            "url": f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/",
+                            "status": status,
+                            "bytes": len(content),
                             "is_directory_listing": "directory listing for" in body.lower(),
                             "html_head": body[:600],
                         }
@@ -274,9 +291,7 @@ class OperatorClient:
         """Every conversation with its live status — so the orchestrator can SEE all running
         builds at once (GET /conversations only returns ids in an unreliable order, and there's
         no running-filter; this fills that gap). `active_only` keeps just the live ones."""
-        async with httpx.AsyncClient(base_url=self.base, timeout=20.0) as hc:
-            r = await hc.get("/conversations")
-            ids = (r.json() if r.status_code == 200 else {}).get("conversation_ids", [])
+        ids = await self._conversation_ids()
         rows = await asyncio.gather(*(self._status(c) for c in ids[-limit:]))
         live = {"RUNNING", "PLANNING", *_GATES}
         out = [
@@ -290,14 +305,30 @@ class OperatorClient:
             "conversations": out,
         }
 
+    async def _conversation_ids(self) -> list[str]:
+        r = await self._auth_client.authenticated_request(
+            "GET", "/conversations", timeout=20.0
+        )
+        body = r.json() if r.status_code == 200 else {}
+        return [str(cid) for cid in body.get("conversation_ids", []) if cid]
+
     async def start(self, surface: str, prompt: str, *, model: str | None = None) -> dict[str, Any]:
         """Create a conversation on `surface` and submit the opening prompt — the operator
         kicking off a run (e.g. a build) it will then drive via wait/view/respond."""
-        async with httpx.AsyncClient(base_url=self.base, timeout=30.0) as hc:
-            r = await hc.post("/conversations", json={"surface": surface, "model_override": model})
-            r.raise_for_status()
-            cid = str(r.json()["conversation_id"])
-        async with _ws_connect(f"{self.ws_base}/ws/conversations/{cid}") as ws:
+        r = await self._auth_client.authenticated_request(
+            "POST",
+            "/conversations",
+            timeout=30.0,
+            json={"surface": surface, "model_override": model},
+        )
+        r.raise_for_status()
+        cid = str(r.json()["conversation_id"])
+        origin, additional_headers = await self._auth_client.websocket_credentials()
+        async with _ws_connect(
+            f"{self.ws_base}/ws/conversations/{cid}",
+            origin=origin,
+            additional_headers=additional_headers,
+        ) as ws:
             await ws.send(json.dumps({"type": "send_message", "content": prompt}))
             try:  # brief grace so the server registers the message before we close
                 await asyncio.wait_for(ws.recv(decode=True), timeout=5.0)
@@ -349,7 +380,12 @@ class OperatorClient:
         url = f"{self.ws_base}/ws/conversations/{cid}"
         moved = before
         try:
-            async with _ws_connect(url) as ws:
+            origin, additional_headers = await self._auth_client.websocket_credentials()
+            async with _ws_connect(
+                url,
+                origin=origin,
+                additional_headers=additional_headers,
+            ) as ws:
                 await ws.send(json.dumps(frame))
                 # keep the socket open until the status moves off the gate (or a grace
                 # window) so the frame is never lost to a close-race.
@@ -415,11 +451,7 @@ def main(argv: list[str] | None = None) -> int:
             return await client.respond(args.cid, args.action, args.text)
         if args.cmd == "wait":
             if args.any or not args.cid:
-                # watch ALL conversations (GET /conversations → {"conversation_ids": [...]})
-                async with httpx.AsyncClient(base_url=client.base, timeout=20.0) as hc:
-                    r = await hc.get("/conversations")
-                    body = r.json() if r.status_code == 200 else {}
-                cids = [c for c in body.get("conversation_ids", []) if c]
+                cids = await client._conversation_ids()
             else:
                 cids = [args.cid]
             return await client.wait(cids, timeout=args.timeout)

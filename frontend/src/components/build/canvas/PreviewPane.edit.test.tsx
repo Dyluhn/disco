@@ -18,7 +18,7 @@ import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
 const { previewBootstrapUrlMock, useBuildPreviewMock } = vi.hoisted(() => ({
-  previewBootstrapUrlMock: vi.fn(() => new Promise<string | null>(() => {})),
+  previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
 }));
 

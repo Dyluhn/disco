@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,6 +12,14 @@ from disco.agent_server.host_proxy import (
     MAX_PREVIEW_REQUEST_BODY_BYTES,
     HostPreviewProxyMiddleware,
 )
+from disco.core.auth import (
+    PREVIEW_APP_HTTP_METHODS,
+    PREVIEW_BOOTSTRAP_PATH,
+    PREVIEW_COOKIE,
+    AuthSession,
+    PreviewCapabilitySigner,
+)
+from disco.core.store.sqlite import SqliteEventStore
 from starlette.applications import Starlette
 from starlette.endpoints import WebSocketEndpoint
 from starlette.responses import PlainTextResponse
@@ -25,10 +34,35 @@ class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        if self.path == "/cookies":
+            body = json.dumps({"cookies": self.headers.get_all("Cookie") or []}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", "disco_preview_cap=upstream-clobber; Path=/")
+            self.send_header("Set-Cookie", "app_session=preserved; Path=/")
+            self.send_header("Set-Cookie", "disco_preview_cap_extra=preserved; Path=/")
+            self.send_header("Set-Cookie", "Disco_preview_cap=case-distinct; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/huge-html":
             body = b"<html><body>" + b"x" * (3 * 1024 * 1024) + b"</body></html>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/cacheable":
+            body = b"cacheable upstream"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.send_header("Surrogate-Control", "max-age=86400")
+            self.send_header("CDN-Cache-Control", "public, max-age=86400")
+            self.send_header("ETag", '"upstream-etag"')
+            self.send_header("Last-Modified", "Tue, 14 Jul 2026 00:00:00 GMT")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -82,6 +116,283 @@ def mock_app(upstream_http):
 
 
 @pytest.mark.asyncio
+async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upstream_http):
+    store = SqliteEventStore(":memory:")
+    app = Starlette()
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda cid8, port, _owner=None: (
+            upstream_http if cid8 == "aaaaaaaa" and port == 8000 else None
+        ),
+        require_capability=True,
+        redemption_store=store,
+    )
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    session = AuthSession(
+        owner_id="owner-a",
+        csrf_token="csrf",
+        session_id="session",
+        expires_at=2**31,
+    )
+    intent = signer.mint_intent(
+        session=session,
+        conversation_id="conv_aaaaaaaafull",
+        port=8000,
+        target_path="/",
+        allow_websocket=True,
+        http_methods=PREVIEW_APP_HTTP_METHODS,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://aaaaaaaa-8000.localhost",
+    ) as client:
+        wrong_method = await client.get(PREVIEW_BOOTSTRAP_PATH)
+        assert wrong_method.status_code == 405
+
+        redemption = await client.post(
+            PREVIEW_BOOTSTRAP_PATH,
+            headers={"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "cross-site"},
+            data={"intent": intent},
+        )
+        assert redemption.status_code == 200
+        assert "?" not in str(redemption.request.url)
+        assert intent not in str(redemption.request.url)
+        assert "window.location.replace" in redemption.text
+        assert intent not in redemption.text
+        cookie = redemption.headers["set-cookie"]
+        assert "HttpOnly" in cookie
+        assert "; Secure" in cookie
+        assert "samesite=none" in cookie.lower()
+        assert "Partitioned" in cookie
+        assert "samesite=strict" not in cookie.lower()
+
+        # The response capability gates the real upstream and cannot be exchanged twice.
+        capability_cookie = cookie.split(";", 1)[0]
+        proxied = await client.get("/", headers={"Cookie": capability_cookie})
+        assert proxied.status_code == 200
+        assert proxied.headers["cache-control"] == "private, no-store"
+        assert proxied.headers["pragma"] == "no-cache"
+
+        cacheable = await client.get("/cacheable", headers={"Cookie": capability_cookie})
+        assert cacheable.status_code == 200
+        assert cacheable.headers["cache-control"] == "private, no-store"
+        assert "etag" not in cacheable.headers
+        assert "last-modified" not in cacheable.headers
+        assert "surrogate-control" not in cacheable.headers
+        assert "cdn-cache-control" not in cacheable.headers
+
+        mutation = await client.post(
+            "/api/submit",
+            headers={"Cookie": capability_cookie, "Origin": "http://aaaaaaaa-8000.localhost"},
+            content=b"capability mutation",
+        )
+        assert mutation.status_code == 201
+        assert mutation.json()["body"] == "capability mutation"
+        for hostile_origin in (None, "https://evil.example"):
+            headers = {"Cookie": capability_cookie}
+            if hostile_origin is not None:
+                headers["Origin"] = hostile_origin
+            rejected_mutation = await client.post(
+                "/api/submit", headers=headers, content=b"must not reach upstream"
+            )
+            assert rejected_mutation.status_code == 403
+            assert rejected_mutation.text == "preview origin required"
+        wrong_scheme_mutation = await client.post(
+            "/api/submit",
+            headers={
+                "Cookie": capability_cookie,
+                "Origin": "http://aaaaaaaa-8000.localhost",
+                "X-Forwarded-Proto": "https",
+            },
+            content=b"must not reach upstream",
+        )
+        assert wrong_scheme_mutation.status_code == 403
+
+        for service_worker_headers in (
+            {"Sec-Fetch-Dest": "serviceworker"},
+            {"Service-Worker": "script"},
+        ):
+            service_worker = await client.get(
+                "/sw.js",
+                headers={"Cookie": capability_cookie, **service_worker_headers},
+            )
+            assert service_worker.status_code == 403
+            assert service_worker.headers["cache-control"] == "private, no-store"
+            assert service_worker.text == "preview service workers disabled"
+        replay = await client.post(
+            PREVIEW_BOOTSTRAP_PATH,
+            data={"intent": intent},
+        )
+        assert replay.status_code == 403
+        assert "set-cookie" not in replay.headers
+
+        # Top-level control remains first-party Strict and non-partitioned.
+        top_level_intent = signer.mint_intent(
+            session=session,
+            conversation_id="conv_aaaaaaaafull",
+            port=8000,
+            target_path="/",
+            allow_websocket=True,
+        )
+        top_level_redemption = await client.post(
+            PREVIEW_BOOTSTRAP_PATH,
+            headers={"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "cross-site"},
+            data={"intent": top_level_intent},
+        )
+        top_level_cookie = top_level_redemption.headers["set-cookie"]
+        assert "samesite=strict" in top_level_cookie.lower()
+        assert "Partitioned" not in top_level_cookie
+
+        # JSON/multipart cannot smuggle alternate redemption shapes. Rejecting
+        # the media type happens before consumption, so the valid form still wins.
+        content_type_intent = signer.mint_intent(
+            session=session,
+            conversation_id="conv_aaaaaaaafull",
+            port=8000,
+            target_path="/",
+            allow_websocket=True,
+        )
+        wrong_content_type = await client.post(
+            PREVIEW_BOOTSTRAP_PATH, json={"intent": content_type_intent}
+        )
+        assert wrong_content_type.status_code == 403
+        valid_after_rejection = await client.post(
+            PREVIEW_BOOTSTRAP_PATH, data={"intent": content_type_intent}
+        )
+        assert valid_after_rejection.status_code == 200
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_live_capability_disconnect_does_not_spin() -> None:
+    store = SqliteEventStore(":memory:")
+
+    async def downstream(scope, receive, send):
+        raise AssertionError((scope, receive, send))
+
+    app = HostPreviewProxyMiddleware(
+        downstream,
+        upstream_resolver=lambda *_args: None,
+        require_capability=True,
+        redemption_store=store,
+    )
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": PREVIEW_BOOTSTRAP_PATH,
+        "raw_path": PREVIEW_BOOTSTRAP_PATH.encode(),
+        "query_string": b"",
+        "headers": [
+            (b"host", b"aaaaaaaa-8000.localhost"),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+        ],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 80),
+    }
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    await asyncio.wait_for(app(scope, receive, send), timeout=0.2)
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 403
+    assert not any(
+        name.lower() == b"set-cookie"
+        for name, _value in sent[0].get("headers", [])
+    )
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_proxy_disconnect_never_forwards_a_truncated_mutation() -> None:
+    async def downstream(scope, receive, send):
+        raise AssertionError((scope, receive, send))
+
+    app = HostPreviewProxyMiddleware(
+        downstream,
+        upstream_resolver=lambda *_args: "http://127.0.0.1:1",
+    )
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/submit",
+        "raw_path": b"/api/submit",
+        "query_string": b"",
+        "headers": [(b"host", b"aaaaaaaa-8000.localhost")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("127.0.0.1", 80),
+    }
+    messages = iter(
+        [
+            {"type": "http.request", "body": b"partial", "more_body": True},
+            {"type": "http.disconnect"},
+        ]
+    )
+    sent: list[dict] = []
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        sent.append(message)
+
+    await app(scope, receive, send)
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_connect_retry_never_replays_mutations(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def downstream(scope, receive, send):
+        raise AssertionError((scope, receive, send))
+
+    proxy = HostPreviewProxyMiddleware(downstream, upstream_resolver=lambda *_args: None)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    class FailingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def send(self, request, *, stream):
+            assert stream is True
+            self.calls += 1
+            raise httpx.ConnectError("synthetic connect failure", request=request)
+
+    async def run(method: str) -> tuple[int, list[dict]]:
+        client = FailingClient()
+        sent: list[dict] = []
+
+        async def send(message):
+            sent.append(message)
+
+        request = httpx.Request(method, "http://127.0.0.1:1/action")
+        result = await proxy._send_with_connect_retry(client, request, send)  # noqa: SLF001
+        assert result is None
+        return client.calls, sent
+
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        calls, sent = await run(method)
+        assert calls == 1
+        assert sent[0]["status"] == 502
+
+    calls, sent = await run("GET")
+    assert calls == 5
+    assert sent[0]["status"] == 502
+
+
+@pytest.mark.asyncio
 async def test_get_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
@@ -96,6 +407,32 @@ async def test_get_passthrough(mock_app):
         assert data["path"] == "/src/main.jsx?foo=bar"
 
 
+def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
+    nginx = (Path(__file__).parents[3] / "frontend" / "nginx.conf").read_text()
+    assert 'server_name "~^p2-[0-9a-f]{8}-\\d{2,5}\\.";' in nginx
+
+    default_server = nginx.split("listen 80 default_server;", 1)[1]
+    for prefix in (
+        "/__disco/path-preview-auth",
+        "/__disco/isolated-preview",
+    ):
+        marker = f"location ^~ {prefix}/ {{"
+        assert default_server.count(marker) == 1
+        block = default_server.split(marker, 1)[1].split("\n    }", 1)[0]
+        assert "proxy_pass http://$agent_upstream:8000;" in block
+        assert "proxy_http_version 1.1;" in block
+        assert "proxy_set_header Host $http_host;" in block
+        assert "proxy_set_header X-Forwarded-Proto $xfp;" in block
+        assert "proxy_set_header Upgrade $http_upgrade;" in block
+        assert "proxy_set_header Connection $connection_upgrade;" in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_request_buffering off;" in block
+        assert "rewrite " not in block
+
+    assert "location ^~ /api/" not in default_server
+    assert "location ^~ /conversations/" not in default_server
+
+
 @pytest.mark.asyncio
 async def test_post_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
@@ -108,6 +445,69 @@ async def test_post_passthrough(mock_app):
         assert data["method"] == "POST"
         assert data["path"] == "/api/submit"
         assert data["body"] == "mybody"
+
+
+@pytest.mark.asyncio
+async def test_in_sandbox_get_fallback_never_converts_a_mutation_to_get() -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, str]] = []
+
+        async def fetch_inside(self, port: int, path: str):
+            self.calls.append((port, path))
+            return 200, b"inside GET", "text/plain"
+
+    session = Session()
+    app = Starlette()
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda *_args: None,
+        session_resolver=lambda *_args: session,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+    ) as client:
+        mutation = await client.post("/api/submit", content=b"must not become GET")
+        assert mutation.status_code == 503
+        assert session.calls == []
+
+        get = await client.get("/asset.js")
+        assert get.status_code == 200
+        assert get.text == "inside GET"
+        assert session.calls == [(8000, "asset.js")]
+
+
+@pytest.mark.asyncio
+async def test_preview_proxy_never_exposes_or_accepts_internal_capability_cookie(mock_app):
+    transport = httpx.ASGITransport(app=mock_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+    ) as client:
+        response = await client.get(
+            "/cookies",
+            headers=[
+                (
+                    "Cookie",
+                    "disco_preview_cap=secret; app_cookie=one; "
+                    "disco_preview_cap_extra=similarly-named",
+                ),
+                ("cookie", "other_cookie=two; Disco_preview_cap=case-distinct"),
+            ],
+        )
+    assert response.status_code == 200
+    upstream_cookie_text = "; ".join(response.json()["cookies"])
+    assert "disco_preview_cap=secret" not in upstream_cookie_text
+    assert "app_cookie=one" in upstream_cookie_text
+    assert "other_cookie=two" in upstream_cookie_text
+    assert "disco_preview_cap_extra=similarly-named" in upstream_cookie_text
+    assert "Disco_preview_cap=case-distinct" in upstream_cookie_text
+
+    set_cookies = response.headers.get_list("set-cookie")
+    assert not any(cookie.lstrip().startswith("disco_preview_cap=") for cookie in set_cookies)
+    assert "app_session=preserved; Path=/" in set_cookies
+    assert "disco_preview_cap_extra=preserved; Path=/" in set_cookies
+    assert "Disco_preview_cap=case-distinct; Path=/" in set_cookies
 
 
 @pytest.mark.asyncio
@@ -318,6 +718,122 @@ async def test_websocket_proxy(proxy_app_server, real_ws_server):
         await ws.send(b"hello bytes")
         resp = await ws.recv()
         assert resp == b"hello bytes"
+
+
+@pytest.fixture
+async def capability_proxy_app_server(real_ws_server, tmp_path):
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("", 0))
+    server_port = sock.getsockname()[1]
+    sock.close()
+    store = SqliteEventStore(tmp_path / "capability-proxy.sqlite3")
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    session = AuthSession("owner-a", "csrf", "session", 2**31)
+    intent = signer.mint_intent(
+        session=session,
+        conversation_id="conv_aaaaaaaafull",
+        port=8000,
+        target_path="/ws",
+        allow_websocket=True,
+    )
+    redeemed = signer.redeem_intent(
+        intent, cid8="aaaaaaaa", port=8000, path_scope="host"
+    )
+    assert redeemed is not None
+    capability_token, _target = redeemed
+
+    app = Starlette()
+
+    def resolver(cid8, port, owner_id=None):
+        if cid8 == "aaaaaaaa" and port == 8000 and owner_id == "owner-a":
+            return real_ws_server
+        return None
+
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=resolver,
+        require_capability=True,
+        redemption_store=store,
+    )
+    config = uvicorn.Config(
+        app=app,
+        host="127.0.0.1",
+        port=server_port,
+        log_level="critical",
+        ws="websockets-sansio",
+    )
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    while not server.started:
+        await asyncio.sleep(0.01)
+
+    yield server_port, capability_token
+
+    server.should_exit = True
+    await task
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
+    capability_proxy_app_server,
+    real_ws_server,
+):
+    server_port, token = capability_proxy_app_server
+    host = f"aaaaaaaa-8000.localhost:{server_port}"
+    url = f"ws://{host}/ws"
+    headers = {"Cookie": f"{PREVIEW_COOKIE}={token}"}
+
+    # Control: the upstream accepts a genuinely absent subprotocol header.
+    async with websockets.connect(f"{real_ws_server}/ws") as direct:
+        await direct.send("no-subprotocol-control")
+        assert await direct.recv() == "no-subprotocol-control"
+
+    async with websockets.connect(
+        url,
+        origin=f"http://{host}",
+        additional_headers=headers,
+    ) as ws:
+        await ws.send("capability-hmr")
+        assert await ws.recv() == "capability-hmr"
+
+    # Origin is checked before the signed cookie; rejecting it does not mutate
+    # or consume the reusable scoped preview cookie.
+    with pytest.raises(websockets.exceptions.InvalidStatus):
+        async with websockets.connect(
+            url,
+            origin="https://evil.example",
+            additional_headers=headers,
+        ):
+            pass
+
+    with pytest.raises(websockets.exceptions.InvalidStatus):
+        async with websockets.connect(
+            url,
+            origin=f"https://{host}",
+            additional_headers=headers,
+        ):
+            pass
+
+    for wrong_url, wrong_origin in (
+        (
+            f"ws://bbbbbbbb-8000.localhost:{server_port}/ws",
+            f"http://bbbbbbbb-8000.localhost:{server_port}",
+        ),
+        (
+            f"ws://aaaaaaaa-8899.localhost:{server_port}/ws",
+            f"http://aaaaaaaa-8899.localhost:{server_port}",
+        ),
+    ):
+        with pytest.raises(websockets.exceptions.InvalidStatus):
+            async with websockets.connect(
+                wrong_url,
+                origin=wrong_origin,
+                additional_headers=headers,
+            ):
+                pass
 
 
 @pytest.mark.asyncio

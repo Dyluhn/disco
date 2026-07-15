@@ -4,6 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentCanvas } from "@/components/build/AgentCanvas";
 import type { AgentEvent } from "@/types/agent";
 
+const pathPreviewBootstrapUrlMock = vi.hoisted(() =>
+  vi.fn((cid: string) =>
+    Promise.resolve({
+      url: `http://localhost:8000/__disco/path-preview-auth/${cid}`,
+      intent: `intent-${cid}-${crypto.randomUUID()}`,
+    }),
+  ),
+);
+
 // BrowserPane now uses useLiveBrowserConfig (React Query); provide a client
 // and a stable mock so these structural tests don't depend on a real server.
 vi.mock("@/hooks/useModels", async (importOriginal) => {
@@ -18,9 +27,7 @@ vi.mock("@/api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/api/client")>();
   return {
     ...actual,
-    pathPreviewBootstrapUrl: vi.fn((cid: string) =>
-      Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
-    ),
+    pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
   };
 });
 
@@ -85,32 +92,52 @@ describe("AgentCanvas — the operator inspector", () => {
   });
 
   it("loads a committed multi-file app through the isolated static capability", async () => {
-    wrap(
+    pathPreviewBootstrapUrlMock.mockClear();
+    const initialEvents = [
+      fileWrite("release/index.html", '<script src="assets/app.js"></script>'),
+      fileWrite("release/assets/app.js", "document.body.dataset.loaded='true'"),
+      appDeliverable("release/index.html"),
+      {
+        id: "v-selected",
+        kind: "workspace_version",
+        version_seq: 1,
+        tree_digest: "selected-tree",
+        trigger: "finish",
+      } as AgentEvent,
+    ];
+    const rendered = wrap(
       <AgentCanvas
-        events={[
-          fileWrite("release/index.html", '<script src="assets/app.js"></script>'),
-          fileWrite("release/assets/app.js", "document.body.dataset.loaded='true'"),
-          appDeliverable("release/index.html"),
-          {
-            id: "v-selected",
-            kind: "workspace_version",
-            version_seq: 1,
-            tree_digest: "selected-tree",
-            trigger: "finish",
-          } as AgentEvent,
-        ]}
+        events={initialEvents}
         status="FINISHED"
         cid="conv_a1b2c3d4agent"
       />,
     );
     await waitFor(() => {
       const frame = screen.getByTitle("Artifact preview");
-      expect(frame).toHaveAttribute(
-        "src",
-        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4agent",
-      );
+      expect(frame).not.toHaveAttribute("src");
       expect(frame).not.toHaveAttribute("srcdoc");
       expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
     });
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <AgentCanvas
+          events={[
+            ...initialEvents,
+            {
+              id: "v-selected-2",
+              kind: "workspace_version",
+              version_seq: 2,
+              tree_digest: "selected-tree-2",
+              trigger: "turn",
+            } as AgentEvent,
+          ]}
+          status="FINISHED"
+          cid="conv_a1b2c3d4agent"
+        />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(2));
   });
 });

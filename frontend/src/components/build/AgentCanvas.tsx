@@ -27,6 +27,7 @@ import {
   agentHttpBase,
   previewBootstrapUrl,
   pathPreviewBootstrapUrl,
+  type PreviewLaunch,
 } from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
@@ -37,6 +38,7 @@ import { useLiveBrowserConfig } from "@/hooks/useModels";
 import { DeckEditorPane } from "@/components/build/DeckEditorPane";
 import { latestEditableDeckBase } from "@/components/build/latestEditableDeckBase";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
+import { PreviewLaunchFrame } from "@/components/PreviewLaunchFrame";
 
 type TabId = "browser" | "artifacts" | "console" | "history" | "deck";
 
@@ -154,7 +156,7 @@ function BrowserPane({
   // opened the view, NOT whatever cid is current now (else we stop the wrong sandbox
   // and leak the old VNC stack).
   const [liveView, setLiveView] = useState<
-    { url: string; novnc_path: string; ownerCid: string } | null
+    { launch: PreviewLaunch; ownerCid: string } | null
   >(null);
   // Streamability TRUTH from the side-effect-free /browser/live-ready probe: true only
   // when this backend can actually run + stream the stack (gVisor) AND a sandbox + healthy
@@ -254,7 +256,7 @@ function BrowserPane({
               startFailuresRef.current = 0;
               setLiveStartFailure(null);
               setIframeConnected(false);
-              setLiveView({ url: src, novnc_path: "", ownerCid: cid });
+              setLiveView({ launch: src, ownerCid: cid });
             }
           } catch (e: unknown) {
             // Distinguish DOOMED from TRANSIENT without exposing raw backend errors.
@@ -389,20 +391,19 @@ function BrowserPane({
 
   // When live view is active, show the noVNC iframe instead of screenshots.
   if (liveView && cid) {
-    const iframeSrc = `${liveView.url}${liveView.novnc_path}`;
     return (
       <div className="flex h-full min-h-0 flex-col">
         {Header}
         <div className="flex min-h-0 flex-1 flex-col">
-          <iframe
+          <PreviewLaunchFrame
             title="Live browser (noVNC)"
-            src={iframeSrc}
+            launch={liveView.launch}
             // The iframe genuinely LOADING is the truth behind the green-blink badge.
             onLoad={() => setIframeConnected(true)}
-            // allow-same-origin is intentionally absent — the noVNC iframe must
-            // NOT be able to reach this page's JS context (cross-origin isolation).
-            // allow-scripts is needed for noVNC's WebSocket connection.
-            sandbox="allow-scripts allow-forms"
+            // The capability host is cross-origin from the app. same-origin is
+            // required inside the frame so noVNC's websocket has its real Origin;
+            // cross-origin browser isolation still prevents access to this page.
+            sandbox="allow-scripts allow-forms allow-same-origin"
             className="h-full w-full border-0"
             data-testid="novnc-iframe"
           />
@@ -539,14 +540,36 @@ function ArtifactsPane({
     cid !== null &&
     selectedDeliverable?.kind === "app" &&
     events.some((event) => event.kind === "workspace_version");
-  const [staticPreviewSrc, setStaticPreviewSrc] = useState<string | null>(null);
+  const committedGeneration = useMemo(() => {
+    let treeDigest = "unversioned";
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i];
+      if (event?.kind === "workspace_version") {
+        treeDigest = event.tree_digest;
+        break;
+      }
+    }
+    return `${selectedDeliverable?.id ?? "none"}:${treeDigest}`;
+  }, [events, selectedDeliverable?.id]);
+  const [staticPreviewSrc, setStaticPreviewSrc] = useState<PreviewLaunch | null>(null);
+  const staticMintRef = useRef<{
+    key: string;
+    promise: Promise<PreviewLaunch | null>;
+  } | null>(null);
   useEffect(() => {
     let cancelled = false;
     if (!committedStaticPreview || !cid || srcDoc === null) {
       setStaticPreviewSrc(null);
+      staticMintRef.current = null;
       return;
     }
-    void pathPreviewBootstrapUrl(cid, "/")
+    const key = `${cid}:committed:${committedGeneration}`;
+    const promise =
+      staticMintRef.current?.key === key
+        ? staticMintRef.current.promise
+        : pathPreviewBootstrapUrl(cid, "/");
+    staticMintRef.current = { key, promise };
+    void promise
       .then((url) => {
         if (!cancelled) setStaticPreviewSrc(url);
       })
@@ -556,7 +579,7 @@ function ArtifactsPane({
     return () => {
       cancelled = true;
     };
-  }, [cid, committedStaticPreview, srcDoc]);
+  }, [cid, committedGeneration, committedStaticPreview, srcDoc]);
 
   // §4.1 C-EDIT-1: ref + selection state for the artifact preview iframe.
   const artifactIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -569,7 +592,7 @@ function ArtifactsPane({
     resetSelection: artifactResetSelection,
   } = useElementSelect(
     artifactIframeRef,
-    staticPreviewSrc ? new URL(staticPreviewSrc).origin : "null",
+    staticPreviewSrc ? new URL(staticPreviewSrc.url).origin : "null",
   );
 
   if (files.length === 0)
@@ -586,21 +609,25 @@ function ArtifactsPane({
           </div>
           {/* §4.1 C-EDIT-1: relative wrapper for SelectionOverlay positioning. */}
           <div className="relative min-h-0 flex-1">
-            <iframe
-              ref={artifactIframeRef}
-              title="Artifact preview"
-              {...(staticPreviewSrc ? { src: staticPreviewSrc } : { srcDoc })}
-              // untrusted (shared/imported run) → empty sandbox, no scripts: a script
-              // here could reach this instance's open-CORS APIs. Trusted keeps allow-scripts.
-              sandbox={
-                untrusted
-                  ? ""
-                  : staticPreviewSrc
-                    ? "allow-scripts allow-same-origin"
-                    : "allow-scripts"
-              }
-              className="h-full w-full border-0 bg-white"
-            />
+            {staticPreviewSrc ? (
+              <PreviewLaunchFrame
+                ref={artifactIframeRef}
+                title="Artifact preview"
+                launch={staticPreviewSrc}
+                sandbox="allow-scripts allow-same-origin"
+                className="h-full w-full border-0 bg-white"
+              />
+            ) : (
+              <iframe
+                ref={artifactIframeRef}
+                title="Artifact preview"
+                srcDoc={srcDoc}
+                // untrusted (shared/imported run) → empty sandbox, no scripts: a script
+                // here could reach this instance's open-CORS APIs.
+                sandbox={untrusted ? "" : "allow-scripts"}
+                className="h-full w-full border-0 bg-white"
+              />
+            )}
             <SelectionOverlay
               armed={artifactArmed}
               untrusted={untrusted}

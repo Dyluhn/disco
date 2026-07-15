@@ -23,7 +23,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 let buildState: Record<string, unknown>;
-const pathPreviewBootstrapUrlMock = vi.hoisted(() => vi.fn());
+const { pathPreviewBootstrapUrlMock, showToastMock } = vi.hoisted(() => ({
+  pathPreviewBootstrapUrlMock: vi.fn(),
+  showToastMock: vi.fn(),
+}));
 
 vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
@@ -41,6 +44,9 @@ vi.mock("@/api/client", async (orig) => ({
   agentLive: () => true,
   agentHttpBase: () => "",
   pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
+}));
+vi.mock("@/components/toastApi", () => ({
+  useToast: () => ({ show: showToastMock }),
 }));
 
 import { BuildSurface } from "@/components/BuildSurface";
@@ -122,7 +128,10 @@ function stubStateFetch(title: string | null) {
 beforeEach(() => {
   stubStateFetch(null);
   pathPreviewBootstrapUrlMock.mockResolvedValue(
-    "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
+    {
+      url: "http://localhost:18250/__disco/path-preview-auth/deadbeef",
+      intent: "signed-body-intent",
+    },
   );
 });
 
@@ -188,38 +197,52 @@ describe("finished app handoff isolation", () => {
     } as AgentEvent,
   ];
 
-  it("opens only the pre-minted isolated path capability", async () => {
-    const open = vi.fn();
+  it("opens a blank window synchronously and mints only after the click", async () => {
+    const popup = { opener: window, close: vi.fn() };
+    const open = vi.fn(() => popup as unknown as Window);
     vi.stubGlobal("open", open);
+    const submissions: Array<{ action: string; intent: string }> = [];
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+      submissions.push({
+        action: this.action,
+        intent: (this.elements.namedItem("intent") as HTMLInputElement).value,
+      });
+    });
     buildState = baseBuild({ status: "FINISHED", events: appEvents });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", { name: /open the deliverable/i });
-    await waitFor(() =>
-      expect(button).toHaveAttribute(
-        "data-app-url",
-        "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
-      ),
-    );
-    expect(button.getAttribute("data-app-url")).not.toContain("/conversations/cid-1/");
+    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
     await userEvent.click(button);
     expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/");
-    expect(open).toHaveBeenCalledWith(
-      "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
-      "_blank",
-      "noopener,noreferrer",
+    expect(open).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^disco-preview-popup-/));
+    expect(popup.opener).toBeNull();
+    await waitFor(() =>
+      expect(submissions).toEqual([
+        {
+          action: "http://localhost:18250/__disco/path-preview-auth/deadbeef",
+          intent: "signed-body-intent",
+        },
+      ]),
     );
   });
 
-  it("fails closed when an isolated handoff cannot be minted", async () => {
+  it("closes the blank popup when an isolated handoff cannot be minted", async () => {
     pathPreviewBootstrapUrlMock.mockRejectedValue(new Error("capability unavailable"));
+    const popup = { opener: window, close: vi.fn() };
+    vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
     buildState = baseBuild({ status: "FINISHED", events: appEvents });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", { name: /open the deliverable/i });
+    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
+    await userEvent.click(button);
     await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalled());
-    expect(button).toBeDisabled();
-    expect(button).not.toHaveAttribute("data-app-url");
+    await waitFor(() => expect(popup.close).toHaveBeenCalled());
+    expect(showToastMock).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Couldn’t open preview" }),
+    );
+    expect(button).toBeEnabled();
     expect(document.body.innerHTML).not.toContain("/conversations/cid-1/preview-app/");
   });
 });

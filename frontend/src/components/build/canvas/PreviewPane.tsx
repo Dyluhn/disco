@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ExternalLink, History, MonitorPlay, MousePointer2, Pencil, RotateCw, Undo2 } from "lucide-react";
@@ -7,8 +14,10 @@ import { deriveDeliverable, deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import {
   agentHttpBase,
   ApiError,
+  livePathPreviewBootstrapUrl,
   pathPreviewBootstrapUrl,
   previewBootstrapUrl,
+  type PreviewLaunch,
 } from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
@@ -18,6 +27,8 @@ import { useElementMention } from "@/hooks/useElementMention";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { PreviewLaunchFrame } from "@/components/PreviewLaunchFrame";
+import { openFreshPreview } from "@/lib/previewLaunch";
 import { useToast } from "@/components/toastApi";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { ELEMENT_MENTION_PICKER_SCRIPT } from "@/lib/elementMentionPicker";
@@ -69,6 +80,19 @@ function originOf(src: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+type OwnedPreviewMint = { key: string; promise: Promise<PreviewLaunch | null> };
+
+function mintOnceForNavigation(
+  ref: MutableRefObject<OwnedPreviewMint | null>,
+  key: string,
+  mint: () => Promise<PreviewLaunch | null>,
+): Promise<PreviewLaunch | null> {
+  if (ref.current?.key === key) return ref.current.promise;
+  const promise = mint();
+  ref.current = { key, promise };
+  return promise;
 }
 
 function PointButton({
@@ -224,6 +248,15 @@ export function PreviewPane({
   const { data } = useBuildPreview(cid, active);
   const qc = useQueryClient();
   const toast = useToast();
+  const previewOpenError = (reason: "popup_blocked" | "capability_unavailable") => {
+    toast.show({
+      title: reason === "popup_blocked" ? "Preview popup blocked" : "Couldn’t open preview",
+      body:
+        reason === "popup_blocked"
+          ? "Allow popups for this site, then try again."
+          : "Isolated preview access could not be established. Try again.",
+    });
+  };
   const {
     versions,
     refetch: refetchVersions,
@@ -310,12 +343,10 @@ export function PreviewPane({
         : deriveSrcDoc(
             files,
             untrusted ? undefined : TRUSTED_SRCDOC_SCRIPT,
-            cid
-              ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
-              : undefined,
+            undefined,
             selectedHtmlPath,
           ),
-    [cid, files, selectedHtmlPath, untrusted, srcdocStaleAfterRestore],
+    [files, selectedHtmlPath, untrusted, srcdocStaleAfterRestore],
   );
 
   const committedStaticPreview =
@@ -324,8 +355,9 @@ export function PreviewPane({
     cid !== null &&
     selectedDeliverable?.kind === "app" &&
     events.some((event) => event.kind === "workspace_version");
-  const [staticPreviewSrc, setStaticPreviewSrc] = useState<string | null>(null);
+  const [staticPreviewSrc, setStaticPreviewSrc] = useState<PreviewLaunch | null>(null);
   const [staticPreviewFailure, setStaticPreviewFailure] = useState(false);
+  const staticMintRef = useRef<OwnedPreviewMint | null>(null);
 
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
   // allowedOrigin is "null" (the string) — sandboxed iframes without
@@ -338,7 +370,7 @@ export function PreviewPane({
     selection: srcdocSelection,
     walkUp: srcdocWalkUp,
     resetSelection: srcdocResetSelection,
-  } = useElementSelect(srcdocIframeRef, originOf(staticPreviewSrc) ?? "null");
+  } = useElementSelect(srcdocIframeRef, originOf(staticPreviewSrc?.url ?? null) ?? "null");
 
   // A1.6 — the entry HTML's workspace path (same pick as deriveSrcDoc: index.html,
   // else any *.html with real client-side content). Used to build the preview-edit
@@ -395,31 +427,6 @@ export function PreviewPane({
   // is NOT reachable, also ask the backend to restart the static serve, then
   // re-poll availability. So a hung/down preview is always user-fixable here.
   const [reloadKey, setReloadKey] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    setStaticPreviewFailure(false);
-    if (!committedStaticPreview || !cid) {
-      setStaticPreviewSrc(null);
-      return;
-    }
-    void pathPreviewBootstrapUrl(cid, "/")
-      .then((url) => {
-        if (cancelled) return;
-        setStaticPreviewSrc(url);
-        setStaticPreviewFailure(url === null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Known client-side bytes can still use the opaque srcdoc. When the
-        // bytes exist only in the committed workspace, surface an honest
-        // isolation failure instead of silently substituting a live server.
-        setStaticPreviewSrc(null);
-        setStaticPreviewFailure(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cid, committedStaticPreview, reloadKey]);
   const [previewPort, setPreviewPort] = useState(8000);
   const boundPorts = (data?.ports ?? [])
     .filter((p) => p.owner != null)
@@ -499,91 +506,124 @@ export function PreviewPane({
       {restoreNotice.text}
     </div>
   ) : null;
+  // Default to the always-correct rendered view. A bundler entry cannot run as
+  // srcdoc, and no-srcdoc non-committed output has no rendered alternative, so
+  // those two cases truthfully need the live proxy.
+  const isBundlerEntry =
+    srcDoc != null && /<script[^>]+type="module"[^>]+src="\/(src|@vite)\//.test(srcDoc);
+  const [mode, setMode] = useState<"rendered" | "live">(() =>
+    proxyAvailable && isBundlerEntry ? "live" : "rendered",
+  );
+  const showLive =
+    proxyAvailable &&
+    (mode === "live" || (srcDoc == null && !committedStaticPreview));
+  const staticVisible =
+    committedStaticPreview &&
+    !showLive &&
+    selectedVersionSeq === null &&
+    !(editMode && canEdit && editSrc !== null);
+  useEffect(() => {
+    let cancelled = false;
+    setStaticPreviewFailure(false);
+    if (!staticVisible || !cid) {
+      setStaticPreviewSrc(null);
+      // Clear only after the owner is genuinely hidden. Do not clear from the
+      // effect cleanup: StrictMode replays cleanup while the frame stays owned.
+      staticMintRef.current = null;
+      return;
+    }
+    void mintOnceForNavigation(
+      staticMintRef,
+      `${cid}:committed:${reloadKey}`,
+      () => pathPreviewBootstrapUrl(cid, "/"),
+    )
+      .then((url) => {
+        if (cancelled) return;
+        setStaticPreviewSrc(url);
+        setStaticPreviewFailure(url === null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Known client-side bytes can still use the opaque srcdoc. When the
+        // bytes exist only in the committed workspace, surface an honest
+        // isolation failure instead of silently substituting a live server.
+        setStaticPreviewSrc(null);
+        setStaticPreviewFailure(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, reloadKey, staticVisible]);
   type IsolatedLivePreview = {
     requestKey: string;
-    url: string | null;
+    launch: PreviewLaunch | null;
     failed: boolean;
   };
   const liveProxyTarget = `/?r=${reloadKey}`;
   const liveProxyRequestKey = cid ? `${cid}:${previewPort}:${liveProxyTarget}` : "";
   const [isolatedLivePreview, setIsolatedLivePreview] =
     useState<IsolatedLivePreview | null>(null);
+  const liveMintRef = useRef<OwnedPreviewMint | null>(null);
   useEffect(() => {
     let cancelled = false;
-    if (!cid) {
+    if (!cid || !showLive || selectedVersionSeq !== null) {
+      setIsolatedLivePreview(null);
+      liveMintRef.current = null;
       return;
     }
     const requestKey = liveProxyRequestKey;
-    void previewBootstrapUrl(cid, previewPort, liveProxyTarget)
+    void mintOnceForNavigation(
+      liveMintRef,
+      requestKey,
+      () => previewBootstrapUrl(cid, previewPort, liveProxyTarget),
+    )
       .then((url) => {
         if (!cancelled) {
-          setIsolatedLivePreview({ requestKey, url, failed: url === null });
+          setIsolatedLivePreview({ requestKey, launch: url, failed: url === null });
         }
       })
       .catch(() => {
         // Executable generated content must never fall back to an unsigned raw
         // wildcard URL. Keep the iframe unmounted and surface the failure.
-        if (!cancelled) setIsolatedLivePreview({ requestKey, url: null, failed: true });
+        if (!cancelled) setIsolatedLivePreview({ requestKey, launch: null, failed: true });
       });
     return () => {
       cancelled = true;
     };
-  }, [cid, liveProxyRequestKey, liveProxyTarget, previewPort]);
+  }, [cid, liveProxyRequestKey, liveProxyTarget, previewPort, selectedVersionSeq, showLive]);
   const proxySrc =
     isolatedLivePreview?.requestKey === liveProxyRequestKey
-      ? isolatedLivePreview.url
+      ? isolatedLivePreview.launch
       : null;
   const proxyFailure =
     isolatedLivePreview?.requestKey === liveProxyRequestKey && isolatedLivePreview.failed;
   const liveIframeRef = useRef<HTMLIFrameElement | null>(null);
-  // H082 — Firefox-safe path previews must be capability bootstraps, never the
-  // authenticated agent-server URL itself. Generated JavaScript opened on that
-  // origin would inherit the application session. The bootstrap moves the tab
-  // to an alternate isolated origin and installs only a cid/path-scoped cookie.
-  type IsolatedPathPreview = { cid: string; targetPath: string; url: string };
+  type IsolatedPathPreview = { cid: string; targetPath: string; launch: PreviewLaunch };
   const livePathTarget = `/?r=${reloadKey}`;
-  const [livePathPreview, setLivePathPreview] = useState<IsolatedPathPreview | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    if (!cid || !proxyAvailable) {
-      setLivePathPreview(null);
-      return;
-    }
-    void pathPreviewBootstrapUrl(cid, livePathTarget)
-      .then((url) => {
-        if (!cancelled) {
-          setLivePathPreview(url ? { cid, targetPath: livePathTarget, url } : null);
-        }
-      })
-      .catch(() => {
-        // Fail closed: the already-isolated proxy link remains available, but
-        // never replace this with the authenticated /preview-app/ route.
-        if (!cancelled) setLivePathPreview(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cid, livePathTarget, proxyAvailable]);
-  const openInNewTabUrl =
-    cid && livePathPreview?.cid === cid && livePathPreview.targetPath === livePathTarget
-      ? livePathPreview.url
-      : null;
 
   const historicalTarget =
     selectedVersionSeq === null ? null : `/?version=${selectedVersionSeq}&r=${reloadKey}`;
   const [historicalPathPreview, setHistoricalPathPreview] =
     useState<IsolatedPathPreview | null>(null);
   const [historicalPreviewFailure, setHistoricalPreviewFailure] = useState<string | null>(null);
+  const historicalMintRef = useRef<OwnedPreviewMint | null>(null);
   useEffect(() => {
     let cancelled = false;
     setHistoricalPathPreview(null);
     setHistoricalPreviewFailure(null);
-    if (!cid || historicalTarget === null) return;
-    void pathPreviewBootstrapUrl(cid, historicalTarget)
+    if (!cid || historicalTarget === null) {
+      historicalMintRef.current = null;
+      return;
+    }
+    void mintOnceForNavigation(
+      historicalMintRef,
+      `${cid}:historical:${historicalTarget}`,
+      () => pathPreviewBootstrapUrl(cid, historicalTarget),
+    )
       .then((url) => {
         if (cancelled) return;
         if (url) {
-          setHistoricalPathPreview({ cid, targetPath: historicalTarget, url });
+          setHistoricalPathPreview({ cid, targetPath: historicalTarget, launch: url });
         } else {
           setHistoricalPreviewFailure(historicalTarget);
         }
@@ -602,7 +642,7 @@ export function PreviewPane({
     historicalTarget !== null &&
     historicalPathPreview?.cid === cid &&
     historicalPathPreview.targetPath === historicalTarget
-      ? historicalPathPreview.url
+      ? historicalPathPreview.launch
       : null;
   const mentionable = Boolean(onElementMention && !untrusted);
   const handleElementMention = useCallback(
@@ -613,35 +653,16 @@ export function PreviewPane({
   );
   const liveMention = useElementMention(
     liveIframeRef,
-    originOf(proxySrc),
+    originOf(proxySrc?.url ?? null),
     handleElementMention,
     mentionable && proxySrc !== null,
   );
   const srcdocMention = useElementMention(
     srcdocIframeRef,
-    originOf(staticPreviewSrc) ?? "null",
+    originOf(staticPreviewSrc?.url ?? null) ?? "null",
     handleElementMention,
     mentionable && srcDoc !== null,
   );
-
-  // Gauntlet walkthrough 2026-07-07 (Dylan): default to the RENDERED view.
-  // The live proxy is one click away via the toggle; auto-preferring it made
-  // the pane land on a half-booted/blank live server instead of the
-  // always-correct render. (Supersedes runthru-v2 #4's default-to-live.)
-  // TWO honest exceptions (no false affordances):
-  //   * a BUNDLER entry (E2): the srcdoc physically cannot load dev-server
-  //     virtual modules (`/src/main.tsx`, `/@vite/client`) — rendering it
-  //     shows a falsely-broken build, so those still default to LIVE;
-  //   * srcDoc == null: nothing client-renderable — an empty rendered pane
-  //     would be a false blank, so fall through to LIVE below.
-  const isBundlerEntry =
-    srcDoc != null && /<script[^>]+type="module"[^>]+src="\/(src|@vite)\//.test(srcDoc);
-  const [mode, setMode] = useState<"rendered" | "live">(() =>
-    proxyAvailable && isBundlerEntry ? "live" : "rendered",
-  );
-  const showLive =
-    proxyAvailable &&
-    (mode === "live" || (srcDoc == null && !committedStaticPreview));
 
   const selectedOwner =
     previewPort === 8000
@@ -697,11 +718,11 @@ export function PreviewPane({
             </div>
           </div>
           {historicalPreviewSrc ? (
-            <iframe
+            <PreviewLaunchFrame
               key={`${reloadKey}-version-${selectedVersionSeq}`}
               title="Historical preview"
-              src={historicalPreviewSrc}
-              sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+              launch={historicalPreviewSrc}
+              sandbox="allow-scripts allow-forms allow-same-origin"
               className="h-full w-full border-0 bg-white"
             />
           ) : (
@@ -840,24 +861,34 @@ export function PreviewPane({
                 Rendered
               </button>
             )}
-            <a
-              href={proxySrc}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
+              onClick={() => {
+                if (cid) {
+                  openFreshPreview(
+                    () => previewBootstrapUrl(cid, previewPort, liveProxyTarget),
+                    previewOpenError,
+                  );
+                }
+              }}
               className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
             >
               <ExternalLink className="size-3" aria-hidden /> Open
-            </a>
-            {openInNewTabUrl && (
-              <a
-                href={openInNewTabUrl}
-                target="_blank"
-                rel="noreferrer"
+            </button>
+            {cid && (
+              <button
+                type="button"
+                onClick={() =>
+                  openFreshPreview(
+                    () => livePathPreviewBootstrapUrl(cid, livePathTarget),
+                    previewOpenError,
+                  )
+                }
                 title="Open via the agent-server path route (works in Firefox / Safari / non-magic-DNS setups)"
                 className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
               >
                 <ExternalLink className="size-3" aria-hidden /> Open in new tab
-              </a>
+              </button>
             )}
           </div>
         </div>
@@ -871,11 +902,11 @@ export function PreviewPane({
           Live preview opens best in Chrome; in Firefox use “Open in new tab” or set{" "}
           <code className="font-mono text-text-muted">network.dns.localDomains</code>.
         </div>
-        <iframe
+        <PreviewLaunchFrame
           key={reloadKey}
           ref={liveIframeRef}
           title="Live preview"
-          src={proxySrc}
+          launch={proxySrc}
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
           className="min-h-0 flex-1 border-0 bg-white"
         />
@@ -952,32 +983,27 @@ export function PreviewPane({
         {/* §4.1 C-EDIT-1: relative wrapper so SelectionOverlay can be positioned
             over the iframe via `absolute inset-0`. */}
         <div className="relative min-h-0 flex-1">
-          <iframe
-            // Bump the key when switching modes so the iframe (and its in-frame
-            // selection agent) re-initialise for the new document.
-            key={`${reloadKey}-${showEdit ? "edit" : "view"}`}
-            ref={srcdocIframeRef}
-            title={showEdit ? "Editable preview" : "Static preview"}
-            // Edit mode loads the server-stamped route by URL; view mode renders
-            // the client-assembled srcDoc. Both keep the SAME ref + overlay.
-            {...(showEdit
-              ? { src: editSrc }
-              : showCommittedStatic
-                ? { src: staticPreviewSrc }
-                : { srcDoc: srcDoc ?? undefined })}
-            // untrusted → empty sandbox (no scripts): a script here could reach this
-            // instance's open-CORS APIs. Trusted (your own run) keeps allow-scripts.
-            // No allow-same-origin in either mode → the frame reports origin "null"
-            // (matches useElementSelect(..., "null")) and can't reach this instance.
-            sandbox={
-              untrusted
-                ? ""
-                : showCommittedStatic
-                  ? "allow-scripts allow-same-origin"
-                  : "allow-scripts"
-            }
-            className="h-full w-full border-0 bg-white"
-          />
+          {showCommittedStatic && staticPreviewSrc ? (
+            <PreviewLaunchFrame
+              key={`${reloadKey}-committed-view`}
+              ref={srcdocIframeRef}
+              title="Static preview"
+              launch={staticPreviewSrc}
+              sandbox="allow-scripts allow-same-origin"
+              className="h-full w-full border-0 bg-white"
+            />
+          ) : (
+            <iframe
+              // Bump the key when switching modes so the iframe (and its in-frame
+              // selection agent) re-initialise for the new document.
+              key={`${reloadKey}-${showEdit ? "edit" : "view"}`}
+              ref={srcdocIframeRef}
+              title={showEdit ? "Editable preview" : "Static preview"}
+              {...(showEdit ? { src: editSrc } : { srcDoc: srcDoc ?? undefined })}
+              sandbox={untrusted ? "" : "allow-scripts"}
+              className="h-full w-full border-0 bg-white"
+            />
+          )}
           <SelectionOverlay
             armed={srcdocArmed}
             untrusted={untrusted}

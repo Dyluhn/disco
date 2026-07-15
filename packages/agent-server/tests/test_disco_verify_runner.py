@@ -34,6 +34,7 @@ from disco.agent_server.verify.scenarios import (
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
+from disco.core.auth import SESSION_COOKIE
 
 
 async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path() -> None:
@@ -73,6 +74,139 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
         "/conversations",
         "/api/conversations/conv_authproof/report/export",
     ]
+
+
+async def test_http_verify_client_fetches_selected_preview_through_clean_capability() -> None:
+    seen: list[str] = []
+    cid = "conv_a1b2c3d4proof"
+    isolated_path = f"/__disco/isolated-preview/{cid}/"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/api/auth/session":
+            return httpx.Response(200, json={"authenticated": False})
+        if request.url.path == "/api/auth/pairing-token":
+            return httpx.Response(200, json={"pairing_token": "pair-proof"})
+        if request.url.path == "/api/auth/mint":
+            return httpx.Response(
+                200,
+                json={"csrf_token": "csrf-proof"},
+                headers={"set-cookie": "disco_session=session-proof; Path=/; HttpOnly"},
+            )
+        if request.url.path == f"/conversations/{cid}/preview/capability":
+            assert request.headers["cookie"] == "disco_session=session-proof"
+            assert request.headers["x-disco-csrf"] == "csrf-proof"
+            assert json.loads(request.content) == {
+                "port": 8000,
+                "target_path": "/",
+                "transport": "path",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": (
+                        "http://localhost:8000/__disco/path-preview-auth/a1b2c3d4"
+                    ),
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "path",
+                },
+            )
+        if request.url.path == "/__disco/path-preview-auth/a1b2c3d4":
+            assert request.url.host == "localhost"
+            assert request.headers["origin"] == "http://127.0.0.1:8000"
+            assert "disco_session" not in request.headers.get("cookie", "")
+            assert request.content == b"intent=one-use-intent"
+            return httpx.Response(
+                200,
+                content=b"bootstrap",
+                headers=[
+                    (
+                        "set-cookie",
+                        (
+                            "disco_path_preview_a1b2c3d4=cap-proof; "
+                            f"Path={isolated_path}; HttpOnly; SameSite=Strict"
+                        ),
+                    ),
+                    (
+                        "set-cookie",
+                        "disco_path_preview_isolated=1; Path=/; HttpOnly; SameSite=Strict",
+                    ),
+                ],
+            )
+        if request.url.path == isolated_path:
+            cookie = request.headers.get("cookie", "")
+            assert request.url.host == "localhost"
+            assert "disco_path_preview_a1b2c3d4=cap-proof" in cookie
+            assert "disco_path_preview_isolated=1" in cookie
+            assert "disco_session" not in cookie
+            assert "origin" not in request.headers
+            return httpx.Response(200, content=b"<h1>SELECTED APP</h1>")
+        if "/preview-app/" in request.url.path:
+            raise AssertionError("legacy full-session preview route must not be called")
+        return httpx.Response(404)
+
+    client = HttpVerifyClient(
+        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
+    )
+    assert await client.fetch_preview(cid) == (200, b"<h1>SELECTED APP</h1>")
+    assert seen == [
+        "/api/auth/session",
+        "/api/auth/pairing-token",
+        "/api/auth/mint",
+        f"/conversations/{cid}/preview/capability",
+        "/__disco/path-preview-auth/a1b2c3d4",
+        isolated_path,
+    ]
+
+
+async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() -> None:
+    cid = "conv_a1b2c3d4proof"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/conversations/{cid}/preview/capability":
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": (
+                        "http://localhost:8000/__disco/path-preview-auth/a1b2c3d4"
+                    ),
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "path",
+                },
+            )
+        if request.url.path == "/__disco/path-preview-auth/a1b2c3d4":
+            return httpx.Response(
+                200,
+                content=b"unsafe bootstrap",
+                headers=[
+                    (
+                        "set-cookie",
+                        "disco_path_preview_a1b2c3d4=cap-proof; Path=/; HttpOnly",
+                    ),
+                    ("set-cookie", "disco_session=must-not-cross; Path=/; HttpOnly"),
+                ],
+            )
+        if request.url.path.startswith("/__disco/isolated-preview/"):
+            raise AssertionError("isolated content must not load with an app session")
+        return httpx.Response(404)
+
+    client = HttpVerifyClient(
+        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
+    )
+    client._csrf_token = "csrf-proof"
+    client._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
+    assert await client.fetch_preview(cid) is None
+    assert (
+        client._validated_isolated_preview_url(
+            cid,
+            "http://user@localhost:8000/__disco/path-preview-auth/a1b2c3d4",
+        )
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------

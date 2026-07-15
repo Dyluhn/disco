@@ -5,6 +5,8 @@ import {
   type APIRequestContext,
   type BrowserContext,
   type Page,
+  type Request,
+  type Response,
   type TestInfo,
 } from "@playwright/test";
 import * as fs from "node:fs";
@@ -25,6 +27,10 @@ import { latestStoppedStatus } from "@/lib/harness/terminalConversationStatus";
 
 type Surface = "build" | "agent";
 
+// This spec inspects a one-time bearer in memory. Never persist its request or
+// response body in a retained Playwright trace when an assertion fails.
+test.use({ trace: "off" });
+
 const RELEASE_ENTRY = "release/index.html";
 const ROOT_STALE = "STALE ROOT MUST NEVER OPEN";
 const RELEASE_TITLE = "RELIABILITY RELEASE";
@@ -32,6 +38,7 @@ const FIRST_MARKER = "SELECTED RELEASE ONE";
 const SECOND_MARKER = "SELECTED RELEASE TWO";
 const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
 const NESTED_MARKER = "NESTED ROUTE LOADED";
+const ISOLATED_PREVIEW_PREFIX = "/__disco/isolated-preview";
 const BACKGROUND = "rgb(12, 34, 56)";
 const FONT_PATH = path.resolve(
   process.cwd(),
@@ -188,49 +195,107 @@ async function assertApiGraph(
   request: APIRequestContext,
   cid: string,
   marker: string,
+  observedBearers: string[],
   version?: number,
+  absentMarker?: string,
 ): Promise<void> {
-  const suffix = version === undefined ? "" : `?version=${version}`;
-  const base = `${AGENT_API}/conversations/${cid}/preview-app`;
-  const root = await request.get(`${base}/${suffix}`);
-  expect(root.ok(), await root.text()).toBe(true);
-  const rootBody = await root.text();
-  expect(rootBody).toContain(marker);
-  expect(rootBody).not.toContain(ROOT_STALE);
+  const targetPath = version === undefined ? "/" : `/?version=${version}`;
+  const mint = await authenticatedMutation(
+    request,
+    `${AGENT_API}/conversations/${cid}/preview/capability`,
+    {
+      data: { port: 8000, target_path: targetPath, transport: "path" },
+      timeout: 30_000,
+    },
+  );
+  expect(mint.ok(), `preview capability mint returned ${mint.status()}`).toBe(true);
+  expect(mint.headers()["cache-control"]).toContain("no-store");
+  const capability = (await mint.json()) as {
+    bootstrap_url: string;
+    bootstrap_intent: string;
+    target_path: string;
+    transport: string;
+  };
+  expect(capability.target_path).toBe(targetPath);
+  expect(capability.transport).toBe("path");
+  expect(
+    typeof capability.bootstrap_intent === "string" && capability.bootstrap_intent.length > 0,
+    "path capability response omitted its one-time intent",
+  ).toBe(true);
+  observedBearers.push(capability.bootstrap_intent);
 
-  const css = await request.get(`${base}/assets/theme.css?theme=7`);
-  const prefixedCss = await request.get(`${base}/release/assets/theme.css?theme=7`);
-  const script = await request.get(`${base}/scripts/app.js?mode=live`);
-  const doubleSlashScript = await request.get(`${base}//scripts/app.js?mode=live`);
-  const image = await request.get(`${base}/media/hero%20image.svg?asset=1`);
-  const font = await request.get(`${base}/fonts/proof.woff2?font=1`);
-  const nested = await request.get(`${base}/docs/?view=full#nested`);
-  for (const response of [css, prefixedCss, script, doubleSlashScript, image, font, nested]) {
-    expect(response.ok(), `${response.url()} -> ${response.status()}: ${await response.text()}`).toBe(
-      true,
-    );
-  }
-  expect(await css.text()).toContain("ProofFont");
-  expect(await prefixedCss.text()).toBe(await css.text());
-  expect(await script.text()).toContain(SCRIPT_MARKER);
-  expect(await doubleSlashScript.text()).toBe(await script.text());
-  expect(await image.text()).toContain("SVG ASSET");
-  expect((await font.body()).byteLength).toBeGreaterThan(1_000);
-  expect(await nested.text()).toContain(NESTED_MARKER);
+  const bootstrapUrl = new URL(capability.bootstrap_url);
+  expect(
+    bootstrapUrl.search === "" && bootstrapUrl.hash === "",
+    "path bootstrap URL contained query or fragment data",
+  ).toBe(true);
+  expect(
+    !capability.bootstrap_url.includes(capability.bootstrap_intent),
+    "path bootstrap URL exposed its one-time intent",
+  ).toBe(true);
 
-  const traversal = await request.get(`${base}/%2e%2e/%2e%2e/etc/passwd`);
-  expect(traversal.ok()).toBe(false);
-  expect(await traversal.text()).not.toContain("root:");
-  const backslash = await request.get(`${base}/assets%5Ctheme.css`);
-  expect(backslash.ok()).toBe(false);
-
-  const anonymous = await playwrightRequest.newContext();
+  const isolated = await playwrightRequest.newContext();
   try {
-    const unauthenticated = await anonymous.get(`${base}/${suffix}`);
-    expect([401, 403]).toContain(unauthenticated.status());
-    expect(await unauthenticated.text()).not.toContain(marker);
+    const base = `${bootstrapUrl.origin}${ISOLATED_PREVIEW_PREFIX}/${cid}`;
+    const withVersion = (path: string): string => {
+      if (version === undefined) return `${base}${path}`;
+      const hashAt = path.indexOf("#");
+      const requestPath = hashAt === -1 ? path : path.slice(0, hashAt);
+      const fragment = hashAt === -1 ? "" : path.slice(hashAt);
+      const separator = requestPath.includes("?") ? "&" : "?";
+      return `${base}${requestPath}${separator}version=${version}${fragment}`;
+    };
+
+    const deniedBeforeRedemption = await isolated.get(withVersion("/"));
+    expect(deniedBeforeRedemption.status()).toBe(403);
+    expect((await deniedBeforeRedemption.text()).includes(marker)).toBe(false);
+
+    const redemption = await isolated.post(capability.bootstrap_url, {
+      form: { intent: capability.bootstrap_intent },
+      timeout: 30_000,
+    });
+    expect(redemption.status(), "isolated body-only capability redemption failed").toBe(200);
+    expect(
+      (await redemption.text()).includes(capability.bootstrap_intent),
+      "bootstrap response reflected the one-time bearer",
+    ).toBe(false);
+
+    const root = await isolated.get(withVersion("/"));
+    expect(root.ok(), `isolated preview root returned ${root.status()}`).toBe(true);
+    const rootBody = await root.text();
+    expect(rootBody).toContain(marker);
+    expect(rootBody).toContain(`<title>${RELEASE_TITLE}</title>`);
+    expect(rootBody).not.toContain(ROOT_STALE);
+    if (absentMarker) expect(rootBody).not.toContain(absentMarker);
+
+    const css = await isolated.get(withVersion("/assets/theme.css?theme=7"));
+    const prefixedCss = await isolated.get(withVersion("/release/assets/theme.css?theme=7"));
+    const script = await isolated.get(withVersion("/scripts/app.js?mode=live"));
+    const doubleSlashScript = await isolated.get(withVersion("//scripts/app.js?mode=live"));
+    const image = await isolated.get(withVersion("/media/hero%20image.svg?asset=1"));
+    const font = await isolated.get(withVersion("/fonts/proof.woff2?font=1"));
+    const nested = await isolated.get(withVersion("/docs/?view=full#nested"));
+    for (const response of [css, prefixedCss, script, doubleSlashScript, image, font, nested]) {
+      expect(
+        response.ok(),
+        `isolated preview asset ${new URL(response.url()).pathname} returned ${response.status()}`,
+      ).toBe(true);
+    }
+    expect(await css.text()).toContain("ProofFont");
+    expect(await prefixedCss.text()).toBe(await css.text());
+    expect(await script.text()).toContain(SCRIPT_MARKER);
+    expect(await doubleSlashScript.text()).toBe(await script.text());
+    expect(await image.text()).toContain("SVG ASSET");
+    expect((await font.body()).byteLength).toBeGreaterThan(1_000);
+    expect(await nested.text()).toContain(NESTED_MARKER);
+
+    const traversal = await isolated.get(withVersion("/%2e%2e/%2e%2e/etc/passwd"));
+    expect(traversal.ok()).toBe(false);
+    expect(await traversal.text()).not.toContain("root:");
+    const backslash = await isolated.get(withVersion("/assets%5Ctheme.css"));
+    expect(backslash.ok()).toBe(false);
   } finally {
-    await anonymous.dispose();
+    await isolated.dispose();
   }
 }
 
@@ -253,41 +318,225 @@ async function assertRenderedDocument(page: Page, marker: string): Promise<void>
   ).toBe(true);
 }
 
+function requestBelongsToPage(request: Request, page: Page): boolean {
+  try {
+    return request.frame().page() === page;
+  } catch {
+    // Playwright requests originating in a service worker have no frame.
+    return false;
+  }
+}
+
+function redactPreviewBearers(value: string, bearers: string[]): string {
+  let redacted = value;
+  for (const bearer of bearers) {
+    redacted = redacted.replaceAll(bearer, "[REDACTED_PREVIEW_BEARER]");
+  }
+  return redacted.replace(
+    /([?&#]intent=)[^&#\s]+/gi,
+    "$1[REDACTED_PREVIEW_BEARER]",
+  );
+}
+
 async function openFromHandoff(
   context: BrowserContext,
   page: Page,
   cid: string,
   marker: string,
+  observedBearers: string[],
 ): Promise<void> {
   const open = page.locator('[data-disco-control="build.open-app"]').first();
   await expect(open).toBeVisible({ timeout: 120_000 });
-  // The handoff control renders from the durable DeliverableEvent before the
-  // isolated capability POST resolves. This is especially visible after a
-  // cold stack restart; synchronize on the signed attribute we consume rather
-  // than assuming control visibility implies async mint completion.
-  await expect(open).toHaveAttribute("data-app-url", /.+/, { timeout: 120_000 });
-  const handoffUrl = await open.getAttribute("data-app-url");
-  expect(handoffUrl, "handoff did not mint an isolated preview capability").toBeTruthy();
-  const parsedHandoff = new URL(handoffUrl!);
-  expect(parsedHandoff.pathname).toBe(
-    `/__disco/path-preview-auth/${cid.replace(/^conv_/, "").slice(0, 8)}`,
-  );
-  expect(parsedHandoff.searchParams.get("intent")).toBeTruthy();
-  expect(parsedHandoff.origin).not.toBe(new URL(page.url()).origin);
-  const popupPromise = context.waitForEvent("page", { timeout: 30_000 });
-  await open.click();
-  const popup = await popupPromise;
-  try {
-    await popup.waitForLoadState("domcontentloaded");
-    await assertRenderedDocument(popup, marker);
-    await popup.reload();
-    await assertRenderedDocument(popup, marker);
-    await popup.locator("#nested-link").click();
-    await expect(popup.locator("body")).toContainText(NESTED_MARKER, { timeout: 60_000 });
-    expect(popup.url()).toMatch(/\/preview-app\/docs\/?\?view=full#nested$/);
-  } finally {
-    await popup.close();
+  await expect(open).not.toHaveAttribute("data-app-url");
+  expect(await page.locator("[data-app-url]").count(), "preview bearer exposed in the DOM").toBe(0);
+
+  const compactCid = cid.replace(/^conv_/, "").slice(0, 8);
+  const capabilityPathSuffix = `/conversations/${cid}/preview/capability`;
+  const bootstrapPath = `/__disco/path-preview-auth/${compactCid}`;
+  const intents: string[] = [];
+
+  // SEC004/H112: every gesture opens its popup synchronously, then mints and
+  // submits one fresh intent through an ephemeral POST form. Two clicks make
+  // cached, eager, or reused capabilities an observable live-test failure.
+  for (let click = 0; click < 2; click += 1) {
+    const capabilityResponses: Response[] = [];
+    const bootstrapRequests: Request[] = [];
+    const popupNetworkRequests: Request[] = [];
+    const onResponse = (response: Response) => {
+      const url = new URL(response.url());
+      if (
+        response.request().method() === "POST" &&
+        url.pathname.endsWith(capabilityPathSuffix)
+      ) {
+        capabilityResponses.push(response);
+      }
+    };
+    const onRequest = (request: Request) => {
+      const url = new URL(request.url());
+      if (request.method() === "POST" && url.pathname === bootstrapPath) {
+        bootstrapRequests.push(request);
+      }
+      popupNetworkRequests.push(request);
+    };
+    context.on("response", onResponse);
+    context.on("request", onRequest);
+
+    const popupPromise = context.waitForEvent("page", { timeout: 30_000 });
+    await open.click();
+    const popup = await popupPromise;
+    try {
+      await assertRenderedDocument(popup, marker);
+      const popupBootstrapRequests = bootstrapRequests.filter((request) =>
+        requestBelongsToPage(request, popup),
+      );
+      expect(
+        popupBootstrapRequests.length,
+        "each handoff click must submit exactly one isolated bootstrap POST",
+      ).toBe(1);
+      const bootstrapRequest = popupBootstrapRequests[0];
+      const bootstrapUrl = new URL(bootstrapRequest.url());
+      expect(bootstrapUrl.pathname === bootstrapPath, "bootstrap path was not exact").toBe(true);
+      expect(
+        bootstrapUrl.search === "" && bootstrapUrl.hash === "",
+        "bootstrap request URL contained query or fragment data",
+      ).toBe(true);
+      expect(bootstrapRequest.headers()["content-type"]).toContain("application/x-www-form-urlencoded");
+
+      const formBody = new URLSearchParams(bootstrapRequest.postData() ?? "");
+      expect([...formBody.keys()]).toEqual(["intent"]);
+      const intent = formBody.get("intent");
+      expect(intent, "bootstrap POST body omitted its one-time intent").toBeTruthy();
+      intents.push(intent!);
+      observedBearers.push(intent!);
+
+      expect(
+        capabilityResponses.length,
+        "each handoff click must mint exactly one fresh preview capability",
+      ).toBe(1);
+      const capabilityResponse = capabilityResponses[0];
+      expect(
+        capabilityResponse.ok(),
+        `capability mint returned ${capabilityResponse.status()}`,
+      ).toBe(true);
+      const capabilityRequestUrl = new URL(capabilityResponse.request().url());
+      expect(capabilityRequestUrl.pathname.endsWith(capabilityPathSuffix)).toBe(true);
+      expect(capabilityRequestUrl.search).toBe("");
+      expect(capabilityRequestUrl.hash).toBe("");
+      expect(capabilityResponse.request().postDataJSON()).toEqual({
+        port: 8000,
+        target_path: "/",
+        transport: "path",
+      });
+      expect(capabilityResponse.headers()["cache-control"]).toContain("no-store");
+      const capability = (await capabilityResponse.json()) as {
+        bootstrap_url: string;
+        bootstrap_intent: string;
+      };
+      expect(
+        capability.bootstrap_intent === intent,
+        "capability response and bootstrap form used different intents",
+      ).toBe(true);
+      expect(
+        capability.bootstrap_url === bootstrapRequest.url(),
+        "minted bootstrap URL did not match submitted form action",
+      ).toBe(true);
+      const capabilityBootstrapUrl = new URL(capability.bootstrap_url);
+      expect(capabilityBootstrapUrl.pathname === bootstrapPath, "minted bootstrap path was not exact").toBe(true);
+      expect(
+        capabilityBootstrapUrl.search === "" && capabilityBootstrapUrl.hash === "",
+        "minted bootstrap URL contained query or fragment data",
+      ).toBe(true);
+      const applicationHostname = new URL(page.url()).hostname;
+      if (applicationHostname === "localhost") {
+        expect(
+          capabilityBootstrapUrl.hostname === "127.0.0.1",
+          "local path bootstrap did not alternate from localhost to 127.0.0.1",
+        ).toBe(true);
+      } else if (applicationHostname === "127.0.0.1") {
+        expect(
+          capabilityBootstrapUrl.hostname === "localhost",
+          "local path bootstrap did not alternate from 127.0.0.1 to localhost",
+        ).toBe(true);
+      } else {
+        expect(
+          capabilityBootstrapUrl.hostname.startsWith(`p2-${compactCid}-8000.`),
+          "remote path bootstrap did not use the versioned p2 isolated origin",
+        ).toBe(true);
+      }
+      expect(capabilityBootstrapUrl.origin).not.toBe(new URL(page.url()).origin);
+
+      const finalUrl = new URL(popup.url());
+      expect(
+        finalUrl.pathname === `${ISOLATED_PREVIEW_PREFIX}/${cid}/`,
+        "popup did not reach the exact signed preview target",
+      ).toBe(true);
+      expect(
+        finalUrl.search === "" && finalUrl.hash === "",
+        "final popup URL contained query or fragment data",
+      ).toBe(true);
+      expect(finalUrl.origin).toBe(capabilityBootstrapUrl.origin);
+      expect(popup.url().includes(intent!), "bearer leaked into final popup URL").toBe(false);
+      expect(
+        bootstrapRequest.url().includes(intent!),
+        "bearer leaked into bootstrap request URL",
+      ).toBe(false);
+      expect(await page.locator('input[name="intent"]').count()).toBe(0);
+      expect(await page.locator("[data-app-url]").count()).toBe(0);
+      expect(
+        (await page.content()).includes(intent!),
+        "bearer remained in application DOM",
+      ).toBe(false);
+      const credentialStatus = await popup.evaluate(async () => {
+        const response = await fetch("/api/auth/pairing-token", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        return response.status;
+      });
+      expect(
+        credentialStatus,
+        "generated preview origin reached a credential endpoint",
+      ).toBe(403);
+      const requestsFromPopup = popupNetworkRequests.filter((request) =>
+        requestBelongsToPage(request, popup),
+      );
+      expect(requestsFromPopup.length).toBeGreaterThan(0);
+      for (const request of requestsFromPopup) {
+        const requestUrl = new URL(request.url());
+        expect(request.url().includes(intent!), "bearer leaked into popup request URL").toBe(false);
+        expect(requestUrl.searchParams.has("intent")).toBe(false);
+      }
+
+      // Reload proves the persisted cookie reaches the clean final target;
+      // the one-time bearer is absent from address-bar and history-visible URLs.
+      await popup.reload();
+      await assertRenderedDocument(popup, marker);
+      expect(popup.url().includes(intent!), "bearer leaked into reloaded popup URL").toBe(false);
+      if (click === 0) {
+        await popup.locator("#nested-link").click();
+        await expect(popup.locator("body")).toContainText(NESTED_MARKER, {
+          timeout: 60_000,
+        });
+        expect(popup.url().includes(intent!), "bearer leaked into nested-route URL").toBe(false);
+        expect(
+          new URL(popup.url()).pathname === `${ISOLATED_PREVIEW_PREFIX}/${cid}/docs/` &&
+            new URL(popup.url()).search === "?view=full" &&
+            new URL(popup.url()).hash === "#nested",
+          "popup did not reach the expected nested route",
+        ).toBe(true);
+      }
+    } finally {
+      context.off("response", onResponse);
+      context.off("request", onRequest);
+      await popup.close();
+    }
   }
+
+  expect(intents.length).toBe(2);
+  expect(
+    intents[1] !== intents[0],
+    "separate handoff clicks reused a one-time intent",
+  ).toBe(true);
 }
 
 async function assertBuildIframe(
@@ -297,7 +546,10 @@ async function assertBuildIframe(
 ): Promise<string[]> {
   const responses: string[] = [];
   const listener = (response: { url(): string; ok(): boolean }) => {
-    if (response.url().includes(`/conversations/${cid}/preview-app/`) && response.ok()) {
+    if (
+      response.url().includes(`${ISOLATED_PREVIEW_PREFIX}/${cid}/`) &&
+      response.ok()
+    ) {
       responses.push(response.url());
     }
   };
@@ -375,12 +627,13 @@ test("Build and Agent open the selected multi-file manifest across restart and r
 
   const consoleErrors: string[] = [];
   const failedPreviewRequests: string[] = [];
+  const previewBearers: string[] = [];
   const observe = (candidate: Page) => {
     candidate.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
     candidate.on("requestfailed", (failed) => {
-      if (failed.url().includes("/preview-app/")) {
+      if (failed.url().includes(`${ISOLATED_PREVIEW_PREFIX}/`)) {
         failedPreviewRequests.push(`${failed.url()}: ${failed.failure()?.errorText ?? "unknown"}`);
       }
     });
@@ -398,8 +651,8 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     const buildFirstVerifier = verifierEvidence(buildFirst.events);
     expect(selectedApp(buildFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(buildFirst.events, await inspectTrace(request, buildCid));
-    await assertApiGraph(request, buildCid, FIRST_MARKER);
-    await openFromHandoff(context, page, buildCid, FIRST_MARKER);
+    await assertApiGraph(request, buildCid, FIRST_MARKER, previewBearers);
+    await openFromHandoff(context, page, buildCid, FIRST_MARKER, previewBearers);
     const iframeResponses = await assertBuildIframe(page, buildCid, FIRST_MARKER);
 
     const agentPage = await context.newPage();
@@ -410,17 +663,17 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     const agentFirstVerifier = verifierEvidence(agentFirst.events);
     expect(selectedApp(agentFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(agentFirst.events, await inspectTrace(request, agentCid));
-    await assertApiGraph(request, agentCid, FIRST_MARKER);
-    await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER);
+    await assertApiGraph(request, agentCid, FIRST_MARKER, previewBearers);
+    await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER, previewBearers);
 
     await restartReliabilityStack();
     await waitForStack(request);
-    await assertApiGraph(request, buildCid, FIRST_MARKER);
-    await assertApiGraph(request, agentCid, FIRST_MARKER);
+    await assertApiGraph(request, buildCid, FIRST_MARKER, previewBearers);
+    await assertApiGraph(request, agentCid, FIRST_MARKER, previewBearers);
     await page.reload();
-    await openFromHandoff(context, page, buildCid, FIRST_MARKER);
+    await openFromHandoff(context, page, buildCid, FIRST_MARKER, previewBearers);
     await agentPage.reload();
-    await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER);
+    await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER, previewBearers);
 
     const beforeRevision = Math.max(0, ...buildFirst.events.map((event) => event.seq ?? 0));
     const revise = await authenticatedMutation(
@@ -445,17 +698,27 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     expect(selectedApp(buildSecond.events)?.path).toBe(RELEASE_ENTRY);
     expect(buildSecond.version).toBeGreaterThan(buildFirst.version);
     assertNoThrash(buildSecond.events, await inspectTrace(request, buildCid));
-    await assertApiGraph(request, buildCid, SECOND_MARKER);
-    const current = await (await request.get(`${AGENT_API}/conversations/${buildCid}/preview-app/`)).text();
-    expect(current).toContain(`<title>${RELEASE_TITLE}</title>`);
-    expect(current).not.toContain(FIRST_MARKER);
-    await assertApiGraph(request, buildCid, FIRST_MARKER, buildFirst.version);
-    await openFromHandoff(context, page, buildCid, SECOND_MARKER);
+    await assertApiGraph(request, buildCid, SECOND_MARKER, previewBearers, undefined, FIRST_MARKER);
+    await assertApiGraph(
+      request,
+      buildCid,
+      FIRST_MARKER,
+      previewBearers,
+      buildFirst.version,
+      SECOND_MARKER,
+    );
+    await openFromHandoff(context, page, buildCid, SECOND_MARKER, previewBearers);
 
-    expect(consoleErrors, `browser console errors: ${JSON.stringify(consoleErrors)}`).toEqual([]);
+    const safeConsoleErrors = consoleErrors.map((message) =>
+      redactPreviewBearers(message, previewBearers),
+    );
+    const safeFailedPreviewRequests = failedPreviewRequests.map((message) =>
+      redactPreviewBearers(message, previewBearers),
+    );
+    expect(safeConsoleErrors, `browser console errors: ${JSON.stringify(safeConsoleErrors)}`).toEqual([]);
     expect(
-      failedPreviewRequests,
-      `failed preview requests: ${JSON.stringify(failedPreviewRequests)}`,
+      safeFailedPreviewRequests,
+      `failed preview requests: ${JSON.stringify(safeFailedPreviewRequests)}`,
     ).toEqual([]);
 
     const evidence = {
@@ -477,8 +740,8 @@ test("Build and Agent open the selected multi-file manifest across restart and r
         verifier: agentFirstVerifier,
       },
       iframe_responses: iframeResponses,
-      console_errors: consoleErrors,
-      failed_preview_requests: failedPreviewRequests,
+      console_errors: safeConsoleErrors,
+      failed_preview_requests: safeFailedPreviewRequests,
     };
     fs.writeFileSync(
       testInfo.outputPath("preview-manifest-assets-evidence.json"),

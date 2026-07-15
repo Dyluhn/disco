@@ -28,6 +28,7 @@ from ..migration import migrate_event
 from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
+from .preview_redemptions import PreviewRedemptionStore
 from .sqlite_schedules import ScheduleStore
 
 if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
@@ -125,6 +126,17 @@ CREATE TABLE IF NOT EXISTS share_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_share_tokens_conv
     ON share_tokens (conversation_id);
+CREATE TABLE IF NOT EXISTS preview_redemptions (
+    -- Short-lived preview intents are bearer credentials delivered only in a
+    -- form POST body. Registration at mint + this durable consumed_at fence
+    -- makes exchange atomic across restarts, processes, and worker replicas
+    -- sharing the deployment database.
+    jti         TEXT PRIMARY KEY,
+    expires_at  INTEGER NOT NULL,
+    consumed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_preview_redemptions_expiry
+    ON preview_redemptions (expires_at);
 CREATE TABLE IF NOT EXISTS schedules (
     -- RP-08: cron-style recurring agent runs. One row per user-created schedule.
     -- `rrule` stores a cron expression (cronsim-parseable, 5-field standard cron).
@@ -326,6 +338,7 @@ class SqliteEventStore(_ClosableSqliteStore):
         self._conn.commit()
         self._schedules = ScheduleStore(self._conn)
         self._write_lock = asyncio.Lock()
+        self._preview_redemptions = PreviewRedemptionStore(self._conn)
         # conversation_id -> set of live subscriber queues.
         self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
             defaultdict(set)
@@ -337,6 +350,12 @@ class SqliteEventStore(_ClosableSqliteStore):
         # only; a late joiner simply misses in-flight deltas and gets the final
         # persisted ActionEvent instead.
         self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
+
+    def register_preview_intent(self, jti: str, expires_at: int) -> None:
+        self._preview_redemptions.register(jti, expires_at)
+
+    def consume_preview_intent(self, jti: str, *, now: int) -> bool:
+        return self._preview_redemptions.consume(jti, now=now)
 
     # ---- conversation metadata (extends the protocol; used by app-server) ----
 

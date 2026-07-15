@@ -21,13 +21,14 @@ const {
   restoreWorkspaceVersionMock: vi.fn(),
   showToastMock: vi.fn(),
   pathPreviewBootstrapUrlMock: vi.fn((cid: string, targetPath: string) =>
-    Promise.resolve(
-      `http://localhost:8000/__disco/path-preview-auth/${cid}?target=${encodeURIComponent(targetPath)}`,
-    ),
+    Promise.resolve({
+      url: `http://localhost:8000/__disco/path-preview-auth/${cid}`,
+      intent: `intent-${encodeURIComponent(targetPath)}`,
+    }),
   ),
   // Version-history tests never exercise a live dev-server capability. Keep that
   // unrelated async effect pending so no state commit can outlive a sync assertion.
-  previewBootstrapUrlMock: vi.fn(() => new Promise<string | null>(() => {})),
+  previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   useWorkspaceVersionsMock: vi.fn(),
 }));
@@ -50,6 +51,7 @@ vi.mock("@/api/client", async () => {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
     previewHostUrl: () => "http://preview.test",
+    livePathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
     pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
     previewBootstrapUrl: previewBootstrapUrlMock,
   };
@@ -141,9 +143,10 @@ beforeEach(() => {
     refetch: refetchVersionsMock,
   });
   pathPreviewBootstrapUrlMock.mockImplementation((cid: string, targetPath: string) =>
-    Promise.resolve(
-      `http://localhost:8000/__disco/path-preview-auth/${cid}?target=${encodeURIComponent(targetPath)}`,
-    ),
+    Promise.resolve({
+      url: `http://localhost:8000/__disco/path-preview-auth/${cid}`,
+      intent: `intent-${encodeURIComponent(targetPath)}`,
+    }),
   );
 });
 
@@ -188,15 +191,28 @@ describe("PreviewPane version history picker", () => {
     expect(screen.getByRole("button", { name: /back to live/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /roll back to this version/i })).toBeInTheDocument();
     const frame = await screen.findByTitle("Historical preview");
-    expect(frame).toHaveAttribute(
-      "src",
-      "http://localhost:8000/__disco/path-preview-auth/conv_versions?target=%2F%3Fversion%3D2%26r%3D0",
-    );
-    expect(frame.getAttribute("src")).not.toContain("agent.test");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-popups");
+    expect(frame).not.toHaveAttribute("src");
     expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
       "conv_versions",
       "/?version=2&r=0",
     );
+  });
+
+  it("mints a fresh one-use launch when the same historical version is revisited", async () => {
+    const user = userEvent.setup();
+    renderPane();
+
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(getVersionLabel(2, "finished app"));
+    await screen.findByTitle("Historical preview");
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /back to live/i }));
+    await user.click(screen.getByRole("button", { name: /version history/i }));
+    await user.click(getVersionLabel(2, "finished app"));
+    await screen.findByTitle("Historical preview");
+    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(2));
   });
 
   it("fails closed instead of loading a historical version on the authenticated origin", async () => {

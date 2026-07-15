@@ -54,6 +54,8 @@ import { ClarifyPanel } from "@/components/build/ClarifyPanel";
 import { QuestionsV2Panel } from "@/components/build/QuestionsV2Panel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
+import { openFreshPreview } from "@/lib/previewLaunch";
+import { useToast } from "@/components/toastApi";
 
 /** This surface backs two framings of the SAME agent machinery: "build" (software)
  * and "agent" (general tasks). Only presentational strings differ; everything else
@@ -111,6 +113,7 @@ export function BuildSurface({
   seedContext?: string | null;
 } = {}) {
   const b = useBuild(resumeCid, framing, seedTask, seedContext);
+  const toast = useToast();
   const copy = FRAMING[framing];
   const [draft, setDraft] = useState("");
 
@@ -152,43 +155,6 @@ export function BuildSurface({
   );
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
-  const [handoffPreview, setHandoffPreview] = useState<{
-    cid: string;
-    deliverableId: string;
-    url: string;
-  } | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setHandoffPreview(null);
-    if (
-      b.status !== "FINISHED" ||
-      !b.cid ||
-      deliverable?.kind !== "app"
-    ) {
-      return;
-    }
-    const cid = b.cid;
-    const deliverableId = deliverable.id;
-    void pathPreviewBootstrapUrl(cid, "/")
-      .then((url) => {
-        if (!cancelled && url) setHandoffPreview({ cid, deliverableId, url });
-      })
-      .catch(() => {
-        // H083: executable handoffs fail closed. Never substitute the
-        // authenticated /preview-app/ path when capability minting fails.
-        if (!cancelled) setHandoffPreview(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [b.cid, b.status, deliverable?.id, deliverable?.kind]);
-  const handoffOpenUrl =
-    b.cid &&
-    deliverable?.kind === "app" &&
-    handoffPreview?.cid === b.cid &&
-    handoffPreview.deliverableId === deliverable.id
-      ? handoffPreview.url
-      : null;
   const [elementMention, setElementMention] = useState<ElementMentionPayload | null>(null);
   // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
   // sentinel. The H1 must read the PROJECT, never the literal sentinel — and
@@ -643,10 +609,23 @@ export function BuildSurface({
           <DeliverablePanel
             deliverable={b.status === "FINISHED" ? deliverable : null}
             cid={b.cid}
-            appUrl={handoffOpenUrl}
             onOpen={
-              handoffOpenUrl
-                ? () => window.open(handoffOpenUrl, "_blank", "noopener,noreferrer")
+              b.status === "FINISHED" && b.cid && deliverable?.kind === "app"
+                ? () =>
+                    openFreshPreview(
+                      () => pathPreviewBootstrapUrl(b.cid!, "/"),
+                      (reason) =>
+                        toast.show({
+                          title:
+                            reason === "popup_blocked"
+                              ? "Preview popup blocked"
+                              : "Couldn’t open preview",
+                          body:
+                            reason === "popup_blocked"
+                              ? "Allow popups for this site, then try again."
+                              : "Isolated preview access could not be established. Try again.",
+                        }),
+                    )
                 : undefined
             }
             onDownload={() => b.cid && download.mutate(b.cid)}

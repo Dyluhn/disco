@@ -11,7 +11,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { StrictMode, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { FilesPane } from "@/components/build/canvas/FilesPane";
@@ -28,10 +28,16 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 const { useBuildPreviewMock, pathPreviewBootstrapUrlMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
   useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
   pathPreviewBootstrapUrlMock: vi.fn((cid: string) =>
-    Promise.resolve(`http://localhost:8000/__disco/path-preview-auth/${cid}`),
+    Promise.resolve({
+      url: `http://localhost:8000/__disco/path-preview-auth/${cid}`,
+      intent: `path-intent-${cid}`,
+    }),
   ),
   previewBootstrapUrlMock: vi.fn((cid: string, port: number) =>
-    Promise.resolve(`http://${cid}-${port}.localhost:8000/__disco/preview-auth?signed=1`),
+    Promise.resolve({
+      url: `http://${cid}-${port}.localhost:8000/__disco/preview-auth`,
+      intent: `host-intent-${cid}-${port}`,
+    }),
   ),
 }));
 
@@ -48,6 +54,7 @@ vi.mock("@/api/client", async () => {
   return {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
+    livePathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
     pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
     previewBootstrapUrl: previewBootstrapUrlMock,
   };
@@ -59,21 +66,29 @@ describe("previewHostUrl (DC-01)", () => {
   });
 
   it("extracts cid8 and maps 127.0.0.1 to .localhost", () => {
-    expect(previewHostUrl("conv_abcdef123456", 8000, "http://127.0.0.1:8000")).toBe("http://abcdef12-8000.localhost:8000");
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://127.0.0.1:8000")).toBe("http://p2-abcdef12-8000.localhost:8000");
   });
 
   it("extracts cid8 and maps localhost to .localhost", () => {
-    expect(previewHostUrl("conv_abcdef123456", 5173, "http://localhost:8000")).toBe("http://abcdef12-5173.localhost:8000");
+    expect(previewHostUrl("conv_abcdef123456", 5173, "http://localhost:8000")).toBe("http://p2-abcdef12-5173.localhost:8000");
   });
 
   it("prepends cid8-port to other hostnames", () => {
-    expect(previewHostUrl("conv_11112222", 8000, "http://my-magic-dns.net")).toBe("http://11112222-8000.my-magic-dns.net");
-    expect(previewHostUrl("conv_11112222", 8000, "https://my-magic-dns.net:443")).toBe("https://11112222-8000.my-magic-dns.net");
+    expect(previewHostUrl("conv_11112222", 8000, "http://my-magic-dns.net")).toBe("http://p2-11112222-8000.my-magic-dns.net");
+    expect(previewHostUrl("conv_11112222", 8000, "https://my-magic-dns.net:443")).toBe("https://p2-11112222-8000.my-magic-dns.net");
+  });
+
+  it("maps IPv6 loopback and fails closed on bare remote IPs", () => {
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://[::1]:8000")).toBe(
+      "http://p2-abcdef12-8000.localhost:8000",
+    );
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://192.0.2.10:8000")).toBeNull();
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://[2001:db8::1]:8000")).toBeNull();
   });
 
   it("drops a relative API prefix from the wildcard preview origin", () => {
     const expected = new URL("/", window.location.origin);
-    expected.hostname = "abcdef12-8000.localhost";
+    expected.hostname = "p2-abcdef12-8000.localhost";
     expect(previewHostUrl("conv_abcdef123456", 8000, "/svc/agent")).toBe(
       expected.toString().replace(/\/+$/, ""),
     );
@@ -109,13 +124,16 @@ function appDeliverable(path: string): AgentEvent {
 const HTML = fileWrite("index.html", "<html><body><h1>Done</h1></body></html>");
 const NOTE = fileWrite("notes.txt", "no html here");
 
-function unresolvedCapability(): Promise<string | null> {
+function unresolvedCapability(): Promise<never> {
   return new Promise(() => {});
 }
 
 function enableLiveCapability() {
   previewBootstrapUrlMock.mockImplementation((cid: string, port: number) =>
-    Promise.resolve(`http://${cid}-${port}.localhost:8000/__disco/preview-auth?signed=1`),
+    Promise.resolve({
+      url: `http://${cid}-${port}.localhost:8000/__disco/preview-auth`,
+      intent: `host-intent-${cid}-${port}`,
+    }),
   );
 }
 
@@ -212,9 +230,8 @@ describe("PreviewPane — selected handoff entry", () => {
     const srcdoc = screen.getByTitle("Static preview").getAttribute("srcdoc") ?? "";
     expect(srcdoc).toContain("SELECTED RELEASE ONE");
     expect(srcdoc).not.toContain("STALE ROOT MUST NEVER OPEN");
-    expect(srcdoc).toContain(
-      '<base href="http://agent.test:8000/conversations/conv_selected_entry/preview-app/">',
-    );
+    expect(srcdoc).not.toContain("<base ");
+    expect(srcdoc).not.toContain("/preview-app/");
   });
 
   it("loads a finished trusted multi-file site from the isolated static origin", async () => {
@@ -246,10 +263,7 @@ describe("PreviewPane — selected handoff entry", () => {
 
     await waitFor(() => {
       const frame = screen.getByTitle("Static preview");
-      expect(frame).toHaveAttribute(
-        "src",
-        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4selected",
-      );
+      expect(frame).not.toHaveAttribute("src");
       expect(frame).not.toHaveAttribute("srcdoc");
       expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
     });
@@ -295,14 +309,101 @@ describe("PreviewPane — selected handoff entry", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTitle("Static preview")).toHaveAttribute(
-        "src",
-        "http://localhost:8000/__disco/path-preview-auth/conv_a1b2c3d4shell",
-      );
+      expect(screen.getByTitle("Static preview")).not.toHaveAttribute("src");
     });
     expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
     expect(screen.queryByTitle("Artifact preview")).not.toBeInTheDocument();
     expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith("conv_a1b2c3d4shell", "/");
+  });
+
+  it("does not mint unused live capabilities while the committed preview is authoritative", async () => {
+    previewBootstrapUrlMock.mockClear();
+    pathPreviewBootstrapUrlMock.mockClear();
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+        ports: [
+          {
+            port: 8000,
+            owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+          },
+        ],
+      } as PreviewInfo,
+    });
+    render(
+      withClient(
+        <StrictMode>
+          <PreviewPane
+            events={[
+              appDeliverable("release/index.html"),
+              {
+                id: "version-authoritative",
+                kind: "workspace_version",
+                version_seq: 1,
+                tree_digest: "authoritative-tree",
+                trigger: "finish",
+              } as AgentEvent,
+            ]}
+            status="FINISHED"
+            cid="conv_a1b2c3d4authoritative"
+          />
+        </StrictMode>,
+      ),
+    );
+
+    await waitFor(() =>
+      expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "conv_a1b2c3d4authoritative",
+        "/",
+      ),
+    );
+    expect(previewBootstrapUrlMock).not.toHaveBeenCalled();
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("remints the committed launch after switching live and back", async () => {
+    enableLiveCapability();
+    pathPreviewBootstrapUrlMock.mockClear();
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+        ports: [
+          {
+            port: 8000,
+            owner: { pid: 6161, cmdline: "python -m http.server 8000", session: "preview" },
+          },
+        ],
+      } as PreviewInfo,
+    });
+    render(
+      withClient(
+        <PreviewPane
+          events={[
+            HTML,
+            appDeliverable("index.html"),
+            {
+              id: "version-remount",
+              kind: "workspace_version",
+              version_seq: 1,
+              tree_digest: "remount-tree",
+              trigger: "finish",
+            } as AgentEvent,
+          ]}
+          status="FINISHED"
+          cid="conv_remount"
+        />,
+      ),
+    );
+    await screen.findByTitle("Static preview");
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /live server/i }));
+    await screen.findByTitle("Live preview");
+    fireEvent.click(screen.getByRole("button", { name: /rendered/i }));
+    await screen.findByTitle("Static preview");
+    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledTimes(2));
   });
 
   it("never gives an untrusted imported site the isolated executable origin", () => {
@@ -357,7 +458,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     expect(screen.queryByTitle("Static preview")).not.toBeInTheDocument();
     // The header is the live-server header, not the preview header.
     expect(screen.getByText("live server")).toBeInTheDocument();
-    await screen.findByRole("link", { name: /open in new tab/i });
+    await screen.findByRole("button", { name: /open in new tab/i });
   });
 
   it("defaults to RENDERED for plain static HTML even when a proxy is available (2026-07-07 walkthrough)", async () => {
@@ -384,7 +485,31 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     const liveButton = screen.getByRole("button", { name: /live/i });
     expect(liveButton).toBeInTheDocument();
     fireEvent.click(liveButton);
-    await screen.findByRole("link", { name: /open in new tab/i });
+    await screen.findByRole("button", { name: /open in new tab/i });
+  });
+
+  it("remints the live launch after toggling rendered and back", async () => {
+    enableLiveCapability();
+    previewBootstrapUrlMock.mockClear();
+    useBuildPreviewMock.mockReturnValue({
+      data: {
+        available: true,
+        owner: { pid: 5151, cmdline: "python -m http.server 8000", session: "preview" },
+        ports: [
+          { port: 8000, owner: { pid: 5151, cmdline: "python -m http.server 8000", session: "preview" } },
+        ],
+      } as PreviewInfo,
+    });
+    render(withClient(<PreviewPane events={[HTML]} status="RUNNING" cid="conv_live_remount" />));
+
+    fireEvent.click(screen.getByRole("button", { name: /live server/i }));
+    await screen.findByTitle("Live preview");
+    expect(previewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /rendered/i }));
+    await screen.findByTitle("Static preview");
+    fireEvent.click(screen.getByRole("button", { name: /live server/i }));
+    await screen.findByTitle("Live preview");
+    await waitFor(() => expect(previewBootstrapUrlMock).toHaveBeenCalledTimes(2));
   });
 });
 
@@ -414,20 +539,29 @@ describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
         <ExecutionCanvas events={[BUNDLER_HTML]} status="RUNNING" cid="conv_e2e3firefox" />,
       ),
     );
-    // The visible escape hatch is the isolated bootstrap URL, never the
-    // authenticated agent-server path that ultimately serves the content.
-    const link = await screen.findByRole("link", { name: /open in new tab/i });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute(
-      "href",
-      "http://localhost:8000/__disco/path-preview-auth/conv_e2e3firefox",
+    const popup = { opener: window, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    const submissions: Array<{ action: string; target: string }> = [];
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+      submissions.push({ action: this.action, target: this.target });
+    });
+    const button = await screen.findByRole("button", { name: /open in new tab/i });
+    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "conv_e2e3firefox",
+        expect.stringMatching(/^\/\?r=\d+$/),
+      ),
     );
-    expect(link.getAttribute("href")).not.toContain("agent.test");
-    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith(
-      "conv_e2e3firefox",
-      expect.stringMatching(/^\/\?r=\d+$/),
+    await waitFor(() =>
+      expect(submissions).toContainEqual({
+        action: "http://localhost:8000/__disco/path-preview-auth/conv_e2e3firefox",
+        target: expect.stringMatching(/^disco-preview-popup-/),
+      }),
     );
+    expect(open).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^disco-preview-popup-/));
+    expect(popup.opener).toBeNull();
   });
 
   it("fails closed when the isolated path capability cannot be created", async () => {
@@ -447,9 +581,11 @@ describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
         <ExecutionCanvas events={[BUNDLER_HTML]} status="RUNNING" cid="conv_e2e3failclosed" />,
       ),
     );
-
+    const popup = { opener: window, close: vi.fn() };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    fireEvent.click(await screen.findByRole("button", { name: /open in new tab/i }));
     await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalled());
-    expect(screen.queryByRole("link", { name: /open in new tab/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(popup.close).toHaveBeenCalled());
     expect(document.body.innerHTML).not.toContain(
       "/conversations/conv_e2e3failclosed/preview-app/",
     );

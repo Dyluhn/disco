@@ -4,20 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json as _json
 import logging
 import mimetypes
-import secrets
+import re
 import urllib.parse
 from pathlib import PurePosixPath
+from typing import Literal
 
 import httpx
 import websockets
 from disco.core import ConversationStatus, DeliverableEvent, StatusEvent, WorkspaceVersionEvent
 from disco.core.auth import (
+    ISOLATED_PATH_PREVIEW_PREFIX,
+    MAX_PREVIEW_TARGET_PATH_CHARS,
     PATH_PREVIEW_BOOTSTRAP_PATH,
+    PATH_PREVIEW_ISOLATION_COOKIE,
+    PREVIEW_APP_HTTP_METHODS,
     PREVIEW_BOOTSTRAP_PATH,
+    SESSION_COOKIE,
     PreviewCapabilitySigner,
+    SessionSigner,
+    origin_matches_request_host,
     path_preview_cookie_name,
     preview_ttl_s,
 )
@@ -27,9 +36,16 @@ from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..auth import current_session, websocket_session
+from ..preview_bootstrap import (
+    MAX_PREVIEW_REDEMPTION_BODY_BYTES,
+    cross_site_iframe_headers,
+    parse_preview_redemption,
+    preview_navigation_document,
+    preview_redemption_content_type,
+)
 from ..preview_inject import inject_element_mention_picker, inject_selection_agent
 from ..runtime import ConversationRuntime
 from ._common import (
@@ -42,7 +58,25 @@ _LOG = logging.getLogger(__name__)
 
 class PreviewCapabilityBody(BaseModel):
     port: int = PREVIEW_PORT
-    target_path: str = "/"
+    target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
+    transport: Literal["host", "path", "path_live"] = "host"
+
+
+_ENCODED_PREVIEW_STRUCTURAL = re.compile(r"%([0-9a-fA-F]{2})")
+
+
+def _safe_capability_target_path(raw: str) -> str | None:
+    """Reject URL encodings browsers may reinterpret as path structure."""
+
+    matched_escapes = set(_ENCODED_PREVIEW_STRUCTURAL.finditer(raw))
+    for match in matched_escapes:
+        if chr(int(match.group(1), 16)) in {".", "/", "\\", "\x00", "%"}:
+            return None
+    # A stray '%' is browser-dependent and cannot be signed canonically.
+    without_escapes = _ENCODED_PREVIEW_STRUCTURAL.sub("", raw)
+    if "%" in without_escapes:
+        return None
+    return _safe_preview_path(raw, allow_leading_slash=True)
 
 
 def _safe_preview_path(raw: str, *, allow_leading_slash: bool) -> str | None:
@@ -137,6 +171,63 @@ def _finished_snapshot_is_committed(events: list) -> bool:  # noqa: ANN001
         isinstance(event, WorkspaceVersionEvent) and (event.seq or -1) > status_seq
         for event in events
     )
+
+
+def _preview_websocket_origin_allowed(
+    origin: str | None,
+    host: str | None,
+    *,
+    websocket_scheme: str,
+    forwarded_proto: str | None = None,
+) -> bool:
+    forwarded_proto = (forwarded_proto or "").split(",", 1)[0].strip().lower()
+    websocket_scheme = websocket_scheme.lower()
+    expected_origin_scheme = {"ws": "http", "wss": "https"}.get(
+        websocket_scheme, websocket_scheme
+    )
+    if forwarded_proto in {"http", "https"}:
+        expected_origin_scheme = forwarded_proto
+    try:
+        origin_scheme = urllib.parse.urlsplit(origin or "").scheme.lower()
+    except ValueError:
+        origin_scheme = ""
+    return origin_matches_request_host(origin, host) and origin_scheme == expected_origin_scheme
+
+
+async def _path_preview_websocket_capability_owner(
+    websocket: WebSocket,
+    store: SqliteEventStore,
+    conversation_id: str,
+) -> tuple[str | None, str]:
+    """Authenticate an isolated path-live HMR socket without an app session."""
+
+    if not _preview_websocket_origin_allowed(
+        websocket.headers.get("origin"),
+        websocket.headers.get("host"),
+        websocket_scheme=websocket.url.scheme,
+        forwarded_proto=websocket.headers.get("x-forwarded-proto"),
+    ):
+        return None, "preview origin required"
+    cid8 = conversation_id.removeprefix("conv_")[:8]
+    try:
+        cookie_name = path_preview_cookie_name(cid8)
+    except ValueError:
+        return None, "preview capability required"
+    cap = PreviewCapabilitySigner().verify(
+        websocket.cookies.get(cookie_name),
+        cid8=cid8,
+        port=PREVIEW_PORT,
+        method="WEBSOCKET",
+        path=websocket.url.path,
+    )
+    if cap is None or cap.conversation_id != conversation_id:
+        return None, "preview capability required"
+    owner_id = await store.conversation_owner_id(conversation_id)
+    if owner_id is None:
+        return None, "conversation not found"
+    if owner_id != cap.owner_id:
+        return None, "conversation forbidden"
+    return owner_id, ""
 
 
 def _forwarded_preview_query(request: Request) -> str:
@@ -241,13 +332,22 @@ async def _close_ws(websocket: WebSocket, code: int, reason: str) -> None:
         await websocket.close(code=code, reason=reason)
 
 
-def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) -> str:
+def _preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
     url = request.url
     hostname = url.hostname or "localhost"
-    if hostname in {"127.0.0.1", "localhost"}:
-        preview_host = f"{cid8}-{port}.localhost"
+    if hostname in {"127.0.0.1", "::1", "localhost"}:
+        preview_host = f"p2-{cid8}-{port}.localhost"
     else:
-        preview_host = f"{cid8}-{port}.{hostname}"
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            preview_host = f"p2-{cid8}-{port}.{hostname}"
+        else:
+            # A label prefixed to a bare LAN/tailnet IP is not DNS. Returning
+            # that URL would consume a one-time intent into an unreachable host.
+            raise HTTPException(
+                status_code=409, detail={"reason": "preview_wildcard_dns_required"}
+            )
     netloc = preview_host
     if url.port is not None:
         netloc = f"{preview_host}:{url.port}"
@@ -257,11 +357,10 @@ def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) 
     # mixed content (codex front-door defect #2, 2026-07-09).
     fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
-    query = urllib.parse.urlencode({"intent": intent})
-    return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, ""))
+    return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", "", ""))
 
 
-def _path_preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) -> str:
+def _path_preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
     """Return a Firefox-safe isolated origin for committed static previews."""
     url = request.url
     hostname = url.hostname or "localhost"
@@ -270,50 +369,23 @@ def _path_preview_bootstrap_url(request: Request, cid8: str, port: int, intent: 
     elif hostname == "localhost":
         preview_host = "127.0.0.1"
     else:
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            raise HTTPException(
+                status_code=409, detail={"reason": "preview_wildcard_dns_required"}
+            )
         # Remote front doors already route this capability-gated wildcard host
         # to the agent server. HostPreviewProxyMiddleware passes the dedicated
         # static path routes through instead of treating them as a live port.
-        preview_host = f"{cid8}-{port}.{hostname}"
+        preview_host = f"p2-{cid8}-{port}.{hostname}"
     netloc = preview_host if url.port is None else f"{preview_host}:{url.port}"
     fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
-    query = urllib.parse.urlencode({"intent": intent})
     path = f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
-    return urllib.parse.urlunparse((scheme, netloc, path, "", query, ""))
-
-
-def _locked_preview_navigation(destination: str) -> Response:
-    """Return a script-only document that starts a fresh navigation on this origin."""
-    nonce = secrets.token_urlsafe(18)
-    safe_destination_json = (
-        _json.dumps(destination)
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
-    document = (
-        '<!doctype html><html><head><meta charset="utf-8">'
-        '<meta name="referrer" content="no-referrer">'
-        "<title>Opening isolated preview</title></head><body>"
-        f'<script nonce="{nonce}">window.location.replace({safe_destination_json})</script>'
-        "<noscript>JavaScript is required to open this isolated preview.</noscript>"
-        "</body></html>"
-    )
-    return Response(
-        document,
-        status_code=200,
-        media_type="text/html",
-        headers={
-            "content-security-policy": (
-                "default-src 'none'; "
-                f"script-src 'nonce-{nonce}'; "
-                "base-uri 'none'; form-action 'none'; frame-ancestors *"
-            ),
-            "x-content-type-options": "nosniff",
-            "referrer-policy": "no-referrer",
-            "cache-control": "no-store",
-        },
-    )
+    return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
 
 
 async def _wake_for_preview(
@@ -344,7 +416,11 @@ async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_
             subprotocols = [Subprotocol(p.strip()) for p in proto.split(",") if p.strip()]
 
     try:
-        ws_client = await websockets.connect(target_url, subprotocols=subprotocols)
+        if subprotocols:
+            ws_client = await websockets.connect(target_url, subprotocols=subprotocols)
+        else:
+            # websockets 16 turns [] into an invalid empty protocol header.
+            ws_client = await websockets.connect(target_url)
     except Exception as exc:  # noqa: BLE001 — failed upgrade should close, not 500
         _LOG.warning("preview websocket upstream connect error: %s", exc)
         await _close_ws(websocket, 1011, "preview upstream unreachable")
@@ -395,62 +471,121 @@ async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_
 
 
 def _register_preview_capability_route(router: APIRouter, store: SqliteEventStore) -> None:
-    cap_signer = PreviewCapabilitySigner()
+    cap_signer = PreviewCapabilitySigner(redemption_store=store)
 
     @router.post("/conversations/{conversation_id}/preview/capability")
     async def preview_capability(
         conversation_id: str,
         body: PreviewCapabilityBody,
         request: Request,
-    ) -> dict:
+    ) -> Response:
         if body.port not in USER_PORTS:
             raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
+        if body.transport in {"path", "path_live"} and body.port != PREVIEW_PORT:
+            raise HTTPException(status_code=400, detail={"reason": "path_preview_port"})
         session = current_session(request)
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         cid8 = conversation_id.removeprefix("conv_")[:8]
         target = body.target_path if body.target_path.startswith("/") else f"/{body.target_path}"
-        intent = cap_signer.mint_intent(
-            session=session,
-            conversation_id=conversation_id,
-            port=body.port,
-            target_path=target,
-        )
-        bootstrap = _preview_bootstrap_url(request, cid8, body.port, intent)
         target_parts = urllib.parse.urlsplit(target)
         if target_parts.scheme or target_parts.netloc or target_parts.fragment:
             raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
-        safe_target = _safe_preview_path(target_parts.path, allow_leading_slash=True)
+        safe_target = _safe_capability_target_path(target_parts.path)
         if safe_target is None:
             raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
-        path_prefix = f"/conversations/{conversation_id}/preview-app/"
-        path_target = f"{path_prefix}{safe_target}"
-        if target_parts.query:
-            path_target = f"{path_target}?{target_parts.query}"
-        path_bootstrap = None
-        if body.port == PREVIEW_PORT:
-            path_intent = cap_signer.mint_intent(
+
+        if body.transport == "host":
+            reserved_host_target = (
+                target_parts.path == PREVIEW_BOOTSTRAP_PATH
+                or target_parts.path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
+                or (
+                    target_parts.path.startswith("/conversations/")
+                    and "/preview-app/" in target_parts.path
+                )
+            )
+            if reserved_host_target:
+                raise HTTPException(
+                    status_code=400, detail={"reason": "reserved_preview_path"}
+                )
+            # Construct/validate the isolated origin before registering a JTI.
+            # Invalid bare-IP deployments therefore leave no unusable intent.
+            bootstrap = _preview_bootstrap_url(request, cid8, body.port)
+            intent = cap_signer.mint_intent(
+                session=session,
+                conversation_id=conversation_id,
+                port=body.port,
+                target_path=target,
+                allow_websocket=True,
+                http_methods=PREVIEW_APP_HTTP_METHODS,
+            )
+        else:
+            path_prefix = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/"
+            path_target = f"{path_prefix}{safe_target}"
+            if target_parts.query:
+                path_target = f"{path_target}?{target_parts.query}"
+            if len(path_target) > MAX_PREVIEW_TARGET_PATH_CHARS:
+                raise HTTPException(
+                    status_code=400, detail={"reason": "preview_target_too_long"}
+                )
+            bootstrap = _path_preview_bootstrap_url(request, cid8, body.port)
+            intent = cap_signer.mint_intent(
                 session=session,
                 conversation_id=conversation_id,
                 port=body.port,
                 target_path=path_target,
                 path_prefix=path_prefix,
+                allow_websocket=body.transport == "path_live",
             )
-            path_bootstrap = _path_preview_bootstrap_url(request, cid8, body.port, path_intent)
-        return {
-            "bootstrap_url": bootstrap,
-            "path_bootstrap_url": path_bootstrap,
-            "target_path": target,
-            "port": body.port,
-        }
 
-    @router.get(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}")
+        return JSONResponse(
+            {
+                "bootstrap_url": bootstrap,
+                "bootstrap_intent": intent,
+                "target_path": target,
+                "port": body.port,
+                "transport": body.transport,
+            },
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
+    @router.post(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}")
     async def path_preview_bootstrap(cid8: str, request: Request) -> Response:
         if len(cid8) != 8 or any(ch not in "0123456789abcdef" for ch in cid8.lower()):
             return Response("invalid preview target", status_code=403, media_type="text/plain")
-        minted = cap_signer.mint_cookie_from_intent(request.query_params.get("intent", ""))
-        if minted is None:
+        if not preview_redemption_content_type(request.headers.get("content-type")):
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
-        token, target = minted
+        if SessionSigner().verify(request.cookies.get(SESSION_COOKIE)) is not None:
+            # A generated-content origin must never transition from a full app
+            # session into preview mode. Use the other isolated loopback host or
+            # the versioned remote wildcard instead.
+            return Response("isolated preview session required", status_code=403)
+        declared_length = request.headers.get("content-length")
+        if declared_length:
+            try:
+                if int(declared_length) > MAX_PREVIEW_REDEMPTION_BODY_BYTES:
+                    return Response("invalid preview intent", status_code=403)
+            except ValueError:
+                return Response("invalid preview intent", status_code=403)
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > MAX_PREVIEW_REDEMPTION_BODY_BYTES:
+                return Response("invalid preview intent", status_code=403)
+            chunks.append(chunk)
+        parsed = parse_preview_redemption(b"".join(chunks))
+        if parsed is None:
+            return Response("invalid preview intent", status_code=403, media_type="text/plain")
+        intent = parsed
+        redeemed = cap_signer.redeem_intent(
+            intent,
+            cid8=cid8,
+            port=PREVIEW_PORT,
+            path_scope="static",
+        )
+        if redeemed is None:
+            return Response("invalid preview intent", status_code=403, media_type="text/plain")
+        token, target = redeemed
         target_path = target.split("?", 1)[0]
         cap = cap_signer.verify(
             token,
@@ -460,45 +595,30 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             path=target_path,
         )
         expected_prefix = (
-            f"/conversations/{cap.conversation_id}/preview-app/" if cap is not None else ""
+            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/"
+            if cap is not None
+            else ""
         )
         if cap is None or not target_path.startswith(expected_prefix):
             return Response(
                 "preview intent scope mismatch", status_code=403, media_type="text/plain"
             )
-        # H084: a Strict cookie set by the first 127.0.0.1 -> localhost iframe
-        # response is not reliably accepted at all; merely replacing a 303 with
-        # a 200 document is insufficient. Land on the isolated origin first
-        # without setting a cookie. Its script then redeems the same short-lived
-        # signed intent through a second, now same-site document. Only that
-        # response installs the narrow capability before navigating to target.
-        stage = request.query_params.get("stage")
-        if stage is None:
-            redeem_query = urllib.parse.urlencode(
-                {"intent": request.query_params.get("intent", ""), "stage": "redeem"}
-            )
-            redeem_target = f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}?{redeem_query}"
-            return _locked_preview_navigation(redeem_target)
-        if stage != "redeem":
-            return Response("invalid preview stage", status_code=403, media_type="text/plain")
 
-        response = _locked_preview_navigation(target)
-        cross_site_iframe = (
-            request.headers.get("sec-fetch-dest", "").strip().lower() == "iframe"
-            and request.headers.get("sec-fetch-site", "").strip().lower() == "cross-site"
-        )
+        document, navigation_headers = preview_navigation_document(target)
+        response = Response(document, status_code=200, headers=navigation_headers)
         cookie_name = path_preview_cookie_name(cid8)
-        if cross_site_iframe:
-            # H086: SameSite is evaluated against the top-level site for an
-            # embedded navigation. Firefox therefore continues to reject a
-            # Strict localhost cookie while the parent is 127.0.0.1, even on
-            # this second localhost document. CHIPS is the narrow exception:
-            # a Secure, partitioned, exact-path capability is usable only under
-            # this top-level site and cannot become a general third-party token.
+        if cross_site_iframe_headers(dict(request.headers)):
+            # H086/H110: this is the actual form-navigation request, so its
+            # browser-generated fetch metadata truthfully selects iframe posture.
             response.headers.append(
                 "set-cookie",
                 f"{cookie_name}={token}; Max-Age={preview_ttl_s()}; "
                 f"Path={expected_prefix}; HttpOnly; Secure; SameSite=None; Partitioned",
+            )
+            response.headers.append(
+                "set-cookie",
+                f"{PATH_PREVIEW_ISOLATION_COOKIE}=1; "
+                "Path=/; HttpOnly; Secure; SameSite=None; Partitioned",
             )
         else:
             forwarded_scheme = (
@@ -512,6 +632,14 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 secure=forwarded_scheme == "https" or request.url.scheme == "https",
                 samesite="strict",
                 path=expected_prefix,
+            )
+            response.set_cookie(
+                PATH_PREVIEW_ISOLATION_COOKIE,
+                "1",
+                httponly=True,
+                secure=forwarded_scheme == "https" or request.url.scheme == "https",
+                samesite="strict",
+                path="/",
             )
         return response
 
@@ -812,6 +940,8 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
 
     @router.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @router.get("/conversations/{conversation_id}/preview-app/")
+    @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/{{path:path}}")
+    @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/")
     # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
     # WALK-10: now wakes suspended sandboxes via wake_for_preview — fixes the Open button
     # and the PreviewPane "Open in new tab" link that returned 503 after sandbox auto-suspend.
@@ -948,6 +1078,8 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
 
     @router.websocket("/conversations/{conversation_id}/preview-app/{path:path}")
     @router.websocket("/conversations/{conversation_id}/preview-app/")
+    @router.websocket(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/{{path:path}}")
+    @router.websocket(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/")
     async def preview_app_websocket(
         websocket: WebSocket,
         conversation_id: str,
@@ -956,18 +1088,24 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
         """Proxy live preview WebSockets (Vite HMR) through the path preview URL."""
         session = websocket_session(websocket)
         if session is None:
-            await _close_ws(websocket, 1008, "auth required")
-            return
-        try:
-            conversation_id = await require_owned_conversation_for_owner(
-                store,
-                conversation_id,
-                session.owner_id,
-                owner_bypass=session.session_id == "test-session",
+            owner_id, capability_error = await _path_preview_websocket_capability_owner(
+                websocket, store, conversation_id
             )
-        except HTTPException:
-            await _close_ws(websocket, 1008, "conversation forbidden")
-            return
+            if owner_id is None:
+                await _close_ws(websocket, 1008, capability_error)
+                return
+        else:
+            try:
+                conversation_id = await require_owned_conversation_for_owner(
+                    store,
+                    conversation_id,
+                    session.owner_id,
+                    owner_bypass=session.session_id == "test-session",
+                )
+            except HTTPException:
+                await _close_ws(websocket, 1008, "conversation forbidden")
+                return
+            owner_id = session.owner_id
         if runtime is None:
             await _close_ws(websocket, 1008, "preview not available")
             return
@@ -975,7 +1113,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             await _close_ws(websocket, 1008, "historical previews are static")
             return
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=session.owner_id)
+        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=owner_id)
         if upstream is None:
             await _close_ws(websocket, 1008, "preview not available")
             return

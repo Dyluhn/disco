@@ -55,11 +55,9 @@ def _agent_public(path: str, methods: set[str]) -> bool:
         return True
     if path.startswith("/api/appkit/cloudflare/"):
         return True
-    # Token-public, not anonymous access: the isolated preview origin cannot
-    # carry the application session. The route exchanges a signed one-use
-    # intent for a narrowly scoped preview cookie and rejects missing/invalid
-    # intents. Its capability enforcement is asserted explicitly below.
-    if "GET" in methods and path == f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}":
+    # The isolated form navigation exchanges one signed, durable one-use intent
+    # from its POST body. There is no public GET stage or URL bearer transport.
+    if "POST" in methods and path == f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}":
         return True
     return False
 
@@ -75,7 +73,10 @@ def _app_public(path: str) -> bool:
 
 
 def _agent_capability_or_session(path: str, methods: set[str]) -> bool:
-    return "GET" in methods and path.startswith("/conversations/{conversation_id}/preview-app/")
+    return "GET" in methods and (
+        path.startswith("/conversations/{conversation_id}/preview-app/")
+        or path.startswith("/__disco/isolated-preview/{conversation_id}/")
+    )
 
 
 def _route_class(path: str, methods: set[str]) -> str:
@@ -212,15 +213,18 @@ def test_agent_route_inventory_actual_enforcement(monkeypatch) -> None:
     raw_prefix = owner_b.get("/conversations/abcdef12/preview-app/")
     assert raw_prefix.status_code == 404
 
-    # Public in the session inventory does not mean open: without a valid
-    # signed intent, the alternate-origin bootstrap must fail closed and must
-    # not set either an app session or preview capability cookie.
-    invalid_bootstrap = unauth.get(
-        f"{PATH_PREVIEW_BOOTSTRAP_PATH}/deadbeef", follow_redirects=False
+    # No public GET stage exists. The form-only POST rejects missing/invalid
+    # signed input without setting an app session or preview cookie.
+    bootstrap = unauth.get(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/deadbeef")
+    assert bootstrap.status_code == 401
+    assert "set-cookie" not in bootstrap.headers
+    invalid_redemption = unauth.post(
+        f"{PATH_PREVIEW_BOOTSTRAP_PATH}/deadbeef",
+        data={"intent": "invalid"},
     )
-    assert invalid_bootstrap.status_code == 403
-    assert "location" not in invalid_bootstrap.headers
-    assert "set-cookie" not in invalid_bootstrap.headers
+    assert invalid_redemption.status_code == 403
+    assert "location" not in invalid_redemption.headers
+    assert "set-cookie" not in invalid_redemption.headers
 
 
 def test_agent_websocket_inventory_has_handshake_auth() -> None:

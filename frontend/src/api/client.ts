@@ -97,10 +97,19 @@ export function previewHostUrl(cid: string, port: number, base: string = AGENT_B
   // Relative (same-origin) bases resolve against the page's own origin — the
   // front-door nginx forwards {cid8}-{port}.* Hosts to the agent-server.
   const url = new URL(base, globalThis.location?.origin ?? "http://localhost");
-  if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
-    url.hostname = `${cid8}-${port}.localhost`;
+  if (
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "localhost" ||
+    url.hostname === "::1" ||
+    url.hostname === "[::1]"
+  ) {
+    url.hostname = `p2-${cid8}-${port}.localhost`;
+  } else if (url.hostname.includes(":") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(url.hostname)) {
+    // Prefixing a label to a bare LAN/tailnet IP does not create a resolvable
+    // wildcard host. Live capability minting reports the same deployment error.
+    return null;
   } else {
-    url.hostname = `${cid8}-${port}.${url.hostname}`;
+    url.hostname = `p2-${cid8}-${port}.${url.hostname}`;
   }
   // The wildcard host is itself the preview transport. An API base may be a
   // same-origin prefix such as `/svc/agent`, but carrying that prefix onto the
@@ -145,18 +154,37 @@ export async function apiFetch(pathOrUrl: string, init: RequestInit = {}): Promi
   return authFetch(BASE, pathOrUrl, init);
 }
 
+type PreviewCapabilityResponse = {
+  bootstrap_url: string;
+  bootstrap_intent: string;
+};
+
+export type PreviewLaunch = { url: string; intent: string };
+
+function mintPreviewCapability(
+  cid: string,
+  port: number,
+  targetPath: string,
+  transport: "host" | "path" | "path_live",
+) {
+  return agentSend<PreviewCapabilityResponse>(
+    "POST",
+    `/conversations/${encodeURIComponent(cid)}/preview/capability`,
+    { port, target_path: targetPath, transport },
+  );
+}
+
 export async function previewBootstrapUrl(
   cid: string,
   port: number,
   targetPath = "/",
-): Promise<string | null> {
-  if (!agentLive()) return previewHostUrl(cid, port);
-  const result = await agentSend<{ bootstrap_url: string }>(
-    "POST",
-    `/conversations/${encodeURIComponent(cid)}/preview/capability`,
-    { port, target_path: targetPath },
-  );
-  return result.bootstrap_url;
+): Promise<PreviewLaunch | null> {
+  if (!agentLive()) {
+    const url = previewHostUrl(cid, port);
+    return url ? { url, intent: "" } : null;
+  }
+  const result = await mintPreviewCapability(cid, port, targetPath, "host");
+  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
 }
 
 /** Capability-gated preview-app URL on an origin isolated from the app session.
@@ -165,14 +193,21 @@ export async function previewBootstrapUrl(
 export async function pathPreviewBootstrapUrl(
   cid: string,
   targetPath = "/",
-): Promise<string | null> {
+): Promise<PreviewLaunch | null> {
   if (!agentLive()) return null;
-  const result = await agentSend<{ path_bootstrap_url: string }>(
-    "POST",
-    `/conversations/${encodeURIComponent(cid)}/preview/capability`,
-    { port: 8000, target_path: targetPath },
-  );
-  return result.path_bootstrap_url;
+  const result = await mintPreviewCapability(cid, 8000, targetPath, "path");
+  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
+}
+
+/** Firefox-safe path transport for a live server, with an explicit signed HMR
+ * websocket claim. Static and historical path launches intentionally omit it. */
+export async function livePathPreviewBootstrapUrl(
+  cid: string,
+  targetPath = "/",
+): Promise<PreviewLaunch | null> {
+  if (!agentLive()) return null;
+  const result = await mintPreviewCapability(cid, 8000, targetPath, "path_live");
+  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
 }
 
 /** An API error that carries the real backend message (surfaced to the UI). */

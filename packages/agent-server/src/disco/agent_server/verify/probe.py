@@ -58,8 +58,8 @@ async def validate_app_deliverables(
 
     If it has a deployment/preview URL, that URL must be 2xx + non-empty. If it has
     NO URL (a static site served via the client-assembled preview), probe the LIVE
-    PREVIEW the user actually sees (the ``/preview-app/`` proxy), so declared-but-
-    empty output fails the same way it did before this extraction.
+    PREVIEW the user actually sees through its isolated path capability, so
+    declared-but-empty output fails the same way it did before this extraction.
     """
     problems: list[str] = []
     for target in app_probe_targets(deliverables):

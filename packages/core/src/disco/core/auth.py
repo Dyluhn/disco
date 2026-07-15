@@ -15,7 +15,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol
 
 from .env import disco_env
 from .store.sqlite import DEFAULT_OWNER_ID
@@ -25,10 +25,15 @@ CSRF_HEADER = "X-Disco-CSRF"
 PREVIEW_COOKIE = "disco_preview_cap"
 PREVIEW_BOOTSTRAP_PATH = "/__disco/preview-auth"
 PATH_PREVIEW_BOOTSTRAP_PATH = "/__disco/path-preview-auth"
+ISOLATED_PATH_PREVIEW_PREFIX = "/__disco/isolated-preview"
+PATH_PREVIEW_ISOLATION_COOKIE = "disco_path_preview_isolated"
 
 _DEFAULT_SESSION_TTL_S = 12 * 60 * 60
 _DEFAULT_PREVIEW_TTL_S = 15 * 60
 _DEFAULT_INTENT_TTL_S = 30
+MAX_PREVIEW_TARGET_PATH_CHARS = 4096
+PREVIEW_APP_HTTP_METHODS = ("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")
+_PREVIEW_HTTP_METHODS = frozenset(PREVIEW_APP_HTTP_METHODS)
 _DEV_SECRET = secrets.token_urlsafe(48)
 _DEFAULT_ALLOWED_ORIGINS = (
     "http://localhost",
@@ -61,9 +66,18 @@ class PreviewCapability:
     owner_id: str
     conversation_id: str
     port: int
-    method: str
+    http_methods: tuple[str, ...]
     path_prefix: str
     expires_at: int
+    allow_websocket: bool = False
+
+
+class PreviewIntentRedemptionStore(Protocol):
+    """Durable atomic replay fence shared by server restarts and workers."""
+
+    def register_preview_intent(self, jti: str, expires_at: int) -> None: ...
+
+    def consume_preview_intent(self, jti: str, *, now: int) -> bool: ...
 
 
 def path_preview_cookie_name(cid8: str) -> str:
@@ -124,19 +138,73 @@ def origin_permitted(origin: str | None, request_host: str | None = None) -> boo
     return origin_allowed(origin) or origin_matches_request_host(origin, request_host)
 
 
+def _origin_hostname(origin: str | None) -> str:
+    if not origin:
+        return ""
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(origin.strip().rstrip("/")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _request_hostname(request_host: str | None) -> str:
+    if not request_host:
+        return ""
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(f"//{request_host.strip()}").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _is_local_preview_hostname(hostname: str) -> bool:
+    """Whether a hostname can be used by the local path-preview transport.
+
+    Browsers accept the complete IPv4 loopback block, not only 127.0.0.1.  Keep
+    this predicate deliberately broader than the two aliases generated today so
+    a preview cannot escape its HostOnly quarantine cookie through another 127/8
+    spelling or a DNS name aimed at the privileged service.
+    """
+
+    normalized = hostname.rstrip(".")
+    return (
+        normalized == "localhost"
+        or normalized == "::1"
+        or normalized == "127"
+        or normalized.startswith("127.")
+    )
+
+
+def local_preview_origin_crosses_host(
+    origin: str | None, request_host: str | None
+) -> bool:
+    """Reject a local-preview browser origin targeting another hostname.
+
+    Path previews deliberately alternate ``localhost`` and ``127.0.0.1`` to get
+    an isolated browser origin. Cookies are HostOnly, while CORS historically
+    permits both aliases. Without this pre-auth check, generated JavaScript on
+    the alternate alias can target the operator's original alias, regain its
+    full session cookie, and reach public credential grants or owner/admin APIs.
+
+    Different ports on the *same* hostname remain valid for the normal split
+    frontend/server development layout. A local preview origin targeting any
+    different hostname (including a DNS name resolving to loopback) is denied.
+    """
+
+    origin_hostname = _origin_hostname(origin)
+    if not _is_local_preview_hostname(origin_hostname):
+        return False
+    return origin_hostname != _request_hostname(request_host)
+
+
 _LOCALHOST_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _is_localhost_origin(origin: str | None) -> bool:
-    if not origin:
-        return False
-    from urllib.parse import urlsplit
-
-    try:
-        hostname = urlsplit(origin.strip().rstrip("/")).hostname or ""
-    except ValueError:
-        return False
-    return hostname.lower() in _LOCALHOST_HOSTNAMES
+    return _origin_hostname(origin).rstrip(".") in _LOCALHOST_HOSTNAMES
 
 
 _LOOPBACK_BINDS = ("", "127.0.0.1", "localhost", "::1")
@@ -412,8 +480,13 @@ class SessionSigner:
 
 
 class PreviewCapabilitySigner:
-    def __init__(self, codec: SignedTokenCodec | None = None) -> None:
+    def __init__(
+        self,
+        codec: SignedTokenCodec | None = None,
+        redemption_store: PreviewIntentRedemptionStore | None = None,
+    ) -> None:
         self._codec = codec or SignedTokenCodec()
+        self._redemption_store = redemption_store
 
     def mint_intent(
         self,
@@ -423,35 +496,87 @@ class PreviewCapabilitySigner:
         port: int,
         target_path: str = "/",
         path_prefix: str = "/",
+        allow_websocket: bool = False,
+        http_methods: tuple[str, ...] = ("GET",),
     ) -> str:
         target = target_path if target_path.startswith("/") else f"/{target_path}"
         prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+        if len(target) > MAX_PREVIEW_TARGET_PATH_CHARS:
+            raise ValueError("preview target path is too long")
         if not target.split("?", 1)[0].startswith(prefix):
             raise ValueError("preview target must be inside its capability prefix")
+        methods = tuple(dict.fromkeys(method.upper() for method in http_methods))
+        if not methods or any(method not in _PREVIEW_HTTP_METHODS for method in methods):
+            raise ValueError("invalid preview HTTP method scope")
         now = int(time.time())
-        return self._codec.sign(
+        store = self._redemption_store
+        if store is None:
+            raise RuntimeError("preview intent minting requires a durable redemption store")
+        jti = secrets.token_urlsafe(18)
+        expires_at = now + intent_ttl_s()
+        token = self._codec.sign(
             {
                 "v": 1,
                 "kind": "preview_intent",
                 "owner": session.owner_id,
                 "cid": conversation_id,
                 "port": int(port),
-                "method": "WEBSOCKET" if target_path.startswith("ws:") else "GET",
+                "methods": list(methods),
                 "prefix": prefix,
                 "target": target,
-                "jti": secrets.token_urlsafe(18),
-                "exp": now + intent_ttl_s(),
+                "ws": bool(allow_websocket),
+                "jti": jti,
+                "exp": expires_at,
             }
         )
+        store.register_preview_intent(jti, expires_at)
+        return token
 
-    def mint_cookie_from_intent(self, intent: str) -> tuple[str, str] | None:
-        payload = self._codec.unsign(intent)
-        if payload is None or payload.get("kind") != "preview_intent":
+    def redeem_intent(
+        self,
+        intent: str,
+        *,
+        cid8: str,
+        port: int,
+        path_scope: Literal["host", "static"],
+    ) -> tuple[str, str] | None:
+        """Validate an endpoint-specific intent, then atomically exchange it once."""
+
+        intent_payload = self._codec.unsign(intent)
+        if intent_payload is None or intent_payload.get("kind") != "preview_intent":
             return None
-        cap = self._cap_from_payload(payload, kind="preview_intent")
-        target = payload.get("target")
-        if cap is None or not isinstance(target, str) or not target.startswith("/"):
+        cap = self._cap_from_payload(intent_payload, kind="preview_intent")
+        target = intent_payload.get("target")
+        expected_prefix = (
+            "/"
+            if path_scope == "host"
+            else f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/"
+            if cap is not None
+            else ""
+        )
+        target_path = target.split("?", 1)[0] if isinstance(target, str) else ""
+        if (
+            cap is None
+            or cap.conversation_id.removeprefix("conv_")[:8] != cid8
+            or cap.port != int(port)
+            or not isinstance(target, str)
+            or not target.startswith("/")
+            or cap.path_prefix != expected_prefix
+            or not target_path.startswith(expected_prefix)
+        ):
             return None
+        if not self._consume_intent(intent_payload):
+            return None
+        return self._mint_cookie(cap, target)
+
+    def _consume_intent(self, payload: dict[str, Any]) -> bool:
+        store = self._redemption_store
+        jti = payload.get("jti")
+        if store is None or not isinstance(jti, str) or not jti:
+            return False
+        return store.consume_preview_intent(jti, now=int(time.time()))
+
+    def _mint_cookie(self, cap: PreviewCapability, target: str) -> tuple[str, str]:
         token = self._codec.sign(
             {
                 "v": 1,
@@ -459,8 +584,9 @@ class PreviewCapabilitySigner:
                 "owner": cap.owner_id,
                 "cid": cap.conversation_id,
                 "port": cap.port,
-                "method": cap.method,
+                "methods": list(cap.http_methods),
                 "prefix": cap.path_prefix,
+                "ws": cap.allow_websocket,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
@@ -481,7 +607,11 @@ class PreviewCapabilitySigner:
             return None
         if cap.conversation_id.removeprefix("conv_")[:8] != cid8:
             return None
-        if cap.port != int(port) or cap.method != method.upper():
+        requested_method = method.upper()
+        method_allowed = requested_method in cap.http_methods or (
+            requested_method == "WEBSOCKET" and cap.allow_websocket
+        )
+        if cap.port != int(port) or not method_allowed:
             return None
         if not path.startswith(cap.path_prefix):
             return None
@@ -494,13 +624,40 @@ class PreviewCapabilitySigner:
         owner = payload.get("owner")
         cid = payload.get("cid")
         port = payload.get("port")
-        method = payload.get("method")
+        methods = payload.get("methods")
         prefix = payload.get("prefix")
         exp = payload.get("exp")
+        allow_websocket = payload.get("ws", False)
         if not isinstance(owner, str) or not isinstance(cid, str):
             return None
-        if not isinstance(method, str) or not isinstance(prefix, str):
+        if not isinstance(prefix, str):
             return None
         if not isinstance(port, int) or not isinstance(exp, int):
             return None
-        return PreviewCapability(owner, cid, port, method.upper(), prefix, exp)
+        if not isinstance(allow_websocket, bool):
+            return None
+        # Short-lived pre-upgrade GET-only cookies remain readable during a
+        # rolling deploy, but newly minted tokens always carry the explicit,
+        # bounded method list. No legacy token can gain mutation authority.
+        if methods is None and isinstance(payload.get("method"), str):
+            methods = [payload["method"]]
+        if (
+            not isinstance(methods, list)
+            or not methods
+            or not all(isinstance(method, str) for method in methods)
+        ):
+            return None
+        normalized_methods = tuple(dict.fromkeys(method.upper() for method in methods))
+        if len(normalized_methods) != len(methods) or any(
+            method not in _PREVIEW_HTTP_METHODS for method in normalized_methods
+        ):
+            return None
+        return PreviewCapability(
+            owner,
+            cid,
+            port,
+            normalized_methods,
+            prefix,
+            exp,
+            allow_websocket=allow_websocket,
+        )

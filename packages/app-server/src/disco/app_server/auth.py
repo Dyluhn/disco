@@ -11,10 +11,12 @@ from typing import Any
 
 from disco.core.auth import (
     CSRF_HEADER,
+    PATH_PREVIEW_ISOLATION_COOKIE,
     SESSION_COOKIE,
     AuthSession,
     SessionSigner,
     allowed_frontend_origins,
+    local_preview_origin_crosses_host,
     localhost_auto_pair_allowed,
     origin_allowed,
     origin_permitted,
@@ -100,6 +102,15 @@ def _is_public_http(path: str, method: str) -> bool:
 
 def _is_admin_path(path: str) -> bool:
     return any(path == prefix or path.startswith(prefix + "/") for prefix in _ADMIN_PREFIXES)
+
+
+def _private_no_store(response: Response) -> Response:
+    for header in ("expires", "etag", "last-modified"):
+        if header in response.headers:
+            del response.headers[header]
+    response.headers["cache-control"] = "private, no-store"
+    response.headers["pragma"] = "no-cache"
+    return response
 
 
 def current_session(request: Request) -> AuthSession:
@@ -194,6 +205,19 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
         method = request.method.upper()
+        if local_preview_origin_crosses_host(
+            request.headers.get("origin"), request.headers.get("host")
+        ):
+            # Generated content on the alternate loopback alias must not regain
+            # the operator's HostOnly session on the original alias. Keep this
+            # before public session/pairing/mint routes; ports may differ, hosts
+            # may not.
+            return _private_no_store(Response("forbidden preview origin", status_code=403))
+        if request.cookies.get(PATH_PREVIEW_ISOLATION_COOKIE) == "1":
+            # App-server has no generated-content route. A marked path-preview
+            # origin is therefore quarantined from every App API, including
+            # public credential grants and administrator settings.
+            return _private_no_store(Response("isolated preview route required", status_code=403))
         if _is_public_http(path, method):
             return await call_next(request)
         origin = request.headers.get("origin")

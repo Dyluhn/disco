@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from disco.core.loop import HostVerificationDeliverable
 from disco.tools.builtin.verify_app import (
     VerifyWebAppArgs,
@@ -74,7 +75,7 @@ class HostWebAppVerifier:
         if client is None:  # caller guards; keep the method total for the checker
             return self._unavailable_verdict(deliverable, "no client")
         url = deliverable.deployment_url or (
-            f"/conversations/{deliverable.conversation_id}/preview-app/"
+            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{deliverable.conversation_id}/"
         )
         if deliverable.deployment_url:
             fetched = await client.fetch_app(deliverable.deployment_url)

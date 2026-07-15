@@ -1,4 +1,9 @@
-import { expect, test } from "@playwright/test";
+import {
+  expect,
+  request as playwrightRequest,
+  test,
+  type APIRequestContext,
+} from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 
@@ -18,6 +23,75 @@ const INITIAL_MARKER = "LIFECYCLE ORIGINAL";
 const REVISED_MARKER = "LIFECYCLE REVISED";
 const STEER_MARKER = "STEER WAS APPLIED";
 const FINAL_MARKER = "POST ROLLBACK CONTINUATION";
+const ISOLATED_PREVIEW_PREFIX = "/__disco/isolated-preview";
+
+// Preview redemption bodies contain a one-time bearer. Keep them out of
+// retained failure traces and compare bearer-sensitive values as booleans.
+test.use({ trace: "off" });
+
+async function isolatedPreviewText(
+  request: APIRequestContext,
+  cid: string,
+  version?: number,
+): Promise<string> {
+  const targetPath = version === undefined ? "/" : `/?version=${version}`;
+  const mint = await authenticatedMutation(
+    request,
+    `${AGENT_API}/conversations/${cid}/preview/capability`,
+    {
+      data: { port: 8000, target_path: targetPath, transport: "path" },
+      timeout: 30_000,
+    },
+  );
+  expect(mint.ok(), `preview capability mint returned ${mint.status()}`).toBe(true);
+  expect(mint.headers()["cache-control"]).toContain("no-store");
+  const capability = (await mint.json()) as {
+    bootstrap_url: string;
+    bootstrap_intent: string;
+    target_path: string;
+    transport: string;
+  };
+  expect(capability.target_path).toBe(targetPath);
+  expect(capability.transport).toBe("path");
+  expect(
+    typeof capability.bootstrap_intent === "string" && capability.bootstrap_intent.length > 0,
+    "path capability response omitted its one-time intent",
+  ).toBe(true);
+  const bootstrapUrl = new URL(capability.bootstrap_url);
+  expect(
+    bootstrapUrl.search === "" && bootstrapUrl.hash === "",
+    "path bootstrap URL contained query or fragment data",
+  ).toBe(true);
+  expect(
+    !capability.bootstrap_url.includes(capability.bootstrap_intent),
+    "path bootstrap URL exposed its one-time intent",
+  ).toBe(true);
+
+  const isolated = await playwrightRequest.newContext();
+  try {
+    const isolatedRoot = `${bootstrapUrl.origin}${ISOLATED_PREVIEW_PREFIX}/${cid}/${
+      version === undefined ? "" : `?version=${version}`
+    }`;
+    const deniedBeforeRedemption = await isolated.get(isolatedRoot);
+    expect(deniedBeforeRedemption.status()).toBe(403);
+
+    const redemption = await isolated.post(capability.bootstrap_url, {
+      form: { intent: capability.bootstrap_intent },
+      timeout: 30_000,
+    });
+    expect(redemption.status(), "isolated body-only capability redemption failed").toBe(200);
+    expect(
+      (await redemption.text()).includes(capability.bootstrap_intent),
+      "bootstrap response reflected the one-time bearer",
+    ).toBe(false);
+
+    const preview = await isolated.get(isolatedRoot);
+    expect(preview.ok(), `isolated preview root returned ${preview.status()}`).toBe(true);
+    return await preview.text();
+  } finally {
+    await isolated.dispose();
+  }
+}
 
 async function approvePlan(page: import("@playwright/test").Page): Promise<void> {
   const approve = page.locator('[data-disco-control="approve-plan"]').first();
@@ -127,20 +201,15 @@ test("Build survives pause/close/resume, steers, exports, rolls back, then build
     );
     expect(initialVersions.versions.length, "initial finish saved no workspace version").toBeGreaterThan(0);
     expect(initialVersions.versions.some((version) => version.seq === originalSeq)).toBe(true);
-    const historical = await request.get(
-      `${AGENT_API}/conversations/${cid}/preview-app/?version=${originalSeq}`,
-    );
-    expect(historical.ok(), await historical.text()).toBe(true);
+    const historical = await isolatedPreviewText(request, cid, originalSeq!);
     expect(
-      await historical.text(),
+      historical,
       "committed finished version did not contain the completed original build",
     ).toContain(INITIAL_MARKER);
 
     // Prove rendered preview and backend live/static preview agree.
     await page.getByRole("tab", { name: /preview/i }).first().click();
-    const previewResponse = await request.get(`${AGENT_API}/conversations/${cid}/preview-app/`);
-    expect(previewResponse.ok(), await previewResponse.text()).toBe(true);
-    expect(await previewResponse.text()).toContain(INITIAL_MARKER);
+    expect(await isolatedPreviewText(request, cid)).toContain(INITIAL_MARKER);
     const previewBody = page.frameLocator("iframe").first().locator("body");
     await expect(previewBody).toContainText(INITIAL_MARKER, { timeout: 120_000 });
 
@@ -171,7 +240,7 @@ test("Build survives pause/close/resume, steers, exports, rolls back, then build
     // plan reaches the real approval gate, then approve it as the user.
     await approvePlan(page);
     await waitForStatus(request, cid, new Set(["FINISHED", "VERIFIED"]), 900_000);
-    let live = await (await request.get(`${AGENT_API}/conversations/${cid}/preview-app/`)).text();
+    let live = await isolatedPreviewText(request, cid);
     expect(live).toContain(REVISED_MARKER);
     expect(live).toContain(STEER_MARKER);
 
@@ -195,7 +264,7 @@ test("Build survives pause/close/resume, steers, exports, rolls back, then build
         .filter({ hasText: `Rolled back to v${originalSeq}` })
         .first(),
     ).toContainText(`Rolled back to v${originalSeq}`, { timeout: 60_000 });
-    live = await (await request.get(`${AGENT_API}/conversations/${cid}/preview-app/`)).text();
+    live = await isolatedPreviewText(request, cid);
     expect(live).toContain(INITIAL_MARKER);
     expect(live).not.toContain(REVISED_MARKER);
 
@@ -209,7 +278,7 @@ test("Build survives pause/close/resume, steers, exports, rolls back, then build
     await postRollback.press("Enter");
     await approvePlan(page);
     await waitForStatus(request, cid, new Set(["FINISHED", "VERIFIED"]), 900_000);
-    live = await (await request.get(`${AGENT_API}/conversations/${cid}/preview-app/`)).text();
+    live = await isolatedPreviewText(request, cid);
     expect(live).toContain(INITIAL_MARKER);
     expect(live).toContain(FINAL_MARKER);
 

@@ -65,10 +65,11 @@ vi.mock("@/api/client", async (importOriginal) => {
       return Promise.resolve({ ok: true });
     }),
     agentHttpBase: vi.fn(() => "http://localhost:8000"),
-    previewBootstrapUrl: vi.fn((cid: string, port: number, targetPath = "/") =>
-      Promise.resolve(
-        `http://${cid.replace(/^conv_/, "").slice(0, 8)}-${port}.localhost:8000${targetPath}`,
-      ),
+    previewBootstrapUrl: vi.fn((cid: string, port: number) =>
+      Promise.resolve({
+        url: `http://${cid.replace(/^conv_/, "").slice(0, 8)}-${port}.localhost:8000/__disco/preview-auth`,
+        intent: `host-intent-${cid}-${port}`,
+      }),
     ),
   };
 });
@@ -84,6 +85,16 @@ async function enable(enabled: boolean) {
     data: { enabled },
     isLoading: false,
   });
+}
+
+function finishSignedNavigation(iframe: HTMLIFrameElement) {
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      data: "disco-preview-bootstrap-ready",
+      source: iframe.contentWindow,
+    }),
+  );
+  fireEvent.load(iframe);
 }
 
 const baseProps = { events: [] as AgentEvent[], status: "RUNNING" as const, cid: "conv_aabbccdd11223344" };
@@ -134,12 +145,17 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
       ),
     );
     const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
-    expect(iframe.src).toContain("view_only=1");
-    expect(iframe.src).toContain("aabbccdd-6080.localhost"); // single-origin proxy, not raw host:port
-    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(iframe).not.toHaveAttribute("src");
+    expect(iframe.getAttribute("sandbox")).toContain("allow-same-origin");
+    const { previewBootstrapUrl } = await import("@/api/client");
+    expect(previewBootstrapUrl).toHaveBeenCalledWith(
+      baseProps.cid,
+      6080,
+      "/vnc.html?autoconnect=1&view_only=1",
+    );
     // badge only AFTER the iframe genuinely loads (honest "actually streaming").
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
-    fireEvent.load(iframe);
+    finishSignedNavigation(iframe);
     const badge = await screen.findByTestId("live-badge");
     expect(badge).toHaveAttribute("data-streaming", "true");
     expect(badge).toHaveTextContent(/live/i);
@@ -149,7 +165,8 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     await enable(true);
     wrap(<AgentCanvas {...baseProps} />);
     const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
-    fireEvent.load(iframe);
+    await act(async () => {}); // install the signed-navigation message gate
+    finishSignedNavigation(iframe);
     await screen.findByTestId("live-badge");
 
     (agentSend as ReturnType<typeof vi.fn>).mockClear();
@@ -203,10 +220,15 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     // …but it is NOT permanently latched: the next readiness tick (~4s) retries and the
     // live view appears. This is the codex-P1 regression — a transient blip must not
     // disable auto-start forever.
-    const iframe = (await screen.findByTestId("novnc-iframe", undefined, {
+    await screen.findByTestId("novnc-iframe", undefined, {
       timeout: 16000,
-    })) as HTMLIFrameElement;
-    expect(iframe.src).toContain("view_only=1");
+    });
+    const { previewBootstrapUrl } = await import("@/api/client");
+    expect(previewBootstrapUrl).toHaveBeenCalledWith(
+      baseProps.cid,
+      6080,
+      "/vnc.html?autoconnect=1&view_only=1",
+    );
     expect(live.urlCalls).toBeGreaterThanOrEqual(2); // it genuinely retried
   }, 20000);
 

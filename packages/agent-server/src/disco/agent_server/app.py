@@ -216,6 +216,7 @@ def create_app(
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(runtime),
         require_capability=True,
+        redemption_store=store,
     )
     # EPIC O P0-3 — strip the permissive wildcard CORS from the owner-only
     # Cloudflare deploy surface. Added LAST so it is the OUTERMOST middleware and
