@@ -569,18 +569,15 @@ class Driver:
             ]
         return list(tools) + virtuals
 
-    def known_tool_names_for_requery(self) -> set[str]:
-        _kn = getattr(self._loop.executor, "known_tool_names_for_requery", None)
-        if callable(_kn):
-            known_tool_names = set(cast("Iterable[str]", _kn()))
-        else:
-            _cn = getattr(self._loop.executor, "callable_tool_names", None)
-            if callable(_cn):
-                # Duck-typed: executors exposing callable_tool_names return an
-                # iterable of tool-name strings (frozenset[str] on the real backend).
-                known_tool_names = set(cast("Iterable[str]", _cn()))
-            else:
-                known_tool_names = {t.name for t in self._loop.executor.available_tools()}
+    def _executor_callable_tool_names(self) -> set[str]:
+        _cn = getattr(self._loop.executor, "callable_tool_names", None)
+        if callable(_cn):
+            # Duck-typed: executors exposing callable_tool_names return an
+            # iterable of tool-name strings (frozenset[str] on the real backend).
+            return set(cast("Iterable[str]", _cn()))
+        return {t.name for t in self._loop.executor.available_tools()}
+
+    def _virtual_tool_names(self) -> set[str]:
         virtual_names = {
             "ask_user",
             "questions_v2",
@@ -606,8 +603,16 @@ class Driver:
             virtual_names.add(self._loop._finish_alias)
         # Include mode-scoped virtuals (planning tools) so
         # we don't requery for valid exploration turns.
-        all_known_names = known_tool_names | virtual_names | set(self._loop._planning_tools)
-        return all_known_names
+        return virtual_names | set(self._loop._planning_tools)
+
+    def known_tool_names_for_requery(self) -> set[str]:
+        _kn = getattr(self._loop.executor, "known_tool_names_for_requery", None)
+        known_tool_names = (
+            set(cast("Iterable[str]", _kn()))
+            if callable(_kn)
+            else self._executor_callable_tool_names()
+        )
+        return known_tool_names | self._virtual_tool_names()
 
     def allowed_tool_names_for_mode(
         self, mode: OperatingMode, *, available_tools: list
@@ -616,12 +621,14 @@ class Driver:
 
         Planning uses the exact execute-time gate predicate.  Other modes use
         the executor's callable (not merely advertised) names plus the loop's
-        virtual/intercepted names, which is the same complete set the invalid-
-        tool requery boundary treats as real.
+        virtual/intercepted names.  This intentionally does not use the broader
+        requery-recognition set: a strict executor may recognize registered but
+        scope-denied names so they receive one canonical denial, while inspect
+        evidence must still report that those names are not callable.
         """
         if mode == OperatingMode.PLANNING:
             return set(self.planning_allowed_tool_names(available_tools))
-        return self.known_tool_names_for_requery()
+        return self._executor_callable_tool_names() | self._virtual_tool_names()
 
     def unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
         _hint = f"ERROR: Unknown tool '{tool_name}'. Available: {sorted(list(offered_names))}"

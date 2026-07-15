@@ -85,6 +85,18 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         self._appkit_on_widen = on_widen
         super().set_widen_callback(on_widen)
 
+    def known_tool_names_for_requery(self) -> frozenset[str]:
+        """Distinguish truly unknown names from strict-scope denials.
+
+        Rung-7 may silently requery a name that does not exist.  A registered
+        tool withheld by strict AppKit is different: it must reach ``execute``
+        once so the model receives the canonical out-of-scope observation and
+        the current actionable allowlist.  This widens only the driver's
+        recognition set, never AppKit callability or execution authority.
+        """
+
+        return self.callable_tool_names() | self._registry.names()
+
     @property
     def _appkit_widened(self) -> ToolScope:
         """Backward-compatible alias for the widened AppKit scope storage."""

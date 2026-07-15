@@ -8,6 +8,7 @@ from disco.agent_server.runtime import ConversationRuntime
 from disco.core import ActionEvent, SecurityRisk, SqliteEventStore, ToolCall
 from disco.core.llm import DefaultLLMRouter, OperatingMode
 from disco.core.loop import BlastRadiusConfirm, RouterAgent
+from disco.core.loop.driver import Driver
 from disco.core.security import RuleBasedAnalyzer
 from disco.tools import AGENT_TOOLS, AppKitToolExecutor, DefaultToolExecutor
 
@@ -75,6 +76,25 @@ def test_appkit_autonomous_drops_escape_hatch() -> None:
     rt.set_autonomous("ak4", True)
     loop = _loop_for(rt, "ak4", appkit_mode=True)
     assert "request_custom_build" not in loop.executor.callable_tool_names()
+
+
+def test_appkit_execution_inspect_allowed_tools_remain_callable_only() -> None:
+    """Requery recognition must not widen DISCO_INSPECT capability evidence."""
+
+    rt = _rt()
+    loop = _loop_for(rt, "ak-inspect", appkit_mode=True)
+    loop.mode = OperatingMode.LONG_HORIZON
+    driver = Driver(loop)
+    offered = driver.tools_for_step(mode=OperatingMode.LONG_HORIZON)
+    allowed = driver.allowed_tool_names_for_mode(
+        OperatingMode.LONG_HORIZON, available_tools=offered
+    )
+
+    assert "file_write" in driver.known_tool_names_for_requery()
+    assert "file_write" not in loop.executor.callable_tool_names()
+    assert "file_write" not in allowed
+    assert "app_create" in allowed
+    assert {tool.name for tool in offered} <= allowed
 
 
 def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:

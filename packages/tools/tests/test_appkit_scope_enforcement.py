@@ -126,6 +126,21 @@ async def test_build_phase_refuses_raw_tools_by_qualified_name():
         assert raw not in ex.callable_tool_names()
 
 
+def test_strict_appkit_requery_distinguishes_scope_denied_from_truly_unknown():
+    """Registered-but-barred tools must reach the canonical executor denial.
+
+    The driver may silently requery names that do not exist at all.  It must not
+    requery a real registry tool merely because strict AppKit withholds it: doing
+    so hides the actionable out-of-scope observation and lets repeated hidden
+    repairs trip the live-thrash breaker before the model can select app_create.
+    """
+
+    ex, _ = _appkit_exec(phase=AppKitPhase.PLANNING)
+    assert "file_write" not in ex.callable_tool_names()
+    assert "file_write" in ex.known_tool_names_for_requery()
+    assert "write_file" not in ex.known_tool_names_for_requery()
+
+
 # ---- (b) the AppKit mutators + probes ARE callable in build phase ------------
 
 
