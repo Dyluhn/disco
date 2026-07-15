@@ -57,6 +57,7 @@ def test_driver_models_exposes_pricing_mode_and_honest_free(tmp_path):
     # base_factory (no on-disk disco-config.json shadowing the test fixture).
     store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
     rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
+    rt._origin_approved = lambda *_args: True
     out = rt.driver_models()
     by_id = {m["id"]: m for m in out["models"]}
 
@@ -74,3 +75,49 @@ def test_driver_models_exposes_pricing_mode_and_honest_free(tmp_path):
     # Metered paid model.
     assert by_id["or-paid"]["pricing_mode"] == "metered"
     assert by_id["or-paid"]["free"] is False
+
+
+def test_driver_models_excludes_models_the_live_router_cannot_wire(tmp_path):
+    cfg = RouterConfig(
+        models={
+            "ready": ModelEntry(
+                model_id="ready-wire",
+                provider="ready-provider",
+                context_window=8192,
+                base_url="https://ready.example/v1",
+                api_key_env="provider_ready",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+            "unapproved": ModelEntry(
+                model_id="unapproved-wire",
+                provider="unapproved-provider",
+                context_window=8192,
+                base_url="https://unapproved.example/v1",
+                api_key_env="provider_unapproved",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+            "locked": ModelEntry(
+                model_id="locked-wire",
+                provider="locked-provider",
+                context_window=8192,
+                base_url="https://locked.example/v1",
+                api_key_env="provider_locked",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+        },
+        default_model="ready",
+    )
+    _seed_probe(
+        "https://ready.example/v1",
+        "https://unapproved.example/v1",
+        "https://locked.example/v1",
+    )
+    store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
+    rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
+    rt._origin_approved = lambda url, *_args: "unapproved" not in url
+    rt._resolve_secret = lambda ref: "decrypted" if ref == "provider_ready" else None
+
+    out = rt.driver_models()
+
+    assert [model["id"] for model in out["models"]] == ["ready"]
+    assert out["default"] == "ready"

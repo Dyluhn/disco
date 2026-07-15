@@ -1468,23 +1468,21 @@ class ConversationRuntime:
         for key, m in cfg.models.items():
             if m.base_url is None or Requirement.TOOL_CALLING not in m.capabilities:
                 continue
+            # The Build picker is an execution surface, not a Settings catalogue.
+            # Models the live router cannot wire must not be selectable here.
+            if not self._origin_approved(m.base_url, f"model:{m.provider}", m.api_key_env):
+                continue
+            if not secret_ref_allowed_for_origin(m.api_key_env, m.base_url):
+                continue
+            api_key = self._resolve_secret(m.api_key_env)
+            if m.api_key_env and not api_key:
+                continue
             if m.model_id in seen:
                 continue
             seen.add(m.model_id)
             # Ground truth over declaration: prefer the live-served model name +
             # context window; fall back to the static ModelEntry on any probe miss.
-            if self._origin_approved(m.base_url, f"model:{m.provider}", m.api_key_env):
-                if secret_ref_allowed_for_origin(m.api_key_env, m.base_url):
-                    api_key = self._resolve_secret(m.api_key_env)
-                    live = (
-                        {"model_id": None, "n_ctx": None}
-                        if m.api_key_env and not api_key
-                        else _probe_live_model(m.base_url, api_key, m.model_id)
-                    )
-                else:
-                    live = {"model_id": None, "n_ctx": None}
-            else:
-                live = {"model_id": None, "n_ctx": None}
+            live = _probe_live_model(m.base_url, api_key, m.model_id)
             label = _model_label(live["model_id"] or m.model_id)
             ctx = live["n_ctx"] or m.context_window
             # W-05-fu: expose pricing_mode so the picker can tell a SUBSCRIPTION

@@ -35,6 +35,7 @@ from harness.build_soak.classify import classify, classify_run_folder
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
+    _driver_catalog_contains,
     assemble_dossier,
     classify_dossier,
     drive_scenario,
@@ -56,6 +57,21 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 _CID = "conv_fake123"
+
+
+def test_driver_catalog_requires_exact_well_formed_model_key():
+    payload = {
+        "models": [
+            {"id": "wanted", "label": "Wire label"},
+            {"id": 7},
+            "not-an-entry",
+        ]
+    }
+
+    assert _driver_catalog_contains(payload, "wanted") is True
+    assert _driver_catalog_contains(payload, "Wire label") is False
+    assert _driver_catalog_contains(payload, "7") is False
+    assert _driver_catalog_contains({"models": {}}, "wanted") is False
 
 
 def _fake_inspect_trace() -> dict[str, Any]:

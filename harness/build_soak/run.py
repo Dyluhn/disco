@@ -125,6 +125,18 @@ def load_scenarios(path: str | Path = _SCENARIOS) -> dict[str, dict[str, Any]]:
     return {str(s["id"]): s for s in loaded}
 
 
+def _driver_catalog_contains(payload: dict[str, Any], model: str) -> bool:
+    """Whether the live agent reports the exact saved key as driver-eligible."""
+
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return False
+    return any(
+        isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"] == model
+        for entry in models
+    )
+
+
 def _declared_workspace_paths(scenario: dict[str, Any]) -> list[str]:
     files = ((scenario.get("assertions") or {}).get("workspace") or {}).get("files") or []
     return [str(f["path"]) for f in files if f.get("path")]
@@ -1885,6 +1897,23 @@ async def _amain(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 3
+        if model:
+            try:
+                models_status, models_data = await inspect_transport.get_json("/models")
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[build-soak] INFRA_FAILURE: driver-model preflight failed: {exc}",
+                    file=sys.stderr,
+                )
+                return 3
+            if models_status != 200 or not _driver_catalog_contains(models_data, model):
+                print(
+                    "[build-soak] INFRA_FAILURE: requested driver model is not live and "
+                    "driver-eligible; refusing to create any conversations. Verify its signed "
+                    "origin approval, secret binding, and tool-calling capability.",
+                    file=sys.stderr,
+                )
+                return 3
 
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
