@@ -317,7 +317,7 @@ class _ContentGateMixin(_FinishGateProto):
                     stack.append((safe, depth + 1))
         return files
 
-    async def _read_deliverable_bytes(self, path: str) -> bytes | None:
+    async def _read_deliverable_bytes(self, path: str, *, strict: bool) -> bytes | None:
         """Read one deliverable file, returning None only when no host/sandbox
         read surface is available. Missing/empty files return b"" so the content
         condition fails loudly against the named file."""
@@ -329,6 +329,9 @@ class _ContentGateMixin(_FinishGateProto):
             except FileNotFoundError:
                 return b""
             except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
+                if not strict:
+                    _LOG.warning("dictated-content read failed for %s: %s", path, exc)
+                    return b""
                 raise _DictatedContentInspectionIncomplete(
                     "a declared deliverable could not be read safely"
                 ) from exc
@@ -351,11 +354,17 @@ class _ContentGateMixin(_FinishGateProto):
             if not candidate.is_file():
                 return b""
             if candidate.stat().st_size > _DICTATED_CONTENT_MAX_FILE_BYTES:
+                if not strict:
+                    _LOG.warning("dictated-content file exceeds inspection budget: %s", path)
+                    return b""
                 raise _DictatedContentInspectionIncomplete(
                     "a text deliverable exceeds the per-file inspection budget"
                 )
             return candidate.read_bytes()
         except OSError as exc:
+            if not strict:
+                _LOG.warning("dictated-content workspace read failed for %s: %s", path, exc)
+                return b""
             raise _DictatedContentInspectionIncomplete(
                 "a declared deliverable could not be read from the workspace"
             ) from exc
@@ -364,6 +373,8 @@ class _ContentGateMixin(_FinishGateProto):
         self,
         conditions: list[DictatedContentCondition],
         paths: list[str],
+        *,
+        strict: bool,
     ) -> tuple[DictatedContentCondition, list[str]] | None:
         unresolved = list(conditions)
         checked: list[str] = []
@@ -371,15 +382,20 @@ class _ContentGateMixin(_FinishGateProto):
         for path in paths:
             if posixpath.splitext(path)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
                 continue
-            data = await self._read_deliverable_bytes(path)
+            data = await self._read_deliverable_bytes(path, strict=strict)
             if data is None:
                 continue
             if len(data) > _DICTATED_CONTENT_MAX_FILE_BYTES:
+                if not strict:
+                    continue
                 raise _DictatedContentInspectionIncomplete(
                     "a text deliverable exceeds the per-file inspection budget"
                 )
             total_bytes += len(data)
             if total_bytes > _DICTATED_CONTENT_MAX_TOTAL_BYTES:
+                if not strict:
+                    _LOG.warning("dictated-content files exceed total inspection budget")
+                    return None
                 raise _DictatedContentInspectionIncomplete(
                     "the app bundle exceeds the total byte inspection budget"
                 )
@@ -394,6 +410,12 @@ class _ContentGateMixin(_FinishGateProto):
             if not unresolved:
                 return None
         if not checked:
+            if not strict:
+                _LOG.warning(
+                    "dictated-content conditions present but no readable non-app "
+                    "deliverable surface is available; skipping the compatibility gate"
+                )
+                return None
             raise _DictatedContentInspectionIncomplete(
                 "no readable text deliverable surface was available"
             )
@@ -425,12 +447,29 @@ class _ContentGateMixin(_FinishGateProto):
             return True
         inspection_error: _DictatedContentInspectionIncomplete | None = None
         miss: tuple[DictatedContentCondition, list[str]] | None = None
+        selected_app = any(
+            isinstance(event, DeliverableEvent) and event.artifact_kind == "app" for event in events
+        )
         try:
-            async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
+            if selected_app:
+                async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
+                    paths = await self._dictated_content_deliverable_paths(events)
+                    if not paths:
+                        return True
+                    miss = await self._first_dictated_content_miss(
+                        conditions,
+                        paths,
+                        strict=True,
+                    )
+            else:
                 paths = await self._dictated_content_deliverable_paths(events)
                 if not paths:
                     return True
-                miss = await self._first_dictated_content_miss(conditions, paths)
+                miss = await self._first_dictated_content_miss(
+                    conditions,
+                    paths,
+                    strict=False,
+                )
         except TimeoutError:
             inspection_error = _DictatedContentInspectionIncomplete(
                 "the complete app-content inspection exceeded its wall-clock limit"
