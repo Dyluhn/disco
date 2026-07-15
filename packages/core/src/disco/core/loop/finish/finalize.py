@@ -16,11 +16,44 @@ from .common import (
     MessageEvent,
     StatusEvent,
     ToolCall,
+    VerifierVerdictEvent,
     _app_verify_command,
     _FinishGateProto,
     _static_verify_command,
     signals,
 )
+
+_UNVERIFIED_RELEASE_FINAL_MESSAGE = (
+    "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
+    "or could not run. Browser rendering remains UNVERIFIED, and the deliverable "
+    "may be INCOMPLETE. Any model-authored verification claim is superseded by "
+    "this host-owned result."
+)
+
+
+def _unverified_release_active(events: list[Event]) -> bool:
+    """Whether finalization is under the current unverified-release marker.
+
+    The marker is a RUNNING status scoped to the current finish attempt. A later
+    lifecycle transition makes an old marker stale, and a later passing host
+    verdict explicitly supersedes it even when a stop-hook kept the same run
+    segment alive. This is deliberately event-only: finalization must not spend
+    another provider call asking the model to correct its pre-gate summary.
+    """
+    active = False
+    for event in events:
+        if isinstance(event, StatusEvent):
+            active = (
+                event.status == ConversationStatus.RUNNING and event.detail == "unverified_release"
+            )
+        elif (
+            active
+            and isinstance(event, VerifierVerdictEvent)
+            and event.verified
+            and event.verdict == "pass"
+        ):
+            active = False
+    return active
 
 
 class _FinalizeMixin(_FinishGateProto):
@@ -192,15 +225,30 @@ class _FinalizeMixin(_FinishGateProto):
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
         if await self._loop._stop_allowed(state, events):
+            unverified_release = _unverified_release_active(events)
+            final_content = (
+                _UNVERIFIED_RELEASE_FINAL_MESSAGE if unverified_release else step.thought
+            )
             # Record the agent's final message (the answer) before
             # finishing — the deliverable text belongs on the log, not
             # discarded on the finish signal. (When the model just
-            # answers a question, this IS the response the UI renders.)
-            if step.thought.strip():
+            # answers a question, this IS the response the UI renders.) An active
+            # unverified release replaces the model-authored pre-gate summary: the
+            # host owns the final truth and cannot allow a stale "Verified" claim
+            # to become the last assistant message.
+            if final_content.strip():
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.AGENT,
-                        message=LLMMessage(role="assistant", content=step.thought),
+                        message=LLMMessage(role="assistant", content=final_content),
+                        meta=(
+                            {
+                                "host_owned_terminal_warning": True,
+                                "unverified_release": True,
+                            }
+                            if unverified_release
+                            else {}
+                        ),
                     )
                 )
             # runthru-v2 (#3): "done" is driven by the REAL finish gate —

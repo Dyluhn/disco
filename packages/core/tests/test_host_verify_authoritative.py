@@ -148,6 +148,14 @@ def _env_messages(events) -> list[str]:
     ]
 
 
+def _agent_messages(events) -> list[MessageEvent]:
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent) and e.source == EventSource.AGENT and e.message is not None
+    ]
+
+
 def _statuses(events) -> list[tuple[str, str | None]]:
     return [(e.status.value, e.detail) for e in events if isinstance(e, StatusEvent)]
 
@@ -169,7 +177,7 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
                 tool="file_write",
                 args={"path": "index.html", "content": "<h1>hello</h1>"},
             ),
-            finish_step(),
+            finish_step("Verified cleanly by the host browser."),
         ]
     )
     loop, store = _loop(agent, execu, host_verifier=host)
@@ -192,6 +200,48 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
         isinstance(e, ObservationEvent) and e.tool_result.tool_name == "verify_web_app"
         for e in events
     )
+    final = _agent_messages(events)[-1]
+    assert final.message.content == "Verified cleanly by the host browser."
+    assert final.meta.get("host_owned_terminal_warning") is not True
+    assert agent.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_later_host_pass_supersedes_stale_unverified_release_marker() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step("Verified after a fresh passing host verdict."),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+
+    async def _seed_stale_marker() -> None:
+        await store.append(
+            "conv",
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverified_release",
+            ),
+        )
+
+    agent._before[0] = _seed_stale_marker
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events("conv")
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert verdicts[-1].verified is True
+    final = _agent_messages(events)[-1]
+    assert final.message.content == "Verified after a fresh passing host verdict."
+    assert final.meta.get("host_owned_terminal_warning") is not True
+    assert agent.calls == 2
 
 
 @pytest.mark.asyncio
@@ -403,7 +453,9 @@ async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> N
                 tool="file_write",
                 args={"path": "index.html", "content": "<h1>hello</h1>"},
             ),
-            finish_step(),
+            finish_step(
+                'Created index.html. Verified: HTTP 200 and the heading "hello" is present.'
+            ),
         ]
     )
     loop, store = _loop(agent, execu, host_verifier=host)
@@ -429,6 +481,13 @@ async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> N
     assert any("WITHOUT browser-render verification" in m for m in env)
     assert any("UNVERIFIED" in m and "INCOMPLETE" in m for m in env)
     assert not any("Host verification did not pass" in m for m in env)
+    final = _agent_messages(events)[-1]
+    assert final.message.content.startswith("⚠ UNVERIFIED FINAL RESULT:")
+    assert "Browser rendering remains UNVERIFIED" in final.message.content
+    assert "Verified: HTTP 200" not in final.message.content
+    assert final.meta.get("host_owned_terminal_warning") is True
+    assert final.meta.get("unverified_release") is True
+    assert agent.calls == 2
 
 
 @pytest.mark.asyncio
