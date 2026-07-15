@@ -52,8 +52,13 @@ from .adapters.disco_api import (
     Transport,
 )
 from .classify import CLASSIFICATION_NAME, classify
-from .evidence import EvidenceManifest, compute_evidence_hashes, write_manifest
-from .product_evidence import PRODUCT_EVIDENCE_NAME, write_product_evidence
+from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
+from .product_evidence import (
+    PRODUCT_EVIDENCE_NAME,
+    PROVIDER_LEDGER_NAME,
+    write_product_evidence,
+    write_provider_ledger,
+)
 from .provider_ledger import parse_relay_log, record_applies_to_conversation
 from .resources import (
     GIB,
@@ -747,6 +752,8 @@ def assemble_dossier(
     seed: int | None = None,
     mode: str = "api",
     kernel: str = "disco",
+    started_at: str | None = None,
+    provider_ledger: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Write the §5 dossier and freeze it under the §6 evidence lock. Returns the
     run-folder path. classification.json is written separately by classify_dossier."""
@@ -755,6 +762,10 @@ def assemble_dossier(
     conv.mkdir(parents=True, exist_ok=True)
 
     (base / "prompt.txt").write_text(str(scenario.get("prompt", "")), encoding="utf-8")
+    scenario_path = base / "scenario.json"
+    scenario_path.write_text(
+        json.dumps(scenario, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     (base / "followups.json").write_text(
         json.dumps(scenario.get("followups") or [], indent=2), encoding="utf-8"
     )
@@ -809,11 +820,15 @@ def assemble_dossier(
     _pe = getattr(run, "product_evidence", None)
     if _pe:
         write_product_evidence(conv, _pe, strict=False)
+    if provider_ledger is not None:
+        write_provider_ledger(conv, provider_ledger)
 
     # Evidence lock: hash the durable §6 set (relative to the run folder).
     conv_rel = f"conversations/{run.conversation_id}"
     evidence_files = {
+        "scenario.json": "scenario.json",
         "events.jsonl": f"{conv_rel}/events.jsonl",
+        "state.initial.json": f"{conv_rel}/state.initial.json",
         "state.final.json": f"{conv_rel}/state.final.json",
         "workspace-manifest.json": f"{conv_rel}/workspace-manifest.json",
     }
@@ -821,6 +836,8 @@ def assemble_dossier(
         evidence_files[PRODUCT_EVIDENCE_NAME] = f"{conv_rel}/{PRODUCT_EVIDENCE_NAME}"
     if run.inspect_trace is not None:
         evidence_files["inspect-trace.json"] = f"{conv_rel}/inspect-trace.json"
+    if provider_ledger is not None:
+        evidence_files[PROVIDER_LEDGER_NAME] = f"{conv_rel}/{PROVIDER_LEDGER_NAME}"
     evidence_files["thrash-monitor.json"] = f"{conv_rel}/thrash-monitor.json"
     # P1 (codex): the PREVIEW dossier is preview TRUTH the oracle adjudicates on — it
     # MUST be under the hash lock too, else a preview-health/served-html tamper would
@@ -829,23 +846,66 @@ def assemble_dossier(
         evidence_files["preview/health.json"] = f"{conv_rel}/preview/health.json"
         evidence_files["preview/served.html"] = f"{conv_rel}/preview/served.html"
         evidence_files["preview/metadata.json"] = f"{conv_rel}/preview/metadata.json"
+    provider_assertion = (scenario.get("assertions") or {}).get("provider") or {}
+    provider = (
+        str(provider_assertion.get("require_host_substr") or "")
+        if isinstance(provider_assertion, dict)
+        else ""
+    )
+    if not started_at:
+        for event in run.events:
+            candidate = event.get("created_at") or event.get("timestamp")
+            if isinstance(candidate, str) and candidate:
+                started_at = candidate
+                break
     manifest = EvidenceManifest(
         run_id=run_id,
         scenario_id=str(scenario.get("id")),
+        scenario_sha256=sha256_file(scenario_path),
         seed=seed,
         repo_commit=commit,
         model=model or "",
+        provider=provider,
         autonomous=autonomous,
         surface=str(scenario.get("surface") or "build"),
         kernel=kernel,
         mode=mode,
-        started_at="",
+        started_at=started_at or datetime.now(UTC).isoformat(),
         finished_at=datetime.now(UTC).isoformat(),
         evidence_files={"events": f"{conv_rel}/events.jsonl", **evidence_files},
         evidence_hashes=compute_evidence_hashes(base, evidence_files),
     )
     write_manifest(base, manifest)
     return base
+
+
+def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:
+    """Capture this run's exact, terminal-annotated provider slice for live and replay use."""
+    relay_log = _relay_log_path()
+    if not relay_log or not os.path.exists(relay_log):
+        return None
+    try:
+        with open(relay_log, encoding="utf-8") as handle:
+            records = parse_relay_log(handle.read())
+        terminal_epoch = _terminal_status_epoch(run.events)
+        start_epoch = _min_event_epoch(run.events)
+        if terminal_epoch is None or start_epoch is None:
+            return None
+        # after_terminal is the BUILD-runaway signal. Tool-less summarizer/title calls are benign;
+        # unmarked records default has_tools=True and therefore remain fail-closed.
+        return [
+            {
+                **record,
+                "after_terminal": float(record["ts"]) > terminal_epoch
+                and bool(record.get("has_tools", True)),
+            }
+            for record in records
+            if isinstance(record.get("ts"), (int, float))
+            and float(record["ts"]) >= start_epoch
+            and record_applies_to_conversation(record, run.conversation_id)
+        ]
+    except Exception:  # noqa: BLE001 — required-provider oracle fails closed on None
+        return None
 
 
 def classify_dossier(
@@ -856,6 +916,7 @@ def classify_dossier(
     autonomous: bool,
     commit: str = "",
     seed: int | None = None,
+    provider_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run the deterministic classifier on the collected run, passing workspace +
     preview + autonomy DIRECTLY (codex #2 — so OutputTruth/preview actually run),
@@ -865,30 +926,8 @@ def classify_dossier(
     # THIS run's window [run_start, ...] and stamp after_terminal on records past the build-terminal
     # epoch; ran AFTER _collect's grace+release so any straggler post-terminal call is already
     # logged. Live-mode only (relay env set) so deterministic unit tests are unaffected.
-    provider_ledger: list[dict[str, Any]] | None = None
-    _rl = _relay_log_path()
-    if _rl and os.path.exists(_rl):
-        try:
-            with open(_rl, encoding="utf-8") as _f:
-                _recs = parse_relay_log(_f.read())
-            _t = _terminal_status_epoch(run.events)
-            _s = _min_event_epoch(run.events)
-            if _t is not None and _s is not None:
-                # [REL-5b] after_terminal is the BUILD-runaway signal the ProviderLedgerOracle
-                # reads.
-                # Stamp it True ONLY for a tool-bearing (build-driver) call past terminal — a tool-
-                # less SUMMARIZER/auto-title call is benign and must not read as
-                # PROVIDER_CALL_AFTER_TERMINAL. Unmarked records default has_tools=True
-                # (fail-closed → still flagged).
-                provider_ledger = [
-                    {**r, "after_terminal": float(r["ts"]) > _t and bool(r.get("has_tools", True))}
-                    for r in _recs
-                    if isinstance(r.get("ts"), (int, float))
-                    and float(r["ts"]) >= _s
-                    and record_applies_to_conversation(r, run.conversation_id)
-                ]
-        except Exception:
-            provider_ledger = None
+    if provider_ledger is None:
+        provider_ledger = _provider_ledger_for_run(run)
     classification = classify(
         run.events,
         scenario=scenario,
@@ -1426,6 +1465,7 @@ async def run_once(
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
     require_inspect_trace: bool = False,
 ) -> dict[str, Any]:
+    run_started_at = datetime.now(UTC).isoformat()
     # §9 pre-create infra gate (the ONLY infra source). No conversation exists yet, so a
     # failure here needs no teardown (returns before the try/finally below).
     try:
@@ -1584,6 +1624,7 @@ async def run_once(
                 facts={"missing_slices": _missing},
             )
 
+        provider_ledger = _provider_ledger_for_run(run)
         base = assemble_dossier(
             out_root,
             run_id,
@@ -1593,8 +1634,17 @@ async def run_once(
             autonomous=autonomous,
             commit=commit,
             kernel=kernel,
+            started_at=run_started_at,
+            provider_ledger=provider_ledger,
         )
-        return classify_dossier(base, scenario, run, autonomous=autonomous, commit=commit)
+        return classify_dossier(
+            base,
+            scenario,
+            run,
+            autonomous=autonomous,
+            commit=commit,
+            provider_ledger=provider_ledger,
+        )
     finally:
         # RUNNER HYGIENE: kill the conversation this run created if it's still non-terminal,
         # so an abandoned RUNNING / PAUSED / AWAITING build (inconclusive cutoff, error path,

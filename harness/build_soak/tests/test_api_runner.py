@@ -6,6 +6,7 @@ pre-create (codex #3), and the run-folder shape (§5)."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -319,6 +320,150 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     assert (conv / "workspace-manifest.json").is_file()
     assert (conv / "preview" / "health.json").is_file()
     assert (conv / "preview" / "metadata.json").is_file()
+
+
+def test_dossier_persists_required_provenance_and_replays_provider_oracle(tmp_path):
+    """H183/H185: a frozen live dossier must reproduce its exact provider verdict."""
+    scenario = json.loads(json.dumps(_smoke_scenario()))
+    scenario["assertions"]["provider"] = {
+        "require_ledger": True,
+        "require_host_substr": "opencode.ai",
+        "model": "deepseek-v4-flash",
+    }
+    events = clean_smoke_log()
+    events[0]["timestamp"] = "2026-07-15T09:34:46.402189Z"
+    content = "<html><h1>Build Smoke OK</h1></html>"
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={
+            "index.html": {
+                "present": True,
+                "size": len(content.encode()),
+                "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                "content": content,
+                "proof": "raw_sha",
+                "content_stable": True,
+            }
+        },
+        preview={
+            "health": {"status": 200},
+            "content": content,
+            "available": True,
+            "runtime_available": False,
+            "runtime_availability_status": 200,
+            "source": "isolated_path_capability",
+        },
+        timeline=["collected"],
+    )
+    provider_ledger = [
+        {
+            "ts": 1.0,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "after_terminal": False,
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+        {
+            "ts": 2.0,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "after_terminal": False,
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+    ]
+    started_at = "2026-07-15T09:34:46.346771+00:00"
+
+    base = assemble_dossier(
+        tmp_path / "out",
+        "run_provider_replay_001",
+        scenario,
+        run,
+        model="opencode-go-deepseek-v4-flash",
+        autonomous=False,
+        commit="a" * 40,
+        started_at=started_at,
+        provider_ledger=provider_ledger,
+    )
+    original = classify_dossier(
+        base,
+        scenario,
+        run,
+        autonomous=False,
+        commit="a" * 40,
+        provider_ledger=provider_ledger,
+    )
+    replayed = classify_run_folder(base)
+    caller_weakened = json.loads(json.dumps(scenario))
+    del caller_weakened["assertions"]["provider"]
+    mismatched_replay = classify_run_folder(base, scenario=caller_weakened)
+    manifest = load_manifest(base)
+
+    assert manifest.scenario_sha256.startswith("sha256:")
+    assert manifest.provider == "opencode.ai"
+    assert manifest.started_at == started_at
+    assert {
+        "scenario.json",
+        "state.initial.json",
+        "provider-call-ledger.jsonl",
+    } <= set(manifest.evidence_hashes)
+    assert verify_evidence_unchanged(base, manifest).intact
+    assert original["status"] == replayed["status"] == "PASS"
+    assert mismatched_replay["status"] == "INVALID_RUN"
+    assert mismatched_replay["code"] == "EVIDENCE_HASH_MISMATCH"
+    for classification in (original, replayed):
+        provider_result = next(
+            result
+            for result in classification["oracle_results"]
+            if result["oracle"] == "provider_ledger"
+        )
+        assert provider_result["status"] == "PASS"
+        assert provider_result["facts"] == {"calls": 2}
+
+
+def test_locked_provider_scenario_rejects_untracked_ledger_injection(tmp_path):
+    """H185: an added-after-lock ledger must never satisfy a required provider oracle."""
+    scenario = json.loads(json.dumps(_smoke_scenario()))
+    scenario["assertions"]["provider"] = {
+        "require_ledger": True,
+        "require_host_substr": "opencode.ai",
+        "model": "deepseek-v4-flash",
+    }
+    content = "<html><h1>Build Smoke OK</h1></html>"
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=clean_smoke_log(),
+        state_initial={},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={"index.html": {"present": True, "content": content}},
+        preview={
+            "health": {"status": 200},
+            "content": content,
+            "available": True,
+            "source": "isolated_path_capability",
+        },
+    )
+    base = assemble_dossier(
+        tmp_path / "out",
+        "run_provider_injection_001",
+        scenario,
+        run,
+        model="opencode-go-deepseek-v4-flash",
+        autonomous=False,
+    )
+    (base / "provider-call-ledger.jsonl").write_text(
+        json.dumps({"host": "opencode.ai", "model": "deepseek-v4-flash"}) + "\n",
+        encoding="utf-8",
+    )
+
+    replayed = classify_run_folder(base)
+
+    assert replayed["status"] == "INVALID_RUN"
+    assert replayed["code"] == "MISSING_REQUIRED_EVIDENCE"
 
 
 @pytest.mark.asyncio
@@ -791,6 +936,172 @@ async def test_snapshot_already_consistent_accepts_promptly(tmp_path, monkeypatc
     assert manifest["index.html"]["proof"] == "raw_sha"
     assert manifest["index.html"]["content_stable"] is False
     assert clock.polls == 0  # already consistent → no needless wait
+
+
+@pytest.mark.asyncio
+async def test_snapshot_read_only_serve_and_verify_shells_preserve_file_write_sha(
+    tmp_path, monkeypatch
+):
+    """H182: serving/probing a file after writing it is not a later mutation.
+
+    The live static-smoke event stream wrote index.html with a precise SHA, then used curl,
+    ``python -m http.server``, test/grep, and the host-generated static verifier.  Treating every
+    shell action as an opaque write erased the exact SHA and mislabeled the final capture
+    ``present_unproven``.  All of these strictly read-only shapes must preserve the write proof.
+    """
+    from disco.core.loop.finish.common import _static_verify_command
+
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<html><h1>Build Smoke OK</h1></html>\n"
+    _plant_snapshot(proj, _CID, {"index.html": content})
+    log = _file_write_log("index.html", content)
+    log.pop()  # append the live post-write serve/verify sequence before FINISHED
+    commands = [
+        (
+            "shell",
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ "
+            '&& echo "" && curl -s http://localhost:8000/ | head -5',
+        ),
+        (
+            "shell",
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ | grep -q 200",
+        ),
+        ("shell_exec", "cd /workspace && python3 -m http.server 8080"),
+        (
+            "shell",
+            "test -f index.html && curl -s -o /dev/null -w '%{http_code}' "
+            'http://localhost:8080/ | grep -q 200 && echo "PASS"',
+        ),
+        ("shell", _static_verify_command("index.html")),
+    ]
+    seq = 5
+    for i, (tool, command) in enumerate(commands):
+        call_id = f"shell-{i}"
+        log.extend(
+            [
+                {
+                    "id": f"a{seq}",
+                    "seq": seq,
+                    "kind": "action",
+                    "source": "agent",
+                    "tool_call": {
+                        "tool_name": tool,
+                        "arguments": {"command": command},
+                        "call_id": call_id,
+                    },
+                },
+                {
+                    "id": f"o{seq + 1}",
+                    "seq": seq + 1,
+                    "kind": "observation",
+                    "source": "environment",
+                    "tool_result": {
+                        "call_id": call_id,
+                        "tool_name": tool,
+                        "success": True,
+                        "content": "ok",
+                    },
+                },
+            ]
+        )
+        seq += 2
+    log.append(
+        {
+            "id": f"s{seq}",
+            "seq": seq,
+            "kind": "status",
+            "source": "system",
+            "status": "FINISHED",
+        }
+    )
+    _seed_db(db, _CID, log)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=50.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["sha256"] == hashlib.sha256(content.encode()).hexdigest()
+    assert manifest["index.html"]["proof"] == "raw_sha"
+    assert clock.polls == 0
+
+
+@pytest.mark.parametrize(
+    "opaque_command",
+    [
+        'echo "$(sed -i s/present/changed/ index.html)"',
+        "curl -s -w '%output{index.html}overwritten' http://localhost:8000/",
+        "curl -s --write-out=%output{index.html}overwritten http://localhost:8000/",
+    ],
+)
+@pytest.mark.asyncio
+async def test_snapshot_unknown_or_shell_substitution_still_downgrades_file_write_sha(
+    tmp_path, monkeypatch, opaque_command
+):
+    """H182 fail-closed guard: executable/redirecting shell syntax stays opaque."""
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    content = "<h1>still present</h1>\n"
+    _plant_snapshot(proj, _CID, {"index.html": content})
+    log = _file_write_log("index.html", content)
+    log.pop()
+    log.extend(
+        [
+            {
+                "id": "a5",
+                "seq": 5,
+                "kind": "action",
+                "source": "agent",
+                "tool_call": {
+                    "tool_name": "shell",
+                    "arguments": {"command": opaque_command},
+                    "call_id": "opaque-5",
+                },
+            },
+            {
+                "id": "o6",
+                "seq": 6,
+                "kind": "observation",
+                "source": "environment",
+                "tool_result": {
+                    "call_id": "opaque-5",
+                    "tool_name": "shell",
+                    "success": True,
+                },
+            },
+            {
+                "id": "s7",
+                "seq": 7,
+                "kind": "status",
+                "source": "system",
+                "status": "FINISHED",
+            },
+        ]
+    )
+    _seed_db(db, _CID, log)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=3.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["proof"] == "unproven_extended_stability"
+    assert clock.polls >= _disco_mod._SNAPSHOT_UNPROVEN_STABLE_POLLS - 1
 
 
 # ---- snapshot READINESS: readback-aware identity (partial-edit-last gap) -----------------

@@ -24,7 +24,7 @@ from typing import Any
 
 from . import failure_codes as fc
 from .events import NormalizationError, normalize_events
-from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
+from .evidence import EvidenceManifest, load_manifest, sha256_file, verify_evidence_unchanged
 from .oracles import (
     BROWSER_EVIDENCE_ORACLES,
     TARGETED_EDIT_ORACLES,
@@ -38,6 +38,7 @@ from .oracles import (
     ToolScopeOracle,
 )
 from .oracles.schema import OracleResult
+from .product_evidence import PROVIDER_LEDGER_NAME
 
 CLASSIFICATION_NAME = "classification.json"
 
@@ -241,6 +242,25 @@ def classify_run_folder(
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         manifest = None
 
+    if manifest is not None:
+        scenario_rel = manifest.evidence_files.get("scenario.json")
+        if scenario_rel:
+            try:
+                scenario_path = base / scenario_rel
+                loaded_scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+                if not isinstance(loaded_scenario, dict):
+                    raise ValueError("persisted scenario is not an object")
+                if (
+                    manifest.scenario_sha256
+                    and sha256_file(scenario_path) != manifest.scenario_sha256
+                ):
+                    raise ValueError("persisted scenario hash does not match manifest")
+                if scenario is not None and scenario != loaded_scenario:
+                    evidence_intact = False
+                scenario = loaded_scenario
+            except (OSError, json.JSONDecodeError, ValueError):
+                evidence_intact = False
+
     events_raw: list[Any] = []
     events_rel = (manifest.evidence_files.get("events") if manifest else None) or "events.jsonl"
     events_path = base / events_rel
@@ -307,10 +327,16 @@ def classify_run_folder(
     # dropped (that would under-report a forbidden call) nor crashes classification —
     # it becomes a hostless record the ProviderLedgerOracle fails on as an evidence gap.
     provider_ledger: list[dict[str, Any]] | None = None
-    ledger_path = base / "provider-call-ledger.jsonl"
-    if not ledger_path.is_file():
-        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
-    if ledger_path.is_file():
+    ledger_rel = (
+        manifest.evidence_files.get(PROVIDER_LEDGER_NAME)
+        or manifest.evidence_files.get("provider_ledger")
+        if manifest
+        else None
+    )
+    ledger_path = base / ledger_rel if ledger_rel else base / PROVIDER_LEDGER_NAME
+    if manifest is None and not ledger_path.is_file():
+        ledger_path = next(iter(base.rglob(PROVIDER_LEDGER_NAME)), ledger_path)
+    if (manifest is None or ledger_rel is not None) and ledger_path.is_file():
         provider_ledger = _read_ledger(ledger_path)
 
     inspect_trace: dict[str, Any] | None = None
