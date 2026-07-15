@@ -63,6 +63,27 @@ class ContractOracle:
         # SKIP. (The event-only WRITE_TOOL_ATTEMPTED_IN_PLANNING check is separate
         # and still runs.)
         tool_scope_assert = assertions.get("tool_scope") or {}
+        if tool_scope_assert:
+            planning_disallows = tool_scope_assert.get("planning_disallows")
+            if (
+                not isinstance(planning_disallows, list)
+                or not planning_disallows
+                or not all(isinstance(name, str) and name for name in planning_disallows)
+                or len(set(planning_disallows)) != len(planning_disallows)
+            ):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link=("scenario_contract -> tool_scope.planning_disallows"),
+                        facts={
+                            "reason": (
+                                "assertions.tool_scope.planning_disallows must be a "
+                                "non-empty unique list of tool names"
+                            )
+                        },
+                    )
+                ]
         if tool_scope_assert and "tool_scope" not in present:
             missing.append("tool_scope_capture (scenario asserts assertions.tool_scope)")
 

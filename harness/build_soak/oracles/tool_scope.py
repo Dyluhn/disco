@@ -10,17 +10,15 @@ Two distinct invariants, with two distinct evidence requirements:
 
   * WRITE_TOOL_ALLOWED_IN_PLANNING — NOT provable from events alone. §11.7 is about
     a disallowed tool remaining *in ToolScope.allowed_tools* even if hidden from the
-    advertised set ("a hidden tool is still unsafe if it remains callable"). The
-    durable event log does NOT persist the offered/allowed tool schemas, so proving
-    a write tool was ALLOWED (callable) needs the runner to capture the per-turn
-    tool scope. That capture is the LATER live-runner slice (S3). Until then this
-    oracle reports SKIP for the ALLOWED check when no `tool_scope` evidence is
-    supplied, and validates it when it is.
+    advertised set ("a hidden tool is still unsafe if it remains callable"). Build
+    campaigns derive this evidence from the frozen per-request DISCO_INSPECT tool-
+    scope snapshots. Legacy/non-inspect callers still receive a SKIP when their
+    scenario does not select the assertion; selected assertions fail closed through
+    ContractOracle when the capture is absent.
 
-Note: the *product* today does let a scripted write call FALL THROUGH and execute
-in PLANNING (engine.py:841 `_gate_planning_mode` only intercepts submit_plan + a
-no-tool prose turn). The ATTEMPTED check below is exactly what catches that on a
-real event log; the §20 contract tests assert the rejection the product still owes.
+The product gate independently rejects a scripted mutating call in PLANNING.  The
+ATTEMPTED check below proves from the event log that no mutating action reached the
+executor, while the frozen scope check proves that the same tool was not callable.
 """
 
 from __future__ import annotations
@@ -54,6 +52,7 @@ PLANNING_SAFE_TOOLS = frozenset(
         "search",
         "extract",
         "ask_user",
+        "questions_v2",
         "clarify",
         "think",
     }
@@ -81,6 +80,7 @@ class ToolScopeOracle:
         tool_scope: list[dict[str, Any]] | None = None,
     ) -> list[OracleResult]:
         results: list[OracleResult] = []
+        attempted_violation = False
 
         # --- WRITE_TOOL_ATTEMPTED_IN_PLANNING (event-only) ---
         if _is_plan_gated(events, scenario):
@@ -118,7 +118,10 @@ class ToolScopeOracle:
                             },
                         )
                     )
+                    attempted_violation = True
                     break  # first broken link wins
+            if not attempted_violation:
+                results.append(passing(_ORACLE, facts={"checked": "attempted_in_planning"}))
 
         # --- WRITE_TOOL_ALLOWED_IN_PLANNING (needs captured tool scope) ---
         if tool_scope is None:
@@ -127,29 +130,91 @@ class ToolScopeOracle:
                     _ORACLE,
                     reason=(
                         "WRITE_TOOL_ALLOWED_IN_PLANNING needs captured per-turn tool "
-                        "scope (offered/allowed_tools); not in the durable event log — "
-                        "TODO live-runner slice (S3)"
+                        "scope (offered/allowed_tools); no selected frozen inspect "
+                        "capture was supplied"
                     ),
                 )
             )
         else:
-            allowed_violation = self._check_allowed(tool_scope)
-            if allowed_violation is not None:
-                results.append(allowed_violation)
+            required = bool(((scenario or {}).get("assertions") or {}).get("tool_scope"))
+            assertion = ((scenario or {}).get("assertions") or {}).get("tool_scope") or {}
+            disallowed = assertion.get("planning_disallows") if required else None
+            scope_result = self._check_allowed(
+                tool_scope,
+                required=required,
+                planning_disallows=disallowed,
+            )
+            if scope_result is not None:
+                results.append(scope_result)
 
         if not results or all(r.skipped for r in results):
             results.append(passing(_ORACLE, facts={"checked": "attempted_in_planning"}))
         return results
 
-    def _check_allowed(self, tool_scope: list[dict[str, Any]]) -> OracleResult | None:
+    def _check_allowed(
+        self,
+        tool_scope: list[dict[str, Any]],
+        *,
+        required: bool,
+        planning_disallows: Any,
+    ) -> OracleResult | None:
         """`tool_scope` is a list of captured per-turn scopes:
         {mode, allowed_tools: [name,...]}. While mode == "planning" no mutating
         tool may appear in allowed_tools (§11.7 — hidden-but-callable is unsafe)."""
-        for turn in tool_scope:
-            if str(turn.get("mode")) != "planning":
+        planning_turns = 0
+        disallowed = set(planning_disallows) if isinstance(planning_disallows, list) else set()
+        for index, turn in enumerate(tool_scope):
+            malformed = turn.get("__malformed__")
+            mode = turn.get("mode")
+            offered = turn.get("offered_tools")
+            allowed = turn.get("allowed_tools")
+            attempt = turn.get("attempt")
+            complete = turn.get("complete")
+            offered_count = turn.get("offered_count")
+            allowed_count = turn.get("allowed_count")
+            if (
+                malformed
+                or mode not in {"planning", "interactive", "long_horizon"}
+                or not isinstance(offered, list)
+                or not all(isinstance(name, str) and name for name in offered)
+                or len(set(offered)) != len(offered)
+                or not isinstance(allowed, list)
+                or not all(isinstance(name, str) and name for name in allowed)
+                or len(set(allowed)) != len(allowed)
+                or not isinstance(attempt, int)
+                or isinstance(attempt, bool)
+                or attempt < 1
+                or complete is not True
+                or not isinstance(offered_count, int)
+                or isinstance(offered_count, bool)
+                or offered_count != len(offered)
+                or not isinstance(allowed_count, int)
+                or isinstance(allowed_count, bool)
+                or allowed_count != len(allowed)
+            ):
+                if required:
+                    return failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="inspect_trace -> tool_scope_capture",
+                        facts={"reason": str(malformed or "malformed tool scope"), "index": index},
+                    )
                 continue
-            allowed = turn.get("allowed_tools") or []
-            leaked = [t for t in allowed if t not in PLANNING_SAFE_TOOLS]
+            if not set(offered).issubset(allowed):
+                return failing(
+                    _ORACLE,
+                    fc.TOOL_SCOPE_MISMATCH,
+                    first_broken_link="offered_tools -> allowed_tools",
+                    facts={"offered_but_not_callable": sorted(set(offered) - set(allowed))},
+                )
+            if mode != "planning":
+                continue
+            planning_turns += 1
+            leaked = (
+                [t for t in allowed if t in disallowed]
+                if required
+                else [t for t in allowed if t not in PLANNING_SAFE_TOOLS]
+            )
             if leaked:
                 return failing(
                     _ORACLE,
@@ -157,4 +222,18 @@ class ToolScopeOracle:
                     first_broken_link="planning_tool_scope -> allowed_tools",
                     facts={"leaked_tools": leaked},
                 )
-        return None
+        if required and planning_turns == 0:
+            return failing(
+                _ORACLE,
+                fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                first_broken_link="inspect_trace -> planning_tool_scope_capture",
+                facts={"reason": "no planning turn captured"},
+            )
+        return passing(
+            _ORACLE,
+            facts={
+                "checked": "allowed_in_planning",
+                "planning_turn_count": planning_turns,
+                "planning_disallows": sorted(disallowed),
+            },
+        )

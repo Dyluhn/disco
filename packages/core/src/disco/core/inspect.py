@@ -8,7 +8,12 @@ end of the application". This module is the machinery for the *other end*: behin
       overflow), retry count, terminal failures — via a real :class:`RoutingSink`
       bound to the conversation, and
   (b) timed SPANS from :mod:`disco.core.obs` (``agent.step`` + its measured
-      token/finish fields) via a logging handler on the ``disco.span`` logger.
+      token/finish fields) via a logging handler on the ``disco.span`` logger,
+      and
+  (c) TOOL SCOPE snapshots immediately before each model request: the exact
+      offered names plus the mode-specific names that remained callable.  Tool
+      names and counts are capability metadata; arguments and schemas are never
+      captured.
 
 A REST snapshot endpoint (agent-server ``/api/debug/trace/{cid}``) exposes the
 trace so a test — or a developer — can PROVE a request travelled UI → loop →
@@ -38,6 +43,8 @@ from .llm.types import RoutingDecision
 # O(_MAX_CONVERSATIONS * _MAX_EVENTS) regardless of uptime or loop length.
 _MAX_CONVERSATIONS = 64
 _MAX_EVENTS = 1024
+_MAX_TOOL_SCOPE_NAMES = 512
+_MAX_TOOL_NAME_CHARS = 256
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -68,6 +75,12 @@ class ConversationTrace:
     def __init__(self, conversation_id: str, max_events: int) -> None:
         self.conversation_id = conversation_id
         self.events: deque[TraceEvent] = deque(maxlen=max_events)
+        self.dropped_event_count = 0
+
+    def add(self, event: TraceEvent) -> None:
+        if self.events.maxlen is not None and len(self.events) >= self.events.maxlen:
+            self.dropped_event_count += 1
+        self.events.append(event)
 
     def snapshot(self) -> dict[str, Any]:
         """A JSON-ready view: the interleaved event stream plus the routing /
@@ -77,8 +90,10 @@ class ConversationTrace:
         return {
             "conversation_id": self.conversation_id,
             "event_count": len(evs),
+            "dropped_event_count": self.dropped_event_count,
             "routing_decisions": [e.data for e in evs if e.kind == "routing"],
             "spans": [e.data for e in evs if e.kind == "span"],
+            "tool_scopes": [e.data for e in evs if e.kind == "tool_scope"],
             "events": [{"seq": e.seq, "kind": e.kind, **e.data} for e in evs],
         }
 
@@ -120,7 +135,7 @@ class InspectRegistry:
             return
         with self._lock:
             self._seq += 1
-            self._trace_for(cid).events.append(TraceEvent(self._seq, kind, data))
+            self._trace_for(cid).add(TraceEvent(self._seq, kind, data))
 
     def snapshot(self, cid: str) -> dict[str, Any] | None:
         with self._lock:
@@ -186,6 +201,53 @@ def routing_sink_for(conversation_id: str | None) -> RoutingSink | None:
     if conversation_id and inspect_enabled():
         return InspectRoutingSink(conversation_id)
     return None
+
+
+def record_tool_scope(
+    conversation_id: str,
+    *,
+    mode: str,
+    offered_tools: set[str],
+    allowed_tools: set[str],
+    attempt: int,
+) -> None:
+    """Record non-secret tool capability truth for one model request.
+
+    This is deliberately inspect-only: when ``DISCO_INSPECT`` is off it neither
+    creates the registry nor allocates sorted snapshots.  The caller supplies
+    names only (never schemas or arguments), and the registry's existing event
+    ring keeps the evidence bounded.
+    """
+    if not inspect_enabled():
+        return
+    offered_count = len(offered_tools)
+    allowed_count = len(allowed_tools)
+    complete = (
+        offered_count <= _MAX_TOOL_SCOPE_NAMES
+        and allowed_count <= _MAX_TOOL_SCOPE_NAMES
+        and all(len(name) <= _MAX_TOOL_NAME_CHARS for name in offered_tools)
+        and all(len(name) <= _MAX_TOOL_NAME_CHARS for name in allowed_tools)
+    )
+    # Do not sort an externally supplied, over-limit capability set.  The
+    # persisted overflow marker remains constant-size and fail-closed.
+    offered = sorted(offered_tools) if complete else []
+    allowed = sorted(allowed_tools) if complete else []
+    registry().add(
+        conversation_id,
+        "tool_scope",
+        {
+            "mode": mode,
+            "attempt": attempt,
+            "complete": complete,
+            "offered_count": offered_count,
+            "allowed_count": allowed_count,
+            # Never silently preserve a prefix: without the complete set a
+            # disallowed hidden tool could sit beyond the cap.  Empty lists plus
+            # complete=false make selected classification INVALID.
+            "offered_tools": offered,
+            "allowed_tools": allowed,
+        },
+    )
 
 
 # ---- span seam ---------------------------------------------------------------

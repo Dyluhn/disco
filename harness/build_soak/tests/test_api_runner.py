@@ -57,6 +57,27 @@ CREATE TABLE IF NOT EXISTS events (
 _CID = "conv_fake123"
 
 
+def _fake_inspect_trace() -> dict[str, Any]:
+    scope = {
+        "mode": "planning",
+        "attempt": 1,
+        "complete": True,
+        "offered_tools": ["file_read", "submit_plan"],
+        "allowed_tools": ["file_read", "submit_plan"],
+        "offered_count": 2,
+        "allowed_count": 2,
+    }
+    return {
+        "conversation_id": _CID,
+        "event_count": 1,
+        "dropped_event_count": 0,
+        "routing_decisions": [{"chosen_model": "m"}],
+        "spans": [{"span": "agent.step", "event": "end"}],
+        "tool_scopes": [scope],
+        "events": [{"seq": 1, "kind": "tool_scope", **scope}],
+    }
+
+
 def _seed_db(path, cid, events):
     conn = sqlite3.connect(str(path))
     try:
@@ -123,6 +144,10 @@ class FakeTransport:
         return 200, {"event_id": "e", "seq": 1}
 
     async def get_json(self, path):
+        if path == f"/api/debug/trace/{self.cid}":
+            trace = _fake_inspect_trace()
+            trace["conversation_id"] = self.cid
+            return 200, trace
         if path.endswith("/state"):
             st = self._states[min(self._idx, len(self._states) - 1)]
             self._idx += 1
@@ -308,6 +333,19 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     classification = classify_dossier(base, scenario, run, autonomous=False)
     assert classification["status"] == "PASS", classification
 
+    # Frozen replay must derive the selected tool-scope assertion from the
+    # evidence-locked inspect trace, not from an in-memory runner argument.
+    replayed = classify_run_folder(base)
+    assert replayed["status"] == "PASS", replayed
+    scope_results = [
+        result for result in replayed["oracle_results"] if result["oracle"] == "ToolScopeOracle"
+    ]
+    assert scope_results
+    assert not any(result.get("skipped", False) for result in scope_results)
+    assert any(
+        result.get("facts", {}).get("checked") == "allowed_in_planning" for result in scope_results
+    )
+
     # §5 run-folder shape
     conv = base / "conversations" / _CID
     assert (base / "manifest.json").is_file()
@@ -356,6 +394,7 @@ def test_dossier_persists_required_provenance_and_replays_provider_oracle(tmp_pa
             "runtime_availability_status": 200,
             "source": "isolated_path_capability",
         },
+        inspect_trace=_fake_inspect_trace(),
         timeline=["collected"],
     )
     provider_ledger = [
@@ -446,6 +485,7 @@ def test_locked_provider_scenario_rejects_untracked_ledger_injection(tmp_path):
             "available": True,
             "source": "isolated_path_capability",
         },
+        inspect_trace=_fake_inspect_trace(),
     )
     base = assemble_dossier(
         tmp_path / "out",
@@ -3991,6 +4031,7 @@ _ASSERTION_KEYS = {
     "preview",
     "terminal_status_in",
     "thrash",
+    "tool_scope",
 }
 _FOLLOWUP_TRIGGERS = {"after_terminal", "after_first_file_write"}
 
@@ -4032,8 +4073,11 @@ def test_every_scenario_loads_with_a_valid_schema():
         assert all(isinstance(value, int) and value >= 0 for value in thrash.values()), sid
         assert s.get("requires_inspect_trace") is True, sid
 
-        # NO scenario asserts tool_scope (no per-turn tool-scope evidence yet — file header).
-        assert "tool_scope" not in a, f"{sid}: must not assert tool_scope (no evidence yet)"
+        if sid == "static_html_minimal":
+            scope = a.get("tool_scope") or {}
+            assert scope.get("planning_disallows"), scope
+        else:
+            assert "tool_scope" not in a, f"{sid}: unexpected tool_scope assertion"
 
         ec = a.get("event_chain") or {}
         assert set(ec) <= _EVENT_CHAIN_KEYS, f"{sid}: bad event_chain keys"

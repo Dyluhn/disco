@@ -18,7 +18,7 @@ as PASS. Each is pinned here so it can never silently regress:
 
 from __future__ import annotations
 
-from _eventlog import action, awaiting, msg, observation, plan, status, to_db_rows
+from _eventlog import action, awaiting, clean_smoke_log, msg, observation, plan, status, to_db_rows
 
 from harness.build_soak.classify import classify
 
@@ -293,9 +293,24 @@ def test_scenario_requires_tool_scope_present_can_pass():
     from _eventlog import clean_smoke_log
 
     # Captured planning tool scope with no leaked mutating tool -> adjudicable.
-    tool_scope = [{"mode": "planning", "allowed_tools": ["submit_plan", "file_read"]}]
+    tool_scope = [
+        {
+            "mode": "planning",
+            "attempt": 1,
+            "complete": True,
+            "offered_tools": ["submit_plan", "file_read"],
+            "allowed_tools": ["submit_plan", "file_read"],
+            "offered_count": 2,
+            "allowed_count": 2,
+        }
+    ]
     c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
     assert c["status"] == "PASS"
+    assert any(
+        result.get("facts", {}).get("checked") == "allowed_in_planning"
+        and result.get("facts", {}).get("planning_turn_count") == 1
+        for result in c["oracle_results"]
+    )
 
 
 def test_scenario_requires_tool_scope_present_and_leaked_fails():
@@ -309,7 +324,177 @@ def test_scenario_requires_tool_scope_present_and_leaked_fails():
     from _eventlog import clean_smoke_log
 
     # A mutating tool remained CALLABLE in planning scope -> §11.7 violation.
-    tool_scope = [{"mode": "planning", "allowed_tools": ["submit_plan", "file_write"]}]
+    tool_scope = [
+        {
+            "mode": "planning",
+            "attempt": 1,
+            "complete": True,
+            "offered_tools": ["submit_plan"],
+            "allowed_tools": ["submit_plan", "file_write"],
+            "offered_count": 1,
+            "allowed_count": 2,
+        }
+    ]
     c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
     assert c["status"] == "FAIL"
     assert c["code"] == "WRITE_TOOL_ALLOWED_IN_PLANNING"
+
+
+def _scope_trace(*scopes: dict) -> dict:
+    events = [
+        {"seq": index, "kind": "tool_scope", **scope} for index, scope in enumerate(scopes, start=1)
+    ]
+    return {
+        "conversation_id": "conv_scope",
+        "event_count": len(events),
+        "dropped_event_count": 0,
+        "routing_decisions": [],
+        "spans": [],
+        "tool_scopes": list(scopes),
+        "events": events,
+    }
+
+
+def _valid_planning_scope(**updates) -> dict:
+    scope = {
+        "mode": "planning",
+        "attempt": 1,
+        "complete": True,
+        "offered_tools": ["file_read", "submit_plan"],
+        "allowed_tools": ["file_read", "submit_plan"],
+        "offered_count": 2,
+        "allowed_count": 2,
+    }
+    scope.update(updates)
+    return scope
+
+
+def test_required_tool_scope_is_derived_from_inspect_trace():
+    scenario = {
+        "id": "scope_from_trace",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    c = classify(
+        clean_smoke_log(),
+        scenario=scenario,
+        inspect_trace=_scope_trace(_valid_planning_scope()),
+    )
+    assert c["status"] == "PASS", c
+    assert not any(
+        result.get("skipped", False)
+        for result in c["oracle_results"]
+        if result["oracle"] == "ToolScopeOracle"
+    )
+
+
+def test_required_tool_scope_tampered_projection_is_invalid():
+    scenario = {
+        "id": "scope_tampered",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    trace = _scope_trace(_valid_planning_scope())
+    trace["tool_scopes"][0]["allowed_tools"] = ["submit_plan"]
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=trace)
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_required_tool_scope_missing_projection_is_invalid():
+    scenario = {
+        "id": "scope_missing_projection",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    trace = _scope_trace(_valid_planning_scope())
+    del trace["tool_scopes"]
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=trace)
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_required_inspect_tool_scope_leaked_callable_fails():
+    scenario = {
+        "id": "scope_leak_from_trace",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    leaked = _valid_planning_scope(
+        allowed_tools=["file_read", "file_write", "submit_plan"],
+        allowed_count=3,
+    )
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=_scope_trace(leaked))
+    assert c["status"] == "FAIL", c
+    assert c["code"] == "WRITE_TOOL_ALLOWED_IN_PLANNING"
+
+
+def test_required_tool_scope_overflow_is_invalid_not_truncated_pass():
+    scenario = {
+        "id": "scope_overflow",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    overflow = _valid_planning_scope(
+        complete=False,
+        offered_tools=[],
+        allowed_tools=[],
+        offered_count=513,
+        allowed_count=513,
+    )
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=_scope_trace(overflow))
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_required_tool_scope_evicted_from_trace_ring_is_invalid():
+    scenario = {
+        "id": "scope_trace_truncated",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    trace = _scope_trace(_valid_planning_scope())
+    trace["dropped_event_count"] = 1
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=trace)
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_required_tool_scope_without_planning_turn_is_invalid():
+    scenario = {
+        "id": "scope_no_planning",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    scope = _valid_planning_scope(mode="long_horizon")
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=_scope_trace(scope))
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_required_tool_scope_malformed_turn_is_invalid():
+    scenario = {
+        "id": "scope_malformed",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "tool_scope": {"planning_disallows": ["file_write"]},
+        },
+    }
+    scope = _valid_planning_scope(allowed_tools="file_read")
+    c = classify(clean_smoke_log(), scenario=scenario, inspect_trace=_scope_trace(scope))
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"

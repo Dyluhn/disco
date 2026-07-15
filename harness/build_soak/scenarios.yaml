@@ -18,12 +18,11 @@
 # _MAX_CLARIFY so an endlessly-asking model is eventually let go to a real terminal.
 #
 # NOTE on §11.7 (WRITE_TOOL_ALLOWED_IN_PLANNING — a disallowed tool that stays
-# *callable* even when hidden): proving it needs the per-turn offered/allowed tool
-# scope, which the durable event log does NOT carry. Capturing it is a future
-# loop-instrumentation slice, so these scenarios do NOT assert `tool_scope`
-# (which would fail-closed to INVALID_RUN without that evidence). The
-# event-adjudicable plan-discipline invariant — WRITE_TOOL_ATTEMPTED_IN_PLANNING
-# (a mutating action before approval) — is still enforced from the event log.
+# *callable* even when hidden): selected scenarios assert `tool_scope` against
+# the per-model-request offered/callable-name snapshots in the frozen
+# DISCO_INSPECT trace. Missing or malformed scope evidence fails closed to
+# INVALID_RUN. The event-adjudicable WRITE_TOOL_ATTEMPTED_IN_PLANNING invariant
+# remains independently enforced from the event log.
 
 # Defaults are deep-merged into every scenario by load_scenarios(). Live CLI
 # campaigns also fail closed when the per-conversation inspect trace is missing,
@@ -85,6 +84,20 @@ scenarios:
         require_user_event: true
         require_plan_before_execution: true
         require_action_observation_pairs: true
+      tool_scope:
+        planning_disallows:
+          - file_write
+          - file_append
+          - file_edit
+          - file_replace_lines
+          - shell
+          - code_exec
+          - browser
+          - serve
+          - finish
+          - remember
+          - notify_user
+          - delegate_explore
       workspace:
         files:
           - path: "index.html"

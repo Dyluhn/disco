@@ -26,6 +26,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
 )
+from ..inspect import inspect_enabled, record_tool_scope
 from ..llm import (
     BudgetExceeded,
     LLMAuthError,
@@ -311,7 +312,7 @@ class Driver:
         except Exception:  # noqa: BLE001 — never let tool-listing crash the loop
             return None
 
-    def planning_allowed_tool_names(self) -> frozenset[str]:
+    def planning_allowed_tool_names(self, available_tools: list | None = None) -> frozenset[str]:
         """The names a tool call may legitimately carry while in PLANNING mode —
         the SAME read-only-capability ∩ name-allowlist intersection that
         `tools_for_step()` uses to decide tool VISIBILITY, so the execute-time
@@ -348,7 +349,12 @@ class Driver:
             return True
 
         names: set[str] = set()
-        for t in self._loop.executor.available_tools():
+        tools = (
+            available_tools
+            if available_tools is not None
+            else self._loop.executor.available_tools()
+        )
+        for t in tools:
             name = getattr(t, "name", None)
             if isinstance(name, str) and _planner_ok(name):
                 names.add(name)
@@ -369,6 +375,7 @@ class Driver:
         force_submit_only: bool = False,
         force_read_tools: frozenset[str] | None = None,
         mode: OperatingMode | None = None,
+        available_tools: list | None = None,
     ) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
@@ -405,7 +412,11 @@ class Driver:
         )
 
         effective_mode = mode or self._loop.mode
-        tools = self._loop.executor.available_tools()
+        tools = (
+            available_tools
+            if available_tools is not None
+            else self._loop.executor.available_tools()
+        )
         if effective_mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
             # stuck prose-planning segment, narrow the offered
@@ -600,6 +611,20 @@ class Driver:
         all_known_names = known_tool_names | virtual_names | set(self._loop._planning_tools)
         return all_known_names
 
+    def allowed_tool_names_for_mode(
+        self, mode: OperatingMode, *, available_tools: list
+    ) -> set[str]:
+        """Names the loop would accept for the current model request.
+
+        Planning uses the exact execute-time gate predicate.  Other modes use
+        the executor's callable (not merely advertised) names plus the loop's
+        virtual/intercepted names, which is the same complete set the invalid-
+        tool requery boundary treats as real.
+        """
+        if mode == OperatingMode.PLANNING:
+            return set(self.planning_allowed_tool_names(available_tools))
+        return self.known_tool_names_for_requery()
+
     def unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
         _hint = f"ERROR: Unknown tool '{tool_name}'. Available: {sorted(list(offered_names))}"
         if self._loop._assist:
@@ -730,14 +755,31 @@ class Driver:
                             update={"messages": current_view.messages + transient_messages}
                         )
 
+                    available_tools = self._loop.executor.available_tools()
+                    offered_tools = self.tools_for_step(
+                        suppress_meta_tools=fresh_session,
+                        force_submit_only=force_submit_only,
+                        force_read_tools=force_read_tools,
+                        mode=mode,
+                        available_tools=available_tools,
+                    )
+                    if inspect_enabled():
+                        record_tool_scope(
+                            self._loop.conversation_id,
+                            mode=mode.value,
+                            offered_tools={
+                                name
+                                for tool in offered_tools
+                                if isinstance((name := getattr(tool, "name", None)), str)
+                            },
+                            allowed_tools=self.allowed_tool_names_for_mode(
+                                mode, available_tools=available_tools
+                            ),
+                            attempt=attempts + 1,
+                        )
                     step = await self._loop.agent.step(
                         current_view,
-                        self.tools_for_step(
-                            suppress_meta_tools=fresh_session,
-                            force_submit_only=force_submit_only,
-                            force_read_tools=force_read_tools,
-                            mode=mode,
-                        ),
+                        offered_tools,
                         mode=mode,
                         overflow_signal=view_render.overflow_signal(events),
                         on_stream=self.build_stream_hook(),

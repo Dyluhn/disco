@@ -22,6 +22,7 @@ from disco.core import (
 from disco.core.inspect import (
     InspectRoutingSink,
     inspect_enabled,
+    record_tool_scope,
     registry,
     routing_sink_for,
 )
@@ -153,6 +154,27 @@ def test_routing_sink_for_disabled(monkeypatch):
     assert routing_sink_for("anything") is None
 
 
+def test_tool_scope_capture_overflow_is_explicit_and_bounded(monkeypatch):
+    monkeypatch.setenv("DISCO_INSPECT", "1")
+    registry().clear()
+    names = {f"tool_{index}" for index in range(513)}
+
+    record_tool_scope(
+        CID,
+        mode="planning",
+        offered_tools=names,
+        allowed_tools=names,
+        attempt=1,
+    )
+
+    snap = registry().snapshot(CID)
+    assert snap is not None
+    scope = snap["tool_scopes"][0]
+    assert scope["complete"] is False
+    assert scope["offered_count"] == scope["allowed_count"] == 513
+    assert scope["offered_tools"] == scope["allowed_tools"] == []
+
+
 # ---- end-to-end: real loop → trace → REST -----------------------------------
 
 
@@ -194,6 +216,17 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
         for s in step_ends
     ), step_ends
 
+    # (d) every actual model request carries offered-vs-callable tool-scope
+    # evidence.  The planning request proves mutators were neither offered nor
+    # callable, and every captured offered name is accepted by the matching gate.
+    scopes = snap["tool_scopes"]
+    planning_scopes = [scope for scope in scopes if scope.get("mode") == "planning"]
+    assert planning_scopes, scopes
+    assert len(scopes) == len(step_ends), (scopes, step_ends)
+    assert all("file_write" not in scope["offered_tools"] for scope in planning_scopes)
+    assert all("file_write" not in scope["allowed_tools"] for scope in planning_scopes)
+    assert all(set(scope["offered_tools"]) <= set(scope["allowed_tools"]) for scope in scopes)
+
     # ...and the REST trace returns those counts as NUMBERS (not ***REDACTED***),
     # even though the key names contain "token".
     client_counts = TestClient(create_app(store, runtime=runtime))
@@ -205,17 +238,18 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
         rest_step_ends
     )
 
-    # (d) the interleaved stream is ordered by true emission order (seq monotonic)
+    # (e) the interleaved stream is ordered by true emission order (seq monotonic)
     seqs = [e["seq"] for e in snap["events"]]
     assert seqs == sorted(seqs)
 
-    # (e) the REST snapshot mirrors the registry
+    # (f) the REST snapshot mirrors the registry
     client = TestClient(create_app(store, runtime=runtime))
     res = client.get(f"/api/debug/trace/{CID}")
     assert res.status_code == 200
     body = res.json()
     assert body["conversation_id"] == CID
     assert len(body["routing_decisions"]) == len(routing)
+    assert body["tool_scopes"] == scopes
     assert body["event_count"] == snap["event_count"]
 
     # the status endpoint lists the live conversation

@@ -68,6 +68,45 @@ _LIKELY_FILES: dict[str, list[str]] = {
 }
 
 
+def _tool_scope_from_inspect(inspect_trace: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """Extract tool-scope proof from the frozen inspect trace, fail-closed.
+
+    ``ConversationTrace.snapshot`` exposes both a convenience projection and an
+    interleaved event stream.  Requiring them to agree prevents a partial or
+    hand-edited projection from becoming admissible evidence.  A malformed
+    capture is returned as a sentinel entry for ``ToolScopeOracle`` to classify
+    as INVALID; total absence remains ``None`` so ``ContractOracle`` reports the
+    selected assertion's missing evidence.
+    """
+    if inspect_trace is None or "tool_scopes" not in inspect_trace:
+        return None
+    scopes = inspect_trace.get("tool_scopes")
+    events = inspect_trace.get("events")
+    if not isinstance(scopes, list) or not isinstance(events, list):
+        return [{"__malformed__": "tool_scopes/events must be lists"}]
+    event_count = inspect_trace.get("event_count")
+    if not isinstance(event_count, int) or event_count != len(events):
+        return [{"__malformed__": "event_count does not match events"}]
+    dropped_event_count = inspect_trace.get("dropped_event_count")
+    if not isinstance(dropped_event_count, int) or dropped_event_count != 0:
+        return [{"__malformed__": "inspect trace is truncated"}]
+
+    projected: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            return [{"__malformed__": "inspect event is not an object"}]
+        if event.get("kind") != "tool_scope":
+            continue
+        item = {k: v for k, v in event.items() if k not in {"seq", "kind"}}
+        projected.append(item)
+    if scopes != projected:
+        return [{"__malformed__": "tool_scopes projection disagrees with events"}]
+    return [
+        dict(scope) if isinstance(scope, dict) else {"__malformed__": "scope is not an object"}
+        for scope in scopes
+    ]
+
+
 def classify(
     events_raw: list[Any],
     *,
@@ -97,6 +136,10 @@ def classify(
     # An explicit autonomous flag (manifest) overrides the scenario declaration.
     if autonomous is not None:
         scenario = {**(scenario or {}), "autonomous": autonomous}
+
+    tool_scope_asserted = bool(((scenario or {}).get("assertions") or {}).get("tool_scope"))
+    if tool_scope is None and tool_scope_asserted:
+        tool_scope = _tool_scope_from_inspect(inspect_trace)
 
     # Normalize the event log; a parse failure is a harness-validity defect.
     parse_ok = True
