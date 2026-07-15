@@ -30,6 +30,49 @@ _LOG = logging.getLogger(__name__)
 # a process-local random key (stable for this process's lifetime).
 _DEV_GATEWAY_SECRET = _secrets.token_bytes(32)
 
+_GATEWAY_DIAGNOSTIC_MAX_CHARS = 1200
+_GATEWAY_SECRET_RE = re.compile(
+    r"(?i)\b(?:kg_auth_token|authorization|api[_-]?key|token|secret)\b"
+    r"(?:\s*[:=]\s*|\s+)(?:bearer\s+|token\s+)?[^\s;]+"
+)
+
+
+def _bounded_gateway_diagnostic(
+    output: object,
+    *,
+    exit_code: object = None,
+    auth_token: str = "",
+) -> str:
+    """Return bounded startup evidence without retaining gateway credentials.
+
+    Shell-session output can include the echoed ``KG_AUTH_TOKEN=...`` launch
+    assignment, arbitrary terminal controls, or a very large traceback.  Kernel
+    readiness failures are durable AgentError evidence, so sanitize and bound the
+    text before it crosses that boundary.  Raw exception strings are intentionally
+    excluded by callers; transport failures are represented by their class only.
+    """
+
+    text = str(output or "")
+    if auth_token:
+        text = text.replace(auth_token, "<redacted>")
+    text = _GATEWAY_SECRET_RE.sub("<redacted>", text)
+    text = "".join(
+        char for char in text if char in "\n\t" or (ord(char) >= 32 and ord(char) != 127)
+    ).strip()
+    if len(text) > _GATEWAY_DIAGNOSTIC_MAX_CHARS:
+        text = "…" + text[-(_GATEWAY_DIAGNOSTIC_MAX_CHARS - 1) :]
+    prefix = f"exit={exit_code}; " if exit_code is not None else ""
+    return (prefix + text).strip()[: _GATEWAY_DIAGNOSTIC_MAX_CHARS + len(prefix)]
+
+
+def _gateway_transport_state(exc: BaseException) -> str:
+    """Class-only transport evidence: actionable category without raw URL/detail."""
+
+    name = type(exc).__name__
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", name):
+        name = "RequestError"
+    return f"transport={name}"
+
 
 def _gateway_auth_token(sandbox_id: str) -> str:
     """The kernel gateway's auth token for one sandbox. SECURITY: the gateway
@@ -591,33 +634,75 @@ class GatewayKernel(KernelSession):
             f"jupyter kernelgateway --KernelGatewayApp.api=kernel_gateway.jupyter_websocket "
             f"--ip 0.0.0.0 --port {port}"
         )
-        await self._sessions.exec("__kernel", cmd, None)
-
-        # Poll /api until ready. The gateway start is CPU-bound; on a saturated
-        # box (local-LLM inference + the build agent competing for cores) it can
-        # take well over 30s, so an autonomous build would forfeit on a
-        # slow-but-fine start. Budget generously + env-tunable
-        # (DISCO_KERNEL_GATEWAY_START_S, default 120s; PMX_ legacy honored).
         budget_s = int(
             os.environ.get("DISCO_KERNEL_GATEWAY_START_S")
             or os.environ.get("PMX_KERNEL_GATEWAY_START_S")
             or "120"
         )
+        budget_s = max(1, budget_s)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget_s
+        started = await self._sessions.exec("__kernel", cmd, None)
+        started_running = getattr(started, "running", None)
+        started_exit = getattr(started, "exit_code", None)
+        started_diagnostic = _bounded_gateway_diagnostic(
+            getattr(started, "output", ""),
+            exit_code=started_exit,
+            auth_token=self._token,
+        )
+        if started_running is False:
+            diagnostic = started_diagnostic or "gateway process exited without startup output"
+            raise SandboxError(
+                "jupyter kernel gateway exited during startup; "
+                f"diagnostic={diagnostic}. code_exec is unavailable for this sandbox session; "
+                "continuing with shell is a degraded fallback and does not prove kernel state"
+            )
+
+        # Poll /api until ready. The gateway start is CPU-bound; on a saturated
+        # box (local-LLM inference + the build agent competing for cores) it can
+        # take well over 30s, so an autonomous build would forfeit on a
+        # slow-but-fine start. The env-tunable budget is a REAL wall-clock bound,
+        # inclusive of the tmux launch wait: poll count × request timeout × sleep
+        # must never silently stretch a claimed 120 seconds toward four minutes.
+        # (DISCO_KERNEL_GATEWAY_START_S, default 120s; PMX_ legacy honored).
+        last_readiness = "not_reachable"
         async with httpx.AsyncClient() as client:
-            for _ in range(max(1, budget_s)):
+            while (remaining := deadline - loop.time()) > 0:
                 try:
                     res = await client.get(
-                        f"{self._url}/api", timeout=1.0, headers=self._auth_headers
+                        f"{self._url}/api",
+                        timeout=max(0.05, min(1.0, remaining)),
+                        headers=self._auth_headers,
                     )
                     if res.status_code == 200:
                         return self._url
-                    await asyncio.sleep(1.0)  # up but not 200 yet — wait, don't tight-loop
-                except Exception:
-                    await asyncio.sleep(1.0)  # not up yet (connection refused) — wait
+                    last_readiness = f"http_status={res.status_code}"
+                except Exception as exc:  # noqa: BLE001 — class-only readiness evidence below
+                    last_readiness = _gateway_transport_state(exc)
+                remaining = deadline - loop.time()
+                if remaining > 0:
+                    await asyncio.sleep(min(1.0, remaining))
+
+        # The process may have exited after ShellSessionManager's initial 15-second
+        # observation. Capture one final, separately bounded pane view without
+        # letting diagnostics materially extend the advertised startup budget.
+        final_diagnostic = started_diagnostic
+        try:
+            view = await asyncio.wait_for(self._sessions.view("__kernel"), timeout=1.0)
+            viewed = _bounded_gateway_diagnostic(
+                getattr(view, "output", ""), auth_token=self._token
+            )
+            if viewed:
+                final_diagnostic = viewed
+        except Exception:  # noqa: BLE001 — keep the launch-time bounded fallback
+            pass
+        diagnostic_suffix = f"; diagnostic={final_diagnostic}" if final_diagnostic else ""
 
         raise SandboxError(
-            f"jupyter kernel gateway failed to start within {budget_s}s "
-            f"(set DISCO_KERNEL_GATEWAY_START_S higher if the box is heavily loaded)"
+            f"jupyter kernel gateway failed to start within {budget_s}s; "
+            f"final_readiness={last_readiness}{diagnostic_suffix}. "
+            "code_exec is unavailable for this sandbox session; continuing with shell is a "
+            "degraded fallback and does not prove kernel state"
         )
 
     async def start(self) -> None:

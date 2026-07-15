@@ -71,13 +71,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # gcc/g++/make/libc-dev — without it `make`-based builds exit 127 and C-extension
 # pip installs (any dependency with no prebuilt wheel) fail to compile, both of
 # which make a build agent flail (same class as the missing python alias / pytest).
-# unzip + sqlite3 are frequent (archive extraction, ad-hoc DB inspection). lsof is
+# unzip + sqlite3 are frequent (archive extraction, ad-hoc DB inspection). `file`
+# and `xxd` are the baseline binary/asset inspection tools used by generated-app
+# verification; omitting them made agents repeat guaranteed exit-127 probes. lsof is
 # a general port/process debugging staple (live_view.py's port probe no longer
 # needs it — it bind-probes via stdlib — but agents debugging "address in use"
 # reach for it constantly). Late layer = cheap, keeps the expensive
 # playwright/chromium layer cached.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential unzip sqlite3 lsof \
+      build-essential unzip sqlite3 lsof file xxd \
     && rm -rf /var/lib/apt/lists/*
 
 # noVNC live-browser stack (E6 / noVNC P1). Packages ONLY — no services started in

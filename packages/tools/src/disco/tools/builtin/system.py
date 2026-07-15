@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.base import ExecResult
-from ._shell_caps import cap_shell_observation
+from ._shell_caps import cap_shell_observation, sanitize_execution_output
 
 # The executor enforces a HARD ceiling (`wait_for(ctx.timeout_s)`). A graceful tool
 # gives its in-container `timeout` a little less, so that fires FIRST and we return a
@@ -49,8 +49,20 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
     (not just a nonzero exit): the partial output is preserved and `timed_out` is
     surfaced in `structured`, so the loop can tell 'killed for running too long' from
     'the command failed'."""
+    # H205: sanitize each raw decoded stream BEFORE constructing content,
+    # structured values, or a spill file.  Once a stream proves binary-like, no
+    # excerpt of it is safe to persist; the bounded replacement carries only
+    # counts and an actionable redirect-to-artifact hint.
+    stdout, stdout_sanitized = sanitize_execution_output(res.stdout, stream="stdout")
+    stderr, stderr_sanitized = sanitize_execution_output(res.stderr, stream="stderr")
+    sanitized_streams = {
+        name: metadata
+        for name, metadata in (("stdout", stdout_sanitized), ("stderr", stderr_sanitized))
+        if metadata is not None
+    }
+
     ok = res.exit_code == 0 and not res.timed_out
-    body = res.stdout if (ok or not res.stderr) else f"{res.stdout}\n{res.stderr}".strip()
+    body = stdout if (ok or not stderr) else f"{stdout}\n{stderr}".strip()
     if res.timed_out:
         error: str | None = f"{what} timed out after {timeout_s}s (partial output preserved)"
     elif not ok:
@@ -60,9 +72,9 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
         # without this the model never sees the actionable "serve on a non-reserved port
         # such as N" guidance and re-tries the same reserved port → STUCK. Other nonzero
         # exits keep the concise summary.
-        stderr = (res.stderr or "").strip()
-        if res.exit_code == 126 and stderr.startswith("refused:"):
-            error = stderr
+        refusal_stderr = stderr.strip()
+        if res.exit_code == 126 and refusal_stderr.startswith("refused:"):
+            error = refusal_stderr
         else:
             error = f"{what} exited {res.exit_code}"
     else:
@@ -78,8 +90,8 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
     if cap_meta is None:
         structured.update(
             {
-                "stdout": res.stdout,
-                "stderr": res.stderr,
+                "stdout": stdout,
+                "stderr": stderr,
                 "output_truncated": False,
             }
         )
@@ -89,6 +101,13 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
                 "stdout_chars": len(res.stdout),
                 "stderr_chars": len(res.stderr),
                 **cap_meta,
+            }
+        )
+    if sanitized_streams:
+        structured.update(
+            {
+                "binary_output_sanitized": True,
+                "sanitized_streams": sanitized_streams,
             }
         )
     return ToolOutcome(
@@ -156,9 +175,52 @@ class CodeExecTool:
             # (floored: a tiny tool timeout must not go zero/negative on the kernel)
             kernel_timeout = max(5, min(ctx.timeout_s - 5, 120))
             res = await ctx.kernel.execute(args.code, timeout_s=kernel_timeout)
-
+            stdout, stdout_sanitized = sanitize_execution_output(res.stdout, stream="stdout")
+            stderr, stderr_sanitized = sanitize_execution_output(res.stderr, stream="stderr")
+            result_repr, result_sanitized = sanitize_execution_output(
+                res.result_repr or "", stream="result"
+            )
+            traceback, traceback_sanitized = sanitize_execution_output(
+                res.error_traceback or "", stream="traceback"
+            )
+            content_parts = [part for part in (stdout, stderr) if part]
+            if result_repr:
+                content_parts.append(f"→ {result_repr}")
+            if traceback:
+                content_parts.append(traceback)
+            content_parts.extend(f"plot saved: {image}" for image in res.images)
+            structured = {
+                "ok": res.ok,
+                "stdout": stdout,
+                "stderr": stderr,
+                "result_repr": result_repr or None,
+                "error_traceback": traceback or None,
+                "images": list(res.images),
+                "timed_out": res.timed_out,
+                "restarted": res.restarted,
+            }
+            sanitized_streams = {
+                name: metadata
+                for name, metadata in (
+                    ("stdout", stdout_sanitized),
+                    ("stderr", stderr_sanitized),
+                    ("result", result_sanitized),
+                    ("traceback", traceback_sanitized),
+                )
+                if metadata is not None
+            }
+            if sanitized_streams:
+                structured.update(
+                    {
+                        "binary_output_sanitized": True,
+                        "sanitized_streams": sanitized_streams,
+                    }
+                )
             return ToolOutcome(
-                success=res.ok, content=str(res), structured=res.__dict__, artifacts=res.images
+                success=res.ok,
+                content="\n".join(content_parts),
+                structured=structured,
+                artifacts=res.images,
             )
 
         # Node: one-shot (no cross-cell state — documented).

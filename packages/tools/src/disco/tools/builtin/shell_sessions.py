@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.shell_sessions import SessionBusy
 from ._outcomes import fail_outcome as _fail
-from ._shell_caps import cap_shell_observation
+from ._shell_caps import cap_shell_observation, sanitize_execution_output
 
 
 def _reject_reserved_session(session: str) -> ToolOutcome | None:
@@ -70,16 +70,30 @@ class ShellExecTool:
             else:
                 header = f"session '{args.session}' — exit {outcome.exit_code}"
 
-            content = f"{header}\n{outcome.output}"
+            output, output_sanitized = sanitize_execution_output(
+                outcome.output, stream="session output"
+            )
+            content = f"{header}\n{output}"
             if outcome.note:
                 content += f"\nNote: {outcome.note}"
             content, cap_meta = cap_shell_observation(content.strip())
-            structured = cap_meta if cap_meta is not None else None
+            structured = dict(cap_meta) if cap_meta is not None else None
+            if output_sanitized is not None:
+                if structured is None:
+                    structured = {}
+                structured.update(
+                    {
+                        "binary_output_sanitized": True,
+                        "sanitized_streams": {"session_output": output_sanitized},
+                    }
+                )
             return ToolOutcome(success=True, content=content, structured=structured)
         except SessionBusy as e:
-            return _fail(str(e))
+            message, _ = sanitize_execution_output(str(e), stream="session error")
+            return _fail(message)
         except Exception as e:
-            return _fail(f"Error: {e}")
+            message, _ = sanitize_execution_output(str(e), stream="session error")
+            return _fail(f"Error: {message}")
 
 
 class ShellViewArgs(BaseModel):
@@ -107,10 +121,22 @@ class ShellViewTool:
         try:
             view = await ctx.sessions.view(args.session)
             state = "running" if view.running else "idle"
-            content = f"session '{args.session}' — {state}\n{view.output}"
-            return ToolOutcome(success=True, content=content.strip())
+            output, output_sanitized = sanitize_execution_output(
+                view.output, stream="session output"
+            )
+            content = f"session '{args.session}' — {state}\n{output}"
+            structured = (
+                {
+                    "binary_output_sanitized": True,
+                    "sanitized_streams": {"session_output": output_sanitized},
+                }
+                if output_sanitized is not None
+                else None
+            )
+            return ToolOutcome(success=True, content=content.strip(), structured=structured)
         except Exception as e:
-            return _fail(f"Error: {e}")
+            message, _ = sanitize_execution_output(str(e), stream="session error")
+            return _fail(f"Error: {message}")
 
 
 class ShellWaitArgs(BaseModel):
@@ -137,10 +163,22 @@ class ShellWaitTool:
         try:
             view = await ctx.sessions.wait(args.session, args.seconds)
             state = "running" if view.running else "idle"
-            content = f"session '{args.session}' — {state}\n{view.output}"
-            return ToolOutcome(success=True, content=content.strip())
+            output, output_sanitized = sanitize_execution_output(
+                view.output, stream="session output"
+            )
+            content = f"session '{args.session}' — {state}\n{output}"
+            structured = (
+                {
+                    "binary_output_sanitized": True,
+                    "sanitized_streams": {"session_output": output_sanitized},
+                }
+                if output_sanitized is not None
+                else None
+            )
+            return ToolOutcome(success=True, content=content.strip(), structured=structured)
         except Exception as e:
-            return _fail(f"Error: {e}")
+            message, _ = sanitize_execution_output(str(e), stream="session error")
+            return _fail(f"Error: {message}")
 
 
 class ShellWriteArgs(BaseModel):

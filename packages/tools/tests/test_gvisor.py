@@ -46,6 +46,27 @@ def test_sandbox_image_browser_bundle_is_shared_with_uid_1000_and_marp() -> None
     assert "/root/.cache/ms-playwright" not in dockerfile
 
 
+def test_sandbox_image_includes_asset_inspection_clis() -> None:
+    """H204: the canonical sandbox must ship the asset-inspection commands agents use.
+
+    RUN-358 proved that advertising a common-CLI image while omitting ``file`` and
+    ``xxd`` produces repeated exit-127 thrash. Keep this assertion bound to the
+    specific common-CLI install layer so mentioning a package in prose cannot pass.
+    """
+    dockerfile = (
+        Path(__file__).resolve().parents[3] / "deploy" / "sandbox" / "Dockerfile"
+    ).read_text()
+    common_cli_section = dockerfile.split("# Build toolchain + common CLIs", 1)[1].split(
+        "# noVNC live-browser stack", 1
+    )[0]
+    install_command = common_cli_section.split("RUN apt-get update", 1)[1].split(
+        "&& rm -rf", 1
+    )[0]
+    install_tokens = set(install_command.replace("\\", " ").split())
+
+    assert {"file", "xxd"} <= install_tokens
+
+
 class FakeContainer:
     def __init__(self, run_kwargs: dict) -> None:
         self.run_kwargs = run_kwargs
