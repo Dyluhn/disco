@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from disco.core.events import (
     ActionEvent,
     AgentErrorEvent,
@@ -32,7 +31,6 @@ from disco.core.events import (
 )
 from disco.core.loop import signals
 from disco.core.migration import migrate_event
-
 
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "evidence.db"
@@ -49,10 +47,7 @@ def _load_events() -> list[Any]:
         "select payload from events where conversation_id=? order by seq",
         (CID,),
     ).fetchall()
-    return [
-        event_from_json_dict(migrate_event(json.loads(row["payload"])))
-        for row in rows
-    ]
+    return [event_from_json_dict(migrate_event(json.loads(row["payload"]))) for row in rows]
 
 
 def _short(text: str, limit: int = 120) -> str:
@@ -102,8 +97,7 @@ def print_db_evidence() -> None:
                 print(f"    seq={event.seq} agent_error")
             elif isinstance(event, StatusEvent):
                 print(
-                    f"    seq={event.seq} status "
-                    f"status={event.status.value} detail={event.detail}"
+                    f"    seq={event.seq} status status={event.status.value} detail={event.detail}"
                 )
             else:
                 print(f"    seq={getattr(event, 'seq', None)} {type(event).__name__}")
@@ -114,10 +108,7 @@ def print_db_evidence() -> None:
         if isinstance(event, MessageEvent) and event.source == EventSource.AGENT
     ]
     print(f"persisted_agent_message_count={len(agent_messages)}")
-    print(
-        "persisted_agent_message_seqs="
-        f"{[event.seq for event in agent_messages]}"
-    )
+    print(f"persisted_agent_message_seqs={[event.seq for event in agent_messages]}")
 
 
 async def live_glm_empty_stop_probe() -> None:
@@ -144,15 +135,12 @@ async def live_glm_empty_stop_probe() -> None:
             {
                 "role": "system",
                 "content": (
-                    "Follow the user instruction exactly. Tools are available "
-                    "but optional."
+                    "Follow the user instruction exactly. Tools are available but optional."
                 ),
             },
             {
                 "role": "user",
-                "content": (
-                    "Return exactly three spaces and nothing else. Do not call tools."
-                ),
+                "content": ("Return exactly three spaces and nothing else. Do not call tools."),
             },
         ],
         "temperature": 0.0,

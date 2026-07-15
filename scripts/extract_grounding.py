@@ -95,8 +95,10 @@ def _build_nli() -> tuple[Any, dict[str, Any]]:
     if _active_remote():
         import os
 
-        from disco.retrieval.live import _DEFAULTS  # type: ignore[attr-defined]
-        from disco.retrieval.live import SidecarNLIVerifier
+        from disco.retrieval.live import (
+            _DEFAULTS,  # type: ignore[attr-defined]
+            SidecarNLIVerifier,
+        )
 
         url = (
             os.environ.get("DISCO_NLI_URL")
@@ -110,7 +112,11 @@ def _build_nli() -> tuple[Any, dict[str, Any]]:
             "note": "real 3-way NLI cross-encoder (mDeBERTa-class) at the sidecar",
         }
 
-    from disco.retrieval.local_encoders import RERANK_MODEL, FastEmbedNLIVerifier, _tier_rerank_default
+    from disco.retrieval.local_encoders import (
+        RERANK_MODEL,
+        FastEmbedNLIVerifier,
+        _tier_rerank_default,
+    )
 
     return FastEmbedNLIVerifier(), {
         "active": "in-process FastEmbedNLIVerifier (ONNX/CPU via fastembed)",

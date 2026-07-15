@@ -239,8 +239,7 @@ async def _amain(args: argparse.Namespace) -> int:
                 # A misconfigured --base / down server should read as a clear message,
                 # not a stack trace.
                 print(
-                    f"Could not reach the agent-server at {args.base}: "
-                    f"{type(exc).__name__}: {exc}"
+                    f"Could not reach the agent-server at {args.base}: {type(exc).__name__}: {exc}"
                 )
                 return 1
             print(_format_reply(res))

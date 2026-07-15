@@ -70,13 +70,13 @@ def mermaid(es: set[tuple[str, str]]) -> str:
     lines = [
         "```mermaid",
         "graph TD",
-        "    frontend[\"frontend (React/Vite)\"]",
-        "    app_server[\"app-server — config/admin API\"]",
-        "    agent_server[\"agent-server — runtime + AgentLoop\"]",
-        "    tools[\"tools — sandbox + builtin tools\"]",
-        "    retrieval[\"retrieval — deep research\"]",
-        "    core[\"core — events, loop engine, LLM\"]",
-        "    sandbox[(\"sandbox container<br/>podman/gVisor\")]",
+        '    frontend["frontend (React/Vite)"]',
+        '    app_server["app-server — config/admin API"]',
+        '    agent_server["agent-server — runtime + AgentLoop"]',
+        '    tools["tools — sandbox + builtin tools"]',
+        '    retrieval["retrieval — deep research"]',
+        '    core["core — events, loop engine, LLM"]',
+        '    sandbox[("sandbox container<br/>podman/gVisor")]',
         "    %% runtime (HTTP / spawn) edges — stable, not import-derived",
         "    frontend -.HTTP.-> agent_server",
         "    frontend -.HTTP.-> app_server",
@@ -101,8 +101,7 @@ def render(es: set[tuple[str, str]]) -> str:
         "Solid arrows = Python import dependencies (auto-derived). Dotted = runtime\n"
         "(HTTP / sandbox spawn). A thick `UPWARD` arrow marks a tracked layering\n"
         "violation (see `.importlinter`). Layering + size are enforced by\n"
-        "`lint-imports` and `scripts/check_arch_budget.py`.\n\n"
-        + mermaid(es) + "\n"
+        "`lint-imports` and `scripts/check_arch_budget.py`.\n\n" + mermaid(es) + "\n"
     )
 
 
@@ -112,8 +111,10 @@ def main() -> int:
     if check:
         existing = open(OUT, encoding="utf-8").read() if os.path.exists(OUT) else ""
         if existing != content:
-            print("STALE: docs/architecture.generated.md is out of date — run "
-                  "`python3 scripts/gen_arch_diagram.py`.")
+            print(
+                "STALE: docs/architecture.generated.md is out of date — run "
+                "`python3 scripts/gen_arch_diagram.py`."
+            )
             return 1
         print("architecture diagram up to date.")
         return 0

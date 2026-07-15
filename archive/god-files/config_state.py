@@ -660,9 +660,7 @@ class ConfigState:
     def projects_config(self) -> ProjectStorageConfigDTO:
         return _projects_from(self._store.load())
 
-    def update_projects_config(
-        self, dto: ProjectStorageConfigDTO
-    ) -> ProjectStorageConfigDTO:
+    def update_projects_config(self, dto: ProjectStorageConfigDTO) -> ProjectStorageConfigDTO:
         """Persist the chosen projects_root after validation. An empty path
         unsets it (allowed). A non-empty path must be an existing, writable
         directory or this raises ConfigValidationError; the endpoint maps that
@@ -834,9 +832,7 @@ class ConfigState:
             srv["command"] = [body.url]
         servers = {**cfg.servers, body.name: srv}
         new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(
-            self._store.load().model_copy(update={"mcp": new_cfg})
-        )
+        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         return McpConnectionDTO(
             id=body.name,
             name=body.name,
@@ -865,9 +861,7 @@ class ConfigState:
             updated["risk_tier"] = patch.risk_tier
         servers = {**cfg.servers, name: updated}
         new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(
-            self._store.load().model_copy(update={"mcp": new_cfg})
-        )
+        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         approvals = self._mcp_approvals()
         ap = approvals.get(name)
         return McpConnectionDTO(
@@ -888,9 +882,7 @@ class ConfigState:
             return False
         servers = {k: v for k, v in cfg.servers.items() if k != name}
         new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(
-            self._store.load().model_copy(update={"mcp": new_cfg})
-        )
+        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         # Also remove the approval row.
         if self._db_conn is not None:
             try:

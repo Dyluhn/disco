@@ -164,6 +164,7 @@ class _MCPToolWrapper:
                 error=str(exc),
             )
 
+
 class _MetaToolSearchWrapper:
     """Wraps the tool_search meta-tool with the full MCP tool list for searching.
 
@@ -225,10 +226,7 @@ def _apply_mcp_scope(
         from disco.tools.mcp.tool_search import meta_tool_search
 
         ts_def = meta_tool_search()
-        all_tool_descs = [
-            {"name": t.name, "description": t.description}
-            for t in all_mcp_tools
-        ]
+        all_tool_descs = [{"name": t.name, "description": t.description} for t in all_mcp_tools]
         executor._registry.register(_MetaToolSearchWrapper(ts_def, all_tool_descs))
         # tool_search must be in allowed_tools (callable) and advertised_tools (visible).
         executor._scope = executor._scope.model_copy(
@@ -250,8 +248,7 @@ def _has_unfinished_plan(events: list) -> bool:
     if not has_plan:
         return False
     has_finished = any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in events
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
     )
     return not has_finished
 
@@ -435,7 +432,10 @@ def _release_process_memory() -> None:
 
     gc.collect()
     if (os.environ.get("DISCO_DR_MALLOC_TRIM") or "1").strip().lower() in (
-        "0", "off", "false", "none",
+        "0",
+        "off",
+        "false",
+        "none",
     ):
         return
     try:
@@ -664,9 +664,7 @@ class ConversationRuntime:
         the long-horizon engine; Research stays read-only + ungated. Idempotent
         until the loop is built. PERSISTED so a server restart cannot demote a
         Build/DR conversation to the toolless research default (DC-05 re-run #7)."""
-        self._surface[conversation_id] = (
-            surface if surface in self._VALID_SURFACES else "research"
-        )
+        self._surface[conversation_id] = surface if surface in self._VALID_SURFACES else "research"
         self._save_surfaces()
 
     def _surface_of(self, conversation_id: str) -> str:
@@ -782,9 +780,7 @@ class ConversationRuntime:
             key = cfg.model_for(ModelRole.AGENT_DRIVER)
             entry = cfg.entry_for(key)
             if entry and entry.base_url:
-                api_key = (
-                    os.environ.get(entry.api_key_env) if entry.api_key_env else None
-                )
+                api_key = os.environ.get(entry.api_key_env) if entry.api_key_env else None
                 await asyncio.to_thread(_do_live_model_probe, entry.base_url, api_key)
         except Exception:  # noqa: BLE001 — best effort; the static config is the fallback
             pass
@@ -803,6 +799,7 @@ class ConversationRuntime:
         if not self._override_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._override_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -820,9 +817,7 @@ class ConversationRuntime:
             try:
                 with open(self._surface_path) as f:
                     data = json.load(f)
-                return {
-                    str(k): str(v) for k, v in data.items() if v in self._VALID_SURFACES
-                }
+                return {str(k): str(v) for k, v in data.items() if v in self._VALID_SURFACES}
             except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
                 return {}
         return {}
@@ -831,6 +826,7 @@ class ConversationRuntime:
         if not self._surface_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._surface_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -853,6 +849,7 @@ class ConversationRuntime:
         if not self._autonomous_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._autonomous_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -905,6 +902,7 @@ class ConversationRuntime:
         if not self._assist_path:
             return
         import tempfile
+
         try:
             dir_name = os.path.dirname(self._assist_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
@@ -923,11 +921,12 @@ class ConversationRuntime:
         """The SINGLE source of truth for the assist gate."""
         if conversation_id in self._assist:
             return self._assist[conversation_id]
-        
+
         # Default policy
         override = self._model_override.get(conversation_id)
         router = self._router_now(pick=override)
         from disco.core.llm import ModelRole
+
         key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
         entry = router._config.models.get(key)
         return self._is_small_assist_default(entry)
@@ -1244,7 +1243,9 @@ class ConversationRuntime:
             cfg = self._config_store.load()
             max_schemas = cfg.mcp.max_active_schemas if cfg.mcp else 20
             _apply_mcp_scope(
-                executor, all_mcp_tools, self._mcp_call_target,
+                executor,
+                all_mcp_tools,
+                self._mcp_call_target,
                 max_active_schemas=max_schemas,
             )
 
@@ -1374,9 +1375,16 @@ class ConversationRuntime:
         search_key = os.environ.get(sch.api_key_env, "") if sch.api_key_env else ""
         ext_key = os.environ.get(ext.api_key_env, "") if ext.api_key_env else ""
         key = (
-            enc.remote, enc.reranker_url, enc.embedder_url, enc.nli_url,
-            sch.provider, sch.base_url, sch.api_key_env,
-            ext.provider, ext.base_url, ext.api_key_env,
+            enc.remote,
+            enc.reranker_url,
+            enc.embedder_url,
+            enc.nli_url,
+            sch.provider,
+            sch.base_url,
+            sch.api_key_env,
+            ext.provider,
+            ext.base_url,
+            ext.api_key_env,
         )
         if self._research_providers is None or self._research_encoders_key != key:
             from disco.retrieval.live import build_live_retrieval
@@ -1447,9 +1455,7 @@ class ConversationRuntime:
             self._run_with_persistence(conversation_id, loop)
         )
 
-    async def _run_with_persistence(
-        self, conversation_id: str, loop: AgentLoop
-    ) -> Any:
+    async def _run_with_persistence(self, conversation_id: str, loop: AgentLoop) -> Any:
         """Snapshot/rehydrate wrapper around `loop.run()`. Surface-aware:
         - Build → snapshot+rehydrate the workspace as before.
         - Deep Research → short-circuit `loop.run()` on the post-plan-approval
@@ -1728,17 +1734,22 @@ class ConversationRuntime:
                         "new_hash": new_hash,
                     }
                     _LOG.warning(
-                        "MCP pool: server %r refused — re-approval required "
-                        "(old=%s… new=%s…)",
-                        name, old_hash[:12], new_hash[:12],
+                        "MCP pool: server %r refused — re-approval required (old=%s… new=%s…)",
+                        name,
+                        old_hash[:12],
+                        new_hash[:12],
                     )
                     if pending_db_conn is not None and old_hash and new_hash:
                         try:
                             from disco.tools.mcp.migrations import (
                                 set_mcp_approval_pending,
                             )
+
                             set_mcp_approval_pending(
-                                pending_db_conn, name, old_hash, new_hash,
+                                pending_db_conn,
+                                name,
+                                old_hash,
+                                new_hash,
                             )
                         except Exception:
                             _LOG.warning(
@@ -1760,7 +1771,9 @@ class ConversationRuntime:
                 _LOG.warning(
                     "McpPool: HTTP server %r refused — description_hash changed "
                     "(%s → %s) — re-approval required",
-                    name, exc.old_hash[:12], exc.new_hash[:12],
+                    name,
+                    exc.old_hash[:12],
+                    exc.new_hash[:12],
                 )
                 self._mcp_approval_pending[name] = {
                     "old_hash": exc.old_hash,
@@ -1776,8 +1789,12 @@ class ConversationRuntime:
                         from disco.tools.mcp.migrations import (
                             set_mcp_approval_pending,
                         )
+
                         set_mcp_approval_pending(
-                            http_db_conn, name, exc.old_hash, exc.new_hash,
+                            http_db_conn,
+                            name,
+                            exc.old_hash,
+                            exc.new_hash,
                         )
                     except Exception:
                         _LOG.warning(
@@ -1792,9 +1809,7 @@ class ConversationRuntime:
                     with contextlib.suppress(Exception):
                         await client.close()
             except Exception as exc:
-                _LOG.warning(
-                    "McpPool: HTTP server %r failed to start: %s", name, exc
-                )
+                _LOG.warning("McpPool: HTTP server %r failed to start: %s", name, exc)
                 if name in self._mcp_http_clients:
                     client = self._mcp_http_clients.pop(name)
                     with contextlib.suppress(Exception):
@@ -1841,10 +1856,7 @@ class ConversationRuntime:
         raw_tools = await client.list_tools()
 
         # Compute the description hash and check approval
-        tool_descs = [
-            {"name": t.name, "description": t.description or ""}
-            for t in raw_tools
-        ]
+        tool_descs = [{"name": t.name, "description": t.description or ""} for t in raw_tools]
         new_hash = compute_description_hash(tool_descs)
 
         stored = approvals.get(name)
@@ -1881,7 +1893,8 @@ class ConversationRuntime:
 
         _LOG.info(
             "McpPool: HTTP server %r connected — %d tool(s) registered",
-            name, len(raw_tools),
+            name,
+            len(raw_tools),
         )
 
     @property
@@ -1901,9 +1914,7 @@ class ConversationRuntime:
                     return await http_clients[server].call_tool(tool, arguments)
                 if pool is not None:
                     return await pool.call_tool(server, tool, arguments)
-                raise RuntimeError(
-                    f"MCP server {server!r} is not connected"
-                )
+                raise RuntimeError(f"MCP server {server!r} is not connected")
 
         return _MergedCallTarget()
 
@@ -1923,35 +1934,42 @@ class ConversationRuntime:
         if self._mcp_pool is not None and self._mcp_pool.started:
             for tdef in self._mcp_pool.snapshot():
                 from disco.tools.mcp.naming import split_qualified_name
+
                 parts = split_qualified_name(tdef.name)
                 if parts is None:
                     continue
                 server, tool_name = parts
-                mcp_entries.append({
-                    "server": server,
-                    "tool_name": tool_name,
-                    "tool": tdef,
-                })
+                mcp_entries.append(
+                    {
+                        "server": server,
+                        "tool_name": tool_name,
+                        "tool": tdef,
+                    }
+                )
 
         # HTTP tools
         for qname, tdef in self._mcp_http_tools.items():
             from disco.tools.mcp.naming import split_qualified_name
+
             parts = split_qualified_name(qname)
             if parts is None:
                 continue
             server, tool_name = parts
-            mcp_entries.append({
-                "server": server,
-                "tool_name": tool_name,
-                "tool": tdef,
-            })
+            mcp_entries.append(
+                {
+                    "server": server,
+                    "tool_name": tool_name,
+                    "tool": tdef,
+                }
+            )
 
         if mcp_entries:
-            self._mcp_retrieval_searches, self._mcp_retrieval_extractions = \
+            self._mcp_retrieval_searches, self._mcp_retrieval_extractions = (
                 build_retrieval_providers(
                     mcp_entries,
                     call_fn=self._mcp_call_target.call_tool,
                 )
+            )
             _LOG.info(
                 "MCP retrieval: built %d search + %d extraction provider(s)",
                 len(self._mcp_retrieval_searches),
@@ -2145,22 +2163,15 @@ class ConversationRuntime:
                 conversation_id,
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             )
-            await self._execute_deep_research(
-                conversation_id, plans[-1], resume_from=partial
-            )
+            await self._execute_deep_research(conversation_id, plans[-1], resume_from=partial)
             return
 
         # Phase 2: plan approved, no report yet → run the engine
-        if (
-            state.execution_status == ConversationStatus.RUNNING
-            and not reports
-        ):
+        if state.execution_status == ConversationStatus.RUNNING and not reports:
             # Distinguish "RUNNING because plan was just approved" from "RUNNING
             # because we're already deep in the engine and the task re-fired."
             # The marker: the last StatusEvent's detail is "plan_approved".
-            last_status = next(
-                (e for e in reversed(events) if isinstance(e, StatusEvent)), None
-            )
+            last_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
             if last_status is not None and last_status.detail == "plan_approved":
                 await self._execute_deep_research(conversation_id, plans[-1])
 
@@ -2170,9 +2181,7 @@ class ConversationRuntime:
         elif reports and self._has_fresh_user_message(events, reports):
             await self._follow_up_deep_research(conversation_id, events, reports[-1])
 
-    async def _propose_deep_research_plan(
-        self, conversation_id: str, events: list
-    ) -> None:
+    async def _propose_deep_research_plan(self, conversation_id: str, events: list) -> None:
         """Decompose the latest user query into sub-questions and emit a
         synthetic PlanEvent + AWAITING_PLAN_APPROVAL. Same shape Build's plan
         gate uses — the UI reuses the existing approve_plan / request_plan
@@ -2206,9 +2215,7 @@ class ConversationRuntime:
         # decompose/plan step (the exact half-applied-pill bug).
         router = self._router_now(pick=self._model_override.get(conversation_id))
         try:
-            subqs = await decompose_query(
-                router, query, max_subq=bound.max_subquestions
-            )
+            subqs = await decompose_query(router, query, max_subq=bound.max_subquestions)
         except Exception as exc:  # noqa: BLE001 — surface as a system reminder
             await self._store.append(
                 conversation_id,
@@ -2254,17 +2261,13 @@ class ConversationRuntime:
             # plan auto-approve (engine.py).
             await self._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.RUNNING, detail="plan_approved"
-                ),
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
             )
             await self._execute_deep_research(conversation_id, plan)
             return
         await self._store.append(
             conversation_id,
-            StatusEvent(
-                status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
-            ),
+            StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id),
         )
 
     async def _execute_deep_research(
@@ -2310,9 +2313,7 @@ class ConversationRuntime:
         # through the SAME engine, so deep-research citations can come from the MCP
         # tier identically to bundled providers.
         search, extraction = self._compose_mcp_retrieval(deps)
-        router = self._router_now(
-            pick=self._model_override.get(conversation_id)
-        )
+        router = self._router_now(pick=self._model_override.get(conversation_id))
         retrieval_engine = DefaultRetrievalEngine(
             search=search,
             extraction=extraction,
@@ -2381,9 +2382,7 @@ class ConversationRuntime:
                     last_action = next(
                         (
                             e
-                            for e in reversed(
-                                await self._store.get_events(conversation_id)
-                            )
+                            for e in reversed(await self._store.get_events(conversation_id))
                             if isinstance(e, ActionEvent)
                         ),
                         None,
@@ -2396,9 +2395,7 @@ class ConversationRuntime:
                             call_id=f"call_{kind}",
                             tool_name=kind,
                             success=bool(payload.get("ok", True)),
-                            content=str(
-                                {k: v for k, v in payload.items() if k != "ok"}
-                            ),
+                            content=str({k: v for k, v in payload.items() if k != "ok"}),
                             structured=payload,
                         ),
                         action_id=action_id,
@@ -2425,12 +2422,8 @@ class ConversationRuntime:
         if resume_from:
             from disco.retrieval.models import Passage, SearchHit
 
-            resume_passages = [
-                Passage.model_validate(p) for p in resume_from.passages
-            ]
-            resume_all_hits = [
-                SearchHit.model_validate(h) for h in resume_from.all_hits
-            ]
+            resume_passages = [Passage.model_validate(p) for p in resume_from.passages]
+            resume_all_hits = [SearchHit.model_validate(h) for h in resume_from.all_hits]
 
         # Fresh cancel flag for this execution; the engine polls it at each
         # sub-question/section boundary so Stop actually halts the run.
@@ -2638,9 +2631,7 @@ class ConversationRuntime:
         return {"ok": True, "conversation_id": cid}
 
     @staticmethod
-    def _has_fresh_user_message(
-        events: list[Event], reports: list[ReportEvent]
-    ) -> bool:
+    def _has_fresh_user_message(events: list[Event], reports: list[ReportEvent]) -> bool:
         """True when a USER message arrived AFTER the latest ReportEvent —
         a follow-up question the user asked on a finished report."""
         if not reports:
@@ -2849,9 +2840,7 @@ class ConversationRuntime:
 
         svc = self._sandbox_service_now()
         cid = f"export-docx-{_uuid.uuid4().hex[:12]}"
-        instance = await svc.create(
-            self._sandbox_spec, owner_id=owner_id, conversation_id=cid
-        )
+        instance = await svc.create(self._sandbox_spec, owner_id=owner_id, conversation_id=cid)
         try:
             return await serialize_docx(report, instance)
         finally:
@@ -3036,12 +3025,14 @@ class ConversationRuntime:
                 except Exception:  # noqa: BLE001 — best effort
                     _LOG.warning(
                         "[dc-07] failed to re-materialize upload %r for %s",
-                        p.name, conversation_id,
+                        p.name,
+                        conversation_id,
                     )
         if written:
             _LOG.info(
                 "[dc-07] re-materialized %d upload(s) for %s",
-                written, conversation_id,
+                written,
+                conversation_id,
             )
 
     async def _maybe_snapshot(self, conversation_id: str) -> None:
@@ -3103,9 +3094,7 @@ class ConversationRuntime:
                 message=LLMMessage(
                     role="user",
                     content=(
-                        "<system-reminder>\n"
-                        f"Project persistence note: {body}\n"
-                        "</system-reminder>"
+                        f"<system-reminder>\nProject persistence note: {body}\n</system-reminder>"
                     ),
                 ),
             ),
@@ -3115,9 +3104,7 @@ class ConversationRuntime:
         """Full conversation id whose uuid part starts with cid8 — live executors only
         (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
         matches = [
-            cid
-            for cid in self._executors.keys()
-            if cid.removeprefix("conv_").startswith(cid8)
+            cid for cid in self._executors.keys() if cid.removeprefix("conv_").startswith(cid8)
         ]
         if len(matches) == 1:
             return matches[0]
@@ -3285,7 +3272,7 @@ class ConversationRuntime:
         def _owner_json(o):  # bound ports only; normalized session name
             sess = o.session
             if sess and sess.startswith(ns):
-                sess = sess[len(ns):]
+                sess = sess[len(ns) :]
             return {"pid": o.pid, "cmdline": o.cmdline, "session": sess}
 
         ports_payload = [
@@ -3407,12 +3394,10 @@ class ConversationRuntime:
         self._cancel_flags.pop(conversation_id, None)
         self.kick(conversation_id)
 
-    def _condense_trailing_degeneracy(
-        self, events: list
-    ) -> CondensationEvent | None:
+    def _condense_trailing_degeneracy(self, events: list) -> CondensationEvent | None:
         """Pure-on-the-event-list detector for trailing degenerate segments.
         No model call (call-site: resume_conversation).
-        
+
         DC-05c Design:
         1. Detection: scan tail backwards to first real Action (non-bookkeeping)
            or USER Message. Count agent messages, duplicate knowledge, plan revisions.
@@ -3517,9 +3502,7 @@ class ConversationRuntime:
             reason="hard_reset",
         )
 
-    async def _reconstruct_resume_context(
-        self, conversation_id: str, events: list
-    ) -> list:
+    async def _reconstruct_resume_context(self, conversation_id: str, events: list) -> list:
         """Build the events to append before a resume status flip (DC-05b / DEFECT-4).
 
         Returns a list that may contain:
@@ -3564,9 +3547,7 @@ class ConversationRuntime:
         # 2. Environment reality block.
         # Starts with "Resumed by user." so existing checks that test for that
         # literal substring continue to pass.
-        parts: list[str] = [
-            "Resumed by user. Current environment reality after interruption:"
-        ]
+        parts: list[str] = ["Resumed by user. Current environment reality after interruption:"]
 
         # The sandbox sentence must match reality: a PAUSED landed by an in-loop
         # valve (dc-05a actionless/noop breakers) leaves the executor — and its
@@ -3604,7 +3585,7 @@ class ConversationRuntime:
         # DC-07: List uploads held server-side.
         upload_names = sorted(list(self.get_upload_names(conversation_id)))
         if upload_names:
-            # If the sandbox is dead, they are "lost-and-recoverable" until the 
+            # If the sandbox is dead, they are "lost-and-recoverable" until the
             # next action triggers recreation + re-materialization.
             listing = "\n  ".join(f"uploads/{n}" for n in upload_names[:30])
             status = (
@@ -3763,9 +3744,7 @@ class ConversationRuntime:
         #    + a 'killed' detail is the contract's terminal-for-now shape).
         await self._store.append(
             conversation_id,
-            StatusEvent(
-                source=EventSource.SYSTEM, status=ConversationStatus.IDLE, detail="killed"
-            ),
+            StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.IDLE, detail="killed"),
         )
 
     async def aclose(self) -> None:
@@ -3786,6 +3765,7 @@ class ConversationRuntime:
         after _start_schedule_manager is called at lifespan start)."""
         if not hasattr(self, "_sched_manager"):
             from .schedule import ScheduleManager
+
             self._sched_manager = ScheduleManager(self._store, self)
         return self._sched_manager
 
@@ -3816,9 +3796,7 @@ class ConversationRuntime:
         )
         return sched.model_dump(mode="json")
 
-    def list_schedules(
-        self, *, owner_id: str, conversation_id: str | None = None
-    ) -> list[dict]:
+    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
         """List schedules, optionally filtered to one conversation."""
         return [
             s.model_dump(mode="json")
@@ -3834,10 +3812,7 @@ class ConversationRuntime:
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
         """Preview next N run times for a cron expression (ISO-8601 strings).
         Returns [] for invalid expressions."""
-        return [
-            dt.isoformat()
-            for dt in self._schedule_manager().preview_next_runs(rrule, n)
-        ]
+        return [dt.isoformat() for dt in self._schedule_manager().preview_next_runs(rrule, n)]
 
     # -- activity dashboard ----------------------------------------------------
 

@@ -11,9 +11,7 @@ from disco.tools.workflow_seed import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Seed the built-in workflow instances."
-    )
+    parser = argparse.ArgumentParser(description="Seed the built-in workflow instances.")
     parser.add_argument(
         "--projects-root",
         help=(

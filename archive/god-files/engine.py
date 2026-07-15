@@ -125,6 +125,7 @@ def _nearest_tool_name(target: str, candidates: set[str]) -> str | None:
             best_name = name
     return best_name
 
+
 # Plan/meta tools that mutate bookkeeping state but do no real work. Excluded
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
 # actionless streak) so a model can't look productive by shuffling plan state.
@@ -301,7 +302,7 @@ def _detect_cargo_toml(workspace: Path) -> list[str]:
             out.append(f"  cargo build/test/run: package = {name.strip()}")
     bins = data.get("bin")
     if isinstance(bins, list):
-        for b in bins[: _F4_MAX_SCRIPTS_PER_MANIFEST]:
+        for b in bins[:_F4_MAX_SCRIPTS_PER_MANIFEST]:
             if isinstance(b, dict):
                 bn = b.get("name")
                 if isinstance(bn, str) and bn.strip():
@@ -319,7 +320,7 @@ def _detect_go_mod(workspace: Path) -> list[str]:
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("module "):
-            mod = line[len("module "):].strip()
+            mod = line[len("module ") :].strip()
             if mod:
                 return [f"  go test/build/run: module = {mod}"]
     return []
@@ -351,27 +352,27 @@ def _detect_project_bootstrap(workspace_path: str | os.PathLike[str]) -> str | N
     sections: list[str] = []
     pkg = _detect_package_json(root)
     if pkg:
-        sections.append("package.json scripts:\n" + "\n".join(pkg[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("package.json scripts:\n" + "\n".join(pkg[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     pyp = _detect_pyproject_toml(root)
     if pyp:
-        scripts_text = "\n".join(pyp[: _F4_MAX_SCRIPTS_PER_MANIFEST])
+        scripts_text = "\n".join(pyp[:_F4_MAX_SCRIPTS_PER_MANIFEST])
         sections.append("pyproject.toml scripts:\n" + scripts_text)
     mk = _detect_makefile(root)
     if mk:
-        sections.append("Makefile targets:\n" + "\n".join(mk[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("Makefile targets:\n" + "\n".join(mk[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     cargo = _detect_cargo_toml(root)
     if cargo:
-        sections.append("Cargo.toml:\n" + "\n".join(cargo[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("Cargo.toml:\n" + "\n".join(cargo[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
     gomod = _detect_go_mod(root)
     if gomod:
-        sections.append("go.mod:\n" + "\n".join(gomod[: _F4_MAX_SCRIPTS_PER_MANIFEST]))
+        sections.append("go.mod:\n" + "\n".join(gomod[:_F4_MAX_SCRIPTS_PER_MANIFEST]))
 
     if not sections:
         return None
 
     body = "\n".join(sections)
     if len(body) > _F4_MAX_CHARS:
-        body = body[: _F4_MAX_CHARS] + "\n  ... (truncated)"
+        body = body[:_F4_MAX_CHARS] + "\n  ... (truncated)"
     return (
         "<system-reminder>\n"
         "F4 bootstrap: detected project commands from workspace manifests. "
@@ -764,10 +765,15 @@ _DOD_REFUSAL_CAP = 3
 # _workspace_snapshot_message. file_list is excluded (its path is a directory).
 # Files the agent MUTATED — the deliverable; these must never be evicted from the
 # snapshot by exploration reads (steelman finding #1).
-_WORKSPACE_MUTATING_TOOLS = frozenset({
-    "file_write", "file_append", "file_edit",
-    "file_replace_lines", "file_insert_lines",
-})
+_WORKSPACE_MUTATING_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_append",
+        "file_edit",
+        "file_replace_lines",
+        "file_insert_lines",
+    }
+)
 _WORKSPACE_READ_TOOLS = frozenset({"file_read"})
 _WS_MAX_FILES = 8  # cap the snapshot breadth (most-recently-touched first)
 _WS_PER_FILE_CHARS = 6_000  # per-file cap; larger files head/tail-truncate with a marker
@@ -902,9 +908,7 @@ def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
     remaining = _HS03_REGROUND_MAX_FILES - len(file_paths)
     if remaining > 0:
         file_paths.extend(read_only[:remaining])
-    files_block = (
-        "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
-    )
+    files_block = "\n".join(f"  - {p}" for p in file_paths) if file_paths else "  (none yet)"
 
     # 4. CONSTRAINTS: the plan's `context` field, when present — the
     # planner's exploration findings + trade-offs (Claude-Code-style
@@ -928,11 +932,7 @@ def _hs03_reground_message(events: list[Event]) -> LLMMessage | None:
     sections.append(f"PROGRESS ({len(done)}/{len(plan.steps)} done):\n{progress}")
     sections.append(f"FILES:\n{files_block}")
 
-    body = (
-        f"{_HS03_REGROUND_SENTINEL}\n"
-        + "\n".join(sections)
-        + f"\n{_HS03_REGROUND_SENTINEL}"
-    )
+    body = f"{_HS03_REGROUND_SENTINEL}\n" + "\n".join(sections) + f"\n{_HS03_REGROUND_SENTINEL}"
     return LLMMessage(role="user", content=body)
 
 
@@ -1004,6 +1004,7 @@ def _describe_llm_error(e: LLMError) -> str:
     loc = " / ".join(p for p in (getattr(e, "provider", ""), getattr(e, "model", "")) if p)
     head = f"{type(e).__name__} [{loc}]" if loc else type(e).__name__
     return f"{head}: {reason}"
+
 
 # Statuses at which the loop yields control back to the caller at a checkpoint.
 _TERMINAL_FOR_NOW = frozenset(
@@ -1097,6 +1098,7 @@ def _stuck_escape_reminder(attempt_count: int) -> str:
     """
     idx = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL)
     return _STUCK_ESCAPE_REMINDER_POOL[idx]
+
 
 # Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED
 # until the agent has done productive work since the most recent plan approval.
@@ -1814,9 +1816,7 @@ def _latest_browser_error(events: list[Event]) -> str | None:
         if not (res.success and res.structured):
             continue
         url = str(res.structured.get("url", ""))
-        if not (
-            url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")
-        ):
+        if not (url.startswith("http://127.0.0.1:8000") or url.startswith("http://localhost:8000")):
             continue
         errors = [
             str(c.get("text", ""))
@@ -1917,12 +1917,12 @@ class AgentLoop:
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
         self._identical_plan_revisions = 0  # C8 (T11): consecutive identical-steps
-                                            # propose_plan_update auto-approvals in
-                                            # autonomous mode. Increments when the
-                                            # new plan's steps match the immediately
-                                            # prior plan's; resets on a different
-                                            # (incl. appended) plan. The cap lives
-                                            # at module-level so tests can pin it.
+        # propose_plan_update auto-approvals in
+        # autonomous mode. Increments when the
+        # new plan's steps match the immediately
+        # prior plan's; resets on a different
+        # (incl. appended) plan. The cap lives
+        # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
         # C20 — `delegate_explore` count, per run segment. Reset in run() so a
@@ -2309,7 +2309,9 @@ class AgentLoop:
                 _LOG.warning(
                     "C18: malformed done_condition on plan step %d (revision %d); "
                     "ignoring (advisory only): %r",
-                    one_based, revision, cond,
+                    one_based,
+                    revision,
+                    cond,
                 )
                 continue
             self._plan_step_predicates[(revision, one_based)] = predicate
@@ -2338,11 +2340,7 @@ class AgentLoop:
             ).strip()
             if not tool_name:
                 continue
-            args = (
-                opt.get("arguments")
-                or (opt.get("tool_call") or {}).get("arguments")
-                or {}
-            )
+            args = opt.get("arguments") or (opt.get("tool_call") or {}).get("arguments") or {}
             if not isinstance(args, dict):
                 continue
             title = str(opt.get("title") or opt.get("label") or f"Option {i + 1}").strip()
@@ -2364,10 +2362,7 @@ class AgentLoop:
         if not options:
             return None
         summary = str(
-            arguments.get("question")
-            or arguments.get("summary")
-            or arguments.get("goal")
-            or ""
+            arguments.get("question") or arguments.get("summary") or arguments.get("goal") or ""
         ).strip()
         if not summary:
             summary = "the agent is asking which path to take"
@@ -2542,11 +2537,7 @@ class AgentLoop:
         for e in reversed(events):
             if isinstance(e, MessageEvent) and e.source == EventSource.USER:
                 return count
-            if (
-                isinstance(e, StatusEvent)
-                and e.detail
-                and e.detail.startswith("auto_continue:")
-            ):
+            if isinstance(e, StatusEvent) and e.detail and e.detail.startswith("auto_continue:"):
                 count += 1
         return count
 
@@ -2643,9 +2634,7 @@ class AgentLoop:
                     ),
                 )
             )
-            await self._emit(
-                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
-            )
+            await self._emit(StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
             return True
 
         if noops >= self._max_consecutive_noops:
@@ -2668,9 +2657,7 @@ class AgentLoop:
                         ),
                     )
                 )
-                await self._emit(
-                    StatusEvent(status=ConversationStatus.PAUSED, detail="noop_limit")
-                )
+                await self._emit(StatusEvent(status=ConversationStatus.PAUSED, detail="noop_limit"))
             else:
                 await self._emit(
                     MessageEvent(
@@ -2917,9 +2904,7 @@ class AgentLoop:
             if ".pmx" in path.split("/"):
                 continue
             try:
-                raw = await asyncio.wait_for(
-                    sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S
-                )
+                raw = await asyncio.wait_for(sbx.read_file(path), timeout=_WS_READ_TIMEOUT_S)
             except TimeoutError:
                 # A hung read implies a wedged/dead sandbox. STOP — don't hold the
                 # conversation lock for timeout×N files (that would block pause/steer/
@@ -2971,10 +2956,13 @@ class AgentLoop:
                 tail = cap - head
                 shown = (
                     f"{text[:head]}\n"
-                    f"… [{len(text) - head - tail:,} chars truncated — this file is too large to show in full. "
+                    f"… [{len(text) - head - tail:,} chars truncated — this file is too large "
+                    "to show in full. "
                     f"Before editing it, call file_read on this path to see the full content. "
-                    f"For a large file like this, make targeted changes with file_edit (content-anchored old→new); "
-                    f"do NOT call file_write with regenerated content, which risks dropping the parts not shown here.] …\n"
+                    "For a large file like this, make targeted changes with file_edit "
+                    "(content-anchored old→new); "
+                    "do NOT call file_write with regenerated content, which risks dropping "
+                    "the parts not shown here.] …\n"
                     f"{text[-tail:]}"
                 )
             else:
@@ -3102,9 +3090,7 @@ class AgentLoop:
         # (e.g. after a condensation). That keeps the cadence tied to
         # MODEL TURNS, not View re-materializations.
         self._recitation_step_count += 1
-        if not (
-            view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)
-        ):
+        if not (view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)):
             # No tail recap in the rendered View (no plan yet) — nothing
             # to gate. Don't touch the signature: the next step with a
             # plan will drift on signature != None.
@@ -3343,11 +3329,7 @@ class AgentLoop:
                     new_tcs.append(tc)
                     continue
                 cid = tc.get("id")
-                if (
-                    tc.get("name") == "file_write"
-                    and isinstance(cid, str)
-                    and cid in confirmed
-                ):
+                if tc.get("name") == "file_write" and isinstance(cid, str) and cid in confirmed:
                     path, content = confirmed[cid]
                     # Only shrink when the ORIGINAL content is long
                     # enough that a prefix is meaningful. Short writes
@@ -3359,10 +3341,9 @@ class AgentLoop:
                         args = tc.get("arguments")
                         if isinstance(args, dict):
                             new_args = dict(args)
-                            new_args["content"] = (
-                                content[:_F8_PREFIX_CHARS]
-                                + _F8_TRUNCATION_MARKER_TEMPLATE.format(path=path)
-                            )
+                            new_args["content"] = content[
+                                :_F8_PREFIX_CHARS
+                            ] + _F8_TRUNCATION_MARKER_TEMPLATE.format(path=path)
                             new_tc = dict(tc)
                             new_tc["arguments"] = new_args
                             new_tcs.append(new_tc)
@@ -3509,20 +3490,24 @@ class AgentLoop:
             existing = (await sbx.read_file(path)).decode("utf-8", errors="replace")
         except (FileNotFoundError, NotADirectoryError):
             try:
-                existing = (
-                    await sbx.read_file(self._LEGACY_MEMORY_PATH)
-                ).decode("utf-8", errors="replace")
+                existing = (await sbx.read_file(self._LEGACY_MEMORY_PATH)).decode(
+                    "utf-8", errors="replace"
+                )
             except Exception:  # noqa: BLE001 — no legacy mirror either: fresh start
                 existing = ""
         except Exception:  # noqa: BLE001 — read flakiness: start clean
             existing = ""
-        lines: list[str] = existing.splitlines() if existing.strip() else [
-            "# Standing memory",
-            "",
-            "Durable facts the agent learned this run (C5: write-through mirror "
-            "of the in-View KnowledgeEvent channel).",
-            "",
-        ]
+        lines: list[str] = (
+            existing.splitlines()
+            if existing.strip()
+            else [
+                "# Standing memory",
+                "",
+                "Durable facts the agent learned this run (C5: write-through mirror "
+                "of the in-View KnowledgeEvent channel).",
+                "",
+            ]
+        )
         if scope:
             header = f"## {scope}"
             if header not in lines:
@@ -3561,9 +3546,7 @@ class AgentLoop:
         for scope, snippet in facts:
             if not snippet:
                 continue
-            await self._emit(
-                KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=snippet)
-            )
+            await self._emit(KnowledgeEvent(source=EventSource.AGENT, scope=scope, snippet=snippet))
             count += 1
         return count
 
@@ -3773,7 +3756,7 @@ class AgentLoop:
             content=(
                 f"[C20 fan-out #{self._fanout_count}/{self._fanout_max}] "
                 f"helper dispatched: "
-                f"question=\"{question[:80]}{'…' if len(question) > 80 else ''}\""
+                f'question="{question[:80]}{"…" if len(question) > 80 else ""}"'
                 + (f" context={len(context)} chars" if context else "")
                 + ". (Default stub — override `_run_fanout` for a real subagent.)"
             ),
@@ -3848,7 +3831,7 @@ class AgentLoop:
         verdict_word = "met" if passed else "NOT met"
         body = (
             f"[advisory, C18] done-condition for plan step {idx} "
-            f"(\"{latest_plan.steps[idx - 1].title}\"): {verdict_word}. "
+            f'("{latest_plan.steps[idx - 1].title}"): {verdict_word}. '
             f"{reason}"
         )
         await self._emit(
@@ -3859,9 +3842,7 @@ class AgentLoop:
             )
         )
 
-    async def _evaluate_plan_step_predicate(
-        self, predicate: DoDPredicate
-    ) -> tuple[bool, str]:
+    async def _evaluate_plan_step_predicate(self, predicate: DoDPredicate) -> tuple[bool, str]:
         """Lightweight inline evaluation of a single DoDPredicate for the
         C18 advisory note. The three kinds reuse the
         `disco.core.dod.DoDPredicate` discriminated union:
@@ -3901,9 +3882,7 @@ class AgentLoop:
         # rather than a silent pass.
         return (False, f"unsupported predicate kind: {type(predicate).__name__}")
 
-    def _check_file_exists_for_plan_step(
-        self, predicate: FileExistsPredicate
-    ) -> tuple[bool, str]:
+    def _check_file_exists_for_plan_step(self, predicate: FileExistsPredicate) -> tuple[bool, str]:
         """Resolve `predicate.path` against the executor's sandbox workspace
         root (when available) and check existence. The path-escape check
         mirrors the C1b evaluator's discipline: a `file_exists` whose
@@ -3911,6 +3890,7 @@ class AgentLoop:
         predicate is not silently passed by a coincidental match on an
         out-of-scope file."""
         from pathlib import Path
+
         sbx = getattr(self.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         path_str = predicate.path
@@ -3957,6 +3937,7 @@ class AgentLoop:
         import asyncio
         import subprocess
         from pathlib import Path
+
         sbx = getattr(self.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
         cwd = str(Path(workspace).resolve()) if workspace else None
@@ -3985,8 +3966,7 @@ class AgentLoop:
         except Exception as exc:  # noqa: BLE001 — defensive
             return (
                 False,
-                f"command({predicate.cmd!r}): executor error "
-                f"({type(exc).__name__}: {exc})",
+                f"command({predicate.cmd!r}): executor error ({type(exc).__name__}: {exc})",
             )
         duration = asyncio.get_event_loop().time() - started
         if completed.returncode == predicate.expect_exit:
@@ -4001,9 +3981,7 @@ class AgentLoop:
             f"expected {predicate.expect_exit}",
         )
 
-    async def _check_http_for_plan_step(
-        self, predicate: HTTPOkPredicate
-    ) -> tuple[bool, str]:
+    async def _check_http_for_plan_step(self, predicate: HTTPOkPredicate) -> tuple[bool, str]:
         """GET `predicate.url` and compare to `predicate.expect_status`
         (default 200). Tight timeout; failures surface the reason. Does
         NOT enforce the C1b egress allow-list — this is a per-step
@@ -4017,6 +3995,7 @@ class AgentLoop:
             # but be defensive in case the test env differs.
             try:
                 import urllib.request
+
                 with urllib.request.urlopen(predicate.url, timeout=2.0) as resp:
                     status = int(resp.status)
             except Exception as exc:  # noqa: BLE001 — defensive
@@ -4032,8 +4011,7 @@ class AgentLoop:
             return (True, f"http_ok({predicate.url}): status {status} as expected")
         return (
             False,
-            f"http_ok({predicate.url}): status {status}, "
-            f"expected {predicate.expect_status}",
+            f"http_ok({predicate.url}): status {status}, expected {predicate.expect_status}",
         )
 
     async def _finish_verify_passed(self, command: str) -> bool:
@@ -4294,6 +4272,7 @@ class AgentLoop:
                 f"no sandbox.workspace_path on executor {type(self.executor).__name__}"
             )
         from pathlib import Path
+
         return DoDEvaluator(Path(workspace))
 
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
@@ -4388,8 +4367,7 @@ class AgentLoop:
                         _reenter_planning_seq = _e.seq or 0
             # In execution mode if: plan approved AND not re-entered planning after that.
             if _plan_approved_seq is not None and (
-                _reenter_planning_seq is None
-                or _plan_approved_seq > _reenter_planning_seq
+                _reenter_planning_seq is None or _plan_approved_seq > _reenter_planning_seq
             ):
                 self.mode = self._execution_mode
 
@@ -4468,12 +4446,8 @@ class AgentLoop:
                     and self._actions_since_last_resume(events) == 0
                 ):
                     _sbx = getattr(self.executor, "sandbox", None)
-                    _workspace = (
-                        getattr(_sbx, "workspace_path", None) if _sbx is not None else None
-                    )
-                    _bootstrap = (
-                        _detect_project_bootstrap(_workspace) if _workspace else None
-                    )
+                    _workspace = getattr(_sbx, "workspace_path", None) if _sbx is not None else None
+                    _bootstrap = _detect_project_bootstrap(_workspace) if _workspace else None
                     if _bootstrap:
                         await self._emit(
                             MessageEvent(
@@ -4623,9 +4597,7 @@ class AgentLoop:
                         )
                     )
                     await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.RUNNING, detail="recovery_requested"
-                        )
+                        StatusEvent(status=ConversationStatus.RUNNING, detail="recovery_requested")
                     )
                     continue
                 if fails > self._circuit_breaker_threshold:
@@ -4773,9 +4745,7 @@ class AgentLoop:
                             )
                         )
                         await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.STUCK, detail="bookkeeping_only"
-                            )
+                            StatusEvent(status=ConversationStatus.STUCK, detail="bookkeeping_only")
                         )
                         return await self.get_state()
 
@@ -4806,9 +4776,9 @@ class AgentLoop:
                             # to the View if we're in a retry loop.
                             current_view = view
                             if transient_messages:
-                                current_view = view.model_copy(update={
-                                    "messages": view.messages + transient_messages
-                                })
+                                current_view = view.model_copy(
+                                    update={"messages": view.messages + transient_messages}
+                                )
 
                             step = await self.agent.step(
                                 current_view,
@@ -4860,9 +4830,7 @@ class AgentLoop:
                             # Include mode-scoped virtuals (planning tools) so
                             # we don't requery for valid exploration turns.
                             all_known_names = (
-                                known_tool_names
-                                | virtual_names
-                                | set(self._planning_tools)
+                                known_tool_names | virtual_names | set(self._planning_tools)
                             )
 
                             if step.tool_call and step.tool_call.tool_name not in all_known_names:
@@ -4878,9 +4846,7 @@ class AgentLoop:
                                 # executed and the execution-finish gate spun forever
                                 # (the confirm/reject livelock root cause).
                                 _gbn = getattr(self.policy, "gates_by_name", None)
-                                _name_gated = callable(_gbn) and _gbn(
-                                    step.tool_call.tool_name
-                                )
+                                _name_gated = callable(_gbn) and _gbn(step.tool_call.tool_name)
                                 if not _name_gated and requery_count < 2:
                                     requery_count += 1
                                     _LOG.info(
@@ -4964,14 +4930,16 @@ class AgentLoop:
                             if requery_count < 2:
                                 requery_count += 1
                                 _LOG.warning(f"Provider rejected request: {e}, requerying...")
-                                transient_messages.append(LLMMessage(
-                                    role="user",
-                                    content=(
-                                        f"The provider rejected the previous request: {e}. "
-                                        "Please adjust your response (check tool names, "
-                                        "JSON structure, or parameters) and try again."
+                                transient_messages.append(
+                                    LLMMessage(
+                                        role="user",
+                                        content=(
+                                            f"The provider rejected the previous request: {e}. "
+                                            "Please adjust your response (check tool names, "
+                                            "JSON structure, or parameters) and try again."
+                                        ),
                                     )
-                                ))
+                                )
                                 continue
                             raise
                 except LLMContextWindowExceeded:
@@ -5066,12 +5034,14 @@ class AgentLoop:
                     fact = str(step.tool_call.arguments.get("fact") or "").strip()
                     if fact:
                         import hashlib
+
                         scope = str(step.tool_call.arguments.get("scope") or "").strip()
                         normalized = fact
                         fact_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
                         seen = {
                             (e.scope, hashlib.sha256(e.snippet.strip().encode("utf-8")).hexdigest())
-                            for e in events if isinstance(e, KnowledgeEvent)
+                            for e in events
+                            if isinstance(e, KnowledgeEvent)
                         }
                         if (scope, fact_hash) in seen:
                             action = ActionEvent(
@@ -5107,6 +5077,7 @@ class AgentLoop:
                                 await self._write_pmx_memory_fact(scope, fact)
                             except Exception:  # noqa: BLE001 — mirror is best-effort
                                 import logging as _logging
+
                                 _logging.getLogger(__name__).warning(
                                     "pmx MEMORY write-through failed (in-View fact survives)",
                                     exc_info=True,
@@ -5221,10 +5192,7 @@ class AgentLoop:
                 # driver keeps working right after — the same shape as
                 # notify_user/remember/serve (the actionless valve still
                 # applies if a fan-out produces no real work).
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name == "delegate_explore"
-                ):
+                if step.tool_call is not None and step.tool_call.tool_name == "delegate_explore":
                     if self._fanout_count >= self._fanout_max:
                         # Cap exceeded — refuse with feedback. The cap is
                         # per-run-segment, so a fresh `run()` resets it.
@@ -5291,19 +5259,14 @@ class AgentLoop:
                         _v = str(_fanout_args.get(_k) or "")
                         if len(_v) > _FANOUT_INPUT_MAX_CHARS:
                             _fanout_args[_k] = (
-                                _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)]
-                                + _trunc_marker
+                                _v[: _FANOUT_INPUT_MAX_CHARS - len(_trunc_marker)] + _trunc_marker
                             )
                     result = await self._run_fanout(
                         _fanout_args,
                         events,
-                        call_id=(
-                            action.tool_call.call_id if action.tool_call else ""
-                        ),
+                        call_id=(action.tool_call.call_id if action.tool_call else ""),
                     )
-                    await self._emit(
-                        ObservationEvent(tool_result=result, action_id=action.id)
-                    )
+                    await self._emit(ObservationEvent(tool_result=result, action_id=action.id))
                     # Fan-out is non-blocking — the driver keeps working
                     # right after. The actionless valve still applies if
                     # the helper returned empty (a degenerate fan-out is
@@ -5505,9 +5468,7 @@ class AgentLoop:
                             await self._emit(
                                 MessageEvent(
                                     source=EventSource.AGENT,
-                                    message=LLMMessage(
-                                        role="assistant", content=step.thought
-                                    ),
+                                    message=LLMMessage(role="assistant", content=step.thought),
                                 )
                             )
                         self._plan_nudges += 1
@@ -5549,9 +5510,7 @@ class AgentLoop:
                             await self._emit(
                                 MessageEvent(
                                     source=EventSource.AGENT,
-                                    message=LLMMessage(
-                                        role="assistant", content=step.thought
-                                    ),
+                                    message=LLMMessage(role="assistant", content=step.thought),
                                 )
                             )
                         else:
@@ -5709,7 +5668,7 @@ class AgentLoop:
                                                 " no work happened in this run segment."
                                                 "\n</system-reminder>"
                                             ),
-                                        )
+                                        ),
                                     )
                                 )
                                 await self._emit(
@@ -5824,8 +5783,7 @@ class AgentLoop:
                     # message, which tells the model it can ask when it can't. (g.5)
                     # still governs propose_plan_update on a fresh session.
                     and not (
-                        self._autonomous
-                        and step.tool_call.tool_name in ("ask_user", "clarify")
+                        self._autonomous and step.tool_call.tool_name in ("ask_user", "clarify")
                     )
                 ):
                     self._invisible_steps += 1
@@ -5869,9 +5827,10 @@ class AgentLoop:
                     and step.tool_call is not None
                     and step.tool_call.tool_name in ("ask_user", "clarify")
                 ):
-                    asked = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
+                    asked = (
+                        str(step.tool_call.arguments.get("question") or "").strip()
+                        or step.thought.strip()
+                    )
                     stall_action = ActionEvent(
                         thought=step.thought,
                         tool_call=step.tool_call,
@@ -5893,18 +5852,13 @@ class AgentLoop:
                             ),
                             action_id=stall_action.id,
                             tool_call_id=(
-                                stall_action.tool_call.call_id
-                                if stall_action.tool_call
-                                else None
+                                stall_action.tool_call.call_id if stall_action.tool_call else None
                             ),
                         )
                     )
                     continue  # non-blocking — let the model act on its own judgment
 
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name == "propose_plan_update"
-                ):
+                if step.tool_call is not None and step.tool_call.tool_name == "propose_plan_update":
                     new_plan = self._plan_from_args(step.tool_call.arguments, events)
                     await self._emit(new_plan)
                     if self._autonomous:
@@ -5934,18 +5888,13 @@ class AgentLoop:
                             if isinstance(e, PlanEvent):
                                 prior_plan = e
                                 break
-                        if (
-                            prior_plan is not None
-                            and [s.title for s in prior_plan.steps]
-                            == [s.title for s in new_plan.steps]
-                        ):
+                        if prior_plan is not None and [s.title for s in prior_plan.steps] == [
+                            s.title for s in new_plan.steps
+                        ]:
                             self._identical_plan_revisions += 1
                         else:
                             self._identical_plan_revisions = 0
-                        if (
-                            self._identical_plan_revisions
-                            >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
-                        ):
+                        if self._identical_plan_revisions >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP:
                             # Reuse the existing bookkeeping-stuck valve: same
                             # message + STUCK/detail pair (c.3) emits.
                             await self._emit(
@@ -5971,9 +5920,7 @@ class AgentLoop:
                             return await self.get_state()
                         self.mode = self._execution_mode
                         await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.RUNNING, detail="plan_approved"
-                            )
+                            StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
                         )
                         continue
                     await self._emit(
@@ -5995,9 +5942,10 @@ class AgentLoop:
                     from ..events import ClarifyEvent as _ClarifyEvent
                     from ..events import ClarifyQuestionItem
 
-                    question = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
+                    question = (
+                        str(step.tool_call.arguments.get("question") or "").strip()
+                        or step.thought.strip()
+                    )
                     raw_items = step.tool_call.arguments.get("questions") or []
                     items: list[ClarifyQuestionItem] = []
                     for it in raw_items:
@@ -6016,9 +5964,7 @@ class AgentLoop:
                         else:
                             qopts = []
                         items.append(
-                            ClarifyQuestionItem(
-                                id=qid, question=qtext, type=qtype, options=qopts
-                            )
+                            ClarifyQuestionItem(id=qid, question=qtext, type=qtype, options=qopts)
                         )
                     if not items:
                         # No valid questions → fall back to free-form ask_user
@@ -6072,9 +6018,10 @@ class AgentLoop:
                     # status's detail carries the question message's id so the
                     # surface can resolve it. The user's reply (send_message /
                     # steer) IS the resume signal.
-                    question = str(
-                        step.tool_call.arguments.get("question") or ""
-                    ).strip() or step.thought.strip()
+                    question = (
+                        str(step.tool_call.arguments.get("question") or "").strip()
+                        or step.thought.strip()
+                    )
                     question_id: str | None = None
                     if question:
                         q_event = MessageEvent(
@@ -6303,9 +6250,7 @@ class AgentLoop:
             if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
                 return state
             self.mode = self._execution_mode
-            await self._emit(
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-            )
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
         return await self.get_state()
 
     async def pick_alternative(self, option_id: str) -> ConversationState:
@@ -6387,8 +6332,7 @@ class AgentLoop:
                     message=LLMMessage(
                         role="user",
                         content=(
-                            f"Try the alternative approach: “{option.title}”. "
-                            f"{option.description}"
+                            f"Try the alternative approach: “{option.title}”. {option.description}"
                         ),
                     ),
                 )

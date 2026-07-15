@@ -306,9 +306,7 @@ class OperatorClient:
         }
 
     async def _conversation_ids(self) -> list[str]:
-        r = await self._auth_client.authenticated_request(
-            "GET", "/conversations", timeout=20.0
-        )
+        r = await self._auth_client.authenticated_request("GET", "/conversations", timeout=20.0)
         body = r.json() if r.status_code == 200 else {}
         return [str(cid) for cid in body.get("conversation_ids", []) if cid]
 

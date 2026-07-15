@@ -13,7 +13,7 @@ log = pathlib.Path(args.log)
 log.parent.mkdir(parents=True, exist_ok=True)
 
 while True:
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    now = dt.datetime.now(dt.UTC).isoformat()
     with log.open("a", encoding="utf-8") as f:
         f.write(f"{now} HEARTBEAT_DUE\n")
         f.flush()

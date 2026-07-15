@@ -537,9 +537,7 @@ class DoDEvaluator:
         timeout = self._command_timeout_seconds
 
         async def runner(command: str) -> CommandResult:
-            return await _default_command_runner(
-                command, cwd=cwd, timeout_seconds=timeout
-            )
+            return await _default_command_runner(command, cwd=cwd, timeout_seconds=timeout)
 
         return runner
 
@@ -604,9 +602,7 @@ class DoDEvaluator:
 
     # ---- per-predicate dispatch --------------------------------------------
 
-    async def _evaluate_one(
-        self, predicate: DoDPredicate, spec: DoDSpec
-    ) -> DoDPredicateResult:
+    async def _evaluate_one(self, predicate: DoDPredicate, spec: DoDSpec) -> DoDPredicateResult:
         # Discriminate by concrete type — the Pydantic `kind` discriminator
         # is the canonical field, but `isinstance` is the cheapest dispatch
         # and the union is closed (only three kinds as of C1a).
@@ -632,9 +628,7 @@ class DoDEvaluator:
         grade it; the verdict names the predicate unmet with the escape
         reason."""
         try:
-            resolved = resolve_under_workspace(
-                self._workspace_root, predicate.path
-            )
+            resolved = resolve_under_workspace(self._workspace_root, predicate.path)
         except PathEscapeError as exc:
             return DoDPredicateResult(
                 predicate=predicate,
@@ -673,9 +667,7 @@ class DoDEvaluator:
             },
         )
 
-    async def _check_command_exit(
-        self, predicate: CommandExitPredicate
-    ) -> DoDPredicateResult:
+    async def _check_command_exit(self, predicate: CommandExitPredicate) -> DoDPredicateResult:
         """Re-run the predicate's own command in a fresh subprocess. The
         verdict turns the `CommandResult` into a `DoDPredicateResult` based
         on the predicate's `expect_exit` (default 0). A hard-denied command
@@ -709,9 +701,7 @@ class DoDEvaluator:
         elif result.error_message:
             reason = f"command not run: {result.error_message}"
         else:
-            reason = (
-                f"command exited {result.exit_code}, expected {predicate.expect_exit}"
-            )
+            reason = f"command exited {result.exit_code}, expected {predicate.expect_exit}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
@@ -730,9 +720,7 @@ class DoDEvaluator:
             },
         )
 
-    async def _check_http_ok(
-        self, predicate: HTTPOkPredicate
-    ) -> DoDPredicateResult:
+    async def _check_http_ok(self, predicate: HTTPOkPredicate) -> DoDPredicateResult:
         """Probe the URL and compare to `expect_status` (default 200). An
         egress-denied URL is "not probed", not "probed and got a bad
         status" — distinct in the audit trail."""
@@ -760,9 +748,7 @@ class DoDEvaluator:
         elif result.error_message:
             reason = f"probe not run: {result.error_message}"
         else:
-            reason = (
-                f"HTTP {result.status_code}, expected {predicate.expect_status}"
-            )
+            reason = f"HTTP {result.status_code}, expected {predicate.expect_status}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
@@ -781,9 +767,7 @@ class DoDEvaluator:
 
     # ---- subjective-judge seam (future) -----------------------------------
 
-    async def _check_subjective(
-        self, predicate: DoDPredicate, spec: DoDSpec
-    ) -> DoDPredicateResult:
+    async def _check_subjective(self, predicate: DoDPredicate, spec: DoDSpec) -> DoDPredicateResult:
         """A predicate kind the evaluator does not handle directly. If a
         `subjective_judge` is wired, delegate to it (fresh context: the
         judge gets the spec + the workspace path, NOT the agent's

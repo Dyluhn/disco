@@ -58,16 +58,16 @@ from .host_proxy import HostPreviewProxyMiddleware
 from .runtime import ConversationRuntime
 from .schedule_models import CreateScheduleBody, PreviewScheduleBody
 
-_MAX_FILE_BYTES = 25 * 1024 * 1024      # 25 MB per file
+_MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _MAX_FILES_PER_REQUEST = 20
-_MAX_CONV_BYTES = 100 * 1024 * 1024    # 100 MB per conversation (uploads/ total)
+_MAX_CONV_BYTES = 100 * 1024 * 1024  # 100 MB per conversation (uploads/ total)
 
 
 def _sanitize_name(raw: str) -> str | None:
     """Return a safe filename for uploads/, or None if the result is empty."""
-    name = Path(raw).name            # kills traversal (../../etc/passwd → passwd)
+    name = Path(raw).name  # kills traversal (../../etc/passwd → passwd)
     name = unicodedata.normalize("NFC", name)
-    name = name.lstrip(".")          # strip leading dots (dotfiles)
+    name = name.lstrip(".")  # strip leading dots (dotfiles)
     name = re.sub(r"\s+", "-", name.strip())  # strip surrounding whitespace, runs → hyphen
     return name or None
 
@@ -108,6 +108,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
     2); pass None in tests that only exercise the wire layer (the loop won't run)."""
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         # On startup, start the MCP pool (RP-05) and reconcile orphaned RUNNING
@@ -123,6 +124,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 # D1: _start_mcp_pool handles ApprovalRequired internally;
                 # unexpected errors are logged but must not block boot.
                 import logging
+
                 _LOG = logging.getLogger(__name__)
                 _LOG.warning("MCP pool startup failed", exc_info=True)
             with contextlib.suppress(Exception):  # never block boot on reconciliation
@@ -145,9 +147,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
 
-    app = FastAPI(
-        title="disco agent-server", version="0.1.0", lifespan=lifespan
-    )
+    app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # dev: open (ownership is an explicit param, not a cookie)
@@ -155,6 +155,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
     async def _preview_upstream_resolver(cid8: str, port: int) -> str | None:
         """DC-01: {cid8}-{port}.localhost → the conversation's sandbox upstream."""
         if runtime is None:
@@ -423,17 +424,21 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
 
             data = await upload.read()
             if len(data) > _MAX_FILE_BYTES:
-                rejected.append({
-                    "name": raw_name,
-                    "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
-                })
+                rejected.append(
+                    {
+                        "name": raw_name,
+                        "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
+                    }
+                )
                 continue
 
             if running_total + len(data) > _MAX_CONV_BYTES:
-                rejected.append({
-                    "name": raw_name,
-                    "reason": "conversation upload quota (100 MB) would be exceeded",
-                })
+                rejected.append(
+                    {
+                        "name": raw_name,
+                        "reason": "conversation upload quota (100 MB) would be exceeded",
+                    }
+                )
                 continue
 
             # Collision: suffix -2, -3, …
@@ -471,16 +476,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             # dissolving into a lossy summary.
             if len(saved) == 1:
                 ds_name = f"uploads/{saved[0]['name']}"
-                ds_docs = (
-                    f"path=uploads/{saved[0]['name']} "
-                    f"size={saved[0]['bytes']:,} bytes"
-                )
+                ds_docs = f"path=uploads/{saved[0]['name']} size={saved[0]['bytes']:,} bytes"
             else:
                 ds_name = f"uploads/{len(saved)}_files"
-                ds_docs = "\n".join(
-                    f"- uploads/{s['name']}  ({s['bytes']:,} bytes)"
-                    for s in saved
-                )
+                ds_docs = "\n".join(f"- uploads/{s['name']}  ({s['bytes']:,} bytes)" for s in saved)
             await store.append(
                 conversation_id,
                 DatasourceEvent(name=ds_name, docs=ds_docs),
@@ -604,7 +603,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 data = await session.read_file(norm)
             except Exception:
                 pass
-        
+
         if data is None:
             project_store_method = getattr(runtime, "project_store", None)
             if project_store_method is not None:
@@ -621,7 +620,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                                 data = disk_path.read_bytes()
                         except Exception:
                             pass
-        
+
         if data is None:
             raise HTTPException(status_code=404)
         return Response(
@@ -755,7 +754,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
-            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+            return Response(
+                "preview upstream unreachable", status_code=502, media_type="text/plain"
+            )  # noqa: E501
         return Response(
             content=r.content,
             status_code=r.status_code,
@@ -778,7 +779,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
-            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+            return Response(
+                "preview upstream unreachable", status_code=502, media_type="text/plain"
+            )  # noqa: E501
         return Response(
             content=r.content,
             status_code=r.status_code,
@@ -884,9 +887,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             raise HTTPException(status_code=404, detail={"reason": "files_missing"})
         workspace = ps.path_for(conversation_id)
         headers = {
-            "Content-Disposition": (
-                f'attachment; filename="{conversation_id}.zip"'
-            ),
+            "Content-Disposition": (f'attachment; filename="{conversation_id}.zip"'),
         }
         return StreamingResponse(
             aiter_zip_workspace(workspace),
@@ -912,9 +913,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if workspace and workspace.is_dir():
             for p in sorted(workspace.rglob("*")):
                 if p.is_file() and not p.name.startswith("_codeact"):
-                    files.append(
-                        {"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size}
-                    )
+                    files.append({"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size})
         # the agent's last deliverable handoff, if any
         deliverable = None
         with contextlib.suppress(Exception):
@@ -1288,9 +1287,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         Returns 404 when no ReportEvent exists for this conversation.
         Returns 400 for an unknown format."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
 
         valid_fmts = frozenset({"md", "pdf", "docx"})
         if fmt not in valid_fmts:
@@ -1300,9 +1297,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             )
 
         try:
-            result = await runtime.export_report(
-                conversation_id, fmt, owner_id=DEFAULT_OWNER_ID
-            )
+            result = await runtime.export_report(conversation_id, fmt, owner_id=DEFAULT_OWNER_ID)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1359,9 +1354,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                     report = e
                     break
         if report is None:
-            raise HTTPException(
-                status_code=404, detail={"ok": False, "reason": "no_report"}
-            )
+            raise HTTPException(status_code=404, detail={"ok": False, "reason": "no_report"})
 
         from disco.core.llm import ConfigStore
 
@@ -1425,12 +1418,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         revocation flips `revoked_at` (a 410 Gone is a probe, so revoked
         tokens look identical to never-issued ones to the viewer)."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
-        result = await runtime.create_share_link_async(
-            conversation_id, owner_id=DEFAULT_OWNER_ID
-        )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
+        result = await runtime.create_share_link_async(conversation_id, owner_id=DEFAULT_OWNER_ID)
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,
@@ -1459,9 +1448,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         owned by the caller). Owner-scoped: a caller can only revoke a
         token it issued (the WHERE clause filters by owner_id)."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         ok = runtime.revoke_share_link(token, owner_id=DEFAULT_OWNER_ID)
         return {"ok": ok, "token": token, "revoked": ok}
 
@@ -1472,12 +1459,8 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         bundle) and for the reviewer's standalone-rung check. The bundle
         IS the share-viewer payload: same shape, same scrubbing."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
-        result = await runtime.share_export(
-            conversation_id, owner_id=DEFAULT_OWNER_ID
-        )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
+        result = await runtime.share_export(conversation_id, owner_id=DEFAULT_OWNER_ID)
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,
@@ -1528,18 +1511,14 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         log is append-only; re-export is deterministic). 404 for missing
         or revoked tokens."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         row = runtime.lookup_share_link(token)
         if row is None:
             # 404 with NO distinguishing detail — revoked and never-issued
             # tokens are intentionally conflated. A probe that varies the
             # token string sees 404 every time.
             raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found"})
-        result = await runtime.share_export(
-            row["conversation_id"], owner_id=row["owner_id"]
-        )
+        result = await runtime.share_export(row["conversation_id"], owner_id=row["owner_id"])
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,

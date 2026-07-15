@@ -60,9 +60,7 @@ class _FakeNetwork:
         self.connected.append(container.name)
         if not container.ip:
             container.ip = "10.89.0.2"
-        container.attrs["NetworkSettings"]["Networks"][self.name] = {
-            "IPAddress": container.ip
-        }
+        container.attrs["NetworkSettings"]["Networks"][self.name] = {"IPAddress": container.ip}
 
     def remove(self) -> None:
         pass
@@ -103,17 +101,12 @@ class _FakeContainers:
         self.created.append(kwargs)
         name = kwargs["name"]
         if kwargs.get("ports"):
-            ports = {
-                f"{p}/tcp": [{"HostPort": str(20_000 + p)}]
-                for p in sorted(PUBLISHED_PORTS)
-            }
+            ports = {f"{p}/tcp": [{"HostPort": str(20_000 + p)}] for p in sorted(PUBLISHED_PORTS)}
             self.sidecar = _FakeContainer(name, ports=ports, ip="10.89.0.2")
             return self.sidecar
         self.sandbox = _FakeContainer(name, ip="10.89.0.3")
-        for net_name in (kwargs.get("networks") or {}):
-            self.sandbox.attrs["NetworkSettings"]["Networks"][net_name] = {
-                "IPAddress": "10.89.0.3"
-            }
+        for net_name in kwargs.get("networks") or {}:
+            self.sandbox.attrs["NetworkSettings"]["Networks"][net_name] = {"IPAddress": "10.89.0.3"}
         return self.sandbox
 
     def list(self, *args, **kwargs) -> list:
@@ -295,9 +288,7 @@ class _LiveReadySession:
 
 class _LiveReadyRuntime:
     def __init__(self, session: _LiveReadySession) -> None:
-        cfg = default_config().model_copy(
-            update={"live_browser": SimpleNamespace(enabled=True)}
-        )
+        cfg = default_config().model_copy(update={"live_browser": SimpleNamespace(enabled=True)})
         self._config_store = SimpleNamespace(load=lambda: cfg)
         self.session = session
         self.wake_calls = 0

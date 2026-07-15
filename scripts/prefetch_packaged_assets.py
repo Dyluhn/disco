@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import urllib.request
+from pathlib import Path
 
 FULL_EMBED_MODEL = "intfloat/multilingual-e5-large"
 FULL_RERANK_MODEL = "BAAI/bge-reranker-base"
@@ -24,8 +24,7 @@ KOKORO_MODEL_URL = (
 )
 KOKORO_MODEL_SHA = "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5"
 KOKORO_VOICES_URL = (
-    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/"
-    "model-files-v1.0/voices-v1.0.bin"
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 )
 KOKORO_VOICES_SHA = "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
 
