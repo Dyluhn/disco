@@ -1072,6 +1072,8 @@ def _invalid_run_record(
     code: str = "RUN_INTERRUPTED",
     first_broken_link: str = "drive -> evidence_collection",
     facts: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
+    timeline_markdown: str | None = None,
 ) -> dict[str, Any]:
     """Write an INVALID_RUN record (§8) when the harness could not collect complete
     evidence / obtain a verdict to adjudicate — e.g. the agent-server became UNREACHABLE
@@ -1089,7 +1091,7 @@ def _invalid_run_record(
         "first_broken_link": first_broken_link,
         "scenario_id": scenario.get("id"),
         "run_id": run_id,
-        "conversation_id": None,
+        "conversation_id": conversation_id,
         "facts": record_facts,
         "required_evidence_present": False,
         "accepted_by": "oracle",
@@ -1099,7 +1101,8 @@ def _invalid_run_record(
         json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
     )
     (base / "timeline.md").write_text(
-        f"# INVALID_RUN ({code})\n\nreason: {reason}\n", encoding="utf-8"
+        timeline_markdown or f"# INVALID_RUN ({code})\n\nreason: {reason}\n",
+        encoding="utf-8",
     )
     return record
 
@@ -1652,6 +1655,30 @@ async def run_once(
                 if not present
             ]
             if missing_trace_parts:
+                # H262: the validity gate must remain fail-closed, but the evidence that
+                # explains the gap must survive isolated-stack teardown.  Freeze the
+                # already-collected run (including an incomplete inspect trace, events,
+                # state/workspace evidence, and any scoped provider ledger) before writing
+                # the INVALID_RUN verdict.  Previously this early return kept only
+                # classification.json + a one-line timeline and discarded the evidence
+                # needed to root-cause the missing trace.
+                run.timeline.append(
+                    "required inspect evidence incomplete: missing "
+                    + ", ".join(missing_trace_parts)
+                )
+                provider_ledger = _provider_ledger_for_run(run)
+                assemble_dossier(
+                    out_root,
+                    run_id,
+                    scenario,
+                    run,
+                    model=model,
+                    autonomous=autonomous,
+                    commit=commit,
+                    kernel=kernel,
+                    started_at=run_started_at,
+                    provider_ledger=provider_ledger,
+                )
                 return _invalid_run_record(
                     out_root,
                     run_id,
@@ -1660,6 +1687,8 @@ async def run_once(
                     code=fc.MISSING_REQUIRED_EVIDENCE,
                     first_broken_link="model_request -> inspect_trace",
                     facts={"missing_trace_parts": missing_trace_parts},
+                    conversation_id=run.conversation_id,
+                    timeline_markdown=_timeline_md(scenario, run),
                 )
             if terminal_driver_preflight:
                 run.timeline.append(

@@ -2887,7 +2887,7 @@ async def test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_
 
 
 @pytest.mark.asyncio
-async def test_nonterminal_routing_trace_still_requires_agent_span(tmp_path):
+async def test_nonterminal_routing_trace_still_requires_agent_span(monkeypatch, tmp_path):
     db = tmp_path / "disco.db"
     _seed_db(
         db,
@@ -2930,12 +2930,26 @@ async def test_nonterminal_routing_trace_still_requires_agent_span(tmp_path):
                 }
             return await super().get_json(path)
 
+    provider_ledger = [
+        {
+            "ts": 1.0,
+            "host": "provider.test",
+            "model": "configured-model",
+            "after_terminal": False,
+            "has_tools": True,
+            "conversation_id": _CID,
+        }
+    ]
+    monkeypatch.setattr(_run_mod, "_provider_ledger_for_run", lambda _run: provider_ledger)
+
     transport = _MissingLoopSpanTransport(db, states=["ERROR", "ERROR"])
+    out_root = tmp_path / "out"
+    run_id = "run_missing_loop_span_001"
     record = await run_once(
         _client(transport, tmp_path),
         _smoke_scenario(),
-        run_id="run_missing_loop_span_001",
-        out_root=tmp_path / "out",
+        run_id=run_id,
+        out_root=out_root,
         model="configured-model",
         autonomous=False,
         commit="abc",
@@ -2945,6 +2959,87 @@ async def test_nonterminal_routing_trace_still_requires_agent_span(tmp_path):
 
     assert record["status"] == "INVALID_RUN"
     assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert record["conversation_id"] == _CID
+
+    # H262: a missing required trace part invalidates the verdict without discarding
+    # the already-collected evidence that explains it.  The incomplete trace and the
+    # other safe run/provider evidence are frozen under the normal evidence lock.
+    base = out_root / run_id
+    conv = base / "conversations" / _CID
+    trace = json.loads((conv / "inspect-trace.json").read_text(encoding="utf-8"))
+    assert trace["routing_decisions"]
+    assert trace["spans"] == []
+    assert (conv / "events.jsonl").read_text(encoding="utf-8").strip()
+    assert json.loads((conv / "state.final.json").read_text(encoding="utf-8"))
+    written_ledger = [
+        json.loads(line)
+        for line in (conv / "provider-call-ledger.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert written_ledger == provider_ledger
+    assert "required inspect evidence incomplete" in (base / "timeline.md").read_text(
+        encoding="utf-8"
+    )
+
+    manifest = load_manifest(base)
+    assert {
+        "events.jsonl",
+        "inspect-trace.json",
+        "provider-call-ledger.jsonl",
+        "state.final.json",
+        "workspace-manifest.json",
+    } <= set(manifest.evidence_hashes)
+    assert verify_evidence_unchanged(base, manifest).intact
+
+
+@pytest.mark.asyncio
+async def test_absent_required_inspect_trace_retains_collected_dossier(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            status(2, "ERROR", detail="loop failed after starting"),
+        ],
+    )
+
+    class _AbsentTraceTransport(FakeTransport):
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                return 404, {}
+            return await super().get_json(path)
+
+    out_root = tmp_path / "out"
+    run_id = "run_absent_inspect_trace_001"
+    record = await run_once(
+        _client(_AbsentTraceTransport(db, states=["ERROR", "ERROR"]), tmp_path),
+        _smoke_scenario(),
+        run_id=run_id,
+        out_root=out_root,
+        model="configured-model",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert record["conversation_id"] == _CID
+    assert record["facts"]["missing_trace_parts"] == ["routing_decisions", "agent.step spans"]
+
+    base = out_root / run_id
+    conv = base / "conversations" / _CID
+    assert not (conv / "inspect-trace.json").exists()
+    assert (conv / "events.jsonl").read_text(encoding="utf-8").strip()
+    assert (conv / "state.initial.json").is_file()
+    assert (conv / "state.final.json").is_file()
+    assert (conv / "workspace-manifest.json").is_file()
+    manifest = load_manifest(base)
+    assert {"events.jsonl", "state.final.json", "workspace-manifest.json"} <= set(
+        manifest.evidence_hashes
+    )
+    assert verify_evidence_unchanged(base, manifest).intact
 
 
 @pytest.mark.asyncio
