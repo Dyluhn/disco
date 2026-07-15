@@ -15,6 +15,7 @@ import App from "@/App";
 // Do NOT tighten these back to 3s — that reintroduces the contention flake.
 const FINISH_TIMEOUT = 15_000; // waitFor budget for the run to reach FINISHED
 const TEST_TIMEOUT = 20_000; // per-test ceiling (> FINISH_TIMEOUT, headroom for contention)
+const SURFACE_LOAD_TIMEOUT = 10_000; // cold React.lazy import under parallel hermetic load
 
 describe("Research surface (integration + streaming reconcile)", () => {
   beforeEach(() => {
@@ -31,7 +32,10 @@ describe("Research surface (integration + streaming reconcile)", () => {
     // empty state (wordmark appears in header + hero)
     expect(screen.getAllByText("Disco").length).toBeGreaterThan(0);
 
-    await user.type(await screen.findByPlaceholderText(/ask anything/i), "How does RRF work?");
+    await user.type(
+      await screen.findByPlaceholderText(/ask anything/i, {}, { timeout: SURFACE_LOAD_TIMEOUT }),
+      "How does RRF work?",
+    );
     await user.keyboard("{Enter}");
 
     // Wait for the FINISHED signal: follow-up pills render only once the run
@@ -53,7 +57,10 @@ describe("Research surface (integration + streaming reconcile)", () => {
   it("renders verification verdicts as citations (the unsupported claim is marked)", async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.type(await screen.findByPlaceholderText(/ask anything/i), "RRF?");
+    await user.type(
+      await screen.findByPlaceholderText(/ask anything/i, {}, { timeout: SURFACE_LOAD_TIMEOUT }),
+      "RRF?",
+    );
     await user.keyboard("{Enter}");
     // wait for finished (citations resolve only once the final answer is set)
     await waitFor(

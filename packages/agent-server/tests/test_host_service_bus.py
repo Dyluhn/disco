@@ -634,6 +634,7 @@ def test_kill_switch_revokes_all_conversation_credentials(store, token_store):
     response = client.post(
         "/conversations/conv_1/kill",
         headers={
+            "Host": "localhost:8000",
             "Origin": "http://localhost:5173",
             CSRF_HEADER: session.csrf_token,
         },
