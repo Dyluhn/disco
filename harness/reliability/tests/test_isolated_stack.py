@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from disco.core.llm import ConfigStore, default_config
 
 from harness.reliability.isolated_stack import (
@@ -83,6 +84,93 @@ def test_stack_copies_all_signed_model_state(monkeypatch, tmp_path: Path) -> Non
     assert manager.env["DISCO_CONFIG"] == str(manager.config_path)
     assert manager.env["DISCO_SECRETS"] == str(manager.secrets_path)
     assert manager.env["DISCO_APPROVALS"] == str(manager.approvals_path)
+
+
+def test_stack_close_removes_secret_artifacts_but_preserves_diagnostics(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "seed-config.json"
+    secrets = tmp_path / "seed-secrets.json"
+    approvals = tmp_path / "seed-approvals.json"
+    config.write_text('{"config": true}', encoding="utf-8")
+    secrets.write_text('{"secrets": true}', encoding="utf-8")
+    approvals.write_text('{"approvals": true}', encoding="utf-8")
+    monkeypatch.setattr(StackManager, "_prepare_config", lambda self: None)
+    manager = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "stack-cleanup",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=config,
+        seed_secrets=secrets,
+        seed_approvals=approvals,
+    )
+    temporary_secrets = manager.secrets_path.with_suffix(".json.tmp")
+    temporary_secrets.write_text('{"partial": true}', encoding="utf-8")
+
+    manager.close()
+
+    assert not manager.secrets_path.exists()
+    assert not temporary_secrets.exists()
+    assert manager.config_path.read_bytes() == config.read_bytes()
+    assert manager.approvals_path.read_bytes() == approvals.read_bytes()
+    assert (manager.root / "stack.json").is_file()
+
+
+def test_stack_removes_copied_secrets_when_initialization_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    secrets = tmp_path / "seed-secrets.json"
+    secrets.write_text('{"secrets": true}', encoding="utf-8")
+
+    def fail_preparation(_manager: StackManager) -> None:
+        raise RuntimeError("config preparation failed")
+
+    monkeypatch.setattr(StackManager, "_prepare_config", fail_preparation)
+    root = tmp_path / "stack-init-failure"
+
+    with pytest.raises(RuntimeError, match="config preparation failed"):
+        StackManager(
+            repo=tmp_path,
+            root=root,
+            agent_port=18000,
+            app_port=18800,
+            ui_port=5274,
+            seed_config=None,
+            seed_secrets=secrets,
+            seed_approvals=None,
+        )
+
+    assert not (root / "secrets.json").exists()
+
+
+def test_stack_removes_secrets_even_when_diagnostic_manifest_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    secrets = tmp_path / "seed-secrets.json"
+    secrets.write_text('{"secrets": true}', encoding="utf-8")
+    monkeypatch.setattr(StackManager, "_prepare_config", lambda self: None)
+    manager = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "stack-manifest-failure",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=None,
+        seed_secrets=secrets,
+        seed_approvals=None,
+    )
+
+    def fail_manifest() -> None:
+        raise OSError("manifest unavailable")
+
+    monkeypatch.setattr(manager, "_write_manifest", fail_manifest)
+
+    with pytest.raises(OSError, match="manifest unavailable"):
+        manager.close()
+
+    assert not manager.secrets_path.exists()
 
 
 def test_stack_defaults_to_filtered_egress_despite_ambient_open(

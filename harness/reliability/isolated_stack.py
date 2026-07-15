@@ -116,14 +116,18 @@ class StackManager:
         self.secrets_path = self.root / "secrets.json"
         self.approvals_path = self.root / "disco-approved-origins.json"
         self.db_path = self.root / "disco.db"
-        if seed_config is not None:
-            shutil.copy2(seed_config, self.config_path)
-        if seed_secrets is not None:
-            shutil.copy2(seed_secrets, self.secrets_path)
-        if seed_approvals is not None:
-            shutil.copy2(seed_approvals, self.approvals_path)
-        self.env = self._environment()
-        self._prepare_config()
+        try:
+            if seed_config is not None:
+                shutil.copy2(seed_config, self.config_path)
+            if seed_secrets is not None:
+                shutil.copy2(seed_secrets, self.secrets_path)
+            if seed_approvals is not None:
+                shutil.copy2(seed_approvals, self.approvals_path)
+            self.env = self._environment()
+            self._prepare_config()
+        except BaseException:
+            self._remove_secret_artifacts()
+            raise
 
     @property
     def agent_url(self) -> str:
@@ -247,11 +251,22 @@ class StackManager:
 
     def close(self) -> None:
         with self._lock:
-            _terminate(self.agent)
-            _terminate(self.app)
-            self.agent = None
-            self.app = None
-            self._write_manifest()
+            try:
+                _terminate(self.agent)
+                _terminate(self.app)
+                self.agent = None
+                self.app = None
+                self._write_manifest()
+            finally:
+                self._remove_secret_artifacts()
+
+    def _remove_secret_artifacts(self) -> None:
+        """Remove credential-bearing state while retaining diagnostic artifacts."""
+        for path in (
+            self.secrets_path,
+            self.secrets_path.with_suffix(self.secrets_path.suffix + ".tmp"),
+        ):
+            path.unlink(missing_ok=True)
 
     def _write_manifest(self) -> None:
         payload = {
