@@ -10,7 +10,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { GroundedAnswer } from "@/types/grounded";
-import { deriveSourceTiers, type ReportEvent } from "./deepResearchTrace";
+import { deriveSourceTiers } from "./deepResearchTrace";
+import type { ReportEvent } from "@/types/agent";
 import { citationNumbers } from "./sources";
 
 // Verbatim shape (ids + urls) of the captured duplicate-source report.

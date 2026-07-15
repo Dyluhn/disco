@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
-import type { AgentEvent, WorkspaceFile } from "@/lib/buildTrace";
+import type { AgentEvent } from "@/types/agent";
+import type { WorkspaceFile } from "@/lib/buildTrace";
 
 function f(path: string, content: string): WorkspaceFile {
   return { path, content, bytes: content.length };

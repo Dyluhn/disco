@@ -28,7 +28,7 @@ function jsonResponse(body: object, status = 200): Response {
   } as unknown as Response;
 }
 
-function makeFetchStub(status = 200, body: BodyInit = new Blob(["data"], { type: "application/pdf" })) {
+function makeFetchStub(status = 200, body: BlobPart = new Blob(["data"], { type: "application/pdf" })) {
   return vi.fn(async (url: RequestInfo | URL) => {
     if (String(url) === "http://agent:8123/api/auth/session") {
       return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });

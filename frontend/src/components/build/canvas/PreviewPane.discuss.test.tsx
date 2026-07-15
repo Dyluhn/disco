@@ -27,7 +27,7 @@ const {
   selectionRef,
 } = vi.hoisted(() => ({
   previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
-  useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
   resetSelectionSpy: vi.fn(),
   disarmSpy: vi.fn(),
   selectionRef: { current: null as SelectionEnvelope | null },

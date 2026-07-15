@@ -16,7 +16,7 @@ describe("PreviewLaunchFrame", () => {
       target: string;
       intent: string | undefined;
     }> = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
       const input = this.elements.namedItem("intent") as HTMLInputElement | null;
       submissions.push({
         action: this.action,
@@ -83,7 +83,7 @@ describe("PreviewLaunchFrame", () => {
 
   it("replaces the named browsing context and ignores stale launch messages", async () => {
     const formTargets: string[] = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
       formTargets.push(this.target);
     });
     const onLoad = vi.fn();
@@ -154,7 +154,7 @@ describe("PreviewLaunchFrame", () => {
       .mockReturnValueOnce(popups[0] as unknown as Window)
       .mockReturnValueOnce(popups[1] as unknown as Window);
     const submissions: string[] = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
       submissions.push((this.elements.namedItem("intent") as HTMLInputElement).value);
     });
     let mintCount = 0;

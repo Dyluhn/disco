@@ -6,7 +6,7 @@
  * only on a real signal: submit (or an actual upload via ensurePreCid).
  */
 
-import type { ReactElement } from "react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,14 +16,22 @@ vi.mock("@/api/client", async (orig) => ({
   agentLive: () => true,
 }));
 
-const createBuildConversation = vi.fn(async () => "conv_created");
+const createBuildConversation = vi.fn<
+  typeof import("@/api/agent").createBuildConversation
+>(async () => "conv_created");
 vi.mock("@/api/agent", () => ({
-  createBuildConversation: (...a: unknown[]) => createBuildConversation(...a),
+  createBuildConversation: (
+    ...a: Parameters<typeof import("@/api/agent").createBuildConversation>
+  ) => createBuildConversation(...a),
 }));
 
-const requestResearch = vi.fn(async () => ({ status: "ok" }));
+const requestResearch = vi.fn<typeof import("@/api/research").requestResearch>(
+  async (scope) => scope,
+);
 vi.mock("@/api/research", () => ({
-  requestResearch: (...a: unknown[]) => requestResearch(...a),
+  requestResearch: (
+    ...a: Parameters<typeof import("@/api/research").requestResearch>
+  ) => requestResearch(...a),
 }));
 
 // useResearchStream subscribes off the scope; with scope=null it's inert, but
@@ -36,7 +44,7 @@ import { useResearch } from "./useResearch";
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactElement }) => (
+  return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
 }

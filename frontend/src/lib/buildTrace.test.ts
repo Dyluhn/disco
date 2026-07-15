@@ -357,11 +357,12 @@ describe("WALK-09: deliverable gate — panel only shows at FINISHED", () => {
     expect(d).not.toBeNull(); // derivation is non-null (unchanged behaviour)
 
     // RUNNING → gate returns null → panel is hidden
-    const runningResult = ("RUNNING" satisfies string) === "FINISHED" ? d : null;
+    const gateDeliverable = (status: string) => status === "FINISHED" ? d : null;
+    const runningResult = gateDeliverable("RUNNING");
     expect(runningResult).toBeNull();
 
     // FINISHED → gate passes through → panel is visible
-    const finishedResult = ("FINISHED" satisfies string) === "FINISHED" ? d : null;
+    const finishedResult = gateDeliverable("FINISHED");
     expect(finishedResult).not.toBeNull();
   });
 });

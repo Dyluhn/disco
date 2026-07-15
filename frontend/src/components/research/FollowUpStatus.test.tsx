@@ -19,6 +19,7 @@ import type { AgentEvent } from "@/types/agent";
 
 function makePhaseEvent(phase: string, seq = 1): AgentEvent {
   return {
+    id: `phase-${seq}`,
     kind: "action",
     seq,
     source: "agent",

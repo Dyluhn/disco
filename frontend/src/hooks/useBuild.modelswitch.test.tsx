@@ -6,7 +6,7 @@
  * — and seeds the picker from the conversation's current pinned model on resume.
  */
 
-import type { ReactElement } from "react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -17,11 +17,15 @@ vi.mock("@/api/client", async (orig) => ({
   agentHttpBase: () => "",
 }));
 
-const patchConversationSettings = vi.fn(async () => undefined);
+const patchConversationSettings = vi.fn<
+  typeof import("@/api/agent").patchConversationSettings
+>(async () => undefined);
 vi.mock("@/api/agent", () => ({
   createBuildConversation: vi.fn(async () => "conv_created"),
   killConversation: vi.fn(async () => undefined),
-  patchConversationSettings: (...a: unknown[]) => patchConversationSettings(...a),
+  patchConversationSettings: (
+    ...a: Parameters<typeof import("@/api/agent").patchConversationSettings>
+  ) => patchConversationSettings(...a),
 }));
 
 // A controllable stream stub: the parent surface drives status; resume/requestPlan/steer
@@ -44,7 +48,7 @@ import { useBuild } from "./useBuild";
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactElement }) => (
+  return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
 }

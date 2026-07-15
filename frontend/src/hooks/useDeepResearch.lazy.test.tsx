@@ -2,7 +2,7 @@
  * lazily create one cid; the final controls are patched onto that same cid
  * before kickoff so the uploaded files are not abandoned. */
 
-import type { ReactElement } from "react";
+import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,18 +12,28 @@ vi.mock("@/api/client", async (orig) => ({
   agentLive: () => true,
 }));
 
-const createDeepResearchConversation = vi.fn(async () => "conv_deep_lazy");
+const createDeepResearchConversation = vi.fn<
+  typeof import("@/api/deepResearch").createDeepResearchConversation
+>(async () => "conv_deep_lazy");
 vi.mock("@/api/deepResearch", () => ({
-  createDeepResearchConversation: (...args: unknown[]) =>
+  createDeepResearchConversation: (
+    ...args: Parameters<
+      typeof import("@/api/deepResearch").createDeepResearchConversation
+    >
+  ) =>
     createDeepResearchConversation(...args),
   exportReportAsMarkdown: vi.fn(),
   exportReport: vi.fn(async () => true),
 }));
 
-const patchConversationSettings = vi.fn(async () => undefined);
+const patchConversationSettings = vi.fn<
+  typeof import("@/api/agent").patchConversationSettings
+>(async () => undefined);
 vi.mock("@/api/agent", () => ({
   killConversation: vi.fn(async () => undefined),
-  patchConversationSettings: (...args: unknown[]) =>
+  patchConversationSettings: (
+    ...args: Parameters<typeof import("@/api/agent").patchConversationSettings>
+  ) =>
     patchConversationSettings(...args),
 }));
 
@@ -43,7 +53,7 @@ function wrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return ({ children }: { children: ReactElement }) => (
+  return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
 }

@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 // vi.hoisted runs before any imports are resolved, so the reference is safe
 // inside the vi.mock factory below.
 const { isDemoModeMock } = vi.hoisted(() => ({
-  isDemoModeMock: vi.fn<[], boolean>(),
+  isDemoModeMock: vi.fn<() => boolean>(),
 }));
 
 vi.mock("@/api/client", () => ({

@@ -50,7 +50,7 @@ Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
   value: () => ({
     fillRect: () => {},
     clearRect: () => {},
-    getImageData: (x: number, y: number, w: number, h: number) => ({
+    getImageData: (_x: number, _y: number, w: number, h: number) => ({
       data: new Uint8ClampedArray(w * h * 4),
     }),
     putImageData: () => {},

@@ -202,7 +202,7 @@ describe("finished app handoff isolation", () => {
     const open = vi.fn(() => popup as unknown as Window);
     vi.stubGlobal("open", open);
     const submissions: Array<{ action: string; intent: string }> = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
       submissions.push({
         action: this.action,
         intent: (this.elements.namedItem("intent") as HTMLInputElement).value,

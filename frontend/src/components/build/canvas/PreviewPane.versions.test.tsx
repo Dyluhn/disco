@@ -29,7 +29,7 @@ const {
   // Version-history tests never exercise a live dev-server capability. Keep that
   // unrelated async effect pending so no state commit can outlive a sync assertion.
   previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
-  useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
   useWorkspaceVersionsMock: vi.fn(),
 }));
 

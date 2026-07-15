@@ -24,8 +24,10 @@ function makeWrapper() {
 
 // ---- Mocks -----------------------------------------------------------------
 
-const mockGetSessions = vi.fn<[string], Promise<{ sessions: SessionInfo[] }>>();
-const mockGetSessionView = vi.fn<[string, string, number?], Promise<SessionView>>();
+const mockGetSessions = vi.fn<(cid: string) => Promise<{ sessions: SessionInfo[] }>>();
+const mockGetSessionView = vi.fn<
+  (cid: string, name: string, tailChars?: number) => Promise<SessionView>
+>();
 
 vi.mock("@/api/agent", () => ({
   getSessions: (cid: string) => mockGetSessions(cid),

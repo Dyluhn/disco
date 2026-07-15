@@ -16,7 +16,7 @@ import { PreviewPane } from "@/components/build/canvas/PreviewPane";
 import type { AgentEvent, ConversationStatus, PreviewInfo } from "@/types/agent";
 
 const { useBuildPreviewMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
-  useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
   previewBootstrapUrlMock: vi.fn((_cid: string, _port: number, targetPath = "/") =>
     Promise.resolve({
       url: "http://preview.test/__disco/preview-auth",

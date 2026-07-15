@@ -95,7 +95,7 @@ describe("ElementBox — edit mode (title)", () => {
   });
 
   it("blur commits an edit and emits replace patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(<ElementBox {...titleBox({ onPatch })} />);
     fireEvent.doubleClick(container.querySelector('[data-element-id="slide-0:title"]')!);
     const input = container.querySelector('input[type="text"]')!;
@@ -107,7 +107,7 @@ describe("ElementBox — edit mode (title)", () => {
   });
 
   it("does NOT emit a patch when content is unchanged on blur", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <ElementBox {...titleBox({ content: "Hello World", onPatch })} />,
     );
@@ -119,7 +119,7 @@ describe("ElementBox — edit mode (title)", () => {
   });
 
   it("Escape reverts the edit and emits no patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(<ElementBox {...titleBox({ onPatch })} />);
     fireEvent.doubleClick(container.querySelector('[data-element-id="slide-0:title"]')!);
     const input = container.querySelector('input[type="text"]')!;
@@ -141,7 +141,7 @@ describe("ElementBox — edit mode (bullet → textarea)", () => {
   });
 
   it("Enter commits a bullet edit and emits replace patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <ElementBox {...titleBox({ elementId: "slide-0:body:0", kind: "bullet", jsonPointer: "/slides/0/body/0", content: "Bullet", onPatch })} />,
     );

@@ -26,7 +26,7 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 // available:false). vi.hoisted runs before any imports, so the mock reference
 // is safe inside the vi.mock factory below.
 const { useBuildPreviewMock, pathPreviewBootstrapUrlMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
-  useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
   pathPreviewBootstrapUrlMock: vi.fn((cid: string) =>
     Promise.resolve({
       url: `http://localhost:8000/__disco/path-preview-auth/${cid}`,
@@ -542,7 +542,7 @@ describe("PreviewPane — E3: isolated cross-browser live preview link", () => {
     const popup = { opener: window, close: vi.fn() };
     const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
     const submissions: Array<{ action: string; target: string }> = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
       submissions.push({ action: this.action, target: this.target });
     });
     const button = await screen.findByRole("button", { name: /open in new tab/i });

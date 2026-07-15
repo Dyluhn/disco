@@ -312,7 +312,7 @@ describe("DeckEditor — BW-13 continuation render↔pointer identity", () => {
   });
 
   it("editing the continuation bullet patches the AUTHORED tail line, not body/0", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <DeckEditor deck={overflowDeck()} renderHtml={OVERFLOW_FIXTURE_HTML} onPatch={onPatch} />,
     );
@@ -538,7 +538,7 @@ describe("DeckEditor — slide strip navigation", () => {
 
 describe("DeckEditor — text edit emits replace patch (overlay wiring)", () => {
   it("double-clicking the title overlay → input → blur emits a replace patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={onPatch} />,
     );
@@ -569,7 +569,7 @@ describe("DeckEditor — text edit emits replace patch (overlay wiring)", () => 
   });
 
   it("does NOT emit a patch when content is unchanged on blur", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={onPatch} />,
     );
@@ -589,7 +589,7 @@ describe("DeckEditor — text edit emits replace patch (overlay wiring)", () => 
 
 describe("DeckEditor — bullet edit (slide 1)", () => {
   it("double-clicking a bullet overlay → textarea → Enter emits replace patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={onPatch} />,
     );
@@ -623,7 +623,7 @@ describe("DeckEditor — bullet edit (slide 1)", () => {
 
 describe("DeckEditor — Escape key reverts edit", () => {
   it("pressing Escape while editing reverts the value and emits no patch", () => {
-    const onPatch = vi.fn<[JsonPatchOp[]], void>();
+    const onPatch = vi.fn<(patch: JsonPatchOp[]) => void>();
     const { container } = render(
       <DeckEditor deck={makeDeck()} renderHtml={FIXTURE_HTML} onPatch={onPatch} />,
     );

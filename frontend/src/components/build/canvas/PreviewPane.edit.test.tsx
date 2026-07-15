@@ -19,7 +19,7 @@ import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
 const { previewBootstrapUrlMock, useBuildPreviewMock } = vi.hoisted(() => ({
   previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
-  useBuildPreviewMock: vi.fn<[{ data: PreviewInfo | null }]>(() => ({ data: null })),
+  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
 }));
 
 vi.mock("@/hooks/useBuildPreview", () => ({
