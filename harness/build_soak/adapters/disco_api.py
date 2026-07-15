@@ -370,6 +370,11 @@ class CollectedRun:
     # browser/verifier observations. Empty by default and deliberately appended last
     # so legacy positional CollectedRun construction retains its old field ordering.
     browser_evidence: dict[str, bytes] = field(default_factory=dict)
+    # Terminal lifecycle/sidecar/cleanup measurements populated after the main
+    # run is frozen but before dossier assembly.  Explicit (rather than a dynamic
+    # attribute) so INVALID retention and replay share one typed evidence contract.
+    # Appended for positional compatibility with every pre-existing fixture.
+    product_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 # ---- the live client --------------------------------------------------------

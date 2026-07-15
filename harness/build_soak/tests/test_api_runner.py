@@ -306,6 +306,97 @@ def test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(tmp_path
     assert client.live_thrash_monitor["findings"] == []
 
 
+def _strict_live_thrash_monitor() -> dict[str, Any]:
+    detected_at = datetime(2026, 7, 15, 21, 0, tzinfo=UTC).timestamp() + 9
+    return {
+        "enabled": True,
+        "sample_count": 2,
+        "minimum_confirmation_samples": 2,
+        "findings": [
+            {
+                "detected_at_epoch": detected_at,
+                "terminal_status": "RUNNING",
+                "event_count": 10,
+                "max_event_seq": 10,
+                "confirmation_samples": 2,
+                "oracle_results": [
+                    {
+                        "oracle": "ThrashOracle",
+                        "status": "FAIL",
+                        "code": "MODEL_REPAIR_THRASH",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "disabled",
+        "one_sample",
+        "sample_count_too_small",
+        "wrong_oracle",
+        "missing_detection_epoch",
+        "nonfinite_detection_epoch",
+        "stale_detection_epoch",
+        "terminal_finding",
+    ],
+)
+def test_killed_idle_audit_boundary_requires_strict_live_thrash_monitor(malformation):
+    monitor = _strict_live_thrash_monitor()
+    if malformation == "disabled":
+        monitor["enabled"] = False
+    elif malformation == "one_sample":
+        monitor["minimum_confirmation_samples"] = 1
+        monitor["findings"][0]["confirmation_samples"] = 1
+    elif malformation == "sample_count_too_small":
+        monitor["sample_count"] = 1
+    elif malformation == "wrong_oracle":
+        monitor["findings"][0]["oracle_results"][0]["oracle"] = "OtherOracle"
+    elif malformation == "missing_detection_epoch":
+        del monitor["findings"][0]["detected_at_epoch"]
+    elif malformation == "nonfinite_detection_epoch":
+        monitor["findings"][0]["detected_at_epoch"] = float("nan")
+    elif malformation == "stale_detection_epoch":
+        monitor["findings"][0]["detected_at_epoch"] -= 1_000
+    elif malformation == "terminal_finding":
+        monitor["findings"][0]["terminal_status"] = "IDLE"
+
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    first = status(1, "RUNNING")
+    first["timestamp"] = started.isoformat()
+    killed = status(2, "IDLE", "killed")
+    killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=[first, killed],
+        state_initial={},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        thrash_monitor=monitor,
+    )
+    assert _run_mod._confirmed_live_thrash_stop(run) is False
+
+
+def test_killed_idle_boundary_prefers_real_build_terminal():
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    killed = status(1, "IDLE", "killed")
+    killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
+    finished = status(2, "FINISHED")
+    finished["timestamp"] = datetime.fromtimestamp(started.timestamp() + 8, UTC).isoformat()
+
+    assert _run_mod._terminal_status_epoch([killed]) is None
+    assert _run_mod._terminal_status_epoch([killed], allow_killed_idle=True) == pytest.approx(
+        started.timestamp() + 10
+    )
+    assert _run_mod._terminal_status_epoch(
+        [killed, finished], allow_killed_idle=True
+    ) == pytest.approx(started.timestamp() + 8)
+
+
 @pytest.mark.asyncio
 async def test_progress_poll_kills_conversation_on_confirmed_live_thrash(monkeypatch, tmp_path):
     client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
@@ -4602,6 +4693,250 @@ async def test_missing_live_cleanup_evidence_is_invalid_not_crash(tmp_path, monk
     assert record["code"] == "RUN_INTERRUPTED"
     assert record["facts"]["missing_slices"] == ["lifecycle", "sidecar", "cleanup"]
     assert "terminal cleanup not adjudicable" in record["facts"]["reason"]
+    assert record["conversation_id"] == _CID
+
+    base = tmp_path / "out" / "run_missing_cleanup_001"
+    conv = base / "conversations" / _CID
+    assert (base / "manifest.json").is_file()
+    assert (conv / "events.jsonl").is_file()
+    assert (conv / "inspect-trace.json").is_file()
+    assert (conv / "thrash-monitor.json").is_file()
+    assert verify_evidence_unchanged(base, load_manifest(base)).intact
+
+
+@pytest.mark.asyncio
+async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp_path, monkeypatch):
+    """A live thrash stop is a product verdict, even though kill leaves IDLE.
+
+    The in-run monitor kills a conversation only after the same strict ThrashOracle
+    failure persists across two samples.  That deliberate stop appends
+    ``IDLE(detail=killed)`` rather than FINISHED/ERROR.  Cleanup/provider evidence
+    must anchor on that kill and preserve the confirmed FAIL; treating the missing
+    work-terminal timestamp as RUN_INTERRUPTED masks the product failure.
+    """
+
+    scenario = json.loads(json.dumps(_smoke_scenario()))
+    scenario["assertions"]["provider"] = {
+        "require_ledger": True,
+        "require_host_substr": "opencode.ai",
+        "model": "deepseek-v4-flash",
+    }
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events[-1] = status(10, "IDLE", "killed")
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+
+    content = "<html><h1>Build Smoke OK</h1></html>"
+    trace = _fake_inspect_trace()
+    trace["spans"].extend(
+        [
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "unknown_tool",
+                "tool_name": "write_file",
+            },
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "unknown_tool",
+                "tool_name": "file_write",
+            },
+        ]
+    )
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={
+            "index.html": {
+                "present": True,
+                "size": len(content.encode()),
+                "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                "content": content,
+                "proof": "raw_sha",
+                "content_stable": True,
+            }
+        },
+        preview={
+            "health": {"status": 200},
+            "content": content,
+            "available": True,
+            "runtime_available": False,
+            "runtime_availability_status": 200,
+            "source": "isolated_path_capability",
+        },
+        inspect_trace=trace,
+        thrash_monitor={
+            **_strict_live_thrash_monitor(),
+        },
+        timeline=["confirmed live thrash threshold stopped the conversation"],
+    )
+
+    async def fake_drive(*_args, **_kwargs):
+        return run
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    ledger = tmp_path / "provider.jsonl"
+    ledger.write_text(
+        json.dumps(
+            {
+                "ts": started.timestamp() + 5,
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "has_tools": True,
+                "conversation_id": _CID,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_run_mod, "drive_scenario", fake_drive)
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(ledger))
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(_run_mod, "_live_disco_container_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_disco_volume_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_dangling_volume_names", lambda: set())
+
+    db = tmp_path / "disco.db"
+    transport = FakeTransport(db, states=["IDLE"])
+    client = _client(transport, tmp_path)
+    record = await run_once(
+        client,
+        scenario,
+        run_id="run_live_thrash_stop_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=True,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["required_evidence_present"] is True
+    thrash = next(
+        result for result in record["oracle_results"] if result["oracle"] == "ThrashOracle"
+    )
+    assert thrash["status"] == "FAIL"
+    assert thrash["code"] == "MODEL_REPAIR_THRASH"
+    base = tmp_path / "out" / "run_live_thrash_stop_001"
+    assert verify_evidence_unchanged(base, load_manifest(base)).intact
+
+
+def test_confirmed_live_thrash_provider_boundary_is_scoped_and_tool_bearing(tmp_path, monkeypatch):
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    first = msg(1, "user", "build")
+    first["timestamp"] = started.isoformat()
+    killed = status(2, "IDLE", "killed")
+    killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=[first, killed],
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        thrash_monitor=_strict_live_thrash_monitor(),
+    )
+    ledger = tmp_path / "provider.jsonl"
+    records = [
+        {
+            "ts": started.timestamp() + 2,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+        {
+            "ts": started.timestamp() + 11,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": _CID,
+        },
+        {
+            "ts": started.timestamp() + 12,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "conversation_id": "conv_other",
+        },
+        {
+            "ts": started.timestamp() + 13,
+            "host": "opencode.ai",
+            "model": "deepseek-v4-flash",
+            "has_tools": False,
+            "conversation_id": _CID,
+        },
+    ]
+    ledger.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(ledger))
+
+    scoped = _run_mod._provider_ledger_for_run(run)
+    assert scoped is not None
+    assert len(scoped) == 3
+    assert [record["after_terminal"] for record in scoped] == [False, True, False]
+
+    run.thrash_monitor = {}
+    assert _run_mod._provider_ledger_for_run(run) is None
+
+
+@pytest.mark.asyncio
+async def test_confirmed_live_thrash_cleanup_requires_pre_stop_provider_call(tmp_path, monkeypatch):
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    first = msg(1, "user", "build")
+    first["timestamp"] = started.isoformat()
+    killed = status(2, "IDLE", "killed")
+    killed["timestamp"] = datetime.fromtimestamp(started.timestamp() + 10, UTC).isoformat()
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=[first, killed],
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        thrash_monitor=_strict_live_thrash_monitor(),
+    )
+    ledger = tmp_path / "provider.jsonl"
+    ledger.write_text(
+        json.dumps(
+            {
+                "ts": started.timestamp() + 11,
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "has_tools": True,
+                "conversation_id": _CID,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(_run_mod, "_live_disco_container_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_disco_volume_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_dangling_volume_names", lambda: set())
+
+    evidence = await _run_mod._collect_terminal_cleanup_evidence(
+        cast(DiscoApiClient, _CleanupKillClient()),
+        _CID,
+        run,
+        baseline_containers=0,
+        relay_log=str(ledger),
+        timeline=[],
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+    )
+
+    assert "lifecycle" in evidence
+    assert "cleanup" in evidence
+    assert "sidecar" not in evidence
 
 
 @pytest.mark.asyncio

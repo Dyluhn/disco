@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import copy
 import json
+import math
 import os
 import subprocess
 import sys
@@ -1084,6 +1085,122 @@ def assemble_dossier(
     return base
 
 
+def _status_value_and_detail(event: dict[str, Any]) -> tuple[str, Any]:
+    status = event.get("status")
+    detail = event.get("detail")
+    payload = event.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload) or {}
+        except Exception:
+            payload = {}
+    if isinstance(payload, dict):
+        if status is None:
+            status = payload.get("status")
+        if detail is None:
+            detail = payload.get("detail")
+    return str(status or "").upper(), detail
+
+
+def _first_killed_idle_epoch(events: list[dict[str, Any]]) -> float | None:
+    first: float | None = None
+    for event in events:
+        if event.get("kind") != "status":
+            continue
+        status, detail = _status_value_and_detail(event)
+        epoch = _event_epoch(event)
+        if status == "IDLE" and detail == "killed" and epoch is not None:
+            first = epoch if first is None else min(first, epoch)
+    return first
+
+
+def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
+    """Whether the live monitor proved thrash before killing this run.
+
+    The monitor stops an actively thrashing conversation through ``POST /kill``.
+    The resulting durable terminal is ``IDLE(detail=killed)``, not a normal Build
+    work terminal.  Accept that otherwise-ambiguous marker only when the retained
+    monitor record contains a confirmed strict ThrashOracle failure.
+    """
+
+    if DiscoApiClient._status_of(run.state_final) != "IDLE":
+        return False
+    monitor = run.thrash_monitor
+    if not isinstance(monitor, dict) or monitor.get("enabled") is not True:
+        return False
+    minimum = monitor.get("minimum_confirmation_samples")
+    sample_count = monitor.get("sample_count")
+    if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 2:
+        return False
+    if (
+        not isinstance(sample_count, int)
+        or isinstance(sample_count, bool)
+        or sample_count < minimum
+    ):
+        return False
+    thrash_codes = {
+        fc.TOOL_CALL_THRASH,
+        fc.TOOL_ERROR_THRASH,
+        fc.ACTIONLESS_THRASH,
+        fc.MODEL_REPAIR_THRASH,
+    }
+    findings = monitor.get("findings")
+    if not isinstance(findings, list):
+        return False
+    run_start = _min_event_epoch(run.events)
+    killed_at = _first_killed_idle_epoch(run.events)
+    if run_start is None or killed_at is None or run_start > killed_at:
+        return False
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        confirmations = finding.get("confirmation_samples")
+        detected_at = finding.get("detected_at_epoch")
+        terminal_status = finding.get("terminal_status")
+        event_count = finding.get("event_count")
+        max_event_seq = finding.get("max_event_seq")
+        results = finding.get("oracle_results")
+        if (
+            not isinstance(confirmations, int)
+            or isinstance(confirmations, bool)
+            or confirmations < minimum
+            or confirmations > sample_count
+        ):
+            continue
+        if (
+            not isinstance(detected_at, (int, float))
+            or isinstance(detected_at, bool)
+            or not math.isfinite(detected_at)
+            or detected_at <= 0
+        ):
+            continue
+        if not run_start <= float(detected_at) <= killed_at:
+            continue
+        if not isinstance(terminal_status, str) or not terminal_status:
+            continue
+        if terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE:
+            continue
+        if not isinstance(event_count, int) or isinstance(event_count, bool) or event_count < 0:
+            continue
+        if (
+            not isinstance(max_event_seq, int)
+            or isinstance(max_event_seq, bool)
+            or max_event_seq < -1
+        ):
+            continue
+        if not isinstance(results, list):
+            continue
+        if any(
+            isinstance(result, dict)
+            and result.get("status") == fc.FAIL
+            and result.get("oracle") == "ThrashOracle"
+            and result.get("code") in thrash_codes
+            for result in results
+        ):
+            return True
+    return False
+
+
 def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:
     """Capture this run's exact, terminal-annotated provider slice for live and replay use."""
     relay_log = _relay_log_path()
@@ -1092,7 +1209,9 @@ def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:
     try:
         with open(relay_log, encoding="utf-8") as handle:
             records = parse_relay_log(handle.read())
-        terminal_epoch = _terminal_status_epoch(run.events)
+        terminal_epoch = _terminal_status_epoch(
+            run.events, allow_killed_idle=_confirmed_live_thrash_stop(run)
+        )
         start_epoch = _min_event_epoch(run.events)
         if terminal_epoch is None or start_epoch is None:
             return None
@@ -1462,34 +1581,37 @@ def _event_epoch(e: dict[str, Any]) -> float | None:
 _BUILD_TERMINAL_STATUSES = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK"})
 
 
-def _terminal_status_epoch(events: list[dict[str, Any]]) -> float | None:
+def _terminal_status_epoch(
+    events: list[dict[str, Any]], *, allow_killed_idle: bool = False
+) -> float | None:
     """[codex/Lane A] Epoch of the LAST `status` event whose status is a BUILD terminal
     (_BUILD_TERMINAL_STATUSES — NOT IDLE) — the true instant the build went terminal. NOT the max
     timestamp across ALL events (a durable event appended AFTER the terminal status would push the
     anchor past a real post-terminal provider call), and NOT anchored on IDLE (the rest/kill state).
     None if no build-terminal status event is present."""
     best: float | None = None
+    first_confirmed_kill: float | None = None
     for e in events:
         if e.get("kind") != "status":
             continue
         # run.events are raw DB rows {seq,kind,created_at,payload(JSON string)} — the status lives
         # INSIDE `payload`, not as a top-level field. Accept both shapes (flattened + DB-row).
-        status = e.get("status")
-        if status is None:
-            pl = e.get("payload")
-            if isinstance(pl, str):
-                try:
-                    status = (json.loads(pl) or {}).get("status")
-                except Exception:
-                    status = None
-            elif isinstance(pl, dict):
-                status = pl.get("status")
-        if str(status or "").upper() not in _BUILD_TERMINAL_STATUSES:
-            continue
+        normalized_status, _detail = _status_value_and_detail(e)
         ep = _event_epoch(e)
-        if ep is not None and (best is None or ep > best):
+        if ep is None:
+            continue
+        if normalized_status in _BUILD_TERMINAL_STATUSES and (best is None or ep > best):
             best = ep
-    return best
+        elif (
+            allow_killed_idle
+            and normalized_status == "IDLE"
+            and _detail == "killed"
+            and (first_confirmed_kill is None or ep < first_confirmed_kill)
+        ):
+            # The first kill is the monitor's spend stop.  Later idempotent cleanup
+            # kills must not move the provider-after-terminal boundary forward.
+            first_confirmed_kill = ep
+    return best if best is not None else first_confirmed_kill
 
 
 def _min_event_epoch(events: list[dict[str, Any]]) -> float | None:
@@ -1541,7 +1663,9 @@ async def _collect_terminal_cleanup_evidence(
     # live mode) so a false 0 can't classify green. Release happens AFTER the grace window so the
     # token is live during the audited window.
     events = getattr(run, "events", []) or []
-    terminal_epoch = _terminal_status_epoch(events)
+    terminal_epoch = _terminal_status_epoch(
+        events, allow_killed_idle=_confirmed_live_thrash_stop(run)
+    )
     run_start_epoch = _min_event_epoch(events)
     calls_after: int | None = None
     if (
@@ -1873,6 +1997,29 @@ async def run_once(
         _required = ("lifecycle", "sidecar", "cleanup")
         _missing = [k for k in _required if k not in ev]
         if _live_measure and _missing:
+            # Verdict-invalidating evidence gaps need the same retained diagnostic
+            # dossier as the inspect-trace validity gate above.  Previously this
+            # early return kept only classification.json and discarded the exact
+            # events, state, inspect trace, live-thrash finding, workspace, and
+            # provider slice needed to distinguish a harness gap from a masked
+            # product failure.
+            run.product_evidence = ev
+            run.timeline.append(
+                "terminal cleanup evidence incomplete: missing " + ", ".join(_missing)
+            )
+            provider_ledger = _provider_ledger_for_run(run)
+            assemble_dossier(
+                out_root,
+                run_id,
+                scenario,
+                run,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                kernel=kernel,
+                started_at=run_started_at,
+                provider_ledger=provider_ledger,
+            )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -1884,6 +2031,8 @@ async def run_once(
                 code=fc.RUN_INTERRUPTED,
                 first_broken_link="terminal -> cleanup_evidence_unmeasurable",
                 facts={"missing_slices": _missing},
+                conversation_id=run.conversation_id,
+                timeline_markdown=_timeline_md(scenario, run),
             )
 
         provider_ledger = _provider_ledger_for_run(run)
