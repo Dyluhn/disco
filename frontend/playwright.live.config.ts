@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { isAbsolute, join } from "node:path";
 
 /**
  * LIVE acceptance config (work-order pack, docs/workorders/README.md rule 2).
@@ -35,8 +36,33 @@ const RELIABILITY_AGENT_URL =
 const RELIABILITY_APP_URL =
   process.env.DISCO_RELIABILITY_APP_URL ?? "http://127.0.0.1:8800";
 
+/**
+ * Reliability suites run concurrently and emit oracle inputs through
+ * `testInfo.outputPath()`. Keep those bytes inside the suite's evidence folder;
+ * Playwright's default `test-results` directory is shared by every invocation
+ * in this checkout and is cleared at the start of a run.
+ */
+export function reliabilityOutputDir(
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const isolated = /^(1|true|yes)$/i.test(
+    environment.DISCO_RELIABILITY_ISOLATED_STACK ?? "",
+  );
+  const suiteOut = environment.DISCO_RELIABILITY_SUITE_OUT?.trim() ?? "";
+  if (isolated && !suiteOut) {
+    throw new Error(
+      "isolated live reliability requires DISCO_RELIABILITY_SUITE_OUT",
+    );
+  }
+  if (suiteOut && !isAbsolute(suiteOut)) {
+    throw new Error("DISCO_RELIABILITY_SUITE_OUT must be an absolute path");
+  }
+  return suiteOut ? join(suiteOut, "playwright-artifacts") : undefined;
+}
+
 export default defineConfig({
   testDir: "./e2e-live",
+  outputDir: reliabilityOutputDir(),
   fullyParallel: LIVE_WORKERS > 1,
   workers: LIVE_WORKERS,
   retries: 0,
