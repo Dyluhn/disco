@@ -78,7 +78,9 @@ scenarios:
   # ---- §15.1 Smoke ---------------------------------------------------------
   - id: static_html_minimal
     mode: api
-    prompt: "Create an index.html with the heading 'Build Smoke OK', serve it, and finish."
+    prompt: >-
+      Create an index.html with the heading 'Build Smoke OK', serve it, then verify in a
+      browser that the page loads and shows the heading before finishing.
     assertions:
       event_chain:
         require_user_event: true
@@ -105,6 +107,8 @@ scenarios:
       preview:
         required: true
         must_contain: ["Build Smoke OK"]
+      browser_verification:
+        required: true
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
   # ---- §15.2 Plan discipline ----------------------------------------------
@@ -273,6 +277,8 @@ scenarios:
       preview:
         required: true
         must_contain: ["Contact Us"]
+      browser_verification:
+        required: true
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
   # ---- DIAGNOSTIC: predict-before-acting tool-clarity probe -----------------
@@ -349,6 +355,8 @@ scenarios:
       workspace:
         files:
           - {path: "index.html", must_contain: ["Join the Waitlist", "<form", "email", "Sign Up"]}
+      browser_verification:
+        required: true
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
   # diag D: a runnable script — exercises shell / code_exec rather than just file+preview.

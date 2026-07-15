@@ -30,6 +30,7 @@ from .manual_edit_preservation import (
 from .output_truth import OutputTruthOracle
 from .provider_ledger import ProviderLedgerOracle
 from .revision import RevisionOracle
+from .scenario_browser_verification import ScenarioBrowserVerificationOracle
 from .schema import OracleResult, failing, passing, skipping
 from .targeted_edit import RewriteAvoidanceOracle, TargetedEditOracle
 from .thrash import ThrashOracle
@@ -62,6 +63,7 @@ __all__ = [
     "PreviewOwnershipOracle",
     "ProviderLedgerOracle",
     "RevisionOracle",
+    "ScenarioBrowserVerificationOracle",
     "RewriteAvoidanceOracle",
     "ScreenLabelOracle",
     "ShowToUserOracle",

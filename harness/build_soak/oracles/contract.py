@@ -87,6 +87,28 @@ class ContractOracle:
         if tool_scope_assert and "tool_scope" not in present:
             missing.append("tool_scope_capture (scenario asserts assertions.tool_scope)")
 
+        # H191: validate the opt-in shape here.  Whether the product actually ran
+        # a passing verifier is adjudicated later as a PRODUCT result; only missing
+        # bytes for an observation that did run are a harness-validity INVALID.
+        browser_verification = assertions.get("browser_verification")
+        if browser_verification is not None:
+            if (
+                not isinstance(browser_verification, dict)
+                or set(browser_verification) != {"required"}
+                or (browser_verification.get("required") is not True)
+            ):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> browser_verification.required",
+                        facts={
+                            "reason": (
+                                "assertions.browser_verification must contain only required: true"
+                            )
+                        },
+                    )
+                ]
         if missing:
             return [
                 failing(

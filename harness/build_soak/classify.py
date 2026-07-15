@@ -34,6 +34,7 @@ from .oracles import (
     OutputTruthOracle,
     ProviderLedgerOracle,
     RevisionOracle,
+    ScenarioBrowserVerificationOracle,
     ThrashOracle,
     ToolScopeOracle,
 )
@@ -125,6 +126,7 @@ def classify(
     provider_ledger: list[dict[str, Any]] | None = None,
     inspect_trace: dict[str, Any] | None = None,
     product_evidence: dict[str, Any] | None = None,
+    browser_evidence_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
     optional captured evidence. Returns the §13 classification dict.
@@ -152,6 +154,7 @@ def classify(
     # supplied kwargs so the ContractOracle judges what we really have (a caller
     # may also pass an explicit set, which we union in).
     present: set[str] = set(available_evidence or set())
+    present.discard("browser_verification")  # H191 proof is oracle-derived below
     present.add("events")
     if workspace_manifest is not None:
         present.add("workspace")
@@ -162,6 +165,8 @@ def classify(
         present.add("preview")
     if tool_scope is not None:
         present.add("tool_scope")
+    verification_paths = _successful_browser_verification_paths(events)
+    captured_browser_paths = set(browser_evidence_paths or set())
 
     results: list[OracleResult] = []
 
@@ -207,7 +212,17 @@ def classify(
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 9. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # 9. H191 scenario-owned browser-verification promise.  Zero passing
+        # verifier observations is an adjudicable PRODUCT failure; a verifier that
+        # did pass but whose referenced bytes are not locked is harness INVALID.
+        results += ScenarioBrowserVerificationOracle().check(
+            scenario=scenario,
+            verification_paths=verification_paths,
+            browser_evidence_paths=captured_browser_paths,
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 10. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
         # slice, so a headless run (product_evidence is None) is unaffected; a product-
         # harness run enforces the real UI path.
         for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
@@ -216,7 +231,7 @@ def classify(
             if first_fail is not None:
                 break
     if first_fail is None:
-        # 10. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
+        # 11. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
         # product_evidence slice, so non-edit runs are unaffected; an edit-harness run
         # enforces targeted-edit + manual-preservation discipline. Producer = P1B-LIVE.
         for _oracle_cls in TARGETED_EDIT_ORACLES:
@@ -267,6 +282,49 @@ def _first_fail(results: list[OracleResult]) -> OracleResult | None:
         if r.failed:
             return r
     return None
+
+
+_BROWSER_VERIFICATION_TOOLS = frozenset({"verify_web_app", "verify_appkit_app"})
+
+
+def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[str]:
+    """Return screenshot paths claimed by successful, passing verifier observations.
+
+    A tool-level success is insufficient: ``verify_web_app`` also uses successful
+    tool transport for an ``unverifiable`` verdict.  Requiring ``structured.passed``
+    to be exactly true keeps that branch from satisfying a browser-verification
+    contract.  Screenshot keys may be nested (notably for AppKit interactions), so
+    collect the same explicit path-key family retained by the H190 capture.
+    """
+    paths: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "screenshot_path" or key.endswith("_screenshot_path"):
+                    if isinstance(child, str) and child:
+                        paths.add(child)
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    for event in events:
+        if event.get("kind") != "observation":
+            continue
+        result = event.get("tool_result")
+        if not isinstance(result, dict):
+            continue
+        if result.get("tool_name") not in _BROWSER_VERIFICATION_TOOLS:
+            continue
+        if result.get("success") is not True:
+            continue
+        structured = result.get("structured")
+        if not isinstance(structured, dict) or structured.get("passed") is not True:
+            continue
+        visit(structured)
+    return paths
 
 
 def classify_run_folder(
@@ -406,6 +464,25 @@ def classify_run_folder(
         except (json.JSONDecodeError, ValueError):
             product_evidence = None
 
+    # H191: only browser evidence named in the manifest is admissible on frozen
+    # replay.  These files are already covered by ``evidence_intact`` above; an
+    # unlisted screenshot sitting beside the dossier cannot satisfy the contract.
+    browser_evidence_paths: set[str] = set()
+    if manifest is not None:
+        prefix = "browser-evidence/"
+        for label, rel in manifest.evidence_files.items():
+            if not label.startswith(prefix) or label == prefix:
+                continue
+            proof_path = label.removeprefix(prefix)
+            expected_rel = f"conversations/{folder_conversation_id}/browser-evidence/{proof_path}"
+            if (
+                folder_conversation_id
+                and rel == expected_rel
+                and label in manifest.evidence_hashes
+                and manifest.evidence_hashes[label] != "MISSING"
+            ):
+                browser_evidence_paths.add(proof_path)
+
     classification = classify(
         events_raw,
         scenario=scenario,
@@ -420,6 +497,7 @@ def classify_run_folder(
         product_evidence=product_evidence,
         workspace_manifest=workspace_manifest,
         preview=preview,
+        browser_evidence_paths=browser_evidence_paths,
     )
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"

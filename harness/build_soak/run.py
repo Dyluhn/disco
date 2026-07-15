@@ -967,6 +967,7 @@ def classify_dossier(
         # HARN-2: browser product-harness evidence (None until HARN-1b populates it on
         # CollectedRun; the browser oracles SKIP without it, so headless runs are unaffected).
         product_evidence=getattr(run, "product_evidence", None),
+        browser_evidence_paths=set(run.browser_evidence),
         revision_meta={
             "declared_followup_seqs": list(run.declared_followup_seqs),
             "declared_followup_requires_revision": list(run.declared_followup_requires_revision),

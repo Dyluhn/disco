@@ -31,7 +31,7 @@ from harness.build_soak.adapters.disco_api import (
     HttpTransport,
     SnapshotNotReadyError,
 )
-from harness.build_soak.classify import classify_run_folder
+from harness.build_soak.classify import classify, classify_run_folder
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
@@ -173,7 +173,13 @@ class FakeTransport:
 
 
 def _smoke_scenario():
-    return load_scenarios()["static_html_minimal"]
+    # Most runner tests below isolate lifecycle, preview, provider, timeout, or
+    # replay behavior with the historical event-only smoke fixture.  Keep those
+    # tests scoped to their named predicate; H191's production browser contract is
+    # exercised explicitly by the strict tests beside the H190 capture coverage.
+    scenario = json.loads(json.dumps(load_scenarios()["static_html_minimal"]))
+    scenario["assertions"].pop("browser_verification")
+    return scenario
 
 
 def _smoke_log_with_file_write(path, content):
@@ -828,6 +834,177 @@ def test_h190_legacy_run_without_screenshot_reference_needs_no_snapshot(tmp_path
         tmp_path / "out", "legacy_no_browser", {"id": "legacy"}, run, model="m", autonomous=False
     )
     assert not (base / "conversations" / _CID / "browser-evidence").exists()
+
+
+def _h191_strict_browser_scenario() -> dict[str, Any]:
+    return {
+        "id": "strict_browser_verification",
+        "assertions": {"browser_verification": {"required": True}},
+    }
+
+
+def _h191_verifier_events(path: str, *, passed: bool = True) -> list[dict[str, Any]]:
+    events = clean_smoke_log()
+    events[-2]["seq"] = 13
+    events[-2]["id"] = "evt_13"
+    events[-1]["seq"] = 14
+    events[-1]["id"] = "evt_14"
+    verifier = _browser_screenshot_observation(path, seq=12, tool_name="verify_web_app")
+    verifier["tool_result"]["structured"]["passed"] = passed
+    verifier["tool_result"]["structured"]["verdict"] = "pass" if passed else "fail"
+    events[-2:-2] = [
+        action(11, "verify_web_app", action_id="act_11"),
+        verifier,
+    ]
+    return events
+
+
+def test_h191_required_browser_verification_fails_closed_when_observation_or_bytes_absent():
+    scenario = _h191_strict_browser_scenario()
+    no_observation = classify(clean_smoke_log(), scenario=scenario)
+    verifier_without_bytes = classify(
+        _h191_verifier_events(".pmx/screenshots/verify.png"),
+        scenario=scenario,
+    )
+    generic_events = clean_smoke_log()
+    generic_events[-2]["seq"] = 13
+    generic_events[-2]["id"] = "evt_13"
+    generic_events[-1]["seq"] = 14
+    generic_events[-1]["id"] = "evt_14"
+    generic_events[-2:-2] = [
+        action(11, "browser", action_id="act_11"),
+        _browser_screenshot_observation(".pmx/screenshots/browser.png", seq=12),
+    ]
+    generic_browser_only = classify(
+        generic_events,
+        scenario=scenario,
+        browser_evidence_paths={".pmx/screenshots/browser.png"},
+    )
+
+    for record in (no_observation, generic_browser_only):
+        assert record["status"] == "FAIL", record
+        assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+        assert record["first_broken_link"] == "finish -> browser_verification"
+        assert record["facts"]["passing_verifier_observations"] == 0
+
+    assert verifier_without_bytes["status"] == "INVALID_RUN", verifier_without_bytes
+    assert verifier_without_bytes["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert verifier_without_bytes["first_broken_link"] == (
+        "browser_verification -> durable_screenshot_evidence"
+    )
+
+
+def test_h191_unverifiable_or_generic_available_evidence_cannot_spoof_contract():
+    path = ".pmx/screenshots/verify.png"
+    scenario = _h191_strict_browser_scenario()
+    unverifiable = classify(
+        _h191_verifier_events(path, passed=False),
+        scenario=scenario,
+        browser_evidence_paths={path},
+        available_evidence={"browser_verification"},
+    )
+
+    assert unverifiable["status"] == "FAIL", unverifiable
+    assert unverifiable["code"] == "VERIFICATION_GATE_BYPASSED"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".pmx/screenshots/verify.PNG",
+        ".pmx/screenshots/verify\x00.png",
+    ],
+)
+def test_h191_replay_path_admissibility_exactly_matches_h190_capture(path):
+    record = classify(
+        _h191_verifier_events(path),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "INVALID_RUN", record
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert record["facts"]["missing_or_untrusted_paths"] == [path]
+
+
+def test_h191_passing_verifier_with_matching_frozen_path_satisfies_opt_in_contract():
+    path = ".pmx/screenshots/verify.png"
+    events = _h191_verifier_events(path)
+
+    strict = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+    legacy = classify(clean_smoke_log(), scenario={"id": "headless", "assertions": {}})
+
+    assert strict["status"] == "PASS", strict
+    assert legacy["status"] == "PASS", legacy
+
+
+def test_h191_frozen_replay_requires_manifest_locked_verifier_screenshot(tmp_path):
+    path = ".pmx/screenshots/verify.png"
+    data = b"\x89PNG\r\n\x1a\nstrict-verifier-proof"
+    events = _h191_verifier_events(path)
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        browser_evidence={path: data},
+    )
+    scenario = _h191_strict_browser_scenario()
+    base = assemble_dossier(
+        tmp_path,
+        "h191_frozen",
+        scenario,
+        run,
+        model="m",
+        autonomous=False,
+    )
+
+    assert classify_dossier(base, scenario, run, autonomous=False)["status"] == "PASS"
+    assert classify_run_folder(base)["status"] == "PASS"
+
+    # A manifest-label rewrite cannot launder some other locked file into browser
+    # proof: label, hash entry, and canonical conversation-scoped path must agree.
+    manifest_path = base / "manifest.json"
+    manifest_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    browser_label = f"browser-evidence/{path}"
+    manifest_raw["evidence_files"][browser_label] = manifest_raw["evidence_files"]["events.jsonl"]
+    manifest_raw["evidence_hashes"][browser_label] = manifest_raw["evidence_hashes"]["events.jsonl"]
+    manifest_path.write_text(json.dumps(manifest_raw), encoding="utf-8")
+    relabeled = classify_run_folder(base)
+    assert relabeled["status"] == "INVALID_RUN", relabeled
+    assert relabeled["code"] == "MISSING_REQUIRED_EVIDENCE"
+
+    # An unlisted file beside the dossier is not durable proof.  Removing the
+    # browser-evidence label from a newly assembled legacy dossier must fail the
+    # strict contract on replay even if identical bytes are planted nearby.
+    absent = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+    )
+    absent_base = assemble_dossier(
+        tmp_path,
+        "h191_unlocked",
+        scenario,
+        absent,
+        model="m",
+        autonomous=False,
+    )
+    planted = absent_base / "conversations" / _CID / "browser-evidence" / path
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_bytes(data)
+    replay = classify_run_folder(absent_base)
+    assert replay["status"] == "INVALID_RUN", replay
+    assert replay["code"] == "MISSING_REQUIRED_EVIDENCE"
 
 
 @pytest.mark.asyncio
@@ -4301,6 +4478,7 @@ _ASSERTION_KEYS = {
     "terminal_status_in",
     "thrash",
     "tool_scope",
+    "browser_verification",
 }
 _FOLLOWUP_TRIGGERS = {"after_terminal", "after_first_file_write"}
 
@@ -4367,6 +4545,14 @@ def test_every_scenario_loads_with_a_valid_schema():
             assert isinstance(prev.get("required"), bool), f"{sid}: preview.required must be bool"
             assert all(isinstance(x, str) for x in (prev.get("must_contain") or [])), sid
 
+        browser_verification = a.get("browser_verification")
+        if browser_verification is not None:
+            assert browser_verification == {"required": True}, sid
+            prompt = s["prompt"].lower()
+            assert "browser" in prompt and "verif" in prompt, (
+                f"{sid}: browser-verification assertion must be disclosed in the prompt"
+            )
+
         # followups: each has a text + a known trigger; if ANY requires a plan revision the
         # ContractOracle requires assertions.revisions.expected_final_plan_revision.
         followups = s.get("followups") or []
@@ -4377,6 +4563,10 @@ def test_every_scenario_loads_with_a_valid_schema():
             assert "expected_final_plan_revision" in (a.get("revisions") or {}), (
                 f"{sid}: revision followups need revisions.expected_final_plan_revision"
             )
+
+    assert {
+        sid for sid, scenario in scen.items() if "browser_verification" in scenario["assertions"]
+    } == {"static_html_minimal", "verify_catches_broken_then_fixed", "diag_form_verify"}
 
 
 def test_agent_general_task_prompt_discloses_literal_source_assertion():
