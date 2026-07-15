@@ -1,4 +1,4 @@
-"""WO-C4 §8.8 closeout — authoritative-npm precedence + launcher-family script heads.
+"""WO-C4 §8.8 closeout — npm precedence, launchers, and executable script proof.
 
 The no-lockfile toolchain reject (``_unsupported_node_pm_declaration``, added on tip
 ``300d7ec6``) had two defects that an exhaustive adversarial re-verify raised against C4;
@@ -93,6 +93,16 @@ Randomized (plan §4 crit 8): the ``package.json`` ``"name"`` is drawn from the 
 lockfile / markers — NEVER the package name — so the verdict cannot be recognized from a
 hard-coded name. No mock/patch and no monkeypatch: the file map is constructed and
 ``detect_release`` is called directly (anti-bypass §4.4).
+
+ACCEPTANCE-v5 CONTROLLED RE-FREEZE (R7; supersedes the old broad-benign conclusion above,
+without changing the preserved launcher/marker cases).  The old fifteen-case benign table
+proved only that a head was not bun/pnpm/yarn; it did not prove that a referenced file or
+package would exist after ``npm ci``.  Exactly two no-extra-artifact forms remain positive:
+``NODE_ENV=production node server.js`` and ``exec node server.js``.  The other thirteen
+forms are explicit RED contracts for one ``entrypoint_unresolved`` blocker on the
+lifecycle field that would execute the unresolved script.  Four paired GREEN controls add
+the referenced node file.  Those six positives prevent a blanket-rejection implementation
+from satisfying the re-freeze.
 """
 
 from __future__ import annotations
@@ -100,8 +110,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from disco.core.release.detect import Provenance, detect_release
-from disco.core.release.spec import ReleaseAssessment
+from disco.core.release.detect import DetectionResult, Provenance, detect_release
+from disco.core.release.spec import ReleaseAssessment, ServiceRole
 
 pytestmark = pytest.mark.export_track1_closeout
 
@@ -127,16 +137,15 @@ def _package_json(name: str, scripts: dict[str, str], package_manager: str | Non
     return json.dumps(payload)
 
 
-def _detect(files: dict[str, str]) -> object:
+def _detect(files: dict[str, str]) -> DetectionResult:
     return detect_release(files, intent=None, provenance=Provenance())
 
 
-def _blocker_codes(result: object) -> set[str]:
-    assert hasattr(result, "blockers")
+def _blocker_codes(result: DetectionResult) -> set[str]:
     return {blocker.code for blocker in result.blockers}
 
 
-def _assert_candidate(result: object) -> None:
+def _assert_candidate(result: DetectionResult) -> None:
     assert getattr(result, "assessment", None) is ReleaseAssessment.candidate, (
         "an authoritative npm signal must keep the project a self-host candidate; "
         f"got assessment={getattr(result, 'assessment', None)!r}, "
@@ -148,7 +157,46 @@ def _assert_candidate(result: object) -> None:
     )
 
 
-def _assert_toolchain_unsupported(result: object) -> None:
+def _assert_locked_npm_candidate(
+    result: DetectionResult, *, expected_build_cmd: tuple[str, ...]
+) -> None:
+    """Assert the complete runnable contract; a broad "candidate" bit is insufficient.
+
+    Every acceptance-v5 positive carries a committed npm lock and must resolve to exactly
+    one ingress whose emitted lifecycle is ``npm ci`` -> optional ``npm run build`` ->
+    ``npm start``.  The empty blocker/resource/env assertions make the controls teethful
+    against implementations that retain a partial candidate beside diagnostics.
+    """
+    _assert_candidate(result)
+    assert result.blockers == ()
+    assert result.resources == ()
+    assert result.env == ()
+    assert len(result.services) == 1
+    ingress = result.services[0]
+    assert ingress.role is ServiceRole.ingress
+    assert result.ingress == ingress
+    assert ingress.package_manager == "npm"
+    assert ingress.lockfile == "package-lock.json"
+    assert ingress.install_cmd == ("npm", "ci")
+    assert ingress.build_cmd == expected_build_cmd
+    assert ingress.start_cmd == ("npm", "start")
+
+
+def _assert_entrypoint_unresolved(result: DetectionResult, *, field: str) -> None:
+    """Assert the exact fail-closed shape; an unrelated or blanket reject cannot pass."""
+    assert result.assessment is ReleaseAssessment.needs_review
+    assert result.services == ()
+    assert result.resources == ()
+    assert result.env == ()
+    assert result.ingress is None
+    assert len(result.blockers) == 1
+    blocker = result.blockers[0]
+    assert blocker.code == "entrypoint_unresolved"
+    assert blocker.field == field
+    assert _blocker_codes(result) == {"entrypoint_unresolved"}
+
+
+def _assert_toolchain_unsupported(result: DetectionResult) -> None:
     assert getattr(result, "assessment", None) is ReleaseAssessment.needs_review, (
         "a non-npm toolchain declaration with NO authoritative npm signal must fail "
         f"closed to needs_review; got assessment={getattr(result, 'assessment', None)!r}."
@@ -166,7 +214,7 @@ def _assert_toolchain_unsupported(result: object) -> None:
 _STRAY_MARKERS: tuple[tuple[str, str], ...] = (
     (".yarnrc", "registry=https://registry.example\n"),
     (".yarnrc.yml", "nodeLinker: node-modules\n"),
-    ("bunfig.toml", "[install]\nregistry = \"https://registry.example\"\n"),
+    ("bunfig.toml", '[install]\nregistry = "https://registry.example"\n'),
     ("pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n"),
     ("pnpm-workspace.yml", "packages:\n  - 'apps/*'\n"),
 )
@@ -181,9 +229,7 @@ def test_committed_package_lock_beats_stray_marker(
     stays a candidate. Pre-fix the marker wrongly emitted ``toolchain_unsupported``."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(
-            str(closeout_name("svc")), {"start": "node server.js"}, None
-        ),
+        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
         "package-lock.json": _PACKAGE_LOCK,
         marker: content,
         "server.js": _SERVER_JS,
@@ -335,49 +381,156 @@ def test_hidden_launcher_head_rejects_even_with_authoritative_npm(
     _assert_toolchain_unsupported(_detect(files))
 
 
-# Benign shapes that must NEVER become ``toolchain_unsupported`` — every effective head is
-# npm-family / a normal binary, a launcher name appears only as a non-head ARGUMENT, or the
-# launcher lives in the DELIBERATELY-uninspected ``prepare`` hook. All carry a committed
-# ``package-lock.json`` (a real npm project) and must stay a ``candidate``.
-_BENIGN_HEAD_CASES: tuple[tuple[str, str], ...] = (
-    ("start", "NODE_ENV=production node server.js"),  # env prefix, node head
-    ("build", "cd app && npm run build"),  # chain, cd + npm heads
-    ("build", "vite build && node post.js"),  # chain, vite + node heads
-    ("start", "npx serve"),  # npx (npm-family) head
-    ("start", 'echo "use bun" && node server.js'),  # `bun` only inside an echo ARG
-    ("postinstall", "node scripts/patch.js"),  # hook, node head
-    ("postinstall", "patch-package"),  # hook, plain-binary head
-    ("prestart", "node warmup.js"),  # start pre-hook, node head
-    # #2e (A): `prepare` is now INSPECTED, but a non-launcher head there is still a candidate.
-    ("prepare", "husky install"),  # husky is not a launcher
-    ("prepare", "node scripts/x.js"),  # node head
-    ("prepare", "patch-package"),  # plain-binary head
-    # #2e (B): a transparent wrapper whose REAL command is node/npm is NOT a launcher.
-    ("start", "cross-env NODE_ENV=production node server.js"),  # wrapper -> node
-    ("start", "env node x"),  # wrapper env -> node
-    ("start", "exec node server.js"),  # wrapper exec -> node
-    ("start", "dotenv -- npm run start"),  # wrapper dotenv (+ `--`) -> npm
+# Acceptance-v5: these thirteen old "benign" shapes are not proven executable.  Each
+# carries a committed npm lock so package-manager selection is settled; the ONLY question
+# is whether the lifecycle script can be resolved in the clean image.  IDs are literal and
+# mirrored byte-for-byte in ``controlled_refreeze_r7.reclassified_reds``.
+_UNRESOLVED_NPM_SCRIPT_CASES: tuple[object, ...] = (
+    pytest.param("build", "cd app && npm run build", "build_cmd", id="build-cd-self-recursion"),
+    pytest.param(
+        "build",
+        "vite build && node post.js",
+        "build_cmd",
+        id="build-vite-chain-missing-post",
+    ),
+    pytest.param("start", "npx serve", "start_cmd", id="start-npx-serve-absent-dep"),
+    pytest.param(
+        "start",
+        'echo "use bun" && node server.js',
+        "start_cmd",
+        id="start-echo-chain",
+    ),
+    pytest.param(
+        "postinstall",
+        "node scripts/patch.js",
+        "install_cmd",
+        id="install-postinstall-missing-node-file",
+    ),
+    pytest.param(
+        "postinstall",
+        "patch-package",
+        "install_cmd",
+        id="install-postinstall-patch-package-absent",
+    ),
+    pytest.param(
+        "prestart",
+        "node warmup.js",
+        "start_cmd",
+        id="start-prestart-missing-node-file",
+    ),
+    pytest.param("prepare", "husky install", "install_cmd", id="install-prepare-husky-absent"),
+    pytest.param(
+        "prepare",
+        "node scripts/x.js",
+        "install_cmd",
+        id="install-prepare-missing-node-file",
+    ),
+    pytest.param(
+        "prepare",
+        "patch-package",
+        "install_cmd",
+        id="install-prepare-patch-package-absent",
+    ),
+    pytest.param(
+        "start",
+        "cross-env NODE_ENV=production node server.js",
+        "start_cmd",
+        id="start-cross-env-absent",
+    ),
+    pytest.param("start", "env node x", "start_cmd", id="start-env-missing-node-file"),
+    pytest.param(
+        "start",
+        "dotenv -- npm run start",
+        "start_cmd",
+        id="start-dotenv-self-recursion",
+    ),
 )
 
 
-@pytest.mark.parametrize(("script_key", "script"), _BENIGN_HEAD_CASES)
-def test_benign_chains_and_hooks_stay_candidate(
-    script_key: str, script: str, closeout_name: object
+@pytest.mark.parametrize(("script_key", "script", "expected_field"), _UNRESOLVED_NPM_SCRIPT_CASES)
+def test_unresolved_npm_lifecycle_script_fails_closed(
+    script_key: str, script: str, expected_field: str, closeout_name: object
 ) -> None:
-    """GREEN — NO NEW FALSE-BLOCK (the critical #2d guard). A real npm project whose every
-    effective sub-command head is node/npm/npx/vite/…, or where a launcher name is only a
-    non-head argument, or whose only launcher lives in the uninspected ``prepare`` hook, must
-    stay a self-host ``candidate`` — robust extraction rejects a launcher HEAD only, in a key
-    the emitted bundle actually runs."""
+    """RED on c0c4f728: unresolved lifecycle work must not become a runnable bundle."""
     assert callable(closeout_name)
     scripts = {"start": "node server.js"}
-    scripts[script_key] = script  # may overwrite start; server.js still binds $PORT
+    scripts[script_key] = script
     files = {
         "package.json": _package_json(str(closeout_name("svc")), scripts, None),
         "package-lock.json": _PACKAGE_LOCK,
         "server.js": _SERVER_JS,
     }
-    _assert_candidate(_detect(files))
+    result = _detect(files)
+    _assert_entrypoint_unresolved(result, field=expected_field)
+    if script == 'echo "use bun" && node server.js':
+        # ``bun`` is an echo argument, not a launcher.  This case must fail for unresolved
+        # start-command proof and never regress to the unrelated toolchain classifier.
+        assert _TOOLCHAIN_UNSUPPORTED not in _blocker_codes(result)
+
+
+# The two retained positives need no package or file beyond the already-proven server.
+_RETAINED_WRAPPER_CASES: tuple[object, ...] = (
+    pytest.param("NODE_ENV=production node server.js", id="env-prefix-node"),
+    pytest.param("exec node server.js", id="exec-node"),
+)
+
+
+@pytest.mark.parametrize("start_script", _RETAINED_WRAPPER_CASES)
+def test_retained_benign_wrapper_stays_candidate(start_script: str, closeout_name: object) -> None:
+    """GREEN: the two accepted wrappers resolve to the present, PORT-bound server."""
+    assert callable(closeout_name)
+    files = {
+        "package.json": _package_json(str(closeout_name("svc")), {"start": start_script}, None),
+        "package-lock.json": _PACKAGE_LOCK,
+        "server.js": _SERVER_JS,
+    }
+    _assert_locked_npm_candidate(_detect(files), expected_build_cmd=())
+
+
+# Paired controls for four file-reference reds.  Each uses the same lifecycle position and
+# command family as its red sibling, but adds the exact referenced file; blanket rejection
+# therefore fails these controls.  Empty JS programs are valid and deterministically exit 0.
+_PRESENT_NODE_REFERENCE_CASES: tuple[object, ...] = (
+    pytest.param(
+        "build",
+        "node build.js",
+        "build.js",
+        ("npm", "run", "build"),
+        id="build-node-file",
+    ),
+    pytest.param(
+        "postinstall",
+        "node scripts/patch.js",
+        "scripts/patch.js",
+        (),
+        id="postinstall-node-file",
+    ),
+    pytest.param("prestart", "node warmup.js", "warmup.js", (), id="prestart-node-file"),
+    pytest.param("prepare", "node scripts/x.js", "scripts/x.js", (), id="prepare-node-file"),
+)
+
+
+@pytest.mark.parametrize(
+    ("script_key", "script", "referenced_file", "expected_build_cmd"),
+    _PRESENT_NODE_REFERENCE_CASES,
+)
+def test_present_node_script_reference_stays_candidate(
+    script_key: str,
+    script: str,
+    referenced_file: str,
+    expected_build_cmd: tuple[str, ...],
+    closeout_name: object,
+) -> None:
+    """GREEN: an existing node lifecycle target remains a fully runnable candidate."""
+    assert callable(closeout_name)
+    scripts = {"start": "node server.js", script_key: script}
+    files = {
+        "package.json": _package_json(str(closeout_name("svc")), scripts, None),
+        "package-lock.json": _PACKAGE_LOCK,
+        "server.js": _SERVER_JS,
+        referenced_file: "// present acceptance-v5 control\n",
+    }
+    _assert_locked_npm_candidate(_detect(files), expected_build_cmd=expected_build_cmd)
 
 
 # ---- GREEN preservation: the genuine reject must NOT be weakened ----
@@ -391,9 +544,7 @@ def test_stray_marker_without_npm_signal_still_fails_closed(
     marker STILL fails closed — finding #1's precedence must not open a blanket bypass."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(
-            str(closeout_name("svc")), {"start": "node server.js"}, None
-        ),
+        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
         marker: content,
         "server.js": _SERVER_JS,
     }
@@ -423,9 +574,7 @@ def test_plain_npm_project_stays_a_candidate(closeout_name: object) -> None:
     stray marker, no non-npm head) stays a self-host candidate with no toolchain reject."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(
-            str(closeout_name("svc")), {"start": "node server.js"}, None
-        ),
+        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
         "package-lock.json": _PACKAGE_LOCK,
         "server.js": _SERVER_JS,
     }

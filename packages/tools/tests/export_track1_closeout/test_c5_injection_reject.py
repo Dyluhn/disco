@@ -48,6 +48,15 @@ output, and that ZERO sidecar bytes were persisted anywhere under the data root.
 Randomized (plan §4 crit 8): conversation ids are drawn from the seeded
 `closeout_name` factory (which records its seed into the JUnit XML), so no case can
 be satisfied by a hard-coded id.
+
+ACCEPTANCE-v5 CONTROLLED CORRECTION (R7; no new G number): six formerly green examples
+used contexts the strict start grammar correctly rejects. Two secret-reference positives
+now exercise the head-agnostic sqlite resource ``migrate_cmd`` rail; three whole-reference
+positives use known direct-uvicorn options; and the ``python_module`` positive is the
+canonical ``python -m uvicorn`` equivalent of the direct uvicorn shape. The first five are
+context-correct controls. The last is a deliberate R7/SHARED_START_PARSER proving red on
+c0c4f728: Python interpreter flag parsing must hand remaining options to the selected
+uvicorn module rather than reject its known server flags. All other C5 nodes are unchanged.
 """
 
 from __future__ import annotations
@@ -169,6 +178,35 @@ def _sidecars(data_dir: Path) -> list[Path]:
     return sorted(data_dir.rglob("release-intent.json")) if data_dir.exists() else []
 
 
+def _one_persisted_sidecar(data_dir: Path) -> tuple[Path, dict[str, Any]]:
+    """Return the one real persisted intent; zero, duplicates, or non-object JSON fail."""
+    sidecars = _sidecars(data_dir)
+    assert len(sidecars) == 1, (
+        "an accepted declaration must persist exactly one release-intent sidecar; "
+        f"found {[str(path) for path in sidecars]}"
+    )
+    payload = json.loads(sidecars[0].read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return sidecars[0], payload
+
+
+def _assert_names_only_payload(payload: dict[str, Any]) -> None:
+    """Prove the persisted intent contains references/names and no value-bearing field."""
+
+    def _walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert "value" not in value, "a NAMES-ONLY release intent must not carry a value field"
+            for nested in value.values():
+                _walk(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                _walk(nested)
+
+    _walk(payload)
+    serialized = json.dumps(payload, sort_keys=True)
+    assert _MARK not in serialized
+
+
 def _output_blob(result: ToolResult) -> str:
     """Everything the tool surfaces to a caller/model, concatenated: the human
     content, the typed error code, and the JSON of the structured payload."""
@@ -267,6 +305,12 @@ def _resource(
     }
 
 
+def _resource_with_migrate_cmd(migrate_cmd: list[str]) -> dict[str, Any]:
+    resource = _resource(url="file:/data/app.db", persistent_path="/data/app.db")
+    resource["migrate_cmd"] = list(migrate_cmd)
+    return resource
+
+
 def _args_for_command_field(field: str, token: str) -> dict[str, Any]:
     """A declare payload whose SOLE offending element is `token`, placed in the
     named top-level command field (`start_cmd` / `build_cmd`). Every other field is a
@@ -361,12 +405,20 @@ async def test_secret_cli_forms_rejected(
 
 _DECLARED_SECRET_REF_FORMS: list[tuple[str, dict[str, Any]]] = [
     (
-        "flag_space_ref",
-        {"start_cmd": ["node", "srv", "--token", "${API_TOKEN}"], "required_env": ["API_TOKEN"]},
+        "migrate_flag_space_ref",
+        {
+            "start_cmd": ["node", "server.js"],
+            "required_env": ["API_TOKEN"],
+            "resources": [_resource_with_migrate_cmd(["dbmate", "--token", "${API_TOKEN}"])],
+        },
     ),
     (
-        "flag_equals_ref",
-        {"start_cmd": ["node", "srv", "--token=${API_TOKEN}"], "required_env": ["API_TOKEN"]},
+        "migrate_flag_equals_ref",
+        {
+            "start_cmd": ["node", "server.js"],
+            "required_env": ["API_TOKEN"],
+            "resources": [_resource_with_migrate_cmd(["dbmate", "--token=${API_TOKEN}"])],
+        },
     ),
 ]
 
@@ -382,12 +434,13 @@ async def test_secret_flag_with_declared_env_reference_accepted(
     monkeypatch: pytest.MonkeyPatch,
     closeout_name: object,
 ) -> None:
-    """WO-C5 §9.2 (the sanctioned carve-out) — GREEN positive.
+    """WO-C5 §9.2 (the sanctioned carve-out) — context-correct GREEN positive.
 
-    The ONE accepted secret-flag shape is a whole typed, DECLARED secret env
-    reference (`--token ${API_TOKEN}` with `API_TOKEN` declared). It carries no
-    literal value, so it is accepted on baseline and must stay accepted after the
-    fix — proving the fix rejects secret VALUES, not the safe reference form."""
+    Resource migration commands are intentionally head-agnostic, unlike the strict
+    runtime start grammar. A credential flag in a sqlite ``migrate_cmd`` may therefore
+    carry a whole typed, DECLARED secret env reference in space or equals form. It carries
+    no literal value. The persisted sidecar must retain the exact migrate argv and the
+    name reference, never secret material."""
     data_dir = tmp_path / "data"
     cid = _cid(closeout_name, f"c5ref{case_id[:4]}")
     result = await _declare(cid, arguments, monkeypatch, data_dir)
@@ -395,6 +448,20 @@ async def test_secret_flag_with_declared_env_reference_accepted(
         f"a whole declared secret env reference [{case_id}] was rejected: "
         f"{result.error} / {result.content}; §9.2 accepts a typed declared reference."
     )
+    _, payload = _one_persisted_sidecar(data_dir)
+    assert payload["start_cmd"] == ["node", "server.js"]
+    assert payload["required_env"] == ["API_TOKEN"]
+    resources = payload["resources"]
+    assert isinstance(resources, list) and len(resources) == 1
+    resource = resources[0]
+    assert resource["id"] == "db"
+    assert resource["kind"] == "sqlite"
+    assert resource["persistent_path"] == "/data/app.db"
+    assert resource["profiles"]["local"]["url"] == "file:/data/app.db"
+    expected_migrate = arguments["resources"][0]["migrate_cmd"]
+    assert resource["migrate_cmd"] == expected_migrate
+    assert sum(token.count("${API_TOKEN}") for token in resource["migrate_cmd"]) == 1
+    _assert_names_only_payload(payload)
 
 
 # ===========================================================================
@@ -556,13 +623,43 @@ async def test_resource_persistent_path_injection_rejected(
 # ===========================================================================
 
 _WHOLE_REF_ACCEPTED: list[tuple[str, dict[str, Any]]] = [
-    ("port_bare_arg", {"start_cmd": ["node", "server.js", "${PORT}"]}),
-    ("port_flag_value", {"start_cmd": ["node", "srv", "--port", "${PORT}"]}),
     (
-        "declared_env_value",
+        "uvicorn_port_space_ref",
         {
-            "start_cmd": ["node", "srv", "--base", "${API_BASE_URL}"],
-            "required_env": ["API_BASE_URL"],
+            "start_cmd": [
+                "uvicorn",
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "${PORT}",
+            ]
+        },
+    ),
+    (
+        "uvicorn_port_equals_ref",
+        {
+            "start_cmd": [
+                "uvicorn",
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--port=${PORT}",
+            ]
+        },
+    ),
+    (
+        "uvicorn_forwarded_ips_ref",
+        {
+            "start_cmd": [
+                "uvicorn",
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--forwarded-allow-ips",
+                "${TRUSTED_PROXY_IPS}",
+            ],
+            "required_env": ["TRUSTED_PROXY_IPS"],
         },
     ),
 ]
@@ -582,9 +679,9 @@ async def test_only_whole_declared_env_reference_accepted(
     """WO-C5 §9.4 (positive) — GREEN preservation.
 
     A whole `${PORT}` (the declared port contract) or `${NAME}` (a declared required
-    env) is the sole legitimate expandable token and must remain accepted. Accepted
-    on baseline; the fix must not over-reject the safe reference form (the partial /
-    undeclared / prefixed variants are the RED rows in the argv corpus above)."""
+    env) is the sole legitimate expandable token and must remain accepted in a KNOWN
+    direct-uvicorn option context. The strict start parser is not weakened to bless an
+    opaque Node argv shape. Partial/undeclared/prefixed variants remain RED above."""
     data_dir = tmp_path / "data"
     cid = _cid(closeout_name, f"c5ok{case_id[:4]}")
     result = await _declare(cid, arguments, monkeypatch, data_dir)
@@ -592,6 +689,10 @@ async def test_only_whole_declared_env_reference_accepted(
         f"a whole declared env reference [{case_id}] was rejected: "
         f"{result.error} / {result.content}; §9.4 accepts exactly this token form."
     )
+    _, payload = _one_persisted_sidecar(data_dir)
+    assert payload["start_cmd"] == arguments["start_cmd"]
+    assert payload["required_env"] == arguments.get("required_env", [])
+    _assert_names_only_payload(payload)
 
 
 # ===========================================================================
@@ -719,7 +820,21 @@ _SUPPORTED_COMMANDS: list[tuple[str, dict[str, Any]]] = [
         "uvicorn_module",
         {"start_cmd": ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${PORT}"]},
     ),
-    ("python_module", {"start_cmd": ["python", "-m", "http.server"]}),
+    (
+        "python_module",
+        {
+            "start_cmd": [
+                "python",
+                "-m",
+                "uvicorn",
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "${PORT}",
+            ]
+        },
+    ),
 ]
 
 
@@ -737,9 +852,10 @@ async def test_supported_command_matrix_accepted(
     """WO-C5 §9.11 (supported matrix) — GREEN preservation.
 
     Every literal in these canonical commands has a defined role (the detector itself
-    emits `npm start`, `uvicorn main:app --host 0.0.0.0 --port ${PORT}`, …), so a
-    runtime grammar MUST keep accepting them. Accepted on baseline; a fix that
-    rejected them would break the detector's own candidates."""
+    emits `npm start`, direct uvicorn, and `python -m uvicorn` shapes), so a runtime
+    grammar MUST keep accepting them. The `python_module` node is the acceptance-v5
+    R7/SHARED_START_PARSER proving red on c0c4f728: generic Python flag metadata must
+    not preempt the selected module's known uvicorn options."""
     data_dir = tmp_path / "data"
     cid = _cid(closeout_name, f"c5sup{case_id[:4]}")
     result = await _declare(cid, arguments, monkeypatch, data_dir)

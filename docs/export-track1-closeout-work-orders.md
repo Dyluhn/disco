@@ -6,6 +6,21 @@
 
 **Original campaign baseline:** `5cfbc5c468b3bc5275cdb8e474acc4474732b468`.
 
+**Controlled R7 re-freeze base:** `c0c4f728e8669dd27f88a9515383cc9a4a58f0d3`
+(`R6b`); intended tag `export-track1-closeout-acceptance-v5`.
+
+**Ratification:** PENDING. Acceptance-v5 is an acceptance-only candidate. No independent
+human has reviewed/signed the semantic diff or created, protected, and published the v5
+tag. The prior v4 manifest SHA-256 is
+`f10f33b4efa7c150c8321af7863298b35841d68bdfc695be6a471f7fc4b48615`; the prior C4 npm
+test SHA-256 is
+`050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06`; the prior C5
+injection-test SHA-256 is
+`f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6`.
+The v5 controlled allowlist contains only the C4 npm test, the C5 injection test, the
+manifest generator, and this work-order document; the other 45 of 49 v4-hashed files must
+remain byte-identical. The regenerated manifest itself is self-excluded as before.
+
 **Historical plan:** `docs/export-track1-work-orders.md`.
 
 **Purpose:** close the independent audit findings and prove that the self-host handoff is
@@ -538,6 +553,31 @@ stricter treatment but may not downgrade a secret-shaped name to public.
 11. Any persisted intent/spec shape change increments its schema version. V1 input is
     either migrated by a deterministic tested adapter or rejected with the exact upgrade
     blocker; canonical v2 serialize/parse/serialize bytes are identical.
+12. **Acceptance-v5 / R7 npm script proof (no new G number).** A supported npm-family
+    head is not sufficient evidence that an emitted lifecycle is runnable. The detector
+    must prove the referenced file/package, working directory, and non-recursive terminal
+    command for every script actually executed by `npm ci`, `npm run build`, or
+    `npm start`; otherwise it returns `needs_review` with exactly one
+    `entrypoint_unresolved` blocker on `install_cmd`, `build_cmd`, or `start_cmd` and emits
+    no services/resources/env. This is the existing criterion 7 applied to npm lifecycle
+    scripts, not a new product-gap family.
+
+    The controlled re-freeze replaces the old 15-node broad-benign table with 19 explicit
+    nodes. Thirteen are RED at `c0c4f728`: build self-recursion; a Vite/post-build chain;
+    absent `npx serve`; an unproven echo/start chain (which must **not** become
+    `toolchain_unsupported`); missing `postinstall`, `prestart`, and `prepare` node files;
+    absent `patch-package` in postinstall/prepare; absent `husky`; absent `cross-env`; an
+    absent `env node x` target; and absent `dotenv` plus start self-recursion. Exactly six
+    are GREEN controls: `NODE_ENV=production node server.js`, `exec node server.js`, and
+    four paired `node` lifecycle references whose exact file is present (`build.js`,
+    `scripts/patch.js`, `warmup.js`, `scripts/x.js`). Every positive asserts one ingress,
+    zero blockers, `npm ci`, and `npm start`, so blanket rejection cannot pass.
+
+    Inventory changes are intentional and bounded: the full closeout lane is `400 -> 404`
+    nodes and `test_c4_npm_precedence.py` is `67 -> 71`. All active bun/pnpm/yarn launcher
+    and npm-over-passive-marker protections remain unchanged. The machine-readable exact
+    13-red/6-positive node list, decision matrix, prior hashes, and ratification state live
+    in `controlled_refreeze_r7` in the generated manifest.
 
 ---
 
@@ -594,6 +634,26 @@ healthcheck code.
 11. Runtime-specific grammar tests reject unknown flags/positional values instead of
     relying only on the secret-flag blacklist; supported command matrices prove every
     accepted literal has a defined role.
+12. **Acceptance-v5 / R7 hygiene-context correction (no new G number).** Whole declared
+    `${NAME}` references are accepted only in a command context whose grammar is known;
+    their presence does not bless an otherwise opaque start shape. Two credential-flag
+    positives therefore exercise the intentionally head-agnostic sqlite resource
+    `migrate_cmd` rail (`--token ${API_TOKEN}` and `--token=${API_TOKEN}`) while the start
+    command remains `node server.js`. Each proves exactly one sidecar, exact migrate argv,
+    the declared name/reference, a valid `file:/data/app.db` resource, and no value-bearing
+    field or secret value. Three start positives use known direct-uvicorn option contexts:
+    `--port ${PORT}`, `--port=${PORT}`, and
+    `--forwarded-allow-ips ${TRUSTED_PROXY_IPS}` with the latter name declared; each proves
+    the exact persisted start argv.
+
+    The sixth replacement preserves the `python_module` node ID but changes its command
+    from `python -m http.server` to the canonical supported
+    `python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}`. It is the deliberate
+    R7/SHARED_START_PARSER proving red on `c0c4f728`: generic Python flag metadata must
+    hand parsing to the selected uvicorn module and accept uvicorn's known options, without
+    weakening strict start parsing. The other 79 C5 nodes remain byte/semantically
+    unchanged. These six replacements are count-neutral (`85 -> 85`), so the full v5
+    inventory remains `404`.
 
 **Forbidden shortcut:** expanding the blacklist while retaining arbitrary shell-string
 construction. The representation/rendering boundary must be safe by construction.

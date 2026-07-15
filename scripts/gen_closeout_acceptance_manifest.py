@@ -73,7 +73,8 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v4"
+REFREEZE_BASE_SHA = "c0c4f728e8669dd27f88a9515383cc9a4a58f0d3"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v5"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -257,6 +258,54 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "test_lockfile_package_manager_disagreement_fails_closed (package_manager_conflict) "
             "and test_v1_intent_sidecar_is_migrated_or_rejected_not_crashed "
             "(intent_upgrade_required)"
+        ),
+    },
+    {
+        # Controlled acceptance-v5 re-freeze.  This is an R7 proof refinement, not a
+        # newly numbered product-gap family: the C4 executable-availability contract
+        # already requires every accepted executable/script to exist in the clean image.
+        "work_order": "R7/NPM_SCRIPT_PROOF",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py"
+            "::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[build-cd-self-recursion]"
+        ),
+        "boundary": (
+            "real detect_release over an authoritative npm project whose emitted "
+            "npm lifecycle would execute an unresolved package.json script"
+        ),
+        "blocker_code": "entrypoint_unresolved",
+        "expected_failure": (
+            "the build script 'cd app && npm run build' self-recurses from an absent "
+            "app directory, but c0c4f728 returns candidate with npm run build. It must "
+            "return needs_review with exactly one entrypoint_unresolved blocker on "
+            "build_cmd and no services/resources/env. Twelve sibling reds cover the "
+            "other unproven install/build/start lifecycle shapes; six positive controls "
+            "prevent blanket rejection. No new G number is assigned."
+        ),
+    },
+    {
+        # The second acceptance-v5 correction is also an R7 proof refinement, not a
+        # newly numbered gap. Direct uvicorn is already a supported start shape; its
+        # canonical `python -m` form must share the server option grammar.
+        "work_order": "R7/SHARED_START_PARSER",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py"
+            "::test_supported_command_matrix_accepted[python_module]"
+        ),
+        "boundary": (
+            "real release_declare tool -> ReleaseIntent -> strict runtime command grammar "
+            "-> real persisted sidecar"
+        ),
+        "expected_failure": (
+            "the canonical 'python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}' "
+            "shape is rejected because generic Python flag metadata continues parsing "
+            "after '-m uvicorn' and preempts uvicorn's known --host/--port options. It "
+            "must share the direct-uvicorn option parser without weakening strict start "
+            "validation. Five context-correct C5 controls stay green. No new G number "
+            "is assigned."
         ),
     },
     {
@@ -740,6 +789,334 @@ REMEDIATION_R0: dict[str, object] = {
 }
 
 
+# ---- acceptance-v5 controlled R7 re-freeze -----------------------------------------
+#
+# The first real R7 adversarial pass found two acceptance contradictions: C4's final
+# "benign head" table did not prove referenced npm lifecycle artifacts, and six C5
+# positives exercised contexts the now-strict start parser should reject. These are
+# acceptance refinements at the frozen boundary, made before their production fixes. They
+# get no new G numbers: C4 criterion 7 and C5 criterion 11 already define the behavior.
+_R7_C4 = "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py"
+_R7_C5 = "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py"
+CONTROLLED_REFREEZE_R7: dict[str, object] = {
+    "acceptance_version": "v5",
+    "refreeze_base_sha": REFREEZE_BASE_SHA,
+    "prior_acceptance_tag": "export-track1-closeout-acceptance-v4",
+    "prior_manifest_sha256": ("f10f33b4efa7c150c8321af7863298b35841d68bdfc695be6a471f7fc4b48615"),
+    "prior_c4_test_sha256": ("050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06"),
+    "prior_c5_test_sha256": ("f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6"),
+    "classification": ("R7/NPM_SCRIPT_PROOF + R7/SHARED_START_PARSER (no new G numbers)"),
+    "scope": (
+        "Acceptance-only corrections of C4 executable/lifecycle proof and six C5 "
+        "hygiene/parser examples. No production, verifier, workflow, live-lane, frontend, "
+        "fixture, or unrelated frozen test is changed. The thirteen C4 reds and one C5 "
+        "shared-parser red fail on the c0c4f728 production tree before any fix."
+    ),
+    "changed_frozen_paths": [
+        _R7_C4,
+        _R7_C5,
+        "scripts/gen_closeout_acceptance_manifest.py",
+        "docs/export-track1-closeout-work-orders.md",
+    ],
+    "unchanged_v4_hashed_files_expected": 45,
+    "inventory_delta": {
+        "python_closeout_inventory": {"before": 400, "after": 404, "delta": 4},
+        "c4_npm_precedence": {"before": 67, "after": 71, "delta": 4},
+        "c5_injection_reject": {"before": 85, "after": 85, "delta": 0},
+        "replaced_old_broad_benign_nodes": 15,
+        "replacement_nodes": 19,
+        "replacement_breakdown": {
+            "proving_reds": 13,
+            "retained_positives": 2,
+            "paired_positives": 4,
+        },
+    },
+    "decision_matrix": [
+        {
+            "input": "authoritative npm + passive bun/pnpm/yarn migration marker",
+            "decision": "candidate",
+            "proof": "the pre-existing marker-precedence nodes remain byte/semantic peers",
+        },
+        {
+            "input": "active bun/pnpm/yarn launcher in an executed npm lifecycle script",
+            "decision": "needs_review / exactly toolchain_unsupported",
+            "proof": "the pre-existing launcher-family nodes remain unchanged",
+        },
+        {
+            "input": (
+                "npm lifecycle script whose referenced file, package executable, working "
+                "directory, or non-recursive terminal command is not statically proven"
+            ),
+            "decision": "needs_review / exactly entrypoint_unresolved",
+            "proof": "the thirteen reclassified reds below, on the exact lifecycle field",
+        },
+        {
+            "input": "NODE_ENV assignment or exec wrapper around present node server.js",
+            "decision": "candidate",
+            "proof": "two retained positive nodes with full npm lifecycle assertions",
+        },
+        {
+            "input": "node lifecycle reference whose exact workspace file is present",
+            "decision": "candidate",
+            "proof": "four paired positive nodes with full npm lifecycle assertions",
+        },
+    ],
+    "reclassified_reds": [
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[build-cd-self-recursion]",
+            "script_key": "build",
+            "script": "cd app && npm run build",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "build_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[build-vite-chain-missing-post]",
+            "script_key": "build",
+            "script": "vite build && node post.js",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "build_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-npx-serve-absent-dep]",
+            "script_key": "start",
+            "script": "npx serve",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-echo-chain]",
+            "script_key": "start",
+            "script": 'echo "use bun" && node server.js',
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+            "must_not_emit": "toolchain_unsupported",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[install-postinstall-missing-node-file]",
+            "script_key": "postinstall",
+            "script": "node scripts/patch.js",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "install_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[install-postinstall-patch-package-absent]",
+            "script_key": "postinstall",
+            "script": "patch-package",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "install_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-prestart-missing-node-file]",
+            "script_key": "prestart",
+            "script": "node warmup.js",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[install-prepare-husky-absent]",
+            "script_key": "prepare",
+            "script": "husky install",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "install_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[install-prepare-missing-node-file]",
+            "script_key": "prepare",
+            "script": "node scripts/x.js",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "install_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[install-prepare-patch-package-absent]",
+            "script_key": "prepare",
+            "script": "patch-package",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "install_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-cross-env-absent]",
+            "script_key": "start",
+            "script": "cross-env NODE_ENV=production node server.js",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-env-missing-node-file]",
+            "script_key": "start",
+            "script": "env node x",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_unresolved_npm_lifecycle_script_fails_closed"
+            "[start-dotenv-self-recursion]",
+            "script_key": "start",
+            "script": "dotenv -- npm run start",
+            "blocker_code": "entrypoint_unresolved",
+            "field": "start_cmd",
+        },
+    ],
+    "positive_controls": [
+        {
+            "node_id": f"{_R7_C4}::test_retained_benign_wrapper_stays_candidate[env-prefix-node]",
+            "script_key": "start",
+            "script": "NODE_ENV=production node server.js",
+            "provisioned": "server.js",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_retained_benign_wrapper_stays_candidate[exec-node]",
+            "script_key": "start",
+            "script": "exec node server.js",
+            "provisioned": "server.js",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_present_node_script_reference_stays_candidate"
+            "[build-node-file]",
+            "script_key": "build",
+            "script": "node build.js",
+            "provisioned": "build.js",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_present_node_script_reference_stays_candidate"
+            "[postinstall-node-file]",
+            "script_key": "postinstall",
+            "script": "node scripts/patch.js",
+            "provisioned": "scripts/patch.js",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_present_node_script_reference_stays_candidate"
+            "[prestart-node-file]",
+            "script_key": "prestart",
+            "script": "node warmup.js",
+            "provisioned": "warmup.js",
+        },
+        {
+            "node_id": f"{_R7_C4}::test_present_node_script_reference_stays_candidate"
+            "[prepare-node-file]",
+            "script_key": "prepare",
+            "script": "node scripts/x.js",
+            "provisioned": "scripts/x.js",
+        },
+    ],
+    "c5_hygiene_context_correction": {
+        "classification": "R7/SHARED_START_PARSER (no new G number)",
+        "unchanged_nodes": 79,
+        "replacement_count": 6,
+        "strict_start_parser_policy": (
+            "Preserved. Opaque Node argv examples are not accepted merely because a whole "
+            "${NAME} reference appears. Start positives use a known direct-uvicorn option "
+            "context; credential-flag positives that intentionally avoid runtime-head "
+            "parsing live in sqlite resource migrate_cmd."
+        ),
+        "replacements": [
+            {
+                "old_node_id": f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+                "[flag_space_ref]",
+                "new_node_id": f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+                "[migrate_flag_space_ref]",
+                "old_context": "opaque node start_cmd --token ${API_TOKEN}",
+                "new_context": "sqlite resource migrate_cmd --token ${API_TOKEN}",
+                "expected": "pass and persist exact names-only migrate argv",
+            },
+            {
+                "old_node_id": f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+                "[flag_equals_ref]",
+                "new_node_id": f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+                "[migrate_flag_equals_ref]",
+                "old_context": "opaque node start_cmd --token=${API_TOKEN}",
+                "new_context": "sqlite resource migrate_cmd --token=${API_TOKEN}",
+                "expected": "pass and persist exact names-only migrate argv",
+            },
+            {
+                "old_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[port_bare_arg]",
+                "new_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[uvicorn_port_space_ref]",
+                "old_context": "opaque node positional ${PORT}",
+                "new_context": "direct uvicorn --port ${PORT}",
+                "expected": "pass and persist exact start argv",
+            },
+            {
+                "old_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[port_flag_value]",
+                "new_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[uvicorn_port_equals_ref]",
+                "old_context": "opaque node --port ${PORT}",
+                "new_context": "direct uvicorn --port=${PORT}",
+                "expected": "pass and persist exact start argv",
+            },
+            {
+                "old_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[declared_env_value]",
+                "new_node_id": f"{_R7_C5}::test_only_whole_declared_env_reference_accepted"
+                "[uvicorn_forwarded_ips_ref]",
+                "old_context": "opaque node --base ${API_BASE_URL}",
+                "new_context": (
+                    "direct uvicorn --forwarded-allow-ips ${TRUSTED_PROXY_IPS} with "
+                    "TRUSTED_PROXY_IPS declared"
+                ),
+                "expected": "pass and persist exact start argv/name reference",
+            },
+            {
+                "old_node_id": f"{_R7_C5}::test_supported_command_matrix_accepted[python_module]",
+                "new_node_id": f"{_R7_C5}::test_supported_command_matrix_accepted[python_module]",
+                "old_context": "python -m http.server",
+                "new_context": ("python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}"),
+                "expected": (
+                    "RED on c0c4f728: generic Python flags preempt uvicorn options; "
+                    "turns green only through shared strict server parsing"
+                ),
+            },
+        ],
+        "context_correct_green_nodes": [
+            f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+            "[migrate_flag_space_ref]",
+            f"{_R7_C5}::test_secret_flag_with_declared_env_reference_accepted"
+            "[migrate_flag_equals_ref]",
+            f"{_R7_C5}::test_only_whole_declared_env_reference_accepted[uvicorn_port_space_ref]",
+            f"{_R7_C5}::test_only_whole_declared_env_reference_accepted[uvicorn_port_equals_ref]",
+            f"{_R7_C5}::test_only_whole_declared_env_reference_accepted[uvicorn_forwarded_ips_ref]",
+        ],
+        "shared_start_parser_red": (
+            f"{_R7_C5}::test_supported_command_matrix_accepted[python_module]"
+        ),
+    },
+    "required_red_shape": {
+        "assessment": "needs_review",
+        "blockers": [{"code": "entrypoint_unresolved", "field": "per-case exact field"}],
+        "services": [],
+        "resources": [],
+        "env": [],
+    },
+    "required_positive_shape": {
+        "assessment": "candidate",
+        "blockers": [],
+        "service_count": 1,
+        "service_role": "ingress",
+        "install_cmd": ["npm", "ci"],
+        "start_cmd": ["npm", "start"],
+    },
+    "ratification_status": (
+        "PENDING. acceptance-v5 is only an intended candidate. No independent human has "
+        "reviewed or signed this semantic re-freeze, created its annotated tag, or "
+        "protected/published that tag to the authoritative remote. Production remediation "
+        "must not treat this metadata as owner ratification."
+    ),
+}
+
+
 def repo_root() -> Path:
     """The checkout root (two levels up from this script: <root>/scripts/<this>)."""
     return Path(__file__).resolve().parents[1]
@@ -856,7 +1233,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag "
         f"{ACCEPTANCE_TAG} is a CANDIDATE: an independent human must create the signed "
         "annotated tag and protect it in the authoritative remote — it does not yet exist "
-        "and no human has ratified it (see remediation_r0.ratification_status). "
+        "and no human has ratified it (see controlled_refreeze_r7.ratification_status). "
         "python_closeout_inventory is generated deterministically from "
         "`pytest --collect-only` over the closeout dirs (marker "
         "'export_track1_closeout and not integration'); the verifier reads it back FROM "
@@ -872,9 +1249,12 @@ def build_manifest(root: Path) -> dict[str, object]:
         "G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and "
         "the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend "
         "proving set, the frontend proving reds, the G11 compile red + evidence-hygiene "
-        "regression, the ratification_status (acceptance-v4 is a CANDIDATE — no human has "
-        "signed/protected any tag), and the R4-activated / record-only / ratified-baseline "
-        "ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
+        "regression, and the historical acceptance-v4 ledger. acceptance-v5 adds only two "
+        "controlled refinements: R7/NPM_SCRIPT_PROOF (thirteen exact C4 proving reds plus "
+        "six positive controls) and R7/SHARED_START_PARSER (six C5 hygiene-context "
+        "replacements: five green controls plus one proving red). The full inventory stays "
+        "400->404 because C5 is count-neutral; prior hashes and exact nodes are recorded in "
+        "controlled_refreeze_r7. No human has signed/protected v5. "
         "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
     return {
@@ -882,6 +1262,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "note": note,
         "acceptance_tag": ACCEPTANCE_TAG,
         "baseline_sha": BASELINE_SHA,
+        "refreeze_base_sha": REFREEZE_BASE_SHA,
         "seed": {"env": "CLOSEOUT_SEED", "default": "export-track1-closeout-v1"},
         "manifest_excludes_self": MANIFEST_REL,
         "anti_bypass_operational_reading": OPERATIONAL_READING,
@@ -891,6 +1272,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "frontend_closeout_inventory": frontend_closeout_inventory(root),
         "red_tests": list(RED_TESTS),
         "remediation_r0": REMEDIATION_R0,
+        "controlled_refreeze_r7": CONTROLLED_REFREEZE_R7,
     }
 
 

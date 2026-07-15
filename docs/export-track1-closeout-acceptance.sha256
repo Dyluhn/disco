@@ -1,8 +1,9 @@
 {
   "schema": "export-track1-closeout-acceptance/v1",
-  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v4 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (see remediation_r0.ratification_status). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, the ratification_status (acceptance-v4 is a CANDIDATE — no human has signed/protected any tag), and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
-  "acceptance_tag": "export-track1-closeout-acceptance-v4",
+  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v5 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (see controlled_refreeze_r7.ratification_status). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, and the historical acceptance-v4 ledger. acceptance-v5 adds only two controlled refinements: R7/NPM_SCRIPT_PROOF (thirteen exact C4 proving reds plus six positive controls) and R7/SHARED_START_PARSER (six C5 hygiene-context replacements: five green controls plus one proving red). The full inventory stays 400->404 because C5 is count-neutral; prior hashes and exact nodes are recorded in controlled_refreeze_r7. No human has signed/protected v5. Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v5",
   "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
+  "refreeze_base_sha": "c0c4f728e8669dd27f88a9515383cc9a4a58f0d3",
   "seed": {
     "env": "CLOSEOUT_SEED",
     "default": "export-track1-closeout-v1"
@@ -12,7 +13,7 @@
   "files": {
     ".github/workflows/export-track1-closeout.yml": "651bb2d05a31225f660445f40f212e1fdabbea16a447ea2e4d0d38fbfe0827ec",
     "docs/export-track1-closeout-suppression-baseline.json": "c558fae43af0e8e38ad8293694a0d2ff83cf0a13c43191e6d08c043486d2a3b7",
-    "docs/export-track1-closeout-work-orders.md": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
+    "docs/export-track1-closeout-work-orders.md": "a3bcdb06afe7e43b8cb3dd6c46ac48a389423a47d820e7f75b9e32d6d58d7c38",
     "frontend/e2e/export-track1-closeout/selfhost-candidate.spec.ts": "e4ad1f8651e7203c0e4c6946b294514b1619af18f1c3a2bdd4f6d02a45265447",
     "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts": "24079e15f0df881970332bed369df2df1436738594cf8d990b0690b1aa27910b",
     "frontend/e2e/export-track1-closeout/selfhost-needs-review.spec.ts": "099dc48229cae1a23c708caacc697356fc0bc1edc6532e5881e2ec9281f83dce",
@@ -50,14 +51,14 @@
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "42dbd6c14ad689c89c9287e410d04874dc0f9b03499b51bfd2da05b85d09a546",
     "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/core/tests/export_track1_closeout/test_c4_build_secret_validate_gate.py": "68709d61f8a3e68073b4c67ca438524cd0985abe36a12ec252b9a60ec3332b9e",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py": "050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py": "926f7269025b272b96c22ef51c7e5a2d40cf637a41c149cef76699c8cfc17f45",
     "packages/tools/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py": "0aa05166c3af801774f78f154cb1e34a6522b937c9f12329cfba473ad31f6976",
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f2326f226997caa92ba3e2cf950840711e3ed72e3ddd32fc164b3ac614daf488",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
-    "scripts/gen_closeout_acceptance_manifest.py": "4637fceff6d622d351cbf3fb89ede4d5ed709a3b1ef8867f297d925c96669fd8",
+    "scripts/gen_closeout_acceptance_manifest.py": "386a77b9babbeaf55a68954e1389e1311aaf87989fac303e9ed833b030914f2b",
     "scripts/verify_export_track1_closeout.py": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d"
   },
   "missing_frozen_paths": [],
@@ -300,21 +301,6 @@
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_active_launcher_head_rejects_even_with_authoritative_npm[start-bunx vite]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_active_launcher_head_rejects_even_with_authoritative_npm[start-pnpx dev]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_active_launcher_head_rejects_even_with_authoritative_npm[start-yarn start]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[build-cd app && npm run build]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[build-vite build && node post.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[postinstall-node scripts/patch.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[postinstall-patch-package]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[prepare-husky install]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[prepare-node scripts/x.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[prepare-patch-package]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[prestart-node warmup.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-NODE_ENV=production node server.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-cross-env NODE_ENV=production node server.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-dotenv -- npm run start]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-echo \"use bun\" && node server.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-env node x]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-exec node server.js]",
-    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_benign_chains_and_hooks_stay_candidate[start-npx serve]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_committed_package_lock_beats_stray_marker[.yarnrc-registry=https://registry.example\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_committed_package_lock_beats_stray_marker[.yarnrc.yml-nodeLinker: node-modules\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_committed_package_lock_beats_stray_marker[bunfig.toml-[install]\\nregistry = \"https://registry.example\"\\n]",
@@ -356,11 +342,30 @@
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_npm_package_manager_field_beats_stray_marker[pnpm-workspace.yaml-packages:\\n  - 'apps/*'\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_npm_package_manager_field_beats_stray_marker[pnpm-workspace.yml-packages:\\n  - 'apps/*'\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_plain_npm_project_stays_a_candidate",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[build-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[postinstall-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[prepare-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[prestart-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_retained_benign_wrapper_stays_candidate[env-prefix-node]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_retained_benign_wrapper_stays_candidate[exec-node]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_stray_marker_without_npm_signal_still_fails_closed[.yarnrc-registry=https://registry.example\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_stray_marker_without_npm_signal_still_fails_closed[.yarnrc.yml-nodeLinker: node-modules\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_stray_marker_without_npm_signal_still_fails_closed[bunfig.toml-[install]\\nregistry = \"https://registry.example\"\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_stray_marker_without_npm_signal_still_fails_closed[pnpm-workspace.yaml-packages:\\n  - 'apps/*'\\n]",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_stray_marker_without_npm_signal_still_fails_closed[pnpm-workspace.yml-packages:\\n  - 'apps/*'\\n]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[build-cd-self-recursion]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[build-vite-chain-missing-post]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-postinstall-missing-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-postinstall-patch-package-absent]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-husky-absent]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-missing-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-patch-package-absent]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-cross-env-absent]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-dotenv-self-recursion]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-echo-chain]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-env-missing-node-file]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-npx-serve-absent-dep]",
+    "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-prestart-missing-node-file]",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_active_configured_root_is_authoritative[custom_absolute]",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_active_configured_root_is_authoritative[default_root]",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_active_root_change_between_construction_and_invocation",
@@ -427,9 +432,9 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_inline_env_assignment_case_insensitive_rejected[title_RED-start_cmd]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_inline_env_assignment_case_insensitive_rejected[upper_GREEN-build_cmd]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_inline_env_assignment_case_insensitive_rejected[upper_GREEN-start_cmd]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[declared_env_value]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[port_bare_arg]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[port_flag_value]",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_forwarded_ips_ref]",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_equals_ref]",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_space_ref]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_resource_persistent_path_injection_rejected[cmd_subst]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_resource_persistent_path_injection_rejected[newline]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_resource_persistent_path_injection_rejected[semicolon]",
@@ -453,8 +458,8 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_cli_forms_rejected[token_equals]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_cli_forms_rejected[token_space]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_cli_forms_rejected[url_userinfo]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[flag_equals_ref]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[flag_space_ref]",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_equals_ref]",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_space_ref]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_rejection_output_is_hygienic_and_persists_no_sidecar",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[build_then_start]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[node_script]",
@@ -552,6 +557,21 @@
         "package_manager_conflict"
       ],
       "expected_failure": "a secret-classed build var is lowered to an ordinary ARG (image/history leakage) instead of a real build-secret mount OR a typed secret_build_env_unsupported; sibling reds test_lockfile_package_manager_disagreement_fails_closed (package_manager_conflict) and test_v1_intent_sidecar_is_migrated_or_rejected_not_crashed (intent_upgrade_required)"
+    },
+    {
+      "work_order": "R7/NPM_SCRIPT_PROOF",
+      "lane": "python-closeout",
+      "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[build-cd-self-recursion]",
+      "boundary": "real detect_release over an authoritative npm project whose emitted npm lifecycle would execute an unresolved package.json script",
+      "blocker_code": "entrypoint_unresolved",
+      "expected_failure": "the build script 'cd app && npm run build' self-recurses from an absent app directory, but c0c4f728 returns candidate with npm run build. It must return needs_review with exactly one entrypoint_unresolved blocker on build_cmd and no services/resources/env. Twelve sibling reds cover the other unproven install/build/start lifecycle shapes; six positive controls prevent blanket rejection. No new G number is assigned."
+    },
+    {
+      "work_order": "R7/SHARED_START_PARSER",
+      "lane": "python-closeout",
+      "node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]",
+      "boundary": "real release_declare tool -> ReleaseIntent -> strict runtime command grammar -> real persisted sidecar",
+      "expected_failure": "the canonical 'python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}' shape is rejected because generic Python flag metadata continues parsing after '-m uvicorn' and preempts uvicorn's known --host/--port options. It must share the direct-uvicorn option parser without weakening strict start validation. Five context-correct C5 controls stay green. No new G number is assigned."
     },
     {
       "work_order": "C5",
@@ -716,5 +736,290 @@
     },
     "ratified_baseline_suppression": "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py:349 '# noqa: BLE001' (G18) — the SINGLE ratified pre-existing suppression; it strengthens the test (catches a churner crash). No new suppressions added.",
     "parked_production_fixes": "R1(G02) R2(G03-G06) R3(G07) R4(G08-G11) R5(G12) R6(G13,G18,G19) R7(G14) R8(G15-G17)"
+  },
+  "controlled_refreeze_r7": {
+    "acceptance_version": "v5",
+    "refreeze_base_sha": "c0c4f728e8669dd27f88a9515383cc9a4a58f0d3",
+    "prior_acceptance_tag": "export-track1-closeout-acceptance-v4",
+    "prior_manifest_sha256": "f10f33b4efa7c150c8321af7863298b35841d68bdfc695be6a471f7fc4b48615",
+    "prior_c4_test_sha256": "050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06",
+    "prior_c5_test_sha256": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
+    "classification": "R7/NPM_SCRIPT_PROOF + R7/SHARED_START_PARSER (no new G numbers)",
+    "scope": "Acceptance-only corrections of C4 executable/lifecycle proof and six C5 hygiene/parser examples. No production, verifier, workflow, live-lane, frontend, fixture, or unrelated frozen test is changed. The thirteen C4 reds and one C5 shared-parser red fail on the c0c4f728 production tree before any fix.",
+    "changed_frozen_paths": [
+      "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py",
+      "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py",
+      "scripts/gen_closeout_acceptance_manifest.py",
+      "docs/export-track1-closeout-work-orders.md"
+    ],
+    "unchanged_v4_hashed_files_expected": 45,
+    "inventory_delta": {
+      "python_closeout_inventory": {
+        "before": 400,
+        "after": 404,
+        "delta": 4
+      },
+      "c4_npm_precedence": {
+        "before": 67,
+        "after": 71,
+        "delta": 4
+      },
+      "c5_injection_reject": {
+        "before": 85,
+        "after": 85,
+        "delta": 0
+      },
+      "replaced_old_broad_benign_nodes": 15,
+      "replacement_nodes": 19,
+      "replacement_breakdown": {
+        "proving_reds": 13,
+        "retained_positives": 2,
+        "paired_positives": 4
+      }
+    },
+    "decision_matrix": [
+      {
+        "input": "authoritative npm + passive bun/pnpm/yarn migration marker",
+        "decision": "candidate",
+        "proof": "the pre-existing marker-precedence nodes remain byte/semantic peers"
+      },
+      {
+        "input": "active bun/pnpm/yarn launcher in an executed npm lifecycle script",
+        "decision": "needs_review / exactly toolchain_unsupported",
+        "proof": "the pre-existing launcher-family nodes remain unchanged"
+      },
+      {
+        "input": "npm lifecycle script whose referenced file, package executable, working directory, or non-recursive terminal command is not statically proven",
+        "decision": "needs_review / exactly entrypoint_unresolved",
+        "proof": "the thirteen reclassified reds below, on the exact lifecycle field"
+      },
+      {
+        "input": "NODE_ENV assignment or exec wrapper around present node server.js",
+        "decision": "candidate",
+        "proof": "two retained positive nodes with full npm lifecycle assertions"
+      },
+      {
+        "input": "node lifecycle reference whose exact workspace file is present",
+        "decision": "candidate",
+        "proof": "four paired positive nodes with full npm lifecycle assertions"
+      }
+    ],
+    "reclassified_reds": [
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[build-cd-self-recursion]",
+        "script_key": "build",
+        "script": "cd app && npm run build",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "build_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[build-vite-chain-missing-post]",
+        "script_key": "build",
+        "script": "vite build && node post.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "build_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-npx-serve-absent-dep]",
+        "script_key": "start",
+        "script": "npx serve",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-echo-chain]",
+        "script_key": "start",
+        "script": "echo \"use bun\" && node server.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd",
+        "must_not_emit": "toolchain_unsupported"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-postinstall-missing-node-file]",
+        "script_key": "postinstall",
+        "script": "node scripts/patch.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "install_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-postinstall-patch-package-absent]",
+        "script_key": "postinstall",
+        "script": "patch-package",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "install_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-prestart-missing-node-file]",
+        "script_key": "prestart",
+        "script": "node warmup.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-husky-absent]",
+        "script_key": "prepare",
+        "script": "husky install",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "install_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-missing-node-file]",
+        "script_key": "prepare",
+        "script": "node scripts/x.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "install_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[install-prepare-patch-package-absent]",
+        "script_key": "prepare",
+        "script": "patch-package",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "install_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-cross-env-absent]",
+        "script_key": "start",
+        "script": "cross-env NODE_ENV=production node server.js",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-env-missing-node-file]",
+        "script_key": "start",
+        "script": "env node x",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_unresolved_npm_lifecycle_script_fails_closed[start-dotenv-self-recursion]",
+        "script_key": "start",
+        "script": "dotenv -- npm run start",
+        "blocker_code": "entrypoint_unresolved",
+        "field": "start_cmd"
+      }
+    ],
+    "positive_controls": [
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_retained_benign_wrapper_stays_candidate[env-prefix-node]",
+        "script_key": "start",
+        "script": "NODE_ENV=production node server.js",
+        "provisioned": "server.js"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_retained_benign_wrapper_stays_candidate[exec-node]",
+        "script_key": "start",
+        "script": "exec node server.js",
+        "provisioned": "server.js"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[build-node-file]",
+        "script_key": "build",
+        "script": "node build.js",
+        "provisioned": "build.js"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[postinstall-node-file]",
+        "script_key": "postinstall",
+        "script": "node scripts/patch.js",
+        "provisioned": "scripts/patch.js"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[prestart-node-file]",
+        "script_key": "prestart",
+        "script": "node warmup.js",
+        "provisioned": "warmup.js"
+      },
+      {
+        "node_id": "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_present_node_script_reference_stays_candidate[prepare-node-file]",
+        "script_key": "prepare",
+        "script": "node scripts/x.js",
+        "provisioned": "scripts/x.js"
+      }
+    ],
+    "c5_hygiene_context_correction": {
+      "classification": "R7/SHARED_START_PARSER (no new G number)",
+      "unchanged_nodes": 79,
+      "replacement_count": 6,
+      "strict_start_parser_policy": "Preserved. Opaque Node argv examples are not accepted merely because a whole ${NAME} reference appears. Start positives use a known direct-uvicorn option context; credential-flag positives that intentionally avoid runtime-head parsing live in sqlite resource migrate_cmd.",
+      "replacements": [
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[flag_space_ref]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_space_ref]",
+          "old_context": "opaque node start_cmd --token ${API_TOKEN}",
+          "new_context": "sqlite resource migrate_cmd --token ${API_TOKEN}",
+          "expected": "pass and persist exact names-only migrate argv"
+        },
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[flag_equals_ref]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_equals_ref]",
+          "old_context": "opaque node start_cmd --token=${API_TOKEN}",
+          "new_context": "sqlite resource migrate_cmd --token=${API_TOKEN}",
+          "expected": "pass and persist exact names-only migrate argv"
+        },
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[port_bare_arg]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_space_ref]",
+          "old_context": "opaque node positional ${PORT}",
+          "new_context": "direct uvicorn --port ${PORT}",
+          "expected": "pass and persist exact start argv"
+        },
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[port_flag_value]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_equals_ref]",
+          "old_context": "opaque node --port ${PORT}",
+          "new_context": "direct uvicorn --port=${PORT}",
+          "expected": "pass and persist exact start argv"
+        },
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[declared_env_value]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_forwarded_ips_ref]",
+          "old_context": "opaque node --base ${API_BASE_URL}",
+          "new_context": "direct uvicorn --forwarded-allow-ips ${TRUSTED_PROXY_IPS} with TRUSTED_PROXY_IPS declared",
+          "expected": "pass and persist exact start argv/name reference"
+        },
+        {
+          "old_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]",
+          "new_node_id": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]",
+          "old_context": "python -m http.server",
+          "new_context": "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT}",
+          "expected": "RED on c0c4f728: generic Python flags preempt uvicorn options; turns green only through shared strict server parsing"
+        }
+      ],
+      "context_correct_green_nodes": [
+        "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_space_ref]",
+        "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_secret_flag_with_declared_env_reference_accepted[migrate_flag_equals_ref]",
+        "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_space_ref]",
+        "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_port_equals_ref]",
+        "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_only_whole_declared_env_reference_accepted[uvicorn_forwarded_ips_ref]"
+      ],
+      "shared_start_parser_red": "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]"
+    },
+    "required_red_shape": {
+      "assessment": "needs_review",
+      "blockers": [
+        {
+          "code": "entrypoint_unresolved",
+          "field": "per-case exact field"
+        }
+      ],
+      "services": [],
+      "resources": [],
+      "env": []
+    },
+    "required_positive_shape": {
+      "assessment": "candidate",
+      "blockers": [],
+      "service_count": 1,
+      "service_role": "ingress",
+      "install_cmd": [
+        "npm",
+        "ci"
+      ],
+      "start_cmd": [
+        "npm",
+        "start"
+      ]
+    },
+    "ratification_status": "PENDING. acceptance-v5 is only an intended candidate. No independent human has reviewed or signed this semantic re-freeze, created its annotated tag, or protected/published that tag to the authoritative remote. Production remediation must not treat this metadata as owner ratification."
   }
 }
