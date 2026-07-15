@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,8 @@ from disco.tools.projects import (
 )
 
 _LOG = logging.getLogger(__name__)
+_DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
+_MIN_IDLE_SWEEP_INTERVAL_S = 5.0
 
 # P-C: the gate states a conversation parks at while waiting on the human. The
 # idle sweep frees their sandbox but never resolves the gate, so they accumulate
@@ -453,8 +456,9 @@ class LifecycleManager:
             if not ids:
                 break
             for cid in ids:
-                # One unreadable conversation must never abort the sweep.
-                with contextlib.suppress(Exception):
+                # One unreadable conversation must never abort the sweep, but
+                # it must remain observable rather than failing silently.
+                try:
                     state = await self._rt._store.get_state(cid)
                     if state.execution_status not in _GATE_STATES:
                         continue
@@ -528,12 +532,40 @@ class LifecycleManager:
                     self._rt._unpin_if_current_generation(cid, captured_generation)
                     _LOG.info("reaped abandoned gate conversation %s", cid)
                     reaped += 1
+                except Exception:
+                    _LOG.exception("failed to evaluate abandoned gate conversation %s", cid)
             if len(ids) < page:
                 break
             cursor = str((int(cursor) if cursor else 0) + len(ids))
         if reaped:
             _LOG.info("reaped %d abandoned gate conversation(s)", reaped)
         return reaped
+
+    async def _sweep_abandoned_gates_logged(self) -> None:
+        """Keep the background loop alive while making whole-sweep failures visible."""
+
+        try:
+            await self._rt.sweep_abandoned_gates_once()
+        except Exception:
+            _LOG.exception("abandoned gate sweep failed")
+
+    @staticmethod
+    def _idle_sweep_interval_s() -> float:
+        raw = disco_env("IDLE_SWEEP_INTERVAL_S", str(_DEFAULT_IDLE_SWEEP_INTERVAL_S))
+        assert raw is not None  # default above is non-None
+        try:
+            interval_s = float(raw)
+        except ValueError:
+            interval_s = 0.0
+        if not math.isfinite(interval_s) or interval_s < _MIN_IDLE_SWEEP_INTERVAL_S:
+            _LOG.error(
+                "DISCO_IDLE_SWEEP_INTERVAL_S must be finite and at least %.0fs; "
+                "using bounded %.0fs default",
+                _MIN_IDLE_SWEEP_INTERVAL_S,
+                _DEFAULT_IDLE_SWEEP_INTERVAL_S,
+            )
+            return _DEFAULT_IDLE_SWEEP_INTERVAL_S
+        return interval_s
 
     async def _idle_sweep_loop(self) -> None:
         """Background task: periodically sweep idle sandboxes. Created by the app
@@ -546,9 +578,7 @@ class LifecycleManager:
         and suppressed so a missing/broken native onnxruntime can't wedge startup, and
         a sweep failure never disturbs the sandbox sweep."""
         while True:
-            sweep_interval = disco_env("IDLE_SWEEP_INTERVAL_S", "60")
-            assert sweep_interval is not None  # default above is non-None
-            interval_s = float(sweep_interval)
+            interval_s = self._idle_sweep_interval_s()
             try:
                 await asyncio.sleep(interval_s)
             except asyncio.CancelledError:
@@ -562,8 +592,7 @@ class LifecycleManager:
                 await self._rt.sweep_stranded_runs_once()
             # P-C: reap conversations abandoned at an AWAITING_* gate past a long TTL
             # so open gates don't accumulate (the idle sweep only frees their sandbox).
-            with contextlib.suppress(Exception):
-                await self._rt.sweep_abandoned_gates_once()
+            await self._sweep_abandoned_gates_logged()
             with contextlib.suppress(Exception):
                 tts_idle_ttl = disco_env("TTS_IDLE_TTL_S", "1800")
                 assert tts_idle_ttl is not None  # default above is non-None

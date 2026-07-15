@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-
-import pytest
 
 from disco.agent_server.lifecycle import LifecycleManager
 from disco.agent_server.runtime import ConversationRuntime
@@ -15,7 +14,6 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     PlanEvent,
-    PlanStep,
     StatusEvent,
 )
 from disco.core.store.sqlite import SqliteEventStore
@@ -33,6 +31,7 @@ async def test_w35_driver_preflight_is_bounded_and_names_driver() -> None:
     rt = ConversationRuntime(store)
     rt._router_now = lambda *_args, **_kwargs: _NeverReturningRouter()  # type: ignore[method-assign]
     rt._DRIVER_PREFLIGHT_TIMEOUT_S = 0.03
+    rt._DRIVER_PREFLIGHT_ATTEMPTS = 1
 
     started = time.perf_counter()
     reason = await rt._preflight_driver("conv_dead_driver")
@@ -128,8 +127,7 @@ async def test_w33_deep_research_stream_stops_on_named_encoder_preflight_error()
         {
             "type": "error",
             "message": (
-                "Deep Research needs the reranker, but it isn't reachable at "
-                "http://dead:8091"
+                "Deep Research needs the reranker, but it isn't reachable at http://dead:8091"
             ),
         }
     ]
@@ -206,6 +204,8 @@ async def test_pc_abandoned_gate_sweeper_reaps_only_stale_unwatched_gates(monkey
     rt = SimpleNamespace(
         _store=store,
         _connections={"ui_connected": 1},
+        _run_generation={},
+        _unpin_if_current_generation=lambda *_args: None,
         running_conversation_ids=lambda: {"active_run_gate"},
     )
     swept = await LifecycleManager(rt).sweep_abandoned_gates_once()
@@ -222,3 +222,107 @@ async def test_pc_abandoned_gate_sweeper_reaps_only_stale_unwatched_gates(monkey
         ConversationStatus.WAITING_FOR_CONFIRMATION
     )
     assert (await store.get_state("running")).execution_status is ConversationStatus.RUNNING
+
+
+async def test_pc_abandoned_gate_sweeper_logs_candidate_errors(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "60")
+    store = SqliteEventStore(":memory:")
+    store.create_conversation("healthy_gate", surface="agent")
+    store.create_conversation("broken_gate", surface="agent")
+    await store.append(
+        "broken_gate",
+        StatusEvent(
+            status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+            timestamp=datetime.now(UTC) - timedelta(hours=2),
+        ),
+    )
+    await store.append(
+        "healthy_gate",
+        StatusEvent(
+            status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+            timestamp=datetime.now(UTC) - timedelta(hours=2),
+        ),
+    )
+
+    class ExplodingGeneration:
+        def get(self, cid: str):
+            if cid == "broken_gate":
+                raise RuntimeError("generation lookup failed")
+            return None
+
+    rt = SimpleNamespace(
+        _store=store,
+        _connections={},
+        _run_generation=ExplodingGeneration(),
+        _unpin_if_current_generation=lambda *_args: None,
+        running_conversation_ids=lambda: set(),
+    )
+    ids = await store.list_conversations(owner_id="local", limit=2)
+    assert ids == ["broken_gate", "healthy_gate"]
+    caplog.set_level(logging.ERROR, logger="disco.agent_server.lifecycle")
+    assert await LifecycleManager(rt).sweep_abandoned_gates_once() == 1
+    assert (await store.get_state("healthy_gate")).execution_status is ConversationStatus.STUCK
+    assert "failed to evaluate abandoned gate conversation broken_gate" in caplog.text
+    assert "generation lookup failed" in caplog.text
+
+
+async def test_pc_abandoned_gate_background_sweep_logs_and_continues(monkeypatch, caplog) -> None:
+    class BrokenRuntime:
+        abandoned_calls = 0
+
+        async def sweep_idle_once(self) -> None:
+            return None
+
+        async def sweep_stranded_runs_once(self) -> None:
+            return None
+
+        async def sweep_abandoned_gates_once(self) -> None:
+            self.abandoned_calls += 1
+            raise RuntimeError("conversation listing failed")
+
+    sleep_delays: list[float] = []
+
+    async def bounded_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+        if len(sleep_delays) == 2:
+            raise asyncio.CancelledError
+
+    async def no_tts_unload(*, ttl_s: int) -> None:
+        del ttl_s
+
+    monkeypatch.setenv("DISCO_IDLE_SWEEP_INTERVAL_S", "60")
+    monkeypatch.setattr(asyncio, "sleep", bounded_sleep)
+    monkeypatch.setattr(
+        "disco.agent_server.tts_local.maybe_unload_if_idle",
+        no_tts_unload,
+    )
+    caplog.set_level(logging.ERROR, logger="disco.agent_server.lifecycle")
+    rt = BrokenRuntime()
+    await LifecycleManager(rt)._idle_sweep_loop()
+
+    assert sleep_delays == [60.0, 60.0]
+    assert rt.abandoned_calls == 1
+    assert "abandoned gate sweep failed" in caplog.text
+    assert "conversation listing failed" in caplog.text
+
+
+async def test_pc_idle_sweep_invalid_intervals_use_bounded_default(monkeypatch, caplog) -> None:
+    class RuntimeThatMustNotSweep:
+        pass
+
+    delays: list[float] = []
+
+    async def cancel_after_first_sleep(delay: float) -> None:
+        delays.append(delay)
+        raise asyncio.CancelledError
+
+    caplog.set_level(logging.ERROR, logger="disco.agent_server.lifecycle")
+    invalid = ("0", "-1", "5e-324", "0.001", "4.999", "nan", "inf", "not-a-number")
+    for raw in invalid:
+        delays.clear()
+        monkeypatch.setenv("DISCO_IDLE_SWEEP_INTERVAL_S", raw)
+        monkeypatch.setattr(asyncio, "sleep", cancel_after_first_sleep)
+        await LifecycleManager(RuntimeThatMustNotSweep())._idle_sweep_loop()
+        assert delays == [60.0]
+
+    assert caplog.text.count("DISCO_IDLE_SWEEP_INTERVAL_S must be finite") == len(invalid)
