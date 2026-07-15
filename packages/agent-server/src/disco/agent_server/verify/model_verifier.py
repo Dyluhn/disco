@@ -28,6 +28,15 @@ from pydantic import ValidationError
 
 _LOG = logging.getLogger(__name__)
 
+_INITIAL_MAX_TOKENS = 900
+# A reasoning-capable remote model may ignore ``enable_thinking=False`` because
+# the OpenAI wire protocol has no portable switch for it.  If that reasoning
+# consumes the small first budget, one larger retry gives the model room to
+# reach its JSON answer.  This is deliberately a single retry: the verifier has
+# no side effects, but an unavailable judge must never create an unbounded
+# provider loop.
+_EMPTY_RESPONSE_RETRY_MAX_TOKENS = 8_192
+
 _SYSTEM_PROMPT = (
     "You are Disco's independent artifact verifier. You are not the builder. "
     "Judge only the bounded evidence provided: contract, deliverable paths, "
@@ -162,7 +171,7 @@ class ModelVerifier:
             ],
             tools=None,
             temperature=0.0,
-            max_tokens=900,
+            max_tokens=_INITIAL_MAX_TOKENS,
             response_format="json",
             enable_thinking=False,
         )
@@ -170,6 +179,17 @@ class ModelVerifier:
             resp = await self._router.complete(
                 req, context=CallContext(conversation_id=self._conversation_id)
             )
+            if not (resp.text or "").strip():
+                _LOG.warning(
+                    "model verifier returned empty text; retrying once with expanded "
+                    "output budget (finish=%s output_tokens=%d)",
+                    resp.finish_reason,
+                    resp.usage.output_tokens,
+                )
+                resp = await self._router.complete(
+                    req.model_copy(update={"max_tokens": _EMPTY_RESPONSE_RETRY_MAX_TOKENS}),
+                    context=CallContext(conversation_id=self._conversation_id),
+                )
             obj = _normalise_verdict_payload(_extract_json_object(resp.text))
             return TypedVerifierVerdict.model_validate(obj)
         except Exception as exc:  # noqa: BLE001

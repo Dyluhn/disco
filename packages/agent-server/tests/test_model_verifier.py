@@ -38,6 +38,18 @@ class _Router:
         )
 
 
+class _SequenceRouter:
+    def __init__(self, responses: list[CompletionResponse]) -> None:
+        self._responses = iter(responses)
+        self.requests = []
+        self.contexts = []
+
+    async def complete(self, req, *, context=None):
+        self.requests.append(req)
+        self.contexts.append(context)
+        return next(self._responses)
+
+
 def test_model_verifier_provider_failure_cause_retains_only_safe_http_shape() -> None:
     safe = LLMTransientError("provider opencode-go returned HTTP 429")
     unsafe = LLMTransientError("upstream body contained API_KEY=do-not-retain")
@@ -224,3 +236,81 @@ async def test_model_verifier_parse_failure_is_structural_bounded_and_logged(
     assert secret_response not in verdict.detail
     assert secret_response not in caplog.text
     assert "JSONDecodeError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_model_verifier_retries_empty_reasoning_budget_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    router = _SequenceRouter(
+        [
+            CompletionResponse(
+                text="",
+                usage=TokenUsage(input_tokens=100, output_tokens=900),
+                finish_reason="length",
+                model_used="reasoning-verifier",
+            ),
+            CompletionResponse(
+                text=json.dumps({"verified": True, "verdict": "pass"}),
+                usage=TokenUsage(input_tokens=100, output_tokens=950),
+                finish_reason="stop",
+                model_used="reasoning-verifier",
+            ),
+        ]
+    )
+    seed = VerifierContextSeed(
+        contract={"kind": "static.site"},
+        deliverable_paths=["index.html"],
+        check_results={"passed": True},
+    )
+
+    with caplog.at_level("WARNING"):
+        verdict = await ModelVerifier(router, conversation_id="conv").judge(seed)
+
+    assert verdict.verified is True
+    assert verdict.verdict == "pass"
+    assert len(router.requests) == 2
+    assert router.requests[0].max_tokens == 900
+    assert router.requests[1].max_tokens == 8192
+    assert router.requests[0].messages == router.requests[1].messages
+    assert router.requests[0].tools is None and router.requests[1].tools is None
+    assert [context.conversation_id for context in router.contexts] == ["conv", "conv"]
+    assert "retrying once" in caplog.text
+    assert "finish=length output_tokens=900" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_model_verifier_empty_retry_is_bounded_and_remains_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    router = _SequenceRouter(
+        [
+            CompletionResponse(
+                text="",
+                usage=TokenUsage(input_tokens=100, output_tokens=900),
+                finish_reason="length",
+                model_used="reasoning-verifier",
+            ),
+            CompletionResponse(
+                text="",
+                usage=TokenUsage(input_tokens=100, output_tokens=8192),
+                finish_reason="length",
+                model_used="reasoning-verifier",
+            ),
+        ]
+    )
+    seed = VerifierContextSeed(
+        contract={"kind": "static.site"},
+        deliverable_paths=["index.html"],
+        check_results={"passed": True},
+    )
+
+    with caplog.at_level("WARNING"):
+        verdict = await ModelVerifier(router, conversation_id="conv").judge(seed)
+
+    assert verdict.verified is False
+    assert verdict.verdict == "unavailable"
+    assert verdict.failure_fingerprint == "model_verifier_unavailable"
+    assert len(router.requests) == 2
+    assert caplog.text.count("retrying once") == 1
+    assert "JSONDecodeError" in verdict.detail
