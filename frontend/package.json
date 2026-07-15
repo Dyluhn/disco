@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:update": "playwright test --update-snapshots"
+    "test:e2e:update": "playwright test --update-snapshots",
+    "test:live-trace-policy": "node scripts/check-live-trace-policy.mjs",
+    "test:preview-cookie-policy": "playwright test --config playwright.security-policy.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.1.0",

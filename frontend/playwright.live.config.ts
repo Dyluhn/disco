@@ -47,7 +47,10 @@ export default defineConfig({
     baseURL: BASE_URL,
     actionTimeout: 30_000,
     navigationTimeout: 60_000,
-    trace: "retain-on-failure",
+    // Authenticated traces faithfully retain cookies and response metadata.
+    // Playwright has no header/body redaction hook, so live evidence uses
+    // screenshots, JSON results, DISCO_INSPECT, and provider-ledger records.
+    trace: "off",
     viewport: { width: 1280, height: 800 },
   },
   projects: [{ name: "firefox", use: { ...devices["Desktop Firefox"] } }],
