@@ -14,22 +14,24 @@ from pathlib import PurePosixPath
 from typing import Literal
 
 import httpx
+import idna
 import websockets
 from disco.core import ConversationStatus, DeliverableEvent, StatusEvent, WorkspaceVersionEvent
 from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     MAX_PREVIEW_TARGET_PATH_CHARS,
     PATH_PREVIEW_BOOTSTRAP_PATH,
-    PATH_PREVIEW_ISOLATION_COOKIE,
     PREVIEW_APP_HTTP_METHODS,
     PREVIEW_BOOTSTRAP_PATH,
-    SESSION_COOKIE,
     PreviewCapabilitySigner,
     SessionSigner,
+    cookie_header_from_headers,
     origin_matches_request_host,
     path_preview_cookie_name,
+    path_preview_host_label,
     preview_ttl_s,
 )
+from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
@@ -182,9 +184,7 @@ def _preview_websocket_origin_allowed(
 ) -> bool:
     forwarded_proto = (forwarded_proto or "").split(",", 1)[0].strip().lower()
     websocket_scheme = websocket_scheme.lower()
-    expected_origin_scheme = {"ws": "http", "wss": "https"}.get(
-        websocket_scheme, websocket_scheme
-    )
+    expected_origin_scheme = {"ws": "http", "wss": "https"}.get(websocket_scheme, websocket_scheme)
     if forwarded_proto in {"http", "https"}:
         expected_origin_scheme = forwarded_proto
     try:
@@ -209,12 +209,16 @@ async def _path_preview_websocket_capability_owner(
     ):
         return None, "preview origin required"
     cid8 = conversation_id.removeprefix("conv_")[:8]
+    request_label = (websocket.url.hostname or "").split(".", 1)[0].lower()
+    if request_label != path_preview_host_label(conversation_id, PREVIEW_PORT):
+        return None, "preview capability required"
     try:
         cookie_name = path_preview_cookie_name(cid8)
     except ValueError:
         return None, "preview capability required"
-    cap = PreviewCapabilitySigner().verify(
-        websocket.cookies.get(cookie_name),
+    cap = PreviewCapabilitySigner().verify_cookie_header(
+        cookie_header_from_headers(websocket.headers),
+        cookie_name,
         cid8=cid8,
         port=PREVIEW_PORT,
         method="WEBSOCKET",
@@ -332,58 +336,149 @@ async def _close_ws(websocket: WebSocket, code: int, reason: str) -> None:
         await websocket.close(code=code, reason=reason)
 
 
-def _preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
-    url = request.url
-    hostname = url.hostname or "localhost"
-    if hostname in {"127.0.0.1", "::1", "localhost"}:
-        preview_host = f"p2-{cid8}-{port}.localhost"
-    else:
+def _site_boundary_key(hostname: str) -> tuple[str, ...]:
+    """Conservative suffix key used to reject a same-site preview override.
+
+    Sharing the final two DNS labels is sufficient evidence that two hosts may
+    share a registrable parent. It intentionally rejects some safe multi-label
+    public-suffix deployments rather than accepting an uncertain cookie boundary.
+    """
+
+    labels = tuple(part for part in hostname.lower().rstrip(".").split(".") if part)
+    return labels[-2:] if len(labels) >= 2 else labels
+
+
+_DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _canonical_dns_hostname(hostname: str) -> str:
+    """Return one browser-equivalent ASCII DNS name, or an empty string.
+
+    Browsers canonicalize Unicode hostnames to IDNA before applying cookie-site
+    boundaries.  Security comparisons must therefore use the same ASCII form;
+    comparing a Unicode spelling directly with its punycode alias can mistake
+    the same registrable site for two isolated sites.
+    """
+
+    try:
+        canonical = idna.encode(
+            hostname.rstrip("."),
+            uts46=True,
+            transitional=False,
+            std3_rules=True,
+        ).decode("ascii")
+    except idna.IDNAError:
+        return ""
+    labels = canonical.split(".")
+    if (
+        not canonical
+        or len(canonical.encode("ascii")) > 253
+        or any(not _DNS_LABEL_RE.fullmatch(label) for label in labels)
+    ):
+        return ""
+    return canonical
+
+
+def _preview_origin_base(request: Request) -> tuple[str, str, int | None]:
+    """Resolve the wildcard preview base, preferring an isolated operator site."""
+
+    configured = disco_env("PREVIEW_ORIGIN_BASE", "").strip()
+    if configured:
         try:
-            ipaddress.ip_address(hostname)
-        except ValueError:
-            preview_host = f"p2-{cid8}-{port}.{hostname}"
-        else:
-            # A label prefixed to a bare LAN/tailnet IP is not DNS. Returning
-            # that URL would consume a one-time intent into an unreachable host.
+            parsed = urllib.parse.urlsplit(configured)
+            configured_port = parsed.port
+        except ValueError as exc:
             raise HTTPException(
-                status_code=409, detail={"reason": "preview_wildcard_dns_required"}
-            )
-    netloc = preview_host
-    if url.port is not None:
-        netloc = f"{preview_host}:{url.port}"
-    # Behind the front-door nginx (and any OUTER TLS terminator ahead of it) the
-    # page scheme travels in X-Forwarded-Proto; request.url.scheme is only the
-    # last plain-HTTP hop. Minting http:// on an https page would be blocked as
-    # mixed content (codex front-door defect #2, 2026-07-09).
-    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
-    scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
-    return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", "", ""))
-
-
-def _path_preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
-    """Return a Firefox-safe isolated origin for committed static previews."""
-    url = request.url
-    hostname = url.hostname or "localhost"
-    if hostname in {"127.0.0.1", "::1"}:
-        preview_host = "localhost"
-    elif hostname == "localhost":
-        preview_host = "127.0.0.1"
-    else:
+                status_code=500, detail={"reason": "preview_origin_base_invalid"}
+            ) from exc
+        hostname = _canonical_dns_hostname(parsed.hostname or "")
+        hostname_labels = hostname.split(".")
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or len(hostname_labels) < 2
+            or configured_port == 0
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+        ):
+            raise HTTPException(status_code=500, detail={"reason": "preview_origin_base_invalid"})
         try:
             ipaddress.ip_address(hostname)
         except ValueError:
             pass
         else:
+            raise HTTPException(status_code=500, detail={"reason": "preview_origin_base_invalid"})
+        request_hostname = _canonical_dns_hostname(request.url.hostname or "localhost")
+        public_ui = disco_env("PUBLIC_UI_URL", "").strip()
+        try:
+            public_ui_url = urllib.parse.urlsplit(public_ui)
+            public_ui_hostname = _canonical_dns_hostname(public_ui_url.hostname or "")
+        except ValueError:
+            public_ui_hostname = ""
+            public_ui_url = urllib.parse.SplitResult("", "", "", "", "")
+        if public_ui_url.scheme not in {"http", "https"} or not public_ui_hostname:
             raise HTTPException(
-                status_code=409, detail={"reason": "preview_wildcard_dns_required"}
+                status_code=500,
+                detail={"reason": "preview_origin_base_public_ui_required"},
             )
-        # Remote front doors already route this capability-gated wildcard host
-        # to the agent server. HostPreviewProxyMiddleware passes the dedicated
-        # static path routes through instead of treating them as a live port.
-        preview_host = f"p2-{cid8}-{port}.{hostname}"
-    netloc = preview_host if url.port is None else f"{preview_host}:{url.port}"
-    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
-    scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
+        privileged_hosts = (request_hostname, public_ui_hostname)
+        if any(
+            privileged and _site_boundary_key(hostname) == _site_boundary_key(privileged)
+            for privileged in privileged_hosts
+        ):
+            raise HTTPException(
+                status_code=500, detail={"reason": "preview_origin_base_not_isolated"}
+            )
+        return parsed.scheme, hostname, configured_port
+
+    url = request.url
+    hostname = (url.hostname or "localhost").lower().rstrip(".")
+    if hostname in {"127.0.0.1", "::1", "localhost"}:
+        base_hostname = "localhost"
+    else:
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            base_hostname = _canonical_dns_hostname(hostname)
+            if not base_hostname:
+                raise HTTPException(
+                    status_code=409, detail={"reason": "preview_wildcard_dns_required"}
+                ) from None
+        else:
+            # A label prefixed to a bare LAN/tailnet IP is not DNS. Returning
+            # that URL would consume a one-time intent into an unreachable host.
+            raise HTTPException(status_code=409, detail={"reason": "preview_wildcard_dns_required"})
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    scheme = forwarded if forwarded in {"http", "https"} else url.scheme
+    return scheme, base_hostname, url.port
+
+
+def _preview_netloc(label: str, base_hostname: str, base_port: int | None) -> str:
+    preview_host = f"{label}.{base_hostname}"
+    if len(preview_host.encode("ascii")) > 253:
+        raise HTTPException(status_code=500, detail={"reason": "preview_origin_host_too_long"})
+    return preview_host if base_port is None else f"{preview_host}:{base_port}"
+
+
+def _preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
+    scheme, base_hostname, base_port = _preview_origin_base(request)
+    netloc = _preview_netloc(f"p2-{cid8}-{port}", base_hostname, base_port)
+    return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", "", ""))
+
+
+def _path_preview_bootstrap_url(request: Request, conversation_id: str, port: int) -> str:
+    """Return a Firefox-safe, per-CID origin for path/static previews."""
+    cid8 = conversation_id.removeprefix("conv_")[:8]
+    scheme, base_hostname, base_port = _preview_origin_base(request)
+    # Keep static/path content off the stable p2 live-host origin. The fresh p3s
+    # namespace is a migration boundary for old workers/caches and gives every
+    # conversation its own browser storage origin without destructive clearing.
+    netloc = _preview_netloc(
+        path_preview_host_label(conversation_id, port), base_hostname, base_port
+    )
     path = f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
     return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
 
@@ -504,9 +599,7 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 )
             )
             if reserved_host_target:
-                raise HTTPException(
-                    status_code=400, detail={"reason": "reserved_preview_path"}
-                )
+                raise HTTPException(status_code=400, detail={"reason": "reserved_preview_path"})
             # Construct/validate the isolated origin before registering a JTI.
             # Invalid bare-IP deployments therefore leave no unusable intent.
             bootstrap = _preview_bootstrap_url(request, cid8, body.port)
@@ -524,10 +617,8 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             if target_parts.query:
                 path_target = f"{path_target}?{target_parts.query}"
             if len(path_target) > MAX_PREVIEW_TARGET_PATH_CHARS:
-                raise HTTPException(
-                    status_code=400, detail={"reason": "preview_target_too_long"}
-                )
-            bootstrap = _path_preview_bootstrap_url(request, cid8, body.port)
+                raise HTTPException(status_code=400, detail={"reason": "preview_target_too_long"})
+            bootstrap = _path_preview_bootstrap_url(request, conversation_id, body.port)
             intent = cap_signer.mint_intent(
                 session=session,
                 conversation_id=conversation_id,
@@ -554,7 +645,10 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             return Response("invalid preview target", status_code=403, media_type="text/plain")
         if not preview_redemption_content_type(request.headers.get("content-type")):
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
-        if SessionSigner().verify(request.cookies.get(SESSION_COOKIE)) is not None:
+        if (
+            SessionSigner().verify_cookie_header(cookie_header_from_headers(request.headers))
+            is not None
+        ):
             # A generated-content origin must never transition from a full app
             # session into preview mode. Use the other isolated loopback host or
             # the versioned remote wildcard instead.
@@ -577,11 +671,13 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
         if parsed is None:
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
         intent = parsed
+        request_label = (request.url.hostname or "").split(".", 1)[0].lower()
         redeemed = cap_signer.redeem_intent(
             intent,
             cid8=cid8,
             port=PREVIEW_PORT,
             path_scope="static",
+            request_host_label=request_label,
         )
         if redeemed is None:
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
@@ -595,16 +691,13 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             path=target_path,
         )
         expected_prefix = (
-            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/"
-            if cap is not None
-            else ""
+            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/" if cap is not None else ""
         )
         if cap is None or not target_path.startswith(expected_prefix):
             return Response(
                 "preview intent scope mismatch", status_code=403, media_type="text/plain"
             )
-
-        document, navigation_headers = preview_navigation_document(target)
+        document, navigation_headers = preview_navigation_document(target, clear_storage=False)
         response = Response(document, status_code=200, headers=navigation_headers)
         cookie_name = path_preview_cookie_name(cid8)
         if cross_site_iframe_headers(dict(request.headers)):
@@ -614,11 +707,6 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 "set-cookie",
                 f"{cookie_name}={token}; Max-Age={preview_ttl_s()}; "
                 f"Path={expected_prefix}; HttpOnly; Secure; SameSite=None; Partitioned",
-            )
-            response.headers.append(
-                "set-cookie",
-                f"{PATH_PREVIEW_ISOLATION_COOKIE}=1; "
-                "Path=/; HttpOnly; Secure; SameSite=None; Partitioned",
             )
         else:
             forwarded_scheme = (
@@ -632,14 +720,6 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 secure=forwarded_scheme == "https" or request.url.scheme == "https",
                 samesite="strict",
                 path=expected_prefix,
-            )
-            response.set_cookie(
-                PATH_PREVIEW_ISOLATION_COOKIE,
-                "1",
-                httponly=True,
-                secure=forwarded_scheme == "https" or request.url.scheme == "https",
-                samesite="strict",
-                path="/",
             )
         return response
 

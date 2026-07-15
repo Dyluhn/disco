@@ -40,6 +40,49 @@ All durable application state lives in the `disco-data` volume. The default
 server image already contains the fastembed ONNX models and Kokoro TTS weights
 under `/opt/disco-cache`, so the `/data` volume does not hide them.
 
+### Scaling and preview redemption
+
+The supported Compose topology runs one `agent-server` against the single
+`/data/disco.db` SQLite database in `disco-data`. Do not horizontally scale
+preview-serving processes onto independent database files while they share a
+`DISCO_SECRET_KEY`: preview launch intents are one-time credentials, and their
+atomic redemption fence is the transaction in that shared database.
+
+Multiple workers or processes are safe only when every one of them uses the
+same SQLite database on a filesystem with correct SQLite locking semantics.
+Copying or replicating outstanding redemption rows into independently committing
+databases can create more than one redemption winner. A multi-node deployment
+therefore needs a shared transactional redemption store; independent-database
+replicas are unsupported and may also reject valid launches when a request lands
+on a replica that did not register the intent.
+
+### Remote preview cookie boundary
+
+For an Internet-facing deployment, route wildcard DNS and TLS for a separately
+registrable preview site to the same frontend/agent-server ingress, then set:
+
+```bash
+DISCO_PUBLIC_UI_URL=https://app.example.com
+DISCO_PREVIEW_ORIGIN_BASE=https://preview.example.net
+```
+
+The preview origin must not be a child, parent, or sibling site of the UI. For
+example, `preview.example.com` is **not** isolated from `app.example.com`: code
+on the preview child can still set `Domain=example.com` cookies and exhaust the
+parent cookie jar or request-header budget. Disco conservatively rejects a
+configured preview base that shares its final two DNS labels with the request
+host or `DISCO_PUBLIC_UI_URL`; the public UI URL is required whenever this
+override is set. Unicode and punycode spellings are canonicalized before this
+comparison. The configured preview base must use HTTPS, a valid nonzero port if
+one is explicit, and a DNS name that leaves room for the generated preview
+label. The wildcard (`*.preview.example.net` in this example) must terminate TLS
+and forward the original `Host` header to the standard front door.
+
+Signature validation prevents a tossed cookie from becoming authenticated, but
+it cannot prevent browser cookie eviction or oversized-header denial of service.
+The separate registrable site is therefore the supported remote availability
+boundary. Localhost deployments can leave this setting blank.
+
 ## Sandbox Image
 
 The default boot builds the sandbox image, so the Build and Agent surfaces work

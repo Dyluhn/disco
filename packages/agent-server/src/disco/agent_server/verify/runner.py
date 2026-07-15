@@ -39,6 +39,7 @@ from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     PATH_PREVIEW_BOOTSTRAP_PATH,
     SESSION_COOKIE,
+    path_preview_host_label,
 )
 from disco.core.evidence.schema import redact
 from disco.tools.sandbox._container import PREVIEW_PORT
@@ -514,18 +515,16 @@ class HttpVerifyClient(AbstractVerifyClient):
             return None
 
     def _validated_isolated_preview_url(self, cid: str, bootstrap_url: str) -> str | None:
-        """Validate the server-minted alternate origin before the verifier fetches it."""
+        """Validate the server-minted p3s origin before the verifier fetches it."""
 
         base = urlsplit(self._base_url)
         bootstrap = urlsplit(bootstrap_url)
         cid8 = cid.removeprefix("conv_")[:8]
         base_hostname = (base.hostname or "").lower()
-        if base_hostname in {"127.0.0.1", "::1"}:
-            expected_hostname = "localhost"
-        elif base_hostname == "localhost":
-            expected_hostname = "127.0.0.1"
-        else:
-            expected_hostname = f"p2-{cid8}-{PREVIEW_PORT}.{base_hostname}"
+        preview_base_hostname = (
+            "localhost" if base_hostname in {"127.0.0.1", "::1", "localhost"} else base_hostname
+        )
+        expected_hostname = f"{path_preview_host_label(cid, PREVIEW_PORT)}.{preview_base_hostname}"
         if (
             not cid8
             or bootstrap.scheme != base.scheme

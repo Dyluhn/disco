@@ -84,6 +84,9 @@ services:
       DISCO_HOST: "0.0.0.0"
       DISCO_PORT: "8000"
       DISCO_DATA_DIR: /data
+      # One transactional DB is also the preview-intent replay boundary. Do not
+      # scale preview-serving replicas onto independent DB files while sharing
+      # DISCO_SECRET_KEY; see docs/self-host.md#scaling-and-preview-redemption.
       DISCO_DB: /data/disco.db # ONE SQLite file, shared with app-server
       DISCO_CONFIG: /data/disco-config.json
       DISCO_SECRETS: /data/secrets.json
@@ -99,6 +102,9 @@ services:
       # browser pairs the app-server but is 403'd by the agent-server (found live
       # 2026-07-09). Keep in lockstep with the app-server block above.
       DISCO_PUBLIC_UI_URL: "${DISCO_PUBLIC_UI_URL:-}"
+      # Optional remote security boundary. This must be a wildcard-routed origin
+      # on a different registrable site from the UI (see docs/self-host.md).
+      DISCO_PREVIEW_ORIGIN_BASE: "${DISCO_PREVIEW_ORIGIN_BASE:-}"
       # Bind posture for first-run auth — keep in LOCKSTEP with the app-server
       # block above (see the comment there).
       DISCO_BIND: "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}"

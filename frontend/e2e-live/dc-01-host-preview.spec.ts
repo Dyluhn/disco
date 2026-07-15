@@ -1,7 +1,18 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import {
+  expect,
+  request as playwrightRequest,
+  test,
+  type APIRequestContext,
+} from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  AGENT_API,
+  authenticatedMutation,
+  requireReliabilityStack,
+} from "./reliability-helpers";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,7 +24,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * preview iframe's document contains REAL table cells with the CSV values.
  */
 
-const API = "http://127.0.0.1:8000";
 const SCREENSHOT_DIR = path.resolve(__dirname, "../../test-record/screenshots/dc-01");
 const RECORD_DIR = path.resolve(__dirname, "../../test-record/dc-01");
 
@@ -46,7 +56,7 @@ async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
 }
 
 async function fullState(request: APIRequestContext, cid: string): Promise<ConversationState> {
-  return getJson<ConversationState>(request, `${API}/conversations/${cid}/state`);
+  return getJson<ConversationState>(request, `${AGENT_API}/conversations/${cid}/state`);
 }
 
 async function waitForStatus(
@@ -66,6 +76,48 @@ async function waitForStatus(
   return st;
 }
 
+async function redeemHostPreview(
+  request: APIRequestContext,
+  cid: string,
+  port: number,
+): Promise<{ context: APIRequestContext; origin: string }> {
+  const mint = await authenticatedMutation(
+    request,
+    `${AGENT_API}/conversations/${cid}/preview/capability`,
+    {
+      data: { port, target_path: "/", transport: "host" },
+      timeout: 30_000,
+    },
+  );
+  expect(mint.ok(), `host capability mint for :${port} returned ${mint.status()}`).toBe(true);
+  const capability = (await mint.json()) as {
+    bootstrap_url: string;
+    bootstrap_intent: string;
+    transport: string;
+  };
+  expect(capability.transport).toBe("host");
+  const bootstrap = new URL(capability.bootstrap_url);
+  expect(bootstrap.hostname).toMatch(
+    new RegExp(`^p2-${cid.replace(/^conv_/, "").slice(0, 8)}-${port}\\.`),
+  );
+  expect(bootstrap.search).toBe("");
+  expect(bootstrap.hash).toBe("");
+
+  const isolated = await playwrightRequest.newContext();
+  try {
+    const redemption = await isolated.post(capability.bootstrap_url, {
+      form: { intent: capability.bootstrap_intent },
+      timeout: 30_000,
+    });
+    expect(redemption.status(), `host capability redemption for :${port} failed`).toBe(200);
+    expect((await redemption.text()).includes(capability.bootstrap_intent)).toBe(false);
+    return { context: isolated, origin: bootstrap.origin };
+  } catch (error) {
+    await isolated.dispose();
+    throw error;
+  }
+}
+
 test("Origin-true preview shows the Vite app and successfully fetches the API", async ({
   page,
   request,
@@ -74,17 +126,22 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
 
   let healthy = false;
   try {
-    healthy = (await request.get(`${API}/health`, { timeout: 5_000 })).ok();
+    healthy = (await request.get(`${AGENT_API}/health`, { timeout: 5_000 })).ok();
   } catch {
     healthy = false;
   }
-  test.skip(!healthy, `agent-server not reachable at ${API} — start it and re-run`);
+  test.skip(!healthy, `agent-server not reachable at ${AGENT_API} — start it and re-run`);
+  await requireReliabilityStack(request);
 
-  const conv = await (
-    await request.post(`${API}/conversations`, {
+  const conversationResponse = await authenticatedMutation(
+    request,
+    `${AGENT_API}/conversations`,
+    {
       data: { surface: "build", title: "DC-01 UI rung: Hostname proxy" },
-    })
-  ).json();
+    },
+  );
+  expect(conversationResponse.ok(), await conversationResponse.text()).toBe(true);
+  const conv = await conversationResponse.json();
   const cid: string = conv.conversation_id;
 
   await page.setViewportSize({ width: 1280, height: 2200 });
@@ -101,16 +158,22 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   // DC-02). Poll the origin-true hostnames directly until BOTH upstreams answer
   // through the proxy — that's the moment the servers are up and the run is
   // still holding (the prompt's `sleep 600` window).
-  const cid8 = cid.replace(/^conv_/, "").slice(0, 8);
-  const viteOrigin = `http://${cid8}-8000.localhost:8000`;
-  const apiOrigin = `http://${cid8}-3000.localhost:8000`;
+  let vitePreviewForCleanup: Awaited<ReturnType<typeof redeemHostPreview>> | null = null;
+  let apiPreviewForCleanup: Awaited<ReturnType<typeof redeemHostPreview>> | null = null;
+  try {
+  const vitePreview = await redeemHostPreview(request, cid, 8000);
+  vitePreviewForCleanup = vitePreview;
+  const apiPreview = await redeemHostPreview(request, cid, 3000);
+  apiPreviewForCleanup = apiPreview;
+  const viteOrigin = vitePreview.origin;
+  const apiOrigin = apiPreview.origin;
   await expect
     .poll(
       async () => {
         try {
           const [vite, api] = await Promise.all([
-            request.get(`${viteOrigin}/`, { timeout: 10_000 }),
-            request.get(`${apiOrigin}/api/readings`, { timeout: 10_000 }),
+            vitePreview.context.get(`${viteOrigin}/`, { timeout: 10_000 }),
+            apiPreview.context.get(`${apiOrigin}/api/readings`, { timeout: 10_000 }),
           ]);
           const st = (await fullState(request, cid)).execution_status;
           if (["FINISHED", "ERROR", "IDLE"].includes(st)) {
@@ -127,7 +190,7 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
     .toBe(true);
 
   // Proxy-level truth first: the Express origin serves the REAL csv rows.
-  const readings = await (await request.get(`${apiOrigin}/api/readings`)).json();
+  const readings = await (await apiPreview.context.get(`${apiOrigin}/api/readings`)).json();
   expect(JSON.stringify(readings)).toContain("42");
   expect(JSON.stringify(readings)).toContain("84");
 
@@ -154,10 +217,15 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
     )
     .toBe(true);
 
-  const src = await iframe.getAttribute("src");
-  expect(src).toMatch(/^http:\/\/[0-9a-f]{8}-8000\.localhost:8000\/\?r=\d+$/);
-
   const frame = iframe.contentFrame();
+  await expect
+    .poll(async () => {
+      const handle = await iframe.elementHandle();
+      return (await handle?.contentFrame())?.url() ?? "";
+    })
+    .toMatch(new RegExp(`^${viteOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?\\?r=\\d+$`));
+  const iframeHandle = await iframe.elementHandle();
+  const iframeUrl = (await iframeHandle?.contentFrame())?.url() ?? "";
   // Vite pre-bundles deps on the FIRST browser request; over the SSH->gVisor
   // transport that first paint can take tens of seconds (run 3 failed with the
   // module graph mid-load at the 60s mark). Be patient and nudge with the
@@ -182,16 +250,18 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "host-preview-table.png") });
 
   // Port pill :3000 → the Express API through its own origin-true hostname.
-  let port3000Src: string | null = null;
+  let port3000Url: string | null = null;
   const pill3000 = page.getByRole("tab", { name: ":3000" });
   if (await pill3000.isVisible()) {
     await pill3000.click();
-    await expect(iframe).toHaveAttribute(
-      "src",
-      /^http:\/\/[0-9a-f]{8}-3000\.localhost:8000\/\?r=\d+$/,
-      { timeout: 30_000 },
-    );
-    port3000Src = await iframe.getAttribute("src");
+    await expect
+      .poll(async () => {
+        const handle = await iframe.elementHandle();
+        return (await handle?.contentFrame())?.url() ?? "";
+      }, { timeout: 30_000 })
+      .toMatch(new RegExp(`^${apiOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?\\?r=\\d+$`));
+    const handle = await iframe.elementHandle();
+    port3000Url = (await handle?.contentFrame())?.url() ?? null;
     await page.waitForTimeout(2_000);
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, "host-preview-port-3000.png") });
   }
@@ -208,7 +278,7 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   let postFinishStatus: number | null = null;
   if (finalStatus === "FINISHED") {
     await expect
-      .poll(async () => (await request.get(`${viteOrigin}/`, { timeout: 10_000 })).status(), {
+      .poll(async () => (await vitePreview.context.get(`${viteOrigin}/`, { timeout: 10_000 })).status(), {
         timeout: 60_000,
         intervals: [2_000],
       })
@@ -222,8 +292,8 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
     JSON.stringify(
       {
         cid,
-        iframeSrc: src,
-        port3000Src,
+        iframeUrl,
+        port3000Url,
         readings,
         finalStatus,
         postFinishProxyStatus: postFinishStatus,
@@ -232,4 +302,11 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
       2,
     ),
   );
+  } finally {
+    await Promise.all(
+      [vitePreviewForCleanup, apiPreviewForCleanup]
+        .filter((preview) => preview !== null)
+        .map((preview) => preview.context.dispose()),
+    );
+  }
 });

@@ -22,8 +22,11 @@ from disco.agent_server.preview_inject import (
 from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     PATH_PREVIEW_BOOTSTRAP_PATH,
+    PATH_PREVIEW_HOST_PREFIX,
+    PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS,
     PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_COOKIE,
+    PreviewCapability,
     PreviewCapabilitySigner,
     PreviewIntentRedemptionStore,
     preview_ttl_s,
@@ -34,15 +37,19 @@ from websockets.typing import Subprotocol
 
 _LOG = logging.getLogger(__name__)
 
-# Any host whose first label is {cid8}-{port} is a preview host — not just
-# .localhost. The bootstrap URLs are minted as {cid8}-{port}.<request-host>
-# (routes/preview.py), and through the single front door the request host is
-# whatever the operator browses (tailnet name, domain, LAN name); the nginx
-# front door routes those prefixed Hosts here (codex front-door defect #1,
-# 2026-07-09). Auth is unchanged — the capability cookie/intent token still
-# gates every preview request; the host match only SELECTS the proxy path.
+# Versioned live (p2) and path/static (p3s) labels work beneath localhost or a
+# deployment wildcard domain. p3s includes a full-conversation digest so the
+# browser origin is never keyed only by the ambiguous cid8 routing prefix. The
+# capability cookie/intent still gates every request; host matching only selects
+# the proxy family.
 PREVIEW_HOST_RE = re.compile(
-    r"^(?:p2-)?(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$"
+    r"^(?P<family>p2)-"
+    r"(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$"
+)
+PATH_PREVIEW_HOST_RE = re.compile(
+    rf"^{PATH_PREVIEW_HOST_PREFIX}-(?P<cid8>[0-9a-f]{{8}})-"
+    rf"[0-9a-f]{{{PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS}}}-"
+    r"(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$"
 )
 
 # C2 (first-hit wake race): the preview upstream is bound lazily by the
@@ -75,16 +82,17 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-def _cookie_value(scope: Scope, name: str) -> str | None:
+def _cookie_values(scope: Scope, name: str) -> tuple[str, ...]:
     needle = name + "="
+    found: list[str] = []
     for header_name, value in scope.get("headers", []):
         if header_name.lower() != b"cookie":
             continue
         for part in value.decode("latin1").split(";"):
             item = part.strip()
             if item.startswith(needle):
-                return item[len(needle) :]
-    return None
+                found.append(item[len(needle) :])
+    return tuple(found)
 
 
 def _strip_reserved_preview_cookie(value: str) -> str | None:
@@ -162,13 +170,50 @@ def _force_private_no_store(send: Send) -> Send:
                 for name, value in message.get("headers", [])
                 if name.lower() not in blocked
             ]
-            headers.extend(
-                [(b"cache-control", b"private, no-store"), (b"pragma", b"no-cache")]
-            )
+            headers.extend([(b"cache-control", b"private, no-store"), (b"pragma", b"no-cache")])
             message = {**message, "headers": headers}
         await send(message)
 
     return send_no_store
+
+
+async def _deny_static_preview_route(scope: Scope, send: Send) -> None:
+    """Keep the dedicated p3s origin out of the generic live-port proxy."""
+
+    if scope["type"] == "http":
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"isolated preview route required",
+            }
+        )
+        return
+    await send({"type": "websocket.close", "code": 1008, "reason": "unknown preview route"})
+
+
+def _verified_preview_capability(
+    signer: PreviewCapabilitySigner,
+    scope: Scope,
+    *,
+    cid8: str,
+    port: int,
+    method: str,
+    path: str,
+) -> PreviewCapability | None:
+    """Select a valid signed capability without trusting duplicate order."""
+
+    for token in _cookie_values(scope, PREVIEW_COOKIE):
+        cap = signer.verify(token, cid8=cid8, port=port, method=method, path=path)
+        if cap is not None:
+            return cap
+    return None
 
 
 class HostPreviewProxyMiddleware:
@@ -206,7 +251,8 @@ class HostPreviewProxyMiddleware:
                 host = value.decode("latin1")
                 break
 
-        match = PREVIEW_HOST_RE.match(host)
+        path_preview_host = PATH_PREVIEW_HOST_RE.match(host)
+        match = path_preview_host or PREVIEW_HOST_RE.match(host)
         if not match:
             await self.app(scope, receive, send)
             return
@@ -218,6 +264,9 @@ class HostPreviewProxyMiddleware:
             send = _force_private_no_store(send)
 
         cid8 = match.group("cid8")
+        preview_family = (
+            PATH_PREVIEW_HOST_PREFIX if path_preview_host is not None else match.group("family")
+        )
         try:
             port = int(match.group("port"))
         except ValueError:
@@ -251,9 +300,7 @@ class HostPreviewProxyMiddleware:
                     "headers": [(b"content-type", b"text/plain")],
                 }
             )
-            await send(
-                {"type": "http.response.body", "body": b"preview service workers disabled"}
-            )
+            await send({"type": "http.response.body", "body": b"preview service workers disabled"})
             return
 
         # H079: committed static previews use the same isolated wildcard host on
@@ -268,6 +315,12 @@ class HostPreviewProxyMiddleware:
             or (path.startswith("/conversations/") and "/preview-app/" in path)
         ):
             await self.app(scope, receive, send)
+            return
+
+        if preview_family == PATH_PREVIEW_HOST_PREFIX:
+            # p3s is a static/path-only origin. Never let a host capability or
+            # an unscoped request turn it back into the generic live-port proxy.
+            await _deny_static_preview_route(scope, send)
             return
 
         if (
@@ -291,8 +344,9 @@ class HostPreviewProxyMiddleware:
                 if scope["type"] == "websocket"
                 else str(scope.get("method") or "GET").upper()
             )
-            cap = self.capability_signer.verify(
-                _cookie_value(scope, PREVIEW_COOKIE),
+            cap = _verified_preview_capability(
+                self.capability_signer,
+                scope,
                 cid8=cid8,
                 port=port,
                 method=method,
@@ -334,9 +388,7 @@ class HostPreviewProxyMiddleware:
                         "headers": [(b"content-type", b"text/plain")],
                     }
                 )
-                await send(
-                    {"type": "http.response.body", "body": b"preview origin required"}
-                )
+                await send({"type": "http.response.body", "body": b"preview origin required"})
                 return
             cap_owner_id = cap.owner_id
 
@@ -515,9 +567,7 @@ class HostPreviewProxyMiddleware:
         """
         last_err: Exception | None = None
         attempts = (
-            _CONNECT_RETRY_ATTEMPTS
-            if req.method.upper() in {"GET", "HEAD", "OPTIONS"}
-            else 1
+            _CONNECT_RETRY_ATTEMPTS if req.method.upper() in {"GET", "HEAD", "OPTIONS"} else 1
         )
         for attempt in range(attempts):
             try:
@@ -557,7 +607,7 @@ class HostPreviewProxyMiddleware:
         no published host upstream. Returns True iff the live in-box server answered
         (response already sent); False to let the caller emit the honest 503. GET only."""
         # SECURITY (noVNC gate-bypass fix): NOVNC_PORT is in USER_PORTS, so a hostname
-        # like {cid8}-6080.localhost reaches here when the upstream resolver returns
+        # like p2-{cid8}-6080.localhost reaches here when the upstream resolver returns
         # None. For 6080 that None is the live-browser GATE (port_upstream refuses
         # NOVNC_PORT when the feature is disabled), NOT just "no host port published".
         # Curling the stale noVNC HTTP surface from inside the box would re-expose a

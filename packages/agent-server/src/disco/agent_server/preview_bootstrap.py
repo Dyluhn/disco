@@ -25,8 +25,15 @@ def preview_redemption_content_type(value: str | None) -> bool:
     return media_type == PREVIEW_REDEMPTION_CONTENT_TYPE
 
 
-def preview_navigation_document(target: str) -> tuple[bytes, dict[str, str]]:
-    """Return a locked document that moves a redeemed POST to its exact target."""
+def preview_navigation_document(
+    target: str, *, clear_storage: bool = True
+) -> tuple[bytes, dict[str, str]]:
+    """Return a locked document that moves a redeemed POST to its exact target.
+
+    Live-host redemption keeps the storage purge as a migration fence for the
+    stable ``p2`` origin. Path previews use their fresh, dedicated ``p3s``
+    origin and must not purge another active tab's origin storage.
+    """
 
     nonce = secrets.token_urlsafe(18)
     safe_target = json.dumps(target).replace("<", "\\u003c").replace(">", "\\u003e")
@@ -41,7 +48,7 @@ def preview_navigation_document(target: str) -> tuple[bytes, dict[str, str]]:
         "<noscript>JavaScript is required to open this isolated preview.</noscript>"
         "</body></html>"
     ).encode()
-    return document, {
+    response_headers = {
         "content-type": "text/html; charset=utf-8",
         "content-security-policy": (
             "default-src 'none'; "
@@ -51,11 +58,12 @@ def preview_navigation_document(target: str) -> tuple[bytes, dict[str, str]]:
         "x-content-type-options": "nosniff",
         "referrer-policy": "no-referrer",
         "cache-control": "no-store",
-        # Path previews use a versioned isolated origin now. This also removes
-        # caches/worker registrations on an already-open p2 origin before its
-        # capability target loads, providing an explicit migration fence.
-        "clear-site-data": '"storage"',
     }
+    if clear_storage:
+        # The stable live-host origin predates the service-worker request gate.
+        # Keep this explicit migration fence until that origin is versioned.
+        response_headers["clear-site-data"] = '"storage"'
+    return document, response_headers
 
 
 def parse_preview_redemption(body: bytes) -> str | None:

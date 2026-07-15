@@ -5,8 +5,8 @@
  *
  * Security notes (per docs/design-novnc-live-browser.md):
  *  - VNC is loopback-bound inside the sandbox (127.0.0.1 only, never network).
- *  - The noVNC endpoint goes through the existing per-conversation preview proxy
- *    ({cid8}-6080.localhost) — same auth/jail as the dev-server preview.
+ *  - The noVNC endpoint goes through the existing server-minted per-conversation
+ *    preview origin (localhost or the configured wildcard site) and auth/jail.
  *  - View-only by default (view_only=1 noVNC param); no input injection.
  *  - gVisor backend requires D7 egress allowlist update — deferred.
  *

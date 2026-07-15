@@ -11,11 +11,12 @@ from typing import Any
 
 from disco.core.auth import (
     CSRF_HEADER,
-    PATH_PREVIEW_ISOLATION_COOKIE,
     SESSION_COOKIE,
     AuthSession,
     SessionSigner,
     allowed_frontend_origins,
+    cookie_header_from_headers,
+    generated_preview_request_host,
     local_preview_origin_crosses_host,
     localhost_auto_pair_allowed,
     origin_allowed,
@@ -213,10 +214,10 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
             # before public session/pairing/mint routes; ports may differ, hosts
             # may not.
             return _private_no_store(Response("forbidden preview origin", status_code=403))
-        if request.cookies.get(PATH_PREVIEW_ISOLATION_COOKIE) == "1":
-            # App-server has no generated-content route. A marked path-preview
-            # origin is therefore quarantined from every App API, including
-            # public credential grants and administrator settings.
+        if generated_preview_request_host(request.headers.get("host")):
+            # App-server has no generated-content route. Exact legacy/p2/p3s
+            # hosts are quarantined before public grants; child-domain cookies
+            # are never trusted as a boundary signal.
             return _private_no_store(Response("isolated preview route required", status_code=403))
         if _is_public_http(path, method):
             return await call_next(request)
@@ -242,7 +243,7 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _authenticate_request(self, request: Request) -> AuthSession | None:
-        session = self._signer.verify(request.cookies.get(SESSION_COOKIE))
+        session = self._signer.verify_cookie_header(cookie_header_from_headers(request.headers))
         if session is not None:
             return session
         if _is_testclient(request):
@@ -329,7 +330,7 @@ def make_auth_router() -> APIRouter:
 
     @router.get("/api/auth/session")
     async def auth_session(request: Request) -> dict:
-        session = signer.verify(request.cookies.get(SESSION_COOKIE))
+        session = signer.verify_cookie_header(cookie_header_from_headers(request.headers))
         if session is None:
             return {"authenticated": False}
         return {

@@ -244,10 +244,10 @@ function BrowserPane({
                 JSON.stringify({ reason: data.reason || "no_upstream" }),
               );
             }
-            // SECURITY: build the single-origin proxy URL client-side
-            // ({cid8}-6080.localhost). The server intentionally never returns a raw sandbox
-            // host:port — that would bypass the auth/cid-scoping proxy. previewHostUrl is
-            // the same helper the dev-server preview uses.
+            // SECURITY: redeem a server-minted launch at the isolated preview origin
+            // (localhost by default, or the operator's separate wildcard site). The server
+            // intentionally never returns a raw sandbox host:port — that would bypass the
+            // auth/cid-scoping proxy.
             const src = await previewBootstrapUrl(cid, data.port, data.novnc_path);
             if (!src) {
               throw new Error(JSON.stringify({ reason: "no_upstream" }));

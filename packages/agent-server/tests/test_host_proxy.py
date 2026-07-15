@@ -10,9 +10,11 @@ import uvicorn
 import websockets
 from disco.agent_server.host_proxy import (
     MAX_PREVIEW_REQUEST_BODY_BYTES,
+    PREVIEW_HOST_RE,
     HostPreviewProxyMiddleware,
 )
 from disco.core.auth import (
+    PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS,
     PREVIEW_APP_HTTP_METHODS,
     PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_COOKIE,
@@ -145,7 +147,7 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport,
-        base_url="http://aaaaaaaa-8000.localhost",
+        base_url="http://p2-aaaaaaaa-8000.localhost",
     ) as client:
         wrong_method = await client.get(PREVIEW_BOOTSTRAP_PATH)
         assert wrong_method.status_code == 405
@@ -160,6 +162,7 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
         assert intent not in str(redemption.request.url)
         assert "window.location.replace" in redemption.text
         assert intent not in redemption.text
+        assert redemption.headers["clear-site-data"] == '"storage"'
         cookie = redemption.headers["set-cookie"]
         assert "HttpOnly" in cookie
         assert "; Secure" in cookie
@@ -169,10 +172,18 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
 
         # The response capability gates the real upstream and cannot be exchanged twice.
         capability_cookie = cookie.split(";", 1)[0]
-        proxied = await client.get("/", headers={"Cookie": capability_cookie})
-        assert proxied.status_code == 200
-        assert proxied.headers["cache-control"] == "private, no-store"
-        assert proxied.headers["pragma"] == "no-cache"
+        for duplicate_headers in (
+            [("Cookie", f"{PREVIEW_COOKIE}=child-domain-invalid; {capability_cookie}")],
+            [("Cookie", f"{capability_cookie}; {PREVIEW_COOKIE}=child-domain-invalid")],
+            [
+                ("Cookie", f"{PREVIEW_COOKIE}=child-domain-invalid"),
+                ("Cookie", capability_cookie),
+            ],
+        ):
+            proxied = await client.get("/", headers=duplicate_headers)
+            assert proxied.status_code == 200
+            assert proxied.headers["cache-control"] == "private, no-store"
+            assert proxied.headers["pragma"] == "no-cache"
 
         cacheable = await client.get("/cacheable", headers={"Cookie": capability_cookie})
         assert cacheable.status_code == 200
@@ -184,7 +195,7 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
 
         mutation = await client.post(
             "/api/submit",
-            headers={"Cookie": capability_cookie, "Origin": "http://aaaaaaaa-8000.localhost"},
+            headers={"Cookie": capability_cookie, "Origin": "http://p2-aaaaaaaa-8000.localhost"},
             content=b"capability mutation",
         )
         assert mutation.status_code == 201
@@ -202,7 +213,7 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
             "/api/submit",
             headers={
                 "Cookie": capability_cookie,
-                "Origin": "http://aaaaaaaa-8000.localhost",
+                "Origin": "http://p2-aaaaaaaa-8000.localhost",
                 "X-Forwarded-Proto": "https",
             },
             content=b"must not reach upstream",
@@ -261,6 +272,14 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
             PREVIEW_BOOTSTRAP_PATH, data={"intent": content_type_intent}
         )
         assert valid_after_rejection.status_code == 200
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=f"http://p3s-aaaaaaaa-{'b' * 40}-8000.localhost",
+    ) as static_origin:
+        wrong_transport = await static_origin.get("/", headers={"Cookie": capability_cookie})
+        assert wrong_transport.status_code == 403
+        assert wrong_transport.text == "isolated preview route required"
     store.close()
 
 
@@ -286,7 +305,7 @@ async def test_live_capability_disconnect_does_not_spin() -> None:
         "raw_path": PREVIEW_BOOTSTRAP_PATH.encode(),
         "query_string": b"",
         "headers": [
-            (b"host", b"aaaaaaaa-8000.localhost"),
+            (b"host", b"p2-aaaaaaaa-8000.localhost"),
             (b"content-type", b"application/x-www-form-urlencoded"),
         ],
         "client": ("127.0.0.1", 1234),
@@ -303,10 +322,7 @@ async def test_live_capability_disconnect_does_not_spin() -> None:
     await asyncio.wait_for(app(scope, receive, send), timeout=0.2)
     assert sent[0]["type"] == "http.response.start"
     assert sent[0]["status"] == 403
-    assert not any(
-        name.lower() == b"set-cookie"
-        for name, _value in sent[0].get("headers", [])
-    )
+    assert not any(name.lower() == b"set-cookie" for name, _value in sent[0].get("headers", []))
     store.close()
 
 
@@ -327,7 +343,7 @@ async def test_proxy_disconnect_never_forwards_a_truncated_mutation() -> None:
         "path": "/api/submit",
         "raw_path": b"/api/submit",
         "query_string": b"",
-        "headers": [(b"host", b"aaaaaaaa-8000.localhost")],
+        "headers": [(b"host", b"p2-aaaaaaaa-8000.localhost")],
         "client": ("127.0.0.1", 1234),
         "server": ("127.0.0.1", 80),
     }
@@ -396,7 +412,7 @@ async def test_connect_retry_never_replays_mutations(monkeypatch: pytest.MonkeyP
 async def test_get_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         # standard GET, path /src/main.jsx, query string
         resp = await client.get("/src/main.jsx?foo=bar")
@@ -409,7 +425,11 @@ async def test_get_passthrough(mock_app):
 
 def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
     nginx = (Path(__file__).parents[3] / "frontend" / "nginx.conf").read_text()
-    assert 'server_name "~^p2-[0-9a-f]{8}-\\d{2,5}\\.";' in nginx
+    assert (
+        'server_name "~^(?:p2-[0-9a-f]{8}-\\d{2,5}|'
+        f"p3s-[0-9a-f]{{8}}-[0-9a-f]{{{PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS}}}"
+        '-\\d{2,5})\\.";' in nginx
+    )
 
     default_server = nginx.split("listen 80 default_server;", 1)[1]
     for prefix in (
@@ -433,11 +453,15 @@ def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
     assert "location ^~ /conversations/" not in default_server
 
 
+def test_unversioned_preview_host_is_no_longer_served() -> None:
+    assert PREVIEW_HOST_RE.fullmatch("aaaaaaaa-8000.localhost") is None
+
+
 @pytest.mark.asyncio
 async def test_post_passthrough(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         resp = await client.post("/api/submit", content=b"mybody")
         assert resp.status_code == 201
@@ -466,7 +490,7 @@ async def test_in_sandbox_get_fallback_never_converts_a_mutation_to_get() -> Non
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         mutation = await client.post("/api/submit", content=b"must not become GET")
         assert mutation.status_code == 503
@@ -482,7 +506,7 @@ async def test_in_sandbox_get_fallback_never_converts_a_mutation_to_get() -> Non
 async def test_preview_proxy_never_exposes_or_accepts_internal_capability_cookie(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         response = await client.get(
             "/cookies",
@@ -514,7 +538,7 @@ async def test_preview_proxy_never_exposes_or_accepts_internal_capability_cookie
 async def test_preview_proxy_rejects_declared_oversized_request_before_upstream(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         response = await client.post(
             "/api/submit", content=b"x" * (MAX_PREVIEW_REQUEST_BODY_BYTES + 1)
@@ -530,7 +554,7 @@ async def test_preview_proxy_rejects_chunked_oversized_request_without_content_l
 
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         response = await client.post("/api/submit", content=chunks())
     assert response.status_code == 413
@@ -541,7 +565,7 @@ async def test_redirect_untouched(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
         transport=transport,
-        base_url="http://aaaaaaaa-8000.localhost",
+        base_url="http://p2-aaaaaaaa-8000.localhost",
         follow_redirects=False,
     ) as client:
         resp = await client.get("/redirect")
@@ -553,7 +577,7 @@ async def test_redirect_untouched(mock_app):
 async def test_oversized_html_streams_without_buffering_for_injection(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         response = await client.get("/huge-html")
     assert response.status_code == 200
@@ -565,7 +589,7 @@ async def test_oversized_html_streams_without_buffering_for_injection(mock_app):
 async def test_unknown_port(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-9999.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-9999.localhost"
     ) as client:
         resp = await client.get("/")
         assert resp.status_code == 404
@@ -576,7 +600,7 @@ async def test_unknown_port(mock_app):
 async def test_internal_port_forbidden(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8899.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8899.localhost"
     ) as client:
         resp = await client.get("/")
         assert resp.status_code == 404
@@ -587,7 +611,7 @@ async def test_internal_port_forbidden(mock_app):
 async def test_unknown_cid8_resolver_none(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://cccccccc-8000.localhost"
+        transport=transport, base_url="http://p2-cccccccc-8000.localhost"
     ) as client:
         resp = await client.get("/")
         assert resp.status_code == 503
@@ -598,7 +622,7 @@ async def test_unknown_cid8_resolver_none(mock_app):
 async def test_upstream_down(mock_app):
     transport = httpx.ASGITransport(app=mock_app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://bbbbbbbb-8000.localhost"
+        transport=transport, base_url="http://p2-bbbbbbbb-8000.localhost"
     ) as client:
         resp = await client.get("/")
         assert resp.status_code == 502
@@ -707,7 +731,7 @@ async def test_websocket_proxy(proxy_app_server, real_ws_server):
 
     # Test proxy
     async with websockets.connect(
-        f"ws://aaaaaaaa-8000.localhost:{port}/ws", subprotocols=["vite-hmr"]
+        f"ws://p2-aaaaaaaa-8000.localhost:{port}/ws", subprotocols=["vite-hmr"]
     ) as ws:
         assert ws.subprotocol == "vite-hmr"
 
@@ -738,9 +762,7 @@ async def capability_proxy_app_server(real_ws_server, tmp_path):
         target_path="/ws",
         allow_websocket=True,
     )
-    redeemed = signer.redeem_intent(
-        intent, cid8="aaaaaaaa", port=8000, path_scope="host"
-    )
+    redeemed = signer.redeem_intent(intent, cid8="aaaaaaaa", port=8000, path_scope="host")
     assert redeemed is not None
     capability_token, _target = redeemed
 
@@ -782,7 +804,7 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
     real_ws_server,
 ):
     server_port, token = capability_proxy_app_server
-    host = f"aaaaaaaa-8000.localhost:{server_port}"
+    host = f"p2-aaaaaaaa-8000.localhost:{server_port}"
     url = f"ws://{host}/ws"
     headers = {"Cookie": f"{PREVIEW_COOKIE}={token}"}
 
@@ -798,6 +820,19 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
     ) as ws:
         await ws.send("capability-hmr")
         assert await ws.recv() == "capability-hmr"
+
+    for duplicate_headers in (
+        [("Cookie", f"{PREVIEW_COOKIE}=invalid; {PREVIEW_COOKIE}={token}")],
+        [("Cookie", f"{PREVIEW_COOKIE}={token}; {PREVIEW_COOKIE}=invalid")],
+        [("Cookie", f"{PREVIEW_COOKIE}=invalid"), ("Cookie", f"{PREVIEW_COOKIE}={token}")],
+    ):
+        async with websockets.connect(
+            url,
+            origin=f"http://{host}",
+            additional_headers=duplicate_headers,
+        ) as ws:
+            await ws.send("duplicate-capability-hmr")
+            assert await ws.recv() == "duplicate-capability-hmr"
 
     # Origin is checked before the signed cookie; rejecting it does not mutate
     # or consume the reusable scoped preview cookie.
@@ -819,12 +854,12 @@ async def test_signed_live_capability_authorizes_only_exact_origin_cid_and_port(
 
     for wrong_url, wrong_origin in (
         (
-            f"ws://bbbbbbbb-8000.localhost:{server_port}/ws",
-            f"http://bbbbbbbb-8000.localhost:{server_port}",
+            f"ws://p2-bbbbbbbb-8000.localhost:{server_port}/ws",
+            f"http://p2-bbbbbbbb-8000.localhost:{server_port}",
         ),
         (
-            f"ws://aaaaaaaa-8899.localhost:{server_port}/ws",
-            f"http://aaaaaaaa-8899.localhost:{server_port}",
+            f"ws://p2-aaaaaaaa-8899.localhost:{server_port}/ws",
+            f"http://p2-aaaaaaaa-8899.localhost:{server_port}",
         ),
     ):
         with pytest.raises(websockets.exceptions.InvalidStatus):
@@ -848,7 +883,7 @@ async def test_async_resolver_awaited():
     app.add_middleware(HostPreviewProxyMiddleware, upstream_resolver=async_resolver)
 
     transport = httpx.ASGITransport(app=app)
-    base = "http://aaaaaaaa-8000.localhost"
+    base = "http://p2-aaaaaaaa-8000.localhost"
     async with httpx.AsyncClient(transport=transport, base_url=base) as client:
         resp = await client.get("/")
         # If the middleware didn't await the coroutine, the resolver would read as

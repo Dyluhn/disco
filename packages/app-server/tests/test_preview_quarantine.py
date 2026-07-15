@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from disco.app_server import create_app
 from disco.core.auth import (
-    PATH_PREVIEW_ISOLATION_COOKIE,
     SESSION_COOKIE,
     SessionSigner,
 )
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi.testclient import TestClient
+
+_TOSSED_MARKER_COOKIE = "disco_path_preview_isolated"
 
 
 def _owner_client(app, *, base_url: str) -> TestClient:
@@ -21,7 +22,7 @@ def _owner_client(app, *, base_url: str) -> TestClient:
     return client
 
 
-def test_app_auth_blocks_same_host_marker_and_cross_alias_session_escape(
+def test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DISCO_AUTH_SECRET", "preview-app-quarantine-secret")
@@ -57,30 +58,56 @@ def test_app_auth_blocks_same_host_marker_and_cross_alias_session_escape(
     assert session.json()["authenticated"] is True
     assert owner.get("/api/models", headers=same_host).status_code == 200
 
-    # On the preview hostname itself, the durable quarantine marker blocks all
-    # App APIs, including public credential grants and admin/settings routes.
+    # H148: a child-domain marker is not a trust signal, and an invalid duplicate
+    # session cannot shadow the valid HostOnly signed session on the parent app.
     marked = _owner_client(app, base_url="http://localhost:8800")
-    marked.headers.update(
-        {
-            "Cookie": (
-                f"{SESSION_COOKIE}={marked.cookies.get(SESSION_COOKIE)}; "
-                f"{PATH_PREVIEW_ISOLATION_COOKIE}=1"
-            )
-        }
-    )
-    for path in (
-        "/api/auth/session",
-        "/api/auth/pairing-token",
-        "/api/models",
-        "/api/secrets",
+    valid_session = marked.cookies.get(SESSION_COOKIE)
+    assert valid_session
+    for cookie_header in (
+        (
+            f"{SESSION_COOKIE}=child-domain-invalid; {_TOSSED_MARKER_COOKIE}=1; "
+            f"{SESSION_COOKIE}={valid_session}"
+        ),
+        (
+            f"{SESSION_COOKIE}={valid_session}; {_TOSSED_MARKER_COOKIE}=1; "
+            f"{SESSION_COOKIE}=child-domain-invalid"
+        ),
     ):
-        assert marked.get(path, headers={"Origin": "http://localhost:8088"}).status_code == 403
-    assert (
-        marked.post(
-            "/api/auth/mint",
-            headers={"Origin": "http://localhost:8088"},
-            json={"pairing_token": None},
-        ).status_code
-        == 403
-    )
+        marked.headers.update({"Cookie": cookie_header})
+        tossed_session = marked.get(
+            "/api/auth/session", headers={"Origin": "http://localhost:8088"}
+        )
+        assert tossed_session.status_code == 200
+        assert tossed_session.json()["authenticated"] is True
+        assert (
+            marked.get("/api/models", headers={"Origin": "http://localhost:8088"}).status_code
+            == 200
+        )
+
+    # Exact legacy/p2/p3s generated Hosts remain quarantined without the removed
+    # marker, while malformed lookalikes retain the normal app session.
+    for generated_host in (
+        "a1b2c3d4-8000.example",
+        "p2-a1b2c3d4-8000.example",
+        "p3s-a1b2c3d4-" + "b" * 40 + "-8000.example",
+    ):
+        generated = _owner_client(app, base_url=f"https://{generated_host}")
+        for path in (
+            "/api/auth/session",
+            "/api/auth/pairing-token",
+            "/api/models",
+            "/api/secrets",
+        ):
+            denied = generated.get(path)
+            assert denied.status_code == 403
+            assert denied.headers["cache-control"] == "private, no-store"
+    for normal_host in (
+        "p2-a1b2c3d4-0.example",
+        "p2-nothex123-8000.example",
+        "p3s-a1b2c3d4-short-8000.example",
+    ):
+        normal = _owner_client(app, base_url=f"https://{normal_host}")
+        normal_session = normal.get("/api/auth/session")
+        assert normal_session.status_code == 200
+        assert normal_session.json()["authenticated"] is True
     store.close()

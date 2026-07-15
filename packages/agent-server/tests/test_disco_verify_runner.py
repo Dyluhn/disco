@@ -34,7 +34,7 @@ from disco.agent_server.verify.scenarios import (
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
-from disco.core.auth import SESSION_COOKIE
+from disco.core.auth import SESSION_COOKIE, path_preview_host_label
 
 
 async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path() -> None:
@@ -79,6 +79,7 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
 async def test_http_verify_client_fetches_selected_preview_through_clean_capability() -> None:
     seen: list[str] = []
     cid = "conv_a1b2c3d4proof"
+    path_host = path_preview_host_label(cid, 8000)
     isolated_path = f"/__disco/isolated-preview/{cid}/"
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -105,7 +106,7 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
                 200,
                 json={
                     "bootstrap_url": (
-                        "http://localhost:8000/__disco/path-preview-auth/a1b2c3d4"
+                        f"http://{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4"
                     ),
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
@@ -114,32 +115,25 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
                 },
             )
         if request.url.path == "/__disco/path-preview-auth/a1b2c3d4":
-            assert request.url.host == "localhost"
+            assert request.url.host == f"{path_host}.localhost"
             assert request.headers["origin"] == "http://127.0.0.1:8000"
             assert "disco_session" not in request.headers.get("cookie", "")
             assert request.content == b"intent=one-use-intent"
             return httpx.Response(
                 200,
                 content=b"bootstrap",
-                headers=[
-                    (
-                        "set-cookie",
-                        (
-                            "disco_path_preview_a1b2c3d4=cap-proof; "
-                            f"Path={isolated_path}; HttpOnly; SameSite=Strict"
-                        ),
-                    ),
-                    (
-                        "set-cookie",
-                        "disco_path_preview_isolated=1; Path=/; HttpOnly; SameSite=Strict",
-                    ),
-                ],
+                headers={
+                    "set-cookie": (
+                        "disco_path_preview_a1b2c3d4=cap-proof; "
+                        f"Path={isolated_path}; HttpOnly; SameSite=Strict"
+                    )
+                },
             )
         if request.url.path == isolated_path:
             cookie = request.headers.get("cookie", "")
-            assert request.url.host == "localhost"
+            assert request.url.host == f"{path_host}.localhost"
             assert "disco_path_preview_a1b2c3d4=cap-proof" in cookie
-            assert "disco_path_preview_isolated=1" in cookie
+            assert "disco_path_preview_isolated" not in cookie
             assert "disco_session" not in cookie
             assert "origin" not in request.headers
             return httpx.Response(200, content=b"<h1>SELECTED APP</h1>")
@@ -147,9 +141,7 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
             raise AssertionError("legacy full-session preview route must not be called")
         return httpx.Response(404)
 
-    client = HttpVerifyClient(
-        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
-    )
+    client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
     assert await client.fetch_preview(cid) == (200, b"<h1>SELECTED APP</h1>")
     assert seen == [
         "/api/auth/session",
@@ -163,6 +155,7 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
 
 async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() -> None:
     cid = "conv_a1b2c3d4proof"
+    path_host = path_preview_host_label(cid, 8000)
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == f"/conversations/{cid}/preview/capability":
@@ -170,7 +163,7 @@ async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() 
                 200,
                 json={
                     "bootstrap_url": (
-                        "http://localhost:8000/__disco/path-preview-auth/a1b2c3d4"
+                        f"http://{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4"
                     ),
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
@@ -194,16 +187,14 @@ async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() 
             raise AssertionError("isolated content must not load with an app session")
         return httpx.Response(404)
 
-    client = HttpVerifyClient(
-        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
-    )
+    client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
     client._csrf_token = "csrf-proof"
     client._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
     assert await client.fetch_preview(cid) is None
     assert (
         client._validated_isolated_preview_url(
             cid,
-            "http://user@localhost:8000/__disco/path-preview-auth/a1b2c3d4",
+            f"http://user@{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4",
         )
         is None
     )

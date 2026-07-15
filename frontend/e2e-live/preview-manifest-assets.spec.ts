@@ -37,6 +37,7 @@ const RELEASE_TITLE = "RELIABILITY RELEASE";
 const FIRST_MARKER = "SELECTED RELEASE ONE";
 const SECOND_MARKER = "SELECTED RELEASE TWO";
 const SCRIPT_MARKER = "SCRIPT ASSET LOADED";
+const SERVICE_WORKER_MARKER = "RELIABILITY SERVICE WORKER";
 const NESTED_MARKER = "NESTED ROUTE LOADED";
 const ISOLATED_PREVIEW_PREFIX = "/__disco/isolated-preview";
 const BACKGROUND = "rgb(12, 34, 56)";
@@ -68,7 +69,9 @@ substitute a one-file app. Create these exact files in the workspace:
 5. release/media/hero image.svg as a valid SVG with visible text 'SVG ASSET'.
 6. release/docs/index.html as a normal HTML document containing visible text
    '${NESTED_MARKER}'.
-7. release/fonts/proof.woff2 by decoding this base64 with the shell, without
+7. release/sw.js as valid service-worker JavaScript containing the exact comment
+   '/* ${SERVICE_WORKER_MARKER} */' and a no-op install event listener.
+8. release/fonts/proof.woff2 by decoding this base64 with the shell, without
    printing it: ${FONT_BASE64}
 
 Use ordinary workspace write/shell tools. Verify the files and links. Then call the
@@ -275,7 +278,17 @@ async function assertApiGraph(
     const image = await isolated.get(withVersion("/media/hero%20image.svg?asset=1"));
     const font = await isolated.get(withVersion("/fonts/proof.woff2?font=1"));
     const nested = await isolated.get(withVersion("/docs/?view=full#nested"));
-    for (const response of [css, prefixedCss, script, doubleSlashScript, image, font, nested]) {
+    const workerScript = await isolated.get(withVersion("/sw.js"));
+    for (const response of [
+      css,
+      prefixedCss,
+      script,
+      doubleSlashScript,
+      image,
+      font,
+      nested,
+      workerScript,
+    ]) {
       expect(
         response.ok(),
         `isolated preview asset ${new URL(response.url()).pathname} returned ${response.status()}`,
@@ -288,6 +301,7 @@ async function assertApiGraph(
     expect(await image.text()).toContain("SVG ASSET");
     expect((await font.body()).byteLength).toBeGreaterThan(1_000);
     expect(await nested.text()).toContain(NESTED_MARKER);
+    expect(await workerScript.text()).toContain(SERVICE_WORKER_MARKER);
 
     const traversal = await isolated.get(withVersion("/%2e%2e/%2e%2e/etc/passwd"));
     expect(traversal.ok()).toBe(false);
@@ -446,23 +460,12 @@ async function openFromHandoff(
         capabilityBootstrapUrl.search === "" && capabilityBootstrapUrl.hash === "",
         "minted bootstrap URL contained query or fragment data",
       ).toBe(true);
-      const applicationHostname = new URL(page.url()).hostname;
-      if (applicationHostname === "localhost") {
-        expect(
-          capabilityBootstrapUrl.hostname === "127.0.0.1",
-          "local path bootstrap did not alternate from localhost to 127.0.0.1",
-        ).toBe(true);
-      } else if (applicationHostname === "127.0.0.1") {
-        expect(
-          capabilityBootstrapUrl.hostname === "localhost",
-          "local path bootstrap did not alternate from 127.0.0.1 to localhost",
-        ).toBe(true);
-      } else {
-        expect(
-          capabilityBootstrapUrl.hostname.startsWith(`p2-${compactCid}-8000.`),
-          "remote path bootstrap did not use the versioned p2 isolated origin",
-        ).toBe(true);
-      }
+      expect(
+        capabilityBootstrapUrl.hostname.match(
+          new RegExp(`^p3s-${compactCid}-[0-9a-f]{40}-8000\\.`),
+        ),
+        "path bootstrap did not use the dedicated per-CID p3s origin",
+      ).not.toBeNull();
       expect(capabilityBootstrapUrl.origin).not.toBe(new URL(page.url()).origin);
 
       const finalUrl = new URL(popup.url());
@@ -497,6 +500,50 @@ async function openFromHandoff(
         credentialStatus,
         "generated preview origin reached a credential endpoint",
       ).toBe(403);
+      if (click === 0) {
+        const workerResponsePromise = context.waitForEvent("response", {
+          predicate: (response) => {
+            const responseUrl = new URL(response.url());
+            return (
+              response.request().method() === "GET" &&
+              responseUrl.origin === finalUrl.origin &&
+              responseUrl.pathname === "/sw.js"
+            );
+          },
+          timeout: 30_000,
+        });
+        const workerProbePromise = popup.evaluate(async () => {
+          if (!("serviceWorker" in navigator)) {
+            return { supported: false, registered: false, registrations: -1 };
+          }
+          try {
+            const registration = await navigator.serviceWorker.register("/sw.js");
+            await registration.unregister();
+            return {
+              supported: true,
+              registered: true,
+              registrations: (await navigator.serviceWorker.getRegistrations()).length,
+            };
+          } catch (error) {
+            return {
+              supported: true,
+              registered: false,
+              error: error instanceof Error ? error.name : typeof error,
+              registrations: (await navigator.serviceWorker.getRegistrations()).length,
+            };
+          }
+        });
+        const [workerResponse, workerProbe] = await Promise.all([
+          workerResponsePromise,
+          workerProbePromise,
+        ]);
+        expect(workerResponse.status(), "p3s service-worker policy did not return 403").toBe(403);
+        expect(workerResponse.headers()["cache-control"]).toContain("no-store");
+        expect(await workerResponse.text()).toBe("preview service workers disabled");
+        expect(workerProbe.supported, "Firefox did not expose serviceWorker on p3s").toBe(true);
+        expect(workerProbe.registered, "p3s accepted a generated service worker").toBe(false);
+        expect(workerProbe.registrations, "p3s retained a service-worker registration").toBe(0);
+      }
       const requestsFromPopup = popupNetworkRequests.filter((request) =>
         requestBelongsToPage(request, popup),
       );
@@ -537,6 +584,76 @@ async function openFromHandoff(
     intents[1] !== intents[0],
     "separate handoff clicks reused a one-time intent",
   ).toBe(true);
+}
+
+async function assertCrossCidStorageIsolation(
+  context: BrowserContext,
+  firstOwnerPage: Page,
+  firstCid: string,
+  firstMarker: string,
+  secondOwnerPage: Page,
+  secondCid: string,
+  secondMarker: string,
+): Promise<void> {
+  const open = async (ownerPage: Page, marker: string): Promise<Page> => {
+    const popupPromise = context.waitForEvent("page", { timeout: 30_000 });
+    await ownerPage.locator('[data-disco-control="build.open-app"]').first().click();
+    const popup = await popupPromise;
+    await assertRenderedDocument(popup, marker);
+    return popup;
+  };
+
+  const storageKey = "disco-h137-storage-sentinel";
+  const cacheName = "disco-h137-cache-sentinel";
+  const cachePath = "/__disco/h137-cache-sentinel";
+  const first = await open(firstOwnerPage, firstMarker);
+  let second: Page | null = null;
+  try {
+    await first.evaluate(
+      async ({ key, name, requestPath }) => {
+        localStorage.setItem(key, "cid-a");
+        const cache = await caches.open(name);
+        await cache.put(requestPath, new Response("cid-a"));
+      },
+      { key: storageKey, name: cacheName, requestPath: cachePath },
+    );
+
+    // Launch CID B only after CID A has durable state. Under the old shared
+    // localhost/127 origin, B's bootstrap Clear-Site-Data erased A here.
+    second = await open(secondOwnerPage, secondMarker);
+    expect(new URL(first.url()).hostname).toMatch(
+      new RegExp(
+        `^p3s-${firstCid.replace(/^conv_/, "").slice(0, 8)}-[0-9a-f]{40}-8000\\.`,
+      ),
+    );
+    expect(new URL(second.url()).hostname).toMatch(
+      new RegExp(
+        `^p3s-${secondCid.replace(/^conv_/, "").slice(0, 8)}-[0-9a-f]{40}-8000\\.`,
+      ),
+    );
+    expect(new URL(first.url()).origin).not.toBe(new URL(second.url()).origin);
+
+    expect(
+      await second.evaluate(
+        async ({ key, requestPath }) => ({
+          local: localStorage.getItem(key),
+          cached: await caches.match(requestPath).then((response) => response?.text() ?? null),
+        }),
+        { key: storageKey, requestPath: cachePath },
+      ),
+    ).toEqual({ local: null, cached: null });
+    expect(
+      await first.evaluate(
+        async ({ key, requestPath }) => ({
+          local: localStorage.getItem(key),
+          cached: await caches.match(requestPath).then((response) => response?.text() ?? null),
+        }),
+        { key: storageKey, requestPath: cachePath },
+      ),
+    ).toEqual({ local: "cid-a", cached: "cid-a" });
+  } finally {
+    await Promise.all([first.close(), ...(second === null ? [] : [second.close()])]);
+  }
 }
 
 async function assertBuildIframe(
@@ -665,6 +782,15 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     assertNoThrash(agentFirst.events, await inspectTrace(request, agentCid));
     await assertApiGraph(request, agentCid, FIRST_MARKER, previewBearers);
     await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER, previewBearers);
+    await assertCrossCidStorageIsolation(
+      context,
+      page,
+      buildCid,
+      FIRST_MARKER,
+      agentPage,
+      agentCid,
+      FIRST_MARKER,
+    );
 
     await restartReliabilityStack();
     await waitForStack(request);

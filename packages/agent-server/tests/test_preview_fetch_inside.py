@@ -144,12 +144,12 @@ def _host_proxy_client(*, upstream: str | None, session: _FakeSession | None) ->
 
 
 def test_hostname_proxy_falls_back_to_fetch_inside_when_no_upstream() -> None:
-    """The in-app iframe host (cid8-8000.localhost) renders on a sealed box: no host
+    """The in-app iframe host (p2-cid8-8000.localhost) renders on a sealed box: no host
     upstream, but a live session serving → 200 from fetch_inside, NOT a 503."""
     body = b"<h1>iframe live</h1>"
     session = _FakeSession((200, body, "text/html"))
     client = _host_proxy_client(upstream=None, session=session)
-    resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
+    resp = client.get("/", headers={"host": "p2-abc12345-8000.localhost"})
     assert resp.status_code == 200
     if resp.headers.get("content-type", "").startswith("text/html"):
         assert resp.content.startswith(body.split(b"</body>")[0])
@@ -163,14 +163,14 @@ def test_hostname_proxy_503_when_no_upstream_and_nothing_listening() -> None:
     """No upstream and the in-box server isn't up → honest 503 (not a false 200)."""
     session = _FakeSession(None)
     client = _host_proxy_client(upstream=None, session=session)
-    resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
+    resp = client.get("/", headers={"host": "p2-abc12345-8000.localhost"})
     assert resp.status_code == 503
     assert b"preview not available" in resp.content
 
 
 def test_hostname_proxy_503_when_no_upstream_and_no_session() -> None:
     client = _host_proxy_client(upstream=None, session=None)
-    resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
+    resp = client.get("/", headers={"host": "p2-abc12345-8000.localhost"})
     assert resp.status_code == 503
 
 
@@ -217,13 +217,13 @@ def test_port_app_still_fetches_inside_normal_port() -> None:
 
 
 def test_hostname_proxy_does_not_fetch_inside_novnc_when_gated() -> None:
-    """The canonical hostname proxy (cid8-6080.localhost) must also refuse the
+    """The canonical hostname proxy (p2-cid8-6080.localhost) must also refuse the
     fetch_inside fallback for the noVNC surface → honest 503, gate preserved."""
     from disco.tools.sandbox._container import NOVNC_PORT
 
     session = _FakeSession((200, b"<html>noVNC</html>", "text/html"))
     client = _host_proxy_client(upstream=None, session=session)
-    resp = client.get("/vnc.html", headers={"host": f"abc12345-{NOVNC_PORT}.localhost"})
+    resp = client.get("/vnc.html", headers={"host": f"p2-abc12345-{NOVNC_PORT}.localhost"})
     assert resp.status_code == 503
     assert b"preview not available" in resp.content
     assert all(call[0] != NOVNC_PORT for call in session.calls)
@@ -235,7 +235,7 @@ def test_hostname_proxy_still_fetches_inside_normal_port() -> None:
     body = b"<h1>iframe live</h1>"
     session = _FakeSession((200, body, "text/html"))
     client = _host_proxy_client(upstream=None, session=session)
-    resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
+    resp = client.get("/", headers={"host": "p2-abc12345-8000.localhost"})
     assert resp.status_code == 200
     if resp.headers.get("content-type", "").startswith("text/html"):
         assert resp.content.startswith(body.split(b"</body>")[0])

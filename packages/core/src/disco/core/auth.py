@@ -26,7 +26,8 @@ PREVIEW_COOKIE = "disco_preview_cap"
 PREVIEW_BOOTSTRAP_PATH = "/__disco/preview-auth"
 PATH_PREVIEW_BOOTSTRAP_PATH = "/__disco/path-preview-auth"
 ISOLATED_PATH_PREVIEW_PREFIX = "/__disco/isolated-preview"
-PATH_PREVIEW_ISOLATION_COOKIE = "disco_path_preview_isolated"
+PATH_PREVIEW_HOST_PREFIX = "p3s"
+PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS = 40
 
 _DEFAULT_SESSION_TTL_S = 12 * 60 * 60
 _DEFAULT_PREVIEW_TTL_S = 15 * 60
@@ -86,6 +87,70 @@ def path_preview_cookie_name(cid8: str) -> str:
     if len(normalized) != 8:
         raise ValueError("path preview cookie requires an eight-character hex id")
     return f"disco_path_preview_{normalized}"
+
+
+def cookie_header_values(cookie_header: str | None, name: str) -> tuple[str, ...]:
+    """Return every raw Cookie value for ``name`` without collapsing duplicates.
+
+    Generated child domains can set a Domain cookie whose name matches a
+    HostOnly signed cookie on the parent. Framework cookie mappings retain only
+    one duplicate, so authentication must validate every raw candidate.
+    Disco's signed values use an unquoted URL-safe alphabet.
+    """
+
+    if not cookie_header or not name:
+        return ()
+    values: list[str] = []
+    for part in cookie_header.split(";"):
+        raw_name, separator, value = part.strip().partition("=")
+        if separator and raw_name == name:
+            values.append(value)
+    return tuple(values)
+
+
+def cookie_header_from_headers(headers: Any) -> str | None:
+    """Preserve every ASGI Cookie field for duplicate-candidate validation.
+
+    HTTP/2 permits a user agent or intermediary to split Cookie across repeated
+    fields. Starlette's mapping-style ``get`` returns only one field, which can
+    hide a valid HostOnly signed value behind an attacker-controlled duplicate.
+    ``getlist`` is intentionally duck-typed so core remains framework-free.
+    """
+
+    getlist = getattr(headers, "getlist", None)
+    if callable(getlist):
+        listed: Any = getlist("cookie")
+        if isinstance(listed, (str, bytes)):
+            listed = (listed,)
+        values = [str(value) for value in listed if value]
+        if values:
+            return "; ".join(values)
+    get = getattr(headers, "get", None)
+    if callable(get):
+        value = get("cookie")
+        return str(value) if value else None
+    return None
+
+
+def path_preview_host_label(conversation_id: str, port: int) -> str:
+    """Return a DNS-safe path-preview label bound to the full conversation ID.
+
+    The first eight hex characters remain visible for the existing live-runtime
+    resolver. A 160-bit digest supplies the browser-origin identity; using only
+    the routing prefix would let distinct conversations share cookies/storage.
+    The longest valid port still leaves this label below DNS's 63-byte limit.
+    """
+
+    cid = conversation_id.removeprefix("conv_")
+    cid8 = cid[:8].lower()
+    if len(cid8) != 8 or any(ch not in "0123456789abcdef" for ch in cid8):
+        raise ValueError("path preview host requires an eight-character hex id")
+    if not 1 <= port <= 65535:
+        raise ValueError("path preview host requires a valid TCP port")
+    digest = hashlib.sha256(conversation_id.encode("utf-8")).hexdigest()[
+        :PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS
+    ]
+    return f"{PATH_PREVIEW_HOST_PREFIX}-{cid8}-{digest}-{port}"
 
 
 def allowed_frontend_origins() -> tuple[str, ...]:
@@ -160,6 +225,41 @@ def _request_hostname(request_host: str | None) -> str:
         return ""
 
 
+def _is_generated_preview_label(label: str) -> bool:
+    """Recognize only hostname labels the live/path preview transports minted."""
+
+    def valid_port(value: str) -> bool:
+        return 2 <= len(value) <= 5 and value.isdigit() and 1 <= int(value) <= 65535
+
+    parts = label.split("-")
+    # Pre-p2 hosts are no longer served, but already-open generated pages must
+    # remain quarantined until they are closed or reloaded onto p2.
+    if len(parts) == 2:
+        cid8, port = parts
+        return len(cid8) == 8 and all(ch in "0123456789abcdef" for ch in cid8) and valid_port(port)
+    if len(parts) == 3 and parts[0] == "p2":
+        _family, cid8, port = parts
+        return len(cid8) == 8 and all(ch in "0123456789abcdef" for ch in cid8) and valid_port(port)
+    if len(parts) == 4 and parts[0] == PATH_PREVIEW_HOST_PREFIX:
+        _family, cid8, digest, port = parts
+        return (
+            len(cid8) == 8
+            and all(ch in "0123456789abcdef" for ch in cid8)
+            and len(digest) == PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS
+            and all(ch in "0123456789abcdef" for ch in digest)
+            and valid_port(port)
+        )
+    return False
+
+
+def generated_preview_request_host(request_host: str | None) -> bool:
+    """True when a request Host starts with an exact generated preview label."""
+
+    hostname = _request_hostname(request_host).rstrip(".")
+    label, separator, _suffix = hostname.partition(".")
+    return bool(separator and _is_generated_preview_label(label))
+
+
 def _is_local_preview_hostname(hostname: str) -> bool:
     """Whether a hostname can be used by the local path-preview transport.
 
@@ -170,24 +270,27 @@ def _is_local_preview_hostname(hostname: str) -> bool:
     """
 
     normalized = hostname.rstrip(".")
-    return (
+    if (
         normalized == "localhost"
         or normalized == "::1"
         or normalized == "127"
         or normalized.startswith("127.")
-    )
+    ):
+        return True
+    label, separator, suffix = normalized.partition(".")
+    if not separator or not (suffix == "localhost" or suffix.endswith(".localhost")):
+        return False
+    return _is_generated_preview_label(label)
 
 
-def local_preview_origin_crosses_host(
-    origin: str | None, request_host: str | None
-) -> bool:
+def local_preview_origin_crosses_host(origin: str | None, request_host: str | None) -> bool:
     """Reject a local-preview browser origin targeting another hostname.
 
-    Path previews deliberately alternate ``localhost`` and ``127.0.0.1`` to get
-    an isolated browser origin. Cookies are HostOnly, while CORS historically
-    permits both aliases. Without this pre-auth check, generated JavaScript on
-    the alternate alias can target the operator's original alias, regain its
-    full session cookie, and reach public credential grants or owner/admin APIs.
+    Local path previews use a full-conversation-bound ``p3s.*.localhost`` origin;
+    live previews use ``p2.*.localhost``. Cookies are HostOnly, while CORS
+    historically permits local aliases. Without this pre-auth check, generated
+    JavaScript can target the operator's original alias, regain its full session
+    cookie, and reach public credential grants or owner/admin APIs.
 
     Different ports on the *same* hostname remain valid for the normal split
     frontend/server development layout. A local preview origin targeting any
@@ -474,6 +577,15 @@ class SessionSigner:
             is_admin=bool(payload.get("admin")),
         )
 
+    def verify_cookie_header(self, cookie_header: str | None) -> AuthSession | None:
+        """Return the first cryptographically valid session among duplicates."""
+
+        for token in cookie_header_values(cookie_header, SESSION_COOKIE):
+            session = self.verify(token)
+            if session is not None:
+                return session
+        return None
+
     @staticmethod
     def csrf_valid(session: AuthSession, presented: str | None) -> bool:
         return bool(presented and hmac.compare_digest(session.csrf_token, presented.strip()))
@@ -539,8 +651,14 @@ class PreviewCapabilitySigner:
         cid8: str,
         port: int,
         path_scope: Literal["host", "static"],
+        request_host_label: str | None = None,
     ) -> tuple[str, str] | None:
-        """Validate an endpoint-specific intent, then atomically exchange it once."""
+        """Validate an endpoint-specific intent, then atomically exchange it once.
+
+        Static intent redemption is also bound to the full-CID p3s request
+        label here, before JTI consumption. Keeping that check inside the
+        exchange prevents a wrong-host handoff from burning the correct launch.
+        """
 
         intent_payload = self._codec.unsign(intent)
         if intent_payload is None or intent_payload.get("kind") != "preview_intent":
@@ -555,6 +673,16 @@ class PreviewCapabilitySigner:
             else ""
         )
         target_path = target.split("?", 1)[0] if isinstance(target, str) else ""
+        static_host_matches = path_scope != "static"
+        if cap is not None and path_scope == "static":
+            try:
+                expected_label = path_preview_host_label(cap.conversation_id, cap.port)
+            except ValueError:
+                expected_label = ""
+            static_host_matches = bool(
+                request_host_label
+                and hmac.compare_digest(expected_label, request_host_label.strip().lower())
+            )
         if (
             cap is None
             or cap.conversation_id.removeprefix("conv_")[:8] != cid8
@@ -563,6 +691,7 @@ class PreviewCapabilitySigner:
             or not target.startswith("/")
             or cap.path_prefix != expected_prefix
             or not target_path.startswith(expected_prefix)
+            or not static_host_matches
         ):
             return None
         if not self._consume_intent(intent_payload):
@@ -616,6 +745,24 @@ class PreviewCapabilitySigner:
         if not path.startswith(cap.path_prefix):
             return None
         return cap
+
+    def verify_cookie_header(
+        self,
+        cookie_header: str | None,
+        cookie_name: str,
+        *,
+        cid8: str,
+        port: int,
+        method: str,
+        path: str,
+    ) -> PreviewCapability | None:
+        """Return the first valid capability among duplicate named cookies."""
+
+        for token in cookie_header_values(cookie_header, cookie_name):
+            cap = self.verify(token, cid8=cid8, port=port, method=method, path=path)
+            if cap is not None:
+                return cap
+        return None
 
     @staticmethod
     def _cap_from_payload(payload: dict[str, Any], *, kind: str) -> PreviewCapability | None:

@@ -87,15 +87,15 @@ export function agentWsUrl(path: string): string | null {
   return `${wsBase(AGENT_BASE)}${path}`;
 }
 
-/** Origin-true preview URL (DC-01): http://{cid8}-{port}.localhost:8000/.
+/** Origin-true preview URL (DC-01): http://p2-{cid8}-{port}.localhost:8000/.
  * cid8 = first 8 chars of the uuid part. 127.0.0.1/localhost bases map to the
- * .localhost zone; any other base (future MagicDNS) gets the same {cid8}-{port}.
+ * .localhost zone; any other base (future MagicDNS) gets the same p2-{cid8}-{port}.
  * prefix on its hostname. Null when AGENT_BASE is unconfigured. */
 export function previewHostUrl(cid: string, port: number, base: string = AGENT_BASE): string | null {
   if (!base) return null;
   const cid8 = cid.replace(/^conv_/, "").slice(0, 8);
   // Relative (same-origin) bases resolve against the page's own origin — the
-  // front-door nginx forwards {cid8}-{port}.* Hosts to the agent-server.
+  // front-door nginx forwards p2-{cid8}-{port}.* Hosts to the agent-server.
   const url = new URL(base, globalThis.location?.origin ?? "http://localhost");
   if (
     url.hostname === "127.0.0.1" ||

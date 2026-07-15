@@ -253,7 +253,7 @@ async def _declared_artifacts(store: SqliteEventStore, conversation_id: str) -> 
 
 
 def make_preview_upstream_resolver(runtime: ConversationRuntime | None):
-    """DC-01: build the `{cid8}-{port}.localhost → sandbox upstream` resolver the
+    """DC-01: build the `p2-{cid8}-{port}.localhost → sandbox upstream` resolver the
     HostPreviewProxyMiddleware calls. Returned closure captures `runtime` (None in
     wire-only tests → always resolves to None)."""
 

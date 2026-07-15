@@ -8,9 +8,11 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import pytest
-from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router
+from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router, websocket_session
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from disco.agent_server.routes.preview import (
+    _path_preview_bootstrap_url,
+    _preview_bootstrap_url,
     _preview_websocket_origin_allowed,
     make_preview_router,
 )
@@ -24,14 +26,17 @@ from disco.core import (
 from disco.core.auth import (
     CSRF_HEADER,
     ISOLATED_PATH_PREVIEW_PREFIX,
-    PATH_PREVIEW_ISOLATION_COOKIE,
     SESSION_COOKIE,
     SessionSigner,
+    path_preview_cookie_name,
+    path_preview_host_label,
 )
 from disco.tools.projects import ProjectStore
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect
+
+_TOSSED_MARKER_COOKIE = "disco_path_preview_isolated"
 
 pytestmark = pytest.mark.integration
 
@@ -97,6 +102,159 @@ def _redeem(
     )
 
 
+def test_normal_websocket_session_selects_valid_repeated_cookie_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "websocket-duplicate-session-secret")
+    token, expected = SessionSigner().mint(owner_id="owner-a", is_admin=True)
+
+    async def receive() -> dict[str, str]:
+        return {"type": "websocket.disconnect"}
+
+    async def send(_message: dict[str, object]) -> None:
+        return None
+
+    for raw_cookie_headers in (
+        [(b"cookie", b"disco_session=invalid"), (b"cookie", f"disco_session={token}".encode())],
+        [(b"cookie", f"disco_session={token}".encode()), (b"cookie", b"disco_session=invalid")],
+    ):
+        websocket = WebSocket(
+            {
+                "type": "websocket",
+                "asgi": {"version": "3.0"},
+                "scheme": "ws",
+                "path": "/conversations/example/ws",
+                "raw_path": b"/conversations/example/ws",
+                "query_string": b"",
+                "headers": [
+                    (b"origin", b"https://app.example"),
+                    (b"host", b"app.example"),
+                    *raw_cookie_headers,
+                ],
+                "client": ("192.0.2.20", 4242),
+                "server": ("app.example", 443),
+                "subprotocols": [],
+            },
+            receive,
+            send,
+        )
+        assert websocket_session(websocket) == expected
+
+
+def test_remote_preview_origin_base_requires_a_separate_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/conversations/conv_a1b2c3d4owner/preview/capability",
+            "raw_path": b"/conversations/conv_a1b2c3d4owner/preview/capability",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"app.example.com:8443"),
+                (b"x-forwarded-proto", b"https"),
+            ],
+            "server": ("app.example.com", 8443),
+        }
+    )
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", "https://app.example.com")
+    monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", "https://preview.example.net:9443")
+    live = urlsplit(_preview_bootstrap_url(request, "a1b2c3d4", 8000))
+    static = urlsplit(_path_preview_bootstrap_url(request, "conv_a1b2c3d4owner", 8000))
+    assert live.scheme == static.scheme == "https"
+    assert live.netloc == "p2-a1b2c3d4-8000.preview.example.net:9443"
+    assert static.netloc == (
+        f"{path_preview_host_label('conv_a1b2c3d4owner', 8000)}.preview.example.net:9443"
+    )
+
+    for unsafe in (
+        "https://preview.example.com",
+        "https://app.example.com",
+        "http://preview.example.net",
+        "https://preview.example.net:0",
+        "https://127.0.0.1",
+        "https://preview",
+        "https://user:password@preview.example.net",
+        "https://preview.example.net/unexpected",
+    ):
+        monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", unsafe)
+        with pytest.raises(HTTPException) as rejected:
+            _preview_bootstrap_url(request, "a1b2c3d4", 8000)
+        assert rejected.value.status_code == 500
+        assert rejected.value.detail["reason"] in {
+            "preview_origin_base_invalid",
+            "preview_origin_base_not_isolated",
+        }
+
+    monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", "https://preview.example.net")
+    monkeypatch.delenv("DISCO_PUBLIC_UI_URL")
+    with pytest.raises(HTTPException) as missing_ui:
+        _preview_bootstrap_url(request, "a1b2c3d4", 8000)
+    assert missing_ui.value.detail["reason"] == "preview_origin_base_public_ui_required"
+
+
+@pytest.mark.parametrize(
+    ("preview_base", "public_ui"),
+    (
+        ("https://éxample.com", "https://app.xn--xample-9ua.com"),
+        ("https://xn--xample-9ua.com", "https://app.éxample.com"),
+        ("https://faß.com", "https://app.xn--fa-hia.com"),
+        ("https://xn--fa-hia.com", "https://app.faß.com"),
+    ),
+)
+def test_remote_preview_origin_base_rejects_idna_same_site_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    preview_base: str,
+    public_ui: str,
+) -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/conversations/conv_a1b2c3d4owner/preview/capability",
+            "headers": [(b"host", b"ui.unrelated.example")],
+            "server": ("ui.unrelated.example", 443),
+        }
+    )
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", public_ui)
+    monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", preview_base)
+
+    with pytest.raises(HTTPException) as rejected:
+        _preview_bootstrap_url(request, "a1b2c3d4", 8000)
+    assert rejected.value.status_code == 500
+    assert rejected.value.detail["reason"] == "preview_origin_base_not_isolated"
+
+
+def test_remote_preview_origin_rejects_generated_hostname_over_dns_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/conversations/conv_a1b2c3d4owner/preview/capability",
+            "headers": [(b"host", b"app.example.com")],
+            "server": ("app.example.com", 443),
+        }
+    )
+    long_base = ".".join(("a" * 63, "b" * 63, "c" * 63, "d" * 52))
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", "https://app.example.com")
+    monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", f"https://{long_base}")
+
+    for make_url in (
+        lambda: _preview_bootstrap_url(request, "a1b2c3d4", 8000),
+        lambda: _path_preview_bootstrap_url(request, "conv_a1b2c3d4owner", 8000),
+    ):
+        with pytest.raises(HTTPException) as rejected:
+            make_url()
+        assert rejected.value.status_code == 500
+        assert rejected.value.detail["reason"] == "preview_origin_host_too_long"
+
+
 async def _finished_site(store: SqliteEventStore, projects: ProjectStore, cid: str) -> None:
     store.create_conversation(cid, owner_id="owner-a", surface="build")
     workspace = projects.path_for(cid)
@@ -148,10 +306,13 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
 
     cid = "conv_a1b2c3d4selected"
     other_cid = "conv_deadbeefother"
+    collision_cid = "conv_a1b2c3d4collision"
+    path_host = path_preview_host_label(cid, 8000)
     store = SqliteEventStore(":memory:")
     projects = ProjectStore(str(tmp_path / "projects"))
     await _finished_site(store, projects, cid)
     store.create_conversation(other_cid, owner_id="owner-a", surface="build")
+    store.create_conversation(collision_cid, owner_id="owner-a", surface="build")
     app = _app(store, _StaticRuntime(projects))
 
     owner = TestClient(app, base_url="http://127.0.0.1:18240")
@@ -166,10 +327,9 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     body = capability.json()
     assert body["transport"] == "path"
     assert "path_bootstrap_url" not in body
+
     def redemption_count() -> int:
-        return int(
-            store._conn.execute("SELECT COUNT(*) FROM preview_redemptions").fetchone()[0]
-        )
+        return int(store._conn.execute("SELECT COUNT(*) FROM preview_redemptions").fetchone()[0])
 
     assert redemption_count() == 1
 
@@ -250,12 +410,12 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     bootstrap_url = body["bootstrap_url"]
     intent = body["bootstrap_intent"]
     parsed = urlsplit(bootstrap_url)
-    assert parsed.hostname == "localhost"
+    assert parsed.hostname == f"{path_host}.localhost"
     assert parsed.port == 18240
     assert parsed.query == parsed.fragment == ""
     assert intent not in bootstrap_url
 
-    isolated_origin = "http://localhost:18240"
+    isolated_origin = f"http://{path_host}.localhost:18240"
     isolated = TestClient(app, base_url=isolated_origin)
     target = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/"
     bootstrap_path = urlsplit(bootstrap_url).path
@@ -288,17 +448,14 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     assert "default-src 'none'" in redeem.headers["content-security-policy"]
     nonce_match = re.search(r'<script nonce="([A-Za-z0-9_-]+)">', redeem.text)
     assert nonce_match is not None
-    assert (
-        f"script-src 'nonce-{nonce_match.group(1)}'"
-        in redeem.headers["content-security-policy"]
-    )
+    assert f"script-src 'nonce-{nonce_match.group(1)}'" in redeem.headers["content-security-policy"]
     assert redeem.headers["x-content-type-options"] == "nosniff"
-    assert redeem.headers["clear-site-data"] == '"storage"'
+    assert "clear-site-data" not in redeem.headers
     set_cookie = redeem.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
     assert "samesite=strict" in set_cookie.lower()
     assert f"Path={target}" in set_cookie
-    assert f"{PATH_PREVIEW_ISOLATION_COOKIE}=1" in set_cookie
+    assert f"{_TOSSED_MARKER_COOKIE}=1" not in set_cookie
     assert SESSION_COOKIE not in set_cookie
 
     # H110: cookie posture comes from the one real browser form navigation,
@@ -383,15 +540,13 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     # replace the path capability, reach owner APIs, or use public credential
     # grants. This remains true after the path capability is absent/expired.
     isolated_with_session = TestClient(app, base_url=isolated_origin)
-    isolated_with_session.cookies.set(PATH_PREVIEW_ISOLATION_COOKIE, "1")
-    isolated_with_session.headers.update(
-        {"Cookie": f"{PATH_PREVIEW_ISOLATION_COOKIE}=1"}
-    )
+    isolated_with_session.cookies.set(_TOSSED_MARKER_COOKIE, "1")
+    isolated_with_session.headers.update({"Cookie": f"{_TOSSED_MARKER_COOKIE}=1"})
     _install_owner_session(isolated_with_session, "owner-a")
     isolated_with_session.headers.update(
         {
             "Cookie": (
-                f"{PATH_PREVIEW_ISOLATION_COOKIE}=1; "
+                f"{_TOSSED_MARKER_COOKIE}=1; "
                 f"{SESSION_COOKIE}={isolated_with_session.cookies.get(SESSION_COOKIE)}"
             )
         }
@@ -411,9 +566,7 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
                 json={"pairing_token": None},
             )
         else:
-            denied = isolated_with_session.get(
-                denied_path, headers={"Origin": isolated_origin}
-            )
+            denied = isolated_with_session.get(denied_path, headers={"Origin": isolated_origin})
         assert denied.status_code == 403
     session_worker = isolated_with_session.get(
         target + "sw.js", headers={"Sec-Fetch-Dest": "serviceworker"}
@@ -431,39 +584,56 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     )
     live_body = live_capability.json()
     live_isolated = TestClient(app, base_url=isolated_origin)
-    live_redeem = _redeem(
-        live_isolated, live_body["bootstrap_url"], live_body["bootstrap_intent"]
-    )
+    live_redeem = _redeem(live_isolated, live_body["bootstrap_url"], live_body["bootstrap_intent"])
     assert live_redeem.status_code == 200
-    with pytest.raises(WebSocketDisconnect) as live_disconnect:
-        with live_isolated.websocket_connect(
-            f"ws://localhost:18240{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/hmr",
-            headers={"Origin": isolated_origin, "Host": "localhost:18240"},
-        ):
-            pass
-    assert live_disconnect.value.reason == "preview not available"
+    live_cookie_name = path_preview_cookie_name("a1b2c3d4")
+    live_cookie = live_isolated.cookies.get(live_cookie_name)
+    assert live_cookie
+    for cookie_header in (
+        f"{live_cookie_name}=invalid; {live_cookie_name}={live_cookie}",
+        f"{live_cookie_name}={live_cookie}; {live_cookie_name}=invalid",
+    ):
+        live_socket = TestClient(app, base_url=isolated_origin)
+        with pytest.raises(WebSocketDisconnect) as live_disconnect:
+            with live_socket.websocket_connect(
+                f"ws://{path_host}.localhost:18240{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/hmr",
+                headers={
+                    "Origin": isolated_origin,
+                    "Host": f"{path_host}.localhost:18240",
+                    "Cookie": cookie_header,
+                },
+            ):
+                pass
+        assert live_disconnect.value.reason == "preview not available"
     with pytest.raises(WebSocketDisconnect) as wrong_origin_disconnect:
         with live_isolated.websocket_connect(
             f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/hmr",
-            headers={"Origin": "https://evil.example", "Host": "localhost:18240"},
+            headers={
+                "Origin": "https://evil.example",
+                "Host": f"{path_host}.localhost:18240",
+            },
         ):
             pass
     assert wrong_origin_disconnect.value.reason == "preview origin required"
     assert _preview_websocket_origin_allowed(
-        "http://localhost:18240", "localhost:18240", websocket_scheme="ws"
+        isolated_origin,
+        f"{path_host}.localhost:18240",
+        websocket_scheme="ws",
     )
     assert not _preview_websocket_origin_allowed(
-        "https://localhost:18240", "localhost:18240", websocket_scheme="ws"
+        f"https://{path_host}.localhost:18240",
+        f"{path_host}.localhost:18240",
+        websocket_scheme="ws",
     )
     assert _preview_websocket_origin_allowed(
-        "https://localhost:18240",
-        "localhost:18240",
+        f"https://{path_host}.localhost:18240",
+        f"{path_host}.localhost:18240",
         websocket_scheme="ws",
         forwarded_proto="https",
     )
     assert not _preview_websocket_origin_allowed(
-        "http://localhost:18240",
-        "localhost:18240",
+        isolated_origin,
+        f"{path_host}.localhost:18240",
         websocket_scheme="ws",
         forwarded_proto="https",
     )
@@ -534,16 +704,51 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     )
     assert same_host_session.status_code == 200
     assert same_host_session.json()["authenticated"] is True
-    assert (
-        owner.get(
-            f"/conversations/{cid}/events",
-            headers={
-                "Origin": "http://127.0.0.1:5173",
-                "Host": "127.0.0.1:18240",
-            },
-        ).json()["events"]
-        == ["OWNER-BYTES"]
+    assert owner.get(
+        f"/conversations/{cid}/events",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Host": "127.0.0.1:18240",
+        },
+    ).json()["events"] == ["OWNER-BYTES"]
+
+    # H143: pre-versioned preview hosts are no longer served, but an already-open
+    # legacy generated origin remains quarantined before public auth routes.
+    legacy_origin = TestClient(app, base_url="http://a1b2c3d4-8000.localhost:18240")
+    _install_owner_session(legacy_origin, "owner-a")
+    legacy_public = legacy_origin.get("/api/auth/session")
+    assert legacy_public.status_code == 403
+    assert legacy_public.text == "isolated preview route required"
+
+    # H144: a legitimate nested localhost app host produces a nested p3s origin.
+    # That exact generated label can redeem and serve its preview, but cannot use
+    # its Origin to regain the parent ui.localhost session/public routes.
+    nested_owner = TestClient(app, base_url="http://ui.localhost:18240")
+    nested_csrf = _install_owner_session(nested_owner, "owner-a")
+    nested_capability = nested_owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers={"Origin": "http://ui.localhost:18240", CSRF_HEADER: nested_csrf},
+        json={"port": 8000, "target_path": "/", "transport": "path"},
     )
+    assert nested_capability.status_code == 200
+    nested_body = nested_capability.json()
+    nested_url = urlsplit(nested_body["bootstrap_url"])
+    assert nested_url.hostname == f"{path_host}.ui.localhost"
+    nested_origin = f"http://{path_host}.ui.localhost:18240"
+    nested_isolated = TestClient(app, base_url=nested_origin)
+    nested_redeem = _redeem(
+        nested_isolated,
+        nested_body["bootstrap_url"],
+        nested_body["bootstrap_intent"],
+    )
+    assert nested_redeem.status_code == 200
+    assert nested_isolated.get(target).status_code == 200
+    nested_escape = nested_isolated.get(
+        "/api/auth/session",
+        headers={"Origin": nested_origin, "Host": "ui.localhost:18240"},
+    )
+    assert nested_escape.status_code == 403
+    assert nested_escape.text == "forbidden preview origin"
 
     remote_owner = TestClient(app, base_url="https://mybox.example")
     remote_csrf = _install_owner_session(remote_owner, "owner-a")
@@ -554,14 +759,135 @@ async def test_path_preview_capability_loads_asset_graph_without_app_session(
     )
     remote_body = remote_capability.json()
     remote_url = remote_body["bootstrap_url"]
-    assert urlsplit(remote_url).hostname == "p2-a1b2c3d4-8000.mybox.example"
-    remote_isolated = TestClient(app, base_url="https://p2-a1b2c3d4-8000.mybox.example")
-    remote_redeem = _redeem(
-        remote_isolated, remote_url, remote_body["bootstrap_intent"]
-    )
+    assert urlsplit(remote_url).hostname == f"{path_host}.mybox.example"
+    remote_isolated = TestClient(app, base_url=f"https://{path_host}.mybox.example")
+    remote_redeem = _redeem(remote_isolated, remote_url, remote_body["bootstrap_intent"])
     assert remote_redeem.status_code == 200
     assert "; Secure" in remote_redeem.headers["set-cookie"]
     remote_document = remote_isolated.get(target)
     assert remote_document.status_code == 200
     assert "CAPABILITY SITE" in remote_document.text
+
+    # H148: child-domain cookies are untrusted. The normal parent app ignores a
+    # tossed isolation marker and selects its valid HostOnly session despite an
+    # invalid duplicate. A generated host derives quarantine from Host and its
+    # preview route selects the valid capability despite an invalid duplicate.
+    remote_session = remote_owner.cookies.get(SESSION_COOKIE)
+    assert remote_session
+    for cookie_header in (
+        (
+            f"{SESSION_COOKIE}=child-domain-invalid; {_TOSSED_MARKER_COOKIE}=1; "
+            f"{SESSION_COOKIE}={remote_session}"
+        ),
+        (
+            f"{SESSION_COOKIE}={remote_session}; {_TOSSED_MARKER_COOKIE}=1; "
+            f"{SESSION_COOKIE}=child-domain-invalid"
+        ),
+    ):
+        parent_with_tossed_cookies = remote_owner.get(
+            "/api/auth/session", headers={"Cookie": cookie_header}
+        )
+        assert parent_with_tossed_cookies.status_code == 200
+        assert parent_with_tossed_cookies.json()["authenticated"] is True
+    remote_capability_name = path_preview_cookie_name("a1b2c3d4")
+    remote_capability_cookie = remote_isolated.cookies.get(remote_capability_name)
+    assert remote_capability_cookie
+    clean_generated_host = TestClient(app, base_url=f"https://{path_host}.mybox.example")
+    for cookie_header in (
+        (
+            f"{remote_capability_name}=child-domain-invalid; "
+            f"{remote_capability_name}={remote_capability_cookie}"
+        ),
+        (
+            f"{remote_capability_name}={remote_capability_cookie}; "
+            f"{remote_capability_name}=child-domain-invalid"
+        ),
+    ):
+        duplicate_capability = clean_generated_host.get(target, headers={"Cookie": cookie_header})
+        assert duplicate_capability.status_code == 200
+        assert "CAPABILITY SITE" in duplicate_capability.text
+
+    # H137: every conversation has a distinct browser storage origin, so one
+    # preview bootstrap cannot clear another conversation's active tab.
+    other_capability = remote_owner.post(
+        f"/conversations/{other_cid}/preview/capability",
+        headers={"Origin": "https://mybox.example", CSRF_HEADER: remote_csrf},
+        json={"port": 8000, "target_path": "/", "transport": "path"},
+    )
+    assert other_capability.status_code == 200
+    other_url = urlsplit(other_capability.json()["bootstrap_url"])
+    assert other_url.hostname == f"{path_preview_host_label(other_cid, 8000)}.mybox.example"
+    assert (other_url.scheme, other_url.netloc) != (
+        urlsplit(remote_url).scheme,
+        urlsplit(remote_url).netloc,
+    )
+
+    # H140: the short routing prefix is not the browser-origin identity. Two
+    # full CIDs with the same cid8 receive different hosts, and a B intent
+    # redeemed on A's host fails before any cookie can be installed.
+    collision_capability = remote_owner.post(
+        f"/conversations/{collision_cid}/preview/capability",
+        headers={"Origin": "https://mybox.example", CSRF_HEADER: remote_csrf},
+        json={"port": 8000, "target_path": "/", "transport": "path"},
+    )
+    assert collision_capability.status_code == 200
+    collision_body = collision_capability.json()
+    collision_url = urlsplit(collision_body["bootstrap_url"])
+    assert collision_url.hostname == (
+        f"{path_preview_host_label(collision_cid, 8000)}.mybox.example"
+    )
+    assert collision_url.hostname != urlsplit(remote_url).hostname
+    wrong_origin_redeem = _redeem(
+        remote_isolated,
+        remote_url,
+        collision_body["bootstrap_intent"],
+    )
+    assert wrong_origin_redeem.status_code == 403
+    assert wrong_origin_redeem.text == "invalid preview intent"
+    assert "set-cookie" not in wrong_origin_redeem.headers
+    collision_path_isolated = TestClient(
+        app,
+        base_url=f"https://{collision_url.hostname}",
+    )
+    correct_after_wrong_host = _redeem(
+        collision_path_isolated,
+        collision_body["bootstrap_url"],
+        collision_body["bootstrap_intent"],
+    )
+    assert correct_after_wrong_host.status_code == 200
+    assert path_preview_cookie_name("a1b2c3d4") in correct_after_wrong_host.headers["set-cookie"]
+
+    collision_live_capability = remote_owner.post(
+        f"/conversations/{collision_cid}/preview/capability",
+        headers={"Origin": "https://mybox.example", CSRF_HEADER: remote_csrf},
+        json={"port": 8000, "target_path": "/", "transport": "path_live"},
+    ).json()
+    collision_host = f"{path_preview_host_label(collision_cid, 8000)}.mybox.example"
+    collision_isolated = TestClient(app, base_url=f"https://{collision_host}")
+    collision_redeem = _redeem(
+        collision_isolated,
+        collision_live_capability["bootstrap_url"],
+        collision_live_capability["bootstrap_intent"],
+    )
+    assert collision_redeem.status_code == 200
+    collision_cookie = collision_isolated.cookies.get(path_preview_cookie_name("a1b2c3d4"))
+    assert collision_cookie
+    collision_cookie_header = f"{path_preview_cookie_name('a1b2c3d4')}={collision_cookie}"
+    cross_host_http = remote_isolated.get(
+        f"{ISOLATED_PATH_PREVIEW_PREFIX}/{collision_cid}/",
+        headers={"Cookie": collision_cookie_header},
+    )
+    assert cross_host_http.status_code == 403
+    assert cross_host_http.text == "preview capability required"
+    with pytest.raises(WebSocketDisconnect) as collision_ws:
+        with remote_isolated.websocket_connect(
+            f"wss://{path_host}.mybox.example{ISOLATED_PATH_PREVIEW_PREFIX}/{collision_cid}/hmr",
+            headers={
+                "Origin": f"https://{path_host}.mybox.example",
+                "Host": f"{path_host}.mybox.example",
+                "Cookie": collision_cookie_header,
+            },
+        ):
+            pass
+    assert collision_ws.value.reason == "preview capability required"
     store.close()

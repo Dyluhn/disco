@@ -893,14 +893,12 @@ export function PreviewPane({
           </div>
         </div>
         {RestoreNotice}
-        {/* E3 — honest cross-browser hint. The iframe above points at the
-            origin-true `{cid8}-{port}.localhost` subdomain, which Chrome
-            resolves but Firefox does not. Tell the user the truth (no
-            fake-affordance, no auto-redirect): Chrome works inline; Firefox
-            needs "Open in new tab" (or a network.dns.localDomains tweak). */}
+        {/* E3 — honest cross-browser hint. Localhost wildcard behavior varies by
+            browser; an operator-configured wildcard preview site does not have
+            that limitation. Keep the fallback accurate for both deployments. */}
         <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.7rem] text-text-faint">
-          Live preview opens best in Chrome; in Firefox use “Open in new tab” or set{" "}
-          <code className="font-mono text-text-muted">network.dns.localDomains</code>.
+          If inline preview cannot resolve, use “Open in new tab”. Local Firefox deployments may
+          require <code className="font-mono text-text-muted">network.dns.localDomains</code>.
         </div>
         <PreviewLaunchFrame
           key={reloadKey}

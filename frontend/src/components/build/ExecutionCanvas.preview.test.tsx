@@ -515,7 +515,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
 
 // ---- E3 — Firefox-safe Open-in-new-tab link via isolated path capability ----
 //
-// The origin-true `{cid8}-{port}.localhost` URL is the most correct, but
+// The origin-true `p2-{cid8}-{port}.localhost` URL is the most correct, but
 // Firefox won't resolve `.localhost` subdomains out of the box. The
 // agent-server can bootstrap its path route on an alternate isolated origin.
 // Surface that capability URL so Firefox / Safari / non-magic-DNS users have

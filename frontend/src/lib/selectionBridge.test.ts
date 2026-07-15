@@ -118,7 +118,7 @@ describe("parseInFrameMessage — forged origin (MUST be rejected)", () => {
   });
 
   it("rejects when allowed origin is a specific URL but event.origin differs", () => {
-    const proxyOrigin = "http://abc12345-8000.localhost:8000";
+    const proxyOrigin = "http://p2-abc12345-8000.localhost:8000";
     const event = makeEvent("http://other-host:9000", validPayload);
     const result = parseInFrameMessage(event, proxyOrigin, VALID_NONCE);
     expect(result).toBeNull();

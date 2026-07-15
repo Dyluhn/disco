@@ -201,7 +201,7 @@ async def test_connect_retry_then_success():
         app = _make_proxy_app(f"http://127.0.0.1:{flaky.port}")
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
-            transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+            transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
         ) as client:
             t0 = time.perf_counter()
             resp = await client.get("/wake-up")
@@ -239,7 +239,7 @@ async def test_connect_retry_bounded_failure():
 
     t0 = time.perf_counter()
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         resp = await client.get("/")
     elapsed = time.perf_counter() - t0
@@ -279,7 +279,7 @@ async def test_5xx_passthrough_no_retry(counting_server):
     app = _make_proxy_app(upstream_url)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         t0 = time.perf_counter()
         resp = await client.get("/")
@@ -314,7 +314,7 @@ async def test_healthy_upstream_no_extra_latency(real_server):
 
     # Warm up: first request through ASGI can be a hair slower.
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://aaaaaaaa-8000.localhost"
+        transport=transport, base_url="http://p2-aaaaaaaa-8000.localhost"
     ) as client:
         await client.get("/warmup")
 
