@@ -12,6 +12,7 @@ classification of older frozen dossiers.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import posixpath
 import re
@@ -100,6 +101,26 @@ def _error_signature(text: str) -> str:
     normalized = _UUID.sub("<id>", text.lower())
     normalized = _NUMBER.sub("<n>", normalized)
     return _SPACE.sub(" ", normalized).strip()[:240]
+
+
+def _failed_action_signature(action: dict[str, Any], error_signature: str) -> str:
+    """Bound the intent context needed to distinguish generic shell failures.
+
+    Shell adapters intentionally expose terse errors such as ``command exited
+    1``. That error alone does not mean two different diagnostic commands are
+    the same failed behavior. Preserve the strict error grouping for structured
+    tools. Only the lossy generic shell exit additionally requires the exact
+    command bytes to match; the bounded digest never adds raw command text to
+    oracle facts.
+    """
+
+    if tool_name_of(action) not in _SHELL_TOOLS or error_signature != "command exited <n>":
+        return ""
+    args = (action.get("tool_call") or {}).get("arguments") or {}
+    command = args.get("command", args.get("cmd"))
+    if not isinstance(command, str):
+        return ""
+    return "sha256:" + hashlib.sha256(command.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str]]:
@@ -372,18 +393,22 @@ class ThrashOracle:
                 )
             ]
 
-        failed_signatures: Counter[tuple[str, str]] = Counter()
-        failure_seqs: dict[tuple[str, str], list[int]] = {}
+        failed_signatures: Counter[tuple[str, str, str]] = Counter()
+        failure_seqs: dict[tuple[str, str, str], list[int]] = {}
         for action in actions:
             action_id = action_id_of(action)
             success, signature = outcomes.get(str(action_id), (False, "missing outcome"))
             if success:
                 continue
-            key = (tool_name_of(action) or "?", signature)
+            key = (
+                tool_name_of(action) or "?",
+                signature,
+                _failed_action_signature(action, signature),
+            )
             failed_signatures[key] += 1
             failure_seqs.setdefault(key, []).append(seq_of(action))
         if failed_signatures:
-            (tool, signature), count = failed_signatures.most_common(1)[0]
+            (tool, signature, action_signature), count = failed_signatures.most_common(1)[0]
             if count > limits["max_same_tool_error_repeats"]:
                 return [
                     failing(
@@ -393,9 +418,10 @@ class ThrashOracle:
                         facts={
                             "tool": tool,
                             "error_signature": signature,
+                            "action_signature": action_signature or None,
                             "count": count,
                             "allowed": limits["max_same_tool_error_repeats"],
-                            "action_seqs": failure_seqs[(tool, signature)],
+                            "action_seqs": failure_seqs[(tool, signature, action_signature)],
                         },
                     )
                 ]

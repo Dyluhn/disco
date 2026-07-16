@@ -137,7 +137,8 @@ Never edit the source tree during a campaign. Untracked file bytes are part of t
 Every live Build dossier includes the Agent's inspect trace. `ThrashOracle` fails an otherwise-finished build when it observes:
 
 - the same tool call and arguments repeated beyond the scenario limit;
-- the same normalized tool error repeated beyond the limit;
+- the same normalized tool error repeated beyond the limit (generic shell
+  exit codes additionally require the exact command identity to match);
 - repeated hidden repair turns before an action is committed, including unknown-tool guesses, empty/prose-only responses, tool-history repair, and provider request rejection/requery cycles;
 - an actionless pause;
 - a product `STUCK` valve caused by repeated actions, no-ops, verification no-progress, or identical plans.

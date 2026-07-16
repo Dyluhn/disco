@@ -217,6 +217,69 @@ def test_repeated_tool_schema_error_fails_even_with_other_calls_between() -> Non
     assert result.facts["count"] == 3
 
 
+def test_distinct_shell_commands_with_generic_exit_one_are_not_same_error_thrash() -> None:
+    commands = (
+        "kill -9 90 2>/dev/null; sleep 0.5; lsof -ti:8000",
+        'curl -s http://localhost:5173/ | grep "Live Server Up"',
+    )
+    events = []
+    for seq, command in zip((15, 25), commands, strict=True):
+        action_id = f"shell{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            agent_error(seq + 1, action_id, error="command exited 1"),
+        ]
+
+    result = ThrashOracle().check(
+        events,
+        scenario=_scenario(max_same_tool_error_repeats=1),
+    )[0]
+
+    assert result.passed
+    assert result.facts["largest_same_tool_error_group"] == 1
+
+
+def test_same_exact_failed_shell_command_remains_error_thrash() -> None:
+    command = 'curl -s http://localhost:5173/ | grep "Live Server Up"'
+    events = [
+        action(1, "shell", action_id="shell1", args={"command": command}),
+        agent_error(2, "shell1", error="command exited 1"),
+        action(3, "file_read", action_id="read", args={"path": "server.py"}),
+        observation(4, "read", tool="file_read", success=True),
+        action(5, "shell", action_id="shell5", args={"command": command}),
+        agent_error(6, "shell5", error="command exited 1"),
+    ]
+
+    result = ThrashOracle().check(
+        events,
+        scenario=_scenario(max_same_tool_error_repeats=1),
+    )[0]
+
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["action_seqs"] == [1, 5]
+    assert result.facts["action_signature"]
+
+
+def test_distinctive_shell_error_stays_grouped_across_changed_commands() -> None:
+    error = "session 'server' is busy running 'bash'"
+    events = []
+    for seq, command in ((1, "python3 server.py &"), (3, "python3 other.py &")):
+        action_id = f"shell{seq}"
+        events += [
+            action(seq, "shell_exec", action_id=action_id, args={"command": command}),
+            agent_error(seq + 1, action_id, error=error),
+        ]
+
+    result = ThrashOracle().check(
+        events,
+        scenario=_scenario(max_same_tool_error_repeats=1),
+    )[0]
+
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["action_seqs"] == [1, 3]
+    assert result.facts["action_signature"] is None
+
+
 def test_actionless_pause_is_a_failure_even_if_run_later_finishes() -> None:
     result = ThrashOracle().check(
         [status(1, "PAUSED", detail="actionless"), status(2, "FINISHED")],
