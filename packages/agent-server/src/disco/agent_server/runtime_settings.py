@@ -345,9 +345,13 @@ class RuntimeSettings:
         from disco.core.llm.types import Requirement
 
         override = self._rt._model_override.get(conversation_id)
-        router = self._rt._router_now(pick=override)
-        key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
-        entry = router._config.models.get(key)
+        # This is a metadata read used by every /state response (the Assist badge).
+        # Building a live router here needlessly resolves/decrypts every provider and
+        # logs every disapproved catalogue entry on every poll.  The policy needs only
+        # the current config entry; actual model calls still rebuild the live router.
+        config = self._rt._routing_config_now()
+        key = config.model_for(ModelRole.AGENT_DRIVER, override=override)
+        entry = config.models.get(key)
         anchored = entry is not None and Requirement.ANCHORED_EDIT in entry.capabilities
         return resolve_policy(
             assist_override=self._rt._assist.get(conversation_id),
@@ -371,9 +375,11 @@ class RuntimeSettings:
         from disco.core.llm import ModelRole
 
         override = self._rt._model_override.get(conversation_id)
-        router = self._rt._router_now(pick=override)
-        key = router._config.model_for(ModelRole.AGENT_DRIVER, override=override)
-        entry = router._config.models.get(key)
+        # Tool-context metadata resolution needs the selected endpoint, not a live
+        # provider object.  Avoid provider construction on read-only setup paths.
+        config = self._rt._routing_config_now()
+        key = config.model_for(ModelRole.AGENT_DRIVER, override=override)
+        entry = config.models.get(key)
         if entry is None or not entry.base_url:
             return None
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin

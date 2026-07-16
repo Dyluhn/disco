@@ -73,8 +73,9 @@ def test_runtime_effective_assist_default(tmp_path):
     with patch.dict("os.environ", {"PMX_DB": str(tmp_path / "disco.db")}):
         rt = ConversationRuntime(store=MagicMock())
 
-        router = MagicMock()
-        rt._router_now = MagicMock(return_value=router)
+        config = MagicMock()
+        rt._config_store.load = MagicMock(return_value=config)
+        rt._router_now = MagicMock(side_effect=AssertionError("metadata read wired providers"))
 
         # Local / LAN / mDNS / cloud — ALL default OFF now (no hosting auto-weak; a
         # capable local model like Qwen 27B is not sandbagged for running on localhost).
@@ -85,14 +86,14 @@ def test_runtime_effective_assist_default(tmp_path):
             ("c4", "http://192.168.1.231:18080/v1"),
             ("c5", "http://workstation.local:18080/v1"),
         ]:
-            router._config.model_for.return_value = "m"
-            router._config.models = {"m": _model_entry(url)}
+            config.model_for.return_value = "m"
+            config.models = {"m": _model_entry(url)}
             assert rt._effective_assist(cid) is False, f"{url} should default OFF"
 
         # The explicit per-conversation toggle is the ONLY default-path way in: setting
         # it flips assist ON even for a local model (where the old heuristic auto-ON'd).
-        router._config.model_for.return_value = "m"
-        router._config.models = {"m": _model_entry("http://127.0.0.1:8080/v1")}
+        config.model_for.return_value = "m"
+        config.models = {"m": _model_entry("http://127.0.0.1:8080/v1")}
         rt.set_assist("c6", True)
         assert rt._effective_assist("c6") is True
         rt.set_assist("c6", False)
@@ -101,8 +102,8 @@ def test_runtime_effective_assist_default(tmp_path):
         # An explicit ModelEntry.tier='weak' in config still enables it (config escape hatch).
         weak_entry = _model_entry("https://api.anthropic.com/v1")
         weak_entry.tier = "weak"
-        router._config.model_for.return_value = "weak-cfg"
-        router._config.models = {"weak-cfg": weak_entry}
+        config.model_for.return_value = "weak-cfg"
+        config.models = {"weak-cfg": weak_entry}
         assert rt._effective_assist("c7") is True
 
 
@@ -127,9 +128,14 @@ def test_create_body_sets_assist_and_state_extras(tmp_path):
             "conversation_id"
         ]
         assert rt.is_assist(cid) is True
-        # /state surfaces extras.assist
-        st = client.get(f"/conversations/{cid}/state").json()
-        assert st["extras"].get("assist") is True
+        # /state surfaces extras.assist without constructing live providers. The
+        # soak polls this route continuously; provider wiring here caused six warning
+        # lines and secret/origin work per poll (15,864 warnings in one partial wave).
+        rt._router_now = MagicMock(side_effect=AssertionError("state poll wired providers"))
+        for _ in range(3):
+            st = client.get(f"/conversations/{cid}/state").json()
+            assert st["extras"].get("assist") is True
+        rt._router_now.assert_not_called()
 
         # create-body assist=False → explicit OFF must STICK even where the
         # probed default would be ON. G3 flagged this: the original test only
@@ -145,13 +151,14 @@ def test_runtime_assist_explicit_override(tmp_path):
     with patch.dict("os.environ", {"PMX_DB": str(tmp_path / "disco.db")}):
         rt = ConversationRuntime(store=MagicMock())
 
-        router = MagicMock()
-        rt._router_now = MagicMock(return_value=router)
+        config = MagicMock()
+        rt._config_store.load = MagicMock(return_value=config)
+        rt._router_now = MagicMock(side_effect=AssertionError("metadata read wired providers"))
 
         # Set up local model which would default to True
-        router._config.model_for.return_value = "local-model"
+        config.model_for.return_value = "local-model"
         entry_local = MagicMock(base_url="http://127.0.0.1:8080/v1")
-        router._config.models = {"local-model": entry_local}
+        config.models = {"local-model": entry_local}
 
         # But explicitly set assist to False
         rt.set_assist("c1", False)
@@ -159,9 +166,9 @@ def test_runtime_assist_explicit_override(tmp_path):
         assert rt._effective_assist("c1") is False
 
         # Set up cloud model which would default to False
-        router._config.model_for.return_value = "cloud-model"
+        config.model_for.return_value = "cloud-model"
         entry_cloud = MagicMock(base_url="https://api.openai.com/v1")
-        router._config.models = {"cloud-model": entry_cloud}
+        config.models = {"cloud-model": entry_cloud}
 
         # Explicitly set assist to True
         rt.set_assist("c2", True)
@@ -175,6 +182,21 @@ def test_runtime_assist_explicit_override(tmp_path):
         assert rt2._assist["c2"] is True
 
 
+def test_metadata_policy_uses_injected_router_config_without_provider_rebuild() -> None:
+    config = MagicMock()
+    config.model_for.return_value = "weak-cfg"
+    weak_entry = _model_entry("https://provider.example/v1")
+    weak_entry.tier = "weak"
+    config.models = {"weak-cfg": weak_entry}
+    router = MagicMock()
+    router._config = config
+    rt = ConversationRuntime(store=MagicMock(), router=router)
+    rt._config_store.load = MagicMock(side_effect=AssertionError("ignored injected config"))
+
+    assert rt.is_assist("c1") is True
+    rt._config_store.load.assert_not_called()
+
+
 def test_root5_effective_driver_endpoint_honors_override():
     """ROOT-5: LLM-using tools (slides_generate) must author with the conversation's
     PICKED model. _effective_driver_endpoint resolves the OVERRIDE-aware AGENT_DRIVER
@@ -182,8 +204,9 @@ def test_root5_effective_driver_endpoint_honors_override():
     from disco.core.llm.config import ModelEntry
 
     rt = ConversationRuntime(store=MagicMock())
-    router = MagicMock()
-    rt._router_now = MagicMock(return_value=router)
+    config = MagicMock()
+    rt._config_store.load = MagicMock(return_value=config)
+    rt._router_now = MagicMock(side_effect=AssertionError("metadata read wired providers"))
     rt._model_override = {"c1": "or-deepseek"}
     entry = ModelEntry(
         model_id="deepseek/deepseek-v4-pro",
@@ -192,16 +215,14 @@ def test_root5_effective_driver_endpoint_honors_override():
         base_url="https://openrouter.ai/api/v1",
         api_key_env="OPENROUTER_API_KEY",
     )
-    router._config.model_for.return_value = "or-deepseek"
-    router._config.models = {"or-deepseek": entry}
+    config.model_for.return_value = "or-deepseek"
+    config.models = {"or-deepseek": entry}
     rt._origin_approved = MagicMock(return_value=True)
 
     ep = rt._effective_driver_endpoint("c1")
     assert ep == ("https://openrouter.ai/api/v1", "deepseek/deepseek-v4-pro", "OPENROUTER_API_KEY")
     # the resolver consulted model_for with the per-conversation override
-    router._config.model_for.assert_called_with(ModelRole.AGENT_DRIVER, override="or-deepseek")
+    config.model_for.assert_called_with(ModelRole.AGENT_DRIVER, override="or-deepseek")
     # no live base_url ⇒ None (the tool then falls back to the global resolver)
-    router._config.models = {
-        "or-deepseek": ModelEntry(model_id="x", provider="p", context_window=1)
-    }
+    config.models = {"or-deepseek": ModelEntry(model_id="x", provider="p", context_window=1)}
     assert rt._effective_driver_endpoint("c1") is None

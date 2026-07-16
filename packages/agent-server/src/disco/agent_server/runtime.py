@@ -1014,6 +1014,19 @@ class ConversationRuntime:
         scope = getattr(executor, "_scope", None)
         return getattr(scope, "preset", None) == "workflow_router"
 
+    def _routing_config_now(self) -> RouterConfig:
+        """Current routing metadata without constructing live providers.
+
+        Tests and embedded callers may inject an authoritative router whose config
+        intentionally differs from the on-disk ConfigStore.  Read-only metadata paths
+        must preserve that seam while avoiding the origin/secret/provider work performed
+        by :meth:`_router_now`.
+        """
+
+        if self._injected_router is not None:
+            return self._injected_router._config
+        return self._config_store.load()
+
     def _router_now(
         self,
         pick: str | None = None,
