@@ -326,3 +326,64 @@ def test_done_condition_validation_rejects_impossible_file_and_command_shapes() 
     assert len(errors) == 3
     assert sum("safe exact workspace file" in error for error in errors) == 2
     assert sum("hard-denied" in error for error in errors) == 1
+
+
+def _command_plan(command: str) -> PlanEvent:
+    return _planner().plan_from_args(
+        {
+            "summary": "Command gate",
+            "steps": [
+                {
+                    "title": "Verify",
+                    "done_condition": {"kind": "command", "cmd": command},
+                }
+            ],
+        },
+        events=[],
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -f http://localhost:8080",
+        "curl -a http://localhost:8080",
+        "curl -O http://localhost:8080",
+        "wget -p http://localhost:8080",
+        "curl http'://'localhost:8080",
+        'curl "$URL"',
+        "timeout 5 npm run dev",
+        "env -u FOO npm run dev",
+        "bash -ec 'npm run dev'",
+        "python manage.py runserver",
+        "python -m flask run",
+        "npm exec vite",
+        "pnpm exec vite",
+        "npm run --silent dev",
+        "yarn run --cwd app dev",
+        "command -- npm run dev",
+    ],
+)
+def test_command_done_condition_rejects_local_preview_lifecycle_shapes(command: str) -> None:
+    errors = validate_plan_done_conditions(_command_plan(command))
+    assert len(errors) == 1
+    assert "immutable finish gate" in errors[0]
+    assert "preview_start" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -q 'http://localhost:8080' README.md",
+        "printf '%s\\n' http://localhost:8080 | grep -q localhost",
+        "vite --config vite.config.js build",
+        "make -n serve",
+        "http GET https://example.com",
+        "curl -f https://example.com/health",
+        "curl -H x:y https://example.com/health",
+        "http --auth user:pass GET https://example.com",
+        "test -f index.html && npm test",
+    ],
+)
+def test_command_done_condition_preserves_finite_verification_shapes(command: str) -> None:
+    assert validate_plan_done_conditions(_command_plan(command)) == []

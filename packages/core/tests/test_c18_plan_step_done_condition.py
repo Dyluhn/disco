@@ -659,6 +659,116 @@ async def test_c18_placeholder_http_gate_is_rejected_before_plan_persistence(tmp
     assert sbx.file_exists_calls == []
 
 
+@pytest.mark.parametrize(
+    ("bad_command", "expected_reason"),
+    [
+        (
+            "python3 -m http.server 8080 >/tmp/site.log 2>&1 & "
+            "sleep 1; curl -fsS http://localhost:8080/",
+            "starts background work",
+        ),
+        (
+            "nohup npm run dev >/tmp/site.log 2>&1 &",
+            "starts background work",
+        ),
+        ("sh -lc 'sleep 30 &'", "starts background work"),
+        ("curl -fsS http://[::1]", "probes a loopback/local preview URL"),
+        ("curl -fsS http://app:8080", "probes a loopback/local preview URL"),
+        ("npm run dev", "launches a local server"),
+        ("sh -lc 'npm --prefix app run dev'", "launches a local server"),
+        (
+            '/usr/bin/curl -fsS "$PREVIEW_URL/health"',
+            "probes a runtime-selected preview URL",
+        ),
+        ("timeout 5 npm run dev", "launches a local server"),
+        ("env -u FOO npm run dev", "launches a local server"),
+        ("bash -ec 'npm run dev'", "launches a local server"),
+        ("python manage.py runserver", "launches a local server"),
+        ("python -m flask run", "launches a local server"),
+        ("npm run --silent dev", "launches a local server"),
+        ("yarn run --cwd app dev", "launches a local server"),
+        ("command -- npm exec vite", "launches a local server"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_c18_local_preview_command_gate_is_rejected_then_corrected_plan_is_accepted(
+    tmp_path, bad_command, expected_reason
+):
+    """A plan cannot freeze a server lifecycle or preview address chosen at runtime.
+
+    The public ``submit_plan`` boundary must reject the bad gate, provide one
+    bounded/actionable correction, then accept an ordinary finite read-only gate.
+    """
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sbx = _FakeSandbox(str(workspace))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "unsafe preview gate",
+                    "steps": [
+                        {
+                            "title": "Start and verify the local preview",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": bad_command,
+                                "expect_exit": 0,
+                            },
+                        }
+                    ],
+                },
+            ),
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "corrected finite gate",
+                    "steps": [
+                        {
+                            "title": "Build and test the static site",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": "test -f index.html && npm test",
+                                "expect_exit": 0,
+                            },
+                        }
+                    ],
+                },
+            ),
+        ]
+    )
+    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert [plan.summary for plan in plans] == ["corrected finite gate"]
+    assert plans[0].steps[0].done_condition is not None
+    assert plans[0].steps[0].done_condition.cmd == "test -f index.html && npm test"
+
+    feedback = [
+        event.message.content
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and event.meta.get("blocking") == "invalid_plan_done_conditions"
+    ]
+    assert len(feedback) == 1
+    assert expected_reason in feedback[0]
+    assert "finite, deterministic verification" in feedback[0]
+    assert "`test -f index.html`" in feedback[0]
+    assert "`npm test`" in feedback[0]
+    assert "`preview_start`" in feedback[0]
+    assert "Invalid plan attempt 1/3" in feedback[0]
+    assert len(feedback[0]) < 1_800
+    assert _advisory_notes(events) == []
+    assert sbx.file_exists_calls == []
+
+
 # ---------------------------------------------------------------------------
 # F-2 — container backend: command predicate ran on the HOST (cwd=None), not
 # in the box. Fix: when sbx has `exec_shell`, run the predicate INSIDE THE BOX.
