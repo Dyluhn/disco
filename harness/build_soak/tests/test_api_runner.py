@@ -4952,7 +4952,12 @@ async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp
         timeline=["confirmed live thrash threshold stopped the conversation"],
     )
 
-    async def fake_drive(*_args, **_kwargs):
+    async def fake_drive(active_client, *_args, **_kwargs):
+        # Model the live monitor's already-completed stop.  REL-5 must reuse
+        # this durable killed state instead of posting a second cleanup kill.
+        active_client.last_conversation_id = _CID
+        stopped = await active_client.kill(_CID)
+        assert stopped["http_status"] == 200
         return run
 
     async def no_sleep(_seconds: float) -> None:
@@ -5000,6 +5005,9 @@ async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp
     )
     assert thrash["status"] == "FAIL"
     assert thrash["code"] == "MODEL_REPAIR_THRASH"
+    kills = [path for path, _body in transport.posts if path.endswith("/kill")]
+    assert kills == [f"/conversations/{_CID}/kill"]
+    assert "REL-5 cleanup observed the live-thrash monitor's durable killed state" in run.timeline
     base = tmp_path / "out" / "run_live_thrash_stop_001"
     assert verify_evidence_unchanged(base, load_manifest(base)).intact
 

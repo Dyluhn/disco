@@ -1875,12 +1875,16 @@ async def _collect_terminal_cleanup_evidence(
     # release here.  Once release is proven, disarm run_once's finally fallback.  A
     # failed/unproven release deliberately leaves it armed for one best-effort retry.
     release_resp: dict[str, Any] = {}
-    released_ok = bool(
+    diagnostic_release_reused = bool(
         getattr(run, "diagnostic_stop", None) == "progressing_hard_cap"
         and getattr(run, "diagnostic_release_confirmed", False)
     )
-    if released_ok:
+    live_thrash_release_reused = _confirmed_live_thrash_stop(run)
+    released_ok = diagnostic_release_reused or live_thrash_release_reused
+    if diagnostic_release_reused:
         timeline.append("REL-5 cleanup observed the diagnostic stop's durable killed state")
+    elif live_thrash_release_reused:
+        timeline.append("REL-5 cleanup observed the live-thrash monitor's durable killed state")
     else:
         with contextlib.suppress(Exception):
             release_resp = await client.kill(cid)
