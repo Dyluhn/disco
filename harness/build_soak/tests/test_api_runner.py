@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from _eventlog import action, clean_smoke_log, msg, plan, status
+from _eventlog import action, clean_smoke_log, msg, observation, plan, status
 from disco.core.auth import path_preview_host_label
 
 import harness.build_soak.adapters.disco_api as _disco_mod
@@ -295,6 +295,17 @@ def test_scenarios_yaml_parses_all_15_scenarios():
     # the §15.4 steer scenario carries the after_first_file_write trigger
     steer = scen["steer_while_running_requires_plan_update_or_clear_execution_note"]
     assert steer["followups"][0]["trigger"] == "after_first_file_write"
+    devserver = scen["diag_devserver"]
+    assert "PORT" in devserver["prompt"]
+    assert "os.environ.get" in devserver["prompt"]
+    assert "8000" in devserver["prompt"]
+    assert "preview_start" in devserver["prompt"]
+    assert "never launch or kill a web server through shell" in devserver["prompt"]
+    assert devserver["assertions"]["preview"] == {
+        "required": True,
+        "must_contain": ["Live Server Up"],
+    }
+    assert devserver["assertions"]["browser_verification"]["required"] is True
 
 
 def test_live_thrash_monitor_confirms_repeated_model_repair(tmp_path):
@@ -338,6 +349,62 @@ def test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(tmp_path
     assert not client.observe_live_thrash_snapshot(rows, None, terminal_status="RUNNING")
     assert not client.observe_live_thrash_snapshot(rows, None, terminal_status="RUNNING")
     assert client.live_thrash_monitor["findings"] == []
+
+
+def test_live_thrash_monitor_distinguishes_recovery_from_restart_loop(tmp_path):
+    scenario = _smoke_scenario()
+    recovery = [
+        action(
+            22,
+            "shell_exec",
+            action_id="start22",
+            args={"command": "python3 /workspace/server.py &", "session": "server"},
+        ),
+        observation(23, "start22", tool="shell_exec"),
+        action(26, "shell_kill_process", action_id="kill26", args={"session": "server"}),
+        observation(27, "kill26", tool="shell_kill_process"),
+        action(
+            28,
+            "shell",
+            action_id="start28",
+            args={"command": "kill 88; sleep 1; python3 /workspace/server.py &"},
+        ),
+        observation(29, "start28"),
+        action(34, "shell", action_id="kill34", args={"command": "fuser -k 8000/tcp"}),
+        observation(35, "kill34"),
+        action(
+            36,
+            "shell_exec",
+            action_id="start36",
+            args={"command": "python3 /workspace/server.py &", "session": "server"},
+        ),
+        observation(37, "start36", tool="shell_exec"),
+    ]
+    client = _client(FakeTransport(tmp_path / "recovery.db", states=["RUNNING"]), tmp_path)
+    client.enable_live_thrash_monitor(scenario)
+    assert not client.observe_live_thrash_snapshot(recovery, None, terminal_status="RUNNING")
+    assert not client.observe_live_thrash_snapshot(recovery, None, terminal_status="RUNNING")
+    assert client.live_thrash_monitor["findings"] == []
+
+    loop = list(recovery)
+    loop += [
+        action(38, "shell", action_id="kill38", args={"command": "pkill -f server.py"}),
+        observation(39, "kill38"),
+        action(
+            40,
+            "shell_exec",
+            action_id="start40",
+            args={"command": "python3 /workspace/server.py &", "session": "server2"},
+        ),
+        observation(41, "start40", tool="shell_exec"),
+    ]
+    looping_client = _client(FakeTransport(tmp_path / "loop.db", states=["RUNNING"]), tmp_path)
+    looping_client.enable_live_thrash_monitor(scenario)
+    assert not looping_client.observe_live_thrash_snapshot(loop, None, terminal_status="RUNNING")
+    assert looping_client.observe_live_thrash_snapshot(loop, None, terminal_status="RUNNING")
+    finding = looping_client.live_thrash_monitor["findings"][0]
+    oracle = finding["oracle_results"][0]
+    assert oracle["first_broken_link"] == "tool_call -> repeated_background_script_restart"
 
 
 def _strict_live_thrash_monitor() -> dict[str, Any]:
@@ -6036,7 +6103,12 @@ def test_every_scenario_loads_with_a_valid_schema():
 
     assert {
         sid for sid, scenario in scen.items() if "browser_verification" in scenario["assertions"]
-    } == {"static_html_minimal", "verify_catches_broken_then_fixed", "diag_form_verify"}
+    } == {
+        "static_html_minimal",
+        "verify_catches_broken_then_fixed",
+        "diag_form_verify",
+        "diag_devserver",
+    }
 
 
 def test_agent_general_task_prompt_discloses_literal_source_assertion():

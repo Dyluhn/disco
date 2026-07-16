@@ -78,9 +78,9 @@ def test_live_build_lanes_use_namespaced_podman_not_shared_host_process() -> Non
 
     shapes = matrix.suites["live-build-shapes"]
     assert "diag_devserver" in shapes.command[shapes.command.index("--scenario") + 1].split(",")
-    # diag_devserver intentionally exercises container port 8000. Podman's host
-    # publication is loopback-only with NO requested host port, so the engine assigns
-    # an ephemeral campaign-private host port instead of binding protected host :8000.
+    # The independent Podman containment invariant remains strict: if a sandbox service
+    # uses conventional container port 8000, host publication is loopback-only with NO
+    # requested host port, so the engine assigns an ephemeral campaign-private port.
     binding = loopback_port_bindings(podman=True)["8000/tcp"]
     assert binding == {"ip": "127.0.0.1"}
     assert "host_port" not in binding

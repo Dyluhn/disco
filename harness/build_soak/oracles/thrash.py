@@ -45,6 +45,9 @@ _THRASH_STUCK_DETAILS = {
     "identical_plan_streak",
 }
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+_RUNTIME_CLEANUP_TOOLS = frozenset({"shell_kill_process"})
+_SHELL_CONTROL_OPERATORS = frozenset({";", "&", "&&", "|", "||"})
+_RUNTIME_CLEANUP_COMMANDS = frozenset({"kill", "killall", "pkill"})
 _FILE_MUTATION_TOOLS = frozenset(
     {
         "exact_replace",
@@ -185,37 +188,39 @@ def _longest_identical_streak(actions: list[dict[str, Any]]) -> tuple[int, str, 
     return best_count, best_fp, best_seqs
 
 
-def _shell_segments(command: str) -> list[list[str]]:
-    """Split a shell command conservatively at control operators.
+def _shell_segments(command: str) -> list[tuple[list[str], str]]:
+    """Split a shell command into ``(argv, terminator)`` pairs.
 
-    ``shlex`` with punctuation support handles both spaced and unspaced forms of
-    ``&&``, ``;`` and pipelines.  Invalid/incomplete shell is deliberately opaque:
-    tool-error accounting handles it, while semantic-repeat accounting skips it.
+    Preserving the exact terminator is evidence-critical: ``python check.py`` is a
+    foreground verification, while ``python server.py &`` starts a background
+    lifecycle process. ``2>&1`` is redirection, not a background terminator.
+    Invalid/incomplete shell is deliberately opaque: tool-error accounting handles
+    it, while semantic-repeat accounting skips it.
     """
 
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
     except ValueError:
         return []
-    segments: list[list[str]] = []
+    segments: list[tuple[list[str], str]] = []
     current: list[str] = []
     for token in tokens:
-        if token and set(token) <= {";", "&", "|"}:
+        if token in _SHELL_CONTROL_OPERATORS:
             if current:
-                segments.append(current)
+                segments.append((current, token))
                 current = []
             continue
         current.append(token)
     if current:
-        segments.append(current)
+        segments.append((current, ""))
     return segments
 
 
-def _direct_script_invocations(command: str) -> list[tuple[str, str]]:
-    """Return conservative ``(fingerprint, runner_family)`` shell invocations.
+def _direct_script_invocations(command: str) -> list[tuple[str, str, bool]]:
+    """Return conservative direct-script invocations with lifecycle role.
 
     This intentionally recognizes only an interpreter directly executing a
     script with an explicit extension.  Module runners (``python -m pytest``),
@@ -226,9 +231,9 @@ def _direct_script_invocations(command: str) -> list[tuple[str, str]]:
     """
 
     cwd = "/workspace"
-    invocations: list[tuple[str, str]] = []
-    for segment in _shell_segments(command):
-        if len(segment) == 2 and segment[0] == "cd":
+    invocations: list[tuple[str, str, bool]] = []
+    for segment, terminator in _shell_segments(command):
+        if len(segment) == 2 and segment[0] == "cd" and terminator != "&":
             destination = segment[1]
             cwd = posixpath.normpath(
                 destination if destination.startswith("/") else posixpath.join(cwd, destination)
@@ -252,9 +257,35 @@ def _direct_script_invocations(command: str) -> list[tuple[str, str]]:
             fingerprint = json.dumps(
                 [family, script_path, segment[2:]], separators=(",", ":"), ensure_ascii=True
             )
-            invocations.append((fingerprint, family))
+            invocations.append((fingerprint, family, terminator == "&"))
             break
     return invocations
+
+
+def _is_runtime_cleanup_action(
+    action: dict[str, Any], outcomes: dict[str, tuple[bool, str, str]]
+) -> bool:
+    """Whether a successful model action deliberately changed process/listener state."""
+
+    success, _, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome", ""))
+    if not success:
+        return False
+    tool = tool_name_of(action)
+    if tool in _RUNTIME_CLEANUP_TOOLS:
+        return True
+    if tool not in _SHELL_TOOLS:
+        return False
+    args = (action.get("tool_call") or {}).get("arguments") or {}
+    command = args.get("command", args.get("cmd"))
+    if not isinstance(command, str):
+        return False
+    for segment, _terminator in _shell_segments(command):
+        executable = posixpath.basename(segment[0]).lower() if segment else ""
+        if executable in _RUNTIME_CLEANUP_COMMANDS:
+            return True
+        if executable == "fuser" and "-k" in segment:
+            return True
+    return False
 
 
 def _explicit_mutation_path(action: dict[str, Any]) -> str | None:
@@ -307,12 +338,60 @@ def _largest_semantic_shell_repeat_group(
             continue
         # One action may mention the same invocation more than once; count model
         # decisions/actions, not textual duplication inside a single shell string.
-        for fingerprint, family in sorted(set(_direct_script_invocations(command))):
+        for fingerprint, family, background in sorted(set(_direct_script_invocations(command))):
+            if background:
+                continue
             groups.setdefault((fingerprint, generations[family]), []).append(seq_of(action))
     if not groups:
         return 0, "", []
     (fingerprint, _generation), seqs = max(groups.items(), key=lambda item: (len(item[1]), item[1]))
     return len(seqs), fingerprint, seqs
+
+
+def _largest_background_script_restart_group(
+    actions: list[dict[str, Any]], outcomes: dict[str, tuple[bool, str, str]]
+) -> tuple[int, str, list[int], list[int], int]:
+    """Find repeated background script starts with one bounded recovery credit.
+
+    Background lifecycle starts are not foreground verification. They still need a
+    strict no-thrash bound: the model gets at most one extra attempt when durable
+    evidence shows a successful process/listener cleanup between the first and last
+    start. Repeating kill/start cycles cannot reset the allowance indefinitely.
+    """
+
+    generations: Counter[str] = Counter()
+    groups: dict[tuple[str, int], list[int]] = {}
+    cleanup_seqs: list[int] = []
+    for action in actions:
+        mutation_path = _explicit_mutation_path(action)
+        mutation_succeeded, _, _ = outcomes.get(
+            str(action_id_of(action)), (False, "missing outcome", "")
+        )
+        if mutation_path is not None and mutation_succeeded:
+            family = _SOURCE_SUFFIX_FAMILY.get(posixpath.splitext(mutation_path)[1].lower())
+            if family is not None:
+                generations[family] += 1
+        if _is_runtime_cleanup_action(action, outcomes):
+            cleanup_seqs.append(seq_of(action))
+        if tool_name_of(action) not in _SHELL_TOOLS or (action.get("meta") or {}).get(
+            "verify_probe"
+        ):
+            continue
+        args = (action.get("tool_call") or {}).get("arguments") or {}
+        command = args.get("command", args.get("cmd"))
+        if not isinstance(command, str):
+            continue
+        for fingerprint, family, background in sorted(set(_direct_script_invocations(command))):
+            if background:
+                groups.setdefault((fingerprint, generations[family]), []).append(seq_of(action))
+    if not groups:
+        return 0, "", [], [], 0
+    (fingerprint, _generation), start_seqs = max(
+        groups.items(), key=lambda item: (len(item[1]), item[1])
+    )
+    qualifying_cleanup = [seq for seq in cleanup_seqs if start_seqs[0] < seq <= start_seqs[-1]]
+    cleanup_credit = 1 if qualifying_cleanup else 0
+    return len(start_seqs), fingerprint, start_seqs, qualifying_cleanup, cleanup_credit
 
 
 class ThrashOracle:
@@ -501,6 +580,32 @@ class ThrashOracle:
                 )
             ]
 
+        (
+            background_count,
+            background_fingerprint,
+            background_seqs,
+            cleanup_seqs,
+            cleanup_credit,
+        ) = _largest_background_script_restart_group(actions, outcomes)
+        background_allowed = limits["max_identical_action_repeats"] + cleanup_credit
+        if background_count > background_allowed:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.TOOL_CALL_THRASH,
+                    first_broken_link="tool_call -> repeated_background_script_restart",
+                    facts={
+                        "fingerprint": background_fingerprint,
+                        "count": background_count,
+                        "allowed": background_allowed,
+                        "base_allowed": limits["max_identical_action_repeats"],
+                        "cleanup_credit": cleanup_credit,
+                        "action_seqs": background_seqs,
+                        "cleanup_seqs": cleanup_seqs,
+                    },
+                )
+            ]
+
         return [
             passing(
                 _ORACLE,
@@ -509,6 +614,8 @@ class ThrashOracle:
                     "actionless_pauses": len(actionless),
                     "longest_identical_action_streak": streak,
                     "largest_semantic_shell_repeat_group": semantic_count,
+                    "largest_background_script_restart_group": background_count,
+                    "background_script_cleanup_credit": cleanup_credit,
                     "largest_same_tool_error_group": max(failed_signatures.values(), default=0),
                     "model_repair_count": len(repairs),
                     "model_repair_counts": dict(repair_counts),

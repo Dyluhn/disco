@@ -377,7 +377,7 @@ scenarios:
           - {path: "primes.py", must_contain: ["def ", "print"]}
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
-  # diag E: a real dev server on a port — the HARDER preview path (running process, not static).
+  # diag E: a real dev server — the HARDER preview path (running process, not static).
   - id: diag_devserver
     mode: api
     prompt: >-
@@ -386,13 +386,20 @@ scenarios:
       TOOL'S behavior surprised you>" (focus on the tool, not your mistakes). One sentence each.
 
       TASK: Create a minimal Python HTTP server (server.py using only the standard library) that
-      serves a page with the h1 'Live Server Up' on port 8000. Start it as a running dev server,
-      make sure it is reachable in the live preview, then finish.
+      serves a page with the h1 'Live Server Up'. The program must read its assigned port with
+      int(os.environ.get('PORT', '8000')), preserving 8000 only as the no-environment default.
+      Start it only through preview_start with command 'python3 server.py' (never launch or kill a
+      web server through shell), verify the returned platform preview in the browser, then finish.
     assertions:
       event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
       workspace:
         files:
-          - {path: "server.py", must_contain: ["8000"]}
+          - {path: "server.py", must_contain: ["Live Server Up", "os.environ.get", "PORT", "8000"]}
+      preview:
+        required: true
+        must_contain: ["Live Server Up"]
+      browser_verification:
+        required: true
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
   # diag F: build-then-revise — exercises the re-plan / revision tool path after a finish.

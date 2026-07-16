@@ -194,6 +194,151 @@ def test_generated_verify_probe_does_not_count_as_model_semantic_repeat() -> Non
     assert result.facts["largest_semantic_shell_repeat_group"] == 2
 
 
+def test_background_server_recovery_is_not_foreground_verification_thrash() -> None:
+    """H320 exact r14 shape: three starts with visible cleanup get one credit."""
+
+    events = [
+        action(
+            22,
+            "shell_exec",
+            action_id="start22",
+            args={"command": "python3 /workspace/server.py &", "session": "server"},
+        ),
+        observation(23, "start22", tool="shell_exec", success=True),
+        action(26, "shell_kill_process", action_id="kill26", args={"session": "server"}),
+        observation(27, "kill26", tool="shell_kill_process", success=True),
+        action(
+            28,
+            "shell",
+            action_id="start28",
+            args={"command": "kill 88 2>/dev/null; sleep 1; python3 /workspace/server.py &"},
+        ),
+        observation(29, "start28", tool="shell", success=True),
+        action(
+            34,
+            "shell",
+            action_id="cleanup34",
+            args={"command": "fuser -k 8000/tcp 2>/dev/null; sleep 1"},
+        ),
+        observation(35, "cleanup34", tool="shell", success=True),
+        action(
+            36,
+            "shell_exec",
+            action_id="start36",
+            args={"command": "python3 /workspace/server.py&", "session": "server"},
+        ),
+        observation(37, "start36", tool="shell_exec", success=True),
+    ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["largest_semantic_shell_repeat_group"] == 0
+    assert result.facts["largest_background_script_restart_group"] == 3
+    assert result.facts["background_script_cleanup_credit"] == 1
+
+
+def test_three_background_script_starts_without_cleanup_fail() -> None:
+    events = []
+    for seq in (1, 3, 5):
+        action_id = f"start{seq}"
+        events += [
+            action(
+                seq,
+                "shell_exec",
+                action_id=action_id,
+                args={"command": "python3 server.py &", "session": f"server{seq}"},
+            ),
+            observation(seq + 1, action_id, tool="shell_exec", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_background_script_restart"
+    assert result.facts["action_seqs"] == [1, 3, 5]
+    assert result.facts["cleanup_credit"] == 0
+
+
+def test_repeated_cleanup_cannot_hide_four_background_restarts() -> None:
+    events = []
+    for index, seq in enumerate((1, 7, 13, 19), start=1):
+        start_id = f"start{seq}"
+        events += [
+            action(
+                seq,
+                "shell",
+                action_id=start_id,
+                args={"command": f"kill {80 + index} 2>/dev/null; python3 server.py &"},
+            ),
+            observation(seq + 1, start_id, tool="shell", success=True),
+            action(
+                seq + 2,
+                "shell",
+                action_id=f"probe{seq}",
+                args={"command": f"lsof -i :{8000 + index}"},
+            ),
+            observation(seq + 3, f"probe{seq}", tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_background_script_restart"
+    assert result.facts["count"] == 4
+    assert result.facts["allowed"] == 3
+    assert result.facts["cleanup_credit"] == 1
+
+
+def test_cleanup_after_final_background_start_grants_no_credit() -> None:
+    events = []
+    for seq in (1, 3, 5):
+        action_id = f"start{seq}"
+        events += [
+            action(
+                seq,
+                "shell_exec",
+                action_id=action_id,
+                args={"command": "python3 server.py &", "session": f"server{seq}"},
+            ),
+            observation(seq + 1, action_id, tool="shell_exec", success=True),
+        ]
+    events += [
+        action(7, "shell", action_id="late-kill", args={"command": "pkill -f server.py"}),
+        observation(8, "late-kill", tool="shell", success=True),
+    ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.facts["cleanup_credit"] == 0
+
+
+def test_stderr_redirection_is_not_background_lifecycle() -> None:
+    events = []
+    commands = (
+        "python3 inventory.py 2>&1",
+        "cd /workspace && python3 inventory.py 2>&1",
+        "echo verify; python3 inventory.py 2>&1",
+    )
+    for seq, command in zip((1, 3, 5), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(
+                seq,
+                "shell",
+                action_id=action_id,
+                args={"command": command},
+            ),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+
+
 def test_repeated_tool_schema_error_fails_even_with_other_calls_between() -> None:
     events = []
     for seq in (1, 5, 9):
