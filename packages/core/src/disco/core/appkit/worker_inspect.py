@@ -818,20 +818,64 @@ def inspect_lead_form(form_src: str, lead: Entity) -> tuple[bool, list[str]]:
 
 
 def inspect_static_worker(worker_ts: str) -> tuple[bool, list[str]]:
-    """STRUCTURALLY verify the directory primitive's STATIC Worker: it serves built
-    assets (`env.ASSETS.fetch`) and has NO server-side data plane — no `/api/leads`
-    route, no D1 prepared insert, no admin read-back. A static worker that grew a
-    lead API / DB write is no longer a directory site and FAILS. Returns (ok, reasons)."""
+    """STRUCTURALLY verify an asset-only STATIC Worker.
+
+    Pin the entire comment-stripped source to the two generated spellings of the
+    canonical asset-only Worker. The only accepted variation is the inert parameter
+    name in the ``ASSETS.fetch`` type declaration (``req`` for directory,
+    ``request`` for local_list). Any extra Env binding, route, handler, statement,
+    call, or other source is an unreviewed capability widening and fails closed.
+    """
     reasons: list[str] = []
     src = _strip_ts_comments(worker_ts)
-    if re.search(r"env\.ASSETS\.fetch\s*\(", src) is None:
+    canonical = re.fullmatch(
+        r"""
+        \s*
+        export\s+interface\s+Env\s*\{\s*
+          ASSETS\s*:\s*\{\s*
+            fetch\s*:\s*\(\s*(?:req|request)\s*:\s*Request\s*\)
+            \s*=>\s*Promise\s*<\s*Response\s*>\s*
+          \}\s*;\s*
+        \}\s*
+        export\s+default\s*\{\s*
+          async\s+fetch\s*\(\s*request\s*:\s*Request\s*,\s*env\s*:\s*Env\s*\)
+          \s*:\s*Promise\s*<\s*Response\s*>\s*\{\s*
+            return\s+env\.ASSETS\.fetch\s*\(\s*request\s*\)\s*;\s*
+          \}\s*,\s*
+        \}\s*;\s*
+        """,
+        src,
+        flags=re.VERBOSE,
+    )
+    if canonical is None:
+        reasons.append(
+            "the static worker does not match the canonical asset-only structure; "
+            "extra bindings, routes, handlers, statements, and calls are forbidden"
+        )
+    asset_passthroughs = re.findall(r"\breturn\s+env\.ASSETS\.fetch\s*\(\s*request\s*\)\s*;", src)
+    if len(asset_passthroughs) != 1:
         reasons.append("the static worker does not serve built assets (env.ASSETS.fetch)")
+    # Expected generated shape: Env's `fetch` member, the Worker's `fetch`
+    # handler, and the single ASSETS passthrough. Counting the identifier also
+    # catches aliases such as `globalThis.fetch` / `fetch.call` and bracketed
+    # `globalThis['fetch']` without pretending a regex is a TypeScript evaluator.
+    fetch_references = re.findall(r"\bfetch\b", src)
+    if len(fetch_references) != 3:
+        reasons.append(
+            "the static worker contains extra fetch references; outbound network "
+            "calls are forbidden in an asset-only worker"
+        )
+    if re.search(r"\b(?:XMLHttpRequest|WebSocket|EventSource)\b|\.sendBeacon\s*\(", src):
+        reasons.append(
+            "the static worker contains an outbound browser-network primitive; "
+            "asset-only workers may call only env.ASSETS.fetch(request)"
+        )
     if "/api/leads" in src:
-        reasons.append("a static directory worker must not expose a /api/leads route")
+        reasons.append("a static worker must not expose a /api/leads route")
     if re.search(r"\.prepare\s*\(", src) is not None:
-        reasons.append("a static directory worker must not run a D1 prepared statement")
+        reasons.append("a static worker must not run a D1 prepared statement")
     if re.search(r"\bD1Database\b", src) is not None:
-        reasons.append("a static directory worker must not bind a D1 database")
+        reasons.append("a static worker must not bind a D1 database")
     return (not reasons), reasons
 
 

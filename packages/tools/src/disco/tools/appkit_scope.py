@@ -11,8 +11,8 @@ name is REFUSED (`unknown_tool`) by the executor, never silently executed.
 Three phases (a function of the loop's operating mode AND the AppKit phase):
 
 * ``planning``      — the loop is gathering context / proposing a plan
-                      (loop ``mode == PLANNING``): reads + ``submit_plan`` +
-                      ``request_custom_build`` only.  No mutators, no raw tools.
+                      (loop ``mode == PLANNING``): reads + ``submit_plan`` only.
+                      No mutators, escape hatch, or raw tools.
 * ``planning`` (execution) — plan approved, app not yet scaffolded: the bootstrap
                       mutator ``app_create`` unlocks (plus reads + the escape
                       hatch).  A SUCCESSFUL ``app_create`` advances to ``build``.
@@ -121,8 +121,11 @@ def appkit_allowed_tools(
     # fail-safe direction: never auto-grant mutators or raw tools when the live
     # operating mode can't be read. The build loop ALWAYS starts in PLANNING.
     if loop_mode is None or loop_mode == OperatingMode.PLANNING:
-        # Context-gathering + plan proposal. No mutators, no raw tools.
-        return APPKIT_READ_TOOLS | _PLAN_TOOL | hatch
+        # Context-gathering + plan proposal. No mutators, raw tools, or widening
+        # hatch: the loop's read-only planning backstop cannot offer or allow the
+        # HIGH-risk request_custom_build signal, so the executor must not claim it
+        # is callable in this phase either.
+        return APPKIT_READ_TOOLS | _PLAN_TOOL
     # Execution mode:
     if phase == AppKitPhase.BUILD:
         return APPKIT_READ_TOOLS | APPKIT_PROBES | APPKIT_MUTATORS | APPKIT_LIFECYCLE | hatch

@@ -61,6 +61,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         self._appkit_autonomous = autonomous
         self._appkit_mode_getter = mode_getter
         self._appkit_on_widen = on_widen
+        self._appkit_base_primitive: str | None = None
 
         def _scope_resolver() -> ToolScope:
             loop_mode = self._appkit_mode_getter() if self._appkit_mode_getter else None
@@ -97,6 +98,49 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
 
         return self.callable_tool_names() | self._registry.names()
 
+    def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:
+        """Give registered strict-scope denials an actionable, non-retry contract."""
+
+        if tool_name in self._registry.names() and tool_name not in self.callable_tool_names():
+            recovery = self._strict_scope_recovery(available)
+            return (
+                f"strict AppKit scope denied registered tool {tool_name!r}; it was not "
+                f"executed. Available now: {available}. Raw file/shell/code/starter/preview "
+                "tools remain disabled while strict AppKit scope is active; do not retry "
+                f"this call. Recovery: {recovery}"
+            )
+        return super()._unknown_tool_message(tool_name, available)
+
+    def _strict_scope_recovery(self, available: list[str]) -> str:
+        """Direct recovery using only productive tools callable in this phase."""
+
+        callable_now = set(available)
+        if "submit_plan" in callable_now:
+            return "inspect with offered read tools if needed, then call `submit_plan`."
+        if "verify_appkit_app" in callable_now:
+            preferred = (
+                "app_update_content",
+                "app_add_section",
+                "app_set_design",
+                "app_add_primitive",
+                "design_lint",
+                "verify_appkit_app",
+                "app_snapshot_version",
+            )
+            offered = [
+                name
+                for name in preferred
+                if name in callable_now
+                and not (
+                    name == "app_add_primitive" and self._appkit_base_primitive == "local_list"
+                )
+            ]
+            rendered = ", ".join(f"`{name}`" for name in offered)
+            return f"continue with a currently offered semantic operation: {rendered}."
+        if "app_create" in callable_now:
+            return "call `app_create` to establish the semantic AppKit scaffold."
+        return "choose a tool from the Available now list."
+
     @property
     def _appkit_widened(self) -> ToolScope:
         """Backward-compatible alias for the widened AppKit scope storage."""
@@ -116,6 +160,10 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         phase = self._appkit_phase.phase
         if name == "app_create" and phase == AppKitPhase.PLANNING:
             # The scaffold + the two .disco specs now exist → unlock the build mutators.
+            structured = result.structured or {}
+            base_primitive = structured.get("primitive_id") or structured.get("app_kind")
+            if isinstance(base_primitive, str):
+                self._appkit_base_primitive = base_primitive
             self._appkit_phase.phase = AppKitPhase.BUILD
         elif name == REQUEST_CUSTOM_BUILD and phase in (
             AppKitPhase.PLANNING,

@@ -48,6 +48,7 @@ from disco.core.appkit import (
     APPSPEC_RELPATH,
     DESIGNSPEC_RELPATH,
     LEAD_GEN_PRIMITIVE_ID,
+    LOCAL_LIST_PRIMITIVE_ID,
     generate,
     get_primitive,
     get_recipe,
@@ -255,8 +256,9 @@ class AppCreateArgs(BaseModel):
         default=LEAD_GEN_PRIMITIVE_ID,
         description="The AppKit primitive to scaffold: 'lead_gen' (a lead-capture app) or "
         "'directory' (a static, searchable directory site) or 'records' (related "
-        "entities with CRUD list/insert routes). Ignored when an explicit app_spec "
-        "is given (the primitive is taken from app_spec.app_kind).",
+        "entities with CRUD list/insert routes) or 'local_list' (a browser-local, "
+        "persistent add/list/delete app with no server data plane). Ignored when an "
+        "explicit app_spec is given (the primitive is taken from app_spec.app_kind).",
     )
     brief: str | None = Field(
         default=None,
@@ -274,8 +276,10 @@ class AppCreateArgs(BaseModel):
         "with an actionable error). A hand-written full spec must satisfy ~40 "
         "validation rules and is the slow path. If you DO pass one — RULES "
         "(violations are refused): app_kind must be one of 'lead_gen' | "
-        "'directory' | 'records' (there is no other kind — model your app onto the "
-        "closest one); entity field names must be snake_case identifiers and must "
+        "'directory' | 'records' | 'local_list' (use local_list for a "
+        "browser-local persistent add/list/delete app with no server data plane; "
+        "otherwise model your app onto the closest kind); entity field names must "
+        "be snake_case identifiers and must "
         "NOT use reserved names like 'id' or 'created_at' (implicit columns); pages "
         "carry sections (each with id/kind/content) — a page has NO direct 'content' "
         "key of its own; a 'records' spec needs at least one NON-form entity.",
@@ -357,7 +361,10 @@ class AppCreateTool:
                 app = primitive.default_app_spec(brief or "Your Brand", recipe)
             # The primitive's airtight normalization (e.g. lead-gen appends the lead
             # entity the worker targets; directory is identity).
-            app = primitive.prepare_app_spec(app)
+            try:
+                app = primitive.prepare_app_spec(app)
+            except (TypeError, ValueError) as exc:
+                raise _AppKitError(f"invalid {primitive.id!r} app_spec: {exc}") from exc
 
             existing = await _read_spec_bytes(ctx, APPSPEC_RELPATH)
             if existing is not None:
@@ -947,6 +954,20 @@ class AppAddPrimitiveTool:
                 )
 
             app = await _load_app_spec(ctx)
+            host = resolve_primitive(app.app_kind)
+            # local_list's reviewed contract is the complete browser-local base.
+            # No registered add-on currently has a provenance verifier + lowering
+            # contract for that host, even when its generic apply_spec happens to
+            # produce a structurally valid AppSpec. Refuse before spec validation
+            # (and before any design/tree/provenance work) instead of silently
+            # changing list semantics or accepting a partially lowered feature.
+            if host.id == LOCAL_LIST_PRIMITIVE_ID:
+                raise _AppKitError(
+                    f"the {LOCAL_LIST_PRIMITIVE_ID!r} host does not support add-on "
+                    f"primitive {prim.id!r}; create a supported base primitive for "
+                    "that feature instead"
+                )
+
             design = await _load_design_spec(ctx)
 
             try:
@@ -996,6 +1017,19 @@ class AppAddPrimitiveTool:
                 new_app = prim.apply_spec(app, validated)
             except Exception as exc:  # noqa: BLE001
                 raise _AppKitError(f"applying the {prim.id!r} spec failed: {exc}") from exc
+
+            # The add-on only owns its spec fold; the CURRENT base primitive owns
+            # the complete output shape. Re-run that base's airtight preparation as
+            # a host-compatibility boundary before any tree/spec/provenance write.
+            # This catches folds that are valid AppSpec data but unsupported by the
+            # selected host (for example Stripe metadata on browser-local local_list)
+            # instead of letting generation crash or silently omit the feature.
+            try:
+                new_app = host.prepare_app_spec(new_app)
+            except Exception as exc:  # noqa: BLE001 - typed fail-closed tool boundary
+                raise _AppKitError(
+                    f"primitive {prim.id!r} is incompatible with the {host.id!r} host: {exc}"
+                ) from exc
             if new_app.model_dump(mode="json") == app.model_dump(mode="json"):
                 # Same RC-M rule as the sibling tools: a no-op must refuse loudly,
                 # never report a hollow success the model will retry into the breaker.
@@ -1004,7 +1038,13 @@ class AppAddPrimitiveTool:
                     "changed. Send different values, or move on."
                 )
 
-            tree = generate(new_app, design)
+            try:
+                tree = generate(new_app, design)
+            except Exception as exc:  # noqa: BLE001 - never leak a core crash to the agent
+                raise _AppKitError(
+                    f"generating the {host.id!r} host after applying primitive "
+                    f"{prim.id!r} failed: {exc}"
+                ) from exc
             _lint_gate(tree, design)
             touched = await _apply_tree(ctx, tree)
             await _save_app_spec(ctx, new_app)

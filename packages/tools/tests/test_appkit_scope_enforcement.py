@@ -7,6 +7,9 @@ called by its QUALIFIED NAME is REFUSED (unknown_tool), never silently executed.
 
 from __future__ import annotations
 
+import re
+
+import pytest
 from disco.core import ActionEvent, SecurityRisk, ToolCall
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import BlastRadiusConfirm
@@ -95,17 +98,24 @@ def _appkit_exec(
     return ex, state
 
 
-async def _scaffold(ex: AppKitToolExecutor):
-    return await ex.execute(call("app_create", recipe_id="editorial-ledger", brief="Acme"))
+async def _scaffold(ex: AppKitToolExecutor, *, primitive_id: str = "lead_gen"):
+    return await ex.execute(
+        call(
+            "app_create",
+            recipe_id="editorial-ledger",
+            primitive_id=primitive_id,
+            brief="Acme",
+        )
+    )
 
 
 # ---- (c) planning phase (loop PLANNING) narrows the allowlist ----------------
 
 
-def test_planning_phase_callable_names_are_reads_plus_plan_plus_hatch():
+def test_planning_phase_callable_names_are_reads_plus_plan_without_hatch():
     ex, _ = _appkit_exec(loop_mode=OperatingMode.PLANNING)
     callable_names = ex.callable_tool_names()
-    assert callable_names == APPKIT_READ_TOOLS | {"submit_plan", "request_custom_build"}
+    assert callable_names == APPKIT_READ_TOOLS | {"submit_plan"}
     # No mutators, no raw tools advertised as callable in planning.
     assert not (callable_names & APPKIT_MUTATORS)
     for raw in _RAW_TOOLS:
@@ -124,6 +134,69 @@ async def test_build_phase_refuses_raw_tools_by_qualified_name():
         assert res.success is False, raw
         assert res.structured is not None and res.structured["kind"] == "unknown_tool", raw
         assert raw not in ex.callable_tool_names()
+
+
+@pytest.mark.parametrize(
+    ("phase", "loop_mode", "expected_recovery"),
+    [
+        (AppKitPhase.PLANNING, OperatingMode.PLANNING, {"submit_plan"}),
+        (AppKitPhase.PLANNING, OperatingMode.LONG_HORIZON, {"app_create"}),
+        (
+            AppKitPhase.BUILD,
+            OperatingMode.LONG_HORIZON,
+            {
+                "app_update_content",
+                "app_add_section",
+                "app_set_design",
+                "app_add_primitive",
+                "design_lint",
+                "verify_appkit_app",
+                "app_snapshot_version",
+            },
+        ),
+    ],
+    ids=("planning", "bootstrap", "build"),
+)
+async def test_registered_scope_denial_is_phase_aware_and_only_directs_callable_tools(
+    phase: AppKitPhase,
+    loop_mode: OperatingMode,
+    expected_recovery: set[str],
+):
+    ex, _ = _appkit_exec(phase=phase, loop_mode=loop_mode, autonomous=True)
+    res = await ex.execute(call("file_write", path="x", content="y"))
+    assert res.success is False
+    assert res.structured is not None and res.structured["kind"] == "unknown_tool"
+    assert "strict AppKit scope denied registered tool 'file_write'" in res.error
+    assert "it was not executed" in res.error
+    assert "do not retry" in res.error
+    recovery = res.error.partition("Recovery: ")[2]
+    directed_tools = set(re.findall(r"`([^`]+)`", recovery))
+    assert directed_tools == expected_recovery
+    assert directed_tools <= ex.callable_tool_names()
+
+
+@pytest.mark.parametrize(
+    ("primitive_id", "expect_add_primitive"),
+    [("local_list", False), ("lead_gen", True)],
+)
+async def test_build_denial_recovery_respects_created_base_primitive(
+    primitive_id: str, expect_add_primitive: bool
+):
+    ex, state = _appkit_exec(
+        phase=AppKitPhase.PLANNING,
+        loop_mode=OperatingMode.LONG_HORIZON,
+        autonomous=True,
+    )
+    created = await _scaffold(ex, primitive_id=primitive_id)
+    assert created.success, created.error
+    assert state.phase == AppKitPhase.BUILD
+
+    denied = await ex.execute(call("file_write", path="x", content="y"))
+    assert not denied.success
+    recovery = denied.error.partition("Recovery: ")[2]
+    directed_tools = set(re.findall(r"`([^`]+)`", recovery))
+    assert ("app_add_primitive" in directed_tools) is expect_add_primitive
+    assert directed_tools <= ex.callable_tool_names()
 
 
 def test_strict_appkit_requery_distinguishes_scope_denied_from_truly_unknown():

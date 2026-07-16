@@ -28,7 +28,12 @@ import html
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .primitives import SEO_PRIMITIVE_ID, PrimitiveDefinition, register_primitive
+from .primitives import (
+    LOCAL_LIST_PRIMITIVE_ID,
+    SEO_PRIMITIVE_ID,
+    PrimitiveDefinition,
+    register_primitive,
+)
 from .recipes import SiteRecipe
 from .spec import (
     MAX_SEO_DESCRIPTION,
@@ -108,6 +113,12 @@ def apply_seo_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
     `app.name` at emit time — see `spec.SeoMeta`)."""
     if not isinstance(spec, SeoSpec):  # defensive: app_add_primitive validated it
         raise TypeError(f"apply_spec for {SEO_PRIMITIVE_ID!r} needs a SeoSpec")
+    if app.app_kind == LOCAL_LIST_PRIMITIVE_ID:
+        raise ValueError(
+            "local_list does not support the seo folded primitive: its dedicated "
+            "generator does not lower SEO metadata or public sitemap/robots files. "
+            "Use a supported base primitive instead."
+        )
     data = app.model_dump(mode="json")
     data["seo"] = {
         "site_description": spec.site_description,

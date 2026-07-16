@@ -116,6 +116,7 @@ from disco.retrieval.deep_research import (
 from disco.retrieval.wiring import retrieval_capability_handlers
 from disco.tools import (
     WORKFLOW_ROUTER_ALLOWED_TOOLS,
+    AppKitPhase,
     AppKitPhaseState,
     AppKitToolExecutor,
     Capability,
@@ -1021,6 +1022,7 @@ class ConversationRuntime:
         surface: str | None = None,
         autonomous: bool = False,
         conversation_id: str | None = None,
+        appkit_mode: bool = False,
     ) -> DefaultLLMRouter:
         """The router for the CURRENT assignments. Cheap to rebuild (providers are
         plain objects; the HTTP client is created per call), so we reload the config
@@ -1065,6 +1067,20 @@ class ConversationRuntime:
 
             workflow_router_active = _workflow_router_active
 
+        appkit_mode_active: Callable[[], bool] | None = None
+        if appkit_mode and conversation_id:
+            appkit_cid = conversation_id
+
+            def _appkit_mode_active() -> bool:
+                executor = self._executors.get(appkit_cid)
+                phase_state = getattr(executor, "appkit_phase", None)
+                # Before loop composition installs its executor, fail closed to
+                # strict. Once the confirmed hatch advances CUSTOM_BUILD, every
+                # subsequent router injection uses the ordinary Build profile.
+                return getattr(phase_state, "phase", None) != AppKitPhase.CUSTOM_BUILD
+
+            appkit_mode_active = _appkit_mode_active
+
         # DISCO_INSPECT: when on, bind a per-conversation routing sink so every
         # RoutingDecision this (per-conversation) router emits lands in the trace.
         # Off → None → the router's NullRoutingSink, i.e. zero overhead.
@@ -1078,6 +1094,8 @@ class ConversationRuntime:
                 autonomous=autonomous,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
                 workflow_router_active=workflow_router_active,
+                appkit_mode=appkit_mode,
+                appkit_mode_active=appkit_mode_active,
             ),
             sink=sink,
         )
@@ -1561,11 +1579,17 @@ class ConversationRuntime:
             # Single source of truth (gated by surface) shared with the loop compose
             # below and the UI badge — they can't desync.
             autonomous = self._effective_autonomous(conversation_id)
+            strict_appkit = (
+                surface in self._BUILD_LIKE_SURFACES
+                and self._effective_appkit_mode(conversation_id)
+                and not self._effective_artifact_mode(conversation_id)
+            )
             router = self._router_now(
                 pick=override,
                 surface=surface,
                 autonomous=autonomous,
                 conversation_id=conversation_id,
+                appkit_mode=strict_appkit,
             )
             # Research↔Build isolation: the SURFACE picks the agent class, so
             # completion semantics (prose=answer for Research vs affirmative

@@ -507,7 +507,15 @@ class Driver:
                 _clarify_tool_singleton(),
             ]
         if self._loop._planning_tools:
-            tools = [t for t in tools if getattr(t, "name", None) not in self._loop._planning_tools]
+            # `_planning_tools` is the PLANNING allowlist, not a declaration that
+            # every member is planning-only. Production includes dual-use reads
+            # and `think` there; removing the whole set after approval silently
+            # stripped the exact exploration tools both execution prompts direct.
+            # Withhold only the intercepted plan-submission signal. Planning-only
+            # ask/intake virtuals are assembled separately below and therefore
+            # cannot leak through this executor-tool filter.
+            plan_name = getattr(self._loop._plan_tool, "name", self._loop._plan_tool)
+            tools = [t for t in tools if getattr(t, "name", None) != plan_name]
         # Append the virtual ask_user + clarify + propose_plan_update tools in execution
         # mode. All are documented so the model decides WHEN to use them;
         # neither is injected by reminder. propose_plan_update is the model's
@@ -628,7 +636,13 @@ class Driver:
         """
         if mode == OperatingMode.PLANNING:
             return set(self.planning_allowed_tool_names(available_tools))
-        return self._executor_callable_tool_names() | self._virtual_tool_names()
+        allowed = self._executor_callable_tool_names() | self._virtual_tool_names()
+        plan_name = getattr(self._loop._plan_tool, "name", self._loop._plan_tool)
+        # These signals are valid only before approval. Keep them in the broader
+        # requery-recognition set so a hallucination gets its canonical typed
+        # refusal, but do not report them as allowed execution capabilities.
+        allowed.difference_update({plan_name, "questions_v2", "plan_step"})
+        return allowed
 
     def unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
         _hint = f"ERROR: Unknown tool '{tool_name}'. Available: {sorted(list(offered_names))}"

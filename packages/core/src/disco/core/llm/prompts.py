@@ -608,6 +608,73 @@ _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "tool becomes callable — approval unlocks all of the above at once."
 )
 
+# H282 — strict AppKit has a deliberately narrow semantic authoring surface.  It
+# must never inherit the ordinary Build prompts: those prompts promise raw file,
+# shell, starter-kit, preview, and progress tools that AppKit correctly withholds.
+# Keep these prompts self-contained (no generic capability/mentioned-element
+# suffixes) so every directed tool is part of the strict phase scope.
+_APPKIT_PLANNING_DRIVER_PROMPT = (
+    "You are an autonomous build agent in STRICT APPKIT PLANNING mode.\n"
+    "Propose a short semantic AppKit plan, then call `submit_plan` exactly once. "
+    "Do not build or mutate the workspace before approval.\n\n"
+    "Before the plan you may use only the read tools actually offered, such as "
+    "`file_list`, `file_read`, `search`, `extract`, and `think`. Raw file writes, "
+    "shell/code execution, starter kits, browser/preview controls, and progress "
+    "tools are unavailable while strict AppKit scope is active; do not call them "
+    "or include them in the semantic plan.\n\n"
+    "Plan in terms of the generated AppKit workflow: choose one `app_create` base "
+    "primitive, then shape copy/sections/design with `app_update_content`, "
+    "`app_add_section`, or `app_set_design`. For supported base primitives, plan "
+    "`app_add_primitive` only when a compatible add-on is required. `local_list` "
+    "is a complete base with no compatible add-ons; never plan "
+    "`app_add_primitive` for it. Then run `verify_appkit_app` and finish. Use "
+    "`local_list` for browser-local notes, "
+    "todos, checklists, or any add/list/delete request; use `lead_gen` for lead "
+    "capture, `directory` for a static searchable directory, and `records` for "
+    "D1-backed related-record APIs. Generated source is owned by AppKit and is not "
+    "hand-edited. Keep the plan to 3-5 outcome-focused steps and omit speculative "
+    "file-level done conditions."
+)
+
+_APPKIT_EXECUTION_DRIVER_PROMPT = (
+    "You are an autonomous build agent executing an approved plan in STRICT APPKIT mode.\n"
+    "Use only the semantic tools actually offered. Raw file mutation, shell/code "
+    "execution, starter kits, browser/preview controls, and progress tools are "
+    "unavailable while strict AppKit scope is active. Never call or retry them in "
+    "that scope, and never hand-edit generated files.\n\n"
+    "Start with `think`, then call `app_create` once. Pick the base primitive that "
+    "matches the behavior: `local_list` for persistent browser-local add/list/delete "
+    "apps such as notes, todos, and checklists; `lead_gen` for lead capture; "
+    "`directory` for static searchable listings; `records` for D1-backed related "
+    "record APIs. After creation, use `app_update_content`, `app_add_section`, or "
+    "`app_set_design` for bounded content, section, and design changes. "
+    "`local_list` supports no add-on primitives, so never call "
+    "`app_add_primitive` for it. For another supported base, "
+    "`app_add_primitive` remains available only for a compatible add-on. Use the "
+    "read tools to inspect generated output when needed.\n\n"
+    "When the app is ready, call `design_lint` if design feedback is needed, then "
+    "call `verify_appkit_app` once. The verifier owns the platform build and preview; "
+    "do not try to start one yourself. If it passes, call `app_snapshot_version` "
+    "when a snapshot is useful and then call `finish` immediately. If a semantic "
+    "tool refuses a call, read the refusal and choose a different offered AppKit "
+    "operation; do not repeat the same denied call."
+)
+
+_APPKIT_AUTONOMOUS_SCOPE_GUIDANCE = (
+    "\n\nThis autonomous strict run has no human-confirmed scope-widening path. "
+    "Raw file, shell/code, starter-kit, browser/preview, and progress tools remain "
+    "disabled for the entire run; complete the task with the offered semantic "
+    "AppKit tools."
+)
+
+_APPKIT_ASSISTED_SCOPE_GUIDANCE = (
+    "\n\nIf the requested result genuinely cannot be represented by the offered "
+    "semantic operations, `request_custom_build` is the only escape hatch. It is "
+    "high-risk and requires explicit human confirmation before strict scope can "
+    "widen and raw tools can become available. Use it only for a demonstrated "
+    "capability gap, never speculatively."
+)
+
 _WORKFLOW_ROUTER_DRIVER_PROMPT = (
     "You are an autonomous task agent in WORKFLOW ROUTER PHASE.\n"
     "This agent conversation routes actionable work through workflows. You have NO "
@@ -661,8 +728,43 @@ class DriverPrompts:
         autonomous: bool = False,
         host_verify_authoritative: bool = False,
         workflow_router_active: Callable[[], bool] | None = None,
+        appkit_mode: bool = False,
+        appkit_mode_active: Callable[[], bool] | None = None,
     ) -> None:
         self._base = base or StaticPromptProvider()
+        self._appkit_mode = appkit_mode
+        self._appkit_mode_active = appkit_mode_active
+        self._ordinary_profile: DriverPrompts | None = None
+        if appkit_mode:
+            # A confirmed request_custom_build widens the live executor to ordinary
+            # Build. Keep an ordinary profile built from the SAME caller inputs so
+            # the next model request switches its system contract atomically with
+            # that shared phase state instead of retaining semantic-only guidance.
+            if appkit_mode_active is not None:
+                self._ordinary_profile = DriverPrompts(
+                    base=self._base,
+                    planning_prompt=planning_prompt,
+                    execution_prompt=execution_prompt,
+                    execution_prompt_small=execution_prompt_small,
+                    skills_block=skills_block,
+                    flavor=flavor,
+                    autonomous=autonomous,
+                    host_verify_authoritative=host_verify_authoritative,
+                    workflow_router_active=workflow_router_active,
+                )
+            planning_prompt = _APPKIT_PLANNING_DRIVER_PROMPT
+            execution_prompt = _APPKIT_EXECUTION_DRIVER_PROMPT
+            execution_prompt_small = _APPKIT_EXECUTION_DRIVER_PROMPT
+            if autonomous:
+                planning_prompt += _APPKIT_AUTONOMOUS_SCOPE_GUIDANCE
+                execution_prompt += _APPKIT_AUTONOMOUS_SCOPE_GUIDANCE
+                execution_prompt_small += _APPKIT_AUTONOMOUS_SCOPE_GUIDANCE
+            else:
+                # request_custom_build is intentionally withheld by the loop's
+                # read-only planning backstop. Advertise the confirmed hatch only
+                # in execution, where it is actually offered and allowed.
+                execution_prompt += _APPKIT_ASSISTED_SCOPE_GUIDANCE
+                execution_prompt_small += _APPKIT_ASSISTED_SCOPE_GUIDANCE
         # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
         # with an explicit instruction to assume + proceed (OpenHands "never ask for
         # human help" + Cline "make reasonable assumptions, don't end with questions").
@@ -701,21 +803,26 @@ class DriverPrompts:
         # from the advertised tool surface for ALL tiers, so it is named in NO planning
         # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
         # list causes the model to call a tool it can't).
-        self._planning = (
-            planning_prompt + _MENTIONED_ELEMENT_GUIDANCE + _AGENT_PLANNING_CAPABILITY_BLOCK
-        )
-        self._execution = execution_prompt + _MENTIONED_ELEMENT_GUIDANCE
-        # [C21] Tightened execution prompt for small open models. Selected ONLY
-        # when the assist gate is ON (req.assist=True) at prompt-injection time.
-        # Capable-model (assist OFF) path keeps using self._execution verbatim.
-        self._execution_small = execution_prompt_small + _MENTIONED_ELEMENT_GUIDANCE
+        if appkit_mode:
+            self._planning = planning_prompt
+            self._execution = execution_prompt
+            self._execution_small = execution_prompt_small
+        else:
+            self._planning = (
+                planning_prompt + _MENTIONED_ELEMENT_GUIDANCE + _AGENT_PLANNING_CAPABILITY_BLOCK
+            )
+            self._execution = execution_prompt + _MENTIONED_ELEMENT_GUIDANCE
+            # [C21] Tightened execution prompt for small open models. Selected ONLY
+            # when the assist gate is ON (req.assist=True) at prompt-injection time.
+            # Capable-model (assist OFF) path keeps using self._execution verbatim.
+            self._execution_small = execution_prompt_small + _MENTIONED_ELEMENT_GUIDANCE
         self._skills_block = skills_block.strip()
         self._workflow_router_active = workflow_router_active
 
     def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
         # [BP-00] Vision bullet: rendered ONLY when the driver has VISION.
         vision_bullet = ""
-        if capabilities and Requirement.VISION in capabilities:
+        if not self._appkit_mode and capabilities and Requirement.VISION in capabilities:
             vision_bullet = (
                 "  • You can SEE your latest browser screenshot. After navigating, look at it: "
                 "check layout, styling, and that the page is not blank or broken before "
@@ -727,7 +834,7 @@ class DriverPrompts:
         # standard-but-non-anchored model is NOT offered exact_replace), so naming it here can
         # never be a false affordance. Mirrors the VISION-bullet capabilities gate.
         anchored_bullet = ""
-        if capabilities and Requirement.ANCHORED_EDIT in capabilities:
+        if not self._appkit_mode and capabilities and Requirement.ANCHORED_EDIT in capabilities:
             anchored_bullet = (
                 "  • For a PRECISE targeted edit, prefer `exact_replace` (an atomic exact-string "
                 "replace — `file_read` first so your `old` matches the file verbatim) over a broad "
@@ -753,6 +860,19 @@ class DriverPrompts:
         capabilities: frozenset[Requirement] | None = None,
         assist: bool = False,
     ) -> str:
+        if self._ordinary_profile is not None and self._appkit_mode_active is not None:
+            try:
+                strict_appkit_active = self._appkit_mode_active()
+            except Exception:  # fail closed if the shared phase reader is unavailable
+                strict_appkit_active = True
+            if not strict_appkit_active:
+                return self._ordinary_profile.system_prompt(
+                    model_family=model_family,
+                    mode=mode,
+                    role=role,
+                    capabilities=capabilities,
+                    assist=assist,
+                )
         if role == ModelRole.AGENT_DRIVER:
             if self._workflow_router_is_active():
                 return self._with_skills(_WORKFLOW_ROUTER_DRIVER_PROMPT, capabilities)

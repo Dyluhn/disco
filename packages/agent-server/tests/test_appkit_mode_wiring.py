@@ -6,11 +6,13 @@ from unittest import mock
 
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import ActionEvent, SecurityRisk, SqliteEventStore, ToolCall
-from disco.core.llm import DefaultLLMRouter, OperatingMode
+from disco.core.llm import DefaultLLMRouter, ModelRole, OperatingMode
 from disco.core.loop import BlastRadiusConfirm, RouterAgent
 from disco.core.loop.driver import Driver
 from disco.core.security import RuleBasedAnalyzer
-from disco.tools import AGENT_TOOLS, AppKitToolExecutor, DefaultToolExecutor
+from disco.tools import AGENT_TOOLS, AppKitPhase, AppKitToolExecutor, DefaultToolExecutor
+
+_EXECUTION_READS = {"file_list", "file_read", "search", "extract", "think"}
 
 
 def _rt() -> ConversationRuntime:
@@ -35,6 +37,24 @@ def test_appkit_mode_builds_appkit_executor() -> None:
     assert isinstance(loop.executor, AppKitToolExecutor)
 
 
+def test_loop_for_selects_strict_appkit_prompt_profile() -> None:
+    rt = _rt()
+    cid = "ak-prompt"
+    rt.set_surface(cid, "agent")
+    rt.set_appkit_mode(cid, True)
+    with mock.patch.object(rt, "_router_now", wraps=rt._router_now) as router_now:
+        with mock.patch.object(rt, "_sandbox_service_now"):
+            rt._loop_for(cid)
+    assert any(call.kwargs.get("appkit_mode") is True for call in router_now.call_args_list)
+    prompt = rt._loops[cid]._router._prompts.system_prompt(
+        model_family="deepseek",
+        mode=OperatingMode.LONG_HORIZON,
+        role=ModelRole.AGENT_DRIVER,
+    )
+    assert "STRICT APPKIT" in prompt
+    assert "`file_write`" not in prompt
+
+
 def test_appkit_off_builds_default_executor() -> None:
     rt = _rt()
     loop = _loop_for(rt, "bld1", appkit_mode=False)
@@ -50,7 +70,7 @@ def test_appkit_loop_starts_in_planning_with_narrow_allowlist() -> None:
     assert loop.mode == OperatingMode.PLANNING
     callable_names = loop.executor.callable_tool_names()
     assert "submit_plan" in callable_names
-    assert "request_custom_build" in callable_names
+    assert "request_custom_build" not in callable_names
     for raw in ("file_write", "shell", "code_exec"):
         assert raw not in callable_names
     assert "app_add_section" not in callable_names
@@ -95,6 +115,95 @@ def test_appkit_execution_inspect_allowed_tools_remain_callable_only() -> None:
     assert "file_write" not in allowed
     assert "app_create" in allowed
     assert {tool.name for tool in offered} <= allowed
+
+
+def test_ordinary_build_execution_retains_prompt_directed_reads_but_not_submit_plan() -> None:
+    rt = _rt()
+    loop = _loop_for(rt, "ordinary-execution", appkit_mode=False)
+    loop.mode = OperatingMode.LONG_HORIZON
+    driver = Driver(loop)
+    offered = driver.tools_for_step(mode=loop.mode)
+    offered_names = {tool.name for tool in offered}
+    allowed = driver.allowed_tool_names_for_mode(loop.mode, available_tools=offered)
+
+    assert _EXECUTION_READS <= offered_names
+    assert _EXECUTION_READS <= allowed
+    assert "submit_plan" not in offered_names
+    assert "submit_plan" not in allowed
+    assert "questions_v2" not in allowed
+
+
+async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> None:
+    rt = _rt()
+    cid = "ak-cross-layer"
+    rt.set_surface(cid, "agent")
+    rt.set_appkit_mode(cid, True)
+    with mock.patch.object(rt, "_sandbox_service_now"):
+        loop = rt._loop_for(cid)
+    driver = Driver(loop)
+
+    def snapshot() -> tuple[set[str], set[str], str]:
+        offered = driver.tools_for_step(mode=loop.mode)
+        offered_names = {tool.name for tool in offered}
+        allowed = driver.allowed_tool_names_for_mode(loop.mode, available_tools=offered)
+        prompt = loop._router._prompts.system_prompt(
+            model_family="deepseek",
+            mode=loop.mode,
+            role=ModelRole.AGENT_DRIVER,
+        )
+        return offered_names, allowed, prompt
+
+    # Planning: submit is real; the high-risk hatch is absent at executor,
+    # offer, allow, and prompt layers.
+    planning_offered, planning_allowed, planning_prompt = snapshot()
+    assert "submit_plan" in planning_offered <= planning_allowed
+    assert "submit_plan" in planning_prompt
+    assert "request_custom_build" not in loop.executor.callable_tool_names()
+    assert "request_custom_build" not in planning_offered
+    assert "request_custom_build" not in planning_allowed
+    assert "request_custom_build" not in planning_prompt
+
+    # Execution bootstrap: app_create + the confirmed hatch are now offered,
+    # allowed, and directed; prompt-directed reads/think remain available.
+    loop.mode = OperatingMode.LONG_HORIZON
+    bootstrap_offered, bootstrap_allowed, bootstrap_prompt = snapshot()
+    assert {"app_create", "request_custom_build"} <= bootstrap_offered <= bootstrap_allowed
+    assert "app_create" in bootstrap_prompt and "request_custom_build" in bootstrap_prompt
+    assert _EXECUTION_READS <= bootstrap_offered <= bootstrap_allowed
+    assert "submit_plan" not in bootstrap_offered
+    assert "submit_plan" not in bootstrap_allowed
+    assert "questions_v2" not in bootstrap_allowed
+
+    # Build: strict semantic operations replace bootstrap-only creation while
+    # the human-confirmed escape remains exactly aligned.
+    assert isinstance(loop.executor, AppKitToolExecutor)
+    loop.executor.appkit_phase.phase = AppKitPhase.BUILD
+    build_offered, build_allowed, build_prompt = snapshot()
+    assert {"app_update_content", "verify_appkit_app", "request_custom_build"} <= build_offered
+    assert build_offered <= build_allowed
+    assert "app_update_content" in build_prompt and "request_custom_build" in build_prompt
+    assert _EXECUTION_READS <= build_offered <= build_allowed
+    assert "submit_plan" not in build_allowed
+
+    # Post-confirmation: executor scope and the active router profile widen
+    # together. Strict semantic-only wording disappears as raw Build tools arrive.
+    widened = await loop.executor.execute(
+        ToolCall(
+            tool_name="request_custom_build",
+            arguments={"reason": "need raw files", "needed_capabilities": ["file_write"]},
+        )
+    )
+    assert widened.success
+    widened_offered, widened_allowed, widened_prompt = snapshot()
+    assert "file_write" in loop.executor.callable_tool_names()
+    assert "file_write" in widened_offered <= widened_allowed
+    assert "file_write" in widened_prompt
+    assert "STRICT APPKIT" not in widened_prompt
+    assert "semantic tools actually offered" not in widened_prompt
+    assert "request_custom_build" not in widened_offered
+    assert "submit_plan" not in widened_offered
+    assert "submit_plan" not in widened_allowed
+    assert "questions_v2" not in widened_allowed
 
 
 def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:

@@ -2635,6 +2635,7 @@ register_primitive(
 
 # Register sibling primitives that depend on the shared emitters defined above.
 importlib.import_module(".records_primitive", package=__package__)
+importlib.import_module(".local_list_primitive", package=__package__)
 importlib.import_module(".hello_primitive", package=__package__)
 importlib.import_module(".stripe_primitive", package=__package__)
 importlib.import_module(".form_primitive", package=__package__)

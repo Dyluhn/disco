@@ -53,6 +53,7 @@ from .spec import AppSpec, DesignSpec
 LEAD_GEN_PRIMITIVE_ID = "lead_gen"
 DIRECTORY_PRIMITIVE_ID = "directory"
 RECORDS_PRIMITIVE_ID = "records"
+LOCAL_LIST_PRIMITIVE_ID = "local_list"
 HELLO_PRIMITIVE_ID = "hello"
 FORM_PRIMITIVE_ID = "form"
 SEO_PRIMITIVE_ID = "seo"
@@ -257,6 +258,7 @@ __all__ = [
     "FORM_PRIMITIVE_ID",
     "HELLO_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
+    "LOCAL_LIST_PRIMITIVE_ID",
     "RECORDS_PRIMITIVE_ID",
     "SEO_PRIMITIVE_ID",
     "HostService",
