@@ -268,6 +268,7 @@ def build_loop(
     workflow_run=None,
     finish_alias: str | None = None,
     quiet: bool = False,
+    strict_appkit_active=None,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -307,6 +308,7 @@ def build_loop(
         workflow_run=workflow_run,
         finish_alias=finish_alias,
         quiet=quiet,
+        strict_appkit_active=strict_appkit_active,
     )
     return loop, store
 

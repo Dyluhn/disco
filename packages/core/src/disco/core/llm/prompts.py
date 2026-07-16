@@ -632,8 +632,11 @@ _APPKIT_PLANNING_DRIVER_PROMPT = (
     "todos, checklists, or any add/list/delete request; use `lead_gen` for lead "
     "capture, `directory` for a static searchable directory, and `records` for "
     "D1-backed related-record APIs. Generated source is owned by AppKit and is not "
-    "hand-edited. Keep the plan to 3-5 outcome-focused steps and omit speculative "
-    "file-level done conditions."
+    "hand-edited. Keep the plan to 3-5 outcome-focused steps. Prefer omitting "
+    "`done_condition`: `verify_appkit_app` owns behavioral proof. If an exact "
+    "existence condition is useful, use `file_exists` only for the canonical "
+    "`.disco/appspec.json` or `.disco/designspec.json`; never guess a generated "
+    "source path, and do not use command or HTTP conditions in strict AppKit."
 )
 
 _APPKIT_EXECUTION_DRIVER_PROMPT = (

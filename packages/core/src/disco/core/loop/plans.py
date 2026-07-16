@@ -16,6 +16,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from ..appkit.spec import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
 from ..dod import (
     CommandExitPredicate,
     FileExistsPredicate,
@@ -228,6 +229,46 @@ def validate_plan_done_conditions(plan: PlanEvent) -> list[str]:
                 "nested file deliverable."
             )
             break
+    return errors
+
+
+_APPKIT_CANONICAL_DOD_FILES = frozenset({APPSPEC_RELPATH, DESIGNSPEC_RELPATH})
+
+
+def validate_appkit_plan_done_conditions(plan: PlanEvent) -> list[str]:
+    """Reject finish gates outside the strict AppKit semantic contract.
+
+    AppKit owns and regenerates its source tree, while ``verify_appkit_app`` owns
+    behavioral proof. The only durable files a strict semantic plan may name as
+    immutable existence gates are the two canonical specs that drive generation.
+    A custom-build widening disables this validator at the caller, restoring the
+    ordinary Build done-condition contract.
+    """
+    errors: list[str] = []
+    canonical = ", ".join(sorted(_APPKIT_CANONICAL_DOD_FILES))
+    for index, step in enumerate(plan.steps, start=1):
+        predicate = step.done_condition
+        if predicate is None:
+            continue
+        if isinstance(predicate, FileExistsPredicate):
+            comparable = _comparable_workspace_path(predicate.path)
+            if comparable is None:
+                # The generic validator already renders the precise safety error.
+                continue
+            if str(comparable) in _APPKIT_CANONICAL_DOD_FILES:
+                continue
+            errors.append(
+                f"step {index} file_exists path {predicate.path!r} is not a "
+                "canonical strict AppKit finish gate. Generated source locations "
+                "are owned by AppKit and must not be guessed. Omit the condition "
+                f"or name only {canonical}; verify_appkit_app owns behavioral proof."
+            )
+            continue
+        errors.append(
+            f"step {index} {predicate.kind} is not a canonical strict AppKit "
+            "finish gate. Strict AppKit plans may omit done_condition or use "
+            f"file_exists only for {canonical}; verify_appkit_app owns behavioral proof."
+        )
     return errors
 
 

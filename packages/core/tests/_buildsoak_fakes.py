@@ -54,7 +54,13 @@ class BuildExecutor(FakeExecutor):
         )
 
 
-def build_plan_loop(agent, *, conversation_id: str, executor: BuildExecutor | None = None):
+def build_plan_loop(
+    agent,
+    *,
+    conversation_id: str,
+    executor: BuildExecutor | None = None,
+    strict_appkit_active=None,
+):
     """A loop wired exactly like the production Build surface: starts in PLANNING
     with the production planning allowlist, executes in LONG_HORIZON."""
     return build_loop(
@@ -64,6 +70,7 @@ def build_plan_loop(agent, *, conversation_id: str, executor: BuildExecutor | No
         mode=OperatingMode.PLANNING,
         planning_tools=PROD_PLANNING_TOOLS,
         execution_mode=OperatingMode.LONG_HORIZON,
+        strict_appkit_active=strict_appkit_active,
     )
 
 

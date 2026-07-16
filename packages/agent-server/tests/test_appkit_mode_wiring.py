@@ -37,6 +37,18 @@ def test_appkit_mode_builds_appkit_executor() -> None:
     assert isinstance(loop.executor, AppKitToolExecutor)
 
 
+def test_appkit_done_condition_profile_tracks_custom_build_widening() -> None:
+    rt = _rt()
+    loop = _loop_for(rt, "ak-dod-profile", appkit_mode=True)
+    reader = loop._strict_appkit_active_reader
+    assert reader is not None
+    assert reader() is True
+
+    assert isinstance(loop.executor, AppKitToolExecutor)
+    loop.executor.appkit_phase.phase = AppKitPhase.CUSTOM_BUILD
+    assert reader() is False
+
+
 def test_loop_for_selects_strict_appkit_prompt_profile() -> None:
     rt = _rt()
     cid = "ak-prompt"

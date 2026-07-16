@@ -47,6 +47,19 @@ def test_strict_appkit_planning_omits_generic_capability_suffixes() -> None:
     assert "submit_plan" in prompt
 
 
+def test_strict_appkit_planning_names_only_canonical_done_conditions() -> None:
+    prompt = DriverPrompts(appkit_mode=True).system_prompt(
+        model_family="deepseek",
+        mode=OperatingMode.PLANNING,
+        role=ModelRole.AGENT_DRIVER,
+    )
+
+    assert ".disco/appspec.json" in prompt
+    assert ".disco/designspec.json" in prompt
+    assert "never guess a generated source path" in prompt
+    assert "do not use command or HTTP conditions" in prompt
+
+
 def test_strict_appkit_planning_never_routes_local_list_to_add_on_primitive() -> None:
     prompt = DriverPrompts(appkit_mode=True).system_prompt(
         model_family="deepseek",

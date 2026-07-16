@@ -99,6 +99,7 @@ from .plan_conditions import PlanStepConditions
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .plans import (
     Planner,
+    validate_appkit_plan_done_conditions,
     validate_plan_done_conditions,
     validate_raw_plan_done_conditions,
 )
@@ -736,6 +737,7 @@ class AgentLoop:
         verifier_judge_timeout_s: float = 30.0,
         workflow_run: WorkflowRun | None = None,
         quiet: bool = False,
+        strict_appkit_active: Callable[[], bool] | None = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -745,6 +747,11 @@ class AgentLoop:
         # instead of an indefinite AWAITING_USER_DECISION stall.
         self._autonomous = autonomous
         self._quiet = quiet
+        # H301 — strict AppKit has a narrower immutable-DoD contract than an
+        # ordinary/custom Build. The runtime callback reads the shared live AppKit
+        # phase, so a confirmed CUSTOM_BUILD widening restores ordinary predicates
+        # without reconstructing the loop. A configured callback fails closed.
+        self._strict_appkit_active_reader = strict_appkit_active
         # P6 — the contract finalizer alias for `finish` (None when no contract governs).
         self._finish_alias = finish_alias
         self._workflow_run = workflow_run
@@ -2606,6 +2613,13 @@ async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: l
     plan = loop._plan_from_args(tool_call.arguments, events)
     condition_errors = validate_raw_plan_done_conditions(tool_call.arguments)
     condition_errors.extend(validate_plan_done_conditions(plan))
+    if loop._strict_appkit_active_reader is not None:
+        try:
+            strict_appkit_active = loop._strict_appkit_active_reader()
+        except Exception:  # fail closed when the shared lifecycle reader is unavailable
+            strict_appkit_active = True
+        if strict_appkit_active:
+            condition_errors.extend(validate_appkit_plan_done_conditions(plan))
     if condition_errors:
         loop._planner.discard_plan_predicates(plan.revision)
         start_seq = signals.current_planning_segment_start_seq(events)

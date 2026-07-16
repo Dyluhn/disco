@@ -166,6 +166,117 @@ async def test_repeated_unsafe_done_conditions_land_bounded_stuck():
     )
 
 
+async def test_strict_appkit_rejects_noncanonical_gates_then_accepts_canonical_plan():
+    """The public submit_plan boundary enforces AppKit's generated-file contract."""
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "invented generated paths",
+                    "steps": [
+                        {
+                            "title": "Create the app",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "app/.app-kit-generated/app.json",
+                            },
+                        },
+                        {
+                            "title": "Run a source-level check",
+                            "done_condition": {
+                                "kind": "command",
+                                "cmd": "test -s app/index.html",
+                            },
+                        },
+                    ],
+                },
+            ),
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "canonical semantic plan",
+                    "steps": [
+                        {
+                            "title": "Create the semantic app",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "/workspace/.disco/appspec.json",
+                            },
+                        },
+                        {"title": "Verify the app"},
+                    ],
+                },
+            ),
+        ]
+    )
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-appkit-canonical-dod",
+        executor=BuildExecutor(),
+        strict_appkit_active=lambda: True,
+    )
+    await loop.send_message("build an AppKit app")
+    await loop.run()
+
+    events = await store.get_events("pw-appkit-canonical-dod")
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert [plan.summary for plan in plans] == ["canonical semantic plan"]
+    assert plans[0].steps[0].done_condition == FileExistsPredicate(
+        path="/workspace/.disco/appspec.json"
+    )
+    feedback = [
+        event.message.content
+        for event in events
+        if isinstance(event, MessageEvent) and event.source == EventSource.ENVIRONMENT
+    ]
+    assert any(
+        "not a canonical strict AppKit finish gate" in message
+        and ".disco/appspec.json" in message
+        and ".disco/designspec.json" in message
+        and "verify_appkit_app owns behavioral proof" in message
+        for message in feedback
+    )
+
+
+@pytest.mark.parametrize("strict_appkit_active", [None, lambda: False])
+async def test_ordinary_and_custom_builds_preserve_noncanonical_done_conditions(
+    strict_appkit_active,
+):
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "ordinary plan",
+                    "steps": [
+                        {
+                            "title": "Create output",
+                            "done_condition": {
+                                "kind": "file_exists",
+                                "path": "dist/custom-output.json",
+                            },
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    cid = f"pw-appkit-widened-{strict_appkit_active is not None}"
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id=cid,
+        executor=BuildExecutor(),
+        strict_appkit_active=strict_appkit_active,
+    )
+    await loop.send_message("build it")
+    await loop.run()
+
+    plans = [event for event in await store.get_events(cid) if isinstance(event, PlanEvent)]
+    assert len(plans) == 1
+    assert plans[0].steps[0].done_condition == FileExistsPredicate(path="dist/custom-output.json")
+
+
 async def test_write_in_planning_is_rejected_then_recovers_to_plan():
     """A file_write in PLANNING is rejected (paired AgentErrorEvent, never executed);
     the model gets another turn and submit_plan still produces a PlanEvent + halts at

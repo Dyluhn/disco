@@ -2174,6 +2174,11 @@ class ConversationRuntime:
             verifier_judge=verifier_judge,
             host_verifier_verdict_hook=host_verify_canary_hook,
             host_verify_authoritative=host_verify_authoritative_enabled(),
+            strict_appkit_active=(
+                (lambda phase=_appkit_phase: phase.phase != AppKitPhase.CUSTOM_BUILD)
+                if _appkit_phase is not None
+                else None
+            ),
         )
 
     # ---- deep research surface ---------------------------------------------
