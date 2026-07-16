@@ -132,6 +132,11 @@ _KERNEL_STREAM_TAIL = 48 * 1024
 _KERNEL_STREAM_CAP = _KERNEL_STREAM_HEAD + _KERNEL_STREAM_TAIL
 _KERNEL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 _KERNEL_WS_MAX_FRAME_BYTES = 1024 * 1024
+_KERNEL_INTERRUPT_GRACE_S = 5.0
+_KERNEL_INTERRUPT_CALL_TIMEOUT_S = 1.0
+_KERNEL_RESTART_CALL_TIMEOUT_S = 65.0
+_KERNEL_SHELL_REPLY_GRACE_S = 5.0
+_KERNEL_SHELL_REPLY_MAX_POLLS = 256
 
 
 def _rewrite_process_workspace_literals(code: str, workspace: Path) -> str:
@@ -258,6 +263,11 @@ class KernelResult:
     images: list[str] = field(default_factory=list)  # workspace-relative paths
     timed_out: bool = False
     restarted: bool = False
+    interrupt_attempted: bool = False
+    interrupt_failed: bool = False
+    restart_attempted: bool = False
+    restart_failed: bool = False
+    protocol_failed: bool = False
 
     def __str__(self) -> str:
         parts = []
@@ -306,6 +316,7 @@ class ProcessKernel(KernelSession):
         self._km: Any | None = None
         self._kc: Any | None = None
         self._ipc_dir: Path | None = None
+        self._restart_failed_closed = False
         self._seq = 0
 
     async def start(self) -> None:
@@ -343,6 +354,7 @@ class ProcessKernel(KernelSession):
             assert self._kc is not None  # client() always returns a KernelClient
             self._kc.start_channels()
             await self._kc.wait_for_ready(timeout=60)
+            self._restart_failed_closed = False
 
             # Setup memory limit: 4GiB as required by BP-08
             setup_cell = (
@@ -355,6 +367,17 @@ class ProcessKernel(KernelSession):
             raise
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
+        if self._restart_failed_closed:
+            return KernelResult(
+                ok=False,
+                stdout="",
+                stderr="",
+                error_traceback=(
+                    "KernelUnavailableError: previous kernel restart failed; "
+                    "recreate the sandbox session"
+                ),
+                restart_failed=True,
+            )
         if not self._kc:
             await self.start()
         assert self._kc is not None  # start() always populates both _km and _kc
@@ -384,47 +407,14 @@ class ProcessKernel(KernelSession):
                     # We use a smaller interval to check for timeout more frequently
                     msg = await kc.get_iopub_msg(timeout=timeout_s)
                 except (TimeoutError, Empty):
-                    # Timeout protocol (EXACT): interrupt() -> wait <=5s -> restart() if hangs
+                    # Timeout protocol (EXACT): interrupt -> prove BOTH cross-channel
+                    # completion signals within 5s -> restart if either is missing.
+                    # An IOPub idle alone is not enough: its matching shell reply can
+                    # still be in flight, and starting the next cell in that window
+                    # races the interrupted handler. On teardown that race surfaced as
+                    # ipykernel's "Socket operation on non-socket" and a lost result.
                     _LOG.warning("Kernel execution timed out, interrupting...")
-                    await self.interrupt()
-
-                    # Wait up to 5s for the kernel to return to idle
-                    idle = False
-                    start_wait = time.time()
-                    while time.time() - start_wait < 5.0:
-                        try:
-                            msg = await kc.get_iopub_msg(timeout=0.1)
-                        except TimeoutError:
-                            continue
-
-                        if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                            continue
-                        if (
-                            msg.get("header", {}).get("msg_type") == "status"
-                            and msg.get("content", {}).get("execution_state") == "idle"
-                        ):
-                            idle = True
-                            break
-
-                    if not idle:
-                        _LOG.warning("Kernel failed to idle after interrupt, restarting...")
-                        await self.restart()
-                        return KernelResult(
-                            ok=False,
-                            stdout="".join(stdout),
-                            stderr="".join(stderr),
-                            error_traceback="Kernel timed out and was restarted",
-                            timed_out=True,
-                            restarted=True,
-                        )
-
-                    return KernelResult(
-                        ok=False,
-                        stdout="".join(stdout),
-                        stderr="".join(stderr),
-                        error_traceback="KeyboardInterrupt: execution timed out",
-                        timed_out=True,
-                    )
+                    return await self._recover_from_timeout(kc, msg_id, stdout, stderr)
 
                 content = msg.get("content", {})
                 msg_type = msg.get("header", {}).get("msg_type")
@@ -455,44 +445,251 @@ class ProcessKernel(KernelSession):
                     traceback = content.get("traceback", [])
                     error_traceback = _cap_kernel_traceback(traceback)
                 elif msg_type == "status" and content.get("execution_state") == "idle":
-                    # Check if we've received the execute_reply
-                    # We might need to skip stale replies from previous interrupted executions
-                    try:
-                        while True:
-                            reply = await kc.get_shell_msg(timeout=1)
-                            if reply.get("parent_header", {}).get("msg_id") == msg_id:
-                                ok = reply.get("content", {}).get("status") == "ok"
-                                res = KernelResult(
-                                    ok=ok,
-                                    stdout="".join(stdout),
-                                    stderr="".join(stderr),
-                                    result_repr=result_repr,
-                                    error_traceback=error_traceback,
-                                    images=images,
-                                )
-                                return await self._apply_discipline(res)
-                            else:
-                                stale = reply.get("parent_header", {}).get("msg_id")
-                                _LOG.debug(f"Skipping stale shell message for {stale}")
-                                continue
-                    except Exception:
-                        # If no reply yet, we might still be waiting for it or it might not come
-                        # For now, we return what we have if we got an idle status
-                        res = KernelResult(
-                            ok=True if not error_traceback else False,
-                            stdout="".join(stdout),
-                            stderr="".join(stderr),
+                    # Shell and IOPub are independent channels.  IOPub idle proves
+                    # publication drained, but success/failure still comes from the
+                    # matching execute_reply.  Bound both time and poll count: a
+                    # broken or adversarial client returning immediate stale frames
+                    # must not turn this into a CPU/memory-thrashing loop (H299).
+                    reply, protocol_failure = await self._wait_for_execute_reply(
+                        kc,
+                        msg_id,
+                        deadline=time.monotonic() + _KERNEL_SHELL_REPLY_GRACE_S,
+                    )
+                    if reply is None:
+                        assert protocol_failure is not None
+                        return await self._recover_from_protocol_failure(
+                            stdout=stdout,
+                            stderr=stderr,
                             result_repr=result_repr,
                             error_traceback=error_traceback,
                             images=images,
+                            detail=protocol_failure,
                         )
-                        return await self._apply_discipline(res)
+
+                    ok = reply.get("content", {}).get("status") == "ok"
+                    res = KernelResult(
+                        ok=ok,
+                        stdout="".join(stdout),
+                        stderr="".join(stderr),
+                        result_repr=result_repr,
+                        error_traceback=error_traceback,
+                        images=images,
+                    )
+                    return await self._apply_discipline(res)
 
         except Exception as e:
             _LOG.exception("Kernel execution failed")
             return KernelResult(
                 ok=False, stdout="".join(stdout), stderr="".join(stderr), error_traceback=str(e)
             )
+
+    async def _wait_for_execute_reply(
+        self,
+        kc: Any,
+        msg_id: str,
+        *,
+        deadline: float,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Return a typed shell reply or a sanitized protocol-failure reason."""
+
+        polls = 0
+        while polls < _KERNEL_SHELL_REPLY_MAX_POLLS:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, "matching execute_reply was not received after idle"
+            polls += 1
+            try:
+                reply = await kc.get_shell_msg(timeout=min(0.1, remaining))
+            except (TimeoutError, Empty):
+                continue
+            except Exception as exc:  # noqa: BLE001 - sanitize transport failure
+                return None, f"shell receive failed ({type(exc).__name__})"
+            if not isinstance(reply, dict):
+                return None, "shell channel returned a malformed message"
+            parent_header = reply.get("parent_header")
+            if not isinstance(parent_header, dict):
+                return None, "shell channel returned a malformed parent header"
+            if parent_header.get("msg_id") == msg_id:
+                header = reply.get("header")
+                content = reply.get("content")
+                if (
+                    not isinstance(header, dict)
+                    or header.get("msg_type") != "execute_reply"
+                    or not isinstance(content, dict)
+                    or content.get("status") not in {"ok", "error", "abort"}
+                ):
+                    return None, "current request received an invalid shell reply"
+                return reply, None
+            stale = parent_header.get("msg_id")
+            _LOG.debug("Skipping non-matching shell message for %s", stale)
+        return None, "matching execute_reply exceeded the shell-message budget"
+
+    async def _recover_from_protocol_failure(
+        self,
+        *,
+        stdout: _BoundedTextCapture,
+        stderr: _BoundedTextCapture,
+        result_repr: str | None,
+        error_traceback: str | None,
+        images: list[str],
+        detail: str,
+    ) -> KernelResult:
+        """Quarantine a desynchronized shell channel without fabricating success."""
+
+        _LOG.error("Kernel protocol failure after idle; restarting the kernel")
+        restart_failure: str | None = None
+        try:
+            await asyncio.wait_for(self.restart(), timeout=_KERNEL_RESTART_CALL_TIMEOUT_S)
+        except TimeoutError:
+            restart_failure = "restart timed out"
+        except Exception as exc:  # noqa: BLE001 - preserve protocol-failure truth
+            restart_failure = f"restart failed ({type(exc).__name__})"
+
+        self._restart_failed_closed = restart_failure is not None
+
+        protocol_error = f"KernelProtocolError: {detail}"
+        if restart_failure is None:
+            protocol_error += "; kernel restarted and state was lost"
+        else:
+            protocol_error += f"; {restart_failure}"
+        if error_traceback:
+            protocol_error = f"{error_traceback}\n{protocol_error}"
+        result = KernelResult(
+            ok=False,
+            stdout="".join(stdout),
+            stderr="".join(stderr),
+            result_repr=result_repr,
+            error_traceback=protocol_error,
+            images=images,
+            restarted=restart_failure is None,
+            restart_attempted=True,
+            restart_failed=restart_failure is not None,
+            protocol_failed=True,
+        )
+        return await self._apply_discipline(result)
+
+    async def _recover_from_timeout(
+        self,
+        kc: Any,
+        msg_id: str,
+        stdout: _BoundedTextCapture,
+        stderr: _BoundedTextCapture,
+    ) -> KernelResult:
+        """Bound interrupt/settle/restart while preserving timeout truth."""
+
+        deadline = time.monotonic() + _KERNEL_INTERRUPT_GRACE_S
+        interrupt_failure: str | None = None
+        try:
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError
+            await asyncio.wait_for(
+                self.interrupt(),
+                timeout=min(_KERNEL_INTERRUPT_CALL_TIMEOUT_S, remaining),
+            )
+        except TimeoutError:
+            interrupt_failure = "interrupt timed out"
+        except Exception as exc:  # noqa: BLE001 - recovery must remain typed
+            interrupt_failure = f"interrupt failed ({type(exc).__name__})"
+
+        settled = False
+        if interrupt_failure is None:
+            try:
+                settled = await self._wait_for_interrupt_settle(
+                    kc,
+                    msg_id,
+                    deadline=deadline,
+                )
+            except Exception as exc:  # noqa: BLE001 - broken channels require restart
+                _LOG.exception("Kernel channels failed while settling interrupt")
+                interrupt_failure = f"interrupt settle failed ({type(exc).__name__})"
+
+        if settled:
+            return KernelResult(
+                ok=False,
+                stdout="".join(stdout),
+                stderr="".join(stderr),
+                error_traceback="KeyboardInterrupt: execution timed out",
+                timed_out=True,
+                interrupt_attempted=True,
+            )
+
+        _LOG.warning("Kernel failed to complete interrupt protocol, restarting...")
+        restart_failure: str | None = None
+        try:
+            await asyncio.wait_for(self.restart(), timeout=_KERNEL_RESTART_CALL_TIMEOUT_S)
+        except TimeoutError:
+            restart_failure = "restart timed out"
+        except Exception as exc:  # noqa: BLE001 - preserve timeout result truth
+            restart_failure = f"restart failed ({type(exc).__name__})"
+
+        self._restart_failed_closed = restart_failure is not None
+
+        detail = interrupt_failure or "interrupt did not complete both response channels"
+        if restart_failure is None:
+            error = f"Kernel timed out and was restarted after {detail}"
+        else:
+            error = f"Kernel timed out after {detail}; {restart_failure}"
+        return KernelResult(
+            ok=False,
+            stdout="".join(stdout),
+            stderr="".join(stderr),
+            error_traceback=error,
+            timed_out=True,
+            restarted=restart_failure is None,
+            interrupt_attempted=True,
+            interrupt_failed=interrupt_failure is not None,
+            restart_attempted=True,
+            restart_failed=restart_failure is not None,
+        )
+
+    async def _wait_for_interrupt_settle(
+        self,
+        kc: Any,
+        msg_id: str,
+        *,
+        deadline: float | None = None,
+    ) -> bool:
+        """Wait boundedly for the interrupted request's IOPub idle + shell reply.
+
+        Jupyter transports the two messages on independent ZMQ channels and may
+        deliver them in either order. We read IOPub first but the shell reply stays
+        queued until consumed. ``queue.Empty`` is jupyter_client's normal async
+        poll timeout and must be retried just like ``TimeoutError``; letting it
+        escape used to return a non-timeout failure while the handler was live.
+        """
+
+        if deadline is None:
+            deadline = time.monotonic() + _KERNEL_INTERRUPT_GRACE_S
+        idle = False
+        while not idle:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                msg = await kc.get_iopub_msg(timeout=min(0.1, remaining))
+            except (TimeoutError, Empty):
+                continue
+            if msg.get("parent_header", {}).get("msg_id") != msg_id:
+                continue
+            idle = (
+                msg.get("header", {}).get("msg_type") == "status"
+                and msg.get("content", {}).get("execution_state") == "idle"
+            )
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                reply = await kc.get_shell_msg(timeout=min(0.1, remaining))
+            except (TimeoutError, Empty):
+                continue
+            if (
+                reply.get("parent_header", {}).get("msg_id") == msg_id
+                and reply.get("header", {}).get("msg_type") == "execute_reply"
+            ):
+                return True
 
     async def _apply_discipline(self, res: KernelResult) -> KernelResult:
         """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
@@ -527,20 +724,25 @@ class ProcessKernel(KernelSession):
             await self._km.interrupt_kernel()
 
     async def restart(self) -> None:
-        if self._km:
-            old_client = self._kc
-            if old_client is not None:
-                old_client.stop_channels()
-            await self._km.restart_kernel()
-            self._kc = self._km.client()
-            assert self._kc is not None  # client() always returns a KernelClient
-            self._kc.start_channels()
-            await self._kc.wait_for_ready(timeout=60)
-            # Re-setup memory limit
-            setup_cell = (
-                "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
-            )
-            await self.execute(setup_cell, timeout_s=10)
+        if self._km is None:
+            raise SandboxError("process kernel cannot restart before it has started")
+        old_client = self._kc
+        # Detach before any operation that can raise or hang. A failed restart is
+        # fail-closed; execute() must never reuse the stopped/desynchronized client.
+        self._kc = None
+        if old_client is not None:
+            old_client.stop_channels()
+        await self._km.restart_kernel()
+        self._kc = self._km.client()
+        assert self._kc is not None  # client() always returns a KernelClient
+        self._kc.start_channels()
+        await self._kc.wait_for_ready(timeout=60)
+        self._restart_failed_closed = False
+        # Re-setup memory limit
+        setup_cell = "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+        setup = await self.execute(setup_cell, timeout_s=10)
+        if not setup.ok:
+            raise SandboxError("process kernel restart initialization failed")
 
     async def shutdown(self) -> None:
         km, kc = self._km, self._kc
@@ -548,6 +750,7 @@ class ProcessKernel(KernelSession):
         self._km = None
         self._kc = None
         self._ipc_dir = None
+        self._restart_failed_closed = False
         try:
             try:
                 if kc is not None:

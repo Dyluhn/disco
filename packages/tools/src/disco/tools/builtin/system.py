@@ -198,6 +198,11 @@ class CodeExecTool:
                 "images": list(res.images),
                 "timed_out": res.timed_out,
                 "restarted": res.restarted,
+                "interrupt_attempted": res.interrupt_attempted,
+                "interrupt_failed": res.interrupt_failed,
+                "restart_attempted": res.restart_attempted,
+                "restart_failed": res.restart_failed,
+                "protocol_failed": res.protocol_failed,
             }
             sanitized_streams = {
                 name: metadata

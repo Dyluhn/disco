@@ -6,7 +6,8 @@ import stat
 import statistics
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from queue import Empty
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.tools.sandbox.base import SandboxError
@@ -188,9 +189,190 @@ async def test_process_kernel_shutdown_closes_client_channels():
     assert pk._km is None
 
 
+class _ImmediateWrongShellReplies:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get(self, *, timeout: float):
+        del timeout
+        self.calls += 1
+        await asyncio.sleep(0)
+        return {
+            "header": {"msg_type": "status"},
+            "parent_header": {"msg_id": "current"},
+            "content": {"execution_state": "idle"},
+        }
+
+
+@pytest.mark.asyncio
+async def test_normal_execute_reply_is_bounded_on_immediate_wrong_messages(monkeypatch):
+    """H299: wrong shell frames cannot create an unbounded hot loop."""
+    pk = ProcessKernel("/tmp/test_kernel_normal_wrong_reply")
+    kc = MagicMock()
+    kc.execute.return_value = "current"
+    kc.get_iopub_msg = AsyncMock(
+        return_value={
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "current"},
+        }
+    )
+    replies = _ImmediateWrongShellReplies()
+    kc.get_shell_msg = replies.get
+    pk._kc = kc
+    pk.restart = AsyncMock()
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_GRACE_S", 0.05)
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_MAX_POLLS", 8)
+
+    result = await asyncio.wait_for(pk.execute("6 * 7", timeout_s=1), timeout=0.5)
+
+    assert result.ok is False
+    assert result.timed_out is False
+    assert result.restarted is True
+    assert result.restart_attempted is True
+    assert result.restart_failed is False
+    assert "invalid shell reply" in (result.error_traceback or "")
+    assert replies.calls == 1
+    pk.restart.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shell_case",
+    ["missing", "stale_then_valid", "wrong_type", "malformed", "receive_error"],
+)
+async def test_normal_execute_reply_requires_typed_matching_response(shell_case, monkeypatch):
+    pk = ProcessKernel("/tmp/test_kernel_normal_reply_contract")
+    kc = MagicMock()
+    kc.execute.return_value = "current"
+    kc.get_iopub_msg = AsyncMock(
+        return_value={
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "current"},
+        }
+    )
+    valid = {
+        "header": {"msg_type": "execute_reply"},
+        "parent_header": {"msg_id": "current"},
+        "content": {"status": "ok"},
+    }
+    if shell_case == "missing":
+        kc.get_shell_msg = AsyncMock(side_effect=Empty)
+    elif shell_case == "stale_then_valid":
+        kc.get_shell_msg = AsyncMock(
+            side_effect=[
+                {
+                    "header": {"msg_type": "execute_reply"},
+                    "parent_header": {"msg_id": "stale"},
+                    "content": {"status": "ok"},
+                },
+                valid,
+            ]
+        )
+    elif shell_case == "wrong_type":
+        kc.get_shell_msg = AsyncMock(
+            return_value={
+                "header": {"msg_type": "status"},
+                "parent_header": {"msg_id": "current"},
+                "content": {"execution_state": "idle"},
+            }
+        )
+    elif shell_case == "malformed":
+        kc.get_shell_msg = AsyncMock(return_value=[])
+    else:
+        kc.get_shell_msg = AsyncMock(side_effect=RuntimeError("private transport detail"))
+    pk._kc = kc
+    pk.restart = AsyncMock()
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_GRACE_S", 0.02)
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_MAX_POLLS", 8)
+
+    result = await asyncio.wait_for(pk.execute("6 * 7", timeout_s=1), timeout=0.5)
+
+    if shell_case == "stale_then_valid":
+        assert result.ok is True
+        assert result.error_traceback is None
+        assert result.restart_attempted is False
+    else:
+        assert result.ok is False
+        assert result.restarted is True
+        assert result.restart_attempted is True
+        assert result.restart_failed is False
+        assert result.protocol_failed is True
+        assert "KernelProtocolError" in (result.error_traceback or "")
+        assert "private transport detail" not in (result.error_traceback or "")
+        pk.restart.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [("raise", "RuntimeError"), ("hang", "restart timed out")],
+)
+async def test_normal_protocol_restart_failure_preserves_truth(
+    failure, expected_error, monkeypatch
+):
+    pk = ProcessKernel("/tmp/test_kernel_normal_protocol_restart_failure")
+    kc = MagicMock()
+    kc.execute.return_value = "current"
+    kc.get_iopub_msg = AsyncMock(
+        return_value={
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "current"},
+        }
+    )
+    kc.get_shell_msg = AsyncMock(side_effect=Empty)
+    pk._kc = kc
+    pk.restart = (
+        AsyncMock(side_effect=RuntimeError("restart boom"))
+        if failure == "raise"
+        else AsyncMock(side_effect=_hang_forever)
+    )
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_GRACE_S", 0.02)
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_SHELL_REPLY_MAX_POLLS", 2)
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_RESTART_CALL_TIMEOUT_S", 0.01)
+
+    result = await asyncio.wait_for(pk.execute("6 * 7", timeout_s=1), timeout=0.5)
+
+    assert result.ok is False
+    assert result.timed_out is False
+    assert result.restarted is False
+    assert result.restart_attempted is True
+    assert result.restart_failed is True
+    assert result.protocol_failed is True
+    assert expected_error in (result.error_traceback or "")
+
+    execute_calls = kc.execute.call_count
+    blocked = await pk.execute("should_not_run = True", timeout_s=1)
+    assert blocked.ok is False
+    assert blocked.restart_failed is True
+    assert "recreate the sandbox session" in (blocked.error_traceback or "")
+    assert kc.execute.call_count == execute_calls
+
+
+@pytest.mark.asyncio
+async def test_process_restart_detaches_failed_client_and_requires_manager():
+    pk = ProcessKernel("/tmp/test_kernel_restart_quarantine")
+    with pytest.raises(SandboxError, match="cannot restart before"):
+        await pk.restart()
+
+    manager = MagicMock()
+    manager.restart_kernel = AsyncMock(side_effect=RuntimeError("restart boom"))
+    client = MagicMock()
+    pk._km = manager
+    pk._kc = client
+
+    with pytest.raises(RuntimeError, match="restart boom"):
+        await pk.restart()
+
+    client.stop_channels.assert_called_once_with()
+    assert pk._kc is None
+
+
 @pytest.mark.asyncio
 async def test_timeout_protocol_state_machine():
-    """Test timeout protocol: interrupt-succeeds -> intact; interrupt-hangs -> restart path."""
+    """Interrupt needs matching IOPub idle + shell reply; otherwise restart."""
     workspace = "/tmp/test_timeout_mock"
     os.makedirs(workspace, exist_ok=True)
     pk = ProcessKernel(workspace)
@@ -208,6 +390,7 @@ async def test_timeout_protocol_state_machine():
     msg_id = "test_msg_id"
     kc.get_iopub_msg.side_effect = [
         TimeoutError("timeout"),
+        Empty,
         {
             "header": {"msg_type": "status"},
             "content": {"execution_state": "idle"},
@@ -216,6 +399,7 @@ async def test_timeout_protocol_state_machine():
     ]
     # Need to mock get_shell_msg too for the final success check
     kc.get_shell_msg.return_value = {
+        "header": {"msg_type": "execute_reply"},
         "parent_header": {"msg_id": msg_id},
         "content": {"status": "ok"},
     }
@@ -227,25 +411,157 @@ async def test_timeout_protocol_state_machine():
     res = await pk.execute("while True: pass", timeout_s=0.1)
     assert res.timed_out is True
     assert res.restarted is False
+    assert res.interrupt_attempted is True
+    assert res.interrupt_failed is False
+    assert res.restart_attempted is False
     pk.interrupt.assert_called_once()
+    assert kc.get_shell_msg.await_count == 1
 
-    # Scenario 2: interrupt-hangs -> restart path
-    # First call times out.
-    # Subsequent calls in the "wait for idle" loop also time out.
+    # Scenario 2: an interrupt that does not settle both channels restarts.
     kc.get_iopub_msg.side_effect = TimeoutError("timeout")
     pk.interrupt = AsyncMock()
     pk.restart = AsyncMock()
+    pk._wait_for_interrupt_settle = AsyncMock(return_value=False)
 
-    # Mock time.time to simulate 5 seconds passing quickly
-    with patch("time.time") as mock_time:
-        mock_time.side_effect = [100.0, 100.1, 106.0]  # start, first check, second check (after 5s)
-        res = await pk.execute("while True: pass", timeout_s=0.1)
+    res = await pk.execute("while True: pass", timeout_s=0.1)
 
     assert res.timed_out is True
     assert res.restarted is True
+    assert res.restart_attempted is True
+    assert res.restart_failed is False
     pk.restart.assert_called_once()
-
     shutil.rmtree(workspace)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_settle_requires_matching_execute_reply_and_ignores_stale_messages():
+    pk = ProcessKernel("/tmp/test_kernel_interrupt_ordering")
+    kc = MagicMock()
+    kc.get_iopub_msg = AsyncMock(
+        side_effect=[
+            {
+                "header": {"msg_type": "status"},
+                "content": {"execution_state": "idle"},
+                "parent_header": {"msg_id": "stale"},
+            },
+            {
+                "header": {"msg_type": "status"},
+                "content": {"execution_state": "idle"},
+                "parent_header": {"msg_id": "current"},
+            },
+        ]
+    )
+    kc.get_shell_msg = AsyncMock(
+        side_effect=[
+            {
+                "header": {"msg_type": "status"},
+                "parent_header": {"msg_id": "current"},
+            },
+            {
+                "header": {"msg_type": "execute_reply"},
+                "parent_header": {"msg_id": "stale"},
+            },
+            {
+                "header": {"msg_type": "execute_reply"},
+                "parent_header": {"msg_id": "current"},
+            },
+        ]
+    )
+
+    assert await pk._wait_for_interrupt_settle(kc, "current") is True
+    assert kc.get_iopub_msg.await_count == 2
+    assert kc.get_shell_msg.await_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shell_case", ["missing", "wrong_type"])
+async def test_interrupt_settle_rejects_missing_or_wrong_shell_reply(shell_case, monkeypatch):
+    pk = ProcessKernel("/tmp/test_kernel_interrupt_incomplete")
+    kc = MagicMock()
+    kc.get_iopub_msg = AsyncMock(
+        return_value={
+            "header": {"msg_type": "status"},
+            "content": {"execution_state": "idle"},
+            "parent_header": {"msg_id": "current"},
+        }
+    )
+    wrong_reply = {
+        "header": {"msg_type": "status"},
+        "parent_header": {"msg_id": "current"},
+    }
+    kc.get_shell_msg = (
+        AsyncMock(side_effect=Empty)
+        if shell_case == "missing"
+        else AsyncMock(return_value=wrong_reply)
+    )
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_INTERRUPT_GRACE_S", 0.01)
+
+    assert await pk._wait_for_interrupt_settle(kc, "current") is False
+
+
+async def _hang_forever() -> None:
+    await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["raise", "hang"])
+async def test_interrupt_raise_or_hang_preserves_timeout_and_attempts_restart(
+    failure: str, monkeypatch
+):
+    pk = ProcessKernel("/tmp/test_kernel_interrupt_failure")
+    kc = MagicMock()
+    kc.execute.return_value = "current"
+    kc.get_iopub_msg = AsyncMock(side_effect=Empty)
+    pk._kc = kc
+    pk.interrupt = (
+        AsyncMock(side_effect=RuntimeError("interrupt boom"))
+        if failure == "raise"
+        else AsyncMock(side_effect=_hang_forever)
+    )
+    pk.restart = AsyncMock()
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_INTERRUPT_CALL_TIMEOUT_S", 0.01)
+
+    result = await pk.execute("while True: pass", timeout_s=1)
+
+    assert result.timed_out is True
+    assert result.interrupt_attempted is True
+    assert result.interrupt_failed is True
+    assert result.restart_attempted is True
+    assert result.restart_failed is False
+    assert result.restarted is True
+    pk.restart.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [("raise", "RuntimeError"), ("hang", "restart timed out")],
+)
+async def test_restart_raise_or_hang_preserves_timeout_and_failure_truth(
+    failure: str, expected_error: str, monkeypatch
+):
+    pk = ProcessKernel("/tmp/test_kernel_restart_failure")
+    kc = MagicMock()
+    kc.execute.return_value = "current"
+    kc.get_iopub_msg = AsyncMock(side_effect=Empty)
+    pk._kc = kc
+    pk.interrupt = AsyncMock()
+    pk._wait_for_interrupt_settle = AsyncMock(return_value=False)
+    pk.restart = (
+        AsyncMock(side_effect=RuntimeError("restart boom"))
+        if failure == "raise"
+        else AsyncMock(side_effect=_hang_forever)
+    )
+    monkeypatch.setattr("disco.tools.sandbox.kernel._KERNEL_RESTART_CALL_TIMEOUT_S", 0.01)
+
+    result = await pk.execute("while True: pass", timeout_s=1)
+
+    assert result.timed_out is True
+    assert result.interrupt_attempted is True
+    assert result.restart_attempted is True
+    assert result.restart_failed is True
+    assert result.restarted is False
+    assert expected_error in (result.error_traceback or "")
 
 
 # 2. Integration tests
@@ -425,9 +741,15 @@ async def test_kernel_integration_interrupt():
         res = await pk.execute("while True: pass", timeout_s=3)
         assert res.timed_out is True
         assert res.restarted is False
+        assert res.error_traceback == "KeyboardInterrupt: execution timed out"
 
         res2 = await pk.execute("y", timeout_s=10)
-        assert "100" in res2.result_repr
+        assert res2.ok is True
+        assert res2.result_repr == "100"
+
+        res3 = await pk.execute("y + 1", timeout_s=10)
+        assert res3.ok is True
+        assert res3.result_repr == "101"
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
@@ -508,6 +830,7 @@ async def test_kernel_output_discipline():
 
     # Mocking successful execution
     kc.get_shell_msg.return_value = {
+        "header": {"msg_type": "execute_reply"},
         "parent_header": {"msg_id": "msg_id"},
         "content": {"status": "ok"},
     }
