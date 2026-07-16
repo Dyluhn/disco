@@ -196,6 +196,13 @@ class PreviewSession:
     restart_count: int = 0
     detail: str = ""
     _supervise: bool = field(default=True, repr=False)
+    # Automatic restart is armed only after this launch generation has served
+    # successfully. An initial startup failure, or a failed explicit repair, must not
+    # be multiplied into hidden background launches while the model is still fixing it.
+    _auto_restart_armed: bool = field(default=False, repr=False)
+    # An explicit recovery starts one new attempt without re-arming background
+    # retries. Only proof that the attempt is healthy resets the automatic budget.
+    _reset_budget_on_healthy: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -706,7 +713,28 @@ class PreviewManager:
                 # Idempotent: refresh health/URL and return the same session + port.
                 await self._refresh(existing)
                 if existing.status is PreviewStatus.CRASHED:
-                    await self._restart(existing)
+                    # A crashed preview is an explicit repair boundary, not ordinary
+                    # idempotent lookup. Re-resolve the CURRENT intent so a corrected
+                    # command/cwd can replace the failed one without stop/start churn.
+                    resolved = self._resolve_command(
+                        existing.port,
+                        serve_dir=serve_dir,
+                        command=command,
+                        framework=framework,
+                    )
+                    exec_dir = await self._launch_workspace(cwd)
+                    intent = {
+                        "serve_dir": serve_dir,
+                        "command": command,
+                        "framework": framework,
+                        "launch_kind": self._launch_kind(command=command, framework=framework),
+                    }
+                    await self._recover_explicit(
+                        existing,
+                        command=resolved,
+                        exec_dir=exec_dir,
+                        intent=intent,
+                    )
                 return existing
 
             port = await self._allocate_port(reclaim_name=key)
@@ -777,6 +805,10 @@ class PreviewManager:
 
     def _mark_running(self, session: PreviewSession) -> None:
         """Healthy on the platform port — expose the URL, or degrade gracefully."""
+        session._auto_restart_armed = True
+        if session._reset_budget_on_healthy:
+            session.restart_count = 0
+            session._reset_budget_on_healthy = False
         url = self._expose(session.port)
         if url is not None:
             session.url = url
@@ -863,6 +895,13 @@ class PreviewManager:
                     and session.restart_count >= self.MAX_RESTARTS
                 ):
                     continue
+                # Initial startup failures are model-visible immediately. Do not
+                # multiply one broken command into three hidden background launches;
+                # the model can repair the command/code and explicitly call start.
+                # Automatic restart is armed only after this preview has actually
+                # served successfully once.
+                if session.status is PreviewStatus.CRASHED and not session._auto_restart_armed:
+                    continue
                 if await self._probe_health(
                     session.port,
                     require_success=self._requires_successful_root(session),
@@ -883,6 +922,13 @@ class PreviewManager:
                 # process exit.
                 if await self._session_alive(session.name):
                     continue
+                # An explicit recovery attempt remains disarmed until it proves
+                # healthy. If it exits first, surface the crash without silently
+                # launching it again in the background.
+                if not session._auto_restart_armed:
+                    session.status = PreviewStatus.CRASHED
+                    session._reset_budget_on_healthy = False
+                    continue
                 await self._restart(session)
 
     async def _restart(self, session: PreviewSession) -> None:
@@ -900,6 +946,8 @@ class PreviewManager:
             session.detail = "process running; not yet answering health checks"
             return
         if session.restart_count >= self.MAX_RESTARTS:
+            session._reset_budget_on_healthy = False
+            session._auto_restart_armed = False
             session.status = PreviewStatus.CRASHED
             session.detail = f"crashed; restart budget ({self.MAX_RESTARTS}) exhausted"
             return
@@ -908,6 +956,56 @@ class PreviewManager:
         session.detail = f"crash detected; restart #{session.restart_count}"
         _LOG.info("restarting crashed preview %s on port %d", session.name, session.port)
         await self._launch(session)
+        if session.status is PreviewStatus.CRASHED and session.restart_count >= self.MAX_RESTARTS:
+            session._auto_restart_armed = False
+            session.detail = f"crashed; restart budget ({self.MAX_RESTARTS}) exhausted"
+
+    async def _recover_explicit(
+        self,
+        session: PreviewSession,
+        *,
+        command: str,
+        exec_dir: str | None,
+        intent: dict[str, Any],
+    ) -> None:
+        """Give a crashed preview one explicit, non-amplifying recovery attempt.
+
+        A user/model may fix the command/server or release a colliding listener after
+        any failed launch. An explicit ``preview_start`` therefore gets ONE attempt
+        without spending or resetting the automatic restart budget. A failure stays
+        disarmed; only observed health resets that budget and re-arms supervision.
+        """
+
+        prior_restart_count = session.restart_count
+        session._auto_restart_armed = False
+        session._reset_budget_on_healthy = True
+        if await self._session_alive(session.name):
+            session.status = PreviewStatus.STARTING
+            session.detail = "process running; waiting for explicit recovery health"
+            return
+
+        # Commit replacement intent only at the actual launch boundary. A mislabeled
+        # CRASHED-but-live process launches nothing; staging new metadata in that case
+        # would falsely attribute the old process and make a later restart execute a
+        # command that had never been accepted as the running generation.
+        session.command = command
+        session.exec_dir = exec_dir
+        session.intent = intent
+        session.status = PreviewStatus.RESTARTING
+        session.detail = "explicit recovery of crashed preview"
+        _LOG.info(
+            "explicitly recovering crashed preview %s on port %d",
+            session.name,
+            session.port,
+        )
+        await self._launch(session)
+        if session.status is PreviewStatus.CRASHED:
+            launch_detail = session.detail
+            session.restart_count = prior_restart_count
+            session._reset_budget_on_healthy = False
+            session.detail = (
+                f"explicit recovery failed; background restart remains disarmed: {launch_detail}"
+            )
 
     # ---- status / logs / stop / list ---------------------------------------
 

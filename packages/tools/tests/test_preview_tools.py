@@ -99,6 +99,16 @@ def test_preview_start_args_have_no_port_field() -> None:
 def test_preview_start_spec_schema_has_no_port() -> None:
     schema = PreviewStartTool.definition.to_spec().parameters_schema
     assert "port" not in schema.get("properties", {})
+    command_help = schema["properties"]["command"]["description"]
+    assert "PORT environment variable" in command_help
+    assert "{port}" in command_help
+
+
+def test_preview_start_description_distinguishes_startup_from_runtime_recovery() -> None:
+    description = PreviewStartTool.definition.description
+    assert "startup failure is attempted once" in description
+    assert "call preview_start again" in description
+    assert "After a preview has run" in description
 
 
 # --------------------------------------------------------------------------- forbid extra

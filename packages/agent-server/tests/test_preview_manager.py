@@ -236,6 +236,171 @@ async def test_restart_budget_exhausts_to_crashed() -> None:
     await mgr.aclose()
 
 
+@pytest.mark.asyncio
+async def test_never_healthy_startup_failure_is_not_silently_retried() -> None:
+    """H319: one broken start must not become four hidden process launches."""
+
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
+        sandbox.sessions.exec_calls.append((name, command, exec_dir))
+        sandbox.sessions._running[name] = False
+
+    sandbox.sessions.exec = _exec_exits  # type: ignore[method-assign]
+    session = await mgr.start(serve_dir="dist", name="app", supervise=True)
+    assert session.status is PreviewStatus.CRASHED
+    assert session.restart_count == 0
+
+    for _ in range(PreviewManager.MAX_RESTARTS + 2):
+        await mgr._supervise_once()
+
+    assert len(sandbox.sessions.exec_calls) == 1
+    assert session.restart_count == 0
+    assert session.status is PreviewStatus.CRASHED
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_start_recovers_never_healthy_session_after_repair() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    working_exec = sandbox.sessions.exec
+
+    async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
+        sandbox.sessions.exec_calls.append((name, command, exec_dir))
+        sandbox.sessions._running[name] = False
+
+    sandbox.sessions.exec = _exec_exits  # type: ignore[method-assign]
+    session = await mgr.start(serve_dir="dist", name="app", supervise=True)
+    assert session.status is PreviewStatus.CRASHED
+    await mgr._supervise_once()
+    assert len(sandbox.sessions.exec_calls) == 1
+
+    sandbox.sessions.exec = working_exec  # type: ignore[method-assign]
+    recovered = await mgr.start(serve_dir="dist", name="app", supervise=True)
+
+    assert recovered is session
+    assert session.status is PreviewStatus.RUNNING
+    assert session.restart_count == 0
+    assert len(sandbox.sessions.exec_calls) == 2
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_recovery_revalidates_and_replaces_failed_command() -> None:
+    """H319: a same-name repair must execute current intent, not stale intent."""
+
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
+        sandbox.sessions.exec_calls.append((name, command, exec_dir))
+        sandbox.sessions._running[name] = False
+
+    sandbox.sessions.exec = _exec_exits  # type: ignore[method-assign]
+    session = await mgr.start(
+        command="python3 -m http.server {port} -d broken",
+        name="app",
+        supervise=True,
+    )
+    assert session.status is PreviewStatus.CRASHED
+
+    working_exec = _FakeSessions.exec.__get__(sandbox.sessions, _FakeSessions)
+    sandbox.sessions.exec = working_exec  # type: ignore[method-assign]
+    recovered = await mgr.start(
+        command="python3 -m http.server {port} -d repaired",
+        name="app",
+        supervise=True,
+    )
+
+    assert recovered is session
+    assert session.status is PreviewStatus.RUNNING
+    assert session.restart_count == 0
+    assert session._auto_restart_armed is True
+    assert sandbox.sessions.exec_calls[-1][1].endswith("-d repaired")
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_explicit_start_recovers_exhausted_session_and_resets_budget_on_health() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=False)
+    sandbox.sessions.crash("app")
+    session.status = PreviewStatus.CRASHED
+    session.restart_count = PreviewManager.MAX_RESTARTS
+    before = len(sandbox.sessions.exec_calls)
+
+    recovered = await mgr.start(serve_dir="dist", name="app", supervise=False)
+
+    assert recovered is session
+    assert session.status is PreviewStatus.RUNNING
+    assert session.restart_count == 0
+    assert len(sandbox.sessions.exec_calls) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_failed_explicit_exhausted_recovery_does_not_rearm_supervisor() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(serve_dir="dist", name="app", supervise=True)
+
+    async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
+        sandbox.sessions.exec_calls.append((name, command, exec_dir))
+        sandbox.sessions._running[name] = False
+
+    sandbox.sessions.exec = _exec_exits  # type: ignore[method-assign]
+    sandbox.sessions.crash("app")
+    session.status = PreviewStatus.CRASHED
+    session.restart_count = PreviewManager.MAX_RESTARTS
+    before = len(sandbox.sessions.exec_calls)
+
+    await mgr.start(serve_dir="dist", name="app", supervise=True)
+
+    assert session.status is PreviewStatus.CRASHED
+    assert session.restart_count == PreviewManager.MAX_RESTARTS
+    assert "explicit recovery failed" in session.detail
+    assert "static preview root did not return a successful HTTP response" in session.detail
+    assert len(sandbox.sessions.exec_calls) == before + 1
+    for _ in range(PreviewManager.MAX_RESTARTS + 2):
+        await mgr._supervise_once()
+    assert len(sandbox.sessions.exec_calls) == before + 1
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_live_crashed_recovery_does_not_stage_unlaunched_command() -> None:
+    """A CRASHED label on a live process cannot mutate its launch generation."""
+
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(
+        command="python3 -m http.server {port} -d original",
+        name="app",
+        supervise=True,
+    )
+    original_command = session.command
+    original_intent = dict(session.intent)
+    sandbox._serving.discard(session.port)
+    session.status = PreviewStatus.CRASHED
+    before = len(sandbox.sessions.exec_calls)
+
+    recovered = await mgr.start(
+        command="python3 -m http.server {port} -d replacement",
+        name="app",
+        supervise=True,
+    )
+
+    assert recovered is session
+    assert len(sandbox.sessions.exec_calls) == before
+    assert session.command == original_command
+    assert session.intent == original_intent
+    assert session.status is PreviewStatus.STARTING
+    assert session._auto_restart_armed is False
+    await mgr.aclose()
+
+
 # ----------------------------------------------------------- supervise: live ≠ crashed
 
 

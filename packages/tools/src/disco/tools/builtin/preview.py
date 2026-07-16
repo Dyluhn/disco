@@ -103,7 +103,9 @@ class PreviewStartArgs(BaseModel):
         description=(
             "A start command for a dev server (e.g. 'npm run dev'). Do NOT include a "
             "port — the platform injects its chosen port (any port you put here is "
-            "ignored). Use this when serve_dir/framework don't fit."
+            "ignored). The program must honor the injected PORT environment variable, "
+            "or put the literal {port} placeholder where its port argument belongs. "
+            "Use this when serve_dir/framework don't fit."
         ),
     )
     framework: str | None = Field(
@@ -129,9 +131,10 @@ class PreviewStartTool:
         description=(
             "Start a live preview of your build. You declare WHAT to serve (a directory, "
             "a framework, or a start command) — the PLATFORM picks the port, starts and "
-            "supervises the server (restarting it if it crashes), and returns the URL. "
-            "You never choose or pass a port. Call again to (idempotently) get the same "
-            "preview's URL."
+            "supervises the server, and returns the URL. After a preview has run, the "
+            "platform can restart it if it later crashes. A startup failure is attempted "
+            "once; repair the cause and call preview_start again for one explicit retry. "
+            "You never choose or pass a port. A running preview call is idempotent."
         ),
         args_model=PreviewStartArgs,
         needs=frozenset({Capability.SHELL, Capability.NETWORK}),
