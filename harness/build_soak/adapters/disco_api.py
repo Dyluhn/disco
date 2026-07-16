@@ -391,6 +391,13 @@ class CollectedRun:
     # Cleanup uses this to avoid redundant teardown while leaving the finally
     # fallback armed when the stop request was rejected or ambiguous.
     diagnostic_release_confirmed: bool = False
+    # A browser screenshot capture failure is normally verdict-invalidating.  The
+    # sole exception is a run whose strict live-thrash monitor already established
+    # and durably stopped a product failure.  In that case the runner retains the
+    # collection error as a distinct hash-locked diagnostic artifact; it is never
+    # admitted as browser proof and therefore cannot satisfy a screenshot contract.
+    # Appended last so every historical positional fixture retains its field mapping.
+    browser_evidence_collection_error: dict[str, Any] | None = None
 
 
 # ---- the live client --------------------------------------------------------

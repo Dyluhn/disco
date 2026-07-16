@@ -104,6 +104,7 @@ _DEFAULT_INACTIVITY_S = 180.0
 _DEFAULT_HARD_CAP_S = 1200.0
 _TRIGGER_AFTER_FIRST_FILE_WRITE = "after_first_file_write"
 _TRIGGER_AFTER_TERMINAL = "after_terminal"
+_BROWSER_EVIDENCE_COLLECTION_ERROR_NAME = "browser-evidence-collection-error.json"
 
 
 # ---- scenario loading -------------------------------------------------------
@@ -1005,7 +1006,20 @@ async def drive_scenario(
     events = client.collect_events(cid)
     state_final = await client.get_state(cid)
     workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
-    browser_evidence = client.collect_browser_evidence(cid, events, workspace)
+    browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
+    try:
+        browser_evidence = client.collect_browser_evidence(cid, events, workspace)
+    except BrowserEvidenceCollectionError as exc:
+        # Browser evidence gaps ordinarily make a run INVALID.  A confirmed live-
+        # thrash stop is different: the strict monitor established the product FAIL
+        # before it killed the conversation, so a screenshot that disappeared after
+        # that stop must not erase the decisive event/inspect/thrash evidence.  Defer
+        # admission until the complete run satisfies _confirmed_live_thrash_stop;
+        # every other collection error is re-raised below unchanged.
+        if initial_status != LIVE_THRASH_STOP:
+            raise
+        browser_evidence = {}
+        browser_evidence_collection_exc = exc
     preview = await client.collect_preview(cid) if _preview_required(scenario) else None
     inspect_trace = await client.collect_inspect_trace(cid)
     client.observe_live_thrash_snapshot(
@@ -1023,7 +1037,7 @@ async def drive_scenario(
         f"collected {len(events)} events; workspace files={list(workspace)}; "
         f"browser evidence files={list(browser_evidence)}"
     )
-    return CollectedRun(
+    run = CollectedRun(
         conversation_id=cid,
         events=events,
         state_initial=state_initial,
@@ -1038,7 +1052,29 @@ async def drive_scenario(
         declared_followup_seqs=declared_followup_seqs,
         declared_followup_requires_revision=declared_followup_requires_revision,
         harness_injected_user_seqs=harness_injected_user_seqs,
+        browser_evidence_collection_error=(
+            {
+                "schema_version": 1,
+                "kind": "browser_evidence_collection_error",
+                "exception_type": type(browser_evidence_collection_exc).__name__,
+                "reason": browser_evidence_collection_exc.reason,
+                "facts": dict(browser_evidence_collection_exc.facts),
+                "conversation_id": cid,
+                "preserved_for": "confirmed_live_thrash_stop",
+                "admissible_as_browser_evidence": False,
+            }
+            if browser_evidence_collection_exc is not None
+            else None
+        ),
     )
+    if browser_evidence_collection_exc is not None:
+        if not _confirmed_live_thrash_stop(run):
+            raise browser_evidence_collection_exc
+        timeline.append(
+            "confirmed live-thrash product failure retained despite browser-evidence "
+            f"collection error: {type(browser_evidence_collection_exc).__name__}"
+        )
+    return run
 
 
 # ---- dossier assembly + evidence lock (§5, §6) ------------------------------
@@ -1130,6 +1166,12 @@ def assemble_dossier(
                 {"path": rel},
             )
         evidence_path.write_bytes(data)
+    browser_collection_error = run.browser_evidence_collection_error
+    if browser_collection_error is not None:
+        (conv / _BROWSER_EVIDENCE_COLLECTION_ERROR_NAME).write_text(
+            json.dumps(browser_collection_error, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     if run.preview is not None:
         preview_dir = conv / "preview"
         preview_dir.mkdir(exist_ok=True)
@@ -1184,6 +1226,10 @@ def assemble_dossier(
     for rel in sorted(run.browser_evidence):
         label = f"browser-evidence/{rel}"
         evidence_files[label] = f"{conv_rel}/{label}"
+    if browser_collection_error is not None:
+        evidence_files[_BROWSER_EVIDENCE_COLLECTION_ERROR_NAME] = (
+            f"{conv_rel}/{_BROWSER_EVIDENCE_COLLECTION_ERROR_NAME}"
+        )
     if _pe:
         evidence_files[PRODUCT_EVIDENCE_NAME] = f"{conv_rel}/{PRODUCT_EVIDENCE_NAME}"
     if run.inspect_trace is not None:

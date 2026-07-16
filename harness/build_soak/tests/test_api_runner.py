@@ -1174,6 +1174,7 @@ async def test_h190_collection_error_is_recorded_as_invalid_run(tmp_path):
     assert record["status"] == "INVALID_RUN"
     assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
     assert record["first_broken_link"] == ("browser_observation -> durable_screenshot_evidence")
+    assert not (tmp_path / "out" / "run_h190_missing_invalid" / "conversations").exists()
 
 
 @pytest.mark.asyncio
@@ -5010,6 +5011,162 @@ async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp
     assert "REL-5 cleanup observed the live-thrash monitor's durable killed state" in run.timeline
     base = tmp_path / "out" / "run_live_thrash_stop_001"
     assert verify_evidence_unchanged(base, load_manifest(base)).intact
+
+
+@pytest.mark.asyncio
+async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_fail(
+    tmp_path, monkeypatch
+):
+    """Post-stop screenshot loss cannot erase an already-proven thrash failure."""
+
+    scenario = _smoke_scenario()
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events[-1] = status(10, "IDLE", "killed")
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+
+    content = "<html><h1>Build Smoke OK</h1></html>"
+    trace = _fake_inspect_trace()
+    trace["spans"].extend(
+        [
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "unknown_tool",
+                "tool_name": "write_file",
+            },
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "unknown_tool",
+                "tool_name": "file_write",
+            },
+        ]
+    )
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(
+        db,
+        states=["RUNNING", "IDLE"],
+        workspace={"index.html": content},
+        preview_html=content,
+    )
+    client = _client(transport, tmp_path)
+
+    async def confirmed_thrash_stop(*_args, **_kwargs):
+        monitor = _strict_live_thrash_monitor()
+        client._live_thrash_samples = monitor["sample_count"]
+        client._live_thrash_findings = monitor["findings"]
+        return LIVE_THRASH_STOP
+
+    async def collect_trace(_conversation_id):
+        return trace
+
+    def missing_screenshot(conversation_id, _events, _workspace):
+        raise BrowserEvidenceCollectionError(
+            "referenced browser screenshot is missing from the workspace snapshot",
+            {
+                "conversation_id": conversation_id,
+                "path": ".pmx/screenshots/removed-after-stop.png",
+                "error": "FileNotFoundError",
+            },
+        )
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", confirmed_thrash_stop)
+    monkeypatch.setattr(client, "collect_inspect_trace", collect_trace)
+    monkeypatch.setattr(client, "collect_browser_evidence", missing_screenshot)
+    monkeypatch.setattr(client, "observe_live_thrash_snapshot", lambda *_args, **_kwargs: False)
+
+    run = await drive_scenario(
+        client,
+        scenario,
+        model="m",
+        autonomous=False,
+        timeout_s=5,
+    )
+
+    assert _run_mod._confirmed_live_thrash_stop(run) is True
+    assert run.browser_evidence == {}
+    assert run.inspect_trace == trace
+    assert run.thrash_monitor == _strict_live_thrash_monitor()
+    collection_error = run.browser_evidence_collection_error
+    assert collection_error == {
+        "schema_version": 1,
+        "kind": "browser_evidence_collection_error",
+        "exception_type": "BrowserEvidenceCollectionError",
+        "reason": "referenced browser screenshot is missing from the workspace snapshot",
+        "facts": {
+            "conversation_id": _CID,
+            "path": ".pmx/screenshots/removed-after-stop.png",
+            "error": "FileNotFoundError",
+        },
+        "conversation_id": _CID,
+        "preserved_for": "confirmed_live_thrash_stop",
+        "admissible_as_browser_evidence": False,
+    }
+
+    base = assemble_dossier(
+        tmp_path / "out",
+        "run_h302_browser_loss_after_thrash",
+        scenario,
+        run,
+        model="m",
+        autonomous=False,
+    )
+    live = classify_dossier(base, scenario, run, autonomous=False)
+    replay = classify_run_folder(base)
+    assert live["status"] == "FAIL" and live["code"] == "MODEL_REPAIR_THRASH"
+    assert replay["status"] == "FAIL" and replay["code"] == "MODEL_REPAIR_THRASH"
+
+    artifact_name = _run_mod._BROWSER_EVIDENCE_COLLECTION_ERROR_NAME
+    artifact = base / "conversations" / _CID / artifact_name
+    manifest = load_manifest(base)
+    assert json.loads(artifact.read_text(encoding="utf-8")) == collection_error
+    assert manifest.evidence_files[artifact_name] == f"conversations/{_CID}/{artifact_name}"
+    assert manifest.evidence_hashes[artifact_name].startswith("sha256:")
+    assert verify_evidence_unchanged(base, manifest).intact
+
+    artifact.write_text("{}\n", encoding="utf-8")
+    tampered = classify_run_folder(base)
+    assert tampered["status"] == "INVALID_RUN"
+    assert tampered["code"] == "EVIDENCE_HASH_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_h302_live_stop_marker_without_strict_confirmation_keeps_invalid_behavior(
+    tmp_path, monkeypatch
+):
+    scenario = _smoke_scenario()
+    events = clean_smoke_log()
+    events[-1] = status(10, "IDLE", "killed")
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(
+        db,
+        states=["RUNNING", "IDLE"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = _client(transport, tmp_path)
+
+    async def unconfirmed_stop(*_args, **_kwargs):
+        return LIVE_THRASH_STOP
+
+    def missing_screenshot(*_args, **_kwargs):
+        raise BrowserEvidenceCollectionError("missing screenshot", {"path": "missing.png"})
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", unconfirmed_stop)
+    monkeypatch.setattr(client, "collect_browser_evidence", missing_screenshot)
+
+    with pytest.raises(BrowserEvidenceCollectionError, match="missing screenshot"):
+        await drive_scenario(
+            client,
+            scenario,
+            model="m",
+            autonomous=False,
+            timeout_s=5,
+        )
 
 
 def test_confirmed_live_thrash_provider_boundary_is_scoped_and_tool_bearing(tmp_path, monkeypatch):
