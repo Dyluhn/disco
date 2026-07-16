@@ -33,7 +33,7 @@ from disco.core.auth import (
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
-from disco.tools.sandbox._container import PREVIEW_PORT
+from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -52,6 +52,20 @@ _PATH_PREVIEW_BOOTSTRAP_RE = re.compile(
 _LEGACY_PATH_PREVIEW_RE = re.compile(
     r"^/conversations/(?P<cid>conv_[A-Za-z0-9_-]+)/preview-app(?:/|$)"
 )
+
+
+def _path_preview_port(conversation_id: str, request_label: str) -> int | None:
+    """Return the exact curated port bound into a full-CID p3s host label."""
+    for port in sorted(USER_PORTS - {NOVNC_PORT}):
+        try:
+            expected = path_preview_host_label(conversation_id, port)
+        except ValueError:
+            return None
+        if secrets.compare_digest(expected, request_label.strip().lower()):
+            return port
+    return None
+
+
 # Derived LIVE from the shared session secret at each use: identical to the
 # app-server's token and stable across restarts, so ONE pasted token pairs both
 # origins. See disco.core.auth.pairing_token. Re-usable (secret is the root of
@@ -296,6 +310,10 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             return True, Response("preview capability required", status_code=403)
         conversation_id = match.group("cid")
         cid8 = conversation_id.removeprefix("conv_")[:8]
+        request_label = (request.url.hostname or "").split(".", 1)[0].lower()
+        port = _path_preview_port(conversation_id, request_label)
+        if port is None:
+            return True, Response("preview capability required", status_code=403)
         try:
             cookie_name = path_preview_cookie_name(cid8)
         except ValueError:
@@ -304,14 +322,11 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             cookie_header_from_headers(request.headers),
             cookie_name,
             cid8=cid8,
-            port=PREVIEW_PORT,
+            port=port,
             method="GET",
             path=request.url.path,
         )
         if cap is None or cap.conversation_id != conversation_id:
-            return True, Response("preview capability required", status_code=403)
-        request_label = (request.url.hostname or "").split(".", 1)[0].lower()
-        if request_label != path_preview_host_label(conversation_id, PREVIEW_PORT):
             return True, Response("preview capability required", status_code=403)
         owner = await self._store.conversation_owner_id(conversation_id)
         if owner is None:

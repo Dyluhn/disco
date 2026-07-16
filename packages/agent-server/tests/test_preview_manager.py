@@ -38,6 +38,7 @@ class _FakeSessions:
         self._name_port: dict[str, int] = {}
         self._logs: dict[str, str] = {}
         self.exec_calls: list[tuple[str, str, str | None]] = []
+        self.stop_server_calls: list[tuple[str, str, int]] = []
 
     @staticmethod
     def _port_of(command: str) -> int | None:
@@ -62,6 +63,12 @@ class _FakeSessions:
         if port is not None:
             self._serving.discard(port)
         return f"killed {name}"
+
+    async def stop_foreground_server(
+        self, name: str, *, expected_command: str, expected_port: int
+    ) -> str:
+        self.stop_server_calls.append((name, expected_command, expected_port))
+        return await self.kill_foreground(name)
 
     # test-only crash injector
     def crash(self, name: str) -> None:
@@ -176,10 +183,58 @@ async def test_start_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_canonical_selection_tracks_explicit_success_and_falls_back() -> None:
+    """H333: canonical routing follows the newest successful explicit selection."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    api = await mgr.start(serve_dir="api", name="api", supervise=False)
+    web = await mgr.start(serve_dir="web", name="web", supervise=False)
+    assert mgr.canonical_port() == web.port == 5173
+
+    # An explicit idempotent start is a deliberate reselection, not a duplicate launch.
+    assert await mgr.start(serve_dir="api", name="api", supervise=False) is api
+    assert mgr.canonical_port() == api.port == 3000
+
+    await mgr.stop("api")
+    assert mgr.canonical_port() == web.port
+    web.status = PreviewStatus.CRASHED
+    assert mgr.canonical_port() is None
+
+
+@pytest.mark.asyncio
+async def test_delayed_health_activates_newest_explicit_canonical_selection() -> None:
+    """A STARTING explicit selection becomes canonical when supervision proves health."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    first = await mgr.start(serve_dir="first", name="first", supervise=False)
+    assert mgr.canonical_port() == first.port == 3000
+
+    real_fetch = sandbox.fetch_inside
+    delay_second = True
+
+    async def delayed_fetch(port: int, path: str, *, timeout_s: int = 5):  # noqa: ANN202
+        if delay_second and port == 5173:
+            return None
+        return await real_fetch(port, path, timeout_s=timeout_s)
+
+    sandbox.fetch_inside = delayed_fetch  # type: ignore[method-assign]
+    second = await mgr.start(command="python3 server.py", name="second", supervise=True)
+    assert second.status is PreviewStatus.STARTING
+    assert mgr.canonical_port() == first.port
+
+    delay_second = False
+    await mgr._supervise_once()
+
+    assert second.status is PreviewStatus.RUNNING
+    assert mgr.canonical_port() == second.port == 5173
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
 async def test_status_logs_stop() -> None:
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000])
-    await mgr.start(serve_dir="dist", name="app", supervise=False)
+    session = await mgr.start(serve_dir="dist", name="app", supervise=False)
 
     status = await mgr.status("app")
     assert len(status) == 1 and status[0].status is PreviewStatus.RUNNING
@@ -192,6 +247,7 @@ async def test_status_logs_stop() -> None:
     after = await mgr.status("app")
     assert after[0].status is PreviewStatus.STOPPED
     assert after[0].url is None
+    assert sandbox.sessions.stop_server_calls == [("app", session.command, 3000)]
 
 
 @pytest.mark.asyncio

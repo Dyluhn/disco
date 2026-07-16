@@ -9,6 +9,7 @@ import json as _json
 import logging
 import mimetypes
 import re
+import secrets
 import urllib.parse
 from pathlib import PurePosixPath
 from typing import Literal
@@ -59,7 +60,9 @@ _LOG = logging.getLogger(__name__)
 
 
 class PreviewCapabilityBody(BaseModel):
-    port: int = PREVIEW_PORT
+    # Path-preview callers omit the port: PreviewManager selects it. An explicit
+    # value is accepted only when it exactly matches that server selection.
+    port: int | None = None
     target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
     transport: Literal["host", "path", "path_live"] = "host"
 
@@ -198,7 +201,7 @@ async def _path_preview_websocket_capability_owner(
     websocket: WebSocket,
     store: SqliteEventStore,
     conversation_id: str,
-) -> tuple[str | None, str]:
+) -> tuple[str | None, str, int | None]:
     """Authenticate an isolated path-live HMR socket without an app session."""
 
     if not _preview_websocket_origin_allowed(
@@ -207,31 +210,32 @@ async def _path_preview_websocket_capability_owner(
         websocket_scheme=websocket.url.scheme,
         forwarded_proto=websocket.headers.get("x-forwarded-proto"),
     ):
-        return None, "preview origin required"
+        return None, "preview origin required", None
     cid8 = conversation_id.removeprefix("conv_")[:8]
     request_label = (websocket.url.hostname or "").split(".", 1)[0].lower()
-    if request_label != path_preview_host_label(conversation_id, PREVIEW_PORT):
-        return None, "preview capability required"
+    port = _path_preview_port_from_label(conversation_id, request_label)
+    if port is None:
+        return None, "preview capability required", None
     try:
         cookie_name = path_preview_cookie_name(cid8)
     except ValueError:
-        return None, "preview capability required"
+        return None, "preview capability required", None
     cap = PreviewCapabilitySigner().verify_cookie_header(
         cookie_header_from_headers(websocket.headers),
         cookie_name,
         cid8=cid8,
-        port=PREVIEW_PORT,
+        port=port,
         method="WEBSOCKET",
         path=websocket.url.path,
     )
     if cap is None or cap.conversation_id != conversation_id:
-        return None, "preview capability required"
+        return None, "preview capability required", None
     owner_id = await store.conversation_owner_id(conversation_id)
     if owner_id is None:
-        return None, "conversation not found"
+        return None, "conversation not found", None
     if owner_id != cap.owner_id:
-        return None, "conversation forbidden"
-    return owner_id, ""
+        return None, "conversation forbidden", None
+    return owner_id, "", port
 
 
 def _forwarded_preview_query(request: Request) -> str:
@@ -483,6 +487,18 @@ def _path_preview_bootstrap_url(request: Request, conversation_id: str, port: in
     return urllib.parse.urlunparse((scheme, netloc, path, "", "", ""))
 
 
+def _path_preview_port_from_label(conversation_id: str, request_label: str) -> int | None:
+    """Recover only an exact curated port from a full-CID-bound p3s host label."""
+    for port in sorted(USER_PORTS - {NOVNC_PORT}):
+        try:
+            expected = path_preview_host_label(conversation_id, port)
+        except ValueError:
+            return None
+        if secrets.compare_digest(expected, request_label.strip().lower()):
+            return port
+    return None
+
+
 async def _wake_for_preview(
     runtime: ConversationRuntime, cid8: str, port: int, *, owner_id: str
 ) -> str | None:
@@ -490,6 +506,67 @@ async def _wake_for_preview(
         return await runtime.wake_for_preview(cid8, port, owner_id=owner_id)
     except TypeError:
         return await runtime.wake_for_preview(cid8, port)  # type: ignore[call-arg]
+
+
+def _canonical_preview_port(runtime: ConversationRuntime, conversation_id: str) -> int | None:
+    """Use the active PreviewManager target without weakening origin capabilities."""
+    resolver = getattr(runtime, "preview_target_port", None)
+    if resolver is None:
+        return PREVIEW_PORT
+    try:
+        port = resolver(conversation_id)
+    except Exception:  # noqa: BLE001 — corrupt selection cannot choose an upstream
+        return None
+    if port is None:
+        return None
+    if (
+        not isinstance(port, int)
+        or isinstance(port, bool)
+        or port not in USER_PORTS
+        or port == NOVNC_PORT
+    ):
+        return None
+    return port
+
+
+async def _committed_static_capability_available(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    target_parts: urllib.parse.SplitResult,
+) -> bool:
+    """Narrow legacy-8000 namespace for a proven immutable app snapshot only."""
+    if runtime is None:
+        return False
+    versions = urllib.parse.parse_qs(target_parts.query).get("version", [])
+    version: int | None = None
+    if versions:
+        if len(versions) != 1:
+            return False
+        try:
+            version = int(versions[0])
+        except ValueError:
+            return False
+        if version < 1:
+            return False
+    try:
+        events = await store.get_events(conversation_id)
+    except Exception:  # noqa: BLE001 — missing evidence cannot authorize fallback
+        return False
+    if version is None and not _finished_snapshot_is_committed(events):
+        return False
+    entry_path = _selected_app_entry(events, version=version)
+    if entry_path is None:
+        return False
+    served = _serve_static_from_snapshot(
+        runtime,
+        conversation_id,
+        "",
+        version=version,
+        entry_path=entry_path,
+        inject_selection=False,
+    )
+    return served is not None and served.status_code < 400
 
 
 async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_path: str) -> None:
@@ -565,7 +642,9 @@ async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_
             await ws_client.close()
 
 
-def _register_preview_capability_route(router: APIRouter, store: SqliteEventStore) -> None:
+def _register_preview_capability_route(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
     cap_signer = PreviewCapabilitySigner(redemption_store=store)
 
     @router.post("/conversations/{conversation_id}/preview/capability")
@@ -574,10 +653,8 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
         body: PreviewCapabilityBody,
         request: Request,
     ) -> Response:
-        if body.port not in USER_PORTS:
+        if body.port is not None and body.port not in USER_PORTS:
             raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
-        if body.transport in {"path", "path_live"} and body.port != PREVIEW_PORT:
-            raise HTTPException(status_code=400, detail={"reason": "path_preview_port"})
         session = current_session(request)
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         cid8 = conversation_id.removeprefix("conv_")[:8]
@@ -588,6 +665,29 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
         safe_target = _safe_capability_target_path(target_parts.path)
         if safe_target is None:
             raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
+        if body.transport in {"path", "path_live"}:
+            selected_port = (
+                _canonical_preview_port(runtime, conversation_id)
+                if runtime is not None
+                else PREVIEW_PORT
+            )
+            if (
+                selected_port is None
+                and body.transport == "path"
+                and await _committed_static_capability_available(
+                    store, runtime, conversation_id, target_parts
+                )
+            ):
+                selected_port = PREVIEW_PORT
+            if selected_port is None:
+                raise HTTPException(status_code=409, detail={"reason": "preview_unavailable"})
+            if body.port is not None and body.port != selected_port:
+                raise HTTPException(
+                    status_code=400, detail={"reason": "path_preview_port_mismatch"}
+                )
+            port = selected_port
+        else:
+            port = body.port if body.port is not None else PREVIEW_PORT
 
         if body.transport == "host":
             reserved_host_target = (
@@ -602,11 +702,11 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 raise HTTPException(status_code=400, detail={"reason": "reserved_preview_path"})
             # Construct/validate the isolated origin before registering a JTI.
             # Invalid bare-IP deployments therefore leave no unusable intent.
-            bootstrap = _preview_bootstrap_url(request, cid8, body.port)
+            bootstrap = _preview_bootstrap_url(request, cid8, port)
             intent = cap_signer.mint_intent(
                 session=session,
                 conversation_id=conversation_id,
-                port=body.port,
+                port=port,
                 target_path=target,
                 allow_websocket=True,
                 http_methods=PREVIEW_APP_HTTP_METHODS,
@@ -618,11 +718,11 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 path_target = f"{path_target}?{target_parts.query}"
             if len(path_target) > MAX_PREVIEW_TARGET_PATH_CHARS:
                 raise HTTPException(status_code=400, detail={"reason": "preview_target_too_long"})
-            bootstrap = _path_preview_bootstrap_url(request, conversation_id, body.port)
+            bootstrap = _path_preview_bootstrap_url(request, conversation_id, port)
             intent = cap_signer.mint_intent(
                 session=session,
                 conversation_id=conversation_id,
-                port=body.port,
+                port=port,
                 target_path=path_target,
                 path_prefix=path_prefix,
                 allow_websocket=body.transport == "path_live",
@@ -633,7 +733,7 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
                 "bootstrap_url": bootstrap,
                 "bootstrap_intent": intent,
                 "target_path": target,
-                "port": body.port,
+                "port": port,
                 "transport": body.transport,
             },
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
@@ -672,10 +772,18 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
         intent = parsed
         request_label = (request.url.hostname or "").split(".", 1)[0].lower()
+        try:
+            port = int(request_label.rsplit("-", 1)[1])
+        except (IndexError, ValueError):
+            port = 0
+        if port not in USER_PORTS or port == NOVNC_PORT:
+            return Response("invalid preview intent", status_code=403, media_type="text/plain")
+        # redeem_intent decodes the signed full conversation id and compares the
+        # complete p3s label, so a forged digest/port suffix cannot consume the JTI.
         redeemed = cap_signer.redeem_intent(
             intent,
             cid8=cid8,
-            port=PREVIEW_PORT,
+            port=port,
             path_scope="static",
             request_host_label=request_label,
         )
@@ -686,7 +794,7 @@ def _register_preview_capability_route(router: APIRouter, store: SqliteEventStor
         cap = cap_signer.verify(
             token,
             cid8=cid8,
-            port=PREVIEW_PORT,
+            port=port,
             method="GET",
             path=target_path,
         )
@@ -996,7 +1104,7 @@ def _register_port_preview_routes(
 
 def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
-    _register_preview_capability_route(router, store)
+    _register_preview_capability_route(router, store, runtime)
     _register_live_browser_start_route(router, store, runtime)
     _register_live_browser_status_routes(router, store, runtime)
     _register_port_preview_routes(router, store, runtime)
@@ -1101,7 +1209,16 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 return Response(
                     "committed preview unavailable", status_code=503, media_type="text/plain"
                 )
-        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=owner_id)
+        target_port = (
+            preview_cap.port
+            if preview_cap is not None
+            else _canonical_preview_port(runtime, conversation_id)
+        )
+        upstream = (
+            await _wake_for_preview(runtime, cid8, target_port, owner_id=owner_id)
+            if target_port is not None
+            else None
+        )
         query = _forwarded_preview_query(request)
         upstream_path = f"{safe_path}?{query}" if query else safe_path
         if upstream is None:
@@ -1110,8 +1227,10 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             # falling back to the (stale mid-run) snapshot, try a liveness proxy that
             # curls the server from INSIDE the sandbox — genuinely liveness-gated and
             # backend-agnostic. Only succeeds when something IS listening on the port.
-            served = await _fetch_inside_response(
-                runtime, conversation_id, PREVIEW_PORT, upstream_path
+            served = (
+                await _fetch_inside_response(runtime, conversation_id, target_port, upstream_path)
+                if target_port is not None
+                else None
             )
             if served is not None:
                 return served
@@ -1129,6 +1248,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             if served is not None:
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")
+        assert target_port is not None  # upstream cannot resolve without a selected port
         try:
             async with httpx.AsyncClient(
                 timeout=15, follow_redirects=False, trust_env=False
@@ -1142,7 +1262,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             # nothing answers) bypassed the None-fallback above; try the in-sandbox
             # liveness proxy before giving up so a live server is still served.
             served = await _fetch_inside_response(
-                runtime, conversation_id, PREVIEW_PORT, upstream_path
+                runtime, conversation_id, target_port, upstream_path
             )
             if served is not None:
                 return served
@@ -1168,9 +1288,11 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
         """Proxy live preview WebSockets (Vite HMR) through the path preview URL."""
         session = websocket_session(websocket)
         if session is None:
-            owner_id, capability_error = await _path_preview_websocket_capability_owner(
-                websocket, store, conversation_id
-            )
+            (
+                owner_id,
+                capability_error,
+                target_port,
+            ) = await _path_preview_websocket_capability_owner(websocket, store, conversation_id)
             if owner_id is None:
                 await _close_ws(websocket, 1008, capability_error)
                 return
@@ -1186,6 +1308,7 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 await _close_ws(websocket, 1008, "conversation forbidden")
                 return
             owner_id = session.owner_id
+            target_port = _canonical_preview_port(runtime, conversation_id) if runtime else None
         if runtime is None:
             await _close_ws(websocket, 1008, "preview not available")
             return
@@ -1193,7 +1316,10 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             await _close_ws(websocket, 1008, "historical previews are static")
             return
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=owner_id)
+        if target_port is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        upstream = await _wake_for_preview(runtime, cid8, target_port, owner_id=owner_id)
         if upstream is None:
             await _close_ws(websocket, 1008, "preview not available")
             return

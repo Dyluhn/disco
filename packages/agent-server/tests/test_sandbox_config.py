@@ -7,6 +7,8 @@ the active backend); a change is picked up per-request; and an explicit injectio
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from disco.agent_server.runtime import ConversationRuntime, build_sandbox_service
 from disco.core import SqliteEventStore
@@ -182,6 +184,54 @@ async def test_multi_port_upstream_resolution():
     assert rt.port_upstream("c", 8000) == "http://h:8000"
     assert rt.port_upstream("c", 3000) == "http://h:3000"
     assert rt.port_upstream("c", 9999) is None  # expose_port (backend) defends this
+
+
+@pytest.mark.asyncio
+async def test_canonical_preview_follows_sole_managed_platform_port():
+    """H333: a valid stop/start move to 5173 must not strand canonical preview on 8000."""
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+
+    class _ManagedSession(_FakeSession):
+        def expose_port(self, port: int) -> str | None:
+            return f"http://managed:{port}" if port == 5173 else None
+
+    session = _ManagedSession("gvisor", None)
+    session._preview_manager = SimpleNamespace(
+        canonical_port=lambda: 5173,
+    )
+    rt._executors["managed"] = _FakeExecutor(session)
+
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    async def mock_port_owners(inst, ports):  # noqa: ANN001
+        return {
+            p: PortOwner(port=p, pid=1234, cmdline="python3 server.py", session="disco-live")
+            if p == 5173
+            else None
+            for p in ports
+        }
+
+    import unittest.mock
+
+    with unittest.mock.patch(
+        "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
+    ):
+        preview = await rt.preview("managed")
+
+    assert rt.preview_target_port("managed") == 5173
+    assert rt.preview_upstream("managed") == "http://managed:5173"
+    assert preview["available"] is True
+    assert preview["port"] == 5173
+
+
+def test_canonical_preview_refuses_manager_without_healthy_selection():
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    session = _FakeSession("gvisor", None)
+    session._preview_manager = SimpleNamespace(canonical_port=lambda: None)
+    rt._executors["unhealthy"] = _FakeExecutor(session)
+
+    assert rt.preview_target_port("unhealthy") is None
+    assert rt.preview_upstream("unhealthy") is None
 
 
 @pytest.mark.asyncio

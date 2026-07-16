@@ -163,14 +163,14 @@ export type PreviewLaunch = { url: string; intent: string };
 
 function mintPreviewCapability(
   cid: string,
-  port: number,
+  port: number | undefined,
   targetPath: string,
   transport: "host" | "path" | "path_live",
 ) {
   return agentSend<PreviewCapabilityResponse>(
     "POST",
     `/conversations/${encodeURIComponent(cid)}/preview/capability`,
-    { port, target_path: targetPath, transport },
+    { ...(port === undefined ? {} : { port }), target_path: targetPath, transport },
   );
 }
 
@@ -195,7 +195,7 @@ export async function pathPreviewBootstrapUrl(
   targetPath = "/",
 ): Promise<PreviewLaunch | null> {
   if (!agentLive()) return null;
-  const result = await mintPreviewCapability(cid, 8000, targetPath, "path");
+  const result = await mintPreviewCapability(cid, undefined, targetPath, "path");
   return { url: result.bootstrap_url, intent: result.bootstrap_intent };
 }
 
@@ -206,7 +206,7 @@ export async function livePathPreviewBootstrapUrl(
   targetPath = "/",
 ): Promise<PreviewLaunch | null> {
   if (!agentLive()) return null;
-  const result = await mintPreviewCapability(cid, 8000, targetPath, "path_live");
+  const result = await mintPreviewCapability(cid, undefined, targetPath, "path_live");
   return { url: result.bootstrap_url, intent: result.bootstrap_intent };
 }
 

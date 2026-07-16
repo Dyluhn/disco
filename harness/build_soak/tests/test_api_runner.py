@@ -2841,7 +2841,7 @@ async def test_collect_preview_carries_canonical_wrong_body_without_forgery(tmp_
 @pytest.mark.asyncio
 async def test_http_transport_redeems_preview_capability_without_app_session():
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 8000)
+    path_host = path_preview_host_label(cid, 5173)
     bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
     isolated_path = f"/__disco/isolated-preview/{cid}/"
     seen: list[str] = []
@@ -2853,7 +2853,6 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
             assert request.headers["cookie"] == "disco_session=app-session-proof"
             assert request.headers["x-disco-csrf"] == "csrf-proof"
             assert json.loads(request.content) == {
-                "port": 8000,
                 "target_path": "/",
                 "transport": "path",
             }
@@ -2863,7 +2862,7 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
                     "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
-                    "port": 8000,
+                    "port": 5173,
                     "transport": "path",
                 },
             )

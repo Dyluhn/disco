@@ -6,7 +6,11 @@ import pytest
 from disco.tools.sandbox import shell_sessions as shell_sessions_module
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import ProcessSandboxService
-from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
+from disco.tools.sandbox.shell_sessions import (
+    PersistentServer,
+    SessionBusy,
+    ShellSessionManager,
+)
 
 _DONE_0 = "__DISCO_DONE_testtoken__0__"
 _DONE_7 = "__DISCO_DONE_testtoken__7__"
@@ -365,6 +369,9 @@ async def test_unknown_idle_kill_preflight_sends_no_signal() -> None:
         return inst
 
     manager = ShellSessionManager(get_inst)
+    manager._persistent_servers["main"] = PersistentServer(
+        name="main", command="python3 -m http.server 8000 &", exec_dir=None, port=8000
+    )
     prompt = "__DISCO_PS1__0__$ "
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["capture-pane"] = [(0, prompt)]
@@ -373,6 +380,170 @@ async def test_unknown_idle_kill_preflight_sends_no_signal() -> None:
 
     assert result == "Session 'main' is already idle; no signal sent."
     assert not any(" C-c" in command for command in inst.cmd_log)
+    assert "main" in manager._persistent_servers  # background listener may still be live
+
+
+@pytest.mark.asyncio
+async def test_generic_foreground_kill_preserves_background_rematerialization(monkeypatch) -> None:
+    """H334: Ctrl-C of unrelated foreground work must not forget a background server."""
+    monkeypatch.setattr(shell_sessions_module, "_POLL_S", 0)
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "busy"
+    manager._persistent_servers["main"] = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__130__$ ")
+
+    result = await manager.kill_foreground("main")
+
+    assert result == "Sent Ctrl-C; session 'main' is now idle."
+    assert manager._persistent_servers["main"].port == 8000
+
+
+@pytest.mark.asyncio
+async def test_explicit_foreground_server_stop_revokes_rematerialization(monkeypatch) -> None:
+    """H334: an explicitly stopped preview must not resurrect after sandbox recreate."""
+    monkeypatch.setattr(shell_sessions_module, "_POLL_S", 0)
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "busy"
+    record = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
+    manager._persistent_servers["main"] = record
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__130__$ ")
+
+    result = await manager.stop_foreground_server(
+        "main", expected_command=record.command, expected_port=record.port
+    )
+
+    assert result == "Sent Ctrl-C; session 'main' is now idle."
+    assert "main" not in manager._persistent_servers
+
+
+@pytest.mark.asyncio
+async def test_foreground_kill_does_not_delete_newer_persistent_generation(monkeypatch) -> None:
+    """H334: a concurrent replacement must survive completion of an older stop."""
+    monkeypatch.setattr(shell_sessions_module, "_POLL_S", 0)
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "busy"
+    manager._persistent_servers["main"] = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
+    replacement = PersistentServer(
+        name="main", command="python3 -m http.server 5173", exec_dir=None, port=5173
+    )
+    inst.canned_outputs["has-session"] = (0, "")
+
+    async def replaced_then_idle(_name: str) -> bool:
+        manager._persistent_servers["main"] = replacement
+        return False
+
+    monkeypatch.setattr(manager, "is_busy", replaced_then_idle)
+
+    await manager.kill_foreground("main")
+
+    assert manager._persistent_servers["main"] is replacement
+
+
+@pytest.mark.asyncio
+async def test_explicit_server_stop_preserves_identical_newer_generation(monkeypatch) -> None:
+    async def unused_instance():
+        raise AssertionError("instance access is not expected")
+
+    manager = ShellSessionManager(unused_instance)
+    original = PersistentServer(
+        name="main", command="python3 -m http.server 5173", exec_dir=None, port=5173
+    )
+    manager._persistent_servers["main"] = original
+    replacement = PersistentServer(
+        name="main", command="python3 -m http.server 5173", exec_dir=None, port=5173
+    )
+
+    async def replace_during_stop(_name: str) -> str:
+        manager._persistent_servers["main"] = replacement
+        return "Session 'main' is already idle; no signal sent."
+
+    monkeypatch.setattr(manager, "kill_foreground", replace_during_stop)
+
+    await manager.stop_foreground_server(
+        "main", expected_command=original.command, expected_port=original.port
+    )
+
+    assert manager._persistent_servers["main"] is replacement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        "Session 'main' is already idle; no signal sent.",
+        "Session 'main' does not exist.",
+    ],
+)
+async def test_explicit_server_stop_revokes_idle_or_missing_generation(
+    monkeypatch, result: str
+) -> None:
+    async def unused_instance():
+        raise AssertionError("instance access is not expected")
+
+    manager = ShellSessionManager(unused_instance)
+    record = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
+    manager._persistent_servers["main"] = record
+
+    async def already_stopped(_name: str) -> str:
+        return result
+
+    monkeypatch.setattr(manager, "kill_foreground", already_stopped)
+
+    assert (
+        await manager.stop_foreground_server(
+            "main", expected_command=record.command, expected_port=record.port
+        )
+        == result
+    )
+    assert "main" not in manager._persistent_servers
+
+
+@pytest.mark.asyncio
+async def test_explicit_server_stop_revokes_captured_generation_on_kill_error(monkeypatch) -> None:
+    async def unused_instance():
+        raise AssertionError("instance access is not expected")
+
+    manager = ShellSessionManager(unused_instance)
+    record = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
+    manager._persistent_servers["main"] = record
+
+    async def ambiguous_failure(_name: str) -> str:
+        raise RuntimeError("transport failed after signal")
+
+    monkeypatch.setattr(manager, "kill_foreground", ambiguous_failure)
+
+    with pytest.raises(RuntimeError, match="transport failed after signal"):
+        await manager.stop_foreground_server(
+            "main", expected_command=record.command, expected_port=record.port
+        )
+    assert "main" not in manager._persistent_servers
 
 
 def test_reset_known_sessions_clears_proven_foreground_state() -> None:
@@ -443,6 +614,9 @@ async def test_kill_then_recreate():
         return inst
 
     manager = ShellSessionManager(get_inst)
+    manager._persistent_servers["main"] = PersistentServer(
+        name="main", command="python3 -m http.server 8000", exec_dir=None, port=8000
+    )
     inst.canned_outputs["has-session"] = [(0, ""), (1, "")]
     inst.canned_outputs["has-session_default"] = (0, "")
     inst.canned_outputs["capture-pane"] = (0, "sleep 10\n")
@@ -451,6 +625,7 @@ async def test_kill_then_recreate():
     assert "Process ignored Ctrl-C; session 'main' was killed and recreated." in res
     assert "tmux kill-session" in " ".join(inst.cmd_log)
     assert "tmux new-session" in " ".join(inst.cmd_log)
+    assert manager._persistent_servers["main"].port == 8000
 
 
 @pytest.mark.asyncio

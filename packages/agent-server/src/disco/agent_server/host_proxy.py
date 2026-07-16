@@ -363,10 +363,14 @@ class HostPreviewProxyMiddleware:
         # families to the application, whose middleware requires the separate,
         # path-scoped preview capability on every asset request.
         path = str(scope.get("path") or "/")
-        if port == PREVIEW_PORT and (
-            path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
-            or path.startswith(f"{ISOLATED_PATH_PREVIEW_PREFIX}/")
-            or (path.startswith("/conversations/") and "/preview-app/" in path)
+        if (
+            preview_family == PATH_PREVIEW_HOST_PREFIX
+            and (
+                path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
+                or path.startswith(f"{ISOLATED_PATH_PREVIEW_PREFIX}/")
+            )
+        ) or (
+            port == PREVIEW_PORT and path.startswith("/conversations/") and "/preview-app/" in path
         ):
             await self.app(scope, receive, send)
             return
@@ -945,9 +949,7 @@ class HostPreviewProxyMiddleware:
                     "headers": [(b"content-type", b"text/plain")],
                 }
             )
-            await send(
-                {"type": "http.response.body", "body": b"preview upstream unreachable"}
-            )
+            await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
             return
 
         # aclose in finally: a client disconnect mid-stream raises out of send()

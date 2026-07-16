@@ -572,6 +572,35 @@ class ShellSessionManager:
         re-issues in the same order the agent launched them."""
         return list(self._persistent_servers.values())
 
+    async def stop_foreground_server(
+        self,
+        name: str,
+        *,
+        expected_command: str,
+        expected_port: int,
+    ) -> str:
+        """Stop and revoke one exact foreground-server generation.
+
+        Object identity is captured before the await because a newer same-name
+        generation may legitimately reuse the exact command and port.
+        """
+        current = self._persistent_servers.get(name)
+        expected = (
+            current
+            if current is not None
+            and current.command == expected_command
+            and current.port == expected_port
+            else None
+        )
+        try:
+            return await self.kill_foreground(name)
+        finally:
+            # Stop intent revokes this captured generation even when transport
+            # fails ambiguously after accepting the signal. Identity still protects
+            # any replacement registered while the awaited stop was in flight.
+            if expected is not None and self._persistent_servers.get(name) is expected:
+                self._persistent_servers.pop(name, None)
+
     async def rehydrate_persistent_servers(
         self, port_check: Callable[[int], Awaitable[bool]] | None = None
     ) -> list[str]:

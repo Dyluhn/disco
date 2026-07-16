@@ -39,7 +39,7 @@ from disco.core.auth import (
     validated_isolated_path_preview_url,
 )
 from disco.core.evidence.schema import redact
-from disco.tools.sandbox._container import PREVIEW_PORT
+from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 from websockets.typing import Origin
 
@@ -464,7 +464,6 @@ class HttpVerifyClient(AbstractVerifyClient):
                     f"/conversations/{cid}/preview/capability",
                     headers=headers,
                     json={
-                        "port": PREVIEW_PORT,
                         "target_path": "/",
                         "transport": "path",
                     },
@@ -472,15 +471,19 @@ class HttpVerifyClient(AbstractVerifyClient):
             if minted.status_code != 200:
                 return minted.status_code, minted.content
             body = minted.json()
+            selected_port = body.get("port")
             if (
                 body.get("transport") != "path"
                 or body.get("target_path") != "/"
-                or body.get("port") != PREVIEW_PORT
+                or not isinstance(selected_port, int)
+                or isinstance(selected_port, bool)
+                or selected_port not in USER_PORTS
+                or selected_port == NOVNC_PORT
             ):
                 return None
             bootstrap_url = str(body.get("bootstrap_url") or "")
             intent = str(body.get("bootstrap_intent") or "")
-            isolated_url = self._validated_isolated_preview_url(cid, bootstrap_url)
+            isolated_url = self._validated_isolated_preview_url(cid, selected_port, bootstrap_url)
             if not intent or isolated_url is None:
                 return None
 
@@ -511,12 +514,14 @@ class HttpVerifyClient(AbstractVerifyClient):
             log.warning("fetch_preview(%s) failed: %s", cid, exc)
             return None
 
-    def _validated_isolated_preview_url(self, cid: str, bootstrap_url: str) -> str | None:
+    def _validated_isolated_preview_url(
+        self, cid: str, port: int, bootstrap_url: str
+    ) -> str | None:
         """Validate the server-minted p3s origin before the verifier fetches it."""
         return validated_isolated_path_preview_url(
             self._base_url,
             cid,
-            PREVIEW_PORT,
+            port,
             bootstrap_url,
         )
 

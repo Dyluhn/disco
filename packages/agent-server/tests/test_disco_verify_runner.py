@@ -79,7 +79,7 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
 async def test_http_verify_client_fetches_selected_preview_through_clean_capability() -> None:
     seen: list[str] = []
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 8000)
+    path_host = path_preview_host_label(cid, 5173)
     isolated_path = f"/__disco/isolated-preview/{cid}/"
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -98,7 +98,6 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
             assert request.headers["cookie"] == "disco_session=session-proof"
             assert request.headers["x-disco-csrf"] == "csrf-proof"
             assert json.loads(request.content) == {
-                "port": 8000,
                 "target_path": "/",
                 "transport": "path",
             }
@@ -110,7 +109,7 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
                     ),
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
-                    "port": 8000,
+                    "port": 5173,
                     "transport": "path",
                 },
             )
@@ -194,6 +193,7 @@ async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() 
     assert (
         client._validated_isolated_preview_url(
             cid,
+            8000,
             f"http://user@{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4",
         )
         is None

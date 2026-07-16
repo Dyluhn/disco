@@ -42,8 +42,12 @@ pytestmark = pytest.mark.integration
 
 
 class _StaticRuntime:
-    def __init__(self, project_store: ProjectStore) -> None:
+    def __init__(self, project_store: ProjectStore, *, target_port: int | None = 8000) -> None:
         self._project_store = project_store
+        self._target_port = target_port
+
+    def preview_target_port(self, _conversation_id: str) -> int | None:
+        return self._target_port
 
     def project_store(self) -> ProjectStore:
         return self._project_store
@@ -294,6 +298,105 @@ async def _finished_site(store: SqliteEventStore, projects: ProjectStore, cid: s
             trigger="finish",
         ),
     )
+
+
+async def test_path_capability_selects_and_binds_dynamic_managed_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H333: mint, origin, redemption, auth, and proxy all bind the selected 5173."""
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "h333-dynamic-preview-secret")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+    cid = "conv_a1b2c3d4dynamic"
+    store = SqliteEventStore(":memory:")
+    projects = ProjectStore(str(tmp_path / "projects"))
+    await _finished_site(store, projects, cid)
+    app = _app(store, _StaticRuntime(projects, target_port=5173))
+    owner = TestClient(app, base_url="http://127.0.0.1:18240")
+    csrf = _install_owner_session(owner, "owner-a")
+    headers = {"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf}
+
+    mismatch = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"port": 8000, "target_path": "/", "transport": "path"},
+    )
+    assert mismatch.status_code == 400
+    assert mismatch.json()["detail"]["reason"] == "path_preview_port_mismatch"
+
+    minted = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "path"},
+    )
+    assert minted.status_code == 200
+    body = minted.json()
+    assert body["port"] == 5173
+    host = f"{path_preview_host_label(cid, 5173)}.localhost"
+    assert urlsplit(body["bootstrap_url"]).hostname == host
+
+    isolated = TestClient(app, base_url=f"http://{host}:18240")
+    redeemed = _redeem(isolated, body["bootstrap_url"], body["bootstrap_intent"])
+    assert redeemed.status_code == 200
+    target = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/"
+    page = isolated.get(target)
+    assert page.status_code == 200
+    assert "CAPABILITY SITE" in page.text
+
+    live_minted = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "path_live"},
+    ).json()
+    live_isolated = TestClient(app, base_url=f"http://{host}:18240")
+    assert (
+        _redeem(
+            live_isolated,
+            live_minted["bootstrap_url"],
+            live_minted["bootstrap_intent"],
+        ).status_code
+        == 200
+    )
+    with pytest.raises(WebSocketDisconnect) as disconnected:
+        with live_isolated.websocket_connect(
+            f"ws://{host}:18240{ISOLATED_PATH_PREVIEW_PREFIX}/{cid}/hmr",
+            headers={"Origin": f"http://{host}:18240", "Host": f"{host}:18240"},
+        ):
+            pass
+    assert disconnected.value.reason == "preview not available"
+
+
+async def test_committed_static_snapshot_survives_stopped_managed_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stopped live preview cannot hide a proven FINISHED immutable app snapshot."""
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "h333-stopped-static-secret")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+    cid = "conv_a1b2c3d4stopped"
+    store = SqliteEventStore(":memory:")
+    projects = ProjectStore(str(tmp_path / "projects"))
+    await _finished_site(store, projects, cid)
+    app = _app(store, _StaticRuntime(projects, target_port=None))
+    owner = TestClient(app, base_url="http://127.0.0.1:18240")
+    csrf = _install_owner_session(owner, "owner-a")
+    headers = {"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf}
+
+    static = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "path"},
+    )
+    assert static.status_code == 200
+    assert static.json()["port"] == 8000
+
+    live = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "path_live"},
+    )
+    assert live.status_code == 409
+    assert live.json()["detail"]["reason"] == "preview_unavailable"
 
 
 async def test_path_preview_capability_loads_asset_graph_without_app_session(

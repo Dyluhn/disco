@@ -226,7 +226,7 @@ async function assertApiGraph(
     request,
     `${AGENT_API}/conversations/${cid}/preview/capability`,
     {
-      data: { port: 8000, target_path: targetPath, transport: "path" },
+      data: { target_path: targetPath, transport: "path" },
       timeout: 30_000,
     },
   );
@@ -456,7 +456,6 @@ async function openFromHandoff(
       expect(capabilityRequestUrl.search).toBe("");
       expect(capabilityRequestUrl.hash).toBe("");
       expect(capabilityResponse.request().postDataJSON()).toEqual({
-        port: 8000,
         target_path: "/",
         transport: "path",
       });
@@ -464,7 +463,9 @@ async function openFromHandoff(
       const capability = (await capabilityResponse.json()) as {
         bootstrap_url: string;
         bootstrap_intent: string;
+        port: number;
       };
+      expect([3000, 4321, 5000, 5173, 8000, 8080]).toContain(capability.port);
       expect(
         capability.bootstrap_intent === intent,
         "capability response and bootstrap form used different intents",
@@ -481,7 +482,7 @@ async function openFromHandoff(
       ).toBe(true);
       expect(
         capabilityBootstrapUrl.hostname.match(
-          new RegExp(`^p3s-${compactCid}-[0-9a-f]{40}-8000\\.`),
+          new RegExp(`^p3s-${compactCid}-[0-9a-f]{40}-${capability.port}\\.`),
         ),
         "path bootstrap did not use the dedicated per-CID p3s origin",
       ).not.toBeNull();

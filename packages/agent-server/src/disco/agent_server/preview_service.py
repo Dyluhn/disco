@@ -58,6 +58,39 @@ class PreviewService:
         except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
             return False
 
+    def preview_target_port(self, conversation_id: str) -> int | None:
+        """Resolve the canonical preview route to its sole managed live preview.
+
+        ``preview_start`` deliberately owns a pool of ports, so an immediate
+        stop/start is allowed to move away from 8000 (for example while a
+        conservative bind probe still sees the old socket as unavailable).  The
+        browser capability origin and its server-side upstream must both follow the
+        product-selected port; clients validate the returned port but never choose it.
+
+        The manager tracks the last successful explicit selection and falls back to
+        the newest remaining servable selection.  Once a manager exists, no healthy
+        selection means unavailable rather than a hidden legacy-8000 fallback.
+        """
+        executor = self._rt._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        manager = getattr(session, "_preview_manager", None) if session is not None else None
+        if manager is None:
+            return PREVIEW_PORT
+        try:
+            port = manager.canonical_port()
+        except Exception:  # noqa: BLE001 — corrupt registry cannot select an upstream
+            return None
+        if port is None:
+            return None
+        if (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or port not in USER_PORTS
+            or port == NOVNC_PORT
+        ):
+            return None
+        return port
+
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Generalized upstream resolution for any curated USER port (BP-10).
         expose_port itself refuses non-USER ports — defense stays in the backend.
@@ -158,7 +191,8 @@ class PreviewService:
             owners = await port_owners(inst, sorted(USER_PORTS))
         except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
             owners = {}
-        owner = owners.get(PREVIEW_PORT)
+        target_port = self.preview_target_port(conversation_id)
+        owner = owners.get(target_port) if target_port is not None else None
 
         ns = f"pmx-{session.sessions.namespace}"
 
@@ -174,13 +208,22 @@ class PreviewService:
             if o is not None and o.pid is not None
         ]
 
+        if target_port is None:
+            return {
+                "available": False,
+                "reason": "No health-verified managed preview is currently available.",
+                "owner": None,
+                "ports": ports_payload,
+                "port": None,
+            }
         if owner is None or owner.pid is None:
             return {
                 "available": False,
-                "reason": f"No dev server detected. Run one on port {PREVIEW_PORT} inside the "
+                "reason": f"No dev server detected. Run one on port {target_port} inside the "
                 "sandbox to see a live preview.",
                 "owner": None,
                 "ports": ports_payload,
+                "port": target_port,
             }
 
         return {
@@ -188,6 +231,7 @@ class PreviewService:
             "proxy": True,
             "owner": _owner_json(owner),
             "ports": ports_payload,
+            "port": target_port,
         }
 
     async def ensure_preview(self, conversation_id: str) -> bool:

@@ -57,9 +57,9 @@ describe("preview capability ownership", () => {
     ).toEqual([
       { port: 8000, target_path: "/?r=0", transport: "host" },
       { port: 8000, target_path: "/?r=0", transport: "host" },
-      { port: 8000, target_path: "/?r=0", transport: "path" },
-      { port: 8000, target_path: "/?r=0", transport: "path" },
-      { port: 8000, target_path: "/?r=0", transport: "path_live" },
+      { target_path: "/?r=0", transport: "path" },
+      { target_path: "/?r=0", transport: "path" },
+      { target_path: "/?r=0", transport: "path_live" },
     ]);
   });
 

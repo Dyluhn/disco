@@ -250,6 +250,10 @@ class PreviewManager:
         self._health_interval_s = health_interval_s
         self._supervise_interval_s = supervise_interval_s
         self._sessions: dict[str, PreviewSession] = {}
+        # Explicit successful preview_start selections, oldest to newest. The
+        # canonical UI route follows the newest still-servable selection; supervisor
+        # restarts never reorder it, while an idempotent explicit start does.
+        self._selection_order: list[str] = []
         self._lock = asyncio.Lock()
         self._supervisor: asyncio.Task[None] | None = None
         self._closed = False
@@ -735,6 +739,7 @@ class PreviewManager:
                         exec_dir=exec_dir,
                         intent=intent,
                     )
+                self._record_explicit_selection(existing)
                 return existing
 
             port = await self._allocate_port(reclaim_name=key)
@@ -760,10 +765,35 @@ class PreviewManager:
             )
             self._sessions[key] = session
             await self._launch(session)
+            self._record_explicit_selection(session)
 
         if supervise:
             self._ensure_supervisor()
         return session
+
+    @staticmethod
+    def _is_servable(session: PreviewSession) -> bool:
+        return session.status in {PreviewStatus.RUNNING, PreviewStatus.UNAVAILABLE}
+
+    def _record_explicit_selection(self, session: PreviewSession) -> None:
+        """Record an accepted explicit start even if health proof arrives later."""
+        if session.status in {PreviewStatus.CRASHED, PreviewStatus.STOPPED}:
+            return
+        if session.name in self._selection_order:
+            self._selection_order.remove(session.name)
+        self._selection_order.append(session.name)
+
+    def canonical_port(self) -> int | None:
+        """Port selected by the newest successful explicit preview_start.
+
+        A manager with no health-proven preview returns ``None``. This is distinct
+        from a sandbox with no manager, where the legacy static preview remains 8000.
+        """
+        for name in reversed(self._selection_order):
+            session = self._sessions.get(name)
+            if session is not None and self._is_servable(session):
+                return session.port
+        return None
 
     async def _launch(self, session: PreviewSession) -> None:
         """Issue the (re)start command in the sandbox + poll health to a verdict."""
@@ -1074,7 +1104,15 @@ class PreviewManager:
         """Stop one tracked preview. Caller owns `_lock` when coordinating with state."""
         session = self._sessions[name]
         try:
-            await self._sandbox.sessions.kill_foreground(name)
+            stop_server = getattr(self._sandbox.sessions, "stop_foreground_server", None)
+            if stop_server is not None:
+                await stop_server(
+                    name,
+                    expected_command=session.command,
+                    expected_port=session.port,
+                )
+            else:
+                await self._sandbox.sessions.kill_foreground(name)
         except Exception:  # noqa: BLE001 — best-effort; mark stopped regardless
             _LOG.debug("kill_foreground failed for preview %s", name, exc_info=True)
         session.status = PreviewStatus.STOPPED

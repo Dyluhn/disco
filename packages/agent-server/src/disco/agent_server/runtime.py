@@ -3806,7 +3806,12 @@ class ConversationRuntime:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
         owns how — localhost for local, the remote host's tailnet IP for gVisor). The
         browser never touches this; the agent-server proxies it (single origin)."""
-        return self.port_upstream(conversation_id, PREVIEW_PORT)
+        port = self.preview_target_port(conversation_id)
+        return self.port_upstream(conversation_id, port) if port is not None else None
+
+    def preview_target_port(self, conversation_id: str) -> int | None:
+        """The live port behind the canonical, capability-isolated preview route."""
+        return self._preview.preview_target_port(conversation_id)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         return self._preview.port_upstream(conversation_id, port)

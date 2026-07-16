@@ -37,9 +37,13 @@ class _FakeSession:
 class _FakeRuntime:
     """No host upstream is ever published (sealed box); a live session may serve."""
 
-    def __init__(self, session: _FakeSession | None) -> None:
+    def __init__(self, session: _FakeSession | None, *, target_port: int = 8000) -> None:
         self._session = session
+        self._target_port = target_port
         self.wake_calls: list[tuple[str, int]] = []
+
+    def preview_target_port(self, conversation_id: str) -> int:
+        return self._target_port
 
     async def wake_for_preview(self, cid8: str, port: int) -> str | None:
         self.wake_calls.append((cid8, port))
@@ -79,6 +83,19 @@ def test_preview_app_serves_live_body_via_fetch_inside() -> None:
     assert resp.headers["content-type"].startswith("text/html")
     # liveness probe hit the live session on the preview port
     assert session.calls and session.calls[0][0] == 8000
+
+
+def test_preview_app_follows_managed_nondefault_port_for_wake_and_fetch() -> None:
+    """H333: canonical origin stays isolated while its upstream follows PreviewManager."""
+    body = b"<html><body>managed 5173</body></html>"
+    session = _FakeSession((200, body, "text/html"))
+    rt = _FakeRuntime(session, target_port=5173)
+
+    resp = _client(rt).get("/conversations/conv_abc12345/preview-app/")
+
+    assert resp.status_code == 200
+    assert rt.wake_calls == [("abc12345", 5173)]
+    assert session.calls == [(5173, "")]
 
 
 def test_port_app_serves_live_body_via_fetch_inside() -> None:

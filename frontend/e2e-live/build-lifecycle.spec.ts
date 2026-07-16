@@ -39,7 +39,7 @@ async function isolatedPreviewText(
     request,
     `${AGENT_API}/conversations/${cid}/preview/capability`,
     {
-      data: { port: 8000, target_path: targetPath, transport: "path" },
+      data: { target_path: targetPath, transport: "path" },
       timeout: 30_000,
     },
   );
@@ -50,9 +50,11 @@ async function isolatedPreviewText(
     bootstrap_intent: string;
     target_path: string;
     transport: string;
+    port: number;
   };
   expect(capability.target_path).toBe(targetPath);
   expect(capability.transport).toBe("path");
+  expect([3000, 4321, 5000, 5173, 8000, 8080]).toContain(capability.port);
   expect(
     typeof capability.bootstrap_intent === "string" && capability.bootstrap_intent.length > 0,
     "path capability response omitted its one-time intent",

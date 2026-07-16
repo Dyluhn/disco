@@ -58,7 +58,7 @@ import httpx  # the adapter MAY import an http client (oracle path stays disco/h
 from disco.core.auth import SESSION_COOKIE, validated_isolated_path_preview_url
 from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.projects.store import tree_digest as project_tree_digest
-from disco.tools.sandbox._container import PREVIEW_PORT
+from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
 from ..events import NormalizationError, normalize_events
 from ..oracles.thrash import ThrashOracle
@@ -2656,7 +2656,6 @@ class HttpTransport:
                 minted = await app_client.post(
                     f"{self.base_url}/conversations/{conversation_id}/preview/capability",
                     json={
-                        "port": PREVIEW_PORT,
                         "target_path": "/",
                         "transport": "path",
                     },
@@ -2665,10 +2664,14 @@ class HttpTransport:
             if minted.status_code != 200:
                 return minted.status_code, minted.text, dict(minted.headers)
             body = _safe_json(minted)
+            selected_port = body.get("port")
             if (
                 body.get("transport") != "path"
                 or body.get("target_path") != "/"
-                or body.get("port") != PREVIEW_PORT
+                or not isinstance(selected_port, int)
+                or isinstance(selected_port, bool)
+                or selected_port not in USER_PORTS
+                or selected_port == NOVNC_PORT
             ):
                 return 502, "invalid preview capability response", {}
             bootstrap_url = str(body.get("bootstrap_url") or "")
@@ -2676,7 +2679,7 @@ class HttpTransport:
             isolated_url = validated_isolated_path_preview_url(
                 self.base_url,
                 conversation_id,
-                PREVIEW_PORT,
+                selected_port,
                 bootstrap_url,
             )
             if not intent or isolated_url is None:
