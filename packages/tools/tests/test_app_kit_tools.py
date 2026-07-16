@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
+from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH, DesignSpec
+from disco.core.design import DIRECTION_BY_ID, render_design_direction
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.app_kit import (
     AppAddSectionArgs,
@@ -32,6 +33,7 @@ from disco.tools.builtin.app_kit import (
     AppUpdateContentArgs,
     AppUpdateContentTool,
 )
+from disco.tools.builtin.design_lint import lint_design
 from tool_fakes import FakeSandboxInstance
 
 
@@ -99,6 +101,65 @@ async def test_app_create_writes_tree_and_both_specs():
     # the persisted appspec is valid JSON and declares the lead entity
     spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
     assert any(e["id"] == "lead" for e in spec["entities"])
+
+
+async def test_app_create_is_clean_against_the_same_committed_direction_as_final_verify():
+    """H315: creation may not certify a weaker lint contract than verification."""
+
+    direction = DIRECTION_BY_ID["warm-craft"]
+    sbx = FakeSandboxInstance()
+    sbx._fs[".disco/context/design_direction.md"] = render_design_direction(direction).encode()
+
+    out = await _create(sbx, recipe="field-notes")
+
+    assert out.success, out.content
+    assert out.structured is not None
+    assert out.structured["direction_id"] == "warm-craft"
+    spec = json.loads(sbx._fs[DESIGNSPEC_RELPATH])
+    assert spec["typography"] == {
+        "heading_font": "Fraunces",
+        "body_font": "Atkinson Hyperlegible",
+    }
+    files = {
+        path: body.decode("utf-8")
+        for path, body in sbx._fs.items()
+        if path.endswith((".css", ".html", ".tsx", ".jsx"))
+    }
+    verdict = lint_design(
+        files,
+        DesignSpec.model_validate(spec),
+        spec_present=True,
+        spec_valid=True,
+        direction=direction,
+    )
+    assert verdict["ok"], verdict["findings"]
+
+
+@pytest.mark.parametrize("direction_id", sorted(DIRECTION_BY_ID))
+async def test_app_create_is_verify_clean_across_the_committed_direction_catalog(
+    direction_id: str,
+):
+    direction = DIRECTION_BY_ID[direction_id]
+    sbx = FakeSandboxInstance()
+    sbx._fs[".disco/context/design_direction.md"] = render_design_direction(direction).encode()
+
+    out = await _create(sbx, recipe="field-notes")
+
+    assert out.success, out.content
+    spec = DesignSpec.model_validate_json(sbx._fs[DESIGNSPEC_RELPATH])
+    files = {
+        path: body.decode("utf-8")
+        for path, body in sbx._fs.items()
+        if path.endswith((".css", ".html", ".tsx", ".jsx"))
+    }
+    verdict = lint_design(
+        files,
+        spec,
+        spec_present=True,
+        spec_valid=True,
+        direction=direction,
+    )
+    assert verdict["ok"], verdict["findings"]
 
 
 async def test_app_create_refuses_overwrite_then_allows_with_flag():
@@ -416,6 +477,23 @@ async def test_app_set_design_touches_only_design_files():
     assert "src/App.tsx" not in touched
 
 
+async def test_app_set_design_recipe_stays_aligned_with_committed_direction():
+    direction = DIRECTION_BY_ID["warm-craft"]
+    sbx = FakeSandboxInstance()
+    sbx._fs[".disco/context/design_direction.md"] = render_design_direction(direction).encode()
+    assert (await _create(sbx, recipe="editorial-ledger")).success
+
+    out = await AppSetDesignTool().run(
+        AppSetDesignArgs(recipe_id="field-notes", variant_policy="preserve"),
+        _ctx(sbx),
+    )
+
+    assert out.success, out.content
+    spec = json.loads(sbx._fs[DESIGNSPEC_RELPATH])
+    assert spec["typography"]["heading_font"] == "Fraunces"
+    assert spec["typography"]["body_font"] == "Atkinson Hyperlegible"
+
+
 async def test_app_set_design_rejects_lint_dirty_raw_spec():
     sbx = FakeSandboxInstance()
     assert (await _create(sbx)).success
@@ -440,6 +518,36 @@ async def test_app_set_design_rejects_lint_dirty_raw_spec():
     # nothing was written — the designspec on disk is the original
     assert sbx._fs[DESIGNSPEC_RELPATH] == before[DESIGNSPEC_RELPATH]
     assert sbx._fs["src/styles.css"] == before["src/styles.css"]
+
+
+async def test_app_set_design_rejects_css_font_stacks_with_actionable_schema_error():
+    """H316: preserve the injection-safe boundary and advertise one family upstream."""
+
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+    raw = {
+        "schema_version": 1,
+        "typography": {
+            "heading_font": "Fraunces, Georgia, serif",
+            "body_font": "Atkinson Hyperlegible, system-ui, sans-serif",
+        },
+        "palette": {
+            "primary": "#8a5a44",
+            "surface": "#faf8f8",
+            "text": "#1e1a13",
+        },
+        "layout_family": "notebook-margin",
+        "component_style": "soft-bordered",
+        "density": "comfortable",
+    }
+
+    out = await AppSetDesignTool().run(AppSetDesignArgs(design_spec=raw), _ctx(sbx))
+
+    assert not out.success
+    assert out.error == "app_set_design_refused"
+    assert "invalid design_spec" in out.content
+    assert "string_pattern_mismatch" in out.content
+    assert "^[A-Za-z0-9 ]+$" in out.content
 
 
 async def test_app_set_design_requires_exactly_one_source():
@@ -477,6 +585,10 @@ def test_app_set_design_advertises_typed_design_spec_schema():
     assert {"heading_font", "body_font"}.issubset(
         design_schema["properties"]["typography"]["properties"]
     )
+    typography = design_schema["properties"]["typography"]["properties"]
+    assert typography["heading_font"]["pattern"] == "^[A-Za-z0-9 ]+$"
+    assert typography["body_font"]["pattern"] == "^[A-Za-z0-9 ]+$"
+    assert "never a comma-separated CSS fallback stack" in typography["heading_font"]["description"]
     assert {"primary", "surface", "text"}.issubset(
         design_schema["properties"]["palette"]["properties"]
     )

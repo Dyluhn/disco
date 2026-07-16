@@ -196,6 +196,10 @@ _RouteStr = Annotated[str, StringConstraints(max_length=200)]  # in-app route pa
 _TargetStr = Annotated[str, StringConstraints(max_length=2048)]
 # small vocab tokens (kinds/types/fonts/styles)
 _ShortStr = Annotated[str, StringConstraints(max_length=120)]
+_FontFamilyStr = Annotated[
+    str,
+    StringConstraints(max_length=120, pattern=_FONT_RE.pattern),
+]
 # justification prose (also has a MIN length validator below)
 _ReasonStr = Annotated[str, StringConstraints(max_length=2000)]
 _HexStr = Annotated[str, StringConstraints(max_length=7)]  # "#rrggbb" — also hex-validated below
@@ -800,8 +804,14 @@ class Typography(BaseModel):
 
     model_config = _STRICT
 
-    heading_font: _ShortStr
-    body_font: _ShortStr
+    heading_font: _FontFamilyStr = Field(
+        description="One primary font family name (letters, digits, and spaces); "
+        "never a comma-separated CSS fallback stack."
+    )
+    body_font: _FontFamilyStr = Field(
+        description="One primary font family name (letters, digits, and spaces); "
+        "never a comma-separated CSS fallback stack."
+    )
 
     @field_validator("heading_font", "body_font")
     @classmethod

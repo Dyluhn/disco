@@ -64,8 +64,26 @@ from disco.core.appkit import (
     tree_digest,
     tree_file_hashes,
 )
-from disco.core.appkit.recipes import RECIPES
-from disco.core.appkit.spec import AppSpec, DesignSpec, Section, SectionContent
+from disco.core.appkit.recipes import (
+    CHOICE_COMPONENT_STYLE,
+    CHOICE_DENSITY,
+    CHOICE_PALETTE_ACCENT,
+    CHOICE_PALETTE_PRIMARY,
+    CHOICE_PALETTE_SURFACE,
+    CHOICE_TYPOGRAPHY_BODY,
+    CHOICE_TYPOGRAPHY_HEADING,
+    RECIPES,
+)
+from disco.core.appkit.spec import (
+    AppSpec,
+    DesignSpec,
+    Justification,
+    Palette,
+    Section,
+    SectionContent,
+    Typography,
+)
+from disco.core.design import DesignDirection, to_brand_tokens
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -76,7 +94,7 @@ from pydantic import (
 )
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
-from .design_lint import lint_design
+from .design_lint import lint_design, load_committed_direction
 
 _FS = frozenset({Capability.FILESYSTEM})
 
@@ -166,12 +184,119 @@ async def _load_design_spec(ctx: ToolContext) -> DesignSpec:
         raise _AppKitError(f"{DESIGNSPEC_RELPATH} is invalid: {exc}") from exc
 
 
-def _lint_gate(tree: dict[str, str], design: DesignSpec) -> None:
-    """Reject a mutation whose regenerated output would be design-slop. The recipe
-    path is clean by construction, so this is a no-op there; it is the real guard
-    on the raw-DesignSpec path (P1) and a backstop everywhere else — a patch can
-    never land a lint-dirty tree on disk."""
-    verdict = lint_design(tree, design, spec_present=True, spec_valid=True)
+def _align_recipe_design_to_direction(design: DesignSpec, direction: DesignDirection) -> DesignSpec:
+    """Project a recipe's layout through the plan's committed visual direction.
+
+    The recipe still owns its section/layout system. The immutable direction owns
+    the fonts, palette, surface treatment, and density that final verification
+    treats as ground truth. Rebuilding a validated ``DesignSpec`` here keeps every
+    emitted value inside the injection-safe spec boundary and replaces stale recipe
+    justifications with truthful direction-derived ones.
+    """
+
+    theme = to_brand_tokens(direction)
+    replaced_choices = {
+        CHOICE_TYPOGRAPHY_HEADING,
+        CHOICE_TYPOGRAPHY_BODY,
+        CHOICE_PALETTE_PRIMARY,
+        CHOICE_PALETTE_SURFACE,
+        CHOICE_PALETTE_ACCENT,
+        CHOICE_COMPONENT_STYLE,
+        CHOICE_DENSITY,
+    }
+    retained = tuple(
+        justification
+        for justification in design.justifications
+        if justification.choice not in replaced_choices
+    )
+    committed = (
+        Justification(
+            choice=CHOICE_TYPOGRAPHY_HEADING,
+            reason=(
+                f"{direction.font_pairing.heading.family} is the committed "
+                f"{direction.id} display family."
+            ),
+        ),
+        Justification(
+            choice=CHOICE_TYPOGRAPHY_BODY,
+            reason=(
+                f"{direction.font_pairing.body.family} is the committed "
+                f"{direction.id} reading family."
+            ),
+        ),
+        Justification(
+            choice=CHOICE_PALETTE_PRIMARY,
+            reason=f"{direction.palette_seed} is the committed {direction.id} palette seed.",
+        ),
+        Justification(
+            choice=CHOICE_PALETTE_SURFACE,
+            reason=(
+                f"{theme.bg} is the derived {direction.id} surface paired with "
+                f"the committed {theme.text} text role."
+            ),
+        ),
+        Justification(
+            choice=CHOICE_PALETTE_ACCENT,
+            reason=(
+                f"{direction.accents[0].hex} is the committed "
+                f"{direction.id} {direction.accents[0].name} accent."
+            ),
+        ),
+        Justification(
+            choice=CHOICE_COMPONENT_STYLE,
+            reason=(
+                f"{direction.surface_treatment.treatment} is the committed "
+                f"{direction.id} surface treatment."
+            ),
+        ),
+        Justification(
+            choice=CHOICE_DENSITY,
+            reason=f"{direction.density} is the committed {direction.id} information density.",
+        ),
+    )
+    return DesignSpec(
+        schema_version=design.schema_version,
+        typography=Typography(
+            heading_font=direction.font_pairing.heading.family,
+            body_font=direction.font_pairing.body.family,
+        ),
+        palette=Palette(
+            primary=direction.palette_seed,
+            surface=theme.bg,
+            text=theme.text,
+            accent=direction.accents[0].hex,
+        ),
+        layout_family=design.layout_family,
+        component_style=direction.surface_treatment.treatment,
+        density=direction.density,
+        justifications=(*retained, *committed),
+    )
+
+
+async def _lint_gate(
+    tree: dict[str, str],
+    design: DesignSpec,
+    ctx: ToolContext,
+    *,
+    direction: DesignDirection | None = None,
+) -> None:
+    """Reject any mutation final ``design_lint`` would reject.
+
+    The same committed direction loader and pure lint engine used by the final
+    verifier govern this pre-write gate, so a successful semantic mutation cannot
+    strand a tree that fails unchanged at ``verify_appkit_app``.
+    """
+
+    committed_direction = (
+        direction if direction is not None else await load_committed_direction(ctx)
+    )
+    verdict = lint_design(
+        tree,
+        design,
+        spec_present=True,
+        spec_valid=True,
+        direction=committed_direction,
+    )
     if not verdict["ok"]:
         rules = ", ".join(dict.fromkeys(f["rule_id"] for f in verdict["findings"]))
         raise _AppKitError(
@@ -320,7 +445,10 @@ class AppCreateTool:
                 raise _AppKitError(
                     f"unknown recipe_id: {args.recipe_id!r}. See the SiteRecipe catalog."
                 )
+            direction = await load_committed_direction(ctx)
             design = recipe.to_design_spec()
+            if direction is not None:
+                design = _align_recipe_design_to_direction(design, direction)
 
             # Resolve the primitive. With an explicit app_spec the primitive is taken
             # from app_spec.app_kind (how generate() dispatches); a caller-supplied
@@ -390,7 +518,7 @@ class AppCreateTool:
                     )
 
             tree = generate(app, design)
-            _lint_gate(tree, design)
+            await _lint_gate(tree, design, ctx, direction=direction)
 
             touched = await _apply_tree(ctx, tree)
             await _save_app_spec(ctx, app)
@@ -407,6 +535,7 @@ class AppCreateTool:
                     "primitive_id": primitive.id,
                     "app_kind": app.app_kind,
                     "app_name": app.name,
+                    "direction_id": direction.id if direction is not None else None,
                     "files_written": touched,
                     "specs": [APPSPEC_RELPATH, DESIGNSPEC_RELPATH],
                 },
@@ -488,7 +617,7 @@ class AppAddSectionTool:
                 raise _AppKitError(f"adding the section made the spec invalid: {exc}") from exc
 
             tree = generate(new_app, design)
-            _lint_gate(tree, design)
+            await _lint_gate(tree, design, ctx)
             touched = await _apply_tree(ctx, tree)
             await _save_app_spec(ctx, new_app)
             return ToolOutcome(
@@ -613,7 +742,7 @@ class AppUpdateContentTool:
                 raise _AppKitError(f"the content update made the spec invalid: {exc}") from exc
 
             tree = generate(new_app, design)
-            _lint_gate(tree, design)
+            await _lint_gate(tree, design, ctx)
             touched = await _apply_tree(ctx, tree)
             await _save_app_spec(ctx, new_app)
             return ToolOutcome(
@@ -640,8 +769,9 @@ class AppSetDesignArgs(BaseModel):
     )
     design_spec: SkipValidation[DesignSpec] | None = Field(
         default=None,
-        description="A raw DesignSpec JSON (P1). Accepted only if the regenerated output "
-        "passes design_lint (no unjustified slop).",
+        description="A raw DesignSpec JSON (P1). Each typography field is ONE primary font "
+        "family (letters/digits/spaces), never a comma-separated CSS fallback stack. "
+        "Accepted only if the regenerated output passes design_lint (no unjustified slop).",
     )
     variant_policy: str = Field(
         default="preserve",
@@ -678,11 +808,14 @@ class AppSetDesignTool:
             app = await _load_app_spec(ctx)
 
             recipe = None
+            direction = await load_committed_direction(ctx)
             if args.recipe_id is not None:
                 recipe = get_recipe(args.recipe_id)
                 if recipe is None:
                     raise _AppKitError(f"unknown recipe_id: {args.recipe_id!r}")
                 design = recipe.to_design_spec()
+                if direction is not None:
+                    design = _align_recipe_design_to_direction(design, direction)
             else:
                 try:
                     design = DesignSpec.model_validate(args.design_spec)
@@ -708,7 +841,7 @@ class AppSetDesignTool:
                     app = AppSpec.model_validate(data)
 
             tree = generate(app, design)
-            _lint_gate(tree, design)
+            await _lint_gate(tree, design, ctx, direction=direction)
             touched = await _apply_tree(ctx, tree)
             if not touched and not app_changed:
                 # Same RC-M rule as app_update_content: an identical design applied
@@ -1045,7 +1178,7 @@ class AppAddPrimitiveTool:
                     f"generating the {host.id!r} host after applying primitive "
                     f"{prim.id!r} failed: {exc}"
                 ) from exc
-            _lint_gate(tree, design)
+            await _lint_gate(tree, design, ctx)
             touched = await _apply_tree(ctx, tree)
             await _save_app_spec(ctx, new_app)
 

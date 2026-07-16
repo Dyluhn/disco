@@ -2168,6 +2168,23 @@ def _render(verdict: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def load_committed_direction(ctx: ToolContext) -> DesignDirection | None:
+    """Load the same immutable design direction every lint boundary enforces.
+
+    Absent, unreadable, or unparseable context intentionally resolves to ``None``:
+    the pure direction-conformance rules then no-op. Keeping this best-effort loader
+    shared prevents semantic AppKit mutations from certifying a tree against a
+    weaker contract than the final ``design_lint`` / ``verify_appkit_app`` scan.
+    """
+
+    assert ctx.sandbox is not None
+    try:
+        markdown = await ArtifactMemoryStore(ctx.sandbox).read_design_direction()
+    except Exception:  # noqa: BLE001 — absent/unreadable → no committed direction
+        return None
+    return direction_from_markdown(markdown or "")
+
+
 # ---- the tool wrapper ---------------------------------------------------------
 
 
@@ -2230,15 +2247,9 @@ class DesignLintTool:
             return fail_outcome(f"design_lint error: {e}")
 
     async def _load_direction(self, ctx: ToolContext) -> DesignDirection | None:
-        """Read the committed design direction from durable context and recover the
-        typed record. Absent/unreadable/unparseable → None (the conformance rule then
-        simply no-ops). Best-effort: never raises into the scan."""
-        assert ctx.sandbox is not None
-        try:
-            markdown = await ArtifactMemoryStore(ctx.sandbox).read_design_direction()
-        except Exception:  # noqa: BLE001 — absent/unreadable → no committed direction
-            return None
-        return direction_from_markdown(markdown or "")
+        """Compatibility seam over the shared committed-direction loader."""
+
+        return await load_committed_direction(ctx)
 
     async def _collect_files(self, ctx: ToolContext, root: str) -> dict[str, str]:
         """Walk the workspace via the sandbox `list_dir`, reading only scannable
