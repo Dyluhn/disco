@@ -172,7 +172,10 @@ def test_public_root_persistent_path_fails_closed(
         ps,
         _store,
         cid,
-        files={"package.json": b'{"name":"svc"}', "server.js": b"x\n"},
+        files={
+            "package.json": b'{"name":"svc"}',
+            "server.js": b"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\n",
+        },
         intent=_resource_intent(path),
     )
 
@@ -207,7 +210,10 @@ def test_public_nonroot_persistent_path_is_backed_and_agrees(
         ps,
         _store,
         cid,
-        files={"package.json": b'{"name":"svc"}', "server.js": b"x\n"},
+        files={
+            "package.json": b'{"name":"svc"}',
+            "server.js": b"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\n",
+        },
         intent=_resource_intent(path),
     )
 

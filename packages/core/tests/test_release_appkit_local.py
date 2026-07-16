@@ -28,7 +28,7 @@ Acceptance criteria proven here:
    host); the non-LIVE proxy parses the emitted `compose.yaml` with pyyaml and
    asserts its structure.
 
-Plus the two folded WO-3 nits (`_runtime_from_argv` matching `python3.12`).
+Plus folded runtime-matrix regression coverage for portable Python starts.
 """
 
 from __future__ import annotations
@@ -384,20 +384,19 @@ def test_wo6_diff_does_not_touch_appkit_packages() -> None:
         path = line[3:].split(" -> ")[-1].strip().strip('"')
         changed.append(path)
     offenders = [
-        path
-        for path in changed
-        for prefix in _FORBIDDEN_DIFF_PREFIXES
-        if path.startswith(prefix)
+        path for path in changed for prefix in _FORBIDDEN_DIFF_PREFIXES if path.startswith(prefix)
     ]
     assert not offenders, offenders
 
 
-# ---- folded WO-3 nit: _runtime_from_argv matches python3.12 --------------------
+# ---- folded runtime-matrix regression: portable Python only -------------------
 
 
-def test_versioned_python_interpreter_maps_to_python_runtime() -> None:
-    # `python3.12` (a versioned interpreter) must be inferred as the python runtime,
-    # not the node fallback. Exercised through the public detect path via intent.
+def test_versioned_python_interpreter_without_server_or_target_fails_closed() -> None:
+    # The export image is pinned to Python 3.13 and does not promise a `python3.12`
+    # executable. The opaque `app` module is also not a supported HTTP server, and an
+    # empty tree proves neither a dependency nor an application target. Do not turn this
+    # unshippable declaration into a candidate merely because its head resembles Python.
     intent = ReleaseIntent(
         build_cmd=(),
         start_cmd=("python3.12", "-m", "app"),
@@ -405,22 +404,33 @@ def test_versioned_python_interpreter_maps_to_python_runtime() -> None:
         required_env=(),
     )
     result = detect_release({}, intent=intent, provenance=Provenance())
-    assert result.assessment is ReleaseAssessment.candidate
-    assert result.ingress is not None
-    assert result.ingress.runtime is RuntimeStrategy.python
+    assert result.assessment is ReleaseAssessment.needs_review
+    assert result.ingress is None
+    assert any(blocker.code == "toolchain_unsupported" for blocker in result.blockers)
 
 
-def test_bare_python3_still_maps_to_python_runtime() -> None:
-    # Regression guard for the pre-existing tokens: `python3` stays python.
+def test_portable_python3_uvicorn_with_real_dependency_and_target_is_candidate() -> None:
+    # The portable interpreter spelling remains supported when the effective server,
+    # dependency, module, and module-scope application attribute are all proven.
     intent = ReleaseIntent(
         build_cmd=(),
-        start_cmd=("python3", "server.py"),
+        start_cmd=("python3", "-m", "uvicorn", "main:app"),
         port_env="PORT",
         required_env=(),
     )
-    result = detect_release({}, intent=intent, provenance=Provenance())
+    result = detect_release(
+        {
+            "requirements.txt": b"uvicorn==0.30\n",
+            # A dependency-free ASGI callable: a proven reachable target for uvicorn-only install.
+            "main.py": b"async def app(scope, receive, send):\n    pass\n",
+        },
+        intent=intent,
+        provenance=Provenance(),
+    )
+    assert result.assessment is ReleaseAssessment.candidate
     assert result.ingress is not None
     assert result.ingress.runtime is RuntimeStrategy.python
+    assert result.ingress.start_cmd[-4:] == ("--host", "0.0.0.0", "--port", "${PORT}")
 
 
 # ---- criterion 5: [LIVE] docker compose up — DEFERRED --------------------------

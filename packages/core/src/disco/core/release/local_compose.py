@@ -59,6 +59,7 @@ from collections.abc import Iterable
 from disco.core.release.command_grammar import (
     flag_env_ref,
     looks_like_credential_literal,
+    public_bind_env_ref,
     whole_env_ref,
 )
 from disco.core.release.spec import (
@@ -232,7 +233,11 @@ def _token_expands(token: str) -> bool:
     """Whether a token carries an env reference the shell must resolve — a WHOLE
     `${NAME}` reference OR the `--flag=${NAME}` value form (WO-C5 #2 F4). A token
     without one is a pure literal that needs no shell."""
-    return whole_env_ref(token) is not None or flag_env_ref(token) is not None
+    return (
+        whole_env_ref(token) is not None
+        or flag_env_ref(token) is not None
+        or public_bind_env_ref(token) is not None
+    )
 
 
 def _shell_expand(argv: tuple[str, ...]) -> str:
@@ -254,6 +259,12 @@ def _shell_expand(argv: tuple[str, ...]) -> str:
         if flag is not None:
             prefix, ref_name = flag
             parts.append(_shell_quote_literal(prefix) + f'"${{{ref_name}}}"')
+            continue
+        bind_name = public_bind_env_ref(token)
+        if bind_name is not None:
+            # Preserve argv as ONE host:port value while expanding only the validated
+            # provider-owned port reference. The host prefix is inert literal data.
+            parts.append(_shell_quote_literal("0.0.0.0:") + f'"${{{bind_name}}}"')
             continue
         parts.append(_shell_quote_literal(token))
     return " ".join(parts)
@@ -589,9 +600,12 @@ def _service_block(
     # WO-C7: inject ONLY the runtime env the consumer topology routes to THIS service
     # (a bound var reaches its resource's consumers; an unbound var reaches its
     # declared consumers, or the sole ingress of a single-service spec).
-    environment: dict[str, _Yaml] = {service.port_env: str(_CONTAINER_PORT)}
+    environment: dict[str, _Yaml] = {}
     for name, value in _service_runtime_env(spec, service).items():
         environment[name] = value
+    # Port ownership is adapter-authoritative. ReleaseSpec rejects every collision, and
+    # assigning this last is a defensive belt for future internal callers.
+    environment[service.port_env] = str(_CONTAINER_PORT)
     block["environment"] = {name: environment[name] for name in sorted(environment)}
 
     build_args = _build_args(spec)

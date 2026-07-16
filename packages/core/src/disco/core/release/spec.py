@@ -51,6 +51,9 @@ from disco.core.release.command_grammar import (
     check_sqlite_local_url,
     check_token_hygiene,
     check_workspace_rel_path,
+    parse_effective_start_argv,
+    public_bind_contract_reason,
+    public_bind_env_ref,
 )
 from pydantic import (
     BaseModel,
@@ -158,7 +161,9 @@ def _validate_id(value: str, *, field: str) -> str:
     return value
 
 
-def _validate_argv(value: tuple[str, ...], *, field: str) -> tuple[str, ...]:
+def _validate_argv(
+    value: tuple[str, ...], *, field: str, allow_public_bind: bool = False
+) -> tuple[str, ...]:
     # An argv-list is a real exec vector (`["node", "server.js"]`), NOT a shell string.
     # Each element must be a non-empty token (an empty token would exec an empty arg)
     # AND must pass token hygiene (WO-C5): the ONLY expandable form is an ENTIRE typed
@@ -171,8 +176,21 @@ def _validate_argv(value: tuple[str, ...], *, field: str) -> tuple[str, ...]:
     for index, arg in enumerate(value):
         if not arg.strip():
             raise ValueError(f"{field} argv element {index} must be a non-empty token")
-        check_token_hygiene(arg, field=f"{field} argv element {index}")
+        check_token_hygiene(
+            arg,
+            field=f"{field} argv element {index}",
+            allow_public_bind=allow_public_bind,
+        )
     return value
+
+
+def _validate_public_bind_start(
+    argv: tuple[str, ...], *, declared_names: frozenset[str], field: str
+) -> None:
+    """Re-parse a start carrying the sole sanctioned partial interpolation shape."""
+    if not any(public_bind_env_ref(token) is not None for token in argv):
+        return
+    parse_effective_start_argv(argv, declared_names=declared_names, field=field)
 
 
 def _reject_traversal(value: str, *, field: str) -> str:
@@ -395,10 +413,19 @@ class ReleaseService(BaseModel):
         check_workspace_rel_path(value, field="ReleaseService path")
         return value
 
-    @field_validator("install_cmd", "build_cmd", "migrate_cmd", "start_cmd")
+    @field_validator("install_cmd", "build_cmd", "migrate_cmd")
     @classmethod
     def _commands_are_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return _validate_argv(value, field="ReleaseService command")
+
+    @field_validator("start_cmd")
+    @classmethod
+    def _start_is_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _validate_argv(
+            value,
+            field="ReleaseService start_cmd",
+            allow_public_bind=True,
+        )
 
     @field_validator("port_env")
     @classmethod
@@ -421,6 +448,41 @@ class ReleaseService(BaseModel):
             _ = _validate_id(dep, field="ReleaseService depends_on")
         _require_unique(value, what="ReleaseService depends_on entry")
         return value
+
+    @model_validator(mode="after")
+    def _public_bind_is_context_bound(self) -> ReleaseService:
+        _validate_public_bind_start(
+            self.start_cmd,
+            declared_names=frozenset({self.port_env}),
+            field="ReleaseService start_cmd",
+        )
+        return self
+
+    @model_validator(mode="after")
+    def _start_binds_the_adapter_port(self) -> ReleaseService:
+        """A RECOGNIZED dedicated-server start whose bind the schema layer can analyze must
+        bind THIS service's adapter-owned ``port_env`` on a PUBLIC interface — never a foreign
+        env var, a hard-coded number, a loopback interface, or a non-TCP socket.
+
+        The host publishes ingress on the port it injects through ``port_env`` (compose sets
+        e.g. ``PORT=8080``) and maps it to the container's PUBLIC interface. So a uvicorn /
+        gunicorn / hypercorn start (incl. ``python -m <server>``) that instead binds
+        ``${OTHER_PORT}``, a literal ``--port 9999`` / ``--bind 0.0.0.0:9999``, a loopback
+        ``--host 127.0.0.1`` / ``--bind 127.0.0.1:...``, or a ``--bind unix:...`` socket
+        listens where the published ingress never reaches — an unreachable deployment.
+
+        This belt FAILS CLOSED by POSITIVE proof (``public_bind_contract_reason``): it SCANS
+        the bind tokens robustly rather than trusting a whole-argv parse, so a wrong port that
+        rides a duplicate ``--port`` or a trailing unknown flag (which abort the strict parse)
+        is still caught — closing the ``bound_public_port_token`` fail-open. It DEFERS to the
+        detector (the primary guard) on binds it genuinely cannot analyze at the schema layer:
+        a start with no explicit port token (the adapter injects ``port_env``), a non-server /
+        source-bound start (``node server.js``), an unrecognized launcher, or a ``--config``-
+        only bind. Value-free: the message names the RULE, never the token."""
+        reason = public_bind_contract_reason(self.start_cmd, port_env=self.port_env)
+        if reason is not None:
+            raise ValueError(reason)
+        return self
 
 
 # ---- resources ----------------------------------------------------------------
@@ -698,10 +760,19 @@ class ReleaseIntent(BaseModel):
     env: tuple[EnvVarDecl, ...] = Field(default_factory=tuple, max_length=_MAX_ENV)
     resources: tuple[ResourceDecl, ...] = Field(default_factory=tuple, max_length=_MAX_RESOURCES)
 
-    @field_validator("build_cmd", "start_cmd", "install_cmd")
+    @field_validator("build_cmd", "install_cmd")
     @classmethod
     def _commands_are_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return _validate_argv(value, field="ReleaseIntent command")
+
+    @field_validator("start_cmd")
+    @classmethod
+    def _start_is_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _validate_argv(
+            value,
+            field="ReleaseIntent start_cmd",
+            allow_public_bind=True,
+        )
 
     @field_validator("lockfile", "output_dir")
     @classmethod
@@ -735,6 +806,16 @@ class ReleaseIntent(BaseModel):
             _ = _validate_env_var_name(name, field="ReleaseIntent required_env")
         _require_unique(value, what="ReleaseIntent required_env name")
         return value
+
+    @model_validator(mode="after")
+    def _public_bind_is_context_bound(self) -> ReleaseIntent:
+        declared = frozenset(self.required_env) | {item.name for item in self.env} | {self.port_env}
+        _validate_public_bind_start(
+            self.start_cmd,
+            declared_names=declared,
+            field="ReleaseIntent start_cmd",
+        )
+        return self
 
 
 class IntentUpgradeError(ValueError):
@@ -898,6 +979,26 @@ class ReleaseSpec(BaseModel):
         _require_unique((service.id for service in self.services), what="service id")
         _require_unique((var.name for var in self.env), what="env var name")
         _require_unique((resource.id for resource in self.resources), what="resource id")
+        return self
+
+    @model_validator(mode="after")
+    def _adapter_port_env_is_not_application_env(self) -> ReleaseSpec:
+        """Keep every service port name exclusively owned by the target adapter.
+
+        The adapter supplies this value to match the port it publishes. Allowing the same
+        name in application env metadata (runtime *or* build scope, required or optional,
+        bound or unbound) creates two owners and can silently redirect the process away
+        from the published port. This belongs at the neutral spec boundary so every target
+        adapter and every construction path gets the same invariant.
+        """
+        application_names = {var.name for var in self.env}
+        for service in self.services:
+            if service.port_env in application_names:
+                raise ValueError(
+                    f"service {service.id!r} port_env is also declared as application env; "
+                    "a service port variable is adapter-owned and must not appear in "
+                    "ReleaseSpec.env"
+                )
         return self
 
     @model_validator(mode="after")

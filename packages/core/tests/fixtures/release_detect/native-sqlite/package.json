@@ -3,14 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "drizzle-kit generate",
     "start": "node server.js"
   },
   "dependencies": {
     "@libsql/client": "^0.6.0",
     "drizzle-orm": "^0.31.0"
-  },
-  "devDependencies": {
-    "drizzle-kit": "^0.22.0"
   }
 }

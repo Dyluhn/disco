@@ -46,6 +46,7 @@ from disco.core.release.command_grammar import (
     check_declaration_argv,
     check_no_inline_secret_cli,
     check_no_positional_credential,
+    parse_effective_start_argv,
 )
 from disco.core.release.spec import EnvVarDecl, ReleaseIntent, ResourceDecl, RuntimeStrategy
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -242,7 +243,10 @@ class ReleaseDeclareTool:
             frozenset(intent.required_env) | {var.name for var in intent.env} | {intent.port_env}
         )
         try:
-            check_declaration_argv(intent.start_cmd, declared_names=declared, field="start_cmd")
+            if intent.start_cmd:
+                parse_effective_start_argv(
+                    intent.start_cmd, declared_names=declared, field="start_cmd"
+                )
             check_declaration_argv(intent.build_cmd, declared_names=declared, field="build_cmd")
         except ValueError:
             return ToolOutcome(

@@ -75,6 +75,30 @@ _NODE_FILES: dict[str, bytes] = {
     "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
 }
 
+# A node workspace whose package.json ALSO defines a `migrate` script and ships the
+# `migrate.js` it runs, so a benign `npm run migrate` / `node migrate.js` migration has a
+# PROVABLE target (Batch-3 migrate-target proof). Used by the legit-migrate positive control:
+# after Batch-3, an UNPROVABLE migrate target (a bare `alembic` / `wrangler` head the node
+# image cannot run, or an `npm run migrate` with no such script) correctly fails closed to
+# `needs_review`, so a candidate positive control must name a target the tree/install proves.
+_NODE_FILES_WITH_MIGRATE: dict[str, bytes] = {
+    "server.js": _NODE_FILES["server.js"],
+    "package.json": (
+        b'{"name":"svc","scripts":{"start":"node server.js","migrate":"node migrate.js"}}'
+    ),
+    "migrate.js": b"process.exit(0);\n",
+}
+
+# A python workspace whose exact pip plan installs `alembic`, so an `alembic upgrade head`
+# migration has a PROVABLE target under the Batch-3 migrate-target proof. Used by the
+# declared-credential-ref positive control (whose intent is that a WHOLE ${NAME} credential
+# ref in a migrate_cmd stays a candidate — a bare-tool migrate carrying a credential flag is
+# only representable on a runtime whose install plan actually provides the tool).
+_PY_MIGRATE_FILES: dict[str, bytes] = {
+    "main.py": b"from fastapi import FastAPI\napp = FastAPI()\n",
+    "requirements.txt": b"fastapi\nuvicorn\nalembic\n",
+}
+
 
 # ---- real ASGI app + real ProjectStore (only ConfigStore.load is seamed) --------
 
@@ -107,15 +131,20 @@ def _cid(make_name: object, prefix: str) -> str:
 
 
 def _seed_raw(
-    ps: ProjectStore, store: SqliteEventStore, cid: str, raw_intent: dict[str, Any]
+    ps: ProjectStore,
+    store: SqliteEventStore,
+    cid: str,
+    raw_intent: dict[str, Any],
+    files: dict[str, bytes] = _NODE_FILES,
 ) -> None:
-    """A real on-disk node workspace + manifest, a RAW release-intent sidecar (written
+    """A real on-disk workspace + manifest, a RAW release-intent sidecar (written
     directly, not via the tool, so it can plant a form the fix will reject downstream),
-    a conversation record, and a committed version 1."""
+    a conversation record, and a committed version 1. ``files`` defaults to the minimal
+    node app; a caller passes an alternate tree when a migration needs a provable target."""
     workspace = ps.path_for(cid)
     workspace.mkdir(parents=True, exist_ok=True)
     total = 0
-    for rel, data in _NODE_FILES.items():
+    for rel, data in files.items():
         dest = workspace / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
@@ -125,7 +154,7 @@ def _seed_raw(
         title="proj",
         owner_id="local",
         created_at="2026-06-06T00:00:00Z",
-        file_count=len(_NODE_FILES),
+        file_count=len(files),
         total_bytes=total,
         imported=False,
     )
@@ -460,7 +489,12 @@ def test_migrate_cmd_declared_secret_ref_is_candidate(
     """WO-C5 #3 F5 (positive) — a migration credential passed as a whole DECLARED
     `${NAME}` reference (`--token ${DB_TOKEN}`, DB_TOKEN in required_env) carries no
     literal and must remain a self-host candidate — the fix rejects inline VALUES, not
-    the safe reference form."""
+    the safe reference form.
+
+    Batch-3: an `alembic` migration is only a PROVABLE target on a runtime whose install
+    plan installs alembic, so this rides a python app whose `requirements.txt` includes
+    alembic (the migrate-target proof passes); the load-bearing assertion — a declared
+    ${NAME} credential ref is not treated as an inline secret — is unchanged."""
     cid = _cid(closeout_name, "conv_c5f5ok")
     client, ps = _client(_store, tmp_path, monkeypatch)
     _seed_raw(
@@ -468,12 +502,14 @@ def test_migrate_cmd_declared_secret_ref_is_candidate(
         _store,
         cid,
         {
-            "start_cmd": ["node", "server.js"],
+            "runtime": "python",
+            "start_cmd": ["uvicorn", "main:app"],
             "required_env": ["DB_TOKEN"],
             "resources": [
                 _sqlite_resource_json(["alembic", "upgrade", "head", "--token", "${DB_TOKEN}"])
             ],
         },
+        files=_PY_MIGRATE_FILES,
     )
     assert _assessment(client, cid) == "candidate", (
         "a migrate_cmd whose credential is a whole declared ${NAME} reference must remain "
@@ -481,10 +517,18 @@ def test_migrate_cmd_declared_secret_ref_is_candidate(
     )
 
 
+# Benign, non-secret migrations whose targets are PROVABLE in the seeded node tree
+# (`_NODE_FILES_WITH_MIGRATE`): a direct `node <file>` whose file ships, and an `npm run
+# <script>` the package.json defines. Batch-3 note: before the migrate-target proof this
+# list read `alembic -c … upgrade head` / `wrangler d1 migrations apply` on a NODE app —
+# both bare tools the node image cannot run — so they were FALSE candidates the emitted
+# one-shot migration service could never exec. The frozen adversarial harness (MIGRATE-01..
+# 04) requires exactly such unprovable targets to fail closed, so the positive control now
+# names targets the tree/install proves; the credential-hygiene invariant it guards (a
+# benign migrate is not rejected by the SECRET rail) is unchanged.
 _LEGIT_MIGRATE_CMDS: list[tuple[str, list[str]]] = [
-    ("alembic_config", ["alembic", "-c", "alembic.ini", "upgrade", "head"]),
-    ("wrangler_apply", ["wrangler", "d1", "migrations", "apply", "app-db"]),
-    ("npm_migrate", ["npm", "run", "migrate"]),
+    ("node_file", ["node", "migrate.js"]),
+    ("npm_run", ["npm", "run", "migrate"]),
 ]
 
 
@@ -499,11 +543,11 @@ def test_legit_migrate_commands_stay_candidate(
     monkeypatch: pytest.MonkeyPatch,
     closeout_name: object,
 ) -> None:
-    """WO-C5 #3 F5 (positive) — head-AGNOSTIC hygiene must NOT reject a legitimate
-    non-secret migration command. A migration tool (`alembic -c alembic.ini …`,
-    `wrangler d1 migrations apply`, `npm run migrate`) with no credential-bearing flag
-    must stay a self-host candidate — this is inline-secret data hygiene, not the §9
-    runtime-executable grammar (which would wrongly reject a non-runtime migration tool)."""
+    """WO-C5 #3 F5 (positive) — head-AGNOSTIC secret hygiene must NOT reject a legitimate
+    non-secret migration command. A benign migration with a PROVABLE target (`node
+    migrate.js` whose file ships, `npm run migrate` the package.json defines) with no
+    credential-bearing flag stays a self-host candidate — this is inline-secret data
+    hygiene, not a blanket rejection of the migration step."""
     cid = _cid(closeout_name, "conv_c5f5legit")
     client, ps = _client(_store, tmp_path, monkeypatch)
     _seed_raw(
@@ -511,6 +555,7 @@ def test_legit_migrate_commands_stay_candidate(
         _store,
         cid,
         {"start_cmd": ["node", "server.js"], "resources": [_sqlite_resource_json(migrate_cmd)]},
+        files=_NODE_FILES_WITH_MIGRATE,
     )
     assert _assessment(client, cid) == "candidate", (
         f"[{case_id}] a legitimate non-secret migrate command was rejected; F5 hygiene is "

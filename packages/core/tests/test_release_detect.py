@@ -22,7 +22,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from disco.core.release.detect import (
     DetectionResult,
     Provenance,
@@ -36,6 +35,11 @@ from disco.core.release.spec import (
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "release_detect"
+_DIRECT_NODE_SERVER = (
+    b'const http = require("http");\n'
+    b"http.createServer((_req, res) => res.end('ok'))"
+    b'.listen(process.env.PORT, "0.0.0.0");\n'
+)
 
 
 def _load_fixture(name: str) -> dict[str, bytes]:
@@ -52,8 +56,8 @@ def _load_fixture(name: str) -> dict[str, bytes]:
 
 def _complete_intent() -> ReleaseIntent:
     return ReleaseIntent(
-        build_cmd=("npm", "run", "build"),
-        start_cmd=("node", "dist/server.js"),
+        build_cmd=(),
+        start_cmd=("node", "release-server.js"),
         port_env="PORT",
         health_path="/healthz",
         required_env=("SESSION_SECRET", "API_BASE_URL"),
@@ -106,6 +110,21 @@ def test_fixture_maps_to_expected_release_shape(name: str) -> None:
     assert tuple(resource.kind for resource in result.resources) == resource_kinds
 
 
+def test_express_fixture_installs_runtime_dependencies_without_a_fake_build() -> None:
+    """Finding 1: interpreted dependencies install even when there is no build step."""
+    result = detect_release(
+        _load_fixture("express-node"),
+        intent=None,
+        provenance=Provenance(),
+    )
+    assert result.assessment is ReleaseAssessment.candidate
+    assert result.ingress is not None
+    assert result.ingress.runtime is RuntimeStrategy.node
+    assert result.ingress.install_cmd == ("npm", "ci")
+    assert result.ingress.build_cmd == ()
+    assert result.ingress.start_cmd == ("npm", "start")
+
+
 def test_dockerfile_and_intent_conflict_is_needs_review_with_both_evidence() -> None:
     # A typed intent AND an owner-supplied Dockerfile are two competing release
     # declarations: fail closed to needs_review citing BOTH evidence strings.
@@ -122,14 +141,14 @@ def test_dockerfile_and_intent_conflict_is_needs_review_with_both_evidence() -> 
 
 def test_unknown_stack_with_complete_intent_is_candidate() -> None:
     files = _load_fixture("unknown-stack")
-    result = detect_release(
-        files, intent=_complete_intent(), provenance=Provenance(imported=True)
-    )
+    result = detect_release(files, intent=_complete_intent(), provenance=Provenance(imported=True))
 
     assert result.assessment is ReleaseAssessment.candidate
     assert result.ingress is not None
     assert result.ingress.runtime is RuntimeStrategy.node
-    assert result.ingress.start_cmd == ("node", "dist/server.js")
+    assert result.ingress.install_cmd == ()
+    assert result.ingress.build_cmd == ()
+    assert result.ingress.start_cmd == ("node", "release-server.js")
     assert {var.name for var in result.env} == {"SESSION_SECRET", "API_BASE_URL"}
 
 
@@ -161,6 +180,10 @@ def test_native_sqlite_resource_uses_local_file_profile() -> None:
     result = detect_release(files, intent=None, provenance=Provenance())
 
     assert result.assessment is ReleaseAssessment.candidate
+    assert result.ingress is not None
+    assert result.ingress.runtime is RuntimeStrategy.node
+    assert result.ingress.install_cmd == ("npm", "ci")
+    assert result.ingress.build_cmd == ()
     assert len(result.resources) == 1
     resource = result.resources[0]
     assert resource.kind is ResourceKind.sqlite
@@ -252,8 +275,7 @@ def test_node_and_fastapi_conflict_is_needs_review_with_both_evidences() -> None
     # a genuinely conflicting pair, not a single guessed runtime.
     assert any("node" in signal.lower() for signal in result.evidence)
     assert any(
-        ("python" in signal.lower() or "fastapi" in signal.lower())
-        for signal in result.evidence
+        ("python" in signal.lower() or "fastapi" in signal.lower()) for signal in result.evidence
     )
 
 
@@ -261,9 +283,7 @@ def test_single_runtime_detection_is_unchanged_by_conflict_handling() -> None:
     # A node-only project (no python manifest) stays a node candidate; a
     # python-only project stays a python candidate — conflict handling must not
     # regress single-runtime detection.
-    node = detect_release(
-        _load_fixture("express-node"), intent=None, provenance=Provenance()
-    )
+    node = detect_release(_load_fixture("express-node"), intent=None, provenance=Provenance())
     assert node.assessment is ReleaseAssessment.candidate
     assert node.ingress is not None and node.ingress.runtime is RuntimeStrategy.node
     python = detect_release(_load_fixture("fastapi"), intent=None, provenance=Provenance())
@@ -287,13 +307,17 @@ def test_empty_intent_is_needs_review_not_a_fabricated_candidate() -> None:
 
 
 def test_intent_with_only_a_start_command_is_still_a_candidate() -> None:
-    # The minimum contract is a start command (port defaults to the $PORT contract,
-    # health is optional — consistent with detector-produced candidates).
+    # The minimum declaration is a start command; its immutable target must still exist
+    # and prove the public $PORT contract. Health remains optional.
     result = detect_release(
-        {}, intent=ReleaseIntent(start_cmd=("node", "server.js")), provenance=Provenance()
+        {"server.js": _DIRECT_NODE_SERVER},
+        intent=ReleaseIntent(start_cmd=("node", "server.js")),
+        provenance=Provenance(),
     )
     assert result.assessment is ReleaseAssessment.candidate
     assert result.ingress is not None
+    assert result.ingress.install_cmd == ()
+    assert result.ingress.build_cmd == ()
     assert result.ingress.start_cmd == ("node", "server.js")
 
 
@@ -307,7 +331,14 @@ def test_secret_shaped_required_env_is_classified_secret() -> None:
         start_cmd=("node", "server.js"),
         required_env=("STRIPE_API_KEY", "SESSION_SECRET", "DB_PASSWORD", "APP_NAME"),
     )
-    result = detect_release({}, intent=intent, provenance=Provenance())
+    result = detect_release(
+        {"server.js": _DIRECT_NODE_SERVER}, intent=intent, provenance=Provenance()
+    )
+    assert result.assessment is ReleaseAssessment.candidate
+    assert result.ingress is not None
+    assert result.ingress.install_cmd == ()
+    assert result.ingress.build_cmd == ()
+    assert result.ingress.start_cmd == ("node", "server.js")
     by_name = {var.name: var for var in result.env}
 
     assert by_name["STRIPE_API_KEY"].secret is SecretClass.secret

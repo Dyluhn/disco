@@ -183,7 +183,10 @@ def test_detect_root_persistent_path_fails_closed_with_typed_blocker(path: str) 
     ``needs_review`` with the typed ``persistent_path_unbackable`` blocker and NO ingress
     (so no self-host bundle is ever offered)."""
     detection = detect_release(
-        {"package.json": b'{"name":"svc"}', "server.js": b"x\n"},
+        {
+            "package.json": b'{"name":"svc"}',
+            "server.js": b"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\n",
+        },
         intent=_root_intent(path),
         provenance=Provenance(),
     )
@@ -218,7 +221,10 @@ def test_detect_nonroot_persistent_path_is_a_candidate(path: str) -> None:
     """A NON-root persistent path is a self-hostable candidate — the fix rejects ONLY the
     unbackable root layout, never a normal subdirectory path."""
     detection = detect_release(
-        {"package.json": b'{"name":"svc"}', "server.js": b"x\n"},
+        {
+            "package.json": b'{"name":"svc"}',
+            "server.js": b"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\n",
+        },
         intent=ReleaseIntent(
             start_cmd=("node", "server.js"),
             resources=(
@@ -327,7 +333,10 @@ def test_mutation_restoring_data_fallback_breaks_the_persistence_proof(
     the file is on the ephemeral layer while the candidate promises it persists. That is
     exactly the G07 defect; the real fix (real-parent ``/`` derivation) is what prevents
     it, so this mutation regression pins it."""
-    files = {"package.json": b'{"name":"svc"}', "server.js": b"x\n"}
+    files = {
+        "package.json": b'{"name":"svc"}',
+        "server.js": b"require('http').createServer((q,r)=>r.end('ok')).listen(process.env.PORT)\n",
+    }
 
     # Control — the REAL fix rejects the root layout.
     fixed = detect_release(files, intent=_root_intent("/app.db"), provenance=Provenance())

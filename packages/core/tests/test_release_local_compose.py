@@ -372,8 +372,12 @@ def _spec_from_secret_tree() -> ReleaseSpec:
     # Sanity: the planted secret really is in the tree we build from.
     assert any(SENTINEL in content for content in tree.values())
     result = detect_release(dict(tree), intent=None, provenance=Provenance())
+    assert result.assessment is ReleaseAssessment.candidate
     ingress = result.ingress
     assert ingress is not None and ingress.runtime is RuntimeStrategy.node
+    assert ingress.install_cmd == ("npm", "ci")
+    assert ingress.build_cmd == ()
+    assert ingress.start_cmd == ("npm", "start")
     return ReleaseSpec(
         kind="web",
         name="Leaky App",
@@ -736,9 +740,7 @@ def test_generic_depends_on_coexists_with_migrate_ordering() -> None:
                 port_env="PORT",
             ),
         ),
-        env=(
-            EnvVarDecl(name="DATABASE_URL", scope=EnvScope.runtime, required=True, binding="db"),
-        ),
+        env=(EnvVarDecl(name="DATABASE_URL", scope=EnvScope.runtime, required=True, binding="db"),),
         resources=(_sqlite_resource(("npm", "run", "migrate")),),
         provenance=_prov(),
     )

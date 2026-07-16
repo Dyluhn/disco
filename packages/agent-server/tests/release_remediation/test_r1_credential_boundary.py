@@ -302,11 +302,19 @@ _ACCEPTED_TOOL: dict[str, dict[str, object]] = {
     "node_script": {"start_cmd": ["node", "server.js"]},
     "npm_start": {"start_cmd": ["npm", "start"]},
     "declared_secret_ref": {
-        "start_cmd": ["node", "srv", "--token", "${API_TOKEN}"],
+        "start_cmd": ["node", "server.js"],
+        "build_cmd": ["npm", "run", "build", "--token", "${API_TOKEN}"],
         "required_env": ["API_TOKEN"],
     },
     "config_set_declared_ref": {
-        "start_cmd": ["npm", "config", "set", "//registry.example/:_authToken", "${NPM_TOKEN}"],
+        "start_cmd": ["node", "server.js"],
+        "install_cmd": [
+            "npm",
+            "config",
+            "set",
+            "//registry.example/:_authToken",
+            "${NPM_TOKEN}",
+        ],
         "required_env": ["NPM_TOKEN"],
     },
 }

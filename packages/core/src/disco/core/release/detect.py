@@ -48,23 +48,49 @@ implemented in this module):
 * preview-evidence consumption (folding a live preview's observed HTTP behaviour
   into the assessment).
 
-Layering: `disco.core` is the leaf — this module imports ONLY pydantic, the
-stdlib, and the sibling `disco.core.release.spec` contract. It does NOT import
+Layering: `disco.core` is the leaf — this module imports ONLY pydantic, the stdlib,
+and sibling neutral release contracts (`spec` and `command_grammar`). Detection
+never imports a target adapter or its private port constants. It does NOT import
 `disco.tools.*` or any higher layer.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
+import shlex
+import tomllib
 from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
 
 from disco.core.release.command_grammar import (
+    GUNICORN_BUILTIN_WORKER_CLASSES,
+    EffectiveStartCommand,
     check_declaration_argv,
     check_no_inline_secret_cli,
     check_no_positional_credential,
+    check_token_hygiene,
+    looks_like_credential_literal,
+    parse_effective_start_argv,
+    public_bind_env_ref,
+    whole_env_ref,
+)
+from disco.core.release.python_proof import (
+    active_requirement_name,
+    python_entrypoint_error,
+    python_script_import_error,
+    requires_python_supported,
+)
+from disco.core.release.source_proof import (
+    node_has_public_port_bind,
+    npmrc_omits_dev_dependencies,
+    npmrc_requires_secret,
+    prove_node_source,
+    prove_vite_output_dir,
+    vite_config_contract_supported,
+    vite_env_names,
 )
 from disco.core.release.spec import (
     EnvScope,
@@ -162,27 +188,6 @@ _SECRET_NAME_MARKERS = (
     "AUTH",
 )
 
-# argv[0] interpreter tokens that reveal a declared process's runtime.
-_NODE_TOKENS = frozenset({"node", "npm", "npx", "pnpm", "yarn", "bun"})
-_PY_TOKENS = frozenset(
-    {"python", "python3", "uvicorn", "gunicorn", "hypercorn", "flask", "fastapi", "poetry", "uv"}
-)
-
-# Genuinely-SUPPORTED start-command heads — an ALLOWLIST, not a blocklist. The
-# neutral base images run exactly these; a declared start whose head is NOT here fails
-# closed to `toolchain_unsupported` (§7 crit 4 / §15: NO node-fallback for an arbitrary
-# executable merely because its name can be guessed — ruby/go/php/caddy/`./server`/bun/
-# deno/uv/poetry are all rejected). Node base: the npm-family launchers the base image
-# ACTUALLY provisions — `node`/`npm`/`npx` ONLY. `pnpm`/`yarn` are DELIBERATELY EXCLUDED
-# (R2 / G05): the `node:22-bookworm-slim` image ships no pnpm/yarn, so a typed
-# `pnpm start` / `yarn start` intent must fail closed with `toolchain_unsupported`
-# exactly as the SOURCE-driven package-manager reject already does for a committed
-# pnpm/yarn lockfile — never accepted and lowered into an image that cannot run it
-# (§8.8: mapping them to npm is FAILURE). Python base: a bare interpreter (matched by
-# the `python` prefix, e.g. `python3.12`) plus the ASGI/WSGI servers the image installs.
-_SUPPORTED_NODE_HEADS = frozenset({"node", "npm", "npx"})
-_SUPPORTED_PY_SERVER_HEADS = frozenset({"uvicorn", "gunicorn", "hypercorn"})
-
 # Package-manager / runtime launcher heads the neutral base images do NOT provision. A
 # TYPED intent whose start/build/install command heads with one of these — or that
 # declares one as its `package_manager` — fails closed with `toolchain_unsupported`
@@ -190,15 +195,6 @@ _SUPPORTED_PY_SERVER_HEADS = frozenset({"uvicorn", "gunicorn", "hypercorn"})
 # `_unsupported_node_pm_declaration` rejects. Includes each manager's `x`-suffixed
 # one-off runner (`bunx`/`pnpx`) so it cannot slip through as a build/install head.
 _UNPROVISIONED_MANAGERS = frozenset({"pnpm", "pnpx", "yarn", "bun", "bunx", "deno", "poetry", "uv"})
-
-
-def _is_supported_toolchain_head(head: str) -> bool:
-    """Whether a start-command interpreter head is a runtime the base images run."""
-    return (
-        head in _SUPPORTED_NODE_HEADS
-        or head in _SUPPORTED_PY_SERVER_HEADS
-        or head.startswith("python")
-    )
 
 
 # Non-sqlite database url schemes — recognized ONLY to fail closed on them.
@@ -269,15 +265,6 @@ _CONVENTIONAL_HEALTH_PATHS = frozenset(
     {"/healthz", "/health", "/ping", "/status", "/livez", "/readyz", "/healthcheck"}
 )
 
-# A static-build output directory declared in a Vite config: an EXPLICIT string
-# literal (`outDir: 'dist'`) is honored; a bare `outDir` key with a non-literal
-# value (`outDir: process.env...`) is DYNAMIC and fails closed.
-_VITE_OUTDIR_LITERAL_RE = re.compile(r"""outDir\s*:\s*['"]([^'"]+)['"]""")
-_VITE_OUTDIR_KEY_RE = re.compile(r"\boutDir\b")
-_VITE_CONFIG_NAMES = frozenset(
-    {"vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"}
-)
-
 # ---- WO-C4 build-env / package-manager / build-secret signals -----------------
 #
 # A Vite CLIENT build var — `import.meta.env.VITE_<NAME>`. Vite exposes ONLY the
@@ -286,20 +273,11 @@ _VITE_CONFIG_NAMES = frozenset(
 # exactly the host-supplied BUILD-scope vars. They are compile-time constants
 # embedded in the PUBLIC bundle, so a `VITE_`-prefixed name is public BY CONVENTION;
 # a secret-shaped one is a leak and fails closed like any secret build var.
-_VITE_BUILD_ENV_RE = re.compile(r"import\.meta\.env\.(VITE_[A-Za-z0-9_]+)")
-
 # The node lockfiles, each naming exactly one package manager. TWO or more present
 # is a package-manager DISAGREEMENT (`package_manager_conflict`, §8.9): the tree
 # declares two managers and picking one by precedence would silently install the
 # wrong dependency graph. Fail closed, never resolve by precedence.
 _NODE_LOCKFILES = ("pnpm-lock.yaml", "yarn.lock", "package-lock.json")
-
-# An `${NAME}` / `$NAME` env reference inside an `.npmrc` (an install-time auth
-# token read at `npm ci`). A secret-shaped referenced NAME is a BUILD-time secret
-# the install step needs — unsupported in a secret-free bundle, so it fails closed
-# with `secret_build_env_unsupported` (§8.4).
-_NPMRC_ENV_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
-_NPMRC_NAME = ".npmrc"
 
 # ROOT lockfiles/manifests each naming a package manager the neutral base images do
 # NOT provision. The node base runs npm (`package-lock.json` -> `npm ci`, or a bare
@@ -357,17 +335,16 @@ _SCRIPT_HEAD_FAMILY: dict[str, str] = {
 # The `package.json` script keys the EMITTED bundle provably runs, so a non-npm launcher
 # hidden in any of them crashes at bundle time (closeout #2 / #2d / #2e). Ordered by
 # npm-lifecycle phase:
-#   * `npm ci` (the emitted install step) runs, for the ROOT package, `preinstall` ->
-#     `install` -> `postinstall` -> `preprepare` -> `prepare` -> `postprepare` — the last
-#     three CONFIRMED on npm 10.9.7 (the emitted `node:22-bookworm-slim` image's npm major:
-#     `npm ci` with no `--ignore-scripts` runs the prepare lifecycle), closeout #2e;
+#   * `npm ci` / `npm install` run the root `prepublish` hook plus `preinstall` ->
+#     `install` -> `postinstall` -> `preprepare` -> `prepare` -> `postprepare`, confirmed
+#     on npm 10.9.7 (the emitted `node:22-bookworm-slim` image's npm major);
 #   * `npm run build` (emitted only when a `build` script exists) runs `prebuild` -> `build`
 #     -> `postbuild`;
 #   * `npm start` (the emitted Dockerfile CMD) runs `prestart` -> `start` -> `poststart`.
-# `prepublish*` / `prepack` / `postpack` are EXCLUDED — they run only on `npm publish` /
-# `npm pack`, never on the emitted `npm ci` / `npm start`, so a launcher there is not a
-# bundle crash and inspecting them would risk a false-block.
+# `prepublishOnly` / `prepack` / `postpack` remain excluded: unlike legacy `prepublish`,
+# those are publish/pack-only and are not part of the emitted install/start plan.
 _TOOLCHAIN_SCRIPT_KEYS = (
+    "prepublish",
     "preinstall",
     "install",
     "postinstall",
@@ -544,6 +521,19 @@ def _file_text(files: Mapping[str, str | bytes], target: str) -> str | None:
     return None
 
 
+def _scan_complete(value: str | bytes) -> bool:
+    """Whether the bounded scanner observed the complete, non-binary value."""
+    if isinstance(value, bytes):
+        return len(value) <= _MAX_SCAN_BYTES and b"\x00" not in value
+    return len(value) <= _MAX_SCAN_BYTES and "\x00" not in value
+
+
+def _root_texts(files: Mapping[str, str | bytes]) -> dict[str, str]:
+    return {
+        _norm(path): _scan_text(value) for path, value in files.items() if "/" not in _norm(path)
+    }
+
+
 def _strip_comments(text: str) -> str:
     """Best-effort removal of JS block/line comments (`/* */`, `//`) and Python line
     comments (`#`) for the fail-open-prone LITERAL checks (the `$PORT` bind, the Vite
@@ -634,6 +624,65 @@ def _node_install(files: Mapping[str, str | bytes]) -> tuple[str | None, str, tu
     return (None, "npm", ("npm", "install"))
 
 
+def _root_package_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
+    raw = next((value for path, value in files.items() if _norm(path) == "package.json"), None)
+    if raw is None:
+        return None
+    if not _scan_complete(raw):
+        return _entrypoint_blocker("the root package.json cannot be scanned completely")
+    try:
+        parsed = json.loads(_scan_text(raw))
+    except (json.JSONDecodeError, ValueError):
+        return _entrypoint_blocker("the root package.json does not parse as JSON")
+    if not isinstance(parsed, dict):
+        return _entrypoint_blocker("the root package.json is not an object")
+    return None
+
+
+def _npm_lock_blocker(
+    files: Mapping[str, str | bytes],
+    pkg: object,
+    install_cmd: tuple[str, ...],
+    *,
+    declared_manager: str | None = None,
+    declared_lockfile: str | None = None,
+) -> _DetectBlocker | None:
+    """Reconcile exact npm install bytes with root package/lock metadata."""
+    roots = {_norm(path): value for path, value in files.items() if "/" not in _norm(path)}
+    if declared_manager is not None and declared_manager.lower() != "npm":
+        return _install_blocker("the npm install command contradicts the declared package manager")
+    if declared_lockfile is not None:
+        if declared_lockfile != "package-lock.json" or declared_lockfile not in roots:
+            return _install_blocker(
+                "the npm install command contradicts a missing or foreign declared lockfile"
+            )
+    if install_cmd != ("npm", "ci"):
+        return None
+    lock = roots.get("package-lock.json")
+    if lock is None or not _scan_complete(lock):
+        return _install_blocker("npm ci requires a complete root package-lock.json")
+    try:
+        parsed = json.loads(_scan_text(lock))
+    except (json.JSONDecodeError, ValueError):
+        return _install_blocker("the root package-lock.json does not parse as JSON")
+    if not isinstance(parsed, dict) or parsed.get("lockfileVersion") not in {2, 3}:
+        return _install_blocker("the root package-lock.json version/shape is unproved")
+    packages = parsed.get("packages")
+    locked_root = packages.get("") if isinstance(packages, dict) else None
+    if not isinstance(pkg, dict) or not isinstance(locked_root, dict):
+        return _install_blocker("the package-lock root package metadata is absent")
+    for field in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        manifest_values = pkg.get(field, {})
+        locked_values = locked_root.get(field, {})
+        if not isinstance(manifest_values, dict) or not isinstance(locked_values, dict):
+            return _install_blocker("package/lock dependency metadata has an invalid shape")
+        if manifest_values != locked_values:
+            return _install_blocker(
+                "package.json and package-lock.json disagree about the exact dependency plan"
+            )
+    return None
+
+
 # ---- env / route / health signal helpers (bounded, whole-tree) ----------------
 
 
@@ -683,6 +732,25 @@ def _js_serves_root(source: str) -> bool:
     )
 
 
+def _js_serves_path(source: str, path: str) -> bool:
+    """Whether the exact node entry source PROVES it serves a declared CONVENTIONAL NON-ROOT
+    health path. A bare ``createServer(...)`` catch-all is NOT such a proof: an
+    ``http.createServer(app)`` whose framework instance never registers the path 404s it, so
+    the emitted health check would go red on a booted process. Require an EXPLICIT handler for
+    the exact path — a route-method registration (``.get/.all/.use('<path>',``) or an explicit
+    request-URL match (``req.url === '<path>'`` / ``req.url.startsWith('<path>')``). The root
+    ``/`` is proven separately by ``_js_serves_root`` (any bound server answers the root)."""
+    esc = re.escape(path)
+    if re.search(r"\.(?:get|all|use)\s*\(\s*['\"]" + esc + r"['\"]\s*,", source) is not None:
+        return True
+    if re.search(r"\breq(?:uest)?\.url\s*===?\s*['\"]" + esc + r"['\"]", source) is not None:
+        return True
+    return (
+        re.search(r"\breq(?:uest)?\.url\s*\.\s*startsWith\s*\(\s*['\"]" + esc + r"['\"]", source)
+        is not None
+    )
+
+
 def _node_source(files: Mapping[str, str | bytes]) -> str:
     """The bounded, binary-safe concatenation of the workspace's scannable content —
     where `process.env` reads and route registrations live. Each file is capped and
@@ -700,8 +768,38 @@ def _build_env_decls(files: Mapping[str, str | bytes]) -> tuple[EnvVarDecl, ...]
 
     Bounded + binary-safe (§7.11): reads only `_scan_text` views, in a stable order."""
     names: set[str] = set()
+    source_suffixes = frozenset(
+        {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".html"}
+    )
+    excluded_segments = frozenset(
+        {
+            ".git",
+            "__tests__",
+            "build",
+            "coverage",
+            "dist",
+            "fixture",
+            "fixtures",
+            "node_modules",
+            "test",
+            "tests",
+            "vendor",
+        }
+    )
     for path in sorted(files):
-        names.update(_VITE_BUILD_ENV_RE.findall(_scan_text(files[path])))
+        norm = _norm(path)
+        segments = tuple(segment.lower() for segment in norm.split("/"))
+        suffix = "." + norm.rsplit(".", 1)[-1].lower() if "." in _basename(norm) else ""
+        if suffix not in source_suffixes or any(
+            segment in excluded_segments for segment in segments[:-1]
+        ):
+            continue
+        basename = _basename(norm).lower()
+        if ".test." in basename or ".spec." in basename:
+            continue
+        discovered = vite_env_names(_scan_text(files[path]))
+        if discovered is not None:
+            names.update(discovered)
     return tuple(
         EnvVarDecl(
             name=name,
@@ -711,6 +809,65 @@ def _build_env_decls(files: Mapping[str, str | bytes]) -> tuple[EnvVarDecl, ...]
         )
         for name in sorted(names)
     )
+
+
+def _build_env_contract_blocker(
+    files: Mapping[str, str | bytes],
+) -> _DetectBlocker | None:
+    """Fail closed when a Vite config/source scan cannot prove the full env contract."""
+    roots = _root_texts(files)
+    if not vite_config_contract_supported(roots):
+        return _DetectBlocker(
+            code="build_env_contract_unresolved",
+            message=(
+                "the exported Vite configuration has an unsupported or dynamic envPrefix, "
+                "multiple root configs, or an unproved exported config expression; build "
+                "environment names cannot be conserved without guessing"
+            ),
+            field="build_env",
+            evidence=("build-env evidence: Vite configuration contract is unproved",),
+        )
+    source_suffixes = frozenset(
+        {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte", ".html"}
+    )
+    excluded = frozenset(
+        {
+            ".git",
+            "__tests__",
+            "build",
+            "coverage",
+            "dist",
+            "fixture",
+            "fixtures",
+            "node_modules",
+            "test",
+            "tests",
+            "vendor",
+        }
+    )
+    for path in sorted(files):
+        norm = _norm(path)
+        basename = _basename(norm).lower()
+        suffix = "." + basename.rsplit(".", 1)[-1] if "." in basename else ""
+        segments = tuple(segment.lower() for segment in norm.split("/"))
+        if (
+            suffix not in source_suffixes
+            or ".test." in basename
+            or ".spec." in basename
+            or any(segment in excluded for segment in segments[:-1])
+        ):
+            continue
+        if not _scan_complete(files[path]) or vite_env_names(_scan_text(files[path])) is None:
+            return _DetectBlocker(
+                code="build_env_contract_unresolved",
+                message=(
+                    "a production client source file could not be scanned completely and "
+                    "lexically, so its compile-time environment contract is unproved"
+                ),
+                field="build_env",
+                evidence=("build-env evidence: relevant source scan incomplete",),
+            )
+    return None
 
 
 def _lockfile_conflict(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
@@ -744,25 +901,20 @@ def _secret_build_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | 
     plain build `ARG` would leak it into image history, so detection fails closed
     rather than shipping a bundle whose build cannot authenticate. `None` when no
     secret-shaped build reference is found."""
-    for path in sorted(files):
-        if _basename(path) != _NPMRC_NAME:
-            continue
-        for name in _NPMRC_ENV_REF_RE.findall(_scan_text(files[path])):
-            if _classify_secret(name) is SecretClass.secret:
-                return _DetectBlocker(
-                    code="secret_build_env_unsupported",
-                    message=(
-                        "the build reads a secret-shaped credential from an .npmrc at "
-                        "install time; a secret-free self-host bundle cannot supply a "
-                        "build-time secret (a plain build ARG would leak it into image "
-                        "history), so this build is not supported. Remove the "
-                        "build-time credential or vendor its dependencies."
-                    ),
-                    field="build_env",
-                    evidence=(
-                        f"build-secret evidence: secret-shaped .npmrc reference in {_norm(path)}",
-                    ),
-                )
+    value = next((value for path, value in files.items() if _norm(path) == ".npmrc"), None)
+    if value is not None and (
+        not _scan_complete(value) or npmrc_requires_secret(_scan_text(value))
+    ):
+        return _DetectBlocker(
+            code="secret_build_env_unsupported",
+            message=(
+                "the root .npmrc carries a credential or cannot be scanned completely; "
+                "a secret-free self-host bundle cannot copy or consume an unproved "
+                "install-time package-manager configuration"
+            ),
+            field="build_env",
+            evidence=("build-secret evidence: root .npmrc is credential-bearing or unproved",),
+        )
     return None
 
 
@@ -795,6 +947,67 @@ def _secret_build_env_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocke
                 ),
             )
     return None
+
+
+# ---- interpreted-server ingress-port binding ----------------------------------
+
+
+_MAX_SERVER_ARGV = 200
+
+
+def _bind_blocker(detail: str) -> _DetectBlocker:
+    return _DetectBlocker(
+        code="port_contract_unresolved",
+        message=detail,
+        field="start_cmd",
+        evidence=("ingress-port evidence: server start does not satisfy the public port contract",),
+    )
+
+
+def _normalized_python_start(
+    effective: EffectiveStartCommand, port_env: str
+) -> tuple[str, ...] | _DetectBlocker:
+    """Lower a parsed Python server start onto the provider-neutral port contract.
+
+    This consumes the shared structured parse; it never scans argv independently. The
+    resulting command names the adapter-owned variable, not a local-compose port number.
+    """
+    if effective.server is None:
+        return _bind_blocker("the parsed Python start has no supported server")
+    argv = effective.argv
+    if effective.server == "uvicorn":
+        host = effective.option_value("--host")
+        port = effective.option_value("--port")
+        if host is not None and host != "0.0.0.0":
+            return _bind_blocker(
+                "the declared uvicorn host is not the public IPv4 wildcard; declare "
+                "--host 0.0.0.0 or omit it so the release contract can add it"
+            )
+        if port is not None and whole_env_ref(port) != port_env:
+            return _bind_blocker(
+                "the declared uvicorn port is not the adapter-owned port variable; "
+                f"declare --port ${{{port_env}}} or omit it so the release contract can add it"
+            )
+        additions: list[str] = []
+        if host is None:
+            additions.extend(("--host", "0.0.0.0"))
+        if port is None:
+            additions.extend(("--port", "${" + port_env + "}"))
+        lowered = argv + tuple(additions)
+    else:
+        bind = effective.option_value("--bind")
+        if bind is not None and public_bind_env_ref(bind) != port_env:
+            return _bind_blocker(
+                "the declared combined bind is not exactly the public IPv4 wildcard "
+                f"plus the adapter-owned port variable; declare --bind 0.0.0.0:${{{port_env}}}"
+            )
+        lowered = argv if bind is not None else argv + ("--bind", "0.0.0.0:${" + port_env + "}")
+    if len(lowered) > _MAX_SERVER_ARGV:
+        return _bind_blocker(
+            "the start command is at the argv limit and the required public bind cannot "
+            "be added safely; shorten the command or declare the bind explicitly"
+        )
+    return lowered
 
 
 def _unsupported_pm_blocker(
@@ -1021,49 +1234,15 @@ def _node_detect(
     contract is predictably broken — a DYNAMIC/undeclared env read
     (`required_env_unresolved`) or a server that never binds `$PORT`
     (`port_contract_unresolved`)."""
+    package_blocker = _root_package_blocker(files)
+    if package_blocker is not None:
+        return package_blocker
     pkg = _root_package_json(files)
     if _script(pkg, "start") is None:
         return None  # no node server signature — not this runtime
 
-    source = _node_source(files)
     port_env = "PORT"
     declared = _declared_env_names(files) | {port_env}
-
-    if _js_has_dynamic_env(source):
-        return _DetectBlocker(
-            code="required_env_unresolved",
-            message=(
-                "the node server reads an environment variable through a dynamic "
-                "`process.env[<expr>]` index whose name cannot be resolved statically; "
-                "declare the required env names in a typed release intent."
-            ),
-            field="required_env",
-            evidence=("node env read: dynamic process.env[<expr>] index",),
-        )
-    undeclared = sorted(_js_env_reads(source) - declared)
-    if undeclared:
-        return _DetectBlocker(
-            code="required_env_unresolved",
-            message=(
-                "the node server reads environment variable(s) "
-                f"{', '.join(undeclared)} that are neither the $PORT contract nor "
-                "declared in a dotenv template or typed intent; requiredness cannot "
-                "be established statically — declare it."
-            ),
-            field="required_env",
-            evidence=(f"node env read: undeclared {', '.join(undeclared)}",),
-        )
-    if not _js_references_port(source, port_env):
-        return _DetectBlocker(
-            code="port_contract_unresolved",
-            message=(
-                "the node server does not bind the $PORT contract (no "
-                "`process.env.PORT` read); it cannot honor the host-assigned port. "
-                "Bind `process.env.PORT` or declare the port via a typed intent."
-            ),
-            field="port_env",
-            evidence=("node port evidence: no process.env.PORT read (literal port only)",),
-        )
     # A package-manager disagreement, an unsupported toolchain, or a build-time secret
     # is unreleasable — fail closed BEFORE emitting a candidate whose install step is
     # ambiguous, cannot run on the base image, or cannot authenticate (§8.9 / §8.8 /
@@ -1081,6 +1260,61 @@ def _node_detect(
     declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
     if declared_toolchain is not None:
         return declared_toolchain
+    script_plan = _node_script_plan_blocker(
+        files,
+        pkg,
+        include_install=True,
+        include_build=_script(pkg, "build") is not None,
+        include_start_hooks=True,
+    )
+    if script_plan is not None:
+        return script_plan
+    try:
+        effective = parse_effective_start_argv(
+            ("npm", "start"), declared_names=frozenset({port_env}), field="start_cmd"
+        )
+    except ValueError:
+        return _entrypoint_blocker("the derived npm start is outside the command grammar")
+    resolved = _resolved_node_start(
+        effective,
+        files,
+        port_env=port_env,
+        allow_source_npm_prefix=True,
+    )
+    if isinstance(resolved, _DetectBlocker):
+        return resolved
+    _, source, external_packages = resolved
+    if _js_has_dynamic_env(source):
+        return _DetectBlocker(
+            code="required_env_unresolved",
+            message=(
+                "the exact Node entrypoint reads a dynamic process.env name that cannot "
+                "be resolved statically; declare a simpler direct environment contract"
+            ),
+            field="required_env",
+            evidence=("node env read: dynamic process.env index in exact entrypoint",),
+        )
+    undeclared = sorted(_js_env_reads(source) - declared)
+    if undeclared:
+        return _DetectBlocker(
+            code="required_env_unresolved",
+            message=(
+                "the exact Node entrypoint reads environment names that are neither the "
+                "port contract nor declared in a dotenv template: " + ", ".join(undeclared)
+            ),
+            field="required_env",
+            evidence=(f"node env read: undeclared {', '.join(undeclared)}",),
+        )
+    port = _node_port_blocker(source, port_env)
+    if port is not None:
+        return port
+    lockfile, manager, install = _node_install(files)
+    lock = _npm_lock_blocker(files, pkg, install)
+    if lock is not None:
+        return lock
+    dependencies = _node_dependency_blocker(external_packages, pkg, install, files)
+    if dependencies is not None:
+        return dependencies
     build_secret = _secret_build_blocker(files)
     if build_secret is not None:
         return build_secret
@@ -1089,10 +1323,12 @@ def _node_detect(
     # A build step that reads a SOURCE-DISCOVERED secret build var fails closed like an
     # `.npmrc` build secret (§8.4) — a secret build var must never fold into build.args.
     if build_cmd:
+        contract = _build_env_contract_blocker(files)
+        if contract is not None:
+            return contract
         source_secret = _secret_build_env_blocker(files)
         if source_secret is not None:
             return source_secret
-    lockfile, manager, install = _node_install(files)
     return ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -1166,13 +1402,32 @@ def _python_detect(
         if "requirements.txt" in tree
         else ("pip", "install", ".")
     )
+    packages = _python_install_packages(install, files)
+    if isinstance(packages, _DetectBlocker):
+        return packages
+    if "uvicorn" not in packages:
+        return _python_server_dependency_blocker("uvicorn")
     module_text = _file_text(files, f"{module}.py") or ""
+    try:
+        effective = parse_effective_start_argv(
+            ("uvicorn", f"{module}:app"),
+            declared_names=frozenset({"PORT"}),
+            field="start_cmd",
+        )
+    except ValueError:
+        return _entrypoint_blocker("the derived uvicorn start is outside the command grammar")
+    entrypoint = _python_entrypoint_blocker(effective, files, packages)
+    if entrypoint is not None:
+        return entrypoint
+    bound = _normalized_python_start(effective, "PORT")
+    if isinstance(bound, _DetectBlocker):
+        return bound
     return ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
         runtime=RuntimeStrategy.python,
         install_cmd=install,
-        start_cmd=("uvicorn", f"{module}:app", "--host", "0.0.0.0", "--port", "${PORT}"),
+        start_cmd=bound,
         port_env="PORT",
         health_path="/" if _PY_ROOT_GET_RE.search(module_text) else None,
     )
@@ -1189,17 +1444,11 @@ def _static_output_dir(files: Mapping[str, str | bytes], build_script: str) -> s
       Vite's default `dist`."""
     if not re.search(r"\bvite\b", build_script):
         return None  # unknown bundler — output dir not statically knowable
-    for path in files:
-        if _basename(path) in _VITE_CONFIG_NAMES:
-            # Strip comments first: a decoy `// outDir: 'dist'` must not be read as a
-            # resolved output directory when the real config is dynamic/absent.
-            text = _strip_comments(_scan_text(files[path]))
-            literal = _VITE_OUTDIR_LITERAL_RE.search(text)
-            if literal is not None:
-                return literal.group(1)
-            if _VITE_OUTDIR_KEY_RE.search(text):
-                return None  # dynamic/computed outDir — fail closed
-    return "dist"  # default-Vite: no outDir override
+    for path, value in files.items():
+        norm = _norm(path)
+        if "/" not in norm and norm.startswith("vite.config.") and not _scan_complete(value):
+            return None
+    return prove_vite_output_dir(_root_texts(files))
 
 
 def _static_detect(
@@ -1212,9 +1461,15 @@ def _static_detect(
     (`output_dir_unresolved`)."""
     if "index.html" not in _paths(files):
         return None
+    package_blocker = _root_package_blocker(files)
+    if package_blocker is not None:
+        return package_blocker
     pkg = _root_package_json(files)
     build_script = _script(pkg, "build")
     if build_script is not None:
+        contract = _build_env_contract_blocker(files)
+        if contract is not None:
+            return contract
         output_dir = _static_output_dir(files, build_script)
         if output_dir is None:
             return _DetectBlocker(
@@ -1244,6 +1499,15 @@ def _static_detect(
         declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
         if declared_toolchain is not None:
             return declared_toolchain
+        script_plan = _node_script_plan_blocker(
+            files,
+            pkg,
+            include_install=True,
+            include_build=True,
+            include_start_hooks=False,
+        )
+        if script_plan is not None:
+            return script_plan
         build_secret = _secret_build_blocker(files)
         if build_secret is not None:
             return build_secret
@@ -1255,6 +1519,9 @@ def _static_detect(
         # A build-requiring static bundle MUST install its dependencies before the
         # build runs, or the emitted image builds against an empty node_modules.
         lockfile, manager, install = _node_install(files)
+        lock = _npm_lock_blocker(files, pkg, install)
+        if lock is not None:
+            return lock
         return ReleaseService(
             id=_INGRESS_ID,
             role=ServiceRole.ingress,
@@ -1323,19 +1590,28 @@ def _fail_closed(blocker: _DetectBlocker) -> DetectionResult:
 
 
 def _health_route_present(files: Mapping[str, str | bytes], health_path: str) -> bool:
-    """Whether a DECLARED health path corresponds to an explicit route in the source.
+    """Whether a DECLARED health path corresponds to an EXPLICIT route REGISTRATION in the
+    source — not merely a quoted string that happens to equal the path.
 
-    The root `/` is always considered served (any bound web server answers it); a
-    non-root path must appear as a quoted route literal somewhere in the (bounded,
-    binary-safe) source. This backs `health_path_unresolved`: a declared health path
-    with no corresponding route is a broken contract."""
+    The root `/` is always considered served (any bound web server answers it); a non-root
+    path must appear as a quoted literal ADJACENT to a route method/decorator: a Flask/FastAPI
+    `@app.route/@app.get(...)`, a Starlette `Route(...)`, or an Express `.get/.all/.use(...)`.
+    A bare string literal in an unrelated docs/example file no longer satisfies the contract.
+    This backs `health_path_unresolved`: a declared health path with no corresponding route
+    registration is a broken contract."""
     if health_path == "/":
         return True
-    needles = (f'"{health_path}"', f"'{health_path}'")
+    esc = re.escape(health_path)
+    patterns = (
+        r"@\s*[\w.]+\.(?:route|get|post|put|delete|patch|head|options|websocket)"
+        r"\s*\(\s*['\"]" + esc + r"['\"]",
+        r"\b(?:Route|WebSocketRoute|Mount)\s*\(\s*['\"]" + esc + r"['\"]",
+        r"\.(?:get|all|use|add_url_rule|add_route)\s*\(\s*['\"]" + esc + r"['\"]",
+    )
     for path in sorted(files):
-        # Strip comments first: a decoy `// '/healthz'` must not count as a real route.
+        # Strip comments first: a decoy `// @app.get('/healthz')` must not count as a route.
         text = _strip_comments(_scan_text(files[path]))
-        if any(needle in text for needle in needles):
+        if any(re.search(pattern, text) is not None for pattern in patterns):
             return True
     return False
 
@@ -1439,21 +1715,6 @@ def _appkit_sqlite_resource(db_name: str) -> ResourceDecl:
     )
 
 
-def _runtime_from_argv(argv: tuple[str, ...]) -> RuntimeStrategy:
-    """Infer a declared process's runtime from its start argv's interpreter token;
-    an unrecognized/absent interpreter falls back to `node`, the conservative base
-    for a declared long-running process on this platform."""
-    if argv:
-        head = argv[0].rsplit("/", 1)[-1].lower()
-        if head in _NODE_TOKENS:
-            return RuntimeStrategy.node
-        # `startswith("python")` maps versioned interpreters (`python3.12`,
-        # `python3.13`) to python too, not just the bare `python`/`python3` tokens.
-        if head.startswith("python") or head in _PY_TOKENS:
-            return RuntimeStrategy.python
-    return RuntimeStrategy.node
-
-
 def _missing_fields(fields: tuple[str, ...]) -> tuple[MissingField, ...]:
     return tuple(MissingField(field=name, detail=_UNVERIFIABLE[name]) for name in fields)
 
@@ -1479,21 +1740,785 @@ def _conflict_result(intent: ReleaseIntent, manifest: str) -> DetectionResult:
     )
 
 
-def _declared_python_deps(files: Mapping[str, str | bytes]) -> frozenset[str]:
-    """The python package NAMES an owner has DECLARED (a `requirements.txt` line, or
-    a `pyproject.toml` token), lowercased. A declared start executable that is a pip
-    package (e.g. `gunicorn`) must appear here, or the base image cannot run it."""
+def _install_blocker(detail: str) -> _DetectBlocker:
+    return _DetectBlocker(
+        code="toolchain_unsupported",
+        message=detail,
+        field="install_cmd",
+        evidence=("install evidence: effective dependency plan is not statically proven",),
+    )
+
+
+def _normalized_package_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+_MAX_REQUIREMENTS_INCLUDE_DEPTH = 8
+
+
+def _requirements_include_path(line: str) -> str | None:
+    """The referenced file for a ``-r``/``--requirement`` include, else ``None``."""
+    if line.startswith("--requirement="):
+        path = line[len("--requirement=") :].strip()
+        return path or None
+    tokens = line.split()
+    if tokens and tokens[0] in {"-r", "--requirement"} and len(tokens) == 2:
+        return tokens[1]
+    return None
+
+
+def _resolve_include(base_dir: str, include: str) -> str | None:
+    """Resolve a requirements include relative to its including file; reject escapes."""
+    candidate = _norm(f"{base_dir}/{include}" if base_dir else include)
+    segments = candidate.split("/")
+    if not candidate or candidate.startswith("/") or ".." in segments or "" in segments:
+        return None
+    return candidate
+
+
+def _requirements_packages(
+    text: str,
+    files: Mapping[str, str | bytes],
+    *,
+    base_dir: str = "",
+    seen: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Prove the active package set from a requirements file, resolving bounded ``-r`` includes.
+
+    Every non-include line is validated by the single authoritative PEP 508/440 grammar
+    (`active_requirement_name`): an invalid line raises, a provably-false marker is inactive.
+    Includes are resolved against the immutable tree with depth/cycle bounds; a missing,
+    escaping, or too-deep include fails closed.
+    """
+    packages: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        include = _requirements_include_path(line)
+        if include is not None:
+            if len(seen) >= _MAX_REQUIREMENTS_INCLUDE_DEPTH:
+                raise ValueError("requirements includes are nested beyond the supported depth")
+            resolved = _resolve_include(base_dir, include)
+            if resolved is None or resolved in seen:
+                raise ValueError("the requirements include path is unsafe or recursive")
+            included = _file_text(files, resolved)
+            if included is None:
+                raise ValueError("the included requirements file is absent")
+            packages |= _requirements_packages(
+                included,
+                files,
+                base_dir=resolved.rsplit("/", 1)[0] if "/" in resolved else "",
+                seen=seen | {resolved},
+            )
+            continue
+        name = active_requirement_name(line)
+        if name is not None:
+            packages.add(name)
+    return frozenset(packages)
+
+
+def _pyproject_packages(text: str) -> frozenset[str]:
+    try:
+        parsed = tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, ValueError) as exc:
+        raise ValueError("pyproject.toml is not valid TOML") from exc
+    project = parsed.get("project")
+    if not isinstance(project, dict):
+        raise ValueError("pyproject.toml has no PEP 621 project table")
+    requires_python = project.get("requires-python")
+    if requires_python is not None and (
+        not isinstance(requires_python, str) or not requires_python_supported(requires_python)
+    ):
+        raise ValueError("the project's requires-python is incompatible with the emitted image")
+    dependencies = project.get("dependencies")
+    if not isinstance(dependencies, list):
+        raise ValueError("pyproject.toml has no PEP 621 project.dependencies list")
+    packages: set[str] = set()
+    for dependency in dependencies:
+        if not isinstance(dependency, str):
+            raise ValueError("pyproject dependency is not a string")
+        name = active_requirement_name(dependency)
+        if name is not None:
+            packages.add(name)
+    return frozenset(packages)
+
+
+def _python_install_packages(
+    install_cmd: tuple[str, ...], files: Mapping[str, str | bytes]
+) -> frozenset[str] | _DetectBlocker:
+    """Prove packages from the exact install command; ignored manifests contribute nothing."""
+    if not install_cmd:
+        return frozenset()
+    if install_cmd[:3] in (("python", "-m", "pip"), ("python3", "-m", "pip")):
+        arguments = install_cmd[3:]
+    elif install_cmd[0] in {"pip", "pip3"}:
+        arguments = install_cmd[1:]
+    else:
+        return _install_blocker(
+            "the Python candidate's effective install command is not exact pip/pip3 or "
+            "python -m pip, so its runtime dependencies are not proven"
+        )
+    if not arguments or arguments[0] != "install":
+        return _install_blocker("the effective pip command is not an install operation")
+    operands: list[str] = []
+    requirement_path: str | None = None
+    index = 1
+    while index < len(arguments):
+        token = arguments[index]
+        if token == "--no-cache-dir":
+            index += 1
+            continue
+        if token in {"-r", "--requirement"}:
+            if requirement_path is not None or index + 1 >= len(arguments):
+                return _install_blocker("the pip requirements input is missing or repeated")
+            requirement_path = _norm(arguments[index + 1])
+            index += 2
+            continue
+        if token.startswith("-"):
+            return _install_blocker(
+                "the effective pip install uses a behavior-changing or unproved option "
+                "(--dry-run/--target/--user/--prefix/--root and all unknown options fail closed)"
+            )
+        operands.append(token)
+        index += 1
+    try:
+        if requirement_path is not None:
+            if operands:
+                raise ValueError("requirements input is mixed with other operands")
+            text = _file_text(files, requirement_path)
+            if text is None:
+                raise ValueError("the exact requirements file is absent")
+            base_dir = requirement_path.rsplit("/", 1)[0] if "/" in requirement_path else ""
+            return _requirements_packages(text, files, base_dir=base_dir)
+        if operands == ["."]:
+            text = _file_text(files, "pyproject.toml")
+            if text is None:
+                raise ValueError("pip install . has no root pyproject.toml")
+            return _pyproject_packages(text)
+        if not operands or "." in operands:
+            raise ValueError("pip install has no single proven dependency source")
+        packages: set[str] = set()
+        for operand in operands:
+            name = active_requirement_name(operand)
+            if name is not None:
+                packages.add(name)
+        return frozenset(packages)
+    except ValueError as exc:
+        return _install_blocker(str(exc))
+
+
+def _python_server_dependency_blocker(server: str) -> _DetectBlocker:
+    return _DetectBlocker(
+        code="toolchain_unsupported",
+        message=(
+            f"the effective Python install plan does not install {server!r}; ignored "
+            "manifests and false target markers cannot satisfy the runtime executable"
+        ),
+        field="install_cmd",
+        evidence=(f"install evidence: effective plan does not install {server!r}",),
+    )
+
+
+def _entrypoint_blocker(detail: str, *, field: str = "start_cmd") -> _DetectBlocker:
+    return _DetectBlocker(
+        code="entrypoint_unresolved",
+        message=detail,
+        field=field,
+        evidence=("entrypoint evidence: effective start target is not proven by the tree",),
+    )
+
+
+def _workspace_option_path(value: str) -> str | None:
+    """A conservative workspace-relative input path, or None for dynamic/unsafe data."""
+    if whole_env_ref(value) is not None or public_bind_env_ref(value) is not None:
+        return None
+    path = _norm(value)
+    if not path or path.startswith("/") or ".." in path.split("/"):
+        return None
+    return path
+
+
+def _workspace_has_directory(files: Mapping[str, str | bytes], path: str) -> bool:
+    if path in {"", "."}:
+        return True
+    prefix = path.rstrip("/") + "/"
+    return any(_norm(candidate).startswith(prefix) for candidate in files)
+
+
+def _gunicorn_config_blocker(
+    resolved: str,
+    files: Mapping[str, str | bytes],
+    packages: frozenset[str],
+    workspace_modules: tuple[
+        frozenset[str], frozenset[str], dict[str, str], frozenset[str], frozenset[str]
+    ],
+) -> _DetectBlocker | None:
+    """Prove a gunicorn config file gunicorn EXECUTES at startup is runnable Python.
+
+    gunicorn runs the config's module body to read its settings, so a config that (a) cannot be
+    scanned (binary/oversized), (b) does not ``ast.parse`` (a boot-time ``SyntaxError``), (c)
+    has a module-scope ``import`` of a distribution absent from the exact install plan (a
+    ``ModuleNotFoundError`` at exec), or (d) sets ``worker_class`` to a value outside the
+    built-in proven set aborts the master BEFORE any worker binds — the deployment is
+    unreachable. (a)–(c) are the SAME proof the migrate script gets: scan-complete fail-closed →
+    ``ast.parse`` → the Batch-3 certain-eval import resolution (``python_script_import_error`` →
+    ``_module_imports_are_proven``) over install-plan ∪ shipped-workspace ``.py`` ∪ stdlib.
+
+    (d) mirrors the RATIFIED CLI ceiling: ``command_grammar`` restricts the CLI
+    ``--worker-class`` for gunicorn to ``GUNICORN_BUILTIN_WORKER_CLASSES`` (``{sync, gthread}``),
+    because gunicorn loads the worker class at ``Arbiter.setup`` (``util.load_class``) BEFORE it
+    binds, and every non-bundled worker module (``gevent``/``eventlet``/``tornado``/a custom
+    dotted path) imports an extra distribution at module scope — a ``worker_class`` outside the
+    proven set whose dependency is unprovable raises before bind exactly like the CLI form. The
+    config had been MORE PERMISSIVE than the CLI (CLI ``--worker-class gevent`` → needs_review,
+    config ``worker_class='gevent'`` → candidate); reading the SAME constant here closes that
+    asymmetry. It is a mirror, NOT a resolve-the-dep: the ceiling rejects gevent unconditionally,
+    so ``worker_class='gevent'`` is rejected even WITH gevent in requirements — allowing it would
+    make the config looser than the ratified CLI oracle. Only a DIRECT module-scope string-literal
+    ``worker_class`` is in scope (see ``_config_worker_class_literal``); a dynamic/aliased value
+    cannot be statically resolved and stays a candidate. Deliberately NOT proven here (a different,
+    lower severity — documented exotic boundary, not this fix): other string settings such as
+    ``logger_class``/``wsgi_app`` (no ratified CLI ceiling to mirror), and config HOOK functions
+    (``post_fork``/``when_ready``/…) which gunicorn calls AFTER the socket is bound, so a failure
+    there does not make the deployment unreachable at boot.
+
+    Used for BOTH the explicit ``--config``/``-c`` file and the auto-discovered
+    ``gunicorn.conf.py``, so both resolution paths get every clause for free.
+    """
+    raw = next((data for path, data in files.items() if _norm(path) == resolved), None)
+    if raw is None or not _scan_complete(raw):
+        return _entrypoint_blocker(
+            "the declared gunicorn config cannot be scanned completely (binary or oversized), "
+            "so its validity as executable Python is unproven"
+        )
+    text = _scan_text(raw)
+    try:
+        tree = ast.parse(text, mode="exec")
+    except (SyntaxError, ValueError):
+        return _entrypoint_blocker(
+            "the declared gunicorn config is not valid Python (it does not parse); gunicorn "
+            "executes it at startup, so an unparseable config aborts the worker before it can bind"
+        )
+    # Existence + a clean parse is NOT runnability: gunicorn executes the config's module body, so
+    # a top-level ``import <pkg>`` of a distribution absent from the exact install plan (the classic
+    # forgotten config dependency) is a ``ModuleNotFoundError`` at boot — the master aborts before
+    # any worker binds, exactly like the migrate-script class-A defect. Resolve the config's imports
+    # with the SAME primitive over the SAME install plan ∪ shipped workspace ``.py`` ∪ stdlib.
+    local_roots, local_dotted, local_sources, ambiguous_modules, package_modules = workspace_modules
+    if (
+        python_script_import_error(
+            text,
+            installed_packages=packages,
+            local_modules=local_roots,
+            local_module_paths=local_dotted,
+            local_module_sources=local_sources,
+            ambiguous_modules=ambiguous_modules,
+            package_modules=package_modules,
+        )
+        is not None
+    ):
+        return _entrypoint_blocker(
+            "the gunicorn config gunicorn executes at startup has a module-scope import that is "
+            "not backed by the install plan or a shipped workspace module; gunicorn runs the "
+            "config at startup, so the missing import aborts the master before any worker can bind"
+        )
+    worker_class = _config_worker_class_literal(tree)
+    if worker_class is not None and worker_class not in GUNICORN_BUILTIN_WORKER_CLASSES:
+        return _entrypoint_blocker(
+            "the gunicorn config sets worker_class to a value outside the built-in proven set "
+            "{sync, gthread}; gunicorn imports the worker class at startup before binding, so a "
+            "non-bundled worker whose dependency is unprovable aborts the master before it can "
+            "bind (the same ceiling the CLI --worker-class already enforces)"
+        )
+    return None
+
+
+def _config_worker_class_literal(tree: ast.Module) -> str | None:
+    """The effective module-scope ``worker_class`` string-literal setting, or ``None``.
+
+    gunicorn reads settings from the config's MODULE SCOPE (never from inside a function), and
+    honors the LAST module-scope binding. So only a top-level ``worker_class = "<str>"`` (or an
+    annotated ``worker_class: str = "<str>"``) with a single Name target is a setting we can
+    prove statically. A non-literal right-hand side (``os.environ.get(...)``, an alias
+    ``worker_class = wc``, a call), a tuple/chained target, or a binding inside a function CANNOT
+    be resolved to a string, so it is left as ``None`` and the config stays a candidate — the
+    documented dynamic/alias boundary (safe under-attribution). If the last binding we can see is
+    non-literal, the earlier literal is dropped (it is overwritten at runtime) so we do not
+    over-reject a config whose effective value is dynamic.
+    """
+    result: str | None = None
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+                continue
+            target_name = stmt.targets[0].id
+            value: ast.expr = stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            if stmt.value is None or not isinstance(stmt.target, ast.Name):
+                continue
+            target_name = stmt.target.id
+            value = stmt.value
+        else:
+            continue
+        if target_name != "worker_class":
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            result = value.value
+        else:
+            result = None  # last binding is non-literal → unresolved → stays a candidate
+    return result
+
+
+def _python_entrypoint_blocker(
+    effective: EffectiveStartCommand,
+    files: Mapping[str, str | bytes],
+    packages: frozenset[str],
+) -> _DetectBlocker | None:
+    """Prove Python config inputs and the exact module:attribute from immutable files."""
+    assert effective.server is not None
+    file_inputs: tuple[str, ...]
+    if effective.server == "uvicorn":
+        directory_option = "--app-dir"
+        file_inputs = ("--ssl-keyfile", "--ssl-certfile")
+    elif effective.server == "gunicorn":
+        directory_option = "--chdir"
+        file_inputs = ("--config",)
+    else:
+        directory_option = ""
+        file_inputs = ("--config",)
+
+    base = "."
+    if directory_option:
+        value = effective.option_value(directory_option)
+        if value is not None:
+            resolved = _workspace_option_path(value)
+            if resolved is None or not _workspace_has_directory(files, resolved):
+                return _entrypoint_blocker(
+                    f"the declared {directory_option} is not a proven workspace directory"
+                )
+            base = resolved
+
+    # Importable modules under the effective sys.path root (the app-dir/chdir base). Computed
+    # ONCE and reused for BOTH the gunicorn config-import proof below and the target-module
+    # reachability proof further down — it is a pure function of (files, base).
+    workspace_modules = _workspace_python_modules(files, base)
+
+    paths = _paths(files)
+    for option in file_inputs:
+        value = effective.option_value(option)
+        if value is None:
+            continue
+        resolved = _workspace_option_path(value)
+        if resolved is None or resolved not in paths:
+            return _entrypoint_blocker(
+                f"the declared {option} is not an exact existing workspace file"
+            )
+        # Existence is NOT runnability for the gunicorn Python config: gunicorn EXECUTES its
+        # `--config`/`-c` file AS PYTHON at startup (the arbiter runs the module body to read the
+        # settings), so a shipped `gunicorn.conf.py` whose body does not parse OR whose module-
+        # scope import is unbacked by the install plan aborts the master before any worker binds
+        # and the deployment is unreachable. Prove it the SAME way the migrate script is proven
+        # (see `_gunicorn_config_blocker`): scan-complete → parse → import resolution.
+        #
+        # STRICTLY gunicorn `--config` only. Deliberately NOT parsed here:
+        #   * uvicorn `--ssl-keyfile`/`--ssl-certfile` — PEM/key material, not Python;
+        #     ast.parsing them would over-reject a valid TLS deploy (and the grammar already
+        #     rejects TLS material upstream, so this branch never carries them anyway).
+        #   * the else-branch (hypercorn) `--config` — an unknown format (hypercorn also accepts
+        #     TOML), so assuming Python would over-reject a valid config. Left existence-only.
+        if effective.server == "gunicorn" and option == "--config":
+            blocker = _gunicorn_config_blocker(resolved, files, packages, workspace_modules)
+            if blocker is not None:
+                return blocker
+
+    # AUTO-DISCOVERY (gunicorn only). With NO explicit `--config`/`-c`, gunicorn loads
+    # `<cwd>/gunicorn.conf.py` if it exists (gunicorn `config.get_default_config_file()` =
+    # `os.path.join(os.getcwd(), 'gunicorn.conf.py')`, loaded by `app.base.load_config()`'s
+    # else-branch) and EXECUTES it as Python — the SAME startup abort risk as the explicit file.
+    # The cwd is the `--chdir` dir (chdir runs first) else the repo root, i.e. the `base` computed
+    # above. gunicorn auto-loads ONLY THAT directory's `gunicorn.conf.py`, never a subdir, so a
+    # broken config in a subdir is not auto-loaded and must stay a candidate. This path is
+    # gunicorn-specific: uvicorn/hypercorn have no such cwd auto-discovery, so nothing is scanned
+    # for them.
+    if effective.server == "gunicorn" and effective.option_value("--config") is None:
+        auto_config = "gunicorn.conf.py" if base == "." else base.rstrip("/") + "/gunicorn.conf.py"
+        if auto_config in paths:
+            blocker = _gunicorn_config_blocker(auto_config, files, packages, workspace_modules)
+            if blocker is not None:
+                return blocker
+
+    module = effective.target_module
+    attribute = effective.target_attribute
+    if module is None or attribute is None:
+        return _entrypoint_blocker("the Python application target is absent")
+    prefix = "" if base == "." else base.rstrip("/") + "/"
+    module_path = module.replace(".", "/")
+    candidates = (prefix + module_path + ".py", prefix + module_path + "/__init__.py")
+    present = tuple(path for path in candidates if path in paths)
+    if len(present) != 1:
+        return _entrypoint_blocker(
+            "the dotted Python module target is missing or ambiguous in the workspace"
+        )
+    source = _file_text(files, present[0])
+    if source is None:
+        return _entrypoint_blocker("the Python target module is not readable text")
+    # Existence is not runnability: the single authoritative reachability proof requires the
+    # exact target to bind an installed ASGI/WSGI framework app (or a `--factory` callable),
+    # with every module- and target-scope import backed by the install plan or a proven
+    # workspace-local module, and no unconditional import-time abort before the binding.
+    local_roots, local_dotted, local_sources, ambiguous_modules, package_modules = workspace_modules
+    module_parts = module.split(".")
+    is_package = present[0].endswith("/__init__.py") or present[0] == "__init__.py"
+    target_package = tuple(module_parts) if is_package else tuple(module_parts[:-1])
+    factory = any(option.name == "--factory" for option in effective.options)
+    target_error = python_entrypoint_error(
+        source,
+        attribute,
+        server=effective.server,
+        factory=factory,
+        installed_packages=packages,
+        local_modules=local_roots,
+        local_module_paths=local_dotted,
+        local_module_sources=local_sources,
+        target_package=target_package,
+        target_module=module,
+        ambiguous_modules=ambiguous_modules,
+        package_modules=package_modules,
+    )
+    if target_error is not None:
+        return _entrypoint_blocker(target_error)
+    return None
+
+
+def _collapse_module_path(path: str) -> str:
+    """Canonicalize a workspace path by dropping empty and ``.`` segments (``./``, ``//``)."""
+    return "/".join(segment for segment in path.split("/") if segment not in ("", "."))
+
+
+def _workspace_python_modules(
+    files: Mapping[str, str | bytes], base: str
+) -> tuple[frozenset[str], frozenset[str], dict[str, str], frozenset[str], frozenset[str]]:
+    """Importable module names under the effective sys.path root (the app-dir/chdir base).
+
+    Returns the top-level importable roots; every importable dotted module path (each ``.py``
+    file plus its ancestor packages); a deterministic map from each module's dotted name to its
+    source text (never dependent on frozenset iteration order); the set of ``ambiguous`` dotted
+    names; and the set of ``packages`` dotted names backed by an ``__init__.py``.  Paths are
+    canonicalized (``./`` prefix and duplicate ``/`` collapsed) before grouping, so a genuinely
+    single file reached by two spellings is not falsely flagged ambiguous.  A dotted name is
+    ``ambiguous`` when it is produced by >=2 DISTINCT canonical paths (``<name>.py`` vs
+    ``<name>/__init__.py``), OR when it is BOTH a regular module file (``<name>.py``) AND a package
+    directory (it has an ``__init__.py`` or any child module) — CPython then binds one and shadows
+    the other, so ``import <name>`` / ``import <name>.child`` is not statically decidable.
+    """
+    prefix = "" if base == "." else base.rstrip("/") + "/"
+    roots: set[str] = set()
+    dotted: set[str] = set()
+    packages: set[str] = set()
+    module_files: set[str] = set()
+    package_dirs: set[str] = set()
+    canonicals: dict[str, set[str]] = {}
+    candidates: dict[str, list[tuple[bool, str]]] = {}
+    for path in _paths(files):
+        if prefix and not path.startswith(prefix):
+            continue
+        relative = _collapse_module_path(path[len(prefix) :])
+        if not relative.endswith(".py"):
+            continue
+        stem = relative[:-3].split("/")
+        is_init = bool(stem) and stem[-1] == "__init__"
+        parts = stem[:-1] if is_init else stem
+        if not parts or any(not segment.isidentifier() for segment in parts):
+            continue
+        name = ".".join(parts)
+        roots.add(parts[0])
+        for depth in range(1, len(parts) + 1):
+            dotted.add(".".join(parts[:depth]))
+        # Every proper ancestor prefix is a directory that physically contains this file.
+        for depth in range(1, len(parts)):
+            package_dirs.add(".".join(parts[:depth]))
+        if is_init:
+            packages.add(name)
+            package_dirs.add(name)
+        else:
+            module_files.add(name)
+        canonicals.setdefault(name, set()).add(relative)
+        candidates.setdefault(name, []).append((is_init, path))
+    same_name = {name for name, paths in canonicals.items() if len(paths) >= 2}
+    ambiguous = frozenset(same_name | (module_files & package_dirs))
+    sources: dict[str, str] = {}
+    for name, entries in candidates.items():
+        # Deterministic source selection (CPython prefers the package ``__init__``; ties break on
+        # the sorted path). Ambiguous names fail closed regardless, so this only fixes the source
+        # for genuinely-single modules — never a dependence on frozenset iteration order.
+        _is_init, chosen = min(entries, key=lambda entry: (not entry[0], entry[1]))
+        text = _file_text(files, chosen)
+        if text is not None:
+            sources[name] = text
+    return frozenset(roots), frozenset(dotted), sources, ambiguous, frozenset(packages)
+
+
+_SOURCE_PUBLIC_ASSIGN_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.+)$")
+_MAX_SOURCE_START_PREFIXES = 4
+
+
+def _source_npm_start_argv(argv: tuple[str, ...], *, port_env: str) -> tuple[str, ...] | None:
+    """Strip the tiny source-only shell prefix grammar before shared argv parsing.
+
+    npm scripts are executed by a shell, but typed start argv is not. Source detection may
+    therefore prove only a bounded sequence of literal public ``NAME=value`` assignments,
+    then an optional shell-builtin ``exec``, followed by the same exact ``node <file>``
+    shape the shared effective-start parser accepts. Quotes, expansion, substitutions,
+    chains, secret-shaped names/values, missing commands, and every other wrapper fail
+    closed. The returned command still goes through ``parse_effective_start_argv`` and
+    immutable file/PORT proof; this function is not a second runtime parser.
+    """
+    if not argv or len(argv) > _MAX_SOURCE_START_PREFIXES + 3:
+        return None
+    index = 0
+    assignments = 0
+    while index < len(argv):
+        match = _SOURCE_PUBLIC_ASSIGN_RE.fullmatch(argv[index])
+        if match is None:
+            break
+        assignments += 1
+        if assignments > _MAX_SOURCE_START_PREFIXES:
+            return None
+        name, value = match.groups()
+        upper = name.upper()
+        execution_control = (
+            upper == port_env.upper()
+            or upper
+            in {
+                "PATH",
+                "NODE_OPTIONS",
+                "NODE_PATH",
+                "HOME",
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH",
+                "IFS",
+                "SHELL",
+                "ENV",
+                "BASH_ENV",
+                "CDPATH",
+            }
+            or upper.startswith(("DYLD_", "NPM_CONFIG_"))
+        )
+        if execution_control or any(marker in upper for marker in _SECRET_NAME_MARKERS):
+            return None
+        if whole_env_ref(value) is not None or looks_like_credential_literal(value):
+            return None
+        try:
+            check_token_hygiene(value, field="package.json scripts.start assignment")
+        except ValueError:
+            return None
+        index += 1
+    if index < len(argv) and argv[index] == "exec":
+        index += 1
+    if len(argv) - index != 2 or argv[index] != "node":
+        return None
+    return argv[index:]
+
+
+def _resolved_node_start(
+    effective: EffectiveStartCommand,
+    files: Mapping[str, str | bytes],
+    *,
+    port_env: str,
+    allow_source_npm_prefix: bool = False,
+) -> tuple[str, str, frozenset[str]] | _DetectBlocker:
+    """Resolve direct node/npm-start to the one exact script file the image will execute."""
+    resolved = effective
+    if effective.npm_script is not None:
+        script = _script(_root_package_json(files), effective.npm_script)
+        if script is None:
+            return _entrypoint_blocker("the exact package.json start script is absent")
+        argv = tuple(script.strip().split())
+        if allow_source_npm_prefix:
+            normalized = _source_npm_start_argv(argv, port_env=port_env)
+            if normalized is None:
+                return _entrypoint_blocker(
+                    "package.json scripts.start is not a bounded public env/exec prefix "
+                    "followed by an exact direct node workspace file"
+                )
+            argv = normalized
+        try:
+            resolved = parse_effective_start_argv(
+                argv, declared_names=frozenset({port_env}), field="package.json scripts.start"
+            )
+        except ValueError:
+            return _entrypoint_blocker(
+                "package.json scripts.start is not a shell-inert direct node workspace file"
+            )
+        if resolved.runtime != "node" or resolved.node_script is None:
+            return _entrypoint_blocker(
+                "package.json scripts.start does not resolve directly to node <workspace-file>"
+            )
+    path = _workspace_option_path(resolved.node_script or "")
+    if path is None:
+        return _entrypoint_blocker("the direct Node entrypoint path is unsafe or dynamic")
+    if not path.endswith(_NODE_EXECUTABLE_EXTS):
+        return _entrypoint_blocker(
+            "the direct Node entrypoint is not a Node-executable module (.js/.cjs/.mjs); a "
+            ".ts/.tsx/.jsx or other extension needs a transpiler the node runtime image does "
+            "not provide, so `node <file>` exits with a SyntaxError before serving"
+        )
+    source = _file_text(files, path)
+    if source is None:
+        return _entrypoint_blocker("the direct Node entrypoint file does not exist")
+    raw = next((value for name, value in files.items() if _norm(name) == path), None)
+    if raw is None or not _scan_complete(raw):
+        return _entrypoint_blocker("the direct Node entrypoint cannot be scanned completely")
+    package = _root_package_json(files)
+    package_type = package.get("type") if isinstance(package, dict) else None
+    if package_type not in {None, "commonjs", "module"}:
+        return _entrypoint_blocker("the root package.json declares an unsupported Node module type")
+    sources = {
+        _norm(name): _scan_text(value) for name, value in files.items() if _scan_complete(value)
+    }
+    proof = prove_node_source(sources, entry_path=path, package_type=package_type)
+    if proof.error is not None or proof.executable_view is None:
+        return _entrypoint_blocker(proof.error or "the exact Node source plan is unproved")
+    return path, proof.executable_view, proof.external_packages
+
+
+def _node_port_blocker(source: str, port_env: str) -> _DetectBlocker | None:
+    """Prove an exact Node entry file listens publicly on its declared port variable."""
+    if node_has_public_port_bind(source, port_env):
+        return None
+    return _bind_blocker(
+        "the exact Node entrypoint does not call listen on a recognized network server "
+        "with the adapter-owned port and an omitted host or public IPv4 wildcard"
+    )
+
+
+_NPM_INSTALL_HOOKS = (
+    "prepublish",
+    "preinstall",
+    "install",
+    "postinstall",
+    "preprepare",
+    "prepare",
+    "postprepare",
+)
+
+
+def _node_package_names(pkg: object) -> frozenset[str]:
     names: set[str] = set()
-    req = _file_text(files, "requirements.txt")
-    if req is not None:
-        for line in req.splitlines():
-            token = re.split(r"[\s<>=!~;\[#]", line.strip(), maxsplit=1)[0].strip().lower()
-            if token:
-                names.add(token)
-    pyproject = _file_text(files, "pyproject.toml")
-    if pyproject is not None:
-        names.update(token.lower() for token in re.findall(r"[A-Za-z0-9_.-]+", pyproject))
+    if isinstance(pkg, dict):
+        for field in (
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ):
+            values = pkg.get(field)
+            if isinstance(values, dict):
+                names.update(str(name).lower() for name in values)
     return frozenset(names)
+
+
+def _node_auxiliary_script_proven(
+    script_name: str,
+    script: str,
+    files: Mapping[str, str | bytes],
+    package_names: frozenset[str],
+) -> bool:
+    """Whether one npm lifecycle/build script has a closed, immutable execution plan."""
+    argv = tuple(script.strip().split())
+    if argv and argv[0] == "node":
+        try:
+            effective = parse_effective_start_argv(
+                argv, declared_names=frozenset(), field=f"scripts.{script_name}"
+            )
+        except ValueError:
+            return False
+        return effective.node_script is not None and effective.node_script in _paths(files)
+    # A Vite build is a bounded package binary shape: npm exposes the declared local
+    # dependency's bin, and the only accepted subcommand has no wrapper/operator/options.
+    if script_name == "build" and argv == ("vite", "build"):
+        return "vite" in package_names
+    return False
+
+
+def _node_script_plan_blocker(
+    files: Mapping[str, str | bytes],
+    pkg: object,
+    *,
+    include_install: bool,
+    include_build: bool,
+    include_start_hooks: bool,
+) -> _DetectBlocker | None:
+    """Prove every auxiliary package script npm will execute for the emitted plan."""
+    active: list[tuple[str, str]] = (
+        [(name, "install_cmd") for name in _NPM_INSTALL_HOOKS] if include_install else []
+    )
+    if include_build:
+        if _script(pkg, "build") is None:
+            return _entrypoint_blocker(
+                "the effective npm run build has no package.json scripts.build target",
+                field="build_cmd",
+            )
+        active.extend((name, "build_cmd") for name in ("prebuild", "build", "postbuild"))
+    if include_start_hooks:
+        active.extend((name, "start_cmd") for name in ("prestart", "poststart"))
+    packages = _node_package_names(pkg)
+    npmrc = _file_text(files, ".npmrc")
+    if include_build and npmrc is not None and npmrc_omits_dev_dependencies(npmrc):
+        development = pkg.get("devDependencies") if isinstance(pkg, dict) else None
+        production = pkg.get("dependencies") if isinstance(pkg, dict) else None
+        if (
+            isinstance(development, dict)
+            and "vite" in development
+            and (not isinstance(production, dict) or "vite" not in production)
+        ):
+            return _install_blocker(
+                "the root npm configuration omits devDependencies, but the proven build "
+                "binary is declared only as a development dependency"
+            )
+    for name, field in active:
+        script = _script(pkg, name)
+        if script is None:
+            continue
+        if not _node_auxiliary_script_proven(name, script, files, packages):
+            return _entrypoint_blocker(
+                f"package.json scripts.{name} is executed by the effective npm plan but "
+                "its command, dependency, workspace file, working directory, wrapper, or "
+                "shell-chain semantics are not statically proven",
+                field=field,
+            )
+    return None
+
+
+def _node_dependency_blocker(
+    external_packages: frozenset[str],
+    pkg: object,
+    install_cmd: tuple[str, ...],
+    files: Mapping[str, str | bytes],
+) -> _DetectBlocker | None:
+    if not external_packages:
+        return None
+    declared = _node_package_names(pkg)
+    missing = sorted(external_packages - declared)
+    if missing or not install_cmd:
+        return _install_blocker(
+            "the exact Node module graph imports an external package that is absent from "
+            "the effective npm dependency/install plan"
+        )
+    npmrc = _file_text(files, ".npmrc")
+    if npmrc is not None and npmrc_omits_dev_dependencies(npmrc) and isinstance(pkg, dict):
+        production: set[str] = set()
+        for field in ("dependencies", "optionalDependencies"):
+            values = pkg.get(field)
+            if isinstance(values, dict):
+                production.update(str(name).lower() for name in values)
+        if external_packages - production:
+            return _install_blocker(
+                "the root npm configuration omits a development dependency imported by "
+                "the exact runtime module graph"
+            )
+    return None
 
 
 def _declared_manager_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
@@ -1539,47 +2564,6 @@ def _declared_manager_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     return None
 
 
-def _toolchain_blocker(
-    intent: ReleaseIntent, files: Mapping[str, str | bytes]
-) -> _DetectBlocker | None:
-    """A `toolchain_unsupported` fail-closed outcome when the declared start command
-    cannot run on the neutral base image: a head that is NOT a supported toolchain
-    (anything outside the allowlist — ruby/go/php/caddy/`./server`/bun/deno/uv/poetry
-    AND pnpm/yarn all fail here, never a Node fallback), a python start executable that
-    is a pip package absent from the declared dependencies, or an unprovisioned package
-    manager named in build_cmd/install_cmd/package_manager (R2 / G05). `None` when the
-    toolchain is supported."""
-    head = intent.start_cmd[0].rsplit("/", 1)[-1].lower()
-    if not _is_supported_toolchain_head(head):
-        return _DetectBlocker(
-            code="toolchain_unsupported",
-            message=(
-                f"the declared start command head {head!r} is not a supported toolchain "
-                "on the neutral base image; the detector will NOT guess a runtime from an "
-                "executable name (pnpm/yarn/bun/deno/poetry/uv are not provisioned). "
-                "Declare a supported start (node/npm/npx, or a python interpreter / "
-                "uvicorn / gunicorn / hypercorn), or vendor the runtime explicitly."
-            ),
-            field="start_cmd",
-            evidence=(f"toolchain evidence: unsupported start head {head!r} (not on allowlist)",),
-        )
-    if _runtime_from_argv(intent.start_cmd) is RuntimeStrategy.python and not head.startswith(
-        "python"
-    ):
-        if head not in _declared_python_deps(files):
-            return _DetectBlocker(
-                code="toolchain_unsupported",
-                message=(
-                    f"the declared python start executable {head!r} is absent from the "
-                    "declared dependencies (requirements.txt / pyproject.toml), so the "
-                    "base image cannot run it; declare it as a dependency."
-                ),
-                field="start_cmd",
-                evidence=(f"toolchain evidence: python start executable {head!r} not declared",),
-            )
-    return _declared_manager_blocker(intent)
-
-
 def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     """A `toolchain_unsupported` fail-closed outcome when a DECLARED start/build command
     does not parse through the runtime grammar (WO-C5 #2 F1).
@@ -1611,7 +2595,10 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     declared = frozenset(intent.required_env) | {var.name for var in intent.env} | {intent.port_env}
     for field, argv in (("start_cmd", intent.start_cmd), ("build_cmd", intent.build_cmd)):
         try:
-            check_declaration_argv(argv, declared_names=declared, field=field)
+            if field == "start_cmd" and argv:
+                parse_effective_start_argv(argv, declared_names=declared, field=field)
+            else:
+                check_declaration_argv(argv, declared_names=declared, field=field)
         except ValueError:
             return _DetectBlocker(
                 code="toolchain_unsupported",
@@ -1633,6 +2620,8 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     # is lowered verbatim into the emitted Dockerfile `RUN`, so a positional / config-role
     # / flag literal credential there must fail closed exactly like a migrate_cmd secret.
     try:
+        for token in intent.install_cmd:
+            check_token_hygiene(token, field="install_cmd")
         check_no_inline_secret_cli(intent.install_cmd, declared_names=declared, field="install_cmd")
         check_no_positional_credential(
             intent.install_cmd, declared_names=declared, field="install_cmd"
@@ -1657,6 +2646,8 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
     # declared ${NAME} reference, never an inline literal.
     for resource in intent.resources:
         try:
+            for token in resource.migrate_cmd:
+                check_token_hygiene(token, field="migrate_cmd")
             check_no_inline_secret_cli(
                 resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
             )
@@ -1771,8 +2762,52 @@ def _intent_install(
     closed instead of deriving a broken install. A stack with no manifest (or a
     no-dependency node app) installs nothing."""
     if intent.install_cmd:
+        head = intent.install_cmd[0]
+        if runtime in {RuntimeStrategy.node, RuntimeStrategy.static}:
+            package_blocker = _root_package_blocker(files)
+            if package_blocker is not None:
+                return package_blocker
+            if head != "npm" or intent.install_cmd not in {("npm", "ci"), ("npm", "install")}:
+                return _install_blocker(
+                    "the effective Node install must be exactly npm ci or npm install; "
+                    "wrappers, paths, alternate managers, and behavior-changing flags are unproved"
+                )
+            conflict = _lockfile_conflict(files)
+            if conflict is not None:
+                return conflict
+            pkg = _root_package_json(files)
+            toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+            if toolchain is not None:
+                return toolchain
+            declared = _unsupported_node_pm_declaration(files, pkg)
+            if declared is not None:
+                return declared
+            lock = _npm_lock_blocker(
+                files,
+                pkg,
+                intent.install_cmd,
+                declared_manager=intent.package_manager,
+                declared_lockfile=intent.lockfile,
+            )
+            if lock is not None:
+                return lock
+            build_secret = _secret_build_blocker(files)
+            if build_secret is not None:
+                return build_secret
+        elif runtime is RuntimeStrategy.python and head not in {
+            "pip",
+            "pip3",
+            "python",
+            "python3",
+        }:
+            return _install_blocker(
+                "the effective Python install must use exact pip/pip3 or python -m pip"
+            )
         return (intent.install_cmd, intent.package_manager, intent.lockfile)
     if runtime is RuntimeStrategy.node or runtime is RuntimeStrategy.static:
+        package_blocker = _root_package_blocker(files)
+        if package_blocker is not None:
+            return package_blocker
         pkg = _root_package_json(files)
         if pkg is None:
             return ((), intent.package_manager, intent.lockfile)
@@ -1791,6 +2826,9 @@ def _intent_install(
         if build_secret is not None:
             return build_secret
         lockfile, manager, install = _node_install(files)
+        lock = _npm_lock_blocker(files, pkg, install)
+        if lock is not None:
+            return lock
         return (install, manager, lockfile)
     if runtime is RuntimeStrategy.python:
         toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_PY_PM)
@@ -1852,6 +2890,99 @@ def _intent_env_result(intent: ReleaseIntent) -> tuple[EnvVarDecl, ...] | _Detec
     return tuple(by_name[name] for name in order)
 
 
+def _candidate_env_result(
+    intent: ReleaseIntent, files: Mapping[str, str | bytes], *, has_build: bool
+) -> tuple[EnvVarDecl, ...] | _DetectBlocker:
+    """The typed-intent rung's candidate env: the intent's declared env
+    (`_intent_env_result`) PLUS the SOURCE build-env safety derivations the node/static
+    SOURCE rungs perform — made INTENT-INDEPENDENT so the presence of a typed intent can
+    never defeat them (closing the discovery-source gap for EVERY candidate kind).
+
+    When the candidate BUILDS (`has_build`): a SOURCE-discovered SECRET build var
+    (`_secret_build_env_blocker` — a secret-shaped `import.meta.env.VITE_*`) fails the
+    release CLOSED with `secret_build_env_unsupported`, EXACTLY as the node/static source
+    rungs do (a secret-free bundle cannot supply a build-time secret, and a plain build arg
+    would leak it into image history); and SOURCE-discovered PUBLIC build vars
+    (`_build_env_decls`) are MERGED into the candidate env so they lower to a build arg +
+    Dockerfile `ARG` and reach the built asset instead of being silently dropped. An intent
+    declaration for the same source-required name is accepted only when it already says
+    exactly `build` / required / public with no runtime binding or consumer scope. Runtime,
+    optional, secret, resource-bound, scoped, or duplicate metadata is a typed
+    `build_env_contract_conflict`: silently letting it win would suppress or weaken the
+    source-required build input. A NON-building candidate has no build step to inject build
+    vars into, so it skips both — mirroring the source path's `if service.build_cmd` gate
+    (`_detected_result`)."""
+    if intent.port_env in intent.required_env or any(
+        decl.name == intent.port_env for decl in intent.env
+    ):
+        return _DetectBlocker(
+            code="port_env_contract_conflict",
+            message=(
+                f"the adapter-owned port variable {intent.port_env!r} is also declared as "
+                "application env metadata. Every target adapter must own that name so its "
+                "published port and process bind stay identical; a second owner could "
+                "make the emitted bundle unreachable. Remove "
+                "the duplicate env declaration; `port_env` alone declares the port contract."
+            ),
+            field="env",
+            evidence=(
+                f"port-env conflict: adapter-owned {intent.port_env!r} is also application env",
+            ),
+        )
+    if has_build:
+        contract = _build_env_contract_blocker(files)
+        if contract is not None:
+            return contract
+        source_secret = _secret_build_env_blocker(files)
+        if source_secret is not None:
+            return source_secret
+    source_build = _build_env_decls(files) if has_build else ()
+    if any(decl.name == intent.port_env for decl in source_build):
+        return _DetectBlocker(
+            code="port_env_contract_conflict",
+            message=(
+                "application source reads the adapter-owned port variable as a build "
+                "input; one name cannot be both a compile-time application value and the "
+                "runtime port contract"
+            ),
+            field="build_env",
+            evidence=("port-env conflict: source build input collides with port_env",),
+        )
+    if source_build:
+        shorthand = frozenset(intent.required_env)
+        for source_decl in source_build:
+            declared = tuple(decl for decl in intent.env if decl.name == source_decl.name)
+            compatible = (
+                len(declared) == 1
+                and declared[0].scope is EnvScope.build
+                and declared[0].secret is SecretClass.public
+                and declared[0].binding is None
+                and declared[0].consumers is None
+            )
+            if (declared and not compatible) or (not declared and source_decl.name in shorthand):
+                return _DetectBlocker(
+                    code="build_env_contract_conflict",
+                    message=(
+                        f"application source reads {source_decl.name!r} as a required public "
+                        "build-time variable, but the typed release intent declares "
+                        "incompatible metadata for that name. Build scope, public class, "
+                        "and the absence of runtime binding/consumer routing are required. "
+                        "The owner's required/optional choice is preserved when those "
+                        "semantics are compatible."
+                    ),
+                    field="env",
+                    evidence=(
+                        f"build-env conflict: source requires {source_decl.name!r} as a "
+                        "required public build input",
+                    ),
+                )
+    env = _intent_env_result(intent)
+    if isinstance(env, _DetectBlocker) or not has_build:
+        return env
+    existing = {decl.name for decl in env}
+    return env + tuple(decl for decl in source_build if decl.name not in existing)
+
+
 def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
     """A typed intent describing a STATIC site — a prebuilt tree served as-is, or a
     build-then-serve bundle whose built assets land in `output_dir` (R2 / G03 / G06). A
@@ -1879,7 +3010,50 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
     if isinstance(install_outcome, _DetectBlocker):
         return _fail_closed(install_outcome)
     install_cmd, package_manager, lockfile = install_outcome
-    env = _intent_env_result(intent)
+    if intent.build_cmd and intent.build_cmd != ("npm", "run", "build"):
+        return _fail_closed(
+            _entrypoint_blocker(
+                "a typed static Node build must be exactly npm run build so its package "
+                "script and lifecycle hooks can be proven from the immutable workspace"
+            )
+        )
+    script_plan = _node_script_plan_blocker(
+        files,
+        _root_package_json(files),
+        include_install=bool(install_cmd),
+        include_build=bool(intent.build_cmd),
+        include_start_hooks=False,
+    )
+    if script_plan is not None:
+        return _fail_closed(script_plan)
+    if intent.build_cmd:
+        build_script = _script(_root_package_json(files), "build") or ""
+        proven_output = _static_output_dir(files, build_script)
+        if proven_output is None:
+            return _fail_closed(
+                _DetectBlocker(
+                    code="output_dir_unresolved",
+                    message=(
+                        "the typed static build's exact Vite output directory cannot be "
+                        "proven from the exported root configuration"
+                    ),
+                    field="output_dir",
+                    evidence=("static output evidence: exact Vite output is unproved",),
+                )
+            )
+        if intent.output_dir is not None and intent.output_dir != proven_output:
+            return _fail_closed(
+                _DetectBlocker(
+                    code="output_dir_unresolved",
+                    message=("the declared output_dir contradicts the exact Vite build output"),
+                    field="output_dir",
+                    evidence=("static output evidence: declaration and build disagree",),
+                )
+            )
+        output_dir = proven_output
+    else:
+        output_dir = intent.output_dir if intent.output_dir is not None else "."
+    env = _candidate_env_result(intent, files, has_build=bool(intent.build_cmd))
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
     service = ReleaseService(
@@ -1890,7 +3064,7 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
         lockfile=lockfile,
         install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
-        output_dir=intent.output_dir if intent.output_dir is not None else ".",
+        output_dir=output_dir,
         port_env=intent.port_env,
         health_path=intent.health_path,
     )
@@ -1907,80 +3081,689 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
     )
 
 
+def _intent_python_start(
+    intent: ReleaseIntent,
+    files: Mapping[str, str | bytes],
+    effective: EffectiveStartCommand,
+    install_cmd: tuple[str, ...],
+    package_manager: str | None,
+) -> tuple[str, ...] | _DetectBlocker:
+    """Lower a proven Python intent to a bound start command, or the first blocker.
+
+    The effective install plan is authoritative: the server executable must be in it, and the
+    exact ``module:attribute`` (or ``--factory`` callable) must be a reachable app under the
+    single authoritative reachability proof before the public bind is normalized.
+    """
+    if package_manager is not None and package_manager.lower() != "pip":
+        return _install_blocker("the Python runtime declares a non-pip package manager")
+    packages = _python_install_packages(install_cmd, files)
+    if isinstance(packages, _DetectBlocker):
+        return packages
+    assert effective.server is not None
+    if _normalized_package_name(effective.server) not in packages:
+        return _python_server_dependency_blocker(effective.server)
+    entrypoint = _python_entrypoint_blocker(effective, files, packages)
+    if entrypoint is not None:
+        return entrypoint
+    return _normalized_python_start(effective, intent.port_env)
+
+
+def _migrate_blocker(detail: str) -> _DetectBlocker:
+    return _DetectBlocker(
+        code="migrate_target_unresolved",
+        message=detail,
+        field="migrate_cmd",
+        evidence=(
+            "migrate evidence: the migration command target is not proven by the "
+            "same immutable tree/install",
+        ),
+    )
+
+
+def _migrate_npm_script(argv: tuple[str, ...]) -> str | None:
+    """The script name of an exact ``npm run <script>`` / ``npm run-script <script>`` migrate
+    command, else ``None`` (npx / yarn / pnpm / any other npm shape is not a proven target)."""
+    if argv[0] == "npm" and len(argv) == 3 and argv[1] in {"run", "run-script"}:
+        return argv[2]
+    return None
+
+
+def _migrate_node_script(argv: tuple[str, ...], files: Mapping[str, str | bytes]) -> str | None:
+    """The workspace file a ``node <file>`` migrate names IF present in the tree, else
+    ``None`` (mirrors ``_node_auxiliary_script_proven``'s existence proof — the shared
+    effective-start parser resolves the exact script, never a second ad-hoc scan)."""
+    try:
+        effective = parse_effective_start_argv(
+            argv, declared_names=frozenset(), field="migrate_cmd"
+        )
+    except ValueError:
+        return None
+    script = effective.node_script
+    if script is not None and script in _paths(files):
+        return script
+    return None
+
+
+# A ``node <file>`` migration file must be a Node-EXECUTABLE module: ``node schema.sql`` (or
+# ``node x.ts``) is a runtime SyntaxError, so a shipped non-JS file is NOT a runnable target.
+_NODE_EXECUTABLE_EXTS = (".js", ".cjs", ".mjs")
+# A ``python <script>`` migration file must be a Python module for the same reason
+# (``python schema.sql`` is a SyntaxError).
+_PY_SCRIPT_EXTS = (".py", ".pyw")
+# Bounded recursion when proving an ``npm run <script>`` BODY that itself invokes a script.
+_MAX_MIGRATE_BODY_DEPTH = 4
+# Shell control operators that make an ``npm`` script BODY un-analyzable as ONE command; a
+# body carrying any of these cannot be proven and fails closed (the safe direction).
+_UNSAFE_MIGRATE_BODY_CHARS = frozenset("&|;<>()`\n\r")
+
+# Curated Python migration CLIs: console-script name -> the distribution(s) that PROVIDE the
+# MIGRATION CAPABILITY invoked through that console script (PEP 503 normalized). A bare
+# (flagless) python migration tool head is accepted ONLY when it is one of these AND a
+# providing distribution is in the exact pip install plan. This is an AUDITABLE
+# (console-script -> capability distribution) allowlist, NEVER a "distribution name ==
+# runnable tool" inference — that is UNSOUND: a distribution's NAME need not match any console
+# script it ships (``requests`` is installed yet ships no ``requests`` executable), and,
+# crucially, the dist that ships the console SCRIPT is not always the dist that provides the
+# MIGRATION subcommand. ``flask db upgrade`` is the canonical case: the ``flask`` script comes
+# from ``Flask``, but the ``db`` migration command group is registered by the SEPARATE
+# ``Flask-Migrate`` distribution — so proving only ``flask`` is present is a FALSE candidate
+# (``flask db`` would fail "No such command 'db'"). Each entry therefore names the dist that
+# provides the migration capability. The static detector cannot introspect the target image's
+# entry points, so a curated allowlist is the soundest static proof; an exotic/unknown bare
+# tool over-rejects to ``needs_review`` (the safe direction), never a false candidate.
+_KNOWN_PY_MIGRATION_CLIS: dict[str, frozenset[str]] = {
+    "alembic": frozenset({"alembic"}),  # `alembic upgrade` — Alembic IS the capability
+    "flask": frozenset({"flask-migrate"}),  # `flask db upgrade` — the `db` group is Flask-Migrate
+    "django-admin": frozenset({"django"}),  # `django-admin migrate` — migrate is Django core
+    "aerich": frozenset({"aerich"}),  # `aerich upgrade` — Aerich (Tortoise ORM) IS the capability
+    "yoyo": frozenset({"yoyo-migrations"}),  # `yoyo apply` — provided by the yoyo-migrations dist
+}
+
+# Curated ``python -m <module>`` migration MODULES: the module name -> the distribution(s) that
+# PROVIDE it, restricted to modules CONFIRMED to be ``-m``-runnable (they ship a ``__main__``)
+# AND to run migrations. ``python -m <module>`` requires the module to have a ``__main__``
+# submodule; merely proving the module's dist is installed does NOT prove it is ``-m``-runnable
+# (``python -m requests`` is a runtime error even though ``requests`` is installed — it has no
+# ``__main__``). Each module below was verified to ship ``<module>/__main__.py`` that invokes
+# its migration CLI (alembic 1.18: ``alembic.config.main``; yoyo-migrations 9: ``yoyo.scripts.
+# main``; aerich 0.9: ``aerich.cli.main``; Django 6: ``django-admin`` via ``execute_from_
+# command_line``). A ``python -m`` target that is NOT in this set fails closed (safe
+# over-rejection), never a guessed candidate.
+_KNOWN_PY_MIGRATION_MODULES: dict[str, frozenset[str]] = {
+    "alembic": frozenset({"alembic"}),
+    "yoyo": frozenset({"yoyo-migrations"}),
+    "aerich": frozenset({"aerich"}),
+    "django": frozenset({"django"}),
+}
+
+# Curated Node migration CLIs: the CLI head -> the npm PACKAGE(S) that ship the
+# ``node_modules/.bin/<cli>`` executable (so its presence in the project dependencies proves
+# the bin exists — npm prepends ``node_modules/.bin`` to a script's PATH). A bare Node
+# migration tool head (a direct ``migrate_cmd`` under a node runtime, or one recursed into
+# from an ``npm run`` script BODY) is accepted ONLY when it is one of these AND its providing
+# package is in the package.json ``dependencies``. As with the Python table this is an
+# AUDITABLE (cli -> providing-package) map, not a name==bin inference: the ``sequelize`` CLI is
+# shipped by the SEPARATE ``sequelize-cli`` package, not by ``sequelize`` (the ORM). An
+# unlisted tool fails closed (safe over-rejection), never a false candidate.
+_KNOWN_NODE_MIGRATION_CLIS: dict[str, frozenset[str]] = {
+    "prisma": frozenset({"prisma"}),  # `prisma migrate deploy` — prisma package ships the bin
+    "knex": frozenset({"knex"}),  # `knex migrate:latest` — knex package ships the bin
+    "sequelize": frozenset({"sequelize-cli"}),  # `sequelize db:migrate` — bin is in sequelize-cli
+    "drizzle-kit": frozenset({"drizzle-kit"}),  # `drizzle-kit migrate` — drizzle-kit ships the bin
+    "typeorm": frozenset({"typeorm"}),  # `typeorm migration:run` — typeorm ships the bin
+    "node-pg-migrate": frozenset({"node-pg-migrate"}),  # `node-pg-migrate up` — ships its own bin
+}
+
+
+def _node_dependency_names(pkg: object) -> frozenset[str]:
+    """The PEP503-style-normalized names in a parsed package.json ``dependencies`` map — the
+    packages PROVABLY installed in the emitted image (production dependencies are always
+    installed; devDependencies are DELIBERATELY excluded, since a production install may prune
+    them, so a migration CLI that lived only in devDependencies would be a false candidate).
+    ``None``/non-dict ``dependencies`` yields the empty set."""
+    if not isinstance(pkg, dict):
+        return frozenset()
+    dependencies = pkg.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return frozenset()
+    return frozenset(
+        _normalized_package_name(name) for name in dependencies if isinstance(name, str)
+    )
+
+
+def _node_production_require_names(pkg: object) -> frozenset[str]:
+    """The lowercased ``dependencies`` names for reconciling a ``node <script>`` migration's
+    ``require()`` roots — the packages the PRODUCTION image ALWAYS installs.
+
+    ``devDependencies`` are excluded (a production install prunes them) and so are
+    ``optionalDependencies`` (npm may skip them on a platform mismatch), so a one-shot migration
+    that hard-``require()``s one and crashes if it is absent fails closed. Normalization is
+    LOWERCASE-ONLY to match :func:`node_external_packages` (the ``require()``-root extractor):
+    npm treats ``socket.io`` and ``socket-io`` as DISTINCT packages, so the PEP503 dash-collapse
+    that :func:`_node_dependency_names` applies to the hand-curated *migration-CLI allowlist*
+    (whose names carry no ``.``/``_``) must NOT be used for arbitrary require roots — it would
+    over-reject the ordinary ``require('socket.io')`` whose ``socket.io`` IS declared."""
+    if not isinstance(pkg, dict):
+        return frozenset()
+    dependencies = pkg.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return frozenset()
+    return frozenset(name.lower() for name in dependencies if isinstance(name, str))
+
+
+def _tokenize_migrate_body(body: str) -> tuple[str, ...] | None:
+    """The argv of an ``npm`` script BODY IF it is a single, shell-inert command, else
+    ``None``. A body carrying any shell control operator (chaining / redirection /
+    substitution) or one that will not lex is un-analyzable and fails closed."""
+    if any(ch in _UNSAFE_MIGRATE_BODY_CHARS for ch in body):
+        return None
+    try:
+        tokens = shlex.split(body)
+    except ValueError:
+        return None
+    return tuple(tokens) if tokens else None
+
+
+def _resolve_python_packages(
+    cache: list[frozenset[str] | _DetectBlocker | None],
+    install_cmd: tuple[str, ...],
+    files: Mapping[str, str | bytes],
+) -> frozenset[str] | _DetectBlocker:
+    """Memoized proof of the exact pip install set (shared across resources + recursion)."""
+    if cache[0] is None:
+        cache[0] = _python_install_packages(install_cmd, files)
+    return cache[0]
+
+
+def _python_migrate_blocker(
+    argv: tuple[str, ...],
+    files: Mapping[str, str | bytes],
+    install_cmd: tuple[str, ...],
+    cache: list[frozenset[str] | _DetectBlocker | None],
+) -> _DetectBlocker | None:
+    """Prove a ``python …`` migrate TARGET. ``python -m <module>`` -> the module must be a
+    curated, ``-m``-runnable migration module whose providing package is in the exact pip
+    install plan; ``python <script>`` / ``python manage.py <cmd>`` -> the script file must SHIP,
+    be a Python module (``.py``), AND parse as valid Python (``ast.parse``)."""
+    if len(argv) < 2:
+        return _migrate_blocker(
+            "a resource migrate_cmd is a bare python interpreter with no migration target"
+        )
+    target = argv[1]
+    if target == "-m":
+        if len(argv) < 3:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs `python -m` with no module to execute"
+            )
+        # ``python -m <module>`` runs only when <module> has a ``__main__`` submodule; proving
+        # the module's dist is installed does NOT prove it is ``-m``-runnable (``python -m
+        # requests`` errors though requests is installed). Accept ONLY a curated module known
+        # to be ``-m``-runnable AND a migration tool; fail closed otherwise (safe over-reject).
+        providers = _KNOWN_PY_MIGRATION_MODULES.get(argv[2])
+        if providers is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs `python -m <module>` on a module that is not a "
+                "known `-m`-runnable migration module; a module's dist being installed does "
+                "not prove it exposes a `__main__`, so the target is not provably runnable"
+            )
+        packages = _resolve_python_packages(cache, install_cmd, files)
+        if isinstance(packages, _DetectBlocker):
+            return _migrate_blocker(
+                "a resource migrate_cmd runs `python -m <module>` but the pip install plan is "
+                "not proven, so the module's providing package is not provably installed"
+            )
+        if not (providers & packages):
+            return _migrate_blocker(
+                "a resource migrate_cmd runs `python -m <module>` whose providing package is "
+                "absent from the exact pip install plan"
+            )
+        return None
+    if target.startswith("-"):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs python with an interpreter option before the "
+            "migration target, so the target is not statically proven"
+        )
+    normalized_target = _norm(target)
+    if normalized_target not in _paths(files):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a `python <script>` migration file that is absent "
+            "from the immutable workspace tree, so the one-shot migration cannot execute"
+        )
+    if not target.endswith(_PY_SCRIPT_EXTS):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs `python <file>` on a file that is not a Python module "
+            "(.py); a non-Python file is a runtime error, not a runnable migration target"
+        )
+    # A ``.py`` EXTENSION is not proof of valid Python: a shipped file whose body is shell/SQL
+    # (`#!/bin/sh\napt-get …`) is a runtime SyntaxError, not a runnable migration. Parse it —
+    # a file that cannot be scanned completely (binary/oversized) or does not ``ast.parse``
+    # fails closed. Cheap and sound (`python_proof.py` proves entrypoints the same way).
+    raw = next((value for path, value in files.items() if _norm(path) == normalized_target), None)
+    if raw is None or not _scan_complete(raw):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a `python <script>` migration file that cannot be "
+            "scanned completely (binary or oversized), so its validity is unproven"
+        )
+    try:
+        ast.parse(_scan_text(raw))
+    except (SyntaxError, ValueError):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a `python <file>` migration file that is not valid "
+            "Python (it does not parse); a non-Python body is a runtime error, not a runnable "
+            "migration target"
+        )
+    # SYMMETRY WITH THE ENTRYPOINT PROOF (the class-A defect this closes). Existence + a valid
+    # ``ast.parse`` is NOT runnability: ``python <script>`` executes the script's module body, so a
+    # top-level ``import <pkg>`` of a distribution absent from the exact pip install plan (the
+    # classic forgotten ``import sqlalchemy``) is a ``ModuleNotFoundError`` at boot — the one-shot
+    # exits 1 and, because the emitted compose gates ``web`` on
+    # ``migrate: service_completed_successfully`` (migrate ``restart: no``), the crash makes the
+    # WHOLE deployment unreachable. The entrypoint proof already resolves its module's imports this
+    # way; do the same for the migrate script by REUSING the identical primitive
+    # (``python_script_import_error`` -> ``_module_imports_are_proven``) over the SAME install plan
+    # ∪ shipped workspace ``.py`` ∪ stdlib. ``python <dir>/<script>`` runs from the SCRIPT's own
+    # directory (CPython puts it on ``sys.path[0]``, not the repo root), so workspace-local modules
+    # resolve against that base.
+    packages = _resolve_python_packages(cache, install_cmd, files)
+    if isinstance(packages, _DetectBlocker):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a `python <script>` migration but the pip install plan is "
+            "not proven, so the script's own imports cannot be resolved against it"
+        )
+    base = normalized_target.rsplit("/", 1)[0] if "/" in normalized_target else "."
+    local_roots, local_dotted, local_sources, ambiguous_modules, package_modules = (
+        _workspace_python_modules(files, base)
+    )
+    if (
+        python_script_import_error(
+            _scan_text(raw),
+            installed_packages=packages,
+            local_modules=local_roots,
+            local_module_paths=local_dotted,
+            local_module_sources=local_sources,
+            ambiguous_modules=ambiguous_modules,
+            package_modules=package_modules,
+        )
+        is not None
+    ):
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a `python <script>` migration whose top-level import is "
+            "not backed by the install plan or a shipped workspace module, so the one-shot "
+            "migration crashes with ModuleNotFoundError before ingress"
+        )
+    return None
+
+
+def _migrate_argv_blocker(
+    argv: tuple[str, ...],
+    files: Mapping[str, str | bytes],
+    runtime: RuntimeStrategy,
+    install_cmd: tuple[str, ...],
+    cache: list[frozenset[str] | _DetectBlocker | None],
+    *,
+    depth: int,
+) -> _DetectBlocker | None:
+    """Prove ONE migrate argv's TARGET is present in the SAME immutable tree/install, or the
+    first blocker. Dispatch by the migrate HEAD shape, reusing the SAME start mirrors (never a
+    second ad-hoc parse) — and, for ``npm run <script>``, recursing the same proof into the
+    script BODY."""
+    head = argv[0]
+    if head == "node":
+        script = _migrate_node_script(argv, files)
+        if script is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs a Node migration file that is absent from the "
+                "immutable workspace tree, so the one-shot migration cannot execute"
+            )
+        if not script.endswith(_NODE_EXECUTABLE_EXTS):
+            return _migrate_blocker(
+                "a resource migrate_cmd runs `node <file>` on a file that is not a "
+                "Node-executable module (.js/.cjs/.mjs); a non-JS file is a runtime "
+                "SyntaxError, not a runnable migration target"
+            )
+        # BATCH-4 CARRY (2c-node): the extension check proves the EXTENSION only, and the
+        # require-resolution added below does NOT close it. A shipped ``.js`` whose BODY is
+        # shell/SQL (`echo hi\nSELECT 1;`) still parses to a candidate — its CONTENT validity is
+        # NOT proven, because the bounded ``js_executable_view`` the prover runs accepts such a
+        # body (it has no ``require()`` to reconcile). The sound Node-JS content proof is Batch-4's
+        # strengthened lexical view (SYNTAX-01/02); it is deliberately NOT duplicated here. Do not
+        # read this as "node migrate-file content is validated" — it is not, and that known edge
+        # stays open until Batch 4.
+        #
+        # SYMMETRY WITH THE ENTRYPOINT PROOF (the class-A defect this closes) — ORTHOGONAL to the
+        # content carry above. A shipped, correctly-extensioned ``.js`` is not runnable if it
+        # ``require()``s a package that will NOT be installed: ``node migrate.js`` executes the
+        # module body, so ``const knex = require('knex')`` with ``knex`` absent from the production
+        # dependencies is a ``Cannot find module 'knex'`` at boot — the one-shot exits 1 and,
+        # because the emitted compose gates ``web`` on ``migrate:
+        # service_completed_successfully``, the deployment is unreachable. Resolve the script's
+        # requires with the SAME node prover the entrypoint uses (``prove_node_source``: node
+        # builtins + shipped-local modules resolve, EXTERNAL require roots are returned) and
+        # reconcile the externals against the PRODUCTION ``dependencies`` only.
+        package = _root_package_json(files)
+        package_type = package.get("type") if isinstance(package, dict) else None
+        if package_type not in {None, "commonjs", "module"}:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs a `node <script>` migration but the root package.json "
+                "declares an unsupported Node module type, so the script is not provably runnable"
+            )
+        node_sources = {
+            _norm(name): _scan_text(value) for name, value in files.items() if _scan_complete(value)
+        }
+        proof = prove_node_source(node_sources, entry_path=script, package_type=package_type)
+        if proof.error is not None or proof.executable_view is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs a `node <script>` migration whose require() graph is "
+                "not statically provable (a dynamic or missing require, or an ESM/CommonJS "
+                "mismatch), so the one-shot migration is not provably runnable"
+            )
+        if proof.external_packages - _node_production_require_names(package):
+            return _migrate_blocker(
+                "a resource migrate_cmd runs a `node <script>` migration whose require() resolves "
+                "to no installed dependency or shipped module (an external package absent from the "
+                "package.json production dependencies), so the one-shot migration crashes with "
+                "`Cannot find module` before ingress"
+            )
+        return None
+    if head in {"npm", "npx", "yarn", "pnpm"}:
+        script = _migrate_npm_script(argv)
+        body = _script(_root_package_json(files), script) if script is not None else None
+        if body is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd invokes a package-manager script/binary whose target "
+                "is not a proven `npm run <script>` defined in package.json scripts"
+            )
+        if depth >= _MAX_MIGRATE_BODY_DEPTH:
+            return _migrate_blocker(
+                "a resource migrate_cmd chains npm scripts beyond the provable depth, so its "
+                "effective migration target cannot be resolved"
+            )
+        body_argv = _tokenize_migrate_body(body)
+        if body_argv is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd runs an `npm run <script>` whose script BODY is not a "
+                "single shell-inert command, so its effective migration target is not proven"
+            )
+        return _migrate_argv_blocker(body_argv, files, runtime, install_cmd, cache, depth=depth + 1)
+    if head in {"python", "python3"}:
+        return _python_migrate_blocker(argv, files, install_cmd, cache)
+    # A bare tool head (alembic, wrangler, prisma, requests, …). A shell launcher (sh/bash) or
+    # a path invokes an unproven target and fails closed. Otherwise the provable heads are a
+    # KNOWN Node migration CLI whose package is in the node dependencies (node runtime), or a
+    # KNOWN Python migration CLI whose providing distribution is in the exact pip plan (python
+    # runtime).
+    if head in {"sh", "bash"} or "/" in head:
+        return _migrate_blocker(
+            "a resource migrate_cmd runs a shell/opaque launcher whose migration target is not "
+            "statically proven by the immutable tree/install"
+        )
+    if runtime is not RuntimeStrategy.python:
+        # NODE runtime: `npm run` prepends `node_modules/.bin` to PATH, so a KNOWN Node
+        # migration CLI (`prisma`, `knex`, `sequelize`, …) is provably runnable when its
+        # providing npm PACKAGE is in the package.json dependencies. This covers both a direct
+        # bare `migrate_cmd` and a bare tool recursed into from an `npm run` script body. An
+        # unlisted tool / a package absent from dependencies fails closed (safe over-reject).
+        node_providers = _KNOWN_NODE_MIGRATION_CLIS.get(head)
+        if node_providers is None:
+            return _migrate_blocker(
+                "a resource migrate_cmd heads with a migration tool that the Node base image "
+                "and install plan do not provably provide"
+            )
+        if node_providers & _node_dependency_names(_root_package_json(files)):
+            return None
+        return _migrate_blocker(
+            "a resource migrate_cmd heads with a known Node migration CLI whose providing npm "
+            "package is absent from the package.json dependencies, so `node_modules/.bin` does "
+            "not provably supply it"
+        )
+    providers = _KNOWN_PY_MIGRATION_CLIS.get(head)
+    if providers is None:
+        return _migrate_blocker(
+            "a resource migrate_cmd heads with a bare tool that is not a known Python "
+            "migration CLI; a distribution's presence does not prove a same-named console "
+            "script, so the target is not provably runnable"
+        )
+    packages = _resolve_python_packages(cache, install_cmd, files)
+    if isinstance(packages, _DetectBlocker):
+        return _migrate_blocker(
+            "a resource migrate_cmd heads with a migration tool but the pip install plan is "
+            "not proven, so the tool is not provably installed"
+        )
+    if not (providers & packages):
+        return _migrate_blocker(
+            "a resource migrate_cmd heads with a known Python migration CLI whose providing "
+            "distribution is absent from the exact pip install plan"
+        )
+    return None
+
+
+def _migrate_target_blocker(
+    resources: tuple[ResourceDecl, ...],
+    files: Mapping[str, str | bytes],
+    runtime: RuntimeStrategy,
+    install_cmd: tuple[str, ...],
+) -> _DetectBlocker | None:
+    """Prove each resource ``migrate_cmd``'s TARGET exists in the SAME immutable tree/install.
+
+    ``_command_grammar_blocker`` proves a migrate command carries no inline secret, but NOT
+    that its executable / file / script / package is actually present — a mandatory one-shot
+    migration service that cannot exec its target exits before ingress, so the release is not
+    self-hostable. Each resource dispatches by the migrate HEAD shape (``_migrate_argv_blocker``):
+
+    * ``node <file>`` -> the file must SHIP and be a Node-executable module (.js/.cjs/.mjs);
+      ``node schema.sql`` is a SyntaxError, not a runnable target.
+    * ``npm run <script>`` -> package.json ``scripts`` must define ``<script>`` AND its BODY
+      must itself prove (the proof RECURSES into the body — its head must be node / npm / a
+      shipped file / a provably-installed tool), so a defined script whose body calls a
+      missing tool (``alembic upgrade head`` in a Node image) fails closed.
+    * ``python -m <module>`` -> the module's providing package must be in the exact pip plan.
+    * ``python <script>`` / ``python manage.py <cmd>`` -> the script file must SHIP (.py).
+    * a bare python tool (alembic, …) -> only a KNOWN Python migration CLI whose providing
+      distribution is in the exact pip plan (never distribution-name==runnable, which is
+      unsound); any other bare head / a Node runtime / an unresolved pip plan fails closed.
+
+    An EMPTY ``migrate_cmd`` is unaffected. Deterministic: the first unprovable resource (in
+    declared order) names the blocker. Value-free: the message names the RULE, never argv."""
+    packages_cache: list[frozenset[str] | _DetectBlocker | None] = [None]
+    for resource in resources:
+        argv = resource.migrate_cmd
+        if not argv:
+            continue
+        blocker = _migrate_argv_blocker(argv, files, runtime, install_cmd, packages_cache, depth=0)
+        if blocker is not None:
+            return blocker
+    return None
+
+
+def _intent_health_blocker(
+    intent: ReleaseIntent,
+    files: Mapping[str, str | bytes],
+    node_source: str | None,
+) -> _DetectBlocker | None:
+    """Prove a declared CONVENTIONAL health path is actually served by the exact source."""
+    if (
+        intent.health_path is not None
+        and intent.health_path in _CONVENTIONAL_HEALTH_PATHS
+        and not (
+            _js_serves_path(node_source, intent.health_path)
+            if node_source is not None
+            else _health_route_present(files, intent.health_path)
+        )
+    ):
+        return _DetectBlocker(
+            code="health_path_unresolved",
+            message=(
+                "the declared conventional health path is absent from the immutable "
+                "workspace source, so the emitted health check is not proven"
+            ),
+            field="health_path",
+            evidence=("health evidence: conventional route is absent",),
+        )
+    return None
+
+
 def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
-    # R2 (G03/G06): a static site (a prebuilt tree, or a build-then-serve bundle) is
-    # SERVED, not started, so it has no `start_cmd`. It is recognized when the intent
-    # declares a `static` runtime OR an `output_dir` (which only makes sense for a static
-    # bundle) — routed to the static shape rather than the no-start needs_review below.
     if not intent.start_cmd:
         if intent.runtime is RuntimeStrategy.static or intent.output_dir is not None:
             return _static_from_intent(intent, files)
-        # A release intent with NO start command AND no static shape cannot describe a
-        # runnable app: there is no process to launch. Rather than fabricate a runnable
-        # candidate (the emitter would default an empty start to `npm start`), fail
-        # closed to needs_review naming the missing start command.
         return DetectionResult(
             assessment=ReleaseAssessment.needs_review,
             evidence=("typed release intent declared without a start command",),
             reasons=(
-                "the declared release intent has no start command, so there is no "
-                "runnable process to release; declare at least a start command "
-                "before this app can be a release candidate.",
+                "the declared release intent has no start command and does not describe a "
+                "static output; no runnable process can be released",
             ),
             missing=_missing_fields(("start_cmd",)),
         )
-    # The declared start command must run on the neutral base image (a supported
-    # runner + any pip-package start executable declared as a dependency), and must not
-    # name an unprovisioned package manager (pnpm/yarn/bun/…) in start/build/install.
-    toolchain = _toolchain_blocker(intent, files)
-    if toolchain is not None:
-        return _fail_closed(toolchain)
-    # WO-C5 #2 F1: the declared start/build argv must parse through the SAME runtime
-    # command grammar the release_declare tool enforces, so a raw sidecar cannot bake a
-    # secret CLI value (or an unsupported/opaque command) into the emitted bundle.
+
+    declared = frozenset(intent.required_env) | {var.name for var in intent.env} | {intent.port_env}
+    try:
+        effective = parse_effective_start_argv(
+            intent.start_cmd, declared_names=declared, field="start_cmd"
+        )
+    except ValueError:
+        return _fail_closed(
+            _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    "the declared start command is outside the closed release matrix: use "
+                    "exact node <workspace-file>, npm start/npm run start resolving to that "
+                    "shape, or exact python/python3 -m uvicorn|gunicorn|hypercorn (or the "
+                    "direct server executable) with one dotted module:attribute target"
+                ),
+                field="start_cmd",
+                evidence=("command-grammar evidence: start_cmd has no effective runtime parse",),
+            )
+        )
+
+    parsed_runtime = (
+        RuntimeStrategy.python if effective.runtime == "python" else RuntimeStrategy.node
+    )
+    if intent.output_dir is not None:
+        return _fail_closed(
+            _DetectBlocker(
+                code="runtime_contract_unresolved",
+                message=(
+                    "output_dir describes a static build but the same intent declares a "
+                    "long-running start process; split or correct the release shape"
+                ),
+                field="output_dir",
+                evidence=("runtime evidence: static output_dir conflicts with process start",),
+            )
+        )
+    if intent.runtime is not None and intent.runtime is not parsed_runtime:
+        return _fail_closed(
+            _DetectBlocker(
+                code="runtime_contract_unresolved",
+                message=(
+                    "the explicit runtime does not match the effective start command; "
+                    "static/container/dev_server cannot be inferred from a Node/Python argv "
+                    "and Node/Python cannot be cross-lowered"
+                ),
+                field="runtime",
+                evidence=("runtime evidence: explicit runtime and effective start disagree",),
+            )
+        )
+    runtime = parsed_runtime
+    if runtime is RuntimeStrategy.python and intent.build_cmd:
+        return _fail_closed(
+            _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    "the closed Python image plan does not execute a separate build command; "
+                    "an npm or otherwise unproved build cannot be paired with a Python runtime"
+                ),
+                field="build_cmd",
+                evidence=("runtime evidence: Python/build pairing is outside the closed matrix",),
+            )
+        )
+
     grammar = _command_grammar_blocker(intent)
     if grammar is not None:
         return _fail_closed(grammar)
-    # R3 (G07): a declared resource whose persistent_path is a filesystem-ROOT file cannot
-    # be volume-backed (its mount dir is `/`, which would shadow the container root), so
-    # fail closed rather than emit a self-host bundle whose state silently does not persist.
+    manager = _declared_manager_blocker(intent)
+    if manager is not None:
+        return _fail_closed(manager)
     topology = _resource_topology_blocker(intent.resources)
     if topology is not None:
         return _fail_closed(topology)
-    # A declared CONVENTIONAL health probe (`/healthz`, `/health`, …) must correspond
-    # to a real route WHEN the workspace ships a concrete node/python service we can
-    # scan: claiming a standard probe the source never registers is a broken contract.
-    # A non-conventional owner-specific path is trusted as a declared datum, and an
-    # intent over an undetectable stack (no scannable service) is trusted as declared.
-    if (
-        intent.health_path is not None
-        and intent.health_path in _CONVENTIONAL_HEALTH_PATHS
-        and (_node_detect(files) is not None or _python_detect(files) is not None)
-        and not _health_route_present(files, intent.health_path)
-    ):
-        return _fail_closed(
-            _DetectBlocker(
-                code="health_path_unresolved",
-                message=(
-                    f"the declared health path {intent.health_path!r} is a conventional "
-                    "probe but does not correspond to any route in the detected service's "
-                    "source; the health check would never pass. Declare a health path the "
-                    "app actually serves."
-                ),
-                field="health_path",
-                evidence=(f"health evidence: no route for conventional {intent.health_path!r}",),
-            )
-        )
-    # R2 (G03): the runtime strategy is the declared one, else inferred from the start
-    # argv's interpreter token.
-    runtime = intent.runtime if intent.runtime is not None else _runtime_from_argv(intent.start_cmd)
-    # R2 (G04): a runtime dependency install no longer depends on a build step — an
-    # interpreted candidate (declared deps, no build) installs them, or fails closed.
+
     install_outcome = _intent_install(intent, files, runtime)
     if isinstance(install_outcome, _DetectBlocker):
         return _fail_closed(install_outcome)
     install_cmd, package_manager, lockfile = install_outcome
-    env = _intent_env_result(intent)
+    node_source: str | None = None
+    if runtime is RuntimeStrategy.python:
+        python_start = _intent_python_start(intent, files, effective, install_cmd, package_manager)
+        if isinstance(python_start, _DetectBlocker):
+            return _fail_closed(python_start)
+        start_cmd = python_start
+    else:
+        if package_manager is not None and package_manager.lower() != "npm":
+            return _fail_closed(
+                _install_blocker("the Node runtime declares a non-npm package manager")
+            )
+        if intent.build_cmd and intent.build_cmd != ("npm", "run", "build"):
+            return _fail_closed(
+                _entrypoint_blocker(
+                    "a typed Node build must be exactly npm run build so its package "
+                    "script and lifecycle hooks can be proven from the immutable workspace"
+                )
+            )
+        script_plan = _node_script_plan_blocker(
+            files,
+            _root_package_json(files),
+            include_install=bool(install_cmd),
+            include_build=bool(intent.build_cmd),
+            include_start_hooks=effective.npm_script is not None,
+        )
+        if script_plan is not None:
+            return _fail_closed(script_plan)
+        resolved = _resolved_node_start(effective, files, port_env=intent.port_env)
+        if isinstance(resolved, _DetectBlocker):
+            return _fail_closed(resolved)
+        _, node_source, external_packages = resolved
+        dependency = _node_dependency_blocker(
+            external_packages, _root_package_json(files), install_cmd, files
+        )
+        if dependency is not None:
+            return _fail_closed(dependency)
+        if _js_has_dynamic_env(node_source):
+            return _fail_closed(
+                _DetectBlocker(
+                    code="required_env_unresolved",
+                    message="the exact Node entrypoint reads a dynamic environment name",
+                    field="required_env",
+                    evidence=("node env evidence: dynamic read in exact entrypoint",),
+                )
+            )
+        undeclared = sorted(_js_env_reads(node_source) - declared)
+        if undeclared:
+            return _fail_closed(
+                _DetectBlocker(
+                    code="required_env_unresolved",
+                    message=(
+                        "the exact Node entrypoint reads undeclared environment names: "
+                        + ", ".join(undeclared)
+                    ),
+                    field="required_env",
+                    evidence=("node env evidence: undeclared read in exact entrypoint",),
+                )
+            )
+        port = _node_port_blocker(node_source, intent.port_env)
+        if port is not None:
+            return _fail_closed(port)
+        start_cmd = intent.start_cmd
+
+    migrate = _migrate_target_blocker(intent.resources, files, runtime, install_cmd)
+    if migrate is not None:
+        return _fail_closed(migrate)
+
+    health = _intent_health_blocker(intent, files, node_source)
+    if health is not None:
+        return _fail_closed(health)
+
+    env = _candidate_env_result(intent, files, has_build=bool(intent.build_cmd))
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
     service = ReleaseService(
@@ -1991,7 +3774,7 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         lockfile=lockfile,
         install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
-        start_cmd=intent.start_cmd,
+        start_cmd=start_cmd,
         port_env=intent.port_env,
         health_path=intent.health_path,
     )
@@ -2002,8 +3785,8 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         env=env,
         evidence=(_intent_evidence(intent),),
         reasons=(
-            "release shape declared by a typed release intent "
-            "(build/start argv, port, health path and env names supplied).",
+            "release shape declared by a typed intent and proven against its exact "
+            "install plan, runtime start, target files, environment, and port contract",
         ),
     )
 

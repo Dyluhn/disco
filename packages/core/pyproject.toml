@@ -16,6 +16,9 @@ dependencies = [
     "pydantic>=2.12",
     "httpx>=0.27",
     "cryptography>=42",  # Fernet for encrypting stored secrets at rest (OpenRouter key)
+    # `disco.core.release.python_proof` uses the reference PEP 508/440 implementation as the
+    # single authoritative dependency grammar (names/extras/specifiers/URLs/requires-python).
+    "packaging>=23",
 ]
 
 [build-system]
