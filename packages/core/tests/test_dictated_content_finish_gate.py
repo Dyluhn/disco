@@ -312,9 +312,129 @@ def test_serve_file_path_dot_does_not_turn_following_title_into_visible_copy():
     assert extract_dictated_content_literals(visible_copy) == ["Selected reliability release"]
 
 
+def test_diagnostic_protocol_examples_are_metadata_not_dictated_content():
+    text = (
+        "DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "
+        '"PREDICT: <expected result>", and AFTER one line "OBSERVED: match" or '
+        '"OBSERVED: mismatch — <what about THE TOOL\'S behavior surprised you>".\n'
+        "TASK: Create a server with the h1 'Live Server Up'."
+    )
+
+    assert extract_dictated_content_literals(text) == ["Live Server Up"]
+
+
+@pytest.mark.parametrize(
+    ("protocol", "task", "expected"),
+    [
+        (
+            'for EVERY tool call, FIRST output one line "PREDICT: <expected result>", '
+            'and AFTER one line "OBSERVED: match" or "OBSERVED: mismatch — <what about '
+            "THE TOOL'S behavior surprised you>\".",
+            "Write primes.py, run it, and finish.",
+            [],
+        ),
+        (
+            'for EVERY tool call, FIRST output one line "PREDICT: <expected result>", '
+            'and AFTER one line "OBSERVED: match".',
+            "Create an index.html with h1 'Join the Waitlist' and button 'Sign Up'.",
+            ["Join the Waitlist", "Sign Up"],
+        ),
+        (
+            'for EVERY tool call, FIRST output one line "PREDICT: <what you expect this '
+            'tool call to return/do>", and AFTER the result one line "OBSERVED: match".',
+            "Build pages with 'Atlas Home', 'Our Services', and 'Reach Us' sharing '.topnav'.",
+            ["Atlas Home", "Our Services", "Reach Us", ".topnav"],
+        ),
+        (
+            "you MUST follow this for EVERY tool call. BEFORE, output a line starting with "
+            '"PREDICT:". AFTER, write "OBSERVED: match" or "OBSERVED: mismatch — <why>".',
+            "Create an index.html whose h1 is 'Build Smoke OK'.",
+            ["Build Smoke OK"],
+        ),
+    ],
+)
+def test_build10_diagnostic_protocol_variants_keep_only_task_copy(
+    protocol: str,
+    task: str,
+    expected: list[str],
+):
+    text = f"DIAGNOSTIC PROTOCOL — {protocol}\nTASK: {task}"
+    assert extract_dictated_content_literals(text) == expected
+
+
+def test_diagnostic_words_remain_dictated_when_requested_as_visible_copy():
+    assert extract_dictated_content_literals('Build a page whose h1 says "OBSERVED: match".') == [
+        "OBSERVED: match"
+    ]
+    assert extract_dictated_content_literals(
+        "DIAGNOSTIC PROTOCOL — for every tool call, print one line first.\n"
+        'TASK: Put "PREDICT: <expected result>" visibly on the page.'
+    ) == ["PREDICT: <expected result>"]
+    assert extract_dictated_content_literals(
+        'DIAGNOSTIC PROTOCOL — output "PREDICT: <expected result>" around tools. '
+        'The customer-facing brand must be "Acme Prime".\n'
+        "TASK: Build the page."
+    ) == ["Acme Prime"]
+    assert extract_dictated_content_literals(
+        'DIAGNOSTIC PROTOCOL — output "OBSERVED: match" around tools. '
+        'COPY REQUIREMENT: h1 exactly "Release Ready".\n'
+        "TASK: Build the page."
+    ) == ["Release Ready"]
+
+
+def test_task_marker_without_diagnostic_protocol_does_not_suppress_copy():
+    assert extract_dictated_content_literals(
+        'Context says "Keep this".\nTASK: Render "And this".'
+    ) == ["Keep this", "And this"]
+    assert extract_dictated_content_literals(
+        'DIAGNOSTIC PROTOCOL — quote "Keep this" without a task section.'
+    ) == ["Keep this"]
+
+
+def test_inspection_cause_taxonomy_never_retains_custom_exception_secrets():
+    secret = "Bearer_REAL_SECRET_" + ("X" * 5000)
+    adversarial_type = type(secret, (OSError,), {})
+    cause = adversarial_type(10**5000, secret)
+    outer = content_gates_module._DictatedContentInspectionIncomplete("inspection failed")
+    outer.__cause__ = cause
+
+    detail = content_gates_module._dictated_content_inspection_cause(outer)
+
+    assert detail == {"category": "os_error"}
+    assert secret not in repr(detail)
+
+
+def test_inspection_cause_taxonomy_does_not_execute_custom_errno_hooks():
+    secret = "SECRET_FROM_ERRNO_PROPERTY"
+
+    class RaisingErrno(OSError):
+        @property
+        def errno(self):  # noqa: ANN201
+            raise RuntimeError(secret)
+
+    class ExplosiveInt(int):
+        def __le__(self, other):  # noqa: ANN001, ANN201
+            raise RuntimeError(secret)
+
+    class AdversarialErrno(OSError):
+        @property
+        def errno(self):  # noqa: ANN201
+            return ExplosiveInt(20)
+
+    for cause in (RaisingErrno(secret), AdversarialErrno(secret)):
+        outer = content_gates_module._DictatedContentInspectionIncomplete("inspection failed")
+        outer.__cause__ = cause
+
+        detail = content_gates_module._dictated_content_inspection_cause(outer)
+
+        assert detail == {"category": "os_error"}
+        assert secret not in repr(detail)
+
+
 def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
     assert _safe_deliverable_file_path("/workspace/release/index.html") == ("release/index.html")
     assert _safe_deliverable_file_path("/workspace", app_root=True) == "index.html"
+    assert _safe_deliverable_file_path("server.py") == "server.py"
     assert _safe_deliverable_file_path("/workspace/../secret.txt") is None
     assert _safe_deliverable_file_path("/workspace/../../etc/passwd") is None
     assert _safe_deliverable_file_path("/workspaces/index.html") is None
@@ -439,6 +559,184 @@ async def test_app_handoff_expands_bounded_multifile_text_bundle(
     assert not any(
         path.endswith("proof.woff2") or "/node_modules/" in f"/{path}" or "/.pmx/" in f"/{path}"
         for path in executor.sandbox.read_paths
+    )
+
+
+@pytest.mark.asyncio
+async def test_selected_app_entry_proof_skips_redundant_bundle_listing(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("server handoff", encoding="utf-8")
+    (tmp_path / "server.py").write_text(
+        'PAGE = "<h1>Live Server Up</h1>"',
+        encoding="utf-8",
+    )
+    executor = _FSBuildExecutor(tmp_path)
+    listing_calls = 0
+
+    async def _unexpected_listing(path: str, limit: int):  # noqa: ANN202, ARG001
+        nonlocal listing_calls
+        listing_calls += 1
+        raise OSError("bounded listing must not run after complete entry proof")
+
+    executor.sandbox.list_dir_bounded = _unexpected_listing  # type: ignore[method-assign]
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-selected-entry-complete",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "
+        '"PREDICT: <expected result>", and AFTER one line "OBSERVED: match".\n'
+        "TASK: Create server.py with the h1 'Live Server Up'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-selected-entry-complete",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="server",
+            path="server.py",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("server handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-selected-entry-complete")
+
+    assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
+    assert listing_calls == 0
+    assert not any(
+        isinstance(event, StatusEvent)
+        and event.detail in {"dictated_content_inspection_incomplete", "dictated_content_release"}
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_selected_app_entry_miss_still_uses_sibling_bundle_proof(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("server handoff", encoding="utf-8")
+    (tmp_path / "server.py").write_text("# entry omits the heading", encoding="utf-8")
+    (tmp_path / "template.html").write_text("<h1>Live Server Up</h1>", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-selected-entry-sibling",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message("Create server.py backed by a template with 'Live Server Up'.")
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-selected-entry-sibling",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="server",
+            path="server.py",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("server handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-selected-entry-sibling")
+
+    assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
+    assert "." in executor.sandbox.list_paths
+    assert "template.html" in executor.sandbox.read_paths
+
+
+@pytest.mark.asyncio
+async def test_selected_app_entry_miss_and_bundle_error_stays_fail_closed(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("server handoff", encoding="utf-8")
+    (tmp_path / "server.py").write_text("# entry omits the heading", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+
+    async def _failed_listing(path: str, limit: int):  # noqa: ANN202, ARG001
+        raise OSError(20, "list_dir_bounded failed safely: NotADirectoryError")
+
+    executor.sandbox.list_dir_bounded = _failed_listing  # type: ignore[method-assign]
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-selected-entry-list-failure",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message("Create server.py with the h1 'Live Server Up'.")
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-selected-entry-list-failure",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="server",
+            path="server.py",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("server handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-selected-entry-list-failure")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )
+    incomplete = next(
+        event
+        for event in events
+        if isinstance(event, StatusEvent)
+        and event.detail == "dictated_content_inspection_incomplete"
+    )
+    assert incomplete.meta == {"inspection_cause": {"category": "not_a_directory", "errno": 20}}
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_release"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_selected_app_entry_cannot_be_substituted_by_sibling_copy(tmp_path: Path):
+    (tmp_path / "artifact.txt").write_text("server handoff", encoding="utf-8")
+    (tmp_path / "template.html").write_text("<h1>Live Server Up</h1>", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-selected-entry-missing",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message("Create server.py with the h1 'Live Server Up'.")
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-selected-entry-missing",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="missing server",
+            path="server.py",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("server handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-selected-entry-missing")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert executor.sandbox.list_paths == []
+    assert any("does not exist as a regular file" in msg for msg in _env_messages(events))
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_release"
+        for event in events
     )
 
 

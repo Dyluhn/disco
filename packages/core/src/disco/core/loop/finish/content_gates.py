@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 from .common import *
 from .common import (
@@ -86,6 +87,43 @@ class _DictatedContentInspectionIncomplete(RuntimeError):
     """The gate could not inspect the declared app scope completely and safely."""
 
 
+def _dictated_content_inspection_cause(exc: BaseException) -> dict[str, str | int]:
+    """Return a bounded, non-secret cause taxonomy for durable evidence."""
+
+    cause = exc.__cause__
+    if cause is None:
+        return {}
+    if isinstance(cause, FileNotFoundError):
+        category = "file_not_found"
+    elif isinstance(cause, PermissionError):
+        category = "permission_denied"
+    elif isinstance(cause, NotADirectoryError):
+        category = "not_a_directory"
+    elif isinstance(cause, IsADirectoryError):
+        category = "is_a_directory"
+    elif isinstance(cause, TimeoutError):
+        category = "timeout"
+    elif isinstance(cause, OSError):
+        category = "os_error"
+    else:
+        category = "unclassified"
+    detail: dict[str, str | int] = {"category": category}
+    safe_errno_types = (
+        OSError,
+        FileNotFoundError,
+        PermissionError,
+        NotADirectoryError,
+        IsADirectoryError,
+        TimeoutError,
+    )
+    errno_value = (
+        cast(OSError, cause).errno if type(cause) in safe_errno_types else None  # noqa: E721
+    )
+    if type(errno_value) is int and 1 <= errno_value <= 4095:  # noqa: E721
+        detail["errno"] = errno_value
+    return detail
+
+
 def _dictated_content_text_candidate(path: str, data: bytes) -> bool:
     """Whether bytes may safely participate in a user-visible text floor.
 
@@ -109,6 +147,49 @@ def _dictated_content_text_candidate(path: str, data: bytes) -> bool:
 
 
 class _ContentGateMixin(_FinishGateProto):
+    async def _dictated_content_selected_app_entry(self, events: list[Event]) -> str | None:
+        latest_app = next(
+            (
+                event
+                for event in reversed(events)
+                if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
+            ),
+            None,
+        )
+        if latest_app is None:
+            return None
+        selected_entry = _safe_deliverable_file_path(latest_app.path)
+        legacy_index = _safe_deliverable_file_path(latest_app.path, app_root=True)
+        if selected_entry is None:
+            selected_entry = legacy_index
+        if selected_entry is None:
+            raise _DictatedContentInspectionIncomplete(
+                "the selected app handoff path is unsafe or invalid"
+            )
+        # `serve` records an explicit entry FILE path. Older persisted events and
+        # direct integrations may still name an app directory, so retain a
+        # fail-closed compatibility bridge only when the sandbox positively
+        # proves the legacy directory's index file exists.
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is not None and hasattr(sbx, "file_exists"):
+            try:
+                if await sbx.file_exists(selected_entry):
+                    return selected_entry
+                if (
+                    legacy_index is not None
+                    and legacy_index != selected_entry
+                    and await sbx.file_exists(legacy_index)
+                ):
+                    return legacy_index
+            except Exception as exc:  # noqa: BLE001 — strict selected-app evidence boundary
+                raise _DictatedContentInspectionIncomplete(
+                    "the selected app entry could not be verified as a regular file"
+                ) from exc
+            raise _DictatedContentInspectionIncomplete(
+                "the selected app entry does not exist as a regular file"
+            )
+        return selected_entry
+
     def _contract_required_deliverable_paths(self) -> list[str]:
         """Best-effort bridge from a contract finalizer alias to required files.
 
@@ -147,20 +228,8 @@ class _ContentGateMixin(_FinishGateProto):
         """
 
         paths: list[str] = []
-        latest_app = next(
-            (
-                event
-                for event in reversed(events)
-                if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
-            ),
-            None,
-        )
-        if latest_app is not None:
-            selected_entry = _safe_deliverable_file_path(latest_app.path, app_root=True)
-            if selected_entry is None:
-                raise _DictatedContentInspectionIncomplete(
-                    "the selected app handoff path is unsafe or invalid"
-                )
+        selected_entry = await self._dictated_content_selected_app_entry(events)
+        if selected_entry is not None:
             paths.append(selected_entry)
             # Once an app is explicitly selected, its resolved bundle is authoritative.
             # Stale handoffs, scratch artifacts, and unrelated plan files cannot satisfy
@@ -213,18 +282,9 @@ class _ContentGateMixin(_FinishGateProto):
         """
 
         roots: list[str] = []
-        latest_app = next(
-            (
-                event
-                for event in reversed(events)
-                if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
-            ),
-            None,
-        )
-        if latest_app is not None:
-            entry = _safe_deliverable_file_path(latest_app.path, app_root=True)
-            if entry is not None:
-                roots.append(posixpath.dirname(entry) or ".")
+        entry = await self._dictated_content_selected_app_entry(events)
+        if entry is not None:
+            roots.append(posixpath.dirname(entry) or ".")
         if not roots:
             return []
 
@@ -453,14 +513,33 @@ class _ContentGateMixin(_FinishGateProto):
         try:
             if selected_app:
                 async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
-                    paths = await self._dictated_content_deliverable_paths(events)
-                    if not paths:
+                    selected_entry = await self._dictated_content_selected_app_entry(events)
+                    if selected_entry is None:
                         return True
-                    miss = await self._first_dictated_content_miss(
-                        conditions,
-                        paths,
-                        strict=True,
-                    )
+                    # The content predicate is existential. When the authoritative
+                    # handoff itself proves every literal, sibling discovery cannot
+                    # invalidate that proof and must not become a redundant finish
+                    # dependency. If the entry is unreadable or incomplete, retain
+                    # the existing bounded, fail-closed whole-bundle inspection.
+                    try:
+                        entry_miss = await self._first_dictated_content_miss(
+                            conditions,
+                            [selected_entry],
+                            strict=True,
+                        )
+                    except _DictatedContentInspectionIncomplete:
+                        entry_miss = (conditions[0], [])
+                    if entry_miss is None:
+                        miss = None
+                    else:
+                        paths = await self._dictated_content_deliverable_paths(events)
+                        if not paths:
+                            return True
+                        miss = await self._first_dictated_content_miss(
+                            conditions,
+                            paths,
+                            strict=True,
+                        )
             else:
                 paths = await self._dictated_content_deliverable_paths(events)
                 if not paths:
@@ -477,11 +556,17 @@ class _ContentGateMixin(_FinishGateProto):
         except _DictatedContentInspectionIncomplete as exc:
             inspection_error = exc
         if inspection_error is not None:
-            _LOG.warning("dictated-content inspection incomplete: %s", inspection_error)
+            inspection_cause = _dictated_content_inspection_cause(inspection_error)
+            _LOG.warning(
+                "dictated-content inspection incomplete: %s; cause=%s",
+                inspection_error,
+                inspection_cause or "unavailable",
+            )
             await self._loop._emit(
                 StatusEvent(
                     status=ConversationStatus.RUNNING,
                     detail="dictated_content_inspection_incomplete",
+                    meta={"inspection_cause": inspection_cause},
                 )
             )
             await self._loop._emit(

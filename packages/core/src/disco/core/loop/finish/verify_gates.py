@@ -420,15 +420,19 @@ class _HostVerifyGateMixin(_FinishGateProto):
         return records
 
     async def _host_verify_artifact_path(self, raw_path: str) -> str | None:
-        path = _safe_deliverable_file_path(raw_path, app_root=True)
+        path = _safe_deliverable_file_path(raw_path)
+        legacy_index = _safe_deliverable_file_path(raw_path, app_root=True)
+        if path is None:
+            path = legacy_index
         if path is None:
             return None
-        raw = (raw_path or "").strip()
-        norm = posixpath.normpath(raw) if raw else "."
-        directory_like = norm in ("", ".") or posixpath.basename(norm.rstrip("/")) != "index.html"
-        if directory_like and await self._host_artifact_file_exists(path) is False:
-            return None
-        return path
+        exists = await self._host_artifact_file_exists(path)
+        if exists is not False:
+            return path
+        if legacy_index is not None and legacy_index != path:
+            if await self._host_artifact_file_exists(legacy_index) is not False:
+                return legacy_index
+        return None
 
     async def _host_verify_manifest_deliverable(
         self,

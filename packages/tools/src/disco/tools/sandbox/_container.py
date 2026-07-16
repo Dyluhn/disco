@@ -446,7 +446,8 @@ try:
     }
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
 except OSError as exc:
-    sys.stderr.write(f"DISCO_LIST_ERROR:{type(exc).__name__}")
+    errno_value = exc.errno if isinstance(exc.errno, int) else "unknown"
+    sys.stderr.write(f"DISCO_LIST_ERROR:{type(exc).__name__}:{errno_value}")
     raise SystemExit(48)
 """
 
@@ -467,6 +468,17 @@ def bounded_list_result(
 ) -> tuple[list[tuple[str, str]], bool]:
     if rc != 0:
         detail = err.decode("utf-8", "replace")
+        fields = detail.split(":")
+        if (
+            len(fields) == 3
+            and fields[0] == "DISCO_LIST_ERROR"
+            and fields[1].isidentifier()
+            and fields[2].isdigit()
+        ):
+            raise OSError(
+                int(fields[2]),
+                f"list_dir_bounded {path!r} failed safely: {fields[1]}",
+            )
         raise OSError(f"list_dir_bounded {path!r} failed safely: {detail or f'exit {rc}'}")
     try:
         payload = json.loads(out.decode("utf-8", "strict"))

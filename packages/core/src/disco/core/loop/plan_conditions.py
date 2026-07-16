@@ -115,6 +115,9 @@ _SERVE_METADATA_PREFIX_RE = re.compile(
     r"\b(?:path|title)\s*$",
     re.IGNORECASE,
 )
+_DIAGNOSTIC_PROTOCOL_HEADER_RE = re.compile(r"(?im)^\s*DIAGNOSTIC\s+PROTOCOL\b")
+_DIAGNOSTIC_PROTOCOL_TASK_RE = re.compile(r"(?im)^\s*TASK\s*:")
+_DIAGNOSTIC_PROTOCOL_LITERAL_RE = re.compile(r"^(?:PREDICT|OBSERVED)\s*:", re.IGNORECASE)
 
 
 def _has_unspaced_slash(text: str) -> bool:
@@ -183,6 +186,30 @@ def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
     return _SERVE_METADATA_PREFIX_RE.search(boundary_view) is not None
 
 
+def _is_diagnostic_protocol_metadata_literal(
+    instruction: str,
+    quote_start: int,
+    literal: str,
+) -> bool:
+    """Exclude quoted tool-observation format examples from app copy floors.
+
+    Diagnostic build scenarios ask the agent to print quoted PREDICT/OBSERVED
+    lines around every tool call. Those strings describe the response protocol,
+    not user-visible deliverable content. Keep the exception section-bound: an
+    ordinary TASK request to render the same text remains a dictated-content
+    condition, and both line-anchored section markers are required.
+    """
+
+    if _DIAGNOSTIC_PROTOCOL_LITERAL_RE.match(literal) is None:
+        return False
+    headers = list(_DIAGNOSTIC_PROTOCOL_HEADER_RE.finditer(instruction, 0, quote_start))
+    if not headers:
+        return False
+    section_start = headers[-1].start()
+    task = _DIAGNOSTIC_PROTOCOL_TASK_RE.search(instruction, section_start)
+    return task is not None and quote_start < task.start()
+
+
 def extract_dictated_content_literals(text: str) -> list[str]:
     """Extract quoted user-authored content literals from a build instruction.
 
@@ -200,6 +227,7 @@ def extract_dictated_content_literals(text: str) -> list[str]:
             literal is None
             or _skip_dictated_literal(literal)
             or _is_serve_metadata_literal(text, mt.start())
+            or _is_diagnostic_protocol_metadata_literal(text, mt.start(), literal)
         ):
             continue
         if literal in seen:

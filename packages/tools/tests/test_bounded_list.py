@@ -39,6 +39,31 @@ def test_bounded_directory_listing_rejects_invalid_limits_and_evidence(tmp_path:
         bounded_list_result(str(tmp_path), 0, b"not-json", b"")
 
 
+def test_bounded_directory_listing_failure_preserves_sanitized_type_and_errno(
+    tmp_path: Path,
+) -> None:
+    regular_file = tmp_path / "server.py"
+    regular_file.write_text("print('ok')", encoding="utf-8")
+
+    completed = subprocess.run(
+        bounded_list_argv(str(regular_file), 256),
+        check=False,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 48
+    assert completed.stdout == b""
+    assert completed.stderr == b"DISCO_LIST_ERROR:NotADirectoryError:20"
+    with pytest.raises(OSError, match="NotADirectoryError") as raised:
+        bounded_list_result(
+            "server.py",
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+    assert raised.value.errno == 20
+
+
 @pytest.mark.asyncio
 async def test_process_backend_bounded_listing_classifies_without_following_aliases() -> None:
     service = ProcessSandboxService()

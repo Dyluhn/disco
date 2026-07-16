@@ -444,7 +444,7 @@ _SERVE_DESCRIPTION = (
     "Hand off a finished deliverable to the user. Call this when you've produced "
     "something they should open or download. Set `kind`='app' for a runnable "
     "result they open in the live preview (a built site / running dev server "
-    "rooted at `path`) — make sure your server is serving on port 8000 (the "
+    "selected by the entry file at `path`) — make sure your server is serving on port 8000 (the "
     "workspace auto-serves the 'preview' session there by default). Set "
     "`kind`='files' for artifacts to download (`path` = the file or folder). "
     "Give a short human `title`. This does NOT end the run — serve the "
@@ -459,7 +459,7 @@ _SERVE_SCHEMA = {
         },
         "path": {
             "type": "string",
-            "description": "Workspace-relative path: app root (kind=app) or file/folder (files).",
+            "description": "Workspace-relative path: entry file (app) or file/folder (files).",
         },
         "kind": {
             "type": "string",

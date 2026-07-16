@@ -428,10 +428,10 @@ def _deliverable_event_paths(events: list[Event]) -> list[str]:
     for ev in events:
         if not isinstance(ev, DeliverableEvent):
             continue
-        p = _safe_deliverable_file_path(
-            ev.path,
-            app_root=(ev.artifact_kind == "app"),
-        )
+        # Public `serve` records a validated entry file for apps. Do not rewrite
+        # non-index entries such as server.py into the impossible
+        # server.py/index.html path.
+        p = _safe_deliverable_file_path(ev.path)
         if p is not None:
             out.append(p)
     return out

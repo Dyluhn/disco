@@ -836,7 +836,7 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
 
     `kind`:
       • "app"   — a runnable result the user opens in the live preview (a built
-                  site / running dev server rooted at `path`).
+                  site / running dev server selected by the entry file at `path`).
       • "files" — one or more workspace artifacts to download/inspect (`path` is
                   the file or directory).
 
@@ -846,7 +846,7 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
     kind: Literal[EventKind.DELIVERABLE] = EventKind.DELIVERABLE
     source: EventSource = EventSource.AGENT
     title: str  # short human label, e.g. "Landing page" / "Sales report"
-    path: str  # workspace-relative path (dir for an app root, file/dir for files)
+    path: str  # workspace-relative path (entry file for apps, file/dir for files)
     artifact_kind: Literal["app", "files"] = "app"
     # Optional canonical URL the deliverable is reachable at (a deploy target, a
     # tunnel, or the live preview). When the agent serves to a known address it

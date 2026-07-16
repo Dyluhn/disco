@@ -8,6 +8,7 @@ import pytest
 from disco.core import (
     ActionEvent,
     ConversationStatus,
+    DeliverableEvent,
     NoOpCondenser,
     ObservationEvent,
     SqliteEventStore,
@@ -158,6 +159,22 @@ def _directory_deliverable_agent() -> ScriptedAgent:
     )
 
 
+def _python_entry_deliverable_agent() -> ScriptedAgent:
+    return ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "server.py", "content": "print(1)"},
+            ),
+            action_step(
+                tool="serve",
+                args={"title": "App", "path": "server.py", "kind": "app"},
+            ),
+            finish_step(),
+        ]
+    )
+
+
 def _non_web_agent() -> ScriptedAgent:
     return ScriptedAgent(
         [
@@ -291,10 +308,12 @@ async def test_root_deliverable_resolves_to_primary_artifact_for_host_verify() -
 
 
 @pytest.mark.asyncio
-async def test_directory_deliverable_without_primary_artifact_skips_host_verify() -> None:
+async def test_non_file_app_handoff_without_primary_artifact_skips_host_verify() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
-    execu.sandbox = _PathSandbox({"dist"})  # type: ignore[attr-defined]
+    # file_exists is a regular-file predicate. A real directory therefore does
+    # not pass the public serve entry-file boundary.
+    execu.sandbox = _PathSandbox(set())  # type: ignore[attr-defined]
     loop, store = _loop(_directory_deliverable_agent(), execu, host_verifier=host)
 
     await loop.send_message("build a page")
@@ -307,6 +326,66 @@ async def test_directory_deliverable_without_primary_artifact_skips_host_verify(
         isinstance(e, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
         for e in events
     )
+
+
+@pytest.mark.asyncio
+async def test_explicit_python_entry_file_is_host_verified_without_index_rewrite() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox({"server.py"})  # type: ignore[attr-defined]
+    loop, store = _loop(_python_entry_deliverable_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a Python server")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [call.artifact_path for call in host.calls] == ["server.py"]
+    events = await store.get_events("conv")
+    verifier_paths = [
+        event.artifact_path
+        for event in events
+        if isinstance(event, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
+    ]
+    assert verifier_paths == ["server.py", "server.py", "server.py"]
+
+
+@pytest.mark.asyncio
+async def test_persisted_legacy_app_directory_resolves_to_proven_index_file() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox({"dist/index.html"})  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("finish a legacy app")
+    await store.append(
+        "conv",
+        DeliverableEvent(title="Legacy app", path="dist", artifact_kind="app"),
+    )
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [call.artifact_path for call in host.calls] == ["dist/index.html"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted_path", [".", "index.html"])
+async def test_persisted_app_path_known_absent_never_reaches_host_verify(
+    persisted_path: str,
+) -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox(set())  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("finish a persisted app")
+    await store.append(
+        "conv",
+        DeliverableEvent(title="Missing app", path=persisted_path, artifact_kind="app"),
+    )
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
 
 
 @pytest.mark.asyncio
