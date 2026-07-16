@@ -283,23 +283,6 @@ class SandboxSession:
                 self.conversation_id,
                 exc_info=True,
             )
-        # C3: re-materialize the agent's own dev servers (vite / express /
-        # uvicorn / http.server on a non-default USER_PORT, …) on the fresh
-        # instance. Until this hook, only the static `python3 -m http.server`
-        # preview survived a recreate — a real app the agent launched simply
-        # vanished on suspend/wake. The shell-sessions manager records each
-        # port-binding command in `exec()` and replays them here, best-effort,
-        # skipping ports already bound (the no-duplication guarantee).
-        try:
-            logs = await self.sessions.rehydrate_persistent_servers()
-            for line in logs:
-                _LOG.info("post-recreate: %s", line)
-        except Exception:  # noqa: BLE001 — rehydrate is a convenience; never wedge the box
-            _LOG.warning(
-                "post-recreate server rehydrate failed for %s",
-                self.conversation_id,
-                exc_info=True,
-            )
 
     def _spawn_auto_preview(self) -> None:
         """Fire-and-forget the static auto-serve (BP-02): every fresh box comes up with

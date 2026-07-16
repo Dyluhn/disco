@@ -405,6 +405,38 @@ async def test_rehydrate_does_not_raise_on_failed_restart(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_session_recreate_invokes_persistent_rehydrate_exactly_once(monkeypatch):
+    """H321: one sandbox generation change cannot replay server intent twice."""
+
+    from disco.tools.sandbox.session import SandboxSession
+
+    initial = _FakeInstance()
+    session = SandboxSession(
+        _CountingService(initial=initial), conversation_id="conv-c3-rehydrate-once"
+    )
+
+    async def _noop_preview(port: int = 8000) -> bool:
+        return False
+
+    session.ensure_preview = _noop_preview  # type: ignore[method-assign]
+    await session._ensure()
+    calls = 0
+
+    async def _count_rehydrate(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(session.sessions, "rehydrate_persistent_servers", _count_rehydrate)
+
+    await session._recreate(initial)
+
+    assert calls == 1
+    assert session._generation == 2
+    await session.destroy()
+
+
+@pytest.mark.asyncio
 async def test_session_recreate_triggers_rehydrate(monkeypatch):
     """The wiring test: a `SandboxSession` that has recorded a USER_PORT-
     binding dev server, on `_recreate`, RE-ISSUES that command on the new
