@@ -15,12 +15,18 @@ file) and tunable per call.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import io
+import os
+import shutil
+import stat
+import tarfile
+import tempfile
 import zipfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Protocol
+from pathlib import Path, PurePosixPath
+from typing import Protocol, cast
 
 # Sensible defaults: deep enough for realistic project trees, large enough for the
 # kinds of artifacts a build agent produces (bundled JS, small images). Raised
@@ -98,6 +104,317 @@ class SnapshotResult:
     skipped: list[str] = field(default_factory=list)  # unreadable entries we tolerated
 
 
+def _copy_preserved_snapshot_paths(
+    dest: Path,
+    staging: Path,
+    preserve_paths: set[str],
+    *,
+    max_depth: int,
+    max_file_bytes: int,
+) -> None:
+    """Copy unreadable prior paths through no-follow directory descriptors.
+
+    The fresh snapshot wins at every conflict.  Anchoring traversal at an open
+    destination directory prevents a host-side link swap from redirecting a
+    preservation read outside the last authoritative workspace.
+    """
+
+    if not preserve_paths:
+        return
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
+    file_flags = os.O_RDONLY | os.O_NOFOLLOW
+    try:
+        root_listed = os.stat(dest, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise WorkspaceArchiveError(f"cannot inspect prior snapshot safely: {exc}") from exc
+    try:
+        root_fd = os.open(dest, directory_flags)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise WorkspaceArchiveError(f"cannot open prior snapshot safely: {exc}") from exc
+
+    def _same_object(before: os.stat_result, after: os.stat_result) -> bool:
+        return (
+            before.st_dev,
+            before.st_ino,
+            stat.S_IFMT(before.st_mode),
+        ) == (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
+
+    root_opened = os.fstat(root_fd)
+    if not stat.S_ISDIR(root_opened.st_mode) or not _same_object(root_listed, root_opened):
+        os.close(root_fd)
+        raise WorkspaceArchiveError("prior snapshot changed before it could be preserved")
+
+    def _excluded(rel: str) -> bool:
+        parts = PurePosixPath(rel).parts
+        return is_runtime_secret_path(rel) or any(part in _SNAPSHOT_EXCLUDED_DIRS for part in parts)
+
+    def _copy_entry(parent_fd: int, name: str, rel: str, target: Path, depth: int) -> None:
+        if _excluded(rel):
+            return
+        if depth > max_depth:
+            raise WorkspaceArchiveError(
+                f"preserved workspace depth exceeded the {max_depth}-level cap at {rel!r}"
+            )
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise WorkspaceArchiveError(f"cannot inspect preserved path {rel!r}: {exc}") from exc
+
+        if stat.S_ISDIR(info.st_mode):
+            if target.exists() and not target.is_dir():
+                return
+            try:
+                child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                raise WorkspaceArchiveError(
+                    f"cannot open preserved directory {rel!r} safely: {exc}"
+                ) from exc
+            opened = os.fstat(child_fd)
+            if not stat.S_ISDIR(opened.st_mode) or not _same_object(info, opened):
+                os.close(child_fd)
+                raise WorkspaceArchiveError(
+                    f"preserved directory {rel!r} changed before it could be copied"
+                )
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+                for child in sorted(os.listdir(child_fd)):
+                    child_rel = f"{rel}/{child}"
+                    _copy_entry(child_fd, child, child_rel, target / child, depth + 1)
+            finally:
+                os.close(child_fd)
+            return
+
+        if not stat.S_ISREG(info.st_mode) or target.exists():
+            return
+        if info.st_nlink != 1:
+            raise WorkspaceArchiveError(f"preserved file {rel!r} is hardlinked")
+        try:
+            source_fd = os.open(name, file_flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise WorkspaceArchiveError(
+                f"cannot open preserved file {rel!r} safely: {exc}"
+            ) from exc
+        try:
+            opened = os.fstat(source_fd)
+            if not stat.S_ISREG(opened.st_mode) or not _same_object(info, opened):
+                raise WorkspaceArchiveError(
+                    f"preserved file {rel!r} changed before it could be copied"
+                )
+            if opened.st_nlink != 1:
+                raise WorkspaceArchiveError(f"preserved file {rel!r} is hardlinked")
+            if opened.st_size > max_file_bytes:
+                raise WorkspaceArchiveError(
+                    f"preserved file {rel!r} exceeds the {max_file_bytes}-byte cap"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copied = 0
+            with os.fdopen(os.dup(source_fd), "rb") as source, target.open("xb") as output:
+                while block := source.read(1024 * 1024):
+                    copied += len(block)
+                    if copied > max_file_bytes:
+                        raise WorkspaceArchiveError(
+                            f"preserved file {rel!r} grew beyond the {max_file_bytes}-byte cap"
+                        )
+                    output.write(block)
+            after = os.fstat(source_fd)
+            before_version = (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_size,
+                opened.st_mtime_ns,
+            )
+            after_version = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            if copied != opened.st_size or after_version != before_version:
+                target.unlink(missing_ok=True)
+                raise WorkspaceArchiveError(f"preserved file {rel!r} changed while copied")
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            os.close(source_fd)
+
+    try:
+        for raw in sorted(preserve_paths):
+            rel = _archive_relpath(raw, max_depth=max_depth)
+            if _excluded(rel):
+                continue
+            parts = PurePosixPath(rel).parts
+            # A successfully captured file at an ancestor wins over an older
+            # preserved subtree.
+            current_target = staging
+            blocked_by_fresh_file = False
+            for part in parts[:-1]:
+                current_target /= part
+                if current_target.exists() and not current_target.is_dir():
+                    blocked_by_fresh_file = True
+                    break
+            if blocked_by_fresh_file:
+                continue
+            parent_fd = root_fd
+            opened_dirs: list[int] = []
+            try:
+                missing = False
+                for part in parts[:-1]:
+                    try:
+                        listed = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+                        parent_fd = os.open(part, directory_flags, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        missing = True
+                        break
+                    except OSError as exc:
+                        raise WorkspaceArchiveError(
+                            f"cannot traverse preserved path {rel!r} safely: {exc}"
+                        ) from exc
+                    opened_dirs.append(parent_fd)
+                    opened = os.fstat(parent_fd)
+                    if not stat.S_ISDIR(opened.st_mode) or not _same_object(listed, opened):
+                        raise WorkspaceArchiveError(
+                            f"preserved path {rel!r} changed during traversal"
+                        )
+                if not missing:
+                    _copy_entry(
+                        parent_fd,
+                        parts[-1],
+                        rel,
+                        staging.joinpath(*parts),
+                        len(parts) - 1,
+                    )
+            finally:
+                for opened_fd in reversed(opened_dirs):
+                    os.close(opened_fd)
+    finally:
+        os.close(root_fd)
+
+
+def _archive_relpath(name: str, *, max_depth: int) -> str:
+    if "\\" in name:
+        raise WorkspaceArchiveError(f"workspace archive member has invalid separator: {name!r}")
+    path = PurePosixPath(name)
+    if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
+        raise WorkspaceArchiveError(f"workspace archive member escapes workspace: {name!r}")
+    if len(path.parts) - 1 > max_depth:
+        raise WorkspaceArchiveError(
+            f"workspace depth exceeded the {max_depth}-level cap at {path.as_posix()!r}"
+        )
+    return path.as_posix()
+
+
+def _write_bulk_archive(
+    archive_path: Path,
+    staging: Path,
+    *,
+    max_depth: int,
+    max_file_bytes: int,
+) -> tuple[list[str], int, list[str]]:
+    """Validate and materialize a backend archive without trusting tar paths/types."""
+
+    paths: list[str] = []
+    skipped: list[str] = []
+    total_bytes = 0
+    consecutive_failures = 0
+    seen: set[str] = set()
+    try:
+        archive = tarfile.open(archive_path, mode="r:")
+    except (tarfile.TarError, EOFError) as exc:
+        raise WorkspaceArchiveError(f"workspace archive is invalid: {exc}") from exc
+    with archive:
+        for member in archive:
+            rel = _archive_relpath(member.name, max_depth=max_depth)
+            if rel in seen:
+                raise WorkspaceArchiveError(f"workspace archive contains duplicate path {rel!r}")
+            rel_parts = PurePosixPath(rel).parts
+            ancestors = [PurePosixPath(*rel_parts[:i]).as_posix() for i in range(1, len(rel_parts))]
+            if any(ancestor in seen for ancestor in ancestors) or any(
+                prior.startswith(rel + "/") for prior in seen
+            ):
+                raise WorkspaceArchiveError(
+                    f"workspace archive contains conflicting path prefix {rel!r}"
+                )
+            seen.add(rel)
+            if not member.isreg():
+                raise WorkspaceArchiveError(f"workspace archive contains non-regular entry {rel!r}")
+            if any(part in _SNAPSHOT_EXCLUDED_DIRS for part in PurePosixPath(rel).parts):
+                skipped.append(f"{rel}: dependency/cache path excluded")
+                continue
+            if is_runtime_secret_path(rel):
+                skipped.append(f"{rel}: runtime secret path excluded")
+                continue
+            if member.size > max_file_bytes:
+                skipped.append(f"{rel}: {member.size} bytes exceeds the {max_file_bytes}-byte cap")
+                consecutive_failures += 1
+                if consecutive_failures >= _SNAPSHOT_MAX_CONSECUTIVE_FAILURES:
+                    raise WorkspaceArchiveError(
+                        f"{consecutive_failures} consecutive failures (last: {rel!r}: "
+                        "oversized) — transport presumed dead, aborting snapshot"
+                    )
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                raise WorkspaceArchiveError(f"workspace archive cannot read {rel!r}")
+            data = source.read(max_file_bytes + 1)
+            if len(data) != member.size:
+                raise WorkspaceArchiveError(
+                    f"workspace archive truncated {rel!r}: expected {member.size}, got {len(data)}"
+                )
+            target = staging / rel
+            current = staging
+            for part in PurePosixPath(rel).parts[:-1]:
+                current /= part
+                if current.exists() and not current.is_dir():
+                    current.unlink()
+                current.mkdir(exist_ok=True)
+            if target.is_dir():
+                shutil.rmtree(target)
+            target.write_bytes(data)
+            paths.append(rel)
+            total_bytes += len(data)
+            consecutive_failures = 0
+    paths.sort()
+    return paths, total_bytes, skipped
+
+
+def _publish_snapshot(staging: Path, dest: Path) -> None:
+    """Atomically publish a complete tree on the Linux campaign filesystem."""
+
+    if not dest.exists():
+        staging.replace(dest)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise WorkspaceArchiveError("atomic snapshot exchange is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    rc = renameat2(
+        -100,
+        os.fsencode(staging),
+        -100,
+        os.fsencode(dest),
+        2,
+    )
+    if rc != 0:
+        error = ctypes.get_errno()
+        raise WorkspaceArchiveError(f"atomic snapshot exchange failed: {os.strerror(error)}")
+    # After RENAME_EXCHANGE the old authoritative tree occupies `staging`.
+    shutil.rmtree(staging)
+
+
 # ---- snapshot OUT ----------------------------------------------------------
 
 
@@ -110,10 +427,10 @@ async def snapshot_workspace(
 ) -> SnapshotResult:
     """Mirror the sandbox /workspace tree to `dest/` on disk, preserving structure.
 
-    The walk goes through SandboxInstance.list_dir (one level at a time — the
-    interface doesn't expose recursion, so we do it client-side). Every leaf is
-    read with read_file and written to disk under the corresponding relative
-    path. Existing files at dest are overwritten; existing dirs are reused.
+    Backends may expose one bounded bulk archive (Podman does); otherwise the
+    portable list/read walker remains the fallback. Both paths build in a private
+    sibling staging directory and publish only a complete tree, so FINISHED-time
+    cancellation can never leave partial bytes at the authoritative destination.
 
     Resilience (dc-02 live-rung lesson): dependency/cache dirs
     (_SNAPSHOT_EXCLUDED_DIRS) are skipped outright, and a single unreadable
@@ -125,12 +442,18 @@ async def snapshot_workspace(
     """
     if dest.is_symlink():
         raise WorkspaceArchiveError("snapshot destination must not be a symlink")
-    dest.mkdir(parents=True, exist_ok=True)
-    # A legacy/host-planted link inside the durable tree must never turn a
-    # sandbox write into an arbitrary host-file overwrite. Snapshot trees carry
-    # regular files only, so links have no valid persistence meaning.
-    for link in sorted((p for p in dest.rglob("*") if p.is_symlink()), reverse=True):
-        link.unlink()
+    if dest.exists() and not dest.is_dir():
+        raise WorkspaceArchiveError("snapshot destination must be a directory")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    transaction = Path(tempfile.mkdtemp(prefix=f".{dest.name}.snapshot-", dir=dest.parent))
+    transaction.chmod(0o700)
+    staging = transaction / "tree"
+    try:
+        staging.mkdir(mode=0o700)
+    except BaseException:
+        shutil.rmtree(transaction, ignore_errors=True)
+        raise
+    archive_path = transaction / "workspace.tar"
 
     paths: list[str] = []
     skipped: list[str] = []
@@ -188,31 +511,61 @@ async def snapshot_workspace(
             if len(data) > max_file_bytes:
                 _skip(child, f"{len(data)} bytes exceeds the {max_file_bytes}-byte cap")
                 continue
-            target = dest / child
+            target = staging / child
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             paths.append(child)
             total_bytes += len(data)
             consecutive_failures = 0  # a success proves the transport is alive
 
-    await _walk("", 0)
-    paths.sort()
-    saved = set(paths)
-    for stale in sorted(p for p in dest.rglob("*") if p.is_file()):
-        rel = stale.relative_to(dest).as_posix()
-        if (
-            rel not in saved
-            and not any(
-                rel == protected or rel.startswith(protected + "/") for protected in preserve_paths
+    try:
+        exporter = getattr(sandbox, "export_workspace_archive", None)
+        export_fn = cast(Callable[..., Awaitable[tuple[list[str], list[str]] | None]], exporter)
+        exported = (
+            await export_fn(
+                archive_path,
+                max_depth=max_depth,
+                max_file_bytes=max_file_bytes,
             )
-        ) or is_runtime_secret_path(rel):
-            stale.unlink()
-    for directory in sorted((p for p in dest.rglob("*") if p.is_dir()), reverse=True):
-        with contextlib.suppress(OSError):
-            directory.rmdir()
-    return SnapshotResult(
-        file_count=len(paths), total_bytes=total_bytes, paths=paths, skipped=skipped
-    )
+            if callable(exporter)
+            else None
+        )
+        if exported is None:
+            await _walk("", 0)
+            paths.sort()
+        else:
+            reported_skipped, reported_preserve = exported
+            if not archive_path.is_file() or archive_path.is_symlink():
+                raise WorkspaceArchiveError("workspace archive exporter returned no archive")
+            paths, total_bytes, archive_skipped = _write_bulk_archive(
+                archive_path,
+                staging,
+                max_depth=max_depth,
+                max_file_bytes=max_file_bytes,
+            )
+            skipped.extend(str(item) for item in reported_skipped)
+            skipped.extend(archive_skipped)
+            for raw in reported_preserve:
+                preserve_paths.add(_archive_relpath(str(raw), max_depth=max_depth))
+            archive_path.unlink()
+
+        _copy_preserved_snapshot_paths(
+            dest,
+            staging,
+            preserve_paths,
+            max_depth=max_depth,
+            max_file_bytes=max_file_bytes,
+        )
+        for directory in sorted((p for p in staging.rglob("*") if p.is_dir()), reverse=True):
+            with contextlib.suppress(OSError):
+                directory.rmdir()
+        _publish_snapshot(staging, dest)
+        return SnapshotResult(
+            file_count=len(paths), total_bytes=total_bytes, paths=paths, skipped=skipped
+        )
+    finally:
+        if transaction.exists():
+            shutil.rmtree(transaction)
 
 
 # ---- rehydrate IN ----------------------------------------------------------

@@ -33,7 +33,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import json
 import logging
+import os
 import pathlib
 import posixpath
 import shlex
@@ -113,6 +115,185 @@ _PODMAN_DEAD_MARKERS = ("no such container", "no container with", "is not runnin
 # the UNVERIFIABLE case (rc!=0 / exception) is retried.
 _INSPECT_RETRIES = 3
 _INSPECT_BACKOFF_S = 0.15
+_WORKSPACE_EXPORT_TIMEOUT_S = 120
+_WORKSPACE_EXPORT_META = "__DISCO_WORKSPACE_EXPORT_META__"
+
+# One guest process streams the bounded workspace as tar.  Keeping the filter in
+# the guest prevents runtime credential files from crossing the sandbox boundary;
+# archive.py validates every member again before it reaches durable storage.
+_WORKSPACE_EXPORT_SCRIPT = r"""
+import json, os, stat, sys, tarfile
+
+root = os.path.realpath(sys.argv[1])
+max_depth = int(sys.argv[2])
+max_bytes = int(sys.argv[3])
+excluded = {
+    'node_modules', '.pnpm-store', '.npm', '.yarn', '.cache', '.venv',
+    '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+}
+safe_templates = {'example', 'sample', 'dist', 'template'}
+skipped = []
+preserve = []
+failures = 0
+
+def secret_path(rel):
+    for name in rel.lower().split('/'):
+        for stem in ('.dev.vars', '.env'):
+            if name == stem:
+                return True
+            if name.startswith(stem + '.') and name.rsplit('.', 1)[-1] not in safe_templates:
+                return True
+    return False
+
+def failure(rel, reason, keep=True):
+    global failures
+    skipped.append(f'{rel}: {reason}')
+    if keep:
+        preserve.append(rel)
+    failures += 1
+    if failures >= 10:
+        raise RuntimeError(
+            f'{failures} consecutive failures (last: {rel!r}: {reason}) '
+            '— transport presumed dead, aborting snapshot'
+        )
+
+if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+    raise RuntimeError('workspace export requires no-follow directory descriptors')
+open_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | os.O_NOFOLLOW
+directory_flags = open_flags | os.O_DIRECTORY
+
+def same_object(before, after):
+    return (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) == (
+        after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode)
+    )
+
+def walk(directory_fd, rel_root, depth, archive):
+    global failures
+    if depth > max_depth:
+        raise RuntimeError(
+            f'workspace depth exceeded the {max_depth}-level cap at {rel_root!r}'
+        )
+    try:
+        with os.scandir(directory_fd) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+    except OSError as exc:
+        if not rel_root:
+            raise RuntimeError(f'workspace traversal failed: {exc}') from exc
+        failure(rel_root, f'list failed: {exc}')
+        return
+
+    for entry in entries:
+        name = entry.name
+        rel = f'{rel_root}/{name}' if rel_root else name
+        if name in excluded or secret_path(rel):
+            continue
+        try:
+            listed = entry.stat(follow_symlinks=False)
+        except OSError as exc:
+            failure(rel, f'lstat failed: {exc}')
+            continue
+        if stat.S_ISLNK(listed.st_mode):
+            skipped.append(f'{rel}: symlink excluded')
+            continue
+        if stat.S_ISDIR(listed.st_mode):
+            if depth + 1 > max_depth:
+                raise RuntimeError(
+                    f'workspace depth exceeded the {max_depth}-level cap at {rel!r}'
+                )
+            child_fd = None
+            try:
+                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
+                opened = os.fstat(child_fd)
+                if not stat.S_ISDIR(opened.st_mode) or not same_object(listed, opened):
+                    os.close(child_fd)
+                    failure(rel, 'directory changed before it could be archived')
+                    continue
+            except OSError as exc:
+                if child_fd is not None:
+                    os.close(child_fd)
+                failure(rel, f'open directory failed: {exc}')
+                continue
+            try:
+                walk(child_fd, rel, depth + 1, archive)
+            finally:
+                os.close(child_fd)
+            continue
+        if not stat.S_ISREG(listed.st_mode):
+            skipped.append(f'{rel}: non-regular entry excluded')
+            continue
+        # A hardlink can give a path-filtered runtime secret an innocent alias.
+        # Snapshot only uniquely linked regular files; caches that legitimately
+        # use hardlinks are excluded above and source artifacts fail closed.
+        if listed.st_nlink != 1:
+            skipped.append(f'{rel}: hardlinked entry excluded')
+            continue
+        fd = None
+        try:
+            fd = os.open(name, open_flags, dir_fd=directory_fd)
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or not same_object(listed, opened):
+                os.close(fd)
+                failure(rel, 'file changed before it could be archived')
+                continue
+            if opened.st_nlink != 1:
+                os.close(fd)
+                skipped.append(f'{rel}: hardlinked entry excluded')
+                continue
+            if opened.st_size > max_bytes:
+                os.close(fd)
+                skipped.append(
+                    f'{rel}: {opened.st_size} bytes exceeds the {max_bytes}-byte cap'
+                )
+                failures += 1
+                if failures >= 10:
+                    raise RuntimeError(
+                        f'{failures} consecutive failures (last: {rel!r}: oversized) '
+                        '— transport presumed dead, aborting snapshot'
+                    )
+                continue
+            member = tarfile.TarInfo(rel)
+            member.size = opened.st_size
+            member.mode = 0o600
+            member.mtime = int(opened.st_mtime)
+            with os.fdopen(fd, 'rb') as source:
+                archive.addfile(member, source)
+                after = os.fstat(source.fileno())
+            before_version = (
+                opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns
+            )
+            after_version = (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+            )
+            if after_version != before_version:
+                raise RuntimeError(f'{rel!r} changed while it was being archived')
+            failures = 0
+        except OSError as exc:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            failure(rel, f'read failed: {exc}')
+
+try:
+    root_fd = os.open(root, directory_flags)
+except OSError as exc:
+    raise RuntimeError(f'workspace root is not a directory: {exc}') from exc
+try:
+    root_info = os.fstat(root_fd)
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise RuntimeError('workspace root is not a directory')
+    with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
+        walk(root_fd, '', 0, archive)
+finally:
+    os.close(root_fd)
+
+print(
+    '__DISCO_WORKSPACE_EXPORT_META__'
+    + json.dumps({'skipped': skipped, 'preserve': preserve}, separators=(',', ':')),
+    file=sys.stderr,
+)
+"""
 
 _CPU_PERIOD = 100_000  # cgroup CPU period (100ms); quota/period = cpus
 
@@ -142,6 +323,46 @@ def _default_cli_runner(argv: list[str], timeout: float) -> tuple[int, bytes, by
         return 124, exc.stdout or b"", (exc.stderr or b"") + b"\n[backend: exec timed out]"
     except FileNotFoundError as exc:
         raise SandboxError(f"the `podman` CLI is required on PATH for exec: {exc}") from exc
+
+
+async def _stream_workspace_archive(
+    argv: list[str], destination: pathlib.Path, timeout: float
+) -> tuple[int, bytes]:
+    """Stream binary stdout to a private file and always reap the CLI process."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdout=output,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except FileNotFoundError as exc:
+                raise SandboxError(
+                    f"the `podman` CLI is required for workspace export: {exc}"
+                ) from exc
+            try:
+                _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                _stdout, stderr = await process.communicate()
+                return 124, (stderr or b"") + b"\n[backend: workspace export timed out]"
+            except asyncio.CancelledError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.communicate()
+                raise
+            returncode = process.returncode
+            if returncode is None:
+                raise SandboxError("podman workspace export did not report an exit status")
+            return returncode, stderr or b""
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
 
 
 class PodmanSandboxInstance(ContainerInstance):
@@ -352,6 +573,68 @@ class PodmanSandboxInstance(ContainerInstance):
         )
         self._raise_if_dead(rc, err)
         return bounded_list_result(path, rc, out, err)
+
+    async def export_workspace_archive(
+        self,
+        destination: pathlib.Path,
+        *,
+        max_depth: int,
+        max_file_bytes: int,
+    ) -> tuple[list[str], list[str]]:
+        """Export the jailed workspace in one bounded guest process.
+
+        The generic snapshot walker needs multiple native-remote execs per node.
+        Under concurrent Podman builds that left FINISHED work uncommitted for more
+        than a minute.  This streams regular, non-secret, non-cache files once; the
+        host archive reader independently validates every member before publication.
+        """
+
+        self._alive()
+        rc, err = await _stream_workspace_archive(
+            [
+                "podman",
+                "--url",
+                self._cli_url,
+                "exec",
+                "--workdir",
+                "/",
+                self._name,
+                "python3",
+                "-I",
+                "-c",
+                _WORKSPACE_EXPORT_SCRIPT,
+                self._ws,
+                str(max_depth),
+                str(max_file_bytes),
+            ],
+            destination,
+            _WORKSPACE_EXPORT_TIMEOUT_S,
+        )
+        self._raise_if_dead(rc, err)
+        if rc != 0:
+            detail = err.decode("utf-8", "replace").strip()
+            raise SandboxError(f"workspace archive export failed: {detail or f'exit {rc}'}")
+        metadata: dict[str, Any] | None = None
+        for line in reversed(err.decode("utf-8", "replace").splitlines()):
+            if line.startswith(_WORKSPACE_EXPORT_META):
+                try:
+                    decoded = json.loads(line.removeprefix(_WORKSPACE_EXPORT_META))
+                except json.JSONDecodeError as exc:
+                    raise SandboxError(
+                        "workspace archive export returned invalid metadata"
+                    ) from exc
+                if isinstance(decoded, dict):
+                    metadata = decoded
+                break
+        if metadata is None:
+            raise SandboxError("workspace archive export returned no completion metadata")
+        skipped = metadata.get("skipped", [])
+        preserve = metadata.get("preserve", [])
+        if not isinstance(skipped, list) or not all(isinstance(item, str) for item in skipped):
+            raise SandboxError("workspace archive export returned invalid skipped metadata")
+        if not isinstance(preserve, list) or not all(isinstance(item, str) for item in preserve):
+            raise SandboxError("workspace archive export returned invalid preserve metadata")
+        return skipped, preserve
 
     async def write_file(self, path: str, data: bytes) -> None:
         """Binary-safe write through the inherited staged atomic path.

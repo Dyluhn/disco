@@ -57,6 +57,7 @@ from typing import Any, Protocol
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
 from disco.core.auth import SESSION_COOKIE, validated_isolated_path_preview_url
 from disco.core.workspace_paths import strip_redundant_workspace_prefix
+from disco.tools.projects.store import tree_digest as project_tree_digest
 from disco.tools.sandbox._container import PREVIEW_PORT
 
 from ..events import NormalizationError, normalize_events
@@ -412,6 +413,7 @@ class DiscoApiClient:
         poll_interval_s: float = 1.0,
         projects_root: str | None = None,
         snapshot_wait_s: float = 0.0,
+        require_workspace_commit: bool = False,
     ) -> None:
         self._t = transport
         self._db_path = db_path
@@ -427,6 +429,11 @@ class DiscoApiClient:
         # two. Re-read the snapshot until every declared file is present (or this budget
         # elapses) so a genuinely-present file is never reported missing.
         self._snapshot_wait_s = snapshot_wait_s
+        # Live evidence freezes only a fully published ProjectStore version.  The
+        # explicit option exists solely for legacy deterministic adapter fixtures
+        # that model file readiness without running the product persistence layer.
+        self._require_workspace_commit = require_workspace_commit
+        self._collected_workspace_dirs: dict[str, Path] = {}
         # The conversation_id this client most recently CREATED (set in
         # create_build_conversation). Lets the runner reach the cid for teardown even when
         # drive_scenario raised before returning a CollectedRun (so an abandoned RUNNING
@@ -1254,7 +1261,9 @@ class DiscoApiClient:
                 },
             )
 
-        ws = self._snapshot_workspace_dir(conversation_id)
+        ws = self._collected_workspace_dirs.get(conversation_id) or self._snapshot_workspace_dir(
+            conversation_id
+        )
         if ws is None:
             raise BrowserEvidenceCollectionError(
                 "referenced browser screenshot has no authoritative workspace snapshot",
@@ -1373,13 +1382,134 @@ class DiscoApiClient:
         stable_n: dict[str, int] = {}
         manifest: dict[str, Any] = {}
         snapshot_dir: Path | None = None
+        terminal_seq: int | None = None
+        commit_seq: int | None = None
+        commit_version_seq: int | None = None
+        commit_digest: str | None = None
+        observed_digest: str | None = None
+        event_evidence_valid = False
         while True:
-            snapshot_dir = self._snapshot_workspace_dir(conversation_id)
+            try:
+                current_events = normalize_events(self.collect_events(conversation_id))
+                event_evidence_valid = True
+            except (sqlite3.Error, NormalizationError):
+                current_events = []
+
+            def _exact_seq(event: dict[str, Any]) -> int | None:
+                raw = event.get("seq")
+                return raw if type(raw) is int and raw > 0 else None
+
+            def _sort_seq(event: dict[str, Any]) -> int:
+                seq = _exact_seq(event)
+                return seq if seq is not None else -1
+
+            def _valid_status(event: dict[str, Any]) -> bool:
+                return (
+                    event.get("source") == "system"
+                    and _exact_seq(event) is not None
+                    and isinstance(event.get("status"), str)
+                )
+
+            def _valid_workspace_version(event: dict[str, Any]) -> bool:
+                version_seq = event.get("version_seq")
+                digest = event.get("tree_digest")
+                return (
+                    event.get("source") == "system"
+                    and _exact_seq(event) is not None
+                    and type(version_seq) is int
+                    and version_seq > 0
+                    and isinstance(digest, str)
+                    and _RAW_SHA256_RE.fullmatch(digest) is not None
+                    and isinstance(event.get("trigger"), str)
+                )
+
+            for event in current_events:
+                kind = event.get("kind")
+                if kind == "status" and not _valid_status(event):
+                    event_evidence_valid = False
+                elif kind == "workspace_version" and not _valid_workspace_version(event):
+                    event_evidence_valid = False
+                elif kind in {"action", "observation", "agent_error"} and _exact_seq(event) is None:
+                    event_evidence_valid = False
+
+            statuses = [
+                event
+                for event in current_events
+                if event.get("kind") == "status" and _valid_status(event)
+            ]
+            latest_status = max(statuses, key=_sort_seq, default=None)
+            terminal_seq = (
+                _exact_seq(latest_status)
+                if event_evidence_valid
+                and latest_status is not None
+                and (
+                    str(latest_status.get("status")) in TERMINAL_STATES
+                    or str(latest_status.get("status")) == PAUSED_STATE
+                )
+                else None
+            )
+            latest_effect_seq = max(
+                (
+                    seq
+                    for event in current_events
+                    if event.get("kind") in {"action", "observation", "agent_error"}
+                    and (seq := _exact_seq(event)) is not None
+                ),
+                default=-1,
+            )
+            commits = [
+                event
+                for event in current_events
+                if event.get("kind") == "workspace_version"
+                and _valid_workspace_version(event)
+                and event.get("trigger") == "finish"
+                and event_evidence_valid
+                and terminal_seq is not None
+                and _sort_seq(event) > terminal_seq
+                and _sort_seq(event) > latest_effect_seq
+            ]
+            commit = max(commits, key=_sort_seq, default=None)
+            commit_seq = _exact_seq(commit) if commit is not None else None
+            commit_version_seq = (
+                int(commit["version_seq"])
+                if commit is not None and type(commit.get("version_seq")) is int
+                else None
+            )
+            commit_digest = str(commit.get("tree_digest") or "") if commit is not None else None
+            observed_digest = None
+            # Strict live evidence never relaxes merely because its ordering proof
+            # is missing or corrupt.  Terminal + post-terminal finish marker +
+            # matching tree digest are all mandatory; absence is INVALID evidence.
+            commit_required = self._require_workspace_commit
+            commit_ready = not commit_required
+            snapshot_dir = (
+                self._workspace_version_dir(conversation_id, commit_version_seq)
+                if commit_required and commit_version_seq is not None
+                else self._snapshot_workspace_dir(conversation_id)
+                if not commit_required
+                else None
+            )
+            if commit is not None and snapshot_dir is not None:
+                try:
+                    observed_digest = project_tree_digest(snapshot_dir)
+                except OSError:
+                    observed_digest = None
+                if commit_required:
+                    commit_ready = bool(commit_digest) and observed_digest == commit_digest
             manifest = (
                 self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
-                if snapshot_dir is not None
+                if snapshot_dir is not None and commit_ready
                 else {}
             )
+            if commit_required and commit_ready and snapshot_dir is not None:
+                try:
+                    post_read_digest = project_tree_digest(snapshot_dir)
+                except OSError:
+                    post_read_digest = None
+                if post_read_digest != commit_digest:
+                    observed_digest = post_read_digest
+                    commit_ready = False
+                    manifest = {}
             # Content-stability bookkeeping: count consecutive identical (present+size+sha)
             # reads per declared file. A change resets the counter to this fresh observation.
             for p in declared:
@@ -1401,7 +1531,11 @@ class DiscoApiClient:
             # ProjectStore had the change). So when readiness rests on unproven stability, do
             # NOT break early — keep polling to the full snapshot_wait_s deadline so a late
             # flush re-resets stability and is captured. Proven captures stay fast (no wait).
-            if ready and (not unproven_ready or time.monotonic() >= deadline):
+            if (
+                ready
+                and commit_ready
+                and (commit_required or not unproven_ready or time.monotonic() >= deadline)
+            ):
                 for p in unproven_ready:
                     _LOG.warning(
                         "snapshot %s: declared file %r accepted on EXTENDED content-stability "
@@ -1413,7 +1547,7 @@ class DiscoApiClient:
                     )
                 break
             if time.monotonic() >= deadline:
-                if blocking:
+                if blocking or not commit_ready:
                     raise SnapshotNotReadyError(
                         "workspace snapshot never reached the agent's final state within "
                         f"{self._snapshot_wait_s:g}s",
@@ -1421,6 +1555,12 @@ class DiscoApiClient:
                             "conversation_id": conversation_id,
                             "snapshot_wait_s": self._snapshot_wait_s,
                             "snapshot_dir": str(snapshot_dir) if snapshot_dir else None,
+                            "terminal_seq": terminal_seq,
+                            "event_evidence_valid": event_evidence_valid,
+                            "workspace_version_seq": commit_seq,
+                            "workspace_version_version_seq": commit_version_seq,
+                            "workspace_version_digest": commit_digest,
+                            "observed_tree_digest": observed_digest,
                             "unsatisfied": [
                                 {
                                     "path": p,
@@ -1448,6 +1588,8 @@ class DiscoApiClient:
             if entry is not None:
                 entry["proof"] = _proof_level(expected.get(p))
                 entry["content_stable"] = stable_n.get(p, 0) >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
+        if snapshot_dir is not None:
+            self._collected_workspace_dirs[conversation_id] = snapshot_dir
         return manifest, snapshot_dir
 
     def _read_snapshot_manifest(
@@ -1501,8 +1643,36 @@ class DiscoApiClient:
             store = ProjectStore(self._projects_root)
             if store.status() != StorageStatus.OK:
                 return None
-            ws = store.path_for(conversation_id).resolve()
+            raw_ws = store.path_for(conversation_id)
+            root = store.root.resolve() if store.root is not None else None
+            if raw_ws.is_symlink() or root is None:
+                return None
+            ws = raw_ws.resolve()
+            if not ws.is_relative_to(root):
+                return None
         except Exception:  # noqa: BLE001 — any resolution failure ⇒ no snapshot available
+            return None
+        return ws if ws.is_dir() else None
+
+    def _workspace_version_dir(self, conversation_id: str, version_seq: int | None) -> Path | None:
+        """Resolve the immutable ProjectStore tree named by a commit marker."""
+
+        if self._projects_root is None or version_seq is None:
+            return None
+        try:
+            from disco.tools.projects.store import ProjectStore, StorageStatus
+
+            store = ProjectStore(self._projects_root)
+            if store.status() != StorageStatus.OK:
+                return None
+            raw_ws = store.version_workspace_path(conversation_id, version_seq)
+            root = store.root.resolve() if store.root is not None else None
+            if raw_ws.is_symlink() or root is None:
+                return None
+            ws = raw_ws.resolve()
+            if not ws.is_relative_to(root):
+                return None
+        except Exception:  # noqa: BLE001 — missing/corrupt version evidence is not ready
             return None
         return ws if ws.is_dir() else None
 

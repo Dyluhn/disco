@@ -274,7 +274,7 @@ def _smoke_log_with_file_write(path, content):
     ]
 
 
-def _client(transport, tmp_path):
+def _client(transport, tmp_path, *, require_workspace_commit: bool = False):
     projects_root = tmp_path / "projects"
     if transport.workspace:
         _plant_snapshot(projects_root, transport.cid, transport.workspace)
@@ -283,6 +283,7 @@ def _client(transport, tmp_path):
         db_path=str(tmp_path / "disco.db"),
         poll_interval_s=0.0,
         projects_root=str(projects_root),
+        require_workspace_commit=require_workspace_commit,
     )
 
 
@@ -813,6 +814,291 @@ def _plant_snapshot(root, cid, files):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
     return ws
+
+
+def _workspace_commit(seq: int, digest: str, *, version_seq: int = 1) -> dict[str, Any]:
+    return {
+        "id": f"workspace_version_{seq}",
+        "seq": seq,
+        "kind": "workspace_version",
+        "source": "system",
+        "version_seq": version_seq,
+        "tree_digest": digest,
+        "trigger": "finish",
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshot_requires_post_terminal_workspace_commit(tmp_path):
+    from disco.tools.projects.store import ProjectStore, tree_digest
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>committed</h1>"
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", content))
+    workspace = _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["terminal_seq"] == 10
+    assert raised.value.facts["workspace_version_seq"] is None
+    assert raised.value.facts["observed_tree_digest"] is None
+
+    _insert_event(db, _CID, _workspace_commit(11, "0" * 64, version_seq=version.seq))
+    with pytest.raises(SnapshotNotReadyError) as mismatched:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert mismatched.value.facts["workspace_version_seq"] == 11
+    assert mismatched.value.facts["workspace_version_digest"] == "0" * 64
+    assert mismatched.value.facts["observed_tree_digest"] == tree_digest(workspace)
+
+    _insert_event(
+        db,
+        _CID,
+        _workspace_commit(12, tree_digest(workspace), version_seq=version.seq),
+    )
+    (workspace / "index.html").write_text("<h1>later uncommitted bytes</h1>")
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+    assert manifest["index.html"]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_stale_preterminal_workspace_commit_cannot_bless_final_tree(tmp_path):
+    from disco.tools.projects.store import ProjectStore, tree_digest
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>final</h1>"
+    events = _smoke_log_with_file_write("index.html", content)
+    events[-1] = _workspace_commit(10, "0" * 64)
+    events.append(status(11, "FINISHED"))
+    _seed_db(db, _CID, events)
+    workspace = _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["terminal_seq"] == 11
+    assert raised.value.facts["workspace_version_seq"] is None
+
+    _insert_event(
+        db,
+        _CID,
+        _workspace_commit(12, tree_digest(workspace), version_seq=version.seq),
+    )
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+    assert manifest["index.html"]["content"] == content
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source", "agent"),
+        ("seq", "11"),
+        ("version_seq", "1"),
+        ("tree_digest", "not-a-digest"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_strict_commit_rejects_forged_or_malformed_system_marker(tmp_path, field, value):
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>committed</h1>"
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", content))
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    marker = _workspace_commit(11, version.tree_digest, version_seq=version.seq)
+    marker[field] = value
+    _insert_event(db, _CID, marker)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["event_evidence_valid"] is False
+    assert raised.value.facts["workspace_version_seq"] is None
+
+
+@pytest.mark.asyncio
+async def test_commit_before_late_action_outcome_cannot_bless_workspace(tmp_path):
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>committed</h1>"
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", content))
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(
+        db,
+        _CID,
+        _workspace_commit(11, version.tree_digest, version_seq=version.seq),
+    )
+    _insert_event(db, _CID, observation(12, "evt_7", tool="file_write"))
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["terminal_seq"] == 10
+    assert raised.value.facts["workspace_version_seq"] is None
+
+
+@pytest.mark.asyncio
+async def test_committed_version_root_symlink_cannot_escape_projects_store(tmp_path):
+    import shutil
+
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>same bytes outside</h1>"
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", content))
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    store = ProjectStore(str(projects))
+    version = store.cut_version(_CID, trigger="finish")
+    assert version is not None
+    version_workspace = store.version_workspace_path(_CID, version.seq)
+    outside = tmp_path / "outside-version"
+    outside.mkdir()
+    (outside / "index.html").write_text(content)
+    shutil.rmtree(version_workspace)
+    version_workspace.symlink_to(outside, target_is_directory=True)
+    _insert_event(
+        db,
+        _CID,
+        _workspace_commit(11, version.tree_digest, version_seq=version.seq),
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["workspace_version_seq"] == 11
+    assert raised.value.facts["snapshot_dir"] is None
+
+
+@pytest.mark.asyncio
+async def test_old_terminal_commit_cannot_bless_later_running_mutation(tmp_path):
+    from disco.tools.projects.store import ProjectStore, tree_digest
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>old committed bytes</h1>"
+    events = _smoke_log_with_file_write("index.html", content)
+    _seed_db(db, _CID, events)
+    workspace = _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(
+        db,
+        _CID,
+        _workspace_commit(11, tree_digest(workspace), version_seq=version.seq),
+    )
+    _insert_event(db, _CID, status(12, "RUNNING"))
+    _insert_event(
+        db,
+        _CID,
+        action(13, "file_write", args={"path": "index.html", "content": "new bytes"}),
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["terminal_seq"] is None
+    assert raised.value.facts["workspace_version_seq"] is None
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_commit_fails_closed_without_terminal_event(tmp_path):
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    events = _smoke_log_with_file_write("index.html", "<h1>bytes</h1>")[:-1]
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, {"index.html": "<h1>bytes</h1>"})
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["terminal_seq"] is None
+    assert raised.value.facts["workspace_version_seq"] is None
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_commit_fails_closed_on_corrupt_event_evidence(
+    tmp_path, monkeypatch
+):
+    projects = tmp_path / "projects"
+    _plant_snapshot(projects, _CID, {"index.html": "<h1>bytes</h1>"})
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+    monkeypatch.setattr(client, "collect_events", lambda _conversation_id: [{"payload": "{"}])
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert raised.value.facts["terminal_seq"] is None
+    assert raised.value.facts["workspace_version_seq"] is None
 
 
 def _browser_screenshot_observation(

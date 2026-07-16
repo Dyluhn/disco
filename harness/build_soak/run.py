@@ -2628,6 +2628,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     db_path=db_path,
                     projects_root=projects_root,
                     snapshot_wait_s=args.snapshot_wait,
+                    require_workspace_commit=True,
                 )
                 classification = await run_once(
                     client,

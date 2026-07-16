@@ -7,7 +7,12 @@ env leak — all offline. The real isolation + limits-bite-through-the-socket is
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
+import os
+import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -424,6 +429,161 @@ async def test_timeout_reported_and_file_round_trip():
     cli.results = [(124, b"partial\n", b"")]
     res = await inst.exec_shell("sleep 999", timeout_s=1)
     assert res.timed_out is True and res.exit_code == 124 and res.stdout == "partial\n"
+
+
+async def test_workspace_archive_export_is_one_argv_only_stream(monkeypatch, tmp_path):
+    from disco.tools.sandbox import podman as podman_module
+
+    calls = []
+
+    async def _archive(argv, destination, timeout):
+        calls.append((argv, timeout))
+        with tarfile.open(destination, "w:") as archive:
+            data = b"<h1>ok</h1>"
+            member = tarfile.TarInfo("index.html")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        destination.chmod(0o600)
+        metadata = json.dumps({"skipped": [], "preserve": []}, separators=(",", ":"))
+        return 0, (podman_module._WORKSPACE_EXPORT_META + metadata).encode()
+
+    monkeypatch.setattr(podman_module, "_stream_workspace_archive", _archive)
+    svc, _client, _cli = _svc()
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    destination = tmp_path / "workspace.tar"
+
+    assert await inst.export_workspace_archive(destination, max_depth=16, max_file_bytes=1024) == (
+        [],
+        [],
+    )
+
+    assert len(calls) == 1
+    argv, _timeout = calls[0]
+    assert argv[:7] == [
+        "podman",
+        "--url",
+        svc._cli_url,
+        "exec",
+        "--workdir",
+        "/",
+        f"disco-sbx-{inst.id}",
+    ]
+    assert argv[7:10] == ["python3", "-I", "-c"]
+    assert "sh" not in argv[:10]
+    assert destination.stat().st_mode & 0o777 == 0o600
+    with tarfile.open(destination, "r:") as archive:
+        assert archive.getnames() == ["index.html"]
+
+
+def test_workspace_export_guest_filter_never_opens_runtime_secrets(tmp_path):
+    from disco.tools.sandbox import podman as podman_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "index.html").write_bytes(b"ok")
+    (workspace / ".env").write_bytes(b"SECRET=never-cross")
+    (workspace / ".env.example").write_bytes(b"SECRET=replace-me")
+    os.link(workspace / ".env", workspace / "innocent-alias.txt")
+    # The real container's working directory is /workspace. Without isolated
+    # mode this shadows stdlib tarfile before the secret filter even starts.
+    (workspace / "tarfile.py").write_text("raise RuntimeError('workspace import executed')\n")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            podman_module._WORKSPACE_EXPORT_SCRIPT,
+            str(workspace),
+            "16",
+            "1024",
+        ],
+        capture_output=True,
+        check=True,
+        cwd=workspace,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r:") as archive:
+        assert archive.getnames() == [".env.example", "index.html", "tarfile.py"]
+        assert b"never-cross" not in result.stdout
+    assert podman_module._WORKSPACE_EXPORT_META.encode() in result.stderr
+
+
+def test_workspace_export_ancestor_swap_stays_on_open_directory(tmp_path):
+    """A renamed ancestor cannot redirect later reads outside /workspace.
+
+    The large first member fills the stdout pipe. Once its header arrives, the
+    test atomically renames the directory and replaces its old path with a link.
+    A path-based walker opens the later target through that link; descriptor-
+    anchored traversal must keep reading from the already-open original dir.
+    """
+
+    from disco.tools.sandbox import podman as podman_module
+
+    workspace = tmp_path / "workspace"
+    victim = workspace / "victim"
+    outside = tmp_path / "outside"
+    victim.mkdir(parents=True)
+    outside.mkdir()
+    marker = b"M" * (512 * 1024)
+    safe = b"safe-workspace-bytes"
+    secret = b"OUTSIDE-ANCESTOR-SWAP-SECRET"
+    (victim / "000-marker.bin").write_bytes(marker)
+    (victim / "999-target.txt").write_bytes(safe)
+    (outside / "999-target.txt").write_bytes(secret)
+
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            podman_module._WORKSPACE_EXPORT_SCRIPT,
+            str(workspace),
+            "16",
+            str(1024 * 1024),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=workspace,
+        bufsize=0,
+    )
+    assert process.stdout is not None
+    try:
+        header = process.stdout.read(512)
+        assert header[:100].rstrip(b"\0") == b"victim/000-marker.bin"
+        original = workspace / "victim-original"
+        victim.rename(original)
+        victim.symlink_to(outside, target_is_directory=True)
+
+        stdout_tail, stderr = process.communicate(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+    output = header + stdout_tail
+    assert process.returncode == 0, stderr.decode("utf-8", "replace")
+    assert secret not in output
+    with tarfile.open(fileobj=io.BytesIO(output), mode="r:") as archive:
+        target = archive.extractfile("victim/999-target.txt")
+        assert target is not None
+        assert target.read() == safe
+
+
+async def test_stream_workspace_archive_cancellation_reaps_and_removes_partial(tmp_path):
+    from disco.tools.sandbox import podman as podman_module
+
+    destination = tmp_path / "partial.tar"
+    task = asyncio.create_task(
+        podman_module._stream_workspace_archive(
+            [sys.executable, "-c", "import time; time.sleep(30)"], destination, 60
+        )
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not destination.exists()
 
 
 async def test_podman_unreachable_is_typed_error():

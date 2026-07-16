@@ -85,6 +85,7 @@ class _VersionCutStore:
         self.manifest_writes = 0
         self.cut_triggers: list[str] = []
         self.next_version = None
+        self.versions = []
 
     def status(self) -> StorageStatus:
         return StorageStatus.OK
@@ -104,6 +105,9 @@ class _VersionCutStore:
         if self.fail_cut:
             raise RuntimeError("version store unavailable")
         return self.next_version
+
+    def list_versions(self, conversation_id: str):
+        return self.versions
 
 
 # ---- snapshot version cuts ---------------------------------------------------
@@ -155,6 +159,33 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     assert events[1].version_seq == 2
     assert events[1].tree_digest == "tree-2"
     assert events[1].trigger == "finish"
+
+
+async def test_maybe_snapshot_reemits_commit_for_unchanged_latest_version(monkeypatch, tmp_path):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = "conv-snapshot-unchanged-commit"
+    project_store = _VersionCutStore(tmp_path)
+    project_store.versions = [SimpleNamespace(seq=4, tree_digest="same-tree")]
+    rt._project_store_now = MagicMock(return_value=project_store)
+    rt._executors[cid] = MagicMock(_sandbox=object())
+
+    async def _snapshot(session, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "index.html").write_text("<h1>unchanged</h1>")
+        return SnapshotResult(file_count=1, total_bytes=18, paths=["index.html"])
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", _snapshot)
+
+    await rt._maybe_snapshot(cid, trigger="finish")
+
+    commits = [
+        event for event in await store.get_events(cid) if isinstance(event, WorkspaceVersionEvent)
+    ]
+    assert len(commits) == 1
+    assert commits[0].version_seq == 4
+    assert commits[0].tree_digest == "same-tree"
+    assert commits[0].trigger == "finish"
 
 
 async def test_maybe_snapshot_survives_cut_version_failure(monkeypatch, tmp_path, caplog):

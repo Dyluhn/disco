@@ -22,6 +22,7 @@ import logging
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from ._container import PREVIEW_PORT, USER_PORTS
@@ -463,6 +464,27 @@ class SandboxSession:
 
     async def list_dir_bounded(self, path: str, limit: int) -> tuple[list[tuple[str, str]], bool]:
         return await self._resilient(lambda i: i.list_dir_bounded(path, limit))
+
+    async def export_workspace_archive(
+        self, destination: Path, *, max_depth: int, max_file_bytes: int
+    ) -> tuple[list[str], list[str]] | None:
+        """Use a backend bulk-export capability when one is available.
+
+        ``None`` preserves the transport-agnostic list/read walker for process,
+        gVisor, and injected test backends.  The resilient wrapper keeps Podman's
+        one-exec fast path under the same recreate/error contract as ordinary I/O.
+        """
+
+        async def _export(
+            instance: SandboxInstance,
+        ) -> tuple[list[str], list[str]] | None:
+            exporter = getattr(instance, "export_workspace_archive", None)
+            if not callable(exporter):
+                return None
+            export_fn = cast(Callable[..., Awaitable[tuple[list[str], list[str]]]], exporter)
+            return await export_fn(destination, max_depth=max_depth, max_file_bytes=max_file_bytes)
+
+        return await self._resilient(_export)
 
     async def file_exists(self, path: str) -> bool:
         """[B4] Delegate the existence check to the live instance (which resolves

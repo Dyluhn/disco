@@ -8,7 +8,10 @@ if the bytes actually round-trip.
 
 from __future__ import annotations
 
+import asyncio
+import io
 import os
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -51,6 +54,42 @@ class _FakeSandbox:
 
     async def write_file(self, path: str, data: bytes) -> None:
         self.files[path] = data
+
+
+class _BulkSandbox:
+    def __init__(
+        self,
+        members: dict[str, bytes],
+        *,
+        link: str | None = None,
+        preserve: list[str] | None = None,
+    ) -> None:
+        self.members = members
+        self.link = link
+        self.preserve = preserve or []
+        self.export_calls = 0
+
+    async def export_workspace_archive(
+        self, destination: Path, *, max_depth: int, max_file_bytes: int
+    ) -> tuple[list[str], list[str]]:
+        self.export_calls += 1
+        with tarfile.open(destination, "w:") as archive:
+            for name, data in self.members.items():
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                archive.addfile(member, io.BytesIO(data))
+            if self.link is not None:
+                member = tarfile.TarInfo(self.link)
+                member.type = tarfile.SYMTYPE
+                member.linkname = "/etc/passwd"
+                archive.addfile(member)
+        return [], self.preserve
+
+    async def list_dir(self, _path: str) -> list[str]:
+        raise AssertionError("bulk snapshot fell back to per-node list")
+
+    async def read_file(self, _path: str) -> bytes:
+        raise AssertionError("bulk snapshot fell back to per-node read")
 
 
 # ---- validate_root: the graceful-failure foundation -----------------------
@@ -134,6 +173,138 @@ async def test_workspace_roundtrip(tmp_path: Path) -> None:
     assert len(rows) == 1 and rows[0].conversation_id == cid
     assert rows[0].file_count == len(payload)
     assert rows[0].files_missing is False
+
+
+async def test_bulk_snapshot_uses_one_archive_and_reapplies_host_filters(tmp_path: Path) -> None:
+    bulk = _BulkSandbox(
+        {
+            "index.html": b"<h1>bulk</h1>",
+            "src/app.js": b"console.log('ok')\n",
+            ".env": b"SECRET=must-not-persist",
+            "node_modules/pkg/index.js": b"cache",
+        }
+    )
+
+    result = await snapshot_workspace(bulk, tmp_path / "snap")
+
+    assert bulk.export_calls == 1
+    assert result.paths == ["index.html", "src/app.js"]
+    assert (tmp_path / "snap" / "index.html").read_bytes() == b"<h1>bulk</h1>"
+    assert not (tmp_path / "snap" / ".env").exists()
+    assert not (tmp_path / "snap" / "node_modules").exists()
+
+
+async def test_bulk_snapshot_rejects_links_without_replacing_last_good_tree(tmp_path: Path) -> None:
+    from disco.tools.projects.archive import WorkspaceArchiveError
+
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    (dest / "index.html").write_bytes(b"last-good")
+    bulk = _BulkSandbox({"new.txt": b"new"}, link="escape")
+
+    with pytest.raises(WorkspaceArchiveError, match="non-regular"):
+        await snapshot_workspace(bulk, dest)
+
+    files = {
+        path.relative_to(dest).as_posix(): path.read_bytes()
+        for path in dest.rglob("*")
+        if path.is_file()
+    }
+    assert files == {"index.html": b"last-good"}
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        {"a": b"file", "a/b": b"child"},
+        {"a/b": b"child", "a": b"file"},
+    ],
+)
+async def test_bulk_snapshot_rejects_file_prefix_conflicts_atomically(
+    tmp_path: Path, members: dict[str, bytes]
+) -> None:
+    from disco.tools.projects.archive import WorkspaceArchiveError
+
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    (dest / "index.html").write_bytes(b"last-good")
+
+    with pytest.raises(WorkspaceArchiveError, match="conflicting path prefix"):
+        await snapshot_workspace(_BulkSandbox(members), dest)
+
+    assert (dest / "index.html").read_bytes() == b"last-good"
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
+
+
+async def test_preserved_path_cannot_follow_host_link_outside_snapshot(tmp_path: Path) -> None:
+    from disco.tools.projects.archive import WorkspaceArchiveError
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_bytes(b"never-copy")
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    (dest / "link").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(WorkspaceArchiveError, match="traverse preserved path"):
+        await snapshot_workspace(_BulkSandbox({}, preserve=["link/secret.txt"]), dest)
+
+    assert (outside / "secret.txt").read_bytes() == b"never-copy"
+    assert (dest / "link").is_symlink()
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
+
+
+async def test_first_snapshot_ignores_unavailable_preserve_without_prior_tree(
+    tmp_path: Path,
+) -> None:
+    dest = tmp_path / "snap"
+
+    result = await snapshot_workspace(
+        _BulkSandbox({"index.html": b"first-good"}, preserve=["unreadable.txt"]), dest
+    )
+
+    assert result.paths == ["index.html"]
+    assert (dest / "index.html").read_bytes() == b"first-good"
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
+
+
+async def test_preserved_host_hardlink_is_rejected_without_publication(tmp_path: Path) -> None:
+    from disco.tools.projects.archive import WorkspaceArchiveError
+
+    outside = tmp_path / "outside-secret"
+    outside.write_bytes(b"never-copy")
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    os.link(outside, dest / "alias.txt")
+
+    with pytest.raises(WorkspaceArchiveError, match="hardlinked"):
+        await snapshot_workspace(_BulkSandbox({"index.html": b"new"}, preserve=["alias.txt"]), dest)
+
+    assert outside.read_bytes() == b"never-copy"
+    assert not (dest / "index.html").exists()
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
+
+
+async def test_bulk_snapshot_cancellation_leaves_old_tree_and_no_transaction(
+    tmp_path: Path,
+) -> None:
+    class _CanceledBulk(_BulkSandbox):
+        async def export_workspace_archive(
+            self, destination: Path, *, max_depth: int, max_file_bytes: int
+        ) -> tuple[list[str], list[str]]:
+            destination.write_bytes(b"partial")
+            raise asyncio.CancelledError
+
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    (dest / "index.html").write_bytes(b"last-good")
+
+    with pytest.raises(asyncio.CancelledError):
+        await snapshot_workspace(_CanceledBulk({}), dest)
+
+    assert (dest / "index.html").read_bytes() == b"last-good"
+    assert not list(tmp_path.glob(".snap.snapshot-*"))
 
 
 def test_runtime_secret_path_classifier_keeps_only_explicit_templates() -> None:

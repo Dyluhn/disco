@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -732,16 +733,19 @@ class LifecycleManager:
                 owner_id = row.owner_id
         except Exception:  # noqa: BLE001 — metadata is best-effort
             pass
+        started = time.monotonic()
+        _LOG.info("snapshot started for %s (trigger=%s)", conversation_id, trigger)
         try:
             result = await snapshot_workspace(session, store.path_for(conversation_id))
             # OBSERVABILITY (bake-off #5a): log the file_count so an empty snapshot of a
             # build that DID write files (a flush/timing race vs the sandbox) is visible,
             # not silent. file_count=0 here + a successful file_write in the events = race.
             _LOG.info(
-                "snapshot for %s: %d files, %d bytes (sandbox=%s)",
+                "snapshot completed for %s: %d files, %d bytes in %.3fs (sandbox=%s)",
                 conversation_id,
                 result.file_count,
                 result.total_bytes,
+                time.monotonic() - started,
                 type(session).__name__,
             )
             store.write_manifest(
@@ -763,6 +767,14 @@ class LifecycleManager:
             )
             try:
                 version = store.cut_version(conversation_id, trigger=trigger)
+                if version is None:
+                    # An unchanged follow-up legitimately reuses the prior version,
+                    # but its newer terminal still needs an ordered persistence
+                    # acknowledgement.  Re-emit the latest identical version as a
+                    # fresh commit marker instead of making strict consumers treat
+                    # the completed snapshot as uncommitted.
+                    versions = store.list_versions(conversation_id)
+                    version = versions[0] if versions else None
                 if version is not None:
                     # A terminal StatusEvent is visible before this copy finishes.
                     # Publish an explicit commit marker so the UI and reliability
@@ -779,7 +791,22 @@ class LifecycleManager:
                 _LOG.warning(
                     "version cut failed for %s after snapshot", conversation_id, exc_info=True
                 )
+        except asyncio.CancelledError:
+            _LOG.warning(
+                "snapshot canceled for %s after %.3fs (trigger=%s)",
+                conversation_id,
+                time.monotonic() - started,
+                trigger,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001 — surface, don't crash
+            _LOG.warning(
+                "snapshot failed for %s after %.3fs (trigger=%s): %s",
+                conversation_id,
+                time.monotonic() - started,
+                trigger,
+                exc,
+            )
             await self._rt._emit_persistence_reminder(
                 conversation_id,
                 f"snapshot failed: {exc}",
