@@ -280,6 +280,60 @@ def test_distinctive_shell_error_stays_grouped_across_changed_commands() -> None
     assert result.facts["action_signature"] is None
 
 
+def test_distinct_recovery_details_under_same_tool_error_are_not_thrash() -> None:
+    """H314: a corrected AppKit retry must not be collapsed by its coarse code."""
+
+    events = [
+        action(34, "app_set_design", action_id="design34", args={"recipe_id": "field-notes"}),
+        agent_error(
+            35,
+            "design34",
+            error="app_set_design_refused",
+            detail="provide exactly one of recipe_id (P0) or design_spec (P1).",
+        ),
+        action(36, "app_set_design", action_id="design36", args={"design_spec": {}}),
+        agent_error(
+            37,
+            "design36",
+            error="app_set_design_refused",
+            detail="invalid design_spec: typography.heading_font must contain one font family",
+        ),
+    ]
+
+    result = ThrashOracle().check(
+        events,
+        scenario=_scenario(max_same_tool_error_repeats=1),
+    )[0]
+
+    assert result.passed
+    assert result.facts["largest_same_tool_error_group"] == 1
+
+
+def test_same_recovery_detail_under_same_tool_error_remains_thrash_without_leaking_detail() -> None:
+    events = []
+    for seq, item in ((1, 123), (3, 456)):
+        action_id = f"design{seq}"
+        events += [
+            action(seq, "app_set_design", action_id=action_id, args={"design_spec": {"v": item}}),
+            agent_error(
+                seq + 1,
+                action_id,
+                error="app_set_design_refused",
+                detail=f"invalid design_spec: secret-marker item {item} has an invalid font stack",
+            ),
+        ]
+
+    result = ThrashOracle().check(
+        events,
+        scenario=_scenario(max_same_tool_error_repeats=1),
+    )[0]
+
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["action_seqs"] == [1, 3]
+    assert result.facts["detail_signature"].startswith("sha256:")
+    assert "secret-marker" not in str(result.facts)
+
+
 def test_actionless_pause_is_a_failure_even_if_run_later_finishes() -> None:
     result = ThrashOracle().check(
         [status(1, "PAUSED", detail="actionless"), status(2, "FINISHED")],

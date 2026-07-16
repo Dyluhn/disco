@@ -97,10 +97,31 @@ def _fingerprint(event: dict[str, Any]) -> str:
     return f"{tool_name_of(event) or '?'}:{encoded}"
 
 
-def _error_signature(text: str) -> str:
+def _normalized_error_text(text: str) -> str:
     normalized = _UUID.sub("<id>", text.lower())
     normalized = _NUMBER.sub("<n>", normalized)
-    return _SPACE.sub(" ", normalized).strip()[:240]
+    return _SPACE.sub(" ", normalized).strip()
+
+
+def _error_signature(text: str) -> str:
+    return _normalized_error_text(text)[:240]
+
+
+def _detail_signature(error: str, detail: str) -> str:
+    """Return a non-disclosing identity for actionable failure detail.
+
+    Built-in tools commonly keep a stable machine error code while putting the
+    actual refusal reason in ``AgentErrorEvent.detail`` (or failed
+    ``ToolOutcome.content``). Two different reasons are two different recovery
+    steps, not evidence of a repeated failed behavior. Normalize volatile IDs and
+    numbers before hashing so retries of the same reason still group, while the
+    evidence dossier never gains the potentially sensitive raw detail.
+    """
+
+    normalized = _normalized_error_text(detail)
+    if not normalized or normalized == _normalized_error_text(error):
+        return ""
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _failed_action_signature(action: dict[str, Any], error_signature: str) -> str:
@@ -123,8 +144,8 @@ def _failed_action_signature(action: dict[str, Any], error_signature: str) -> st
     return "sha256:" + hashlib.sha256(command.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str]]:
-    outcomes: dict[str, tuple[bool, str]] = {}
+def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str, str]]:
+    outcomes: dict[str, tuple[bool, str, str]] = {}
     for event in events:
         kind = kind_of(event)
         action_id = str(event.get("action_id") or "")
@@ -133,10 +154,20 @@ def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str]
         if kind == KIND_OBSERVATION:
             result = event.get("tool_result") or {}
             success = result.get("success") is True
-            error = str(result.get("error") or ("" if success else result.get("content") or ""))
-            outcomes[action_id] = (success, _error_signature(error))
+            content = str(result.get("content") or "")
+            error = str(result.get("error") or ("" if success else content))
+            outcomes[action_id] = (
+                success,
+                _error_signature(error),
+                "" if success else _detail_signature(error, content),
+            )
         elif kind == KIND_AGENT_ERROR:
-            outcomes[action_id] = (False, _error_signature(str(event.get("error") or "")))
+            error = str(event.get("error") or "")
+            outcomes[action_id] = (
+                False,
+                _error_signature(error),
+                _detail_signature(error, str(event.get("detail") or "")),
+            )
     return outcomes
 
 
@@ -240,7 +271,7 @@ def _explicit_mutation_path(action: dict[str, Any]) -> str | None:
 
 
 def _largest_semantic_shell_repeat_group(
-    actions: list[dict[str, Any]], outcomes: dict[str, tuple[bool, str]]
+    actions: list[dict[str, Any]], outcomes: dict[str, tuple[bool, str, str]]
 ) -> tuple[int, str, list[int]]:
     """Find repeated successful direct-script executions between source edits.
 
@@ -256,7 +287,9 @@ def _largest_semantic_shell_repeat_group(
     groups: dict[tuple[str, int], list[int]] = {}
     for action in actions:
         mutation_path = _explicit_mutation_path(action)
-        mutation_succeeded, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome"))
+        mutation_succeeded, _, _ = outcomes.get(
+            str(action_id_of(action)), (False, "missing outcome", "")
+        )
         if mutation_path is not None and mutation_succeeded:
             family = _SOURCE_SUFFIX_FAMILY.get(posixpath.splitext(mutation_path)[1].lower())
             if family is not None:
@@ -265,7 +298,7 @@ def _largest_semantic_shell_repeat_group(
             "verify_probe"
         ):
             continue
-        success, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome"))
+        success, _, _ = outcomes.get(str(action_id_of(action)), (False, "missing outcome", ""))
         if not success:
             continue
         args = (action.get("tool_call") or {}).get("arguments") or {}
@@ -393,22 +426,27 @@ class ThrashOracle:
                 )
             ]
 
-        failed_signatures: Counter[tuple[str, str, str]] = Counter()
-        failure_seqs: dict[tuple[str, str, str], list[int]] = {}
+        failed_signatures: Counter[tuple[str, str, str, str]] = Counter()
+        failure_seqs: dict[tuple[str, str, str, str], list[int]] = {}
         for action in actions:
             action_id = action_id_of(action)
-            success, signature = outcomes.get(str(action_id), (False, "missing outcome"))
+            success, signature, detail_signature = outcomes.get(
+                str(action_id), (False, "missing outcome", "")
+            )
             if success:
                 continue
             key = (
                 tool_name_of(action) or "?",
                 signature,
+                detail_signature,
                 _failed_action_signature(action, signature),
             )
             failed_signatures[key] += 1
             failure_seqs.setdefault(key, []).append(seq_of(action))
         if failed_signatures:
-            (tool, signature, action_signature), count = failed_signatures.most_common(1)[0]
+            (tool, signature, detail_signature, action_signature), count = (
+                failed_signatures.most_common(1)[0]
+            )
             if count > limits["max_same_tool_error_repeats"]:
                 return [
                     failing(
@@ -418,10 +456,13 @@ class ThrashOracle:
                         facts={
                             "tool": tool,
                             "error_signature": signature,
+                            "detail_signature": detail_signature or None,
                             "action_signature": action_signature or None,
                             "count": count,
                             "allowed": limits["max_same_tool_error_repeats"],
-                            "action_seqs": failure_seqs[(tool, signature, action_signature)],
+                            "action_seqs": failure_seqs[
+                                (tool, signature, detail_signature, action_signature)
+                            ],
                         },
                     )
                 ]

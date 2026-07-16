@@ -105,13 +105,16 @@ def observation(
     }
 
 
-def agent_error(seq: int, action_id: str, *, error: str = "rejected") -> dict[str, Any]:
+def agent_error(
+    seq: int, action_id: str, *, error: str = "rejected", detail: str | None = None
+) -> dict[str, Any]:
     return {
         "id": f"evt_{seq}",
         "seq": seq,
         "kind": "agent_error",
         "source": "environment",
         "error": error,
+        "detail": detail,
         "action_id": action_id,
         "tool_call_id": f"call_{seq}",
     }
