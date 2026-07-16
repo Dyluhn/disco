@@ -19,6 +19,7 @@ directive is always None, and the bool facade is unchanged.
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from ..events import (
     ObservationEvent,
     StatusEvent,
 )
+from ..workspace_paths import strip_redundant_workspace_prefix
 from .signals import (
     _NON_PRODUCTIVE_TOOLS,
     _NONCRITICAL_FAILURE_TOOLS,
@@ -101,6 +103,13 @@ _PROBE_SPIN_TOOLS = _NO_PROGRESS_PROBE_TOOLS | frozenset(
         "deploy_status",
     }
 )
+
+# H336 — successful file reads can silently thrash by varying offset/limit over
+# lines the model already read. Raw action/output equality cannot see that the
+# coverage is identical. The parser keys only on FileReadTool's explicit numbered
+# line contract; opaque/binary/malformed observations never contribute.
+_FILE_READ_NUMBERED_LINE_RE = re.compile(r"^\s*(\d+)\t(.*)$", re.MULTILINE)
+_FILE_READ_HEADER_RE = re.compile(r"^\[lines\s+\d+-\d+\s+of\s+(\d+)(?:[; (\]\u2014])")
 
 # H275 — structured verifier outcomes are semantic progress signals, not ordinary
 # successful tool executions.  The live AppKit run varied reads/lists/status calls
@@ -197,6 +206,11 @@ class StuckThresholds(BaseModel):
     # M3 — same non-productive probe tool calls in the recent window, with no
     # productive action between them. 0 disables the detector.
     probe_spin_calls: int = 12
+    # H336 — successful same-file reads that return only already-known,
+    # byte-identical numbered lines after the latest productive action. The first
+    # read (and every read adding/changing a line) is progress, not a repeat.
+    # 0 disables the detector.
+    redundant_read_coverage: int = 4
 
 
 class RewriteDirective(BaseModel):
@@ -307,9 +321,16 @@ class StuckDetector:
         Probe-spin counts ActionEvents, which normally arrive paired with
         ObservationEvents, so N probe calls require roughly 2N raw events.
         """
-        if self.t.probe_spin_calls <= 0:
-            return self.t.scan_window
-        return max(self.t.scan_window, self.t.probe_spin_calls * 2)
+        probe_window = self.t.probe_spin_calls * 2 if self.t.probe_spin_calls > 0 else 0
+        # One coverage-establishing read plus N redundant reads, each normally an
+        # action/observation pair. Four extra events preserve the one-shot escape
+        # reminder and the model's bounded response inside the next evaluation.
+        read_window = (
+            (self.t.redundant_read_coverage + 1) * 2 + 4
+            if self.t.redundant_read_coverage > 0
+            else 0
+        )
+        return max(self.t.scan_window, probe_window, read_window)
 
     def evaluate(self, recent: list[Event]) -> StuckResult:
         """The richer stuck signal. Returns the same stuck bool the four
@@ -348,9 +369,104 @@ class StuckDetector:
             return "alternating_actions"  # pattern 4
         if self._pure_repeat(legacy_recent):
             return "pure_repeat"  # W1 pattern 5
+        if self._redundant_read_coverage(recent):
+            return "redundant_read_coverage"
         if self._probe_spin(recent):
             return "probe_spin"
         return None
+
+    # -- H336 pattern 7: varied offsets over already-known file content ------
+
+    @staticmethod
+    def _normalized_read_path(raw: object) -> str | None:
+        path = str(raw or "").strip()
+        if not path:
+            return None
+        normalized = posixpath.normpath(strip_redundant_workspace_prefix(path))
+        return normalized if normalized not in ("", ".") else None
+
+    @staticmethod
+    def _numbered_read_lines(content: str) -> dict[int, str]:
+        return {
+            int(match.group(1)): match.group(2)
+            for match in _FILE_READ_NUMBERED_LINE_RE.finditer(content)
+        }
+
+    @staticmethod
+    def _read_total(content: str) -> int | None:
+        match = _FILE_READ_HEADER_RE.match(content)
+        return int(match.group(1)) if match is not None else None
+
+    def _redundant_read_coverage(self, events: list[Event]) -> bool:
+        """Detect successful same-file reads that add no content knowledge.
+
+        FileReadTool emits each returned source line as ``<number>\t<content>``.
+        We retain that exact per-line content after the latest confirmed successful
+        productive action. A read is redundant only when every returned numbered
+        line was already observed with identical bytes (or a valid unchanged-total
+        header proves an empty range). Legitimate pagination, changed content,
+        failed reads, and opaque/binary output do not increment the streak.
+        """
+        threshold = self.t.redundant_read_coverage
+        if threshold <= 0:
+            return False
+        actions: dict[str, ActionEvent] = {}
+        known_by_path: dict[str, dict[int, str]] = {}
+        total_by_path: dict[str, int] = {}
+        redundant_by_path: dict[str, int] = {}
+        for event in events:
+            if isinstance(event, ActionEvent) and event.tool_call is not None:
+                actions[event.id] = event
+                continue
+            if not isinstance(event, ObservationEvent):
+                continue
+            result = event.tool_result
+            # An attempted edit is not progress. Reset only when the environment
+            # confirms a productive tool succeeded; failed, success=False, and
+            # unpaired ActionEvents remain transparent to the read-spin streak.
+            if result.success and result.tool_name not in _NON_PRODUCTIVE_TOOLS:
+                known_by_path.clear()
+                total_by_path.clear()
+                redundant_by_path.clear()
+                continue
+            if not result.success:
+                continue
+            action = actions.get(event.action_id or "")
+            if action is None or action.tool_call is None:
+                continue
+            if (
+                action.tool_call.tool_name != "file_read"
+                or result.tool_name != "file_read"
+            ):
+                continue
+            path = self._normalized_read_path(action.tool_call.arguments.get("path"))
+            lines = self._numbered_read_lines(result.content)
+            total = self._read_total(result.content)
+            if path is None or total is None:
+                continue
+            prior_total = total_by_path.get(path)
+            if prior_total is None or prior_total != total:
+                total_by_path[path] = total
+                known_by_path[path] = dict(lines)
+                redundant_by_path.clear()
+                continue
+            known = known_by_path.setdefault(path, {})
+            redundant = not lines or (
+                bool(known)
+                and all(known.get(number) == text for number, text in lines.items())
+            )
+            if redundant:
+                redundant_by_path[path] = redundant_by_path.get(path, 0) + 1
+            else:
+                # New/changed knowledge on any path is a genuine change of
+                # approach after the escape nudge. Keep per-path coverage maps,
+                # but re-arm every redundancy streak from zero.
+                redundant_by_path.clear()
+                known.update(lines)
+        # Judge the FINAL streak, not a historical prefix. A successful repair or
+        # changed/new content later in this same window must clear a prior trigger;
+        # otherwise the one-shot escape reminder would terminal-STUCK real recovery.
+        return any(count >= threshold for count in redundant_by_path.values())
 
     # -- M3 pattern 6: repeated varying probe calls --------------------------
 

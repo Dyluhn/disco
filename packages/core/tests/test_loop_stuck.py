@@ -228,6 +228,247 @@ def test_probe_spin_trips_on_varying_server_status_output():
     assert result.reason == "probe_spin"
 
 
+def _numbered_read(
+    path: str,
+    start: int,
+    stop: int,
+    *,
+    text_prefix: str = "line",
+    offset: int | None = None,
+    limit: int | None = None,
+    total: int | None = None,
+):
+    args = {"path": path}
+    if offset is not None:
+        args["offset"] = offset
+    if limit is not None:
+        args["limit"] = limit
+    read = action(thought=f"read {start}-{stop}", tool="file_read", args=args)
+    numbered = "\n".join(
+        f"{line:>3}\t{text_prefix}-{line}" for line in range(start, stop + 1)
+    )
+    content = f"[lines {start}-{stop} of {total if total is not None else stop}]\n{numbered}"
+    return [read, observation(action_id=read.id, tool="file_read", content=content)]
+
+
+def _header_only_read(path: str, header: str, *, offset: int | None = None):
+    args = {"path": path}
+    if offset is not None:
+        args["offset"] = offset
+    read = action(thought="read empty range", tool="file_read", args=args)
+    return [read, observation(action_id=read.id, tool="file_read", content=header)]
+
+
+def test_redundant_read_coverage_trips_on_varied_overlapping_offsets():
+    """H336 live shape: one full read then four unchanged contained slices."""
+    events = _numbered_read("styles.css", 1, 20)
+    events += _numbered_read("./styles.css", 1, 5, offset=1, total=20)
+    events += _numbered_read("workspace/styles.css", 6, 10, offset=6, total=20)
+    events += _numbered_read("/workspace/styles.css", 11, 15, offset=11, total=20)
+    events += _numbered_read("/workspace/styles.css", 16, 20, offset=16, total=20)
+
+    result = StuckDetector().evaluate(events)
+
+    assert result.is_stuck is True
+    assert result.reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_stays_below_threshold_at_three():
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    for start in (1, 6, 11):
+        events += _numbered_read(
+            "styles.css", start, start + 4, offset=start, total=20
+        )
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_allows_legitimate_pagination():
+    events = []
+    for start in (1, 6, 11, 16, 21, 26):
+        events += _numbered_read("big.css", start, start + 4, offset=start, total=30)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_resets_on_changed_lines():
+    events = _numbered_read("styles.css", 1, 5)
+    for limit in (10, 11, 12):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+    events += _numbered_read("styles.css", 1, 5, text_prefix="changed", limit=20)
+    for limit in (21, 22, 23):
+        events += _numbered_read(
+            "styles.css", 1, 5, text_prefix="changed", limit=limit
+        )
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_recovery_after_threshold_changed_lines():
+    events = _numbered_read("styles.css", 1, 5)
+    for limit in (10, 11, 12, 13):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+    events += _numbered_read("styles.css", 1, 5, text_prefix="changed", limit=20)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_recovery_after_threshold_new_range():
+    events = _numbered_read("styles.css", 1, 5, total=10)
+    for limit in (10, 11, 12, 13):
+        events += _numbered_read("styles.css", 1, 5, limit=limit, total=10)
+    events += _numbered_read("styles.css", 6, 10, offset=6, total=10)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_resets_on_productive_action():
+    events = _numbered_read("styles.css", 1, 5)
+    for limit in (10, 11, 12):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+    write = action(
+        thought="change it",
+        tool="file_write",
+        args={"path": "styles.css", "content": "new"},
+    )
+    events.extend([write, observation(action_id=write.id, tool="file_write", content="wrote")])
+    events += _numbered_read("styles.css", 1, 5, limit=20)
+    for limit in (21, 22, 23):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_recovery_after_threshold_productive_action():
+    events = _numbered_read("styles.css", 1, 5)
+    for limit in (10, 11, 12, 13):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+    write = action(
+        thought="repair",
+        tool="file_write",
+        args={"path": "styles.css", "content": "changed"},
+    )
+    events.extend([write, observation(action_id=write.id, tool="file_write", content="wrote")])
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def _failed_or_unpaired_write(kind: str):
+    write = action(
+        thought="attempt change",
+        tool="file_write",
+        args={"path": "styles.css", "content": "new"},
+    )
+    if kind == "error":
+        return [write, agent_error("write rejected", action_id=write.id)]
+    if kind == "success_false":
+        return [
+            write,
+            observation(
+                action_id=write.id,
+                tool="file_write",
+                content="write rejected",
+                success=False,
+            ),
+        ]
+    assert kind == "unpaired"
+    return [write]
+
+
+@pytest.mark.parametrize("kind", ["error", "success_false", "unpaired"])
+def test_redundant_read_coverage_failed_or_unpaired_write_does_not_reset(kind):
+    events = _numbered_read("styles.css", 1, 5)
+    for limit in (10, 11, 12):
+        events += _numbered_read("styles.css", 1, 5, limit=limit)
+    events += _failed_or_unpaired_write(kind)
+    events += _numbered_read("styles.css", 1, 5, limit=13)
+
+    result = StuckDetector().evaluate(events)
+
+    assert result.is_stuck is True
+    assert result.reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_ignores_other_paths_and_opaque_output():
+    events = []
+    for index in range(6):
+        events += _numbered_read(f"file-{index}.css", 1, 5)
+    for index in range(6):
+        opaque = action(
+            thought="binary",
+            tool="file_read",
+            args={"path": "blob.bin", "offset": index + 1},
+        )
+        events.extend(
+            [opaque, observation(action_id=opaque.id, tool="file_read", content="<binary>")]
+        )
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_keeps_backslash_filename_distinct_on_linux():
+    events = _numbered_read("dir/file.css", 1, 5, limit=10)
+    events += _numbered_read(r"dir\file.css", 1, 5, limit=11)
+    events += _numbered_read("dir/file.css", 1, 5, limit=12)
+    events += _numbered_read(r"dir\file.css", 1, 5, limit=13)
+    events += _numbered_read("dir/file.css", 1, 5, limit=14)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_new_path_rearms_global_streak():
+    events = _numbered_read("a.css", 1, 5)
+    for limit in (10, 11, 12, 13):
+        events += _numbered_read("a.css", 1, 5, limit=limit)
+    events += _numbered_read("b.css", 1, 5)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+    # Coverage for A is retained, but the new-path progress re-armed its count:
+    # three more redundant reads remain below the four-read threshold.
+    for limit in (20, 21, 22):
+        events += _numbered_read("a.css", 1, 5, limit=limit)
+    assert StuckDetector().evaluate(events).is_stuck is False
+    events += _numbered_read("a.css", 1, 5, limit=23)
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_trips_on_empty_file_header_only_reads():
+    events = _header_only_read("empty.txt", "[lines 1-0 of 0]")
+    for offset in (2, 3, 4, 5):
+        events += _header_only_read(
+            "empty.txt", f"[lines {offset}-0 of 0]", offset=offset
+        )
+
+    result = StuckDetector().evaluate(events)
+
+    assert result.is_stuck is True
+    assert result.reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_trips_on_varied_past_eof_reads():
+    events = _numbered_read("tiny.txt", 1, 2)
+    for offset in (100, 101, 102, 103):
+        events += _header_only_read(
+            "tiny.txt",
+            f"[lines {offset}-2 of 2 \u2014 offset past end of file]",
+            offset=offset,
+        )
+
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_changed_total_recovers_header_only_streak():
+    events = _header_only_read("growing.txt", "[lines 1-0 of 0]")
+    for offset in (2, 3, 4, 5):
+        events += _header_only_read(
+            "growing.txt", f"[lines {offset}-0 of 0]", offset=offset
+        )
+    events += _numbered_read("growing.txt", 1, 1, text_prefix="new")
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
 def _barren_read_events(*, error: str = "books.json: No such file or directory"):
     events = [user_msg("inspect the project")]
     for i in range(8):
