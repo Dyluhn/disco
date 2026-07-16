@@ -17,6 +17,7 @@ Tests use fakes only — no real tmux, no real containers, no real /proc probes.
 from __future__ import annotations
 
 import pytest
+from disco.tools.sandbox import shell_sessions as shell_sessions_module
 from disco.tools.sandbox.base import (
     ExecResult,
     SandboxError,
@@ -26,8 +27,17 @@ from disco.tools.sandbox.base import (
     SandboxUnavailableError,
 )
 from disco.tools.sandbox.shell_sessions import (
+    PersistentServer,
     ShellSessionManager,
 )
+
+_DONE_0 = "__DISCO_DONE_testtoken__0__"
+
+
+@pytest.fixture(autouse=True)
+def _stable_completion_token(monkeypatch):
+    monkeypatch.setattr(shell_sessions_module.secrets, "token_hex", lambda _n: "testtoken")
+
 
 # ---------------------------------------------------------------------------
 # Test fakes — no real tmux, no real containers
@@ -181,7 +191,7 @@ def _setup_finished_capture(inst: _FakeInstance, output_body: str = "ok") -> Non
     inst.canned_outputs["capture-pane"] = [
         (0, "__DISCO_PS1__0__$ "),  # is_busy
         (0, "__DISCO_PS1__0__$ "),  # pre_cap
-        (0, f"__DISCO_PS1__0__$ \n{output_body}\n__DISCO_PS1__0__$ "),  # finished
+        (0, f"__DISCO_PS1__0__$ \n{output_body}\n{_DONE_0}\n__DISCO_PS1__0__$ "),
     ]
 
 
@@ -235,6 +245,175 @@ async def test_recording_persistent_server_after_running_exec(monkeypatch):
     assert recorded.command == "vite --port 5173"
     assert recorded.port == 5173
     assert recorded.exec_dir is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owned", [True, False])
+async def test_background_server_records_only_with_exact_port_ownership(monkeypatch, owned):
+    """H322: a returned shell prompt needs listener ownership, not optimism."""
+
+    inst = _FakeInstance()
+    _setup_finished_capture(inst, output_body="server launch returned")
+    mgr = ShellSessionManager(lambda: _return(inst))
+
+    ownership = [(True, None), (True, 42 if owned else None)]
+
+    async def _owner(
+        _name: str, _port: int, *, wait_for_listener: bool = False
+    ) -> tuple[bool, int | None]:
+        return ownership.pop(0)
+
+    monkeypatch.setattr(mgr, "_background_port_owner", _owner)
+
+    outcome = await mgr.exec("dev", "vite --port 5173 &", None)
+
+    assert outcome.running is False
+    assert ("dev" in mgr._persistent_servers) is owned
+    if owned:
+        assert mgr._persistent_servers["dev"].port == 5173
+        assert outcome.note == "background server ownership confirmed"
+    else:
+        assert outcome.note is not None and "status is unverified" in outcome.note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owned", [True, False])
+async def test_background_timeout_still_requires_exact_port_ownership(monkeypatch, owned):
+    _fasten_polls(monkeypatch)
+    inst = _FakeInstance()
+    _setup_running_capture(inst)
+    mgr = ShellSessionManager(lambda: _return(inst))
+
+    ownership = [(True, None), (True, 42 if owned else None)]
+
+    async def _owner(
+        _name: str, _port: int, *, wait_for_listener: bool = False
+    ) -> tuple[bool, int | None]:
+        return ownership.pop(0)
+
+    monkeypatch.setattr(mgr, "_background_port_owner", _owner)
+
+    outcome = await mgr.exec("dev", "vite --port 5173 &", None)
+
+    assert outcome.running is True
+    assert ("dev" in mgr._persistent_servers) is owned
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "owner_session,owner_pid,expected",
+    [
+        ("disco-dev", 42, True),
+        ("disco-preview", 42, False),
+        (None, 42, False),
+        (None, None, False),
+    ],
+)
+async def test_background_port_ownership_requires_exact_tmux_session(
+    monkeypatch, owner_session, owner_pid, expected
+):
+    from types import SimpleNamespace
+
+    from disco.tools.sandbox import port_owner as port_owner_module
+    from disco.tools.sandbox import shell_sessions as shell_sessions_module
+
+    inst = _FakeInstance()
+    mgr = ShellSessionManager(lambda: _return(inst))
+
+    async def _owner(_inst, _port):
+        return SimpleNamespace(pid=owner_pid, session=owner_session)
+
+    monkeypatch.setattr(port_owner_module, "port_owner", _owner)
+    monkeypatch.setattr(shell_sessions_module, "_BACKGROUND_OWNER_ATTEMPTS", 1)
+
+    conclusive, owned_pid = await mgr._background_port_owner("dev", 5173)
+    assert conclusive is True
+    assert (owned_pid is not None) is expected
+
+
+@pytest.mark.asyncio
+async def test_background_owner_raw_none_is_inconclusive(monkeypatch):
+    from disco.tools.sandbox import port_owner as port_owner_module
+    from disco.tools.sandbox import shell_sessions as shell_sessions_module
+
+    inst = _FakeInstance()
+    mgr = ShellSessionManager(lambda: _return(inst))
+
+    async def _failed_probe(_inst, _port):
+        return None
+
+    monkeypatch.setattr(port_owner_module, "port_owner", _failed_probe)
+    monkeypatch.setattr(shell_sessions_module, "_BACKGROUND_OWNER_ATTEMPTS", 1)
+
+    assert await mgr._background_port_owner("dev", 5173) == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_background_post_probe_retries_conclusive_absence(monkeypatch):
+    from types import SimpleNamespace
+
+    from disco.tools.sandbox import port_owner as port_owner_module
+    from disco.tools.sandbox import shell_sessions as shell_sessions_module
+
+    inst = _FakeInstance()
+    mgr = ShellSessionManager(lambda: _return(inst))
+    owners = [
+        SimpleNamespace(pid=None, session=None),
+        SimpleNamespace(pid=84, session="disco-dev"),
+    ]
+
+    async def _owner(_inst, _port):
+        return owners.pop(0)
+
+    monkeypatch.setattr(port_owner_module, "port_owner", _owner)
+    monkeypatch.setattr(shell_sessions_module, "_BACKGROUND_OWNER_ATTEMPTS", 2)
+    monkeypatch.setattr(shell_sessions_module, "_BACKGROUND_OWNER_INTERVAL_S", 0)
+
+    assert await mgr._background_port_owner("dev", 5173, wait_for_listener=True) == (True, 84)
+
+
+@pytest.mark.asyncio
+async def test_preexisting_listener_cannot_validate_failed_background_relaunch(monkeypatch):
+    inst = _FakeInstance()
+    _setup_finished_capture(inst, output_body="EADDRINUSE")
+    mgr = ShellSessionManager(lambda: _return(inst))
+    mgr._persistent_servers["dev"] = PersistentServer(
+        name="dev", command="vite --port 5173 &", exec_dir=None, port=5173
+    )
+    ownership = [(True, 42), (True, 42)]
+
+    async def _owner(
+        _name: str, _port: int, *, wait_for_listener: bool = False
+    ) -> tuple[bool, int | None]:
+        return ownership.pop(0)
+
+    monkeypatch.setattr(mgr, "_background_port_owner", _owner)
+
+    outcome = await mgr.exec("dev", "python3 -m http.server 5173 &", None)
+
+    assert outcome.running is False
+    assert outcome.note is not None and "status is unverified" in outcome.note
+    assert mgr._persistent_servers["dev"].command == "vite --port 5173 &"
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_preprobe_cannot_attribute_existing_listener(monkeypatch):
+    inst = _FakeInstance()
+    _setup_finished_capture(inst, output_body="launch status unknown")
+    mgr = ShellSessionManager(lambda: _return(inst))
+    ownership = [(False, None), (True, 42)]
+
+    async def _owner(
+        _name: str, _port: int, *, wait_for_listener: bool = False
+    ) -> tuple[bool, int | None]:
+        return ownership.pop(0)
+
+    monkeypatch.setattr(mgr, "_background_port_owner", _owner)
+
+    outcome = await mgr.exec("dev", "vite --port 5173 &", None)
+
+    assert outcome.note is not None and "status is unverified" in outcome.note
+    assert "dev" not in mgr._persistent_servers
 
 
 # ---------------------------------------------------------------------------

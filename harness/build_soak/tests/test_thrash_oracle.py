@@ -339,6 +339,50 @@ def test_stderr_redirection_is_not_background_lifecycle() -> None:
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
 
 
+def test_quoted_ampersand_argument_remains_foreground_verification() -> None:
+    commands = (
+        "python3 inventory.py '&'",
+        'cd /workspace && python3 inventory.py "&"',
+        r"echo verify; python3 inventory.py \&",
+    )
+    events = []
+    for seq, command in zip((1, 3, 5), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ("|& tee output.log", "# lifecycle note R&D"),
+)
+def test_pipeline_stderr_and_comment_ampersands_remain_foreground(suffix: str) -> None:
+    commands = (
+        f"python3 inventory.py {suffix}",
+        f"cd /workspace && python3 inventory.py {suffix}",
+        f"echo verify; python3 inventory.py {suffix}",
+    )
+    events = []
+    for seq, command in zip((1, 3, 5), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+
+
 def test_repeated_tool_schema_error_fails_even_with_other_calls_between() -> None:
     events = []
     for seq in (1, 5, 9):

@@ -46,8 +46,15 @@ _THRASH_STUCK_DETAILS = {
 }
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
 _RUNTIME_CLEANUP_TOOLS = frozenset({"shell_kill_process"})
-_SHELL_CONTROL_OPERATORS = frozenset({";", "&", "&&", "|", "||"})
+_SHELL_CONTROL_OPERATORS = frozenset({";", "&", "&&", "|", "|&", "||"})
 _RUNTIME_CLEANUP_COMMANDS = frozenset({"kill", "killall", "pkill"})
+_SHELL_PUNCTUATION = ";&|<>"
+_QUOTED_PUNCTUATION_MASK = str.maketrans(
+    {char: chr(0xE100 + index) for index, char in enumerate(_SHELL_PUNCTUATION)}
+)
+_QUOTED_PUNCTUATION_UNMASK = str.maketrans(
+    {chr(0xE100 + index): char for index, char in enumerate(_SHELL_PUNCTUATION)}
+)
 _FILE_MUTATION_TOOLS = frozenset(
     {
         "exact_replace",
@@ -198,8 +205,35 @@ def _shell_segments(command: str) -> list[tuple[list[str], str]]:
     it, while semantic-repeat accounting skips it.
     """
 
+    # shlex intentionally removes quotes, so a quoted literal '&' otherwise becomes
+    # indistinguishable from the background operator token. Mask punctuation while it
+    # is quoted/escaped, let shlex parse real control edges, then restore argv bytes.
+    masked: list[str] = []
+    quote = ""
+    escaped = False
+    for index, char in enumerate(command):
+        if escaped:
+            masked.append(char.translate(_QUOTED_PUNCTUATION_MASK))
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            masked.append(char)
+            escaped = True
+            continue
+        if quote:
+            masked.append(char.translate(_QUOTED_PUNCTUATION_MASK))
+            if char == quote:
+                quote = ""
+            continue
+        if char == "#" and (
+            index == 0 or command[index - 1].isspace() or command[index - 1] in ";|&()"
+        ):
+            break
+        masked.append(char)
+        if char in ("'", '"'):
+            quote = char
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        lexer = shlex.shlex("".join(masked), posix=True, punctuation_chars=_SHELL_PUNCTUATION)
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
@@ -213,7 +247,7 @@ def _shell_segments(command: str) -> list[tuple[list[str], str]]:
                 segments.append((current, token))
                 current = []
             continue
-        current.append(token)
+        current.append(token.translate(_QUOTED_PUNCTUATION_UNMASK))
     if current:
         segments.append((current, ""))
     return segments

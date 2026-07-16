@@ -3,9 +3,18 @@ import urllib.request
 import uuid
 
 import pytest
+from disco.tools.sandbox import shell_sessions as shell_sessions_module
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import ProcessSandboxService
 from disco.tools.sandbox.shell_sessions import SessionBusy, ShellSessionManager
+
+_DONE_0 = "__DISCO_DONE_testtoken__0__"
+_DONE_7 = "__DISCO_DONE_testtoken__7__"
+
+
+@pytest.fixture(autouse=True)
+def _stable_completion_token(monkeypatch):
+    monkeypatch.setattr(shell_sessions_module.secrets, "token_hex", lambda _n: "testtoken")
 
 
 class FakeInstance:
@@ -68,7 +77,7 @@ async def test_marker_parse_exit_0():
         (0, "__DISCO_PS1__0__$ "),  # view
         (0, "__DISCO_PS1__0__$ "),  # view in is_busy
         (0, "__DISCO_PS1__0__$ "),  # pre_cap
-        (0, "__DISCO_PS1__0__$ \necho hi\nhi\n__DISCO_PS1__0__$ "),  # post_cap
+        (0, f"__DISCO_PS1__0__$ \necho hi\nhi\n{_DONE_0}\n__DISCO_PS1__0__$ "),
     ]
 
     view = await manager.view("main")
@@ -77,7 +86,7 @@ async def test_marker_parse_exit_0():
     out = await manager.exec("main", "echo hi", None)
     assert not out.running
     assert out.exit_code == 0
-    assert out.output == "echo hi\nhi"
+    assert out.output == "hi"
 
 
 @pytest.mark.asyncio
@@ -93,13 +102,311 @@ async def test_marker_parse_exit_7():
     inst.canned_outputs["capture-pane"] = [
         (0, "__DISCO_PS1__0__$ "),  # view in is_busy
         (0, "__DISCO_PS1__0__$ "),  # pre_cap
-        (0, "__DISCO_PS1__0__$ \nexit 7\n__DISCO_PS1__7__$ "),  # post_cap
+        (0, f"__DISCO_PS1__0__$ \nexit 7\n{_DONE_7}\n__DISCO_PS1__7__$ "),
     ]
 
     out = await manager.exec("main", "exit 7", None)
     assert not out.running
     assert out.exit_code == 7
-    assert out.output == "exit 7"
+    assert out.output == ""
+
+
+@pytest.mark.asyncio
+async def test_fresh_prompt_before_background_stderr_proves_shell_idle() -> None:
+    """H322: late child stderr cannot hide the fresh post-dispatch prompt."""
+
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    inst.canned_outputs["has-session"] = (0, "")
+    prompt = "__DISCO_PS1__0__$ "
+    late = (
+        prompt
+        + "\npython3 /workspace/server.py &\n[1] 444\n"
+        + _DONE_0
+        + "\n"
+        + prompt
+        + "Traceback (most recent call last):\nOSError: [Errno 98] Address already in use"
+    )
+    inst.canned_outputs["capture-pane_default"] = (0, late)
+    inst.canned_outputs["capture-pane"] = [
+        (0, prompt),  # is_busy
+        (0, prompt),  # pre-dispatch capture
+        (0, late),  # fresh prompt followed inline by background stderr
+    ]
+
+    out = await manager.exec("server", "python3 /workspace/server.py &", None)
+
+    assert out.running is False
+    assert out.exit_code == 0
+    assert "Address already in use" in out.output
+    assert "__DISCO_PS1__" not in out.output
+    assert out.note is not None and "background process status is unverified" in out.note
+    assert not await manager.is_busy("server")
+
+    before = list(inst.cmd_log)
+    killed = await manager.kill_foreground("server")
+    assert killed == "Session 'server' is already idle; no signal sent."
+    assert not any(" C-c" in command for command in inst.cmd_log[len(before) :])
+
+    inst.canned_outputs["capture-pane"] = [
+        (0, late),  # cached idle is accepted for is_busy
+        (0, late),  # next command's pre-dispatch capture
+        (0, late + "\necho ok\nok\n" + _DONE_0 + "\n" + prompt),
+    ]
+    next_out = await manager.exec("server", "echo ok", None)
+    assert next_out.running is False
+    assert next_out.output == "ok"
+
+
+@pytest.mark.asyncio
+async def test_old_prompt_before_new_foreground_command_does_not_false_idle(monkeypatch) -> None:
+    """Only a marker in the current exec delta is proof; scrollback is not."""
+
+    from disco.tools.sandbox import shell_sessions
+
+    monkeypatch.setattr(shell_sessions, "_EXEC_WAIT_S", 0.05)
+    monkeypatch.setattr(shell_sessions, "_POLL_S", 0.01)
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    prompt = "__DISCO_PS1__0__$ "
+    running = prompt + "\nsleep 10\n" + prompt + "\nworking"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane_default"] = (0, running)
+    inst.canned_outputs["capture-pane"] = [
+        (0, prompt),  # is_busy
+        (0, prompt),  # pre-dispatch capture
+        (0, running),  # old prompt is entirely in pre; delta has no fresh prompt
+    ]
+
+    out = await manager.exec("main", "sleep 10", None)
+
+    assert out.running is True
+    assert await manager.is_busy("main")
+
+
+@pytest.mark.asyncio
+async def test_prefix_mismatch_does_not_promote_old_prompt_to_fresh(monkeypatch) -> None:
+    """Pane truncation/resize loses continuity; only a terminal marker is safe then."""
+
+    from disco.tools.sandbox import shell_sessions
+
+    monkeypatch.setattr(shell_sessions, "_EXEC_WAIT_S", 0.05)
+    monkeypatch.setattr(shell_sessions, "_POLL_S", 0.01)
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    prompt = "__DISCO_PS1__0__$ "
+    pre = prompt + "\nold pane history"
+    mismatched = "truncated history\n" + prompt + "sleep 10\nworking"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane_default"] = (0, mismatched)
+    inst.canned_outputs["capture-pane"] = [
+        (0, prompt),
+        (0, pre),
+        (0, mismatched),
+    ]
+
+    out = await manager.exec("main", "sleep 10", None)
+
+    assert out.running is True
+    assert manager._foreground_state["main"] == "busy"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_clears_prior_foreground_proof(monkeypatch) -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "idle"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane"] = [
+        (0, "background stderr"),  # cached idle is_busy
+        (0, "background stderr"),  # pre-dispatch capture
+    ]
+    original_run_tmux = manager._run_tmux
+
+    async def _fail_send(command: str) -> str:
+        if "send-keys" in command:
+            raise RuntimeError("send failed")
+        return await original_run_tmux(command)
+
+    monkeypatch.setattr(manager, "_run_tmux", _fail_send)
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await manager.exec("main", "echo no", None)
+
+    assert "main" not in manager._foreground_state
+
+
+@pytest.mark.asyncio
+async def test_exec_enter_failure_clears_proof_and_blocks_command_concatenation(
+    monkeypatch,
+) -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "idle"
+    prompt_with_text = "__DISCO_PS1__0__$ echo first"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane_default"] = (0, prompt_with_text)
+    inst.canned_outputs["capture-pane"] = [
+        (0, "__DISCO_PS1__0__$ "),
+        (0, "__DISCO_PS1__0__$ "),
+    ]
+    original_run_tmux = manager._run_tmux
+
+    async def _fail_enter(command: str) -> str:
+        if command.endswith(" Enter"):
+            raise RuntimeError("enter failed")
+        return await original_run_tmux(command)
+
+    monkeypatch.setattr(manager, "_run_tmux", _fail_enter)
+
+    with pytest.raises(RuntimeError, match="enter failed"):
+        await manager.exec("main", "echo first", None)
+
+    assert "main" not in manager._foreground_state
+    inst.canned_outputs["capture-pane"] = [(0, prompt_with_text)]
+    with pytest.raises(SessionBusy):
+        await manager.exec("main", "echo second", None)
+
+
+@pytest.mark.asyncio
+async def test_write_enter_failure_does_not_claim_foreground_busy(monkeypatch) -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "idle"
+    inst.canned_outputs["has-session"] = (0, "")
+    original_run_tmux = manager._run_tmux
+
+    async def _fail_enter(command: str) -> str:
+        if command.endswith(" Enter"):
+            raise RuntimeError("enter failed")
+        return await original_run_tmux(command)
+
+    monkeypatch.setattr(manager, "_run_tmux", _fail_enter)
+
+    with pytest.raises(RuntimeError, match="enter failed"):
+        await manager.write("main", "echo no", press_enter=True)
+
+    assert "main" not in manager._foreground_state
+    inst.canned_outputs["capture-pane"] = [(0, "__DISCO_PS1__0__$ echo no")]
+    with pytest.raises(SessionBusy):
+        await manager.exec("main", "echo second", None)
+
+
+@pytest.mark.asyncio
+async def test_write_without_enter_clears_idle_proof_and_blocks_exec() -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "idle"
+    inst.canned_outputs["has-session"] = (0, "")
+
+    await manager.write("main", "echo pending", press_enter=False)
+
+    assert "main" not in manager._foreground_state
+    inst.canned_outputs["capture-pane"] = [(0, "__DISCO_PS1__0__$ echo pending")]
+    with pytest.raises(SessionBusy):
+        await manager.exec("main", "echo second", None)
+
+
+@pytest.mark.asyncio
+async def test_write_first_send_failure_clears_idle_proof(monkeypatch) -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    manager._foreground_state["main"] = "idle"
+    inst.canned_outputs["has-session"] = (0, "")
+
+    async def _fail_send(_command: str) -> str:
+        raise RuntimeError("transport uncertain")
+
+    monkeypatch.setattr(manager, "_run_tmux", _fail_send)
+
+    with pytest.raises(RuntimeError, match="transport uncertain"):
+        await manager.write("main", "echo maybe", press_enter=False)
+
+    assert "main" not in manager._foreground_state
+
+
+@pytest.mark.asyncio
+async def test_unknown_idle_kill_preflight_sends_no_signal() -> None:
+    inst = FakeInstance()
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst)
+    prompt = "__DISCO_PS1__0__$ "
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["capture-pane"] = [(0, prompt)]
+
+    result = await manager.kill_foreground("main")
+
+    assert result == "Session 'main' is already idle; no signal sent."
+    assert not any(" C-c" in command for command in inst.cmd_log)
+
+
+def test_reset_known_sessions_clears_proven_foreground_state() -> None:
+    async def _unused_instance():
+        raise AssertionError("instance access is not expected")
+
+    manager = ShellSessionManager(_unused_instance)
+    manager._foreground_state["main"] = "idle"
+
+    manager.reset_known_sessions()
+
+    assert manager._foreground_state == {}
+
+
+def test_background_parser_distinguishes_control_from_redirection() -> None:
+    assert ShellSessionManager._backgrounded("vite --port 5173 &") is True
+    assert ShellSessionManager._backgrounded("vite --port 5173&") is True
+    assert ShellSessionManager._backgrounded("python check.py 2>&1") is False
+    assert ShellSessionManager._backgrounded("python check.py &>output.log") is False
+    assert ShellSessionManager._backgrounded("cd /workspace && python check.py") is False
+    assert ShellSessionManager._backgrounded("python check.py '&'") is False
+    assert ShellSessionManager._backgrounded('python check.py "&"') is False
+    assert ShellSessionManager._backgrounded(r"python check.py \&") is False
+    assert ShellSessionManager._backgrounded("python check.py |& tee output.log") is False
+    assert ShellSessionManager._backgrounded("echo ok # R&D") is False
+    assert ShellSessionManager._backgrounded("echo R&D") is True
+
+
+def test_private_completion_marker_is_not_literal_in_dispatched_command() -> None:
+    dispatched, completion_re = ShellSessionManager._completion_dispatch("echo hi", "testtoken")
+
+    assert "__DISCO_DONE_testtoken__" not in dispatched
+    assert completion_re.search("\n__DISCO_DONE_testtoken__7__\n") is not None
+    assert completion_re.search("echo __DISCO_DONE_testtoken__7__") is None
 
 
 @pytest.mark.asyncio
@@ -345,7 +652,7 @@ def _serve_canned(inst):
     inst.canned_outputs["capture-pane"] = [
         (0, "__DISCO_PS1__0__$ "),  # is_busy view
         (0, "__DISCO_PS1__0__$ "),  # pre_cap
-        (0, "__DISCO_PS1__0__$ \nserving\n__DISCO_PS1__0__$ "),  # post_cap w/ marker
+        (0, f"__DISCO_PS1__0__$ \nserving\n{_DONE_0}\n__DISCO_PS1__0__$ "),
     ]
 
 
