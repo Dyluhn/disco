@@ -382,6 +382,88 @@ def test_capture_blank_page_returns_empty_after_bounded_cap(tmp_path, monkeypatc
     assert len(retry_sleeps) == daemon_mod.CAPTURE_RETRY_MAX - 1
 
 
+def test_visible_semantic_elements_are_strict_rendered_evidence():
+    """H335: the daemon emits proof for short, non-interactive rendered content.
+
+    The Python boundary rejects malformed/boolean page values fail-closed.
+    """
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+    page = MagicMock()
+    page.evaluate.return_value = 1
+    assert handler._count_visible_semantic_elements(page) == 1
+    script = page.evaluate.call_args.args[0]
+    assert "getBoundingClientRect" in script
+    assert "getComputedStyle" in script
+    assert "checkVisibility" in script and "checkOpacity: true" in script
+    assert "'h1, h2, h3, h4, h5, h6'" in script
+    assert "createTreeWalker" in script and "getClientRects" in script
+    assert "visibleRatio < 0.25" in script
+    assert "elementFromPoint" in script
+    assert "canvas" not in script and "img" not in script
+    assert "textContent" in script
+
+    for invalid in (True, -1, "1", None):
+        page.evaluate.return_value = invalid
+        assert handler._count_visible_semantic_elements(page) == 0
+
+    page.evaluate.side_effect = RuntimeError("page closed")
+    assert handler._count_visible_semantic_elements(page) == 0
+
+
+@pytest.mark.integration
+def test_visible_semantic_elements_real_chromium():
+    """H335 executable DOM proof: visible heading only; false-pass shapes stay zero."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin.browser import _installed_chromium_executable
+    from playwright.sync_api import sync_playwright
+
+    executable = _installed_chromium_executable()
+    if executable is None:
+        pytest.skip("installed Chromium is required")
+
+    cases = {
+        "<h1>Live Server Up</h1>": 1,
+        "<p>Loading...</p>": 0,
+        '<canvas width="100" height="100"></canvas>': 0,
+        '<img src="/missing.png" width="100" height="100">': 0,
+        '<h1 style="position:absolute;left:-9999px">Ghost</h1>': 0,
+        '<div style="width:1px;height:1px;overflow:hidden"><h1>Ghost</h1></div>': 0,
+        '<h1 style="clip-path:inset(100%)">Ghost</h1>': 0,
+        '<h1 style="color:transparent">Ghost</h1>': 0,
+        '<h1><span style="opacity:0">Ghost</span></h1>': 0,
+        '<h1><span style="visibility:hidden">Ghost</span></h1>': 0,
+        (
+            '<h1><span style="display:block;width:1px;height:1px;'
+            'overflow:hidden">Ghost</span></h1>'
+        ): 0,
+        '<h1><span style="clip-path:inset(100%)">Ghost</span></h1>': 0,
+        (
+            '<h1 style="position:relative">Ghost<span style="position:absolute;'
+            'inset:0;background:white"></span></h1>'
+        ): 0,
+        (
+            '<h1>Covered</h1><div style="position:fixed;inset:0;'
+            'background:white;z-index:9999"></div>'
+        ): 0,
+    }
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            executable_path=executable,
+            args=["--no-sandbox"],
+        )
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            for html, expected in cases.items():
+                page.set_content(html)
+                assert handler._count_visible_semantic_elements(page) == expected, html
+        finally:
+            browser.close()
+
+
 def test_daemon_start_applies_anti_fingerprint(monkeypatch):
     """W-46: state.start() must launch with the anti-automation flag + a realistic
     desktop-Chrome context (UA without 'HeadlessChrome', locale/timezone/Accept-Language)
@@ -721,6 +803,9 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         <html>
         <body>
             <h1 id="counter">0</h1>
+            <h2 style="position:absolute;left:-9999px">offscreen ghost</h2>
+            <canvas width="100" height="100"></canvas>
+            <img src="/missing.png" width="100" height="100">
             <div id="cookies"></div>
             <button id="btn"
                 onclick="const c = document.getElementById('counter');
@@ -788,6 +873,9 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
         assert data["ok"]
         assert any("boom" in c["text"] for c in data["console"])
         assert any("<button>Click</button>" in el for el in data["elements"])
+        # H335: only the rendered in-viewport heading counts. The offscreen
+        # heading, empty canvas, and broken image cannot fabricate content proof.
+        assert data["visible_semantic_elements"] == 1
         # screenshot_path is workspace-relative; PMX_WORKSPACE=tmp_path, so it must exist there
         assert data["screenshot_path"]
         assert (tmp_path / data["screenshot_path"]).is_file()

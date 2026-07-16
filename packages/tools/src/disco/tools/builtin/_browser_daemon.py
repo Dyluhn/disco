@@ -418,6 +418,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 canvas_count = page.evaluate("() => document.querySelectorAll('canvas').length")
             except Exception:
                 canvas_count = 0
+            visible_semantic_elements = self._count_visible_semantic_elements(page)
 
             res = {
                 "ok": True,
@@ -429,6 +430,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "text": text,
                 "appkit_sections": appkit_sections,
                 "canvas_count": canvas_count,
+                "visible_semantic_elements": visible_semantic_elements,
                 "screenshot_path": screenshot_path,
             }
 
@@ -438,6 +440,133 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 res["screenshot_b64"] = b64
 
             return res
+
+    @staticmethod
+    def _count_visible_semantic_elements(page) -> int:
+        """Count rendered, content-bearing DOM semantics.
+
+        The interactive element walker deliberately ignores ordinary headings and
+        paragraphs.  Without a separate signal, a valid small page such as
+        ``<h1>Live Server Up</h1>`` is indistinguishable from an empty SPA shell to
+        the finish and verification gates.  Keep this signal deliberately narrow:
+        only headings count.  Short paragraphs/list items can be transient loading
+        placeholders, and unpainted canvas or broken media must not manufacture a
+        pass.  Hidden, zero-area, and off-viewport headings do not count, and a
+        heading must contain non-whitespace text.
+        """
+        try:
+            count = page.evaluate(r"""
+                () => {
+                    const viewportWidth = window.innerWidth ||
+                        document.documentElement.clientWidth;
+                    const viewportHeight = window.innerHeight ||
+                        document.documentElement.clientHeight;
+                    const transparent = value => value === 'transparent' ||
+                        /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
+                    const intersect = (box, left, top, right, bottom) => ({
+                        left: Math.max(box.left, left),
+                        top: Math.max(box.top, top),
+                        right: Math.min(box.right, right),
+                        bottom: Math.min(box.bottom, bottom),
+                    });
+                    return Array.from(document.querySelectorAll(
+                        'h1, h2, h3, h4, h5, h6'
+                    )).filter(el => {
+                        if (typeof el.checkVisibility === 'function' &&
+                            !el.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) {
+                            return false;
+                        }
+                        const style = window.getComputedStyle(el);
+                        if (style.visibility === 'hidden' || style.display === 'none' ||
+                            style.pointerEvents === 'none' || Number(style.opacity) === 0 ||
+                            transparent(style.color) ||
+                            transparent(style.webkitTextFillColor || '')) {
+                            return false;
+                        }
+
+                        // A DOM box can exist while all of its text is clipped. Walk
+                        // actual text ranges, then intersect each range with the
+                        // viewport and every clipping ancestor.
+                        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+                        const textNodes = [];
+                        while (walker.nextNode()) {
+                            if ((walker.currentNode.textContent || '').trim()) {
+                                textNodes.push(walker.currentNode);
+                            }
+                        }
+                        return textNodes.some(node => {
+                            const textParent = node.parentElement || el;
+                            if (typeof textParent.checkVisibility === 'function' &&
+                                !textParent.checkVisibility({
+                                    checkOpacity: true, checkVisibilityCSS: true
+                                })) {
+                                return false;
+                            }
+                            const nodeStyle = window.getComputedStyle(textParent);
+                            if (nodeStyle.visibility === 'hidden' ||
+                                nodeStyle.display === 'none' ||
+                                nodeStyle.pointerEvents === 'none' ||
+                                Number(nodeStyle.opacity) === 0 ||
+                                transparent(nodeStyle.color) ||
+                                transparent(nodeStyle.webkitTextFillColor || '')) {
+                                return false;
+                            }
+                            const range = document.createRange();
+                            range.selectNodeContents(node);
+                            return Array.from(range.getClientRects()).some(rect => {
+                                if (rect.width <= 0 || rect.height <= 0) return false;
+                                let box = intersect(
+                                    rect, 0, 0, viewportWidth, viewportHeight
+                                );
+                                for (let ancestor = textParent; ancestor;
+                                     ancestor = ancestor.parentElement) {
+                                    const ancestorStyle = window.getComputedStyle(ancestor);
+                                    if (ancestorStyle.clipPath !== 'none' ||
+                                        ancestorStyle.clip !== 'auto') {
+                                        return false; // clipping geometry is not safely inferable
+                                    }
+                                    const ancestorRect = ancestor.getBoundingClientRect();
+                                    if (ancestorStyle.overflowX !== 'visible') {
+                                        box.left = Math.max(box.left, ancestorRect.left);
+                                        box.right = Math.min(box.right, ancestorRect.right);
+                                    }
+                                    if (ancestorStyle.overflowY !== 'visible') {
+                                        box.top = Math.max(box.top, ancestorRect.top);
+                                        box.bottom = Math.min(box.bottom, ancestorRect.bottom);
+                                    }
+                                }
+                                const width = box.right - box.left;
+                                const height = box.bottom - box.top;
+                                const visibleRatio = (width * height) / (rect.width * rect.height);
+                                if (width < 2 || height < 2 || visibleRatio < 0.25) return false;
+
+                                // Geometry alone cannot prove the text is not fully
+                                // covered by another element. At least one sampled
+                                // point must resolve to the text parent or one of its
+                                // ancestors (never an opaque covering descendant).
+                                const points = [
+                                    [0.5, 0.5], [0.25, 0.25], [0.75, 0.25],
+                                    [0.25, 0.75], [0.75, 0.75],
+                                ];
+                                return points.some(([x, y]) => {
+                                    const hit = document.elementFromPoint(
+                                        box.left + width * x, box.top + height * y
+                                    );
+                                    return hit === textParent ||
+                                        (hit !== null && hit.contains(textParent));
+                                });
+                            });
+                        });
+                    }).length;
+                }
+            """)
+        except Exception:
+            return 0
+        # JavaScript data is untrusted.  In particular, bool is an int subclass in
+        # Python and must not become a fabricated positive count.
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            return 0
+        return count
 
     def _get_elements(self, page):
         # W6: broaden the element walker beyond standard interactive elements.

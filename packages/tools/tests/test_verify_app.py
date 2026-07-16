@@ -175,6 +175,29 @@ def test_verdict_blank_render_is_degraded():
     assert "blank" in v["summary"].lower() or "no visible" in v["summary"].lower()
 
 
+@pytest.mark.asyncio
+async def test_run_short_rendered_heading_passes_with_semantic_evidence(monkeypatch):
+    """H335: a visible short heading is content, not a false blank-page verdict."""
+
+    async def fake_browser_run(self, args, ctx):
+        return ToolOutcome(
+            success=True,
+            content="b",
+            structured=_structured(title="", text="Live Server Up", elements=[])
+            | {"visible_semantic_elements": 1},
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/"), _ctx(FakeSandbox("200"))
+    )
+
+    assert out.success is True
+    assert out.structured["passed"] is True
+    assert out.structured["meaningful_content"] is True
+    assert out.structured["visible_text_chars"] == len("Live Server Up")
+
+
 def test_verdict_not_serving():
     v = compute_verdict(
         url="http://127.0.0.1:8000/",

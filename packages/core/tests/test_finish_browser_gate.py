@@ -451,6 +451,21 @@ def test_browser_content_meaningful_pure():
     assert _browser_content_meaningful({"title": "", "text": "", "elements": ["1[:] <a>Home</a>"]})
     # explicit links/forms count fields honored
     assert _browser_content_meaningful({"title": "", "text": "", "forms": 1})
+    # A short rendered semantic element is genuine content even below the legacy
+    # 20-character threshold (H335's live <h1>Live Server Up</h1> case).
+    assert _browser_content_meaningful(
+        {
+            "title": "",
+            "text": "Live Server Up",
+            "elements": [],
+            "visible_semantic_elements": 1,
+        }
+    )
+    # Missing, zero, malformed, or boolean evidence must not bless an empty shell.
+    for value in (0, -1, True, "1", None):
+        assert not _browser_content_meaningful(
+            {"title": "", "text": "", "elements": [], "visible_semantic_elements": value}
+        )
     # _latest_browser_structured picks the latest qualifying :8000 obs
     events = [
         browser_obs("http://127.0.0.1:8000/", [], seq=5),

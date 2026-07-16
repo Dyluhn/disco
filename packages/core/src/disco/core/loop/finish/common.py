@@ -806,7 +806,11 @@ def _browser_content_meaningful(structured: dict) -> bool:
     passes that page; this guard catches it.
 
     Meaningful iff there is real visible content (title + body text >= 20 chars
-    combined) OR interactive structure. The browser daemon's element walker
+    combined), rendered content-bearing semantics, OR interactive structure. The
+    browser daemon reports ``visible_semantic_elements`` after checking geometry,
+    viewport intersection, and computed visibility for content-bearing headings.
+    This distinguishes a short but valid rendered heading from an empty SPA shell.
+    The browser daemon's element walker
     (`_get_elements`) indexes links/forms/buttons/inputs/clickables, so a
     non-empty `elements` list means the page has actionable structure even when
     its text is sparse. (`links`/`forms` count fields are honored too if a daemon
@@ -814,6 +818,13 @@ def _browser_content_meaningful(structured: dict) -> bool:
     title = str(structured.get("title", "") or "")
     text = str(structured.get("text", "") or "")
     if len((title + " " + text).strip()) >= 20:
+        return True
+    semantic_count = structured.get("visible_semantic_elements")
+    if (
+        isinstance(semantic_count, int)
+        and not isinstance(semantic_count, bool)
+        and semantic_count > 0
+    ):
         return True
     elements = structured.get("elements")
     if isinstance(elements, list) and len(elements) > 0:
