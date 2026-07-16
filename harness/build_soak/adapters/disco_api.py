@@ -1226,6 +1226,8 @@ class DiscoApiClient:
         conversation_id: str,
         events: list[dict[str, Any]],
         workspace_manifest: dict[str, Any],
+        *,
+        require_verified_host_screenshot: bool = False,
     ) -> dict[str, bytes]:
         """Capture referenced screenshots from the authoritative ProjectStore snapshot.
 
@@ -1236,7 +1238,10 @@ class DiscoApiClient:
         :class:`BrowserEvidenceCollectionError`; silently dropping visual evidence would
         make a frozen replay look stronger than the live run.
         """
-        references = _referenced_screenshot_paths(events)
+        references = _referenced_screenshot_paths(
+            events,
+            require_verified_host_screenshot=require_verified_host_screenshot,
+        )
         if not references:
             return {}
         if len(references) > _BROWSER_EVIDENCE_MAX_FILES:
@@ -1584,13 +1589,17 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     return p if isinstance(p, dict) else {}
 
 
-def _referenced_screenshot_paths(events: list[dict[str, Any]]) -> list[str]:
+def _referenced_screenshot_paths(
+    events: list[dict[str, Any]], *, require_verified_host_screenshot: bool = False
+) -> list[str]:
     """Return sorted unique screenshot paths explicitly claimed by successful probes.
 
     ``verify_appkit_app`` can carry interaction screenshots in nested dictionaries,
     so keys named ``screenshot_path`` or ending in ``_screenshot_path`` are followed
     recursively. Other strings (including human-readable ``content`` and base64
-    fields) are deliberately ignored.
+    fields) are deliberately ignored.  A host ``verifier_verdict`` is a separate,
+    host-owned proof path: only an exact verified/pass verdict is eligible, and such
+    a verdict MUST name one admissible screenshot or collection fails closed.
     """
     found: set[str] = set()
 
@@ -1620,6 +1629,26 @@ def _referenced_screenshot_paths(events: list[dict[str, Any]]) -> list[str]:
             {"error": str(exc)},
         ) from exc
     for event in normalized:
+        if event.get("kind") == "verifier_verdict":
+            if event.get("verified") is not True or event.get("verdict") != "pass":
+                continue
+            screenshot_path = event.get("screenshot_path")
+            if not isinstance(screenshot_path, str) or not screenshot_path:
+                if not require_verified_host_screenshot:
+                    continue
+                raise BrowserEvidenceCollectionError(
+                    "passing host verifier verdict has no admissible screenshot path",
+                    {
+                        "field": "screenshot_path",
+                        "value_type": type(screenshot_path).__name__,
+                    },
+                )
+            try:
+                found.add(validate_browser_evidence_relpath(screenshot_path))
+            except BrowserEvidenceCollectionError:
+                if require_verified_host_screenshot:
+                    raise
+            continue
         if event.get("kind") != "observation":
             continue
         result = event.get("tool_result")

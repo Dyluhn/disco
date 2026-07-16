@@ -287,14 +287,31 @@ def _first_fail(results: list[OracleResult]) -> OracleResult | None:
 _BROWSER_VERIFICATION_TOOLS = frozenset({"verify_web_app", "verify_appkit_app"})
 
 
+def _admissible_browser_screenshot_path(path: str) -> bool:
+    """Mirror H190's exact product-owned screenshot namespace."""
+    parts = path.split("/")
+    return (
+        bool(path)
+        and not path.startswith("/")
+        and "\\" not in path
+        and "\x00" not in path
+        and len(parts) == 3
+        and parts[:2] == [".pmx", "screenshots"]
+        and not any(part in {"", ".", ".."} for part in parts)
+        and parts[2].endswith(".png")
+    )
+
+
 def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[str]:
-    """Return screenshot paths claimed by successful, passing verifier observations.
+    """Return screenshot paths claimed by successful, passing verifier evidence.
 
     A tool-level success is insufficient: ``verify_web_app`` also uses successful
     tool transport for an ``unverifiable`` verdict.  Requiring ``structured.passed``
     to be exactly true keeps that branch from satisfying a browser-verification
     contract.  Screenshot keys may be nested (notably for AppKit interactions), so
-    collect the same explicit path-key family retained by the H190 capture.
+    collect the same explicit path-key family retained by the H190 capture.  Host
+    ``verifier_verdict`` events are accepted only with exact verified/pass fields and
+    one admissible top-level screenshot path.
     """
     paths: set[str] = set()
 
@@ -311,6 +328,16 @@ def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[
                 visit(child)
 
     for event in events:
+        if event.get("kind") == "verifier_verdict":
+            path = event.get("screenshot_path")
+            if (
+                event.get("verified") is True
+                and event.get("verdict") == "pass"
+                and isinstance(path, str)
+                and _admissible_browser_screenshot_path(path)
+            ):
+                paths.add(path)
+            continue
         if event.get("kind") != "observation":
             continue
         result = event.get("tool_result")

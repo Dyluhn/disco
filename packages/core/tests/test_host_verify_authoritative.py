@@ -169,7 +169,9 @@ def test_model_verifier_event_cause_rejects_untrusted_free_form_text() -> None:
 
 @pytest.mark.asyncio
 async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
-    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    host_verdict = _verdict(passed=True, fp="HOST")
+    host_verdict["screenshot_path"] = ".pmx/screenshots/0002-navigate.png"
+    host = _HostVerifier(host_verdict)
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
     agent = ScriptedAgent(
         [
@@ -193,6 +195,7 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
     assert len(verdicts) == 1
     assert verdicts[0].verified is True
     assert verdicts[0].verdict == "pass"
+    assert verdicts[0].screenshot_path == ".pmx/screenshots/0002-navigate.png"
     assert not any(
         isinstance(e, ActionEvent) and e.tool_call.tool_name == "verify_web_app" for e in events
     )
@@ -204,6 +207,110 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
     assert final.message.content == "Verified cleanly by the host browser."
     assert final.meta.get("host_owned_terminal_warning") is not True
     assert agent.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_host_screenshot_provenance_never_creates_a_false_verified_claim() -> None:
+    host_verdict = _verdict(passed=False, fp="HOST_FAIL")
+    host_verdict["screenshot_path"] = ".pmx/screenshots/0003-failed.png"
+    host = _HostVerifier(host_verdict)
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+    )
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events("conv")
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert verdicts
+    assert all(event.screenshot_path == ".pmx/screenshots/0003-failed.png" for event in verdicts)
+    assert all(event.verified is False for event in verdicts)
+    assert ("RUNNING", "unverified_release") in _statuses(events)
+
+
+@pytest.mark.parametrize("malformed_passed", ["false", 1])
+@pytest.mark.asyncio
+async def test_truthy_non_boolean_host_pass_cannot_verify_or_release(malformed_passed) -> None:
+    host_verdict = _verdict(passed=True, fp="MALFORMED_HOST")
+    host_verdict["passed"] = malformed_passed
+    host_verdict["screenshot_path"] = ".pmx/screenshots/malformed.png"
+    host = _HostVerifier(host_verdict)
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+    )
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events("conv")
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+    assert verdicts
+    assert all(event.verified is False for event in verdicts)
+    assert ("RUNNING", "unverified_release") in _statuses(events)
+    assert any(
+        "WITHOUT a passing host verifier verdict" in message for message in _env_messages(events)
+    )
+
+
+@pytest.mark.asyncio
+async def test_host_screenshot_provenance_rejects_unbounded_path() -> None:
+    host_verdict = _verdict(passed=True, fp="HOST")
+    host_verdict["screenshot_path"] = "x" * 513
+    host = _HostVerifier(host_verdict)
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+    )
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events("conv")
+    verdict = next(e for e in events if isinstance(e, VerifierVerdictEvent))
+    assert verdict.verified is True
+    assert verdict.screenshot_path is None
 
 
 @pytest.mark.asyncio

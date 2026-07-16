@@ -893,6 +893,11 @@ class VerifierVerdictEvent(BaseEvent):
     verdict: str | None = None
     detail: str | None = None
     failures: list[dict[str, Any]] = Field(default_factory=list)
+    # Workspace-relative screenshot named by the host verifier's own verdict.
+    # This is provenance only: its presence never implies ``verified=True``.
+    # Keep the event boundary bounded because verifier output is externally
+    # derived and persists in the append-only event log.
+    screenshot_path: str | None = Field(default=None, max_length=512)
 
 
 class VerifierShadowEvent(BaseEvent):

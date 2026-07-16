@@ -75,6 +75,17 @@ def test_driver_catalog_requires_exact_well_formed_model_key():
     assert _driver_catalog_contains({"models": {}}, "wanted") is False
 
 
+def test_host_screenshot_strictness_is_scenario_scoped() -> None:
+    assert _run_mod._browser_verification_required(_h191_strict_browser_scenario()) is True
+    assert _run_mod._browser_verification_required({"assertions": {}}) is False
+    assert (
+        _run_mod._browser_verification_required(
+            {"assertions": {"browser_verification": {"required": False}}}
+        )
+        is False
+    )
+
+
 def _fake_inspect_trace() -> dict[str, Any]:
     scope = {
         "mode": "planning",
@@ -772,6 +783,27 @@ def _browser_screenshot_observation(
     }
 
 
+def _host_verifier_verdict(
+    screenshot_path: Any,
+    *,
+    seq: int = 11,
+    verified: Any = True,
+    verdict: Any = "pass",
+) -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "verifier_verdict",
+        "source": "system",
+        "artifact_path": "index.html",
+        "artifact_kind": "app",
+        "verified": verified,
+        "verdict": verdict,
+        "screenshot_path": screenshot_path,
+        "failures": [],
+    }
+
+
 def test_h190_referenced_browser_screenshot_is_retained_byte_identical_and_locked(tmp_path):
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
@@ -936,6 +968,123 @@ def test_h190_screenshot_manifest_hash_mismatch_fails_closed(tmp_path):
         client.collect_browser_evidence(_CID, [_browser_screenshot_observation(rel)], manifest)
 
 
+def test_h190_passing_host_verdict_screenshot_is_retained_and_hash_locked(tmp_path):
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    rel = ".pmx/screenshots/host-verify.png"
+    data = b"\x89PNG\r\n\x1a\nhost-verifier-proof"
+    ws = _plant_snapshot(proj, _CID, {"index.html": "ok"})
+    screenshot = ws / rel
+    screenshot.parent.mkdir(parents=True, exist_ok=True)
+    screenshot.write_bytes(data)
+    events = _h191_verifier_events(rel, host=True)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        projects_root=str(proj),
+    )
+    manifest = client._read_snapshot_manifest(_CID, ["index.html"], ws)
+
+    captured = client.collect_browser_evidence(
+        _CID, events, manifest, require_verified_host_screenshot=True
+    )
+
+    assert captured == {rel: data}
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest=manifest,
+        preview=None,
+        browser_evidence=captured,
+    )
+    base = assemble_dossier(
+        tmp_path / "out",
+        "h305_host_verifier",
+        _h191_strict_browser_scenario(),
+        run,
+        model="m",
+        autonomous=False,
+    )
+    frozen = base / "conversations" / _CID / "browser-evidence" / rel
+    assert frozen.read_bytes() == data
+    assert classify_run_folder(base)["status"] == "PASS"
+
+    frozen.write_bytes(data + b"tampered")
+    replayed = classify_run_folder(base)
+    assert replayed["status"] == "INVALID_RUN"
+    assert replayed["code"] == "EVIDENCE_HASH_MISMATCH"
+
+
+@pytest.mark.parametrize("path", [None, 7, "", "../outside.png", ".pmx/screenshots/x.PNG"])
+def test_h190_passing_host_verdict_with_missing_or_malformed_path_fails_closed(tmp_path, path):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+
+    with pytest.raises(BrowserEvidenceCollectionError):
+        client.collect_browser_evidence(
+            _CID,
+            [_host_verifier_verdict(path)],
+            {},
+            require_verified_host_screenshot=True,
+        )
+
+
+def test_h190_passing_host_verdict_with_absent_path_fails_closed(tmp_path):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+    verdict = _host_verifier_verdict(".pmx/screenshots/host.png")
+    verdict.pop("screenshot_path")
+
+    with pytest.raises(BrowserEvidenceCollectionError):
+        client.collect_browser_evidence(
+            _CID,
+            [verdict],
+            {},
+            require_verified_host_screenshot=True,
+        )
+
+
+def test_h190_non_strict_scenario_ignores_host_pass_without_screenshot(tmp_path):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+
+    assert client.collect_browser_evidence(_CID, [_host_verifier_verdict(None)], {}) == {}
+
+
+@pytest.mark.parametrize(
+    ("verified", "verdict"),
+    [(False, "pass"), (1, "pass"), (True, "fail"), (True, "PASS")],
+)
+def test_h190_failing_or_unverified_host_verdict_does_not_claim_screenshot(
+    tmp_path, verified, verdict
+):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+
+    assert (
+        client.collect_browser_evidence(
+            _CID,
+            [_host_verifier_verdict("../must-not-be-read.png", verified=verified, verdict=verdict)],
+            {},
+        )
+        == {}
+    )
+
+
 def test_h190_legacy_run_without_screenshot_reference_needs_no_snapshot(tmp_path):
     client = DiscoApiClient(
         FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
@@ -974,19 +1123,31 @@ def _h191_strict_browser_scenario() -> dict[str, Any]:
     }
 
 
-def _h191_verifier_events(path: str, *, passed: bool = True) -> list[dict[str, Any]]:
+def _h191_verifier_events(
+    path: str, *, passed: bool = True, host: bool = False
+) -> list[dict[str, Any]]:
     events = clean_smoke_log()
     events[-2]["seq"] = 13
     events[-2]["id"] = "evt_13"
     events[-1]["seq"] = 14
     events[-1]["id"] = "evt_14"
-    verifier = _browser_screenshot_observation(path, seq=12, tool_name="verify_web_app")
-    verifier["tool_result"]["structured"]["passed"] = passed
-    verifier["tool_result"]["structured"]["verdict"] = "pass" if passed else "fail"
-    events[-2:-2] = [
-        action(11, "verify_web_app", action_id="act_11"),
-        verifier,
-    ]
+    if host:
+        events[-2:-2] = [
+            _host_verifier_verdict(
+                path,
+                seq=12,
+                verified=passed,
+                verdict="pass" if passed else "fail",
+            )
+        ]
+    else:
+        verifier = _browser_screenshot_observation(path, seq=12, tool_name="verify_web_app")
+        verifier["tool_result"]["structured"]["passed"] = passed
+        verifier["tool_result"]["structured"]["verdict"] = "pass" if passed else "fail"
+        events[-2:-2] = [
+            action(11, "verify_web_app", action_id="act_11"),
+            verifier,
+        ]
     return events
 
 
@@ -1071,6 +1232,44 @@ def test_h191_passing_verifier_with_matching_frozen_path_satisfies_opt_in_contra
 
     assert strict["status"] == "PASS", strict
     assert legacy["status"] == "PASS", legacy
+
+
+def test_h191_passing_host_verdict_with_matching_frozen_path_satisfies_contract():
+    path = ".pmx/screenshots/host-verify.png"
+
+    strict = classify(
+        _h191_verifier_events(path, host=True),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert strict["status"] == "PASS", strict
+
+
+@pytest.mark.parametrize(
+    ("path", "verified", "verdict"),
+    [
+        (".pmx/screenshots/host.png", False, "pass"),
+        (".pmx/screenshots/host.png", 1, "pass"),
+        (".pmx/screenshots/host.png", True, "fail"),
+        (".pmx/screenshots/host.png", True, "PASS"),
+        ("../outside.png", True, "pass"),
+        (".pmx/screenshots/host.PNG", True, "pass"),
+        (None, True, "pass"),
+    ],
+)
+def test_h191_unverified_failing_or_malformed_host_verdict_does_not_count(path, verified, verdict):
+    events = _h191_verifier_events(".pmx/screenshots/unused.png", host=True)
+    events[-3] = _host_verifier_verdict(path, seq=12, verified=verified, verdict=verdict)
+
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={".pmx/screenshots/host.png"},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED"
 
 
 def test_h191_frozen_replay_requires_manifest_locked_verifier_screenshot(tmp_path):
@@ -5063,7 +5262,7 @@ async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_f
     async def collect_trace(_conversation_id):
         return trace
 
-    def missing_screenshot(conversation_id, _events, _workspace):
+    def missing_screenshot(conversation_id, _events, _workspace, **_kwargs):
         raise BrowserEvidenceCollectionError(
             "referenced browser screenshot is missing from the workspace snapshot",
             {

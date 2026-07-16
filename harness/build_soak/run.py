@@ -317,6 +317,11 @@ def _preview_required(scenario: dict[str, Any]) -> bool:
     return bool(((scenario.get("assertions") or {}).get("preview") or {}).get("required"))
 
 
+def _browser_verification_required(scenario: dict[str, Any]) -> bool:
+    assertion = (scenario.get("assertions") or {}).get("browser_verification") or {}
+    return isinstance(assertion, dict) and assertion.get("required") is True
+
+
 def _is_cancel_after_first_write(cancel_at: dict[str, Any] | None) -> bool:
     return (
         isinstance(cancel_at, dict) and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
@@ -813,7 +818,12 @@ async def drive_scenario(
                 f"progress hard-cap workspace collection failed: {type(workspace_exc).__name__}"
             )
         try:
-            browser_evidence = client.collect_browser_evidence(cid, events, workspace)
+            browser_evidence = client.collect_browser_evidence(
+                cid,
+                events,
+                workspace,
+                require_verified_host_screenshot=_browser_verification_required(scenario),
+            )
         except Exception as browser_exc:  # noqa: BLE001
             browser_evidence = {}
             timeline.append(
@@ -1008,7 +1018,12 @@ async def drive_scenario(
     workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
     browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
     try:
-        browser_evidence = client.collect_browser_evidence(cid, events, workspace)
+        browser_evidence = client.collect_browser_evidence(
+            cid,
+            events,
+            workspace,
+            require_verified_host_screenshot=_browser_verification_required(scenario),
+        )
     except BrowserEvidenceCollectionError as exc:
         # Browser evidence gaps ordinarily make a run INVALID.  A confirmed live-
         # thrash stop is different: the strict monitor established the product FAIL

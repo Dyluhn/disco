@@ -56,6 +56,7 @@ _MODEL_VERIFIER_META_KEYS = (
     "model_verifier_applied",
     "model_verifier_cause",
 )
+_HOST_VERDICT_SCREENSHOT_PATH_MAX_CHARS = 512
 _SAFE_MODEL_VERIFIER_CAUSE_RE = re.compile(
     r"(?:"
     r"model verifier unavailable \("
@@ -78,6 +79,27 @@ def _bounded_model_verifier_cause(value: object) -> str:
     if _SAFE_MODEL_VERIFIER_CAUSE_RE.fullmatch(clean):
         return clean
     return "model verifier unavailable (unclassified structural failure)"
+
+
+def _bounded_host_verdict_screenshot_path(value: object) -> str | None:
+    """Retain a usable, bounded path from the host verifier's raw verdict.
+
+    The value is audit provenance, not a verification signal.  Do not truncate
+    an overlong path into a different path, and do not persist control-bearing
+    values.  Downstream evidence capture owns workspace jailing and namespace
+    validation.
+    """
+
+    if not isinstance(value, str):
+        return None
+    path = value.strip()
+    if (
+        not path
+        or len(path) > _HOST_VERDICT_SCREENSHOT_PATH_MAX_CHARS
+        or any(ord(char) < 32 or ord(char) == 127 for char in path)
+    ):
+        return None
+    return path
 
 
 def _model_verifier_fallback(base: dict[str, Any], *, status: str, cause: object) -> dict[str, Any]:
@@ -512,7 +534,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         if label is not None:
             return str(label)
         if "passed" in verdict:
-            return "pass" if verdict.get("passed") else "fail"
+            return "pass" if verdict.get("passed") is True else "fail"
         return None
 
     @staticmethod
@@ -527,7 +549,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         for err in verdict.get("network_failures") or []:
             if isinstance(err, dict):
                 failures.append({"kind": "network_failure", **err})
-        if not verdict.get("passed") and not failures:
+        if verdict.get("passed") is not True and not failures:
             summary = str(verdict.get("summary") or verdict.get("detail") or "").strip()
             if summary:
                 failures.append({"kind": "summary", "message": summary})
@@ -833,7 +855,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             )
         # Deterministic host failures are a hard floor. A reading/vision judge can
         # add detail to a failure, but it cannot green-light a broken runtime.
-        if not host_verdict.get("passed") and (
+        if host_verdict.get("passed") is not True and (
             typed.verified or typed.verdict in {"unavailable", "unverifiable"}
         ):
             return _model_verifier_fallback(
@@ -934,12 +956,14 @@ class _HostVerifyGateMixin(_FinishGateProto):
         )
 
         if deliverable.artifact_kind != "app":
+            host_screenshot_path = None
             if not authoritative:
                 return Disp.FALLTHROUGH
             host_verdict = self._host_unverifiable_verdict(deliverable)
         elif host_verifier is None:
             return Disp.FALLTHROUGH
         else:
+            host_screenshot_path = None
             try:
                 raw_host_verdict = await asyncio.wait_for(
                     host_verifier.verify(deliverable),
@@ -956,6 +980,9 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     )
                 else:
                     host_verdict = raw_host_verdict
+                    host_screenshot_path = _bounded_host_verdict_screenshot_path(
+                        raw_host_verdict.get("screenshot_path")
+                    )
             except TimeoutError:
                 host_verdict = self._host_unavailable_verdict(
                     deliverable,
@@ -1026,10 +1053,11 @@ class _HostVerifyGateMixin(_FinishGateProto):
             VerifierVerdictEvent(
                 artifact_path=deliverable.artifact_path,
                 artifact_kind=deliverable.artifact_kind,
-                verified=bool(host_verdict.get("passed")) and host_label == "pass",
+                verified=host_verdict.get("passed") is True and host_label == "pass",
                 verdict=host_label,
                 detail=detail or None,
                 failures=self._verdict_failures(host_verdict),
+                screenshot_path=host_screenshot_path,
                 meta=dict(verifier_meta),
             )
         )
@@ -1045,7 +1073,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     exc_info=True,
                 )
         if authoritative and deliverable.artifact_kind == "app":
-            if host_verdict.get("passed") and host_label == "pass":
+            if host_verdict.get("passed") is True and host_label == "pass":
                 self._loop._browser_verify_refusals = 0
                 return Disp.FALLTHROUGH
             if host_label == "unavailable":
@@ -1260,7 +1288,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             # never a silent done, never a fall-back to the legacy browser gate.
             return await self._verifier_unavailable_disposition(tool_name)
 
-        if verdict.get("passed"):
+        if verdict.get("passed") is True:
             self._loop._browser_verify_refusals = 0  # clean pass → reset the streak
             if _vision_mode():
                 shot = str(verdict.get("screenshot_path") or "")
