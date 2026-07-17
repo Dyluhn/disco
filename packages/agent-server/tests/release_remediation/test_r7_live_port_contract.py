@@ -196,3 +196,37 @@ def test_non_uvicorn_start_is_never_touched(
     dockerfile = _dockerfile(client, cid)
     assert 'CMD ["node", "server.js"]' in dockerfile, dockerfile
     assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile
+
+
+def test_case_variant_head_is_never_touched(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifier-demonstrated defect: ``UVICORN`` is not ``uvicorn`` under case-sensitive
+    exec — a case-variant head is a different declaration and must stay verbatim."""
+    cid = _uid("conv_r7d2case")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed(ps, _store, cid, _FASTAPI_FILES, intent=ReleaseIntent(start_cmd=("UVICORN", "main:app")))
+
+    dockerfile = _dockerfile(client, cid)
+    assert 'CMD ["UVICORN", "main:app"]' in dockerfile, dockerfile
+    assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile
+
+
+def test_path_qualified_head_is_never_touched(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verifier-demonstrated defect: a path-qualified head is a different declaration
+    than the bare token the live defect reproduced; preservation wins."""
+    cid = _uid("conv_r7d2path")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed(
+        ps,
+        _store,
+        cid,
+        _FASTAPI_FILES,
+        intent=ReleaseIntent(start_cmd=("/usr/local/bin/uvicorn", "main:app")),
+    )
+
+    dockerfile = _dockerfile(client, cid)
+    assert 'CMD ["/usr/local/bin/uvicorn", "main:app"]' in dockerfile, dockerfile
+    assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile

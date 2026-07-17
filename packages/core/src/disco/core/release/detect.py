@@ -1941,10 +1941,13 @@ def _port_contract_start(start_cmd: tuple[str, ...], port_env: str) -> tuple[str
     bare declaration can NEVER satisfy the contract the emitted bundle establishes
     (compose ``PORT``, ``EXPOSE``, loopback healthcheck) — the container is unreachable
     and never becomes healthy. Mirror the source-detection shape by appending
-    ``--host 0.0.0.0 --port ${<port_env>}`` for EXACTLY that shape: head ``uvicorn``
-    with neither ``--host`` nor ``--port`` declared (spaced or ``=``-form). An
-    owner-declared binding always wins verbatim; every other command is untouched."""
-    if not start_cmd or start_cmd[0].rsplit("/", 1)[-1].lower() != "uvicorn":
+    ``--host 0.0.0.0 --port ${<port_env>}`` for EXACTLY that shape: head EXACTLY the
+    bare token ``uvicorn`` (exec is case-sensitive and a path-qualified or case-variant
+    head is a DIFFERENT declaration — independent verification demonstrated both were
+    being over-matched), with neither ``--host`` nor ``--port`` declared (spaced or
+    ``=``-form). An owner-declared binding always wins verbatim; every other command
+    is untouched."""
+    if not start_cmd or start_cmd[0] != "uvicorn":
         return start_cmd
     for token in start_cmd[1:]:
         if token in ("--host", "--port") or token.startswith(("--host=", "--port=")):
