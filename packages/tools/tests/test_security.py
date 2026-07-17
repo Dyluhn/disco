@@ -21,9 +21,25 @@ SENTINEL = "SUPER-SECRET-SENTINEL-9F3A2"
 # ---- §11.4 the headline: no secret is ever in the box -----------------------
 
 
+async def _assert_box_secret_free(inst) -> None:
+    """The box invariant, stated on the SECRET rather than on emptiness: the only
+    content the sandbox machinery may itself create is the designed bounded-exec
+    spill artifact (`.disco/spills/` — written when a command's output exceeds the
+    128 KiB capture cap, e.g. `ps` on a process-heavy host), and no byte of it may
+    carry the sentinel. Anything else in a fresh box is still a failure."""
+    files = await inst.list_dir(".")
+    assert files in ([], [".disco"]), f"unexpected content in the box: {files}"
+    if files == [".disco"]:
+        assert await inst.list_dir(".disco") == ["spills"]
+        for name in await inst.list_dir(".disco/spills"):
+            data = await inst.read_file(f".disco/spills/{name}")
+            assert SENTINEL.encode("utf-8") not in data
+
+
 async def test_no_secret_in_the_box():
     """A secret injected into the orchestrator's store is absent from the
-    sandbox's env, filesystem, and process list."""
+    sandbox's env, filesystem (including any designed spill artifact), and
+    process list."""
     secrets = InMemorySecretsStore({"PROVIDER_KEY": SENTINEL})
     assert secrets.get("PROVIDER_KEY") == SENTINEL  # the orchestrator can read it
 
@@ -32,10 +48,29 @@ async def test_no_secret_in_the_box():
     # env (clean — never os.environ), process list, and workspace: all secret-free.
     env = await inst.exec_shell("env", timeout_s=10)
     procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
-    files = await inst.list_dir(".")
     assert SENTINEL not in env.stdout
     assert SENTINEL not in procs.stdout
-    assert files == []  # nothing was written into the box
+    await _assert_box_secret_free(inst)
+    await inst.destroy()
+
+
+async def test_no_secret_in_the_box_even_when_output_spills():
+    """DETERMINISTIC spill branch: force a >128 KiB output so the bounded-exec
+    helper writes its designed `.disco/spills/` artifact, then prove the box
+    STILL carries no secret byte anywhere — including inside the spill files.
+    (The headline test only hits this branch when the host is process-heavy;
+    this pins the behavior regardless of load.)"""
+    secrets = InMemorySecretsStore({"PROVIDER_KEY": SENTINEL})
+    assert secrets.get("PROVIDER_KEY") == SENTINEL
+
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    big = await inst.exec_shell("seq 1 400000", timeout_s=30)
+    assert big.exit_code == 0
+    assert SENTINEL not in big.stdout
+    files = await inst.list_dir(".")
+    assert files == [".disco"], f"expected the designed spill artifact, got {files}"
+    await _assert_box_secret_free(inst)
     await inst.destroy()
 
 
