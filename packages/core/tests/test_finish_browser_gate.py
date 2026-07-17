@@ -1,10 +1,13 @@
 import pytest
 from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
     ToolResult,
 )
 from disco.core.events import EventSource
@@ -117,6 +120,84 @@ def test_is_web_deliverable_server_status():
     )
     events = [ObservationEvent(tool_result=res, action_id="a")]
     assert _is_web_deliverable(events) is False
+
+
+# ---- H357: preview_start action/observation pair signals web intent ---------
+
+
+def _preview_action() -> ActionEvent:
+    return ActionEvent(
+        thought="preview",
+        tool_call=ToolCall(tool_name="preview_start", arguments={}),
+    )
+
+
+def _preview_observation(action_id: str, *, success: bool = True) -> ObservationEvent:
+    return ObservationEvent(
+        tool_result=ToolResult(
+            call_id="c",
+            tool_name="preview_start",
+            success=success,
+            content="preview started on port 8000" if success else "preview failed",
+            structured={"status": "running" if success else "crashed"},
+        ),
+        action_id=action_id,
+    )
+
+
+def test_is_web_deliverable_preview_start_success():
+    """preview_start action + matching successful observation → True."""
+    act = _preview_action()
+    obs = _preview_observation(act.id)
+    assert _is_web_deliverable([act, obs]) is True
+
+
+def test_is_web_deliverable_preview_start_failed_observation():
+    """preview_start action with a failed (success=False) observation → False."""
+    act = _preview_action()
+    obs = _preview_observation(act.id, success=False)
+    assert _is_web_deliverable([act, obs]) is False
+
+
+def test_is_web_deliverable_preview_start_agent_error():
+    """preview_start action with an AgentErrorEvent → False."""
+    act = _preview_action()
+    err = AgentErrorEvent(error="preview crashed", action_id=act.id)
+    assert _is_web_deliverable([act, err]) is False
+
+
+def test_is_web_deliverable_preview_start_orphan_observation():
+    """Observation with action_id that matches no action → False."""
+    obs = _preview_observation("nonexistent-id")
+    assert _is_web_deliverable([obs]) is False
+
+
+def test_is_web_deliverable_preview_start_action_only():
+    """Action without any matching observation → False."""
+    act = _preview_action()
+    assert _is_web_deliverable([act]) is False
+
+
+def test_is_web_deliverable_preview_start_wrong_tool_observation():
+    """Observation with wrong tool_name (preview_stop) → False even when
+    action_id matches a preview_start action."""
+    act = _preview_action()
+    obs = ObservationEvent(
+        tool_result=ToolResult(
+            call_id="c", tool_name="preview_stop", success=True, content="stopped"
+        ),
+        action_id=act.id,
+    )
+    assert _is_web_deliverable([act, obs]) is False
+
+
+def test_is_web_deliverable_preview_start_observation_before_action():
+    """Observation before its matching action must NOT count — a single forward
+    scan should reject the reordered pair."""
+    act = _preview_action()
+    obs = _preview_observation(act.id, success=True)
+    # Observation comes BEFORE the action in the event list
+    assert _is_web_deliverable([obs, act]) is False
 
 
 def test_browser_verified_matrix():
@@ -715,3 +796,148 @@ async def test_active_probe_foreign_port_observation_is_rejected():
     assert len(warns) == 1
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses  # valve released — no deadlock
+
+
+# ---- H357: preview_start triggers the verify gate end-to-end -----------------
+
+
+class PreviewBuildExecutor(FakeExecutor):
+    """Executor with file_write, preview_start, shell, code_exec, and
+    verify_web_app.  preview_start returns success; verify_web_app returns a
+    structured PASS verdict.  All other tools fall through to the default
+    success=True."""
+
+    def __init__(self):
+        tools = [
+            ToolSpec(name="file_write", description="write", parameters_schema={}),
+            ToolSpec(name="preview_start", description="start preview", parameters_schema={}),
+            ToolSpec(name="shell", description="shell", parameters_schema={}),
+            ToolSpec(name="code_exec", description="execute code", parameters_schema={}),
+            ToolSpec(name="verify_web_app", description="verify web app", parameters_schema={}),
+            ToolSpec(name="submit_plan", description="plan", parameters_schema={}),
+        ]
+        super().__init__(tools=tools)
+        self.verify_app_calls = 0
+
+    async def execute(self, call):
+        if call.tool_name == "preview_start":
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name="preview_start",
+                success=True,
+                content="preview started on http://127.0.0.1:8000/",
+                structured={
+                    "status": "running",
+                    "url": "http://127.0.0.1:8000/",
+                    "port": 8000,
+                    "command": "python3 server.py",
+                },
+            )
+        if call.tool_name == "verify_web_app":
+            self.verify_app_calls += 1
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name="verify_web_app",
+                success=True,
+                content="verified",
+                structured={
+                    "passed": True,
+                    "verdict": "pass",
+                    "url": "http://127.0.0.1:8000/",
+                    "http_status": 200,
+                    "title": "Test App",
+                    "meaningful_content": True,
+                    "visible_text_chars": 50,
+                    "elements_count": 3,
+                    "console_errors": [],
+                    "console_warnings": [],
+                    "network_failures": [],
+                    "checks": [],
+                    "summary": "App verified successfully",
+                },
+            )
+        return await super().execute(call)
+
+
+@pytest.mark.asyncio
+async def test_preview_start_triggers_verify_gate():
+    """H357 regression: Build writes server.py, preview_start with command
+    python3 server.py succeeds (returns structured running preview with
+    URL/port), code_exec and shell local probes succeed, then the agent
+    attempts tool-less finish without any browser/verifier observation.
+    The preview_start signal must route through the existing verify gate:
+    the gate auto-drives verify_web_app and lands a clean FINISHED.
+    Assert a gate-owned verify probe (ActionEvent with verify_probe meta)
+    causally precedes FINISHED and no preexisting agent verifier proof
+    made the test vacuous."""
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "server.py", "content": "..."}),
+            action_step(tool="preview_start", args={"command": "python3 server.py"}),
+            action_step(tool="code_exec", args={"code": "..."}),
+            action_step(tool="shell", args={"command": "curl localhost:8000"}),
+            finish_step(),
+        ]
+    )
+    execu = PreviewBuildExecutor()
+    loop, store = _gate_loop(agent, execu)
+    await loop.send_message("build a web server")
+    await loop.run()
+
+    events = await store.get_events("conv")
+
+    # The gate must have driven verify_web_app because of the preview_start signal.
+    # Assert the OBSERVATION exists.
+    verify_obs = [
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "verify_web_app"
+    ]
+    assert verify_obs, (
+        "fix should route through verify_web_app gate — "
+        "verify_web_app observation must exist in events"
+    )
+
+    # The verify_web_app observation (gate-driven) must causally precede FINISHED.
+    finished_seq: int | None = None
+    for e in events:
+        if isinstance(e, StatusEvent) and e.status.value == "FINISHED":
+            finished_seq = e.seq
+            break
+    assert finished_seq is not None, "must land FINISHED"
+    for obs in verify_obs:
+        obs_seq = getattr(obs, "seq", None)
+        assert obs_seq is not None and obs_seq < finished_seq, (
+            f"verify_web_app obs seq {obs_seq} must precede FINISHED seq {finished_seq}"
+        )
+
+    # Assert the verify_web_app action is GATE-OWNED (tagged verify_probe)
+    # — no preexisting agent verifier proof made the test vacuous.
+    verify_actions = [
+        e
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call
+        and e.tool_call.tool_name == "verify_web_app"
+    ]
+    assert verify_actions, "verify_web_app action must exist (gate-driven probe)"
+    assert execu.verify_app_calls == 1, "the finish gate must drive exactly one verifier call"
+    assert all(
+        e.meta.get("verify_probe") for e in verify_actions
+    ), "all verify_web_app actions must be gate-owned (verify_probe)"
+    # The gate-driven action precedes FINISHED
+    for act in verify_actions:
+        act_seq = getattr(act, "seq", None)
+        assert act_seq is not None and act_seq < finished_seq, (
+            f"verify_web_app action seq {act_seq} must precede FINISHED seq {finished_seq}"
+        )
+
+    statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
+    assert "FINISHED" in statuses
+
+    # Without the fix (no preview_start detection) _is_web_deliverable
+    # returns False for these events — verify the fix is causal.
+    # server.py is NOT index.html and no server_status observation exists.
+    assert _is_web_deliverable(events) is True, "fix must mark events as web deliverable"

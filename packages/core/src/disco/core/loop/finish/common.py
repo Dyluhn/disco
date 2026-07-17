@@ -351,8 +351,31 @@ def _tc_components_installed(events: list[Event]) -> bool:
 
 
 def _is_web_deliverable(events: list[Event]) -> bool:
-    """Web deliverable if index.html was written/edited OR port 8000 owned by non-preview.
+    """Web deliverable if index.html was written/edited OR port 8000 owned by non-preview
+    OR a successful preview_start action/observation pair exists.
     Derived from events to keep the check pure (event-list in, verdict out)."""
+
+    # H357: detect a successful preview_start action/observation pair.  The
+    # observation must be bound to the matching action id and the tool name
+    # must be "preview_start".  A failed, malformed, unpaired/orphaned,
+    # wrong-tool, or action-only preview record must not create this signal.
+    # Uses a SINGLE forward scan so that an observation before its causal
+    # action (forged/reordered) never qualifies — only an action-then-
+    # observation pair counts.
+    preview_action_ids: set[str] = set()
+    for ev in events:
+        if isinstance(ev, ActionEvent) and ev.tool_call.tool_name == "preview_start":
+            preview_action_ids.add(ev.id)
+        elif (
+            isinstance(ev, ObservationEvent)
+            and ev.tool_result.tool_name == "preview_start"
+            and ev.tool_result.success
+            and isinstance(ev.action_id, str)
+            and ev.action_id in preview_action_ids
+        ):
+            return True
+
+    # Existing: index.html was written/edited OR port 8000 owned by non-preview.
     for ev in reversed(events):
         if isinstance(ev, ActionEvent):
             if ev.tool_call.tool_name in (
