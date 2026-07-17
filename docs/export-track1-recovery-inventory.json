@@ -3,7 +3,7 @@
   "excludes_self": "docs/export-track1-recovery-inventory.json",
   "expected_proof": {
     "failed": 0,
-    "passed": 34,
+    "passed": 41,
     "tests": [
       "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
       "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
