@@ -19,17 +19,17 @@
     }
   ],
   "files": {
-    "docs/export-track1-closeout-acceptance.sha256": "1375a8a6fe764ce60f4a474a9841504ea53dde9cfbdad836ded53a7472ea829d",
+    "docs/export-track1-closeout-acceptance.sha256": "7f3199816ae71c49b72a6b1bf314f4ce2a10e36c36a5428db696d4d815d9fcd1",
     "packages/agent-server/tests/integration/_closeout_live_support.py": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
-    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "6f016245999a5c26cb665bec3bf1276a3a813c551528916ddb0fe4c32315a708",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
     "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "35df19742f1c3c28dbe797bc208e68640a44f4a8040803614bee64624e6ca55d",
     "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "69a5fa265646aec68822b243a9cfac13f886d04acde3ce9923460b77b1b4cc4e",
     "packages/core/src/disco/core/release/detect.py": "c63b15361f2038009274d76dd1a81a912c96b8a5cac60507c0ade9846a904c29",
-    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "46cb9e109620c8d94d9cc28f242ffabffedf42dad2f4cdfa8dcb711c94448cf5",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "aa8b20bac23367758e0f1cdc3b5eb53210e2bdd21b9d640e7b8e8fce48c3b573",
     "packages/tools/tests/test_security.py": "da91672ffb43aa7a4994c77b46a62de5c07506e64e3abf1cc569ea9bcf103b7e",
-    "scripts/export_track1_candidate_receipt.py": "09485430ccf0018ab3b1bc09e4312c9ce50bf83b88285197734aa071aa3b4bc6",
-    "scripts/gen_closeout_acceptance_manifest.py": "35853b2827dfd22112c2fb508ba18b5f5dadb6cb39df364d44459ea8e2a2a8cf"
+    "scripts/export_track1_candidate_receipt.py": "ebeb852be395db6758bacf8ecbfa6f39ad5fc8016072eb906d75ce807c06a4df",
+    "scripts/gen_closeout_acceptance_manifest.py": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8"
   },
   "note": "Hash inventory for the Export Track-1 recovery (base c0c4f728..HEAD). Regenerate with scripts/export_track1_candidate_receipt.py --emit-inventory (authoring aid; the protection is human review of this file's diff + the operator-supplied HEAD). external_evidence is OPTIONAL and NON-AUTHORITATIVE (owner policy 2026-07-17): bytes are pinned for a tamper-evident trail; the receipt never executes it.",
   "schema": "export-track1-recovery-inventory/v1"
