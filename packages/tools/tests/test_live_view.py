@@ -7,11 +7,13 @@ def test_browser_state_headless_by_default():
     """BrowserState.start() with no display arg → headless=True (the default)."""
     mock_browser = MagicMock()
     mock_context = MagicMock()
+    mock_calibration_page = MagicMock()
+    mock_calibration_page.evaluate.return_value = True
     mock_page = MagicMock()
     mock_pw = MagicMock()
     mock_pw.chromium.launch.return_value = mock_browser
     mock_browser.new_context.return_value = mock_context
-    mock_context.new_page.return_value = mock_page
+    mock_context.new_page.side_effect = [mock_calibration_page, mock_page]
     mock_sp_instance = MagicMock()
     mock_sp_instance.start.return_value = mock_pw
 
@@ -30,11 +32,13 @@ def test_browser_state_headed_when_display_given():
     """BrowserState.start(display=':1') → headless=False."""
     mock_browser = MagicMock()
     mock_context = MagicMock()
+    mock_calibration_page = MagicMock()
+    mock_calibration_page.evaluate.return_value = True
     mock_page = MagicMock()
     mock_pw = MagicMock()
     mock_pw.chromium.launch.return_value = mock_browser
     mock_browser.new_context.return_value = mock_context
-    mock_context.new_page.return_value = mock_page
+    mock_context.new_page.side_effect = [mock_calibration_page, mock_page]
     mock_sp_instance = MagicMock()
     mock_sp_instance.start.return_value = mock_pw
 

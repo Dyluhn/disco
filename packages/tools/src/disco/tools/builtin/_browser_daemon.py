@@ -75,6 +75,34 @@ _STEALTH_INIT_SCRIPT = """
 """
 
 
+class BrowserRendererUnavailable(RuntimeError):
+    """Chromium launched, but cannot produce trustworthy painted text evidence."""
+
+
+def _text_renderer_ready(page) -> bool:
+    """Calibrate ordinary system-font layout on a disposable browser page."""
+    try:
+        page.set_content(
+            '<!doctype html><span id="disco-render-probe" '
+            'style="font:16px sans-serif">Disco renderer probe</span>'
+        )
+        result = page.evaluate("""
+            () => {
+                const element = document.getElementById('disco-render-probe');
+                const node = element && element.firstChild;
+                if (!element || !node || !(element.innerText || '').trim()) return false;
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                return Array.from(range.getClientRects()).some(
+                    rect => rect.width > 0 && rect.height > 0
+                );
+            }
+        """)
+    except Exception:
+        return False
+    return result is True
+
+
 class BrowserState:
     def __init__(self):
         self.playwright = None
@@ -85,6 +113,8 @@ class BrowserState:
         # B7: failed/4xx-5xx network requests are otherwise invisible to the agent.
         self.network_fails = []
         self.screenshot_seq = 0
+        self.render_ready = False
+        self.render_error = ""
 
     def start(self, display: str | None = None):
         self.playwright = sync_playwright().start()
@@ -130,6 +160,16 @@ class BrowserState:
         )
         # W-46: erase the JS-visible headless tells before any page script runs.
         self.context.add_init_script(_STEALTH_INIT_SCRIPT)
+        calibration_page = self.context.new_page()
+        try:
+            if not _text_renderer_ready(calibration_page):
+                self.render_error = (
+                    "browser renderer unavailable: Chromium could not lay out ordinary "
+                    "system-font text; painted browser evidence is unavailable"
+                )
+                raise BrowserRendererUnavailable(self.render_error)
+        finally:
+            calibration_page.close()
         self.page = self.context.new_page()
         self.page.on("console", self._add_console)
         self.page.on("pageerror", self._add_pageerror)
@@ -137,6 +177,8 @@ class BrowserState:
         # so the agent can see *why* a page it is debugging is broken.
         self.page.on("requestfailed", self._add_request_failed)
         self.page.on("response", self._add_response)
+        self.render_ready = True
+        self.render_error = ""
 
     def stop(self):
         """Close Playwright in ownership order; safe after partial startup."""
@@ -223,14 +265,15 @@ state = BrowserState()
 class BrowserHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
-            if state.page:
+            if state.page and state.render_ready:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(INSTANCE_ID.encode("ascii"))
             else:
                 self.send_response(503)
                 self.end_headers()
-                self.wfile.write(b"Not Ready")
+                detail = state.render_error or "browser renderer not ready"
+                self.wfile.write(detail.encode("utf-8", errors="replace")[:512])
         else:
             self.send_response(404)
             self.end_headers()
@@ -259,8 +302,11 @@ class BrowserHandler(BaseHTTPRequestHandler):
 
     def _handle_action(self, action, params):
         page = state.page
-        if not page:
-            return {"ok": False, "error": "Browser not initialized"}
+        if not page or not state.render_ready:
+            return {
+                "ok": False,
+                "error": state.render_error or "Browser renderer not initialized",
+            }
 
         vw = params.get("viewport_width")
         vh = params.get("viewport_height")

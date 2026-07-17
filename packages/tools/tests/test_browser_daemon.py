@@ -298,6 +298,8 @@ def _drive_capture(fake_page, elements_seq, action="navigate", params=None):
 
     # Point module state at the fake page.
     daemon_mod.state.page = fake_page
+    daemon_mod.state.render_ready = True
+    daemon_mod.state.render_error = ""
 
     handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
 
@@ -422,6 +424,28 @@ def test_visible_semantic_elements_real_chromium():
     executable = _installed_chromium_executable()
     if executable is None:
         pytest.skip("installed Chromium is required")
+    import base64
+    import importlib.resources
+
+    font = (
+        importlib.resources.files("disco.core.brand")
+        .joinpath("fonts/SchibstedGrotesk.ttf")
+        .read_bytes()
+    )
+    font_b64 = base64.b64encode(font).decode("ascii")
+    font_css = '<style>*{font-family:"DiscoProbe"!important}</style>'
+    load_font = """
+        async b64 => {
+            const bytes = atob(b64);
+            const data = new Uint8Array(bytes.length);
+            for (let index = 0; index < bytes.length; index++) {
+                data[index] = bytes.charCodeAt(index);
+            }
+            const font = new FontFace('DiscoProbe', data.buffer, {weight: '100 900'});
+            await font.load();
+            document.fonts.add(font);
+        }
+    """
 
     cases = {
         "<h1>Live Server Up</h1>": 1,
@@ -458,7 +482,14 @@ def test_visible_semantic_elements_real_chromium():
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             for html, expected in cases.items():
-                page.set_content(html)
+                page.set_content(font_css + html)
+                page.evaluate(load_font, font_b64)
+                page.evaluate("() => document.fonts.ready")
+                if "<h1>Live Server Up</h1>" in html:
+                    page.wait_for_function(
+                        "() => document.querySelector('h1').getBoundingClientRect().height > 0",
+                        timeout=2_000,
+                    )
                 assert handler._count_visible_semantic_elements(page) == expected, html
         finally:
             browser.close()
@@ -474,6 +505,15 @@ def test_daemon_start_applies_anti_fingerprint(monkeypatch):
     rec: dict = {}
 
     class _FakeStartPage:
+        def set_content(self, _html):
+            pass
+
+        def evaluate(self, _script):
+            return True
+
+        def close(self):
+            pass
+
         def on(self, *a, **k):
             pass
 
@@ -536,6 +576,15 @@ def test_daemon_start_headed_keeps_anti_fingerprint(monkeypatch):
     rec: dict = {}
 
     class _FakeStartPage:
+        def set_content(self, _html):
+            pass
+
+        def evaluate(self, _script):
+            return True
+
+        def close(self):
+            pass
+
         def on(self, *a, **k):
             pass
 
@@ -576,6 +625,63 @@ def test_daemon_start_headed_keeps_anti_fingerprint(monkeypatch):
     assert "--display=:1" in rec["launch_kwargs"]["args"]
     assert rec["context_kwargs"]["user_agent"] == daemon_mod._REALISTIC_UA
     assert "webdriver" in rec["init_script"]
+
+
+def test_h344_daemon_start_refuses_fontless_renderer(monkeypatch):
+    """A live Chromium process is not ready evidence if it cannot paint text."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    class _FontlessPage:
+        def set_content(self, _html):
+            pass
+
+        def evaluate(self, _script):
+            return False
+
+        def close(self):
+            pass
+
+    class _Context:
+        def add_init_script(self, _script):
+            pass
+
+        def new_page(self):
+            return _FontlessPage()
+
+        def close(self):
+            pass
+
+    class _Browser:
+        def new_context(self, **_kwargs):
+            return _Context()
+
+        def close(self):
+            pass
+
+    class _Chromium:
+        def launch(self, **_kwargs):
+            return _Browser()
+
+    class _Playwright:
+        chromium = _Chromium()
+
+        def stop(self):
+            pass
+
+    class _Manager:
+        def start(self):
+            return _Playwright()
+
+    monkeypatch.setattr(daemon_mod, "sync_playwright", lambda: _Manager())
+    state = daemon_mod.BrowserState()
+
+    with pytest.raises(daemon_mod.BrowserRendererUnavailable, match="system-font text"):
+        state.start()
+
+    assert state.render_ready is False
+    assert "renderer unavailable" in state.render_error
+    assert state.page is None
+    state.stop()
 
 
 @pytest.mark.asyncio
@@ -794,6 +900,23 @@ async def test_browser_daemon_integration_real_chromium(tmp_path):
 
     import disco.tools.builtin._browser_daemon as daemon_mod
     import httpx
+    from disco.tools.builtin.browser import _installed_chromium_executable
+    from playwright.sync_api import sync_playwright
+
+    executable = _installed_chromium_executable()
+    if executable is None:
+        pytest.skip("installed Chromium is required")
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True, executable_path=executable, args=["--no-sandbox"]
+        )
+        try:
+            calibration_page = browser.new_page()
+            renderer_ready = daemon_mod._text_renderer_ready(calibration_page)
+        finally:
+            browser.close()
+    if not renderer_ready:
+        pytest.skip("INFRA: installed Chromium cannot lay out ordinary system-font text")
 
     # 1. Setup a fixture page: a counter button, a cookie-setter, and a console error.
     fixture_dir = tmp_path / "fixtures"
