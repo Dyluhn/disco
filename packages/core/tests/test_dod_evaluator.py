@@ -266,6 +266,37 @@ async def test_unmet_command_predicate_is_named_in_verdict(tmp_path: Path) -> No
     assert captured == ["pytest -q"]
 
 
+async def test_h342_default_command_runner_pins_bash_and_clean_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sandbox-less DoD fallback cannot inherit an ambient /bin/sh dialect."""
+    import os
+    import subprocess
+
+    import disco.core.dod_evaluator as evaluator_module
+
+    captured: dict[str, object] = {}
+
+    def _run(command: str, **kwargs):  # noqa: ANN003, ANN202
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="verified", stderr="")
+
+    monkeypatch.setattr(evaluator_module.subprocess, "run", _run)
+    command = "read -r value < <(printf 71); [[ $value == 71 ]]"
+    verdict = await DoDEvaluator(tmp_path).evaluate(
+        DoDSpec(predicates=[CommandExitPredicate(cmd=command)])
+    )
+
+    assert verdict.passed is True
+    assert captured["command"] == command
+    assert captured["shell"] is True
+    assert captured["executable"] == "/bin/bash"
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["timeout"] == 30.0
+    assert captured["env"] == {"PATH": os.environ.get("PATH", "")}
+
+
 async def test_unmet_http_predicate_is_named_in_verdict(tmp_path: Path) -> None:
     """An `http_ok` predicate that returns 500 (when 200 is expected) is
     named in `unmet` with the observed status in the reason. The probe

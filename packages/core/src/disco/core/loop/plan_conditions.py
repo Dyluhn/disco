@@ -834,6 +834,9 @@ class PlanStepConditions:
             return subprocess.run(
                 predicate.cmd,
                 shell=True,
+                # H342: the sandbox and DoD evaluator define non-interactive
+                # Bash semantics; keep this sandbox-less fallback identical.
+                executable="/bin/bash",
                 cwd=cwd,
                 capture_output=True,
                 text=True,

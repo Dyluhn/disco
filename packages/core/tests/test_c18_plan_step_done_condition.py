@@ -53,6 +53,12 @@ from disco.core.llm import OperatingMode
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv-c18"
+_H342_PROCESS_SUBSTITUTION_PREDICATE = (
+    'python3 -c "import sys; lines=sys.stdin.read().split(); '
+    "assert len(lines)==20, f'expected 20 primes, got {len(lines)}'; "
+    "assert lines[-1]=='71', f'last prime was {lines[-1]}, expected 71'; "
+    "print('VERIFIED: 20 primes, ending with 71')\" < <(python3 primes.py)"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -909,12 +915,28 @@ async def test_c18_container_command_timed_out_fails(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_c18_sandboxless_command_falls_back_to_subprocess(tmp_path):
-    """F-2: when the sandbox has no exec_shell (or there is no sandbox), the
-    command predicate falls back to host subprocess. _FakeSandbox has
-    workspace_path but no exec_shell, so subprocess runs against the real cwd."""
+async def test_h342_c18_and_finish_fallback_share_bash_process_substitution(tmp_path):
+    """The advisory and authoritative finish gate use identical Bash semantics.
+
+    H342 froze this exact process-substitution predicate into the DoD, while the
+    public proof worked only when the agent added ``bash -c``. The C18 fallback
+    and fresh DoD runner both selected ambient ``/bin/sh`` and rejected a
+    correct workspace. Keep the exact predicate here so either fallback drifting
+    away from the shared Bash contract blocks FINISHED.
+    """
     workspace = tmp_path / "ws"
     workspace.mkdir()
+    (workspace / "primes.py").write_text(
+        "def primes(n):\n"
+        "    out = []\n"
+        "    candidate = 2\n"
+        "    while len(out) < n:\n"
+        "        if all(candidate % p for p in out if p * p <= candidate):\n"
+        "            out.append(candidate)\n"
+        "        candidate += 1\n"
+        "    return out\n"
+        "print(*primes(20), sep='\\n')\n"
+    )
     sbx = _FakeSandbox(str(workspace))
 
     agent = ScriptedAgent(
@@ -925,16 +947,18 @@ async def test_c18_sandboxless_command_falls_back_to_subprocess(tmp_path):
                     "summary": "p",
                     "steps": [
                         {
-                            "title": "always passes",
+                            "title": "verify the first twenty primes",
                             "done_condition": {
                                 "kind": "command",
-                                "cmd": "true",
+                                "cmd": _H342_PROCESS_SUBSTITUTION_PREDICATE,
                                 "expect_exit": 0,
                             },
                         }
                     ],
                 },
             ),
+            # Cross the approved-plan execution boundary before marking it done.
+            action_step("shell", {"command": "python3 primes.py"}),
             action_step("plan_step", {"index": 1, "state": "done"}),
             finish_step(),
         ]
@@ -956,6 +980,43 @@ async def test_c18_sandboxless_command_falls_back_to_subprocess(tmp_path):
     # Subprocess path stamps "in X.XXs"; sandbox path stamps "(sandbox)".
     assert "(sandbox)" not in note.message.content
     assert "in " in note.message.content
+    final_status = next(event for event in reversed(events) if isinstance(event, StatusEvent))
+    assert final_status.status == ConversationStatus.FINISHED
+
+
+async def test_h342_c18_host_fallback_pins_bash_and_raw_command(tmp_path, monkeypatch):
+    import os
+    import subprocess
+
+    from disco.core.dod import CommandExitPredicate
+    from disco.core.loop.plan_conditions import PlanStepConditions
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    sbx = _FakeSandbox(str(workspace))
+    loop, _ = build_loop(
+        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id="conv-h342-c18"
+    )
+    captured: dict[str, object] = {}
+
+    def _run(command: str, **kwargs):  # noqa: ANN003, ANN202
+        captured["command"] = command
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="verified", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    command = "read -r value < <(printf 71); [[ $value == 71 ]]"
+    passed, _note = await PlanStepConditions(loop).check_command_for_plan_step(
+        CommandExitPredicate(cmd=command)
+    )
+
+    assert passed is True
+    assert captured["command"] == command
+    assert captured["shell"] is True
+    assert captured["executable"] == "/bin/bash"
+    assert captured["cwd"] == str(workspace)
+    assert captured["timeout"] == 5.0
+    assert captured["env"] == {"PATH": os.environ.get("PATH", "")}
 
 
 # ---------------------------------------------------------------------------

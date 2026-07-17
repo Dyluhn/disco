@@ -78,6 +78,43 @@ def test_hard_deny_catches_rm_root_bypass_variants():
         "rm --r /etc",  # shortest unambiguous abbreviation
         "find -H / -delete",  # find leading global option
         "find / -exec /bin/rm -rf {} +",  # path-qualified rm in -exec
+        # H343: side-effecting shell substitutions execute before their benign
+        # outer command. The hard-deny floor must recurse into each active body.
+        "echo $(rm -rf /)",
+        "echo `rm -rf /`",
+        "cat <(rm -rf /)",
+        "cat >(rm -rf /)",
+        "bash -c 'cat <(rm -rf /)'",
+        "echo $(printf ok; rm -rf /)",
+        "echo $(rm -rf /",  # malformed active body fails closed
+        "if true; then rm -rf /; fi",
+        "for x in 1; do rm -rf /; done",
+        "(rm -rf /)",
+        "{ rm -rf /; }",
+        'echo "$(if true; then rm -rf /; fi)"',
+        'echo "$(case x in x) rm -rf /;; esac)"',
+        'echo "$(case y in x) printf esac;; y) rm -rf /;; esac)"',
+        'echo "$(case y in x) \\esac;; y) rm -rf /;; esac)"',
+        'echo "$(case y in x) e\\sac;; y) rm -rf /;; esac)"',
+        'echo "$(case y in x|esac) printf no;; y) rm -rf /;; esac)"',
+        "coproc rm -rf /",
+        "coproc job { rm -rf /; }",
+        "function f { rm -rf /; }; f",
+        "coproc X=1 rm -rf /",
+        "coproc job { X=1 rm -rf /; }",
+        "function f { X=1 rm -rf /; }; f",
+        "if true; then coproc rm -rf /; fi",
+        "if true; then coproc X=1 rm -rf /; fi",
+        "{ coproc job { rm -rf /; }; }",
+        "if true; then function f { rm -rf /; }; f; fi",
+        "env -u rm bash -c 'rm -rf /'",
+        "env -u find sh -c 'rm -rf /'",
+        "echo `echo \\`rm -rf /\\``",
+        "echo `r\\\nm -rf /`",
+        'echo "$(printf %s ${x:-)}; rm -rf /)"',
+        'echo "$(printf x # )\nrm -rf /\n)"',
+        "r\\\nm -rf /",
+        "mk\\\nfs.ext4 /dev/sda1",
     ]:
         assert hard_deny_reason(cmd) is not None, f"NOT denied but should be: {cmd!r}"
 
@@ -109,8 +146,136 @@ def test_hard_deny_does_not_false_positive_on_real_builds():
         "echo 'rm -rf / | cat'",  # the | is inside the quoted arg
         "rm --interactive foo",  # --i… is NOT the --recursive prefix
         "rm --force ./x",  # --f… is NOT recursive
+        # H343: quoted spellings are data, and safe active substitutions remain
+        # valid Bash verification commands.
+        "printf '%s' '$(rm -rf /)'",
+        "printf '%s' '`rm -rf /`'",
+        "printf '%s' '<(rm -rf /)'",
+        "cat <(printf ok)",
+        "cat >(printf ok)",
+        "echo $((1 + 2))",
+        'echo "$(printf \'rm -rf /\\n\')"',
+        'echo "$(case x in x) printf ok;; esac)"',
+        'echo "$(case y in x) printf esac;; y) printf HIT;; esac)"',
+        'echo "$(case y in x|esac) printf no;; y) printf HIT;; esac)"',
+        "coproc printf ok",
+        "coproc job { printf ok; }",
+        "function f { printf ok; }; f",
+        "coproc X=1 printf ok",
+        "coproc job { X=1 printf ok; }",
+        "function f { X=1 printf ok; }; f",
+        "if true; then coproc printf ok; fi",
+        "if true; then coproc X=1 printf ok; fi",
+        "{ coproc job { printf ok; }; }",
+        "if true; then function f { printf ok; }; f; fi",
+        "env -u rm bash -c 'printf ok'",
+        "env -u find sh -c 'printf ok'",
+        "echo `echo \\`printf safe_nested\\``",
+        "echo `pri\\\nntf safe_line`",
+        'echo "$(printf %s ${x:-)}; printf SAFE_PARAM)"',
+        'echo "$(printf x # )\nprintf SAFE_COMMENT\n)"',
+        "echo $(printf x # rm -rf /\n)",
+        "pri\\\nntf SAFE_TOP",
+        "printf '%s' 'r\\\nm -rf /'",
+        "pri\\\nntf SAFE_NON_RM",
     ]:
         assert hard_deny_reason(cmd) is None, f"false-positive deny on: {cmd!r}"
+
+
+def test_h343_nested_substitution_analysis_is_bounded_and_fail_closed():
+    import shlex
+
+    depth_overflow = "echo " + "$(" * 9 + "printf ok" + ")" * 9
+    count_overflow = "echo " + " ".join("$(printf ok)" for _ in range(33))
+    size_overflow = "echo $(printf " + "x" * (64 * 1024 + 1) + ")"
+    wrapper_overflow = "printf ok"
+    for _ in range(10):
+        wrapper_overflow = f"bash -c {shlex.quote(wrapper_overflow)}"
+    malformed = [
+        "echo $(printf ok",
+        "echo `printf ok",
+        "cat <(printf ok",
+        "cat >(printf ok",
+    ]
+
+    for command in [
+        depth_overflow,
+        count_overflow,
+        size_overflow,
+        wrapper_overflow,
+        *malformed,
+    ]:
+        reason = hard_deny_reason(command)
+        assert reason is not None, f"analysis limit silently passed: {command[:80]!r}"
+        assert "substitution" in reason
+
+
+def test_h343_nested_substitution_quote_and_escape_controls():
+    safe_commands = [
+        r"printf '%s' '\$(rm -rf /)'",
+        r"printf '%s' '\`rm -rf /\`'",
+        'echo "<(rm -rf /)"',
+        'echo ">(rm -rf /)"',
+        'echo "$(printf ok)"',
+        "echo `printf ok`",
+        "bash -c \"printf '%s' '<(rm -rf /)'\"",
+    ]
+    for command in safe_commands:
+        assert hard_deny_reason(command) is None, f"literal/safe substitution denied: {command!r}"
+
+    nested_dangerous = [
+        'echo "$(printf ok; rm -rf /)"',
+        "echo $((1 + $(rm -rf /)))",
+        'cat <(printf \'%s\' "$(rm -rf /)")',
+    ]
+    for command in nested_dangerous:
+        assert hard_deny_reason(command) is not None, (
+            f"nested destructive substitution passed: {command!r}"
+        )
+
+
+def test_h343_nested_backtick_delimiter_escape_parity():
+    backtick = "`"
+    slashes = "\\" * 5
+    dangerous = (
+        "echo "
+        + backtick
+        + "echo "
+        + slashes
+        + backtick
+        + "rm -rf /"
+        + slashes
+        + backtick
+        + backtick
+    )
+    safe = dangerous.replace("rm -rf /", "printf safe")
+
+    assert hard_deny_reason(dangerous) is not None
+    assert hard_deny_reason(safe) is None
+
+
+def test_h343_nested_heredoc_fails_closed_before_body_delimiters():
+    double_quote = '"'
+    single_quote = "'"
+    newline = "\n"
+    prefix = (
+        "echo "
+        + double_quote
+        + "$(cat <<"
+        + single_quote
+        + "EOF"
+        + single_quote
+        + newline
+        + ")"
+        + newline
+        + "EOF"
+        + newline
+    )
+    dangerous = prefix + "rm -rf /" + newline + ")" + double_quote
+    safe_but_uninspectable = prefix + "printf SAFE_HEREDOC" + newline + ")" + double_quote
+
+    assert "heredoc" in (hard_deny_reason(dangerous) or "")
+    assert "heredoc" in (hard_deny_reason(safe_but_uninspectable) or "")
 
 
 def test_hard_deny_allows_preview_termination():

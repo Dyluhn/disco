@@ -181,11 +181,12 @@ import threading
 
 timeout_s = float(sys.argv[1])
 command = sys.argv[2]
-token = sys.argv[3]
-head_cap = int(sys.argv[4])
-tail_cap = int(sys.argv[5])
-return_cap = int(sys.argv[6])
-spill_cap = int(sys.argv[7])
+shell_executable = sys.argv[3]
+token = sys.argv[4]
+head_cap = int(sys.argv[5])
+tail_cap = int(sys.argv[6])
+return_cap = int(sys.argv[7])
+spill_cap = int(sys.argv[8])
 spill_dir = os.path.join(os.getcwd(), ".disco", "spills")
 os.makedirs(spill_dir, mode=0o700, exist_ok=True)
 
@@ -253,6 +254,11 @@ err = Capture("stderr")
 proc = subprocess.Popen(
     command,
     shell=True,
+    # H342: the sandbox image deliberately provisions Bash as the agent user's
+    # shell and container command.  Leaving ``shell=True`` ambient selected
+    # Debian's dash via /bin/sh, so one-shot shell/DoD commands used a different
+    # language than persistent shell sessions.  Pin the shared command contract.
+    executable=shell_executable,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     start_new_session=True,
@@ -316,6 +322,7 @@ def bounded_exec_argv(command: str, timeout_s: int, *, python: str = "python3") 
         _BOUNDED_EXEC_HELPER,
         str(timeout_s),
         command,
+        "/bin/bash",
         secrets.token_hex(8),
         str(EXEC_CAPTURE_HEAD_BYTES),
         str(EXEC_CAPTURE_TAIL_BYTES),

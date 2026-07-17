@@ -127,7 +127,7 @@ class ShellTool:
         name="shell",
         description=(
             "One-shot: runs to completion and returns output — the default for "
-            "installs, builds, tests, git. Run a shell command inside the sandbox "
+            "installs, builds, tests, git. Run a non-interactive Bash command inside the sandbox "
             "and return its output. NOT for creating or editing files — use "
             "file_write / file_edit / file_append for that, never `>`, `>>`, `sed`, "
             "`tee`, or a here-doc."

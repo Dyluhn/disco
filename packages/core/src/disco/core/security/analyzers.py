@@ -147,6 +147,543 @@ _PROTECTED_ROOTS: frozenset[str] = frozenset(
 # re-inspect (`bash -c "rm -rf /"` would otherwise slip past a token scan).
 _SHELL_WRAPPERS: frozenset[str] = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
 
+# H343 — bounded recursive inspection for command/process substitutions.  These
+# bodies execute before their apparently-benign outer command, so command-head
+# analysis alone is not a hard-deny floor.  Bounds keep adversarial nesting
+# linear and deterministic; exceeding one fails closed.
+_SUBSTITUTION_MAX_DEPTH = 8
+_SUBSTITUTION_MAX_COUNT = 32
+_SUBSTITUTION_MAX_CHARS = 64 * 1024
+_UNSAFE_HEREDOC = -2
+_DOUBLE_QUOTE_ESCAPES = frozenset({'$', '`', '"', "\\", "\n"})
+
+
+def _without_shell_line_continuations(command: str) -> str:
+    """Remove Bash backslash-newline continuations outside single quotes."""
+    out: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if quote == "'":
+            out.append(character)
+            if character == "'":
+                quote = None
+            index += 1
+            continue
+        if character == "\\" and command[index + 1 : index + 2] == "\n":
+            index += 2
+            continue
+        out.append(character)
+        if character == '"':
+            quote = None if quote == '"' else '"'
+        elif character == "'" and quote is None:
+            quote = "'"
+        if character == "\\" and index + 1 < len(command):
+            out.append(command[index + 1])
+            index += 2
+            continue
+        index += 1
+    return "".join(out)
+
+
+def _backtick_end(command: str, start: int, *, max_chars: int) -> int | None:
+    """Return the closing index for an active backtick starting at ``start``."""
+    index = start + 1
+    while index < len(command):
+        if index - (start + 1) > max_chars:
+            return -1
+        # A heredoc can contain an arbitrary backtick delimiter as data. The
+        # legacy syntax is not safely inspectable with this bounded recognizer;
+        # fail closed instead of guessing where the executable body resumes.
+        if command[index : index + 2] == "<<":
+            return _UNSAFE_HEREDOC
+        if command[index] == "\\" and index + 1 < len(command):
+            index += 2
+            continue
+        if command[index] == "`":
+            return index
+        index += 1
+    return None
+
+
+def _decode_backtick_body(body: str) -> str:
+    """Decode escapes Bash removes before parsing a legacy backtick body."""
+    out: list[str] = []
+    index = 0
+    while index < len(body):
+        if body[index] == "\\" and index + 1 < len(body):
+            escaped = body[index + 1]
+            if escaped == "\n":
+                index += 2
+                continue
+            if escaped not in {"$", "`", "\\"}:
+                out.append(body[index])
+                index += 1
+                continue
+            out.append(escaped)
+            index += 2
+            continue
+        out.append(body[index])
+        index += 1
+    # Backslashes that quote the legacy closing delimiter are syntax, not part
+    # of the command operand. Multiple nested levels can leave an odd residual
+    # after one decode pass; remove only the body-final delimiter quoting run.
+    return "".join(out).rstrip("\\")
+
+
+def _parameter_expansion_end(
+    command: str,
+    start: int,
+    *,
+    max_chars: int,
+    syntax_depth: int,
+) -> int | None:
+    """Return the closing brace for an active, possibly nested ``${...}``."""
+    if syntax_depth > _SUBSTITUTION_MAX_DEPTH:
+        return -1
+    depth = 1
+    quote: str | None = None
+    index = start + 2
+    body_start = index
+    while index < len(command):
+        if index - body_start > max_chars:
+            return -1
+        character = command[index]
+        if quote == "'":
+            if character == "'":
+                quote = None
+            index += 1
+            continue
+        if quote == '"':
+            if character == "\\" and index + 1 < len(command):
+                index += 2
+                continue
+            if character == '"':
+                quote = None
+                index += 1
+                continue
+        elif character == "\\" and index + 1 < len(command):
+            index += 2
+            continue
+        elif character in {"'", '"'}:
+            quote = character
+            index += 1
+            continue
+        if command[index : index + 2] == "${":
+            depth += 1
+            index += 2
+            continue
+        if command[index : index + 2] == "$(":
+            closing = _balanced_substitution_end(
+                command,
+                index,
+                max_chars=max_chars - (index - body_start),
+                syntax_depth=syntax_depth + 1,
+            )
+            if closing is None or closing < 0:
+                return closing
+            index = closing + 1
+            continue
+        if character == "`":
+            closing = _backtick_end(
+                command,
+                index,
+                max_chars=max_chars - (index - body_start),
+            )
+            if closing is None or closing < 0:
+                return closing
+            index = closing + 1
+            continue
+        # Heredoc bodies may contain a bare ``)`` line that is data, not the
+        # command-substitution close. Conservatively refuse this uncommon shell
+        # shape (the product prompt already directs agents away from heredocs).
+        if command[index : index + 2] == "<<":
+            return _UNSAFE_HEREDOC
+        if character == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _balanced_substitution_end(
+    command: str,
+    start: int,
+    *,
+    max_chars: int,
+    syntax_depth: int = 0,
+) -> int | None:
+    """Return the closing-paren index for ``$(`/``<(`/``>(`` at ``start``.
+
+    Parentheses inside quotes/backticks do not balance the active substitution.
+    Nested unquoted parentheses do.  This is a bounded lexical recognizer, never
+    an evaluator and never a general shell parser.
+    """
+    if syntax_depth > _SUBSTITUTION_MAX_DEPTH:
+        return -1
+    depth = 1
+    quote: str | None = None
+    index = start + 2
+    body_start = index
+    # Each entry is [phase, pattern_paren_depth, pattern_started], where phase
+    # is waiting_in, pattern, or body. This lets case-pattern ``)`` be
+    # distinguished from the surrounding substitution close in one pass,
+    # including escaped/quoted words or alternatives that merely spell ``esac``.
+    case_stack: list[list[str | int]] = []
+    command_position = True
+    word: list[str] = []
+    word_quoted = False
+
+    def _flush_word() -> None:
+        nonlocal command_position, word_quoted
+        if not word:
+            return
+        token = "".join(word)
+        eligible_reserved = not word_quoted
+        phase = str(case_stack[-1][0]) if case_stack else ""
+        if phase == "waiting_in":
+            if eligible_reserved and token == "in":
+                case_stack[-1][0] = "pattern"
+                case_stack[-1][1] = 0
+                case_stack[-1][2] = 0
+        elif phase == "pattern":
+            if eligible_reserved and token == "esac" and not case_stack[-1][2]:
+                case_stack.pop()
+            else:
+                case_stack[-1][2] = 1
+        elif command_position and eligible_reserved and token == "case":
+            case_stack.append(["waiting_in", 0, 0])
+            command_position = False
+        elif command_position and eligible_reserved and token == "esac" and case_stack:
+            case_stack.pop()
+            command_position = False
+        elif eligible_reserved and token in {"do", "elif", "else", "then"}:
+            command_position = True
+        elif command_position and not re.fullmatch(r"[A-Za-z_]\w*=.*", token):
+            command_position = False
+        word.clear()
+        word_quoted = False
+
+    while index < len(command):
+        if index - body_start > max_chars:
+            return -1
+        character = command[index]
+        if quote == "'":
+            if character == "'":
+                quote = None
+            else:
+                word.append(character)
+            index += 1
+            continue
+        if quote == '"':
+            if character == "\\" and index + 1 < len(command):
+                if command[index + 1] in _DOUBLE_QUOTE_ESCAPES:
+                    word.append(command[index + 1])
+                    word_quoted = True
+                    index += 2
+                    continue
+            if character == '"':
+                quote = None
+                index += 1
+                continue
+            if command[index : index + 2] == "${":
+                closing = _parameter_expansion_end(
+                    command,
+                    index,
+                    max_chars=max_chars - (index - body_start),
+                    syntax_depth=syntax_depth + 1,
+                )
+                if closing is None or closing < 0:
+                    return closing
+                word.append("parameter")
+                word_quoted = True
+                index = closing + 1
+                continue
+            if command[index : index + 2] == "$(":
+                closing = _balanced_substitution_end(
+                    command,
+                    index,
+                    max_chars=max_chars - (index - body_start),
+                    syntax_depth=syntax_depth + 1,
+                )
+                if closing is None or closing < 0:
+                    return closing
+                word.append("substitution")
+                word_quoted = True
+                index = closing + 1
+                continue
+            if character == "`":
+                closing = _backtick_end(
+                    command,
+                    index,
+                    max_chars=max_chars - (index - body_start),
+                )
+                if closing is None or closing < 0:
+                    return closing
+                word.append("substitution")
+                word_quoted = True
+                index = closing + 1
+                continue
+            word.append(character)
+            index += 1
+            continue
+        if character == "\\" and index + 1 < len(command):
+            word.append(command[index + 1])
+            word_quoted = True
+            index += 2
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            word_quoted = True
+            index += 1
+            continue
+        if character == "#" and not word:
+            # At a token boundary ``#`` comments through newline; delimiters in
+            # that text are data. Keep the scan bounded and resume at the next
+            # command line.
+            while index < len(command) and command[index] != "\n":
+                if index - body_start > max_chars:
+                    return -1
+                index += 1
+            command_position = True
+            continue
+        if command[index : index + 2] == "<<":
+            return _UNSAFE_HEREDOC
+        if character == "`":
+            closing = _backtick_end(
+                command,
+                index,
+                max_chars=max_chars - (index - body_start),
+            )
+            if closing is None or closing < 0:
+                return closing
+            word.append("substitution")
+            word_quoted = True
+            index = closing + 1
+            continue
+        if command[index : index + 2] == "${":
+            closing = _parameter_expansion_end(
+                command,
+                index,
+                max_chars=max_chars - (index - body_start),
+                syntax_depth=syntax_depth + 1,
+            )
+            if closing is None or closing < 0:
+                return closing
+            word.append("parameter")
+            word_quoted = True
+            index = closing + 1
+            continue
+        if character.isspace():
+            _flush_word()
+            if character == "\n":
+                command_position = True
+            index += 1
+            continue
+        if character in ";&|":
+            _flush_word()
+            run_end = index + 1
+            while run_end < len(command) and command[run_end] in ";&|":
+                run_end += 1
+            operator = command[index:run_end]
+            if case_stack and case_stack[-1][0] == "body" and ";" in operator:
+                case_stack[-1][0] = "pattern"
+                case_stack[-1][1] = 0
+                case_stack[-1][2] = 0
+            command_position = True
+            index = run_end
+            continue
+        if character == "(":
+            _flush_word()
+            if case_stack and case_stack[-1][0] == "pattern":
+                case_stack[-1][1] = int(case_stack[-1][1]) + 1
+                case_stack[-1][2] = 1
+            else:
+                depth += 1
+        elif character == ")":
+            _flush_word()
+            if case_stack and case_stack[-1][0] == "pattern":
+                pattern_depth = int(case_stack[-1][1])
+                if pattern_depth > 0:
+                    case_stack[-1][1] = pattern_depth - 1
+                else:
+                    case_stack[-1][0] = "body"
+                    command_position = True
+            else:
+                depth -= 1
+                if depth == 0:
+                    return index
+        else:
+            word.append(character)
+        index += 1
+    return None
+
+
+def _active_shell_substitutions(
+    command: str,
+    *,
+    budget: list[int],
+) -> tuple[list[tuple[str, str]], str | None]:
+    """Extract immediate active substitution bodies without executing anything.
+
+    Single-quoted and escaped spellings are literals. ``$()`` and backticks stay
+    active inside double quotes; Bash process substitution does not. Arithmetic
+    ``$((...))`` is tagged separately so only substitutions nested *inside* its
+    expression are treated as commands.
+    """
+    found: list[tuple[str, str]] = []
+    quote: str | None = None
+    token_start = True
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if quote == "'":
+            if character == "'":
+                quote = None
+                token_start = False
+            index += 1
+            continue
+        if quote == '"':
+            if character == "\\" and index + 1 < len(command):
+                if command[index + 1] in _DOUBLE_QUOTE_ESCAPES:
+                    index += 2
+                    continue
+            if character == '"':
+                quote = None
+                token_start = False
+                index += 1
+                continue
+            if command[index : index + 2] == "$(":
+                if budget[0] >= _SUBSTITUTION_MAX_COUNT:
+                    return found, "nested shell substitution exceeds analysis bounds"
+                closing = _balanced_substitution_end(
+                    command,
+                    index,
+                    max_chars=_SUBSTITUTION_MAX_CHARS - budget[1],
+                )
+                if closing is None:
+                    return found, "unparseable nested shell substitution"
+                if closing == _UNSAFE_HEREDOC:
+                    return found, "nested shell heredoc is not safely analyzable"
+                if closing < 0:
+                    return found, "nested shell substitution exceeds analysis bounds"
+                kind = "arithmetic" if command[index : index + 3] == "$((" else "command"
+                body_length = closing - (index + 2)
+                budget[0] += 1
+                budget[1] += body_length
+                if (
+                    budget[0] > _SUBSTITUTION_MAX_COUNT
+                    or budget[1] > _SUBSTITUTION_MAX_CHARS
+                ):
+                    return found, "nested shell substitution exceeds analysis bounds"
+                found.append((kind, command[index + 2 : closing]))
+                index = closing + 1
+                continue
+            if character == "`":
+                if budget[0] >= _SUBSTITUTION_MAX_COUNT:
+                    return found, "nested shell substitution exceeds analysis bounds"
+                closing = _backtick_end(
+                    command,
+                    index,
+                    max_chars=_SUBSTITUTION_MAX_CHARS - budget[1],
+                )
+                if closing is None:
+                    return found, "unparseable nested shell substitution"
+                if closing == _UNSAFE_HEREDOC:
+                    return found, "nested shell heredoc is not safely analyzable"
+                if closing < 0:
+                    return found, "nested shell substitution exceeds analysis bounds"
+                body_length = closing - (index + 1)
+                budget[0] += 1
+                budget[1] += body_length
+                if (
+                    budget[0] > _SUBSTITUTION_MAX_COUNT
+                    or budget[1] > _SUBSTITUTION_MAX_CHARS
+                ):
+                    return found, "nested shell substitution exceeds analysis bounds"
+                found.append(
+                    ("backtick", _decode_backtick_body(command[index + 1 : closing]))
+                )
+                index = closing + 1
+                continue
+            index += 1
+            continue
+        if character == "\\" and index + 1 < len(command):
+            token_start = False
+            index += 2
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            token_start = False
+            index += 1
+            continue
+        if character == "#" and token_start:
+            newline = command.find("\n", index + 1)
+            if newline < 0:
+                return found, None
+            index = newline + 1
+            token_start = True
+            continue
+        marker = command[index : index + 2]
+        if marker in {"$(", "<(", ">("}:
+            if budget[0] >= _SUBSTITUTION_MAX_COUNT:
+                return found, "nested shell substitution exceeds analysis bounds"
+            closing = _balanced_substitution_end(
+                command,
+                index,
+                max_chars=_SUBSTITUTION_MAX_CHARS - budget[1],
+            )
+            if closing is None:
+                return found, "unparseable nested shell substitution"
+            if closing == _UNSAFE_HEREDOC:
+                return found, "nested shell heredoc is not safely analyzable"
+            if closing < 0:
+                return found, "nested shell substitution exceeds analysis bounds"
+            if marker == "$(":
+                kind = "arithmetic" if command[index : index + 3] == "$((" else "command"
+            else:
+                kind = "process"
+            body_length = closing - (index + 2)
+            budget[0] += 1
+            budget[1] += body_length
+            if budget[0] > _SUBSTITUTION_MAX_COUNT or budget[1] > _SUBSTITUTION_MAX_CHARS:
+                return found, "nested shell substitution exceeds analysis bounds"
+            found.append((kind, command[index + 2 : closing]))
+            index = closing + 1
+            token_start = False
+            continue
+        if character == "`":
+            if budget[0] >= _SUBSTITUTION_MAX_COUNT:
+                return found, "nested shell substitution exceeds analysis bounds"
+            closing = _backtick_end(
+                command,
+                index,
+                max_chars=_SUBSTITUTION_MAX_CHARS - budget[1],
+            )
+            if closing is None:
+                return found, "unparseable nested shell substitution"
+            if closing == _UNSAFE_HEREDOC:
+                return found, "nested shell heredoc is not safely analyzable"
+            if closing < 0:
+                return found, "nested shell substitution exceeds analysis bounds"
+            body_length = closing - (index + 1)
+            budget[0] += 1
+            budget[1] += body_length
+            if budget[0] > _SUBSTITUTION_MAX_COUNT or budget[1] > _SUBSTITUTION_MAX_CHARS:
+                return found, "nested shell substitution exceeds analysis bounds"
+            found.append(("backtick", _decode_backtick_body(command[index + 1 : closing])))
+            index = closing + 1
+            token_start = False
+            continue
+        if character.isspace() or character in ";&|()":
+            token_start = True
+        else:
+            token_start = False
+        index += 1
+    return found, None
+
 
 def _var_assignments(command: str) -> dict[str, str]:
     """Best-effort scan of `NAME=value` assignments so a later `rm -rf "$X"` can
@@ -207,6 +744,14 @@ _CMD_PREFIXES: frozenset[str] = frozenset(
 
 # Shell control operators that separate one command from the next.
 _SEG_OPERATORS: frozenset[str] = frozenset({";", "&", "&&", "|", "||", "\n"})
+
+# Reserved words / grouping tokens after which the next token is in command
+# position.  Stripping these before command-head analysis catches the body of
+# ``if/then``, ``for/do``, subshell, and brace-group constructs without treating
+# an ordinary argument named ``rm`` as executable.
+_COMMAND_POSITION_PREFIXES: frozenset[str] = frozenset(
+    {"!", "(", "{", "case", "do", "elif", "else", "for", "if", "select", "then", "until", "while"}
+)
 
 # find's leading GLOBAL options (precede the paths). `-D`/`-O` additionally take
 # an argument.
@@ -271,13 +816,24 @@ def _find_deny(rest: list[str], assignments: dict[str, str]) -> str | None:
     return "recursive find-delete of a protected system path" if destructive else None
 
 
-def _analyze_command(base: str, rest: list[str], assignments: dict[str, str]) -> str | None:
+def _analyze_command(
+    base: str,
+    rest: list[str],
+    assignments: dict[str, str],
+    *,
+    depth: int,
+    budget: list[int],
+) -> str | None:
     """Given a resolved command word `base` and its arg tokens, deny iff it is a
     recursive delete of a protected root (rm), a `find <root> -delete/-exec rm`,
     or a shell wrapper whose `-c` string is one of those."""
     if base in _SHELL_WRAPPERS:
         j = _c_flag_arg_index(rest)
-        return _rm_protected_root_deny(rest[j]) if j is not None else None
+        return (
+            _rm_protected_root_deny(rest[j], _depth=depth + 1, _budget=budget)
+            if j is not None
+            else None
+        )
     if base == "find":
         return _find_deny(rest, assignments)
     if base != "rm":
@@ -293,7 +849,13 @@ def _analyze_command(base: str, rest: list[str], assignments: dict[str, str]) ->
     return None
 
 
-def _rm_tokens_deny(tokens: list[str], assignments: dict[str, str]) -> str | None:
+def _rm_tokens_deny(
+    tokens: list[str],
+    assignments: dict[str, str],
+    *,
+    depth: int,
+    budget: list[int],
+) -> str | None:
     """Deny iff the segment's COMMAND is a recursive delete of a protected root.
     Analyzes the COMMAND position only (so `echo rm -rf /` — rm as an argument — is
     never a false positive), after skipping leading `NAME=val` assignments and
@@ -302,6 +864,26 @@ def _rm_tokens_deny(tokens: list[str], assignments: dict[str, str]) -> str | Non
     while i < len(tokens) and re.fullmatch(r"[A-Za-z_]\w*=.*", tokens[i]):
         i += 1  # leading env-assignments (VAR=val cmd)
     toks = tokens[i:]
+    # Normalize wrappers to a fixed point: a valid Bash command may compose
+    # control words, assignments, coproc, and function syntax in any of these
+    # command-position layers (``then coproc X=1 rm ...``).
+    while toks:
+        before = len(toks)
+        while toks and re.fullmatch(r"[A-Za-z_]\w*=.*", toks[0]):
+            toks = toks[1:]
+        while toks and toks[0] in _COMMAND_POSITION_PREFIXES:
+            toks = toks[1:]
+        if toks[:1] == ["coproc"]:
+            toks = toks[1:]
+            # Bash named coprocess syntax is ``coproc NAME { command; }``.
+            if len(toks) >= 2 and toks[1] == "{":
+                toks = toks[2:]
+        elif toks[:1] == ["function"]:
+            # ``function NAME { command; }`` puts the executable body later in
+            # this segment. Parenthesized NAME() bodies start a fresh segment.
+            toks = toks[2:] if len(toks) >= 2 else []
+        if len(toks) == before:
+            break
     if not toks:
         return None
     base0 = toks[0].rsplit("/", 1)[-1]
@@ -314,9 +896,61 @@ def _rm_tokens_deny(tokens: list[str], assignments: dict[str, str]) -> str | Non
         for k in range(1, len(toks)):
             b = toks[k].rsplit("/", 1)[-1]
             if b in ("rm", "find") or b in _SHELL_WRAPPERS:
-                return _analyze_command(b, toks[k + 1 :], assignments)
+                reason = _analyze_command(
+                    b,
+                    toks[k + 1 :],
+                    assignments,
+                    depth=depth,
+                    budget=budget,
+                )
+                if reason is not None:
+                    return reason
         return None
-    return _analyze_command(base0, toks[1:], assignments)
+    return _analyze_command(base0, toks[1:], assignments, depth=depth, budget=budget)
+
+
+def _without_shell_comments(command: str) -> str:
+    """Remove active shell comments while preserving their newline separator."""
+    out: list[str] = []
+    quote: str | None = None
+    token_start = True
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if quote is not None:
+            out.append(character)
+            if character == "\\" and quote == '"' and index + 1 < len(command):
+                out.append(command[index + 1])
+                index += 2
+                continue
+            if character == quote:
+                quote = None
+                token_start = False
+            index += 1
+            continue
+        if character == "\\" and index + 1 < len(command):
+            out.extend((character, command[index + 1]))
+            token_start = False
+            index += 2
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            token_start = False
+            out.append(character)
+            index += 1
+            continue
+        if character == "#" and token_start:
+            newline = command.find("\n", index + 1)
+            if newline < 0:
+                break
+            out.append("\n")
+            index = newline + 1
+            token_start = True
+            continue
+        out.append(character)
+        token_start = character.isspace() or character in ";&|()"
+        index += 1
+    return "".join(out)
 
 
 def _split_command_segments(command: str) -> list[list[str]] | None:
@@ -326,22 +960,51 @@ def _split_command_segments(command: str) -> list[list[str]] | None:
     benign `printf` command, not a spurious `rm` segment (the false positive a
     naive regex split produced). Returns None if the whole command has unbalanced
     quotes (malformed)."""
-    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    lex = shlex.shlex(_without_shell_comments(command), posix=True, punctuation_chars=";&|()\n")
     lex.whitespace_split = True
+    lex.whitespace = " \t\r"
+    lex.commenters = ""
     try:
         raw = list(lex)
     except ValueError:
         return None
     segs: list[list[str]] = [[]]
     for t in raw:
-        if t in _SEG_OPERATORS:
+        if t in _SEG_OPERATORS or (t and all(character in ";&|()" for character in t)):
             segs.append([])
         else:
             segs[-1].append(t)
     return [s for s in segs if s]
 
 
-def _rm_protected_root_deny(command: str) -> str | None:
+def _nested_substitution_deny(command: str, *, depth: int, budget: list[int]) -> str | None:
+    substitutions, malformed = _active_shell_substitutions(command, budget=budget)
+    if malformed is not None:
+        return malformed
+    if substitutions and depth >= _SUBSTITUTION_MAX_DEPTH:
+        return "nested shell substitution exceeds analysis bounds"
+    for kind, body in substitutions:
+        if kind == "arithmetic":
+            reason = _nested_substitution_deny(body, depth=depth + 1, budget=budget)
+        else:
+            reason = _rm_protected_root_deny(body, _depth=depth + 1, _budget=budget)
+        if reason is not None:
+            if reason in {
+                "nested shell substitution exceeds analysis bounds",
+                "nested shell heredoc is not safely analyzable",
+                "unparseable nested shell substitution",
+            }:
+                return reason
+            return f"destructive command inside {kind} substitution: {reason}"
+    return None
+
+
+def _rm_protected_root_deny(
+    command: str,
+    *,
+    _depth: int = 0,
+    _budget: list[int] | None = None,
+) -> str | None:
     """Deny a recursive delete of a protected system root, robust to the bypasses
     a regex misses (`--`, long options + GNU abbreviations, `--no-preserve-root`,
     flag reordering, quoting, `\\rm`/`'r'm`, transparent prefixes, `$VAR`
@@ -352,6 +1015,13 @@ def _rm_protected_root_deny(command: str) -> str | None:
     Static analysis cannot model runtime shell EXPANSION (`$'r'm`, `/e??` globs,
     `env -S`), so those remain the domain of the sandbox isolation boundary — this
     floor is defense-in-depth, not a complete shell interpreter."""
+    if _depth > _SUBSTITUTION_MAX_DEPTH:
+        return "nested shell substitution exceeds analysis bounds"
+    command = _without_shell_line_continuations(command)
+    budget = _budget if _budget is not None else [0, 0]
+    nested_reason = _nested_substitution_deny(command, depth=_depth, budget=budget)
+    if nested_reason is not None:
+        return nested_reason
     assignments = _var_assignments(command)
     segs = _split_command_segments(command)
     if segs is None:
@@ -363,7 +1033,7 @@ def _rm_protected_root_deny(command: str) -> str | None:
             return "recursive rm of a protected path (unparseable command)"
         return None
     for tokens in segs:
-        reason = _rm_tokens_deny(tokens, assignments)
+        reason = _rm_tokens_deny(tokens, assignments, depth=_depth, budget=budget)
         if reason:
             return reason
     return None
@@ -372,11 +1042,12 @@ def _rm_protected_root_deny(command: str) -> str | None:
 def hard_deny_reason(command: str) -> str | None:
     """Return a reason string if a shell command is HARD-DENIED (never runnable),
     else None. Pure + deterministic. The loop refuses denied actions outright."""
-    low = command.lower()
+    normalized = _without_shell_line_continuations(command)
+    low = normalized.lower()
     for pat, why in _SHELL_DENY:
         if pat.search(low):
             return why
-    return _rm_protected_root_deny(command)
+    return _rm_protected_root_deny(normalized)
 
 
 def _score_shell(command: str) -> tuple[SecurityRisk, str]:

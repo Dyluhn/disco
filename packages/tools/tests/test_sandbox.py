@@ -16,6 +16,7 @@ from disco.tools import (
     ToolScope,
     build_default_registry,
 )
+from disco.tools.sandbox._container import _BOUNDED_EXEC_HELPER, bounded_exec_argv
 from tool_fakes import FakeSandboxInstance, call
 
 
@@ -124,6 +125,35 @@ async def test_process_shell_resolves_workspace_prefix():
     assert res.exit_code != 0
 
     await inst.destroy()
+
+
+def test_h342_bounded_shell_argv_pins_non_login_bash():
+    command = "read -r value < <(printf 71); [[ $value == 71 ]]"
+    argv = bounded_exec_argv(command, 17, python="python-test")
+
+    assert argv[:4] == ["python-test", "-c", argv[2], "17"]
+    assert argv[4] == command
+    assert argv[5] == "/bin/bash"
+    assert "-l" not in argv[5:]
+    assert "shell_executable = sys.argv[3]" in _BOUNDED_EXEC_HELPER
+    assert "executable=shell_executable" in _BOUNDED_EXEC_HELPER
+
+
+async def test_h342_process_shell_runs_bash_process_substitution():
+    """One-shot shell honors the same Bash dialect as persistent sessions/DoD."""
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="h342")
+    try:
+        await inst.write_file("producer.py", b"print('proof')\n")
+        result = await inst.exec_shell(
+            "python3 -c 'import sys; assert sys.stdin.read().strip() == \"proof\"' "
+            "< <(python3 producer.py)",
+            timeout_s=10,
+        )
+        assert result.exit_code == 0, result.stderr
+        assert result.timed_out is False
+    finally:
+        await inst.destroy()
 
 
 async def test_process_shell_resolves_workspace_path_with_escaped_space():

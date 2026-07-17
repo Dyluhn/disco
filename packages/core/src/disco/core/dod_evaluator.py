@@ -309,6 +309,10 @@ async def _default_command_runner(
         return subprocess.run(
             command,
             shell=True,
+            # H342: match sandbox ``exec_shell`` and persistent sessions.  An
+            # ambient /bin/sh is backend-dependent (dash in the sandbox image),
+            # which made valid Bash predicates impossible only at finish.
+            executable="/bin/bash",
             cwd=str(cwd),
             capture_output=True,
             text=True,
