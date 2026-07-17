@@ -3,6 +3,8 @@ security-critical tests. The headline is `test_no_secret_in_the_box`."""
 
 from __future__ import annotations
 
+import re
+
 from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
@@ -21,17 +23,26 @@ SENTINEL = "SUPER-SECRET-SENTINEL-9F3A2"
 # ---- §11.4 the headline: no secret is ever in the box -----------------------
 
 
-async def _assert_box_secret_free(inst) -> None:
+# The bounded-exec helper's designed spill names: `<token_hex(8)>.<stream>.log`.
+_SPILL_NAME_RE = re.compile(r"[0-9a-f]{16}\.(stdout|stderr)\.log")
+
+
+async def _assert_box_secret_free(inst, *, allowed: tuple[str, ...] = ()) -> None:
     """The box invariant, stated on the SECRET rather than on emptiness: the only
     content the sandbox machinery may itself create is the designed bounded-exec
     spill artifact (`.disco/spills/` — written when a command's output exceeds the
-    128 KiB capture cap, e.g. `ps` on a process-heavy host), and no byte of it may
-    carry the sentinel. Anything else in a fresh box is still a failure."""
+    128 KiB capture cap, e.g. `ps` on a process-heavy host). Every spill entry must
+    carry the DESIGNED name shape (independent verification demonstrated a
+    sentinel-bearing FILENAME passed a contents-only scan) and no spill byte may
+    carry the sentinel. Anything else in a fresh box — beyond the caller's
+    explicitly `allowed` test-authored files — is still a failure."""
     files = await inst.list_dir(".")
-    assert files in ([], [".disco"]), f"unexpected content in the box: {files}"
-    if files == [".disco"]:
+    unexpected = [name for name in files if name != ".disco" and name not in allowed]
+    assert unexpected == [], f"unexpected content in the box: {unexpected}"
+    if ".disco" in files:
         assert await inst.list_dir(".disco") == ["spills"]
         for name in await inst.list_dir(".disco/spills"):
+            assert _SPILL_NAME_RE.fullmatch(name), f"non-designed spill entry: {name}"
             data = await inst.read_file(f".disco/spills/{name}")
             assert SENTINEL.encode("utf-8") not in data
 
@@ -47,10 +58,21 @@ async def test_no_secret_in_the_box():
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
     # env (clean — never os.environ), process list, and workspace: all secret-free.
     env = await inst.exec_shell("env", timeout_s=10)
-    procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
+    # Scan the FULL process list, not the bounded stdout projection: bounded exec
+    # returns only a 64 KiB head + tail and spills at most 1 MiB, so a sentinel in
+    # the dropped middle of an oversized `ps` would be invisible to a stdout scan
+    # (independent verification demonstrated exactly that gap). Writing the listing
+    # into the box and reading the file back whole closes it — read_file's 32 MiB
+    # cap is far above any real process list.
+    ps_write = await inst.exec_shell(
+        "{ ps -e -o args 2>/dev/null || ps; } > .ps-scan.txt", timeout_s=10
+    )
+    assert ps_write.exit_code == 0
+    ps_bytes = await inst.read_file(".ps-scan.txt")
+    assert len(ps_bytes) > 0
     assert SENTINEL not in env.stdout
-    assert SENTINEL not in procs.stdout
-    await _assert_box_secret_free(inst)
+    assert SENTINEL.encode("utf-8") not in ps_bytes
+    await _assert_box_secret_free(inst, allowed=(".ps-scan.txt",))
     await inst.destroy()
 
 
