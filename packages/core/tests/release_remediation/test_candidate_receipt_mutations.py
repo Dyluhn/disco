@@ -31,6 +31,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -38,7 +39,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _RECEIPT_PATH = _REPO_ROOT / "scripts" / "export_track1_candidate_receipt.py"
 
 
-def _load_receipt() -> object:
+def _load_receipt() -> Any:
     """Import the receipt BY PATH (``scripts/`` is not an importable package).
 
     The module MUST be registered in ``sys.modules`` before ``exec_module``:
@@ -93,12 +94,12 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
     proof = repo / "test_receipt_proof.py"
     proof.write_text("def test_green():\n    assert True\n")
 
-    inventory_path = repo / str(receipt.INVENTORY_REL)  # pyright: ignore[reportAttributeAccessIssue]
+    inventory_path = repo / str(receipt.INVENTORY_REL)
     inventory_path.parent.mkdir(parents=True, exist_ok=True)
     inventory = {
         "schema": "export-track1-recovery-inventory/v1",
         "base_sha": base_sha,
-        "excludes_self": str(receipt.INVENTORY_REL),  # pyright: ignore[reportAttributeAccessIssue]
+        "excludes_self": str(receipt.INVENTORY_REL),
         "external_evidence": [{"path": str(evidence), "sha256": _sha256(evidence)}],
         "expected_proof": {"tests": ["test_receipt_proof.py"], "passed": 1, "failed": 0},
         "files": {"recovery.py": _sha256(campaign), "test_receipt_proof.py": _sha256(proof)},
@@ -111,11 +112,11 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
     return {"repo": repo, "head": head, "base": base_sha, "evidence": evidence, "canary": canary}
 
 
-def _gates(synthetic: dict[str, object], head: str | None = None) -> list[object]:
+def _gates(synthetic: dict[str, object], head: str | None = None) -> list[Any]:
     repo = synthetic["repo"]
     assert isinstance(repo, Path)
-    inventory = receipt.load_inventory(repo)  # pyright: ignore[reportAttributeAccessIssue]
-    return receipt.gate_checks(  # pyright: ignore[reportAttributeAccessIssue]
+    inventory = receipt.load_inventory(repo)
+    return receipt.gate_checks(
         repo, head or str(synthetic["head"]), inventory, str(synthetic["base"])
     )
 
@@ -123,14 +124,14 @@ def _gates(synthetic: dict[str, object], head: str | None = None) -> list[object
 def _run_main(synthetic: dict[str, object], head: str | None = None) -> int:
     repo = synthetic["repo"]
     assert isinstance(repo, Path)
-    return receipt.main(  # pyright: ignore[reportAttributeAccessIssue]
+    return receipt.main(
         ["--expect-head", head or str(synthetic["head"]), "--python", sys.executable],
         repo=repo,
     )
 
 
-def _failed(checks: list[object]) -> list[str]:
-    return [c.name for c in checks if not c.ok]  # pyright: ignore[reportAttributeAccessIssue]
+def _failed(checks: list[Any]) -> list[str]:
+    return [c.name for c in checks if not c.ok]
 
 
 # ---- the unmutated baseline: green end-to-end, and evidence NEVER executes ----
@@ -159,7 +160,7 @@ def test_no_declared_external_evidence_is_still_green(synthetic: dict[str, objec
     passes the evidence gate with an explicit 'none declared' record."""
     repo = synthetic["repo"]
     assert isinstance(repo, Path)
-    inventory_path = repo / str(receipt.INVENTORY_REL)  # pyright: ignore[reportAttributeAccessIssue]
+    inventory_path = repo / str(receipt.INVENTORY_REL)
     data = json.loads(inventory_path.read_text())
     data["external_evidence"] = []
     inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -274,7 +275,7 @@ def test_missing_inventory_entry_forces_nonzero(synthetic: dict[str, object]) ->
     """An inventory entry with no file on disk is MISSING, not 'vacuously satisfied'."""
     repo = synthetic["repo"]
     assert isinstance(repo, Path)
-    inventory_path = repo / str(receipt.INVENTORY_REL)  # pyright: ignore[reportAttributeAccessIssue]
+    inventory_path = repo / str(receipt.INVENTORY_REL)
     data = json.loads(inventory_path.read_text())
     data["files"]["never_existed.py"] = "0" * 64
     inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -329,7 +330,7 @@ def test_evidence_records_the_exact_sha_and_results(
     assert isinstance(repo, Path)
     (repo / "stray.py").write_text("# untracked\n")
     evidence_dir = tmp_path / "evidence"
-    rc = receipt.main(  # pyright: ignore[reportAttributeAccessIssue]
+    rc = receipt.main(
         [
             "--expect-head",
             str(synthetic["head"]),

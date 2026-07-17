@@ -289,7 +289,9 @@ def run_proof_tests(repo: Path, inventory: dict[str, object], python: Path) -> C
     """
     expected = inventory.get("expected_proof")
     assert isinstance(expected, dict)
-    tests = [str(t) for t in list(expected["tests"])]  # pyright: ignore[reportArgumentType]
+    tests_obj = expected["tests"]
+    assert isinstance(tests_obj, list), "expected_proof 'tests' must be a list"
+    tests = [str(t) for t in tests_obj]
     want_passed = int(str(expected["passed"]))
     want_failed = int(str(expected["failed"]))
 
@@ -431,7 +433,9 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     if args.emit_inventory:
         fresh = emit_inventory(repo, base_sha, inventory)
         (repo / INVENTORY_REL).write_text(json.dumps(fresh, indent=2, sort_keys=True) + "\n")
-        print(f"wrote {INVENTORY_REL} ({len(fresh['files'])} files)")  # pyright: ignore[reportArgumentType]
+        files_map = fresh["files"]
+        assert isinstance(files_map, dict)
+        print(f"wrote {INVENTORY_REL} ({len(files_map)} files)")
         return 0
 
     # ---- Gates first: every one fails CLOSED, and none of them execute anything. ----
