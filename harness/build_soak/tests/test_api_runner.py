@@ -24,6 +24,7 @@ from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKED_UP,
     FOLLOWUP_PICKUP_TIMEOUT,
     FOLLOWUP_REPLANNED,
+    INACTIVE_TIMEOUT,
     LIVE_THRASH_STOP,
     BrowserEvidenceCollectionError,
     CollectedRun,
@@ -1666,7 +1667,7 @@ def test_h191_direct_browser_fails_closed_without_strict_pass_facts(field, value
         browser_evidence_paths={path},
     )
 
-    assert record["status"] == "FAIL", record
+    assert record["status"] == "FAIL"
     assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
 
 
@@ -3878,7 +3879,7 @@ async def test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_
         require_inspect_trace=True,
     )
 
-    assert record["status"] == "FAIL"
+    assert record["status"] == "FAIL", record
     assert record["code"] != "MISSING_REQUIRED_EVIDENCE"
     assert record["conversation_id"] == _CID
 
@@ -4824,22 +4825,53 @@ async def test_progressing_cutoff_rejected_kill_retains_retry_and_partial_dossie
 
 
 @pytest.mark.asyncio
-async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_path):
+async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(
+    tmp_path, monkeypatch
+):
     # The flip side: a genuinely WEDGED build (no new events, frozen status) for the
     # inactivity window IS a real product finding — BUILD_DID_NOT_FINISH — NOT the
     # inconclusive INVALID_RUN reserved for an actively-progressing cutoff.
     db = tmp_path / "disco.db"
-    _seed_db(db, _CID, clean_smoke_log()[:-1])
+    events = clean_smoke_log()[:-1]
+    screenshot_path = ".pmx/screenshots/nonterminal.png"
+    events += [
+        action(
+            10,
+            "browser",
+            args={"action": "navigate", "url": "http://localhost:8000/"},
+            action_id="act_10",
+        ),
+        _browser_screenshot_observation(screenshot_path, seq=11),
+    ]
+    _seed_db(db, _CID, events)
     transport = FakeTransport(
         db,
         states=["RUNNING"] * 6,
         workspace={"index.html": "<h1>Build Smoke OK</h1>"},
         preview_html="<h1>Build Smoke OK</h1>",
     )
-    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    provider_ledger = tmp_path / "provider.jsonl"
+    provider_ledger.write_text("", encoding="utf-8")
+    monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(provider_ledger))
+    client = DiscoApiClient(
+        transport,
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(tmp_path / "projects"),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+    scenario = _smoke_scenario()
+    scenario["followups"] = [
+        {
+            "trigger": "after_terminal",
+            "text": "this must not be sent after inactivity",
+            "requires_plan_revision": False,
+        }
+    ]
     record = await run_once(
         client,
-        _smoke_scenario(),
+        scenario,
         run_id="run_wedge_001",
         out_root=tmp_path / "out",
         model="m",
@@ -4848,8 +4880,158 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_p
         timeout_s=0.1,  # short inactivity — the wedge trips it
         hard_cap_s=30.0,
     )
-    assert record["status"] == "FAIL"
+    assert record["status"] == "FAIL", record
     assert record["code"] == "BUILD_DID_NOT_FINISH"
+    assert record["first_broken_link"] == "required_finish -> terminal_status"
+    message_posts = [path for path, _body in transport.posts if path.endswith("/messages")]
+    assert len(message_posts) == 1  # initial prompt only; no after-terminal follow-up
+    workspace_path = (
+        tmp_path
+        / "out"
+        / "run_wedge_001"
+        / "conversations"
+        / _CID
+        / "workspace-manifest.json"
+    )
+    workspace = json.loads(workspace_path.read_text(encoding="utf-8"))
+    assert workspace == {
+        "_capture": {
+            "drive_status": "INACTIVE_TIMEOUT",
+            "reason": "strict atomic workspace evidence requires a durable terminal",
+            "status": "not_collected_nonterminal",
+        },
+        "files": {},
+    }
+    conv = workspace_path.parent
+    browser_diagnostic = json.loads(
+        (conv / _run_mod._BROWSER_EVIDENCE_COLLECTION_ERROR_NAME).read_text(encoding="utf-8")
+    )
+    assert browser_diagnostic == {
+        "admissible_as_browser_evidence": False,
+        "conversation_id": _CID,
+        "facts": {"referenced_paths": [screenshot_path]},
+        "kind": "browser_evidence_not_collected_nonterminal",
+        "preserved_for": "nonterminal_product_adjudication",
+        "reason": "strict browser bytes require the unavailable terminal snapshot",
+        "schema_version": 1,
+    }
+    product_evidence = json.loads(
+        (conv / "product-evidence.json").read_text(encoding="utf-8")
+    )
+    assert product_evidence["nonterminal_adjudication"] == {
+        "drive_status": "INACTIVE_TIMEOUT",
+        "frozen_max_seq": 11,
+        "schema_version": 1,
+        "terminal_baseline_seq": None,
+        "terminal_cleanup_slices_not_applicable": ["sidecar"],
+        "terminal_only_evidence_unavailable": ["workspace", "browser"],
+        "terminal_snapshot_available": False,
+    }
+    manifest = load_manifest(tmp_path / "out" / "run_wedge_001")
+    assert verify_evidence_unchanged(tmp_path / "out" / "run_wedge_001", manifest).intact
+
+
+@pytest.mark.asyncio
+async def test_inactive_poll_late_terminal_race_uses_strict_snapshot_path(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())  # terminal appears in the frozen event read
+    transport = FakeTransport(
+        db,
+        states=["RUNNING"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    async def inactive(*_args, **_kwargs):
+        return INACTIVE_TIMEOUT
+
+    workspace_calls = 0
+
+    async def strict_workspace(_cid, _declared):
+        nonlocal workspace_calls
+        workspace_calls += 1
+        return {"index.html": "<h1>Build Smoke OK</h1>"}
+
+    monkeypatch.setattr(client, "poll_until_terminal_or_gate", inactive)
+    monkeypatch.setattr(client, "poll_until_terminal", inactive)
+    monkeypatch.setattr(client, "collect_workspace", strict_workspace)
+
+    run = await drive_scenario(
+        client,
+        _smoke_scenario(),
+        model="m",
+        autonomous=False,
+        timeout_s=0.1,
+    )
+
+    assert workspace_calls == 1
+    assert run.workspace_manifest == {"index.html": "<h1>Build Smoke OK</h1>"}
+    assert not any("not_collected_nonterminal" in line for line in run.timeline)
+
+
+@pytest.mark.asyncio
+async def test_followup_inactivity_ignores_stale_terminal_and_stops_later_followups(
+    tmp_path, monkeypatch
+):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
+        db,
+        states=["FINISHED"],
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scripted_statuses = iter(["FINISHED", INACTIVE_TIMEOUT])
+
+    async def scripted_drive(*_args, **_kwargs):
+        return next(scripted_statuses)
+
+    sent_followups: list[str] = []
+
+    async def append_followup(cid, content, *, kind="message"):
+        del kind
+        sent_followups.append(content)
+        _insert_event(db, cid, msg(11, "user", content))
+        _insert_event(db, cid, status(12, "RUNNING", "planning"))
+        return {"event_id": "evt_11", "seq": 11}
+
+    async def strict_workspace_must_not_run(*_args, **_kwargs):
+        raise AssertionError("stale initial FINISHED must not enable strict snapshot collection")
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", scripted_drive)
+    monkeypatch.setattr(client, "send_followup", append_followup)
+    monkeypatch.setattr(client, "collect_workspace", strict_workspace_must_not_run)
+    scenario = _smoke_scenario()
+    scenario["followups"] = [
+        {"trigger": "after_terminal", "text": "first", "requires_plan_revision": False},
+        {"trigger": "after_terminal", "text": "second", "requires_plan_revision": False},
+    ]
+
+    run = await drive_scenario(
+        client,
+        scenario,
+        model="m",
+        autonomous=False,
+        timeout_s=0.1,
+    )
+
+    assert sent_followups == ["first"]
+    assert run.workspace_manifest["_capture"] == {
+        "drive_status": INACTIVE_TIMEOUT,
+        "reason": "strict atomic workspace evidence requires a durable terminal",
+        "status": "not_collected_nonterminal",
+    }
+    base = assemble_dossier(
+        tmp_path / "out", "run_followup_inactive", scenario, run, model="m", autonomous=False
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    assert classification["status"] == "FAIL", classification
+    assert classification["code"] == "BUILD_DID_NOT_FINISH"
+    assert classification["first_broken_link"] == "required_finish -> terminal_status"
 
 
 # ---- H1: after-terminal follow-ups are SERIALIZED ---------------------------

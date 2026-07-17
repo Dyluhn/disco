@@ -39,6 +39,7 @@ from .adapters.disco_api import (
     AWAITING_USER_DECISION,
     AWAITING_USER_QUESTION,
     FOLLOWUP_PICKUP_TIMEOUT,
+    INACTIVE_TIMEOUT,
     LIVE_THRASH_STOP,
     PAUSED_STATE,
     PROGRESSING_TIMEOUT,
@@ -52,6 +53,7 @@ from .adapters.disco_api import (
     InfraProbeError,
     SnapshotNotReadyError,
     Transport,
+    _referenced_screenshot_paths,
     validate_browser_evidence_relpath,
 )
 from .classify import CLASSIFICATION_NAME, classify
@@ -912,6 +914,15 @@ async def drive_scenario(
         await _freeze_progress_timeout(exc)
         raise
 
+    terminal_snapshot_states = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK"})
+    drive_status = initial_status
+    drive_terminal_baseline_seq: int | None = None
+    if initial_status == INACTIVE_TIMEOUT:
+        # A wedged/nonterminal initial phase has no legal "after terminal" phase.
+        # Sending those turns would pile work onto the very run being adjudicated
+        # and could hide its decisive BUILD_DID_NOT_FINISH boundary.
+        after_terminal = []
+
     if initial_status == LIVE_THRASH_STOP:
         timeline.append(
             "confirmed live thrash threshold stopped the conversation; "
@@ -920,7 +931,7 @@ async def drive_scenario(
         after_terminal = []
 
     if (
-        initial_status != LIVE_THRASH_STOP
+        initial_status in terminal_snapshot_states
         and cancel_at
         and cancel_at.get("trigger") == _TRIGGER_AFTER_TERMINAL
     ):
@@ -994,7 +1005,8 @@ async def drive_scenario(
             declared_followup_seqs.append(new_user_seq)
             declared_followup_requires_revision.append(bool(f.get("requires_plan_revision")))
         try:
-            await _drive_to_terminal(
+            drive_terminal_baseline_seq = baseline_seq
+            drive_status = await _drive_to_terminal(
                 client,
                 cid,
                 autonomous=autonomous,
@@ -1008,33 +1020,98 @@ async def drive_scenario(
                 injected_user_seqs=harness_injected_user_seqs,
                 min_seq=baseline_seq,
             )
+            if drive_status in {INACTIVE_TIMEOUT, LIVE_THRASH_STOP}:
+                timeline.append(
+                    "after-terminal phase stopped without a durable work terminal: "
+                    f"{drive_status}; skipping remaining follow-ups"
+                )
+                break
         except InconclusiveRunError as exc:
             await _freeze_progress_timeout(exc)
             raise
 
-    # Collect (post-terminal, race-free DB read for events).
+    # Collect the durable event/state boundary before release. A genuinely inactive
+    # nonterminal run is already an adjudicable product failure; it can never have
+    # the post-terminal atomic workspace commit required by strict live capture.
+    # Waiting for that impossible commit would mask BUILD_DID_NOT_FINISH behind
+    # WORKSPACE_SNAPSHOT_NOT_READY (H339). Preserve an explicit empty evidence slice
+    # so ContractOracle can proceed to OutputTruthOracle's earlier terminal verdict.
     events = client.collect_events(cid)
     state_final = await client.get_state(cid)
-    workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
-    browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
     try:
-        browser_evidence = client.collect_browser_evidence(
-            cid,
+        frozen_events = normalize_events(events)
+    except (NormalizationError, ValueError, TypeError):
+        frozen_events = []
+    frozen_work_terminal = any(
+        event.get("kind") == "status"
+        and event.get("source") == "system"
+        and event.get("status") in terminal_snapshot_states
+        and type(event.get("seq")) is int
+        and (
+            drive_terminal_baseline_seq is None
+            or int(event["seq"]) > drive_terminal_baseline_seq
+        )
+        for event in frozen_events
+    )
+    # Late-terminal race guard: if a real work terminal landed after the poll's
+    # inactivity decision but before this frozen read, use the ordinary strict
+    # terminal snapshot path. Never downgrade that terminal to a diagnostic slice.
+    inactive_without_terminal = (
+        drive_status == INACTIVE_TIMEOUT and not frozen_work_terminal
+    )
+    terminal_snapshot_available = not inactive_without_terminal
+    if terminal_snapshot_available:
+        workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
+    else:
+        workspace = {
+            "files": {},
+            "_capture": {
+                "status": "not_collected_nonterminal",
+                "drive_status": drive_status,
+                "reason": "strict atomic workspace evidence requires a durable terminal",
+            },
+        }
+        timeline.append(
+            "skipped strict workspace/browser byte capture for nonterminal drive status "
+            f"{drive_status}; preserving terminal adjudication"
+        )
+    browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
+    browser_collection_diagnostic: dict[str, Any] | None = None
+    if not terminal_snapshot_available:
+        browser_evidence = {}
+        referenced_paths = _referenced_screenshot_paths(
             events,
-            workspace,
             require_verified_host_screenshot=_browser_verification_required(scenario),
         )
-    except BrowserEvidenceCollectionError as exc:
-        # Browser evidence gaps ordinarily make a run INVALID.  A confirmed live-
-        # thrash stop is different: the strict monitor established the product FAIL
-        # before it killed the conversation, so a screenshot that disappeared after
-        # that stop must not erase the decisive event/inspect/thrash evidence.  Defer
-        # admission until the complete run satisfies _confirmed_live_thrash_stop;
-        # every other collection error is re-raised below unchanged.
-        if initial_status != LIVE_THRASH_STOP:
-            raise
-        browser_evidence = {}
-        browser_evidence_collection_exc = exc
+        if referenced_paths:
+            browser_collection_diagnostic = {
+                "schema_version": 1,
+                "kind": "browser_evidence_not_collected_nonterminal",
+                "reason": "strict browser bytes require the unavailable terminal snapshot",
+                "facts": {"referenced_paths": referenced_paths},
+                "conversation_id": cid,
+                "preserved_for": "nonterminal_product_adjudication",
+                "admissible_as_browser_evidence": False,
+            }
+    else:
+        try:
+            browser_evidence = client.collect_browser_evidence(
+                cid,
+                events,
+                workspace,
+                require_verified_host_screenshot=_browser_verification_required(scenario),
+            )
+        except BrowserEvidenceCollectionError as exc:
+            # Browser evidence gaps ordinarily make a run INVALID.  A confirmed live-
+            # thrash stop is different: the strict monitor established the product FAIL
+            # before it killed the conversation, so a screenshot that disappeared after
+            # that stop must not erase the decisive event/inspect/thrash evidence.  Defer
+            # admission until the complete run satisfies _confirmed_live_thrash_stop;
+            # every other collection error is re-raised below unchanged.
+            if drive_status != LIVE_THRASH_STOP:
+                raise
+            browser_evidence = {}
+            browser_evidence_collection_exc = exc
     preview = await client.collect_preview(cid) if _preview_required(scenario) else None
     inspect_trace = await client.collect_inspect_trace(cid)
     client.observe_live_thrash_snapshot(
@@ -1052,6 +1129,27 @@ async def drive_scenario(
         f"collected {len(events)} events; workspace files={list(workspace)}; "
         f"browser evidence files={list(browser_evidence)}"
     )
+    nonterminal_product_evidence = (
+        {
+            "nonterminal_adjudication": {
+                "schema_version": 1,
+                "drive_status": drive_status,
+                "terminal_baseline_seq": drive_terminal_baseline_seq,
+                "frozen_max_seq": max(
+                    (
+                        int(event["seq"])
+                        for event in frozen_events
+                        if type(event.get("seq")) is int
+                    ),
+                    default=-1,
+                ),
+                "terminal_snapshot_available": False,
+                "terminal_only_evidence_unavailable": ["workspace", "browser"],
+            }
+        }
+        if inactive_without_terminal
+        else {}
+    )
     run = CollectedRun(
         conversation_id=cid,
         events=events,
@@ -1067,7 +1165,9 @@ async def drive_scenario(
         declared_followup_seqs=declared_followup_seqs,
         declared_followup_requires_revision=declared_followup_requires_revision,
         harness_injected_user_seqs=harness_injected_user_seqs,
-        browser_evidence_collection_error=(
+        product_evidence=nonterminal_product_evidence,
+        browser_evidence_collection_error=browser_collection_diagnostic
+        or (
             {
                 "schema_version": 1,
                 "kind": "browser_evidence_collection_error",
@@ -2280,7 +2380,15 @@ async def run_once(
         _live_measure = bool(_relay_log_path())
         _required = ("lifecycle", "sidecar", "cleanup")
         _missing = [k for k in _required if k not in ev]
-        if _live_measure and _missing:
+        nonterminal_adjudication = ev.get("nonterminal_adjudication")
+        trusted_nonterminal = (
+            isinstance(nonterminal_adjudication, dict)
+            and nonterminal_adjudication.get("schema_version") == 1
+            and nonterminal_adjudication.get("drive_status") == INACTIVE_TIMEOUT
+            and nonterminal_adjudication.get("terminal_snapshot_available") is False
+            and type(nonterminal_adjudication.get("frozen_max_seq")) is int
+        )
+        if _live_measure and _missing and not trusted_nonterminal:
             # Verdict-invalidating evidence gaps need the same retained diagnostic
             # dossier as the inspect-trace validity gate above.  Previously this
             # early return kept only classification.json and discarded the exact
@@ -2317,6 +2425,19 @@ async def run_once(
                 facts={"missing_slices": _missing},
                 conversation_id=run.conversation_id,
                 timeline_markdown=_timeline_md(scenario, run),
+            )
+        if _live_measure and _missing and trusted_nonterminal:
+            # Freeze the exact exception boundary into hash-locked product evidence.
+            # timeline.md is operator context only and is not part of EvidenceManifest,
+            # so it cannot be the sole record of which terminal-only slices were waived.
+            assert isinstance(nonterminal_adjudication, dict)
+            nonterminal_adjudication["terminal_cleanup_slices_not_applicable"] = sorted(
+                _missing
+            )
+            run.product_evidence = ev
+            run.timeline.append(
+                "terminal cleanup evidence not required for decisive nonterminal product "
+                "failure; missing " + ", ".join(_missing)
             )
 
         provider_ledger = _provider_ledger_for_run(run)
