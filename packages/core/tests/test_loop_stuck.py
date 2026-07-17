@@ -245,9 +245,7 @@ def _numbered_read(
     if limit is not None:
         args["limit"] = limit
     read = action(thought=f"read {start}-{stop}", tool="file_read", args=args)
-    numbered = "\n".join(
-        f"{line:>3}\t{text_prefix}-{line}" for line in range(start, stop + 1)
-    )
+    numbered = "\n".join(f"{line:>3}\t{text_prefix}-{line}" for line in range(start, stop + 1))
     content = f"[lines {start}-{stop} of {total if total is not None else stop}]\n{numbered}"
     return [read, observation(action_id=read.id, tool="file_read", content=content)]
 
@@ -329,10 +327,7 @@ def test_redundant_read_after_churn_nudge_malformed_whole_result_is_inert(malfor
 def test_redundant_read_after_churn_nudge_huge_total_tiny_body_is_bounded_and_inert():
     marker = _read_churn_nudge()
     read = action(thought="budgeted huge read", tool="file_read", args={"path": "styles.css"})
-    content = (
-        "[lines 1-2 of 1000000000000; read more with offset=3]\n"
-        "1\ta\n2\tb"
-    )
+    content = "[lines 1-2 of 1000000000000; read more with offset=3]\n1\ta\n2\tb"
     events = [marker, read, observation(action_id=read.id, tool="file_read", content=content)]
 
     assert StuckDetector().evaluate(events).is_stuck is False
@@ -456,9 +451,7 @@ def test_redundant_read_after_churn_nudge_opaque_read_is_inert():
 def test_redundant_read_after_churn_nudge_ignores_non_environment_observation():
     events = [_read_churn_nudge()]
     events += _numbered_read("styles.css", 1, 20, total=20)
-    read, result = _numbered_read(
-        "styles.css", 1, 10, offset=1, limit=10, total=20
-    )
+    read, result = _numbered_read("styles.css", 1, 10, offset=1, limit=10, total=20)
     events += [read, result.model_copy(update={"source": EventSource.AGENT})]
 
     assert StuckDetector().evaluate(events).is_stuck is False
@@ -511,6 +504,193 @@ def test_redundant_read_after_churn_nudge_escape_rearms_then_retrips():
     assert StuckDetector().evaluate(events).is_stuck is False
     events += _numbered_read("styles.css", 11, 20, offset=11, limit=10, total=20)
     assert StuckDetector().evaluate(events).reason == "redundant_read_after_churn_nudge"
+
+
+def _coverage_one_hit_below_threshold(path: str = "styles.css") -> list[Event]:
+    events = _numbered_read(path, 1, 20, total=20)
+    for limit in (10, 11, 12):
+        events += _numbered_read(path, 1, 5, offset=1, limit=limit, total=20)
+    assert StuckDetector().evaluate(events).is_stuck is False
+    return events
+
+
+def test_trusted_churn_nudge_rearms_coverage_for_its_permitted_whole_read():
+    """H391: the nudge's allowed baseline cannot inherit pre-nudge hit counts."""
+    events = _coverage_one_hit_below_threshold()
+    events.append(_read_churn_nudge("/workspace/styles.css"))
+    events += _numbered_read("./styles.css", 1, 20, total=20)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+    recovered = list(events)
+    write = action(
+        thought="act on the permitted baseline",
+        tool="file_write",
+        args={"path": "styles.css", "content": "changed"},
+    )
+    recovered += [write, observation(action_id=write.id, tool="file_write", content="wrote")]
+    assert StuckDetector().evaluate(recovered).is_stuck is False
+
+    # The allowance is exactly one baseline read. A subsequent unchanged slice
+    # still trips the stricter typed-nudge breaker before generic coverage.
+    events += _numbered_read("styles.css", 1, 5, offset=1, limit=5, total=20)
+    assert StuckDetector().evaluate(events).reason == "redundant_read_after_churn_nudge"
+
+
+def test_trusted_churn_nudge_permits_whole_read_at_coverage_threshold_one():
+    """H404: the allowed baseline is not itself a generic redundant hit."""
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    events.append(_read_churn_nudge("/workspace/styles.css"))
+    events += _numbered_read("./styles.css", 1, 20, total=20)
+    detector = StuckDetector(StuckThresholds(redundant_read_coverage=1))
+
+    assert detector.evaluate(events).is_stuck is False
+
+    events += _numbered_read("styles.css", 1, 5, offset=1, limit=5, total=20)
+    assert detector.evaluate(events).reason == "redundant_read_after_churn_nudge"
+
+
+def test_h391_frozen_window_38_61_semantic_replay():
+    """The exact live overlap/escape/nudge shape cannot kill its allowed read."""
+    events: list[Event] = [
+        observation(
+            action_id="action-before-window",
+            tool="file_read",
+            content="[lines 129-208 of 623]\n129\tline-129",
+        )
+    ]
+    events += _numbered_read("/workspace/styles.css", 209, 238, offset=209, limit=30, total=623)
+    events += _numbered_read("/workspace/styles.css", 220, 234, offset=220, limit=15, total=623)
+    events += _numbered_read("/workspace/styles.css", 228, 247, offset=228, limit=20, total=623)
+    events += [
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(role="user", content="take a genuinely different action"),
+        ),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"),
+    ]
+    events += _numbered_read("/workspace/styles.css", 1, 623, total=623)
+    events += _numbered_read("/workspace/styles.css", 205, 214, offset=205, limit=10, total=623)
+    events += _numbered_read("/workspace/styles.css", 219, 238, offset=219, limit=20, total=623)
+    events += _numbered_read("/workspace/styles.css", 215, 224, offset=215, limit=10, total=623)
+    events += _numbered_read("/workspace/styles.css", 224, 238, offset=224, limit=15, total=623)
+    events += _numbered_read("/workspace/styles.css", 210, 214, offset=210, limit=5, total=623)
+    marker = _read_churn_nudge("/workspace/styles.css")
+    events.append(marker)
+    events += _numbered_read("/workspace/styles.css", 1, 623, total=623)
+    assert len(events) == 24
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+    without_nudge = [event for event in events if event is not marker]
+    assert StuckDetector().evaluate(without_nudge).reason == "redundant_read_coverage"
+
+
+def test_whole_reread_without_churn_nudge_still_trips_coverage_threshold_one():
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    events += _numbered_read("styles.css", 1, 20, total=20)
+
+    result = StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events)
+
+    assert result.reason == "redundant_read_coverage"
+
+
+@pytest.mark.parametrize("kind", ["malformed", "opaque", "failed", "unpaired"])
+def test_invalid_read_cannot_consume_threshold_one_nudge_baseline(kind):
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    events.append(_read_churn_nudge("styles.css"))
+    invalid = action(thought=f"{kind} whole read", tool="file_read", args={"path": "styles.css"})
+    if kind == "malformed":
+        giant = "9" * 5000
+        result = observation(
+            action_id=invalid.id,
+            tool="file_read",
+            content=f"[lines 1-20 of 20]\n{giant}\tline-1",
+        )
+    elif kind == "opaque":
+        result = observation(action_id=invalid.id, tool="file_read", content="<binary>")
+    elif kind == "failed":
+        result = observation(action_id=invalid.id, tool="file_read", success=False)
+    else:
+        result = observation(
+            action_id="missing-action",
+            tool="file_read",
+            content="[lines 1-20 of 20]\n1\tline-1",
+        )
+    events += [invalid, result]
+    events += _numbered_read("styles.css", 1, 20, total=20)
+
+    assert (
+        StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events).is_stuck is False
+    )
+
+
+def test_pre_nudge_action_cannot_claim_threshold_one_baseline_allowance():
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    stale_action, stale_result = _numbered_read("styles.css", 1, 20, total=20)
+    events += [stale_action, _read_churn_nudge("styles.css"), stale_result]
+
+    result = StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events)
+
+    assert result.reason == "redundant_read_coverage"
+
+
+@pytest.mark.parametrize(
+    "spoof",
+    ["source", "diagnostic", "path", "count-string", "count-bool", "count-small"],
+)
+def test_untrusted_churn_nudge_cannot_rearm_generic_coverage(spoof):
+    events = _coverage_one_hit_below_threshold()
+    marker = _read_churn_nudge()
+    if spoof == "source":
+        marker = marker.model_copy(update={"source": EventSource.AGENT})
+    elif spoof == "diagnostic":
+        marker = marker.model_copy(
+            update={"meta": {**marker.meta, "diagnostic": "read_churn_nudeg"}}
+        )
+    elif spoof == "path":
+        marker = marker.model_copy(update={"meta": {**marker.meta, "path": ""}})
+    elif spoof == "count-string":
+        marker = marker.model_copy(update={"meta": {**marker.meta, "count": "5"}})
+    elif spoof == "count-bool":
+        marker = marker.model_copy(update={"meta": {**marker.meta, "count": True}})
+    else:
+        marker = marker.model_copy(update={"meta": {**marker.meta, "count": 4}})
+    events.append(marker)
+    events += _numbered_read("styles.css", 1, 20, total=20)
+
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
+    assert (
+        StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events).reason
+        == "redundant_read_coverage"
+    )
+
+
+def test_trusted_churn_nudge_does_not_rearm_another_path():
+    events = _coverage_one_hit_below_threshold("styles.css")
+    events.append(_read_churn_nudge("other.css"))
+    events += _numbered_read("styles.css", 1, 20, total=20)
+
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
+    assert (
+        StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events).reason
+        == "redundant_read_coverage"
+    )
+
+
+def test_trusted_churn_nudge_rearms_named_empty_file_header_coverage():
+    events = _header_only_read("empty.txt", "[lines 1-0 of 0]")
+    for offset in (2, 3, 4):
+        events += _header_only_read("empty.txt", f"[lines {offset}-0 of 0]", offset=offset)
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+    events.append(_read_churn_nudge("/workspace/empty.txt"))
+    events += _header_only_read("./empty.txt", "[lines 1-0 of 0]")
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+    assert (
+        StuckDetector(StuckThresholds(redundant_read_coverage=1)).evaluate(events).is_stuck is False
+    )
 
 
 def test_redundant_read_coverage_trips_on_varied_overlapping_offsets():
@@ -596,9 +776,7 @@ def test_redundant_read_coverage_resets_on_changed_lines():
         events += _numbered_read("styles.css", 1, 5, limit=limit)
     events += _numbered_read("styles.css", 1, 5, text_prefix="changed", limit=20)
     for limit in (21, 22, 23):
-        events += _numbered_read(
-            "styles.css", 1, 5, text_prefix="changed", limit=limit
-        )
+        events += _numbered_read("styles.css", 1, 5, text_prefix="changed", limit=limit)
 
     assert StuckDetector().evaluate(events).is_stuck is False
 
@@ -735,9 +913,7 @@ def test_redundant_read_coverage_new_path_rearms_global_streak():
 def test_redundant_read_coverage_trips_on_empty_file_header_only_reads():
     events = _header_only_read("empty.txt", "[lines 1-0 of 0]")
     for offset in (2, 3, 4, 5):
-        events += _header_only_read(
-            "empty.txt", f"[lines {offset}-0 of 0]", offset=offset
-        )
+        events += _header_only_read("empty.txt", f"[lines {offset}-0 of 0]", offset=offset)
 
     result = StuckDetector().evaluate(events)
 
@@ -760,9 +936,7 @@ def test_redundant_read_coverage_trips_on_varied_past_eof_reads():
 def test_redundant_read_coverage_changed_total_recovers_header_only_streak():
     events = _header_only_read("growing.txt", "[lines 1-0 of 0]")
     for offset in (2, 3, 4, 5):
-        events += _header_only_read(
-            "growing.txt", f"[lines {offset}-0 of 0]", offset=offset
-        )
+        events += _header_only_read("growing.txt", f"[lines {offset}-0 of 0]", offset=offset)
     events += _numbered_read("growing.txt", 1, 1, text_prefix="new")
 
     assert StuckDetector().evaluate(events).is_stuck is False
