@@ -12,12 +12,15 @@ from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
+    EventSource,
+    MessageEvent,
     ObservationEvent,
     SecurityRisk,
+    ToolCall,
     ToolResult,
 )
 from disco.core.llm import DefaultLLMRouter, ProposedToolCall
-from disco.core.loop import ConfirmRisky, NeverConfirm, RouterAgent
+from disco.core.loop import AgentStep, ConfirmRisky, NeverConfirm, RouterAgent
 from llm_fakes import simple_config
 from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
 
@@ -212,6 +215,131 @@ async def test_app_verify_honours_a_custom_url():
     await loop.send_message("ship the api")
     await loop.run()
     assert "localhost:3000/health" in executor.calls[0].arguments["command"]
+
+
+# ---- E4a: static:<non-html> validation ---------------------------------------
+
+
+async def test_static_verify_with_non_html_path_is_ignored_with_reminder():
+    """`verify="static:primes.py"` reaches FINISHED, executes no HTML probe,
+    and records an explicit ignored-directive environment message with
+    stable metadata."""
+    agent = _agent([_finish(verify="static:primes.py")])
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    # No shell command executed (the optional verifier was omitted).
+    assert executor.calls == []
+    # The environment reminder with stable metadata was emitted.
+    events = await store.get_events(CID)
+    ignored_reminders = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("finish_verify_ignored") is True
+    ]
+    assert len(ignored_reminders) == 1
+    rem = ignored_reminders[0]
+    assert "static:primes.py" in rem.message.content
+    assert "ignored" in rem.message.content.lower()
+    assert rem.meta.get("verify_kind") == "static"
+    assert rem.meta.get("directive") == "static:primes.py"
+
+
+async def test_static_verify_with_mixed_case_html_extensions():
+    """Mixed-case `.HTML` and `.HTM` custom paths still translate to the
+    HTML parser (case-insensitive extension check)."""
+    for ext in (".HTML", ".HTM", ".Html", ".Htm"):
+        agent = _agent([_finish(verify=f"static:about{ext}")])
+        executor = FakeExecutor()
+        loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+        await loop.send_message(f"ship {ext}")
+        await loop.run()
+
+        assert len(executor.calls) == 1
+        cmd = executor.calls[0].arguments["command"]
+        assert cmd.startswith("python3 -c")
+        assert f"about{ext}" in cmd
+
+
+async def test_raw_shell_verify_with_non_html_filename_still_executes():
+    """An ordinary raw shell verifier that mentions a non-HTML filename
+    (e.g. ``pytest primes.py``) executes unchanged — only the ``static:``
+    prefix triggers the extension validation."""
+    agent = _agent([_finish(verify="pytest primes.py")])
+    executor = FakeExecutor()
+    loop, _ = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("go")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(executor.calls) == 1
+    assert executor.calls[0].arguments["command"] == "pytest primes.py"
+
+
+async def test_ignored_static_directive_does_not_bypass_external_dod():
+    """Prove that the ignored ``static:primes.py`` directive does NOT bypass
+    the external DoD gate.  ``normalize_finish_step`` skips the optional
+    verifier but the DoD gate still runs and refuses the finish."""
+    from disco.core.dod import DoDSpec, FileExistsPredicate
+    from disco.core.dod_evaluator import DoDPredicateResult, DoDVerdict
+
+    class _FixedEvaluator:
+        """A fake DoD evaluator that always fails its predicate."""
+
+        async def evaluate(self, spec, *, conversation_id):  # noqa: ARG002
+            pred = FileExistsPredicate(path="out.txt")
+            result = DoDPredicateResult(predicate=pred, passed=False, reason="out.txt is missing")
+            return DoDVerdict(
+                passed=False,
+                unmet=[pred],
+                results=[result],
+                spec_predicate_count=1,
+                evaluated_at="2026-06-13T00:00:00Z",
+                spec_fingerprint="fp-test",
+            )
+
+    agent = _agent([_finish(verify="static:primes.py")])
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        agent,
+        executor=executor,
+        policy=NeverConfirm(),
+        dod_evaluator_factory=lambda: _FixedEvaluator(),
+    )
+    await store.set_dod_spec(CID, DoDSpec(predicates=[FileExistsPredicate(path="out.txt")]))
+
+    # Drive normalize_finish_step directly (same path the loop takes).
+    step = AgentStep(
+        finished=False,
+        tool_call=ToolCall(
+            tool_name="finish",
+            arguments={"summary": "done", "verify": "static:primes.py"},
+        ),
+    )
+    events_before = await store.get_events(CID)
+    step_out, _ = await loop._finish.normalize_finish_step(step, events_before)
+
+    # The DoD gate refused the finish (step is NOT marked finished).
+    assert not step_out.finished
+    # No shell command was executed (the verify was ignored, not run).
+    assert executor.calls == []
+    # The ignored-directive reminder was emitted.
+    events = await store.get_events(CID)
+    ignored = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent) and e.meta.get("finish_verify_ignored") is True
+    ]
+    assert len(ignored) == 1
+    assert ignored[0].meta.get("verify_kind") == "static"
 
 
 def test_app_verify_command_distinguishes_serving_from_not(tmp_path):

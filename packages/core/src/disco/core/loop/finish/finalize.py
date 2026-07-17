@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .common import (
     _APP_VERIFY_PREFIX,
     _FINISH_VERIFY_CAP,
@@ -22,6 +24,20 @@ from .common import (
     _static_verify_command,
     signals,
 )
+
+
+@dataclass(frozen=True)
+class _ResolvedVerify:
+    """Typed result of resolving a finish verify directive.
+
+    When *ignored_reason* is set the optional model-owned verifier was
+    rejected at the validation boundary — *command* is empty and a
+    structured environment reminder must be emitted by the caller.
+    """
+
+    command: str
+    ignored_reason: str | None = None
+
 
 _UNVERIFIED_RELEASE_FINAL_MESSAGE = (
     "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
@@ -57,18 +73,32 @@ def _unverified_release_active(events: list[Event]) -> bool:
 
 
 class _FinalizeMixin(_FinishGateProto):
-    async def resolve_verify_command(self, args: dict) -> str:
+    async def resolve_verify_command(self, args: dict) -> _ResolvedVerify:
         verify_cmd = str(args.get("verify") or "").strip()
         # E4: a `static` directive verifies a static page WITHOUT a server
         # (files present + HTML parses) — the honest check for a page build.
-        if verify_cmd == _STATIC_VERIFY_PREFIX or verify_cmd.startswith(
-            _STATIC_VERIFY_PREFIX + ":"
-        ):
+        if verify_cmd == _STATIC_VERIFY_PREFIX:
+            # Bare `static` → default index.html HTML probe.
+            return _ResolvedVerify(command=_static_verify_command(""))
+        if verify_cmd.startswith(_STATIC_VERIFY_PREFIX + ":"):
             _, _, _path = verify_cmd.partition(":")
-            verify_cmd = _static_verify_command(_path)
+            # Normalize exactly as _static_verify_command does internally,
+            # then validate it is an HTML file path (case-insensitive).
+            _normalized = _path.strip().strip("'\"")
+            if _normalized.lower().endswith((".html", ".htm")):
+                return _ResolvedVerify(command=_static_verify_command(_path))
+            # Non-HTML static path — malformed optional model-owned verifier.
+            return _ResolvedVerify(
+                command="",
+                ignored_reason=(
+                    f"structured static verify directive `{verify_cmd}` requires an .html"
+                    " or .htm file path; non-HTML paths are not supported as static "
+                    "verifiers"
+                ),
+            )
         # app / app:<url> — verify the RUNNING deliverable actually serves
         # (HTTP 200 + non-trivial body), not just that a file exists.
-        elif verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(_APP_VERIFY_PREFIX + ":"):
+        if verify_cmd == _APP_VERIFY_PREFIX or verify_cmd.startswith(_APP_VERIFY_PREFIX + ":"):
             _, _, _url = verify_cmd.partition(":")
             _url = _url.strip()
             if not _url:
@@ -81,9 +111,9 @@ class _FinalizeMixin(_FinishGateProto):
                 # spin the model into re-serve/re-verify loops.
                 _url = await self._detect_preview_url() or ""
                 if not _url:
-                    return _static_verify_command("index.html")
-            verify_cmd = _app_verify_command(_url)
-        return verify_cmd
+                    return _ResolvedVerify(command=_static_verify_command("index.html"))
+            return _ResolvedVerify(command=_app_verify_command(_url))
+        return _ResolvedVerify(command=verify_cmd)
 
     async def normalize_finish_step(
         self, step: AgentStep, events: list[Event]
@@ -95,7 +125,35 @@ class _FinalizeMixin(_FinishGateProto):
         # failure the agent sees exactly what broke and adapts, instead
         # of declaring a broken build complete.
         assert step.tool_call is not None  # caller (engine loop) enters only on the finish tool
-        verify_cmd = await self.resolve_verify_command(step.tool_call.arguments)
+        resolved = await self.resolve_verify_command(step.tool_call.arguments)
+
+        # E4a: malformed structured static directive — emit reminder, skip optional verifier.
+        if resolved.ignored_reason:
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"The {resolved.ignored_reason}. "
+                            "This directive has been ignored.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                    meta={
+                        "finish_verify_ignored": True,
+                        "verify_kind": "static",
+                        "directive": str(step.tool_call.arguments.get("verify") or ""),
+                    },
+                )
+            )
+            verify_cmd = ""
+        elif resolved.command:
+            verify_cmd = resolved.command
+        else:
+            verify_cmd = ""
+
         if verify_cmd:
             passed, malformed = await self.finish_verify_passed(verify_cmd)
             if passed:
