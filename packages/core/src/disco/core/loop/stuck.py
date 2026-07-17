@@ -206,9 +206,10 @@ class StuckThresholds(BaseModel):
     # M3 — same non-productive probe tool calls in the recent window, with no
     # productive action between them. 0 disables the detector.
     probe_spin_calls: int = 12
-    # H336 — successful same-file reads that return only already-known,
-    # byte-identical numbered lines after the latest productive action. The first
-    # read (and every read adding/changing a line) is progress, not a repeat.
+    # H336/H338 — redundant byte-identical observations of the same known line
+    # after the latest productive action. Counting per-line hits (not merely read
+    # calls) distinguishes a cyclic reread from a finite set of disjoint/overlapping
+    # validation slices. The first read and new/changed lines are progress.
     # 0 disables the detector.
     redundant_read_coverage: int = 4
 
@@ -413,10 +414,18 @@ class StuckDetector:
         actions: dict[str, ActionEvent] = {}
         known_by_path: dict[str, dict[int, str]] = {}
         total_by_path: dict[str, int] = {}
-        redundant_by_path: dict[str, int] = {}
+        redundant_line_hits_by_path: dict[str, dict[int, int]] = {}
+        redundant_header_only_by_path: dict[str, int] = {}
         for event in events:
             if isinstance(event, ActionEvent) and event.tool_call is not None:
                 actions[event.id] = event
+                continue
+            if isinstance(event, StatusEvent) and event.detail == "stuck_escape":
+                # The escape reminder grants one genuine retry. Pre-reminder hit
+                # counts must not remain latched and terminal-STUCK a different
+                # next action; retain known lines so fresh redundant hits re-trip.
+                redundant_line_hits_by_path.clear()
+                redundant_header_only_by_path.clear()
                 continue
             if not isinstance(event, ObservationEvent):
                 continue
@@ -427,7 +436,8 @@ class StuckDetector:
             if result.success and result.tool_name not in _NON_PRODUCTIVE_TOOLS:
                 known_by_path.clear()
                 total_by_path.clear()
-                redundant_by_path.clear()
+                redundant_line_hits_by_path.clear()
+                redundant_header_only_by_path.clear()
                 continue
             if not result.success:
                 continue
@@ -448,7 +458,8 @@ class StuckDetector:
             if prior_total is None or prior_total != total:
                 total_by_path[path] = total
                 known_by_path[path] = dict(lines)
-                redundant_by_path.clear()
+                redundant_line_hits_by_path.clear()
+                redundant_header_only_by_path.clear()
                 continue
             known = known_by_path.setdefault(path, {})
             redundant = not lines or (
@@ -456,17 +467,31 @@ class StuckDetector:
                 and all(known.get(number) == text for number, text in lines.items())
             )
             if redundant:
-                redundant_by_path[path] = redundant_by_path.get(path, 0) + 1
+                if lines:
+                    hits = redundant_line_hits_by_path.setdefault(path, {})
+                    for number in lines:
+                        hits[number] = hits.get(number, 0) + 1
+                else:
+                    redundant_header_only_by_path[path] = (
+                        redundant_header_only_by_path.get(path, 0) + 1
+                    )
             else:
                 # New/changed knowledge on any path is a genuine change of
                 # approach after the escape nudge. Keep per-path coverage maps,
                 # but re-arm every redundancy streak from zero.
-                redundant_by_path.clear()
+                redundant_line_hits_by_path.clear()
+                redundant_header_only_by_path.clear()
                 known.update(lines)
         # Judge the FINAL streak, not a historical prefix. A successful repair or
         # changed/new content later in this same window must clear a prior trigger;
         # otherwise the one-shot escape reminder would terminal-STUCK real recovery.
-        return any(count >= threshold for count in redundant_by_path.values())
+        return any(
+            count >= threshold
+            for hits in redundant_line_hits_by_path.values()
+            for count in hits.values()
+        ) or any(
+            count >= threshold for count in redundant_header_only_by_path.values()
+        )
 
     # -- M3 pattern 6: repeated varying probe calls --------------------------
 

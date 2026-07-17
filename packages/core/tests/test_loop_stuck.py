@@ -260,12 +260,39 @@ def _header_only_read(path: str, header: str, *, offset: int | None = None):
 
 
 def test_redundant_read_coverage_trips_on_varied_overlapping_offsets():
-    """H336 live shape: one full read then four unchanged contained slices."""
+    """H336: varied ranges still cycle over the same known line four times."""
     events = _numbered_read("styles.css", 1, 20)
-    events += _numbered_read("./styles.css", 1, 5, offset=1, total=20)
-    events += _numbered_read("workspace/styles.css", 6, 10, offset=6, total=20)
-    events += _numbered_read("/workspace/styles.css", 11, 15, offset=11, total=20)
-    events += _numbered_read("/workspace/styles.css", 16, 20, offset=16, total=20)
+    events += _numbered_read("./styles.css", 1, 12, offset=1, total=20)
+    events += _numbered_read("workspace/styles.css", 5, 15, offset=5, total=20)
+    events += _numbered_read("/workspace/styles.css", 10, 20, offset=10, total=20)
+    events += _numbered_read("/workspace/styles.css", 1, 20, total=20)
+
+    result = StuckDetector().evaluate(events)
+
+    assert result.is_stuck is True
+    assert result.reason == "redundant_read_coverage"
+
+
+def test_redundant_read_coverage_allows_finite_full_overlap_tail_validation():
+    """H338 live shape: four reads, but no line is redundantly observed four times."""
+    events = _numbered_read("styles.css", 1, 624)
+    events += _numbered_read("styles.css", 190, 389, offset=190, limit=200, total=624)
+    events += _numbered_read("styles.css", 1, 624, total=624)
+    events += _numbered_read("styles.css", 190, 289, offset=190, limit=100, total=624)
+    events += _numbered_read("styles.css", 290, 624, offset=290, total=624)
+
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_retains_h336_multi_traversal_spin():
+    events = _numbered_read("index.html", 1, 328)
+    events += _numbered_read("index.html", 86, 185, offset=86, limit=100, total=328)
+    events += _numbered_read("index.html", 186, 285, offset=186, limit=100, total=328)
+    events += _numbered_read("index.html", 286, 328, offset=286, limit=50, total=328)
+    events += _numbered_read("index.html", 1, 328, total=328)
+    events += _numbered_read("index.html", 87, 286, offset=87, limit=200, total=328)
+    events += _numbered_read("index.html", 286, 328, offset=286, total=328)
+    events += _numbered_read("index.html", 1, 100, offset=1, limit=100, total=328)
 
     result = StuckDetector().evaluate(events)
 
@@ -275,12 +302,30 @@ def test_redundant_read_coverage_trips_on_varied_overlapping_offsets():
 
 def test_redundant_read_coverage_stays_below_threshold_at_three():
     events = _numbered_read("styles.css", 1, 20, total=20)
-    for start in (1, 6, 11):
-        events += _numbered_read(
-            "styles.css", start, start + 4, offset=start, total=20
-        )
+    for limit in (10, 11, 12):
+        events += _numbered_read("styles.css", 1, 5, offset=1, limit=limit, total=20)
 
     assert StuckDetector().evaluate(events).is_stuck is False
+
+
+def test_redundant_read_coverage_rearms_at_stuck_escape_then_retrips():
+    events = _numbered_read("styles.css", 1, 20, total=20)
+    for limit in (10, 11, 12, 13):
+        events += _numbered_read("styles.css", 1, 5, offset=1, limit=limit, total=20)
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
+
+    events.append(StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"))
+    listing = action(thought="change approach", tool="file_list", args={"path": "."})
+    events.extend(
+        [listing, observation(action_id=listing.id, tool="file_list", content="styles.css")]
+    )
+    assert StuckDetector().evaluate(events).is_stuck is False
+
+    for limit in (20, 21, 22):
+        events += _numbered_read("styles.css", 1, 5, offset=1, limit=limit, total=20)
+    assert StuckDetector().evaluate(events).is_stuck is False
+    events += _numbered_read("styles.css", 1, 5, offset=1, limit=23, total=20)
+    assert StuckDetector().evaluate(events).reason == "redundant_read_coverage"
 
 
 def test_redundant_read_coverage_allows_legitimate_pagination():
