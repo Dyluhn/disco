@@ -60,6 +60,12 @@ FROZEN_FILES: tuple[str, ...] = (
     "scripts/closeout_pytest_report.py",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
     "packages/agent-server/tests/integration/_closeout_live_support.py",
+    # acceptance-v5: the capture/structural-rendering regression suite the 2026-07-17
+    # owner rulings (A / E) require — proves the exec_env exemption is narrow, ordinary
+    # recorded output is still swept, and the structural rendering excludes ONLY
+    # externally supplied env (an in-yaml secret still fails). Frozen so the ruled
+    # guarantees cannot be silently weakened.
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py",
     ".github/workflows/export-track1-closeout.yml",
     "docs/export-track1-closeout-work-orders.md",
     # The dedicated tsconfig for the G11 nullable-binding compile lane (acceptance-v4).
@@ -73,7 +79,7 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v4"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v5"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -587,11 +593,66 @@ RED_TESTS: tuple[dict[str, object], ...] = (
 # `pytest --collect-only` (the machine-truth python_closeout_inventory).
 _R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
 _R0_TOOLS = "packages/tools/tests/export_track1_closeout"
+REMEDIATION_V5: dict[str, object] = {
+    "authored": "2026-07-17",
+    "authority": (
+        "Owner adjudication of 2026-07-17 (recovery campaign, evidence archive "
+        "2026-07-17-export-track1-recovery/owner-adjudication/): ruling A (exec_env "
+        "capture exemption), ruling B option (a) (§12.6 drives the generated app's "
+        "documented session-auth model: register via Bearer ADMIN_TOKEN -> login -> "
+        "session cookie -> record write -> unauth 401 -> restart read-back -> "
+        "down/up persistence + idempotent migration), ruling E (topology rendering is "
+        "the STRUCTURAL model via `config --no-interpolate --no-env-resolution "
+        "--format json`, kept recorded and swept; `config --quiet` unchanged on the "
+        "real .env). The generator/AppKit RBAC/session auth were NOT modified."
+    ),
+    "frozen_byte_changes_v4_to_v5": {
+        "packages/agent-server/tests/integration/_closeout_live_support.py": {
+            "before_v4": "ca596d4708bc78742abcc641f95391c9f0015e315410b27ccf45373d15b4c3ba",
+            "after_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
+            "why": "rulings A + E: compose(record=) with exec_env as the SOLE "
+            "record=False caller (probe asserts its own success); config_json "
+            "renders the structural model; http_response/session_cookie_from "
+            "helpers; appkit_record_plan additionally derives a valid role",
+        },
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+            "before_v4": "42dbd6c14ad689c89c9287e410d04874dc0f9b03499b51bfd2da05b85d09a546",
+            "after_v5": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
+            "why": "ruling B(a): AppKit §12.6 exercises the documented session-auth "
+            "model end-to-end; docstrings updated to match",
+        },
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
+            "before_v4": None,
+            "after_v5": "6f016245999a5c26cb665bec3bf1276a3a813c551528916ddb0fe4c32315a708",
+            "why": "NEW frozen file: the six ruled regressions for A + E",
+        },
+        "scripts/gen_closeout_acceptance_manifest.py": {
+            "before_v4": "4637fceff6d622d351cbf3fb89ede4d5ed709a3b1ef8867f297d925c96669fd8",
+            "after_v5": "(self-referential: see the files map of this manifest)",
+            "why": "acceptance-v5 authoring: tag, this remediation_v5 record, and the "
+            "new frozen regression file",
+        },
+    },
+    "live_lane_result_at_authoring": (
+        "frozen R7 lane 7 passed / 0 failed on Docker 29.6.1 / Compose v5.3.1 "
+        "(express, fastapi, imported-node, vite-static, appkit, public-build-env vite, "
+        "availability)"
+    ),
+    "ratification_status": (
+        "acceptance-v5 is a CANDIDATE for independent human review. No human has "
+        "reviewed, signed, or protected any v5 tag; ratification succeeds only when a "
+        "human creates the signed annotated export-track1-closeout-acceptance-v5 tag "
+        "and publishes it to the protected authoritative remote."
+    ),
+}
+
+
 REMEDIATION_R0: dict[str, object] = {
     "acceptance_version": "v4",
     "base_candidate": "581d1fbe",
     "plan_doc": "docs/export-track1-closeout-remediation-plan.md",
     "ratification_status": (
+        "[HISTORICAL R0 RECORD — superseded by acceptance-v5; see remediation_v5.] "
         "acceptance-v4 is a CANDIDATE for independent human review. No human has reviewed, "
         "signed, or protected any acceptance tag in this campaign; v2/v3 are annotated but "
         "unsigned, local-only, and not protected; v1 was lightweight. R0 is NOT complete "
@@ -872,8 +933,9 @@ def build_manifest(root: Path) -> dict[str, object]:
         "G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and "
         "the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend "
         "proving set, the frontend proving reds, the G11 compile red + evidence-hygiene "
-        "regression, the ratification_status (acceptance-v4 is a CANDIDATE — no human has "
-        "signed/protected any tag), and the R4-activated / record-only / ratified-baseline "
+        "regression, the ratification_status (the v4 candidacy is SUPERSEDED by "
+        "acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and "
+        "the R4-activated / record-only / ratified-baseline "
         "ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
         "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
@@ -891,6 +953,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "frontend_closeout_inventory": frontend_closeout_inventory(root),
         "red_tests": list(RED_TESTS),
         "remediation_r0": REMEDIATION_R0,
+        "remediation_v5": REMEDIATION_V5,
     }
 
 
