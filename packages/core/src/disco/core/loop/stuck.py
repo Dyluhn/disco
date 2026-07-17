@@ -41,6 +41,7 @@ from ..workspace_paths import strip_redundant_workspace_prefix
 from .signals import (
     _NON_PRODUCTIVE_TOOLS,
     _NONCRITICAL_FAILURE_TOOLS,
+    READ_CHURN_NUDGE_DIAGNOSTIC,
 )
 
 # F6 — tools whose ActionEvents count as "patch attempts" for the per-file
@@ -110,6 +111,10 @@ _PROBE_SPIN_TOOLS = _NO_PROGRESS_PROBE_TOOLS | frozenset(
 # line contract; opaque/binary/malformed observations never contribute.
 _FILE_READ_NUMBERED_LINE_RE = re.compile(r"^\s*(\d+)\t(.*)$", re.MULTILINE)
 _FILE_READ_HEADER_RE = re.compile(r"^\[lines\s+\d+-\d+\s+of\s+(\d+)(?:[; (\]\u2014])")
+_FILE_READ_RANGE_HEADER_RE = re.compile(
+    r"\[lines\s+(\d+)-(\d+)\s+of\s+(\d+)"
+    r"(?:(?:; read more with offset=(\d+))|( \u2014 offset past end of file))?\]"
+)
 
 # H275 — structured verifier outcomes are semantic progress signals, not ordinary
 # successful tool executions.  The live AppKit run varied reads/lists/status calls
@@ -370,6 +375,8 @@ class StuckDetector:
             return "alternating_actions"  # pattern 4
         if self._pure_repeat(legacy_recent):
             return "pure_repeat"  # W1 pattern 5
+        if self._redundant_read_after_churn_nudge(recent):
+            return "redundant_read_after_churn_nudge"
         if self._redundant_read_coverage(recent):
             return "redundant_read_coverage"
         if self._probe_spin(recent):
@@ -387,16 +394,234 @@ class StuckDetector:
         return normalized if normalized not in ("", ".") else None
 
     @staticmethod
-    def _numbered_read_lines(content: str) -> dict[int, str]:
-        return {
-            int(match.group(1)): match.group(2)
-            for match in _FILE_READ_NUMBERED_LINE_RE.finditer(content)
-        }
+    def _bounded_decimal(raw: str) -> int | None:
+        if len(raw) > 18:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _numbered_read_lines(cls, content: str) -> dict[int, str] | None:
+        lines: dict[int, str] = {}
+        for match in _FILE_READ_NUMBERED_LINE_RE.finditer(content):
+            number = cls._bounded_decimal(match.group(1))
+            if number is None:
+                return None
+            lines[number] = match.group(2)
+        return lines
 
     @staticmethod
     def _read_total(content: str) -> int | None:
         match = _FILE_READ_HEADER_RE.match(content)
-        return int(match.group(1)) if match is not None else None
+        if match is None:
+            return None
+        raw = match.group(1)
+        return StuckDetector._bounded_decimal(raw)
+
+    @staticmethod
+    def _read_range(content: str) -> tuple[int, int, int] | None:
+        header = content.splitlines()[0] if content else ""
+        match = _FILE_READ_RANGE_HEADER_RE.fullmatch(header)
+        if match is None:
+            return None
+        start = StuckDetector._bounded_decimal(match.group(1))
+        end = StuckDetector._bounded_decimal(match.group(2))
+        total = StuckDetector._bounded_decimal(match.group(3))
+        more_offset = (
+            StuckDetector._bounded_decimal(match.group(4))
+            if match.group(4) is not None
+            else None
+        )
+        # Observation bytes are untrusted detector input. The shared bounded
+        # parser prevents Python's max-digit guard (or huge arbitrary-precision
+        # integers) from turning malformed evidence into a loop crash/CPU sink.
+        if start is None or end is None or total is None:
+            return None
+        if match.group(4) is not None and more_offset is None:
+            return None
+        past_eof = match.group(5) is not None
+        if more_offset is not None and (end >= total or more_offset != end + 1):
+            return None
+        if past_eof and not (total > 0 and start > total and end == total):
+            return None
+        return (start, end, total)
+
+    @staticmethod
+    def _contiguous_numbered_range(numbers: list[int], start: int, end: int) -> bool:
+        expected_count = end - start + 1
+        return (
+            expected_count >= 0
+            and len(numbers) == expected_count
+            and all(number == start + index for index, number in enumerate(numbers))
+        )
+
+    def _redundant_read_after_churn_nudge(self, events: list[Event]) -> bool:
+        """Escalate an ignored typed read-churn instruction.
+
+        ``read_churn_nudge`` explicitly permits one whole-file read and then
+        requires action.  H340 obeyed the first clause, immediately resumed
+        byte-identical slices of that same file, and stayed nominally
+        "progressing" until the hard cap.  Bind this breaker to the trusted
+        environment marker and exact normalized path so unnudged finite H338
+        validation remains byte-for-byte unaffected.
+
+        Judge the final streak rather than returning on a historical prefix:
+        changed bytes, a confirmed productive action, or the one-shot
+        ``stuck_escape`` can recover later in the same replay window.
+        """
+        actions: dict[str, ActionEvent] = {}
+        nudge_path: str | None = None
+        baseline_lines: dict[int, str] | None = None
+        baseline_total: int | None = None
+        violated = False
+
+        for event in events:
+            if isinstance(event, ActionEvent) and event.tool_call is not None:
+                actions[event.id] = event
+                continue
+            if (
+                isinstance(event, MessageEvent)
+                and event.source == EventSource.ENVIRONMENT
+                and event.meta.get("diagnostic") == READ_CHURN_NUDGE_DIAGNOSTIC
+                and type(event.meta.get("count")) is int
+                and int(event.meta["count"]) >= 5
+            ):
+                path = self._normalized_read_path(event.meta.get("path"))
+                if path is not None:
+                    # Only actions emitted after the trusted marker may satisfy
+                    # its one-whole-read allowance. This is both sequence-safe
+                    # for persisted events and deterministic for unit events
+                    # whose optional seq has not been assigned by EventStore.
+                    actions.clear()
+                    nudge_path = path
+                    baseline_lines = None
+                    baseline_total = None
+                    violated = False
+                continue
+            if isinstance(event, StatusEvent) and event.detail == "stuck_escape":
+                # Preserve the trusted whole-file baseline, but grant the one
+                # existing escape attempt. A fresh redundant read re-trips.
+                violated = False
+                continue
+            if (
+                not isinstance(event, ObservationEvent)
+                or event.source != EventSource.ENVIRONMENT
+                or nudge_path is None
+            ):
+                continue
+            result = event.tool_result
+            action = actions.get(event.action_id or "")
+            paired = (
+                action is not None
+                and action.source == EventSource.AGENT
+                and action.tool_call is not None
+                and action.tool_call.tool_name == result.tool_name
+            )
+            if (
+                paired
+                and result.success
+                and result.tool_name not in _NON_PRODUCTIVE_TOOLS
+            ):
+                nudge_path = None
+                baseline_lines = None
+                baseline_total = None
+                violated = False
+                continue
+            if not result.success or result.tool_name != "file_read":
+                continue
+            if (
+                not paired
+                or action is None
+                or action.tool_call is None
+                or action.tool_call.tool_name != "file_read"
+                or self._normalized_read_path(action.tool_call.arguments.get("path"))
+                != nudge_path
+            ):
+                continue
+            lines = self._numbered_read_lines(result.content)
+            if lines is None:
+                continue
+            read_range = self._read_range(result.content)
+            if read_range is None:
+                continue
+            start, end, total = read_range
+            body = result.content.splitlines()[1:]
+            numbered_matches = [
+                _FILE_READ_NUMBERED_LINE_RE.fullmatch(line) for line in body
+            ]
+            parsed_sequence = [
+                self._bounded_decimal(match.group(1))
+                for match in numbered_matches
+                if match is not None
+            ]
+            body_valid = all(match is not None for match in numbered_matches) and all(
+                number is not None for number in parsed_sequence
+            )
+            numbered_sequence = [number for number in parsed_sequence if number is not None]
+            if baseline_lines is None:
+                args = action.tool_call.arguments
+                whole_request = "offset" not in args and "limit" not in args
+                whole_result = (
+                    total == 0
+                    and start == 1
+                    and end == 0
+                    and body_valid
+                    and not numbered_sequence
+                ) or (
+                    total > 0
+                    and start == 1
+                    and end == total
+                    and body_valid
+                    and self._contiguous_numbered_range(numbered_sequence, 1, total)
+                )
+                if not whole_request:
+                    violated = True
+                elif whole_result:
+                    baseline_lines = dict(lines)
+                    baseline_total = total
+                continue
+            structurally_valid = (
+                total == 0
+                and start >= 1
+                and 0 <= end < start
+                and body_valid
+                and not numbered_sequence
+            ) or (
+                total > 0
+                and body_valid
+                and (
+                    (
+                        1 <= start <= end <= total
+                        and self._contiguous_numbered_range(numbered_sequence, start, end)
+                    )
+                    or (
+                        1 <= start <= total
+                        and end == start - 1
+                        and not numbered_sequence
+                    )
+                    or (start > total and end == total and not numbered_sequence)
+                )
+            )
+            if not structurally_valid:
+                continue
+            if total != baseline_total or any(
+                baseline_lines.get(number) != text for number, text in lines.items()
+            ):
+                # The bytes/extent changed despite no observed product mutation.
+                # Treat that external change as recovery; stale baseline evidence
+                # may not convict the new content.
+                nudge_path = None
+                baseline_lines = None
+                baseline_total = None
+                violated = False
+                continue
+            # A successful empty/header-only read at the unchanged total, or any
+            # byte-identical subset of the whole baseline, ignored "then act".
+            violated = True
+
+        return violated
 
     def _redundant_read_coverage(self, events: list[Event]) -> bool:
         """Detect successful same-file reads that add no content knowledge.
@@ -451,6 +676,8 @@ class StuckDetector:
                 continue
             path = self._normalized_read_path(action.tool_call.arguments.get("path"))
             lines = self._numbered_read_lines(result.content)
+            if lines is None:
+                continue
             total = self._read_total(result.content)
             if path is None or total is None:
                 continue
