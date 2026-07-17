@@ -4612,6 +4612,14 @@ class _RejectedKillProgressTransport(_ProgressTransport):
         return await super().post_json(path, body)
 
 
+class _SandboxIdProgressTransport(_ProgressTransport):
+    async def post_json(self, path, body):
+        status_code, data = await super().post_json(path, body)
+        if path.endswith("/kill"):
+            data = {**data, "sandbox_instance_ids": ["sbx_progress_timeout"]}
+        return status_code, data
+
+
 @pytest.mark.asyncio
 async def test_progress_aware_wait_does_not_cut_off_a_progressing_build(tmp_path):
     # The must_plan repro at the unit level: a TINY inactivity window (a blind wall-clock
@@ -4659,7 +4667,7 @@ async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
     # NEVER frozen mid-flight and mislabeled a product BUILD_DID_NOT_FINISH.
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log()[:-1])
-    transport = _ProgressTransport(db, finish_after=None)
+    transport = _SandboxIdProgressTransport(db, finish_after=None)
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
     record = await run_once(
         client,
@@ -4671,6 +4679,7 @@ async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
         commit="abc",
         timeout_s=10.0,  # generous inactivity — never trips while events advance
         hard_cap_s=0.2,  # tiny ceiling — bounds the never-terminating run
+        parallel_workers=10,
     )
     assert record["status"] == "INVALID_RUN"
     assert record["code"] == "RUN_TIMEOUT_WHILE_PROGRESSING"
@@ -4708,6 +4717,10 @@ async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
     assert diagnostic["boundary_source"] == "durable_killed_status"
     assert isinstance(diagnostic["boundary_seq"], int)
     assert isinstance(diagnostic["boundary_epoch"], (int, float))
+    assert diagnostic["sandbox_instance_ids"] == ["sbx_progress_timeout"]
+    product = json.loads((conv / "product-evidence.json").read_text(encoding="utf-8"))
+    assert product["cleanup"]["scope"] == "conversation"
+    assert product["cleanup"]["container_orphans"] == 0
     assert verify_evidence_unchanged(base, manifest).intact
 
 
@@ -6755,6 +6768,119 @@ async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_i
         "volume_orphans": 1,
         "volume_scope": "global_dangling",
     }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_progress_timeout_uses_preserved_kill_id_in_parallel(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman(
+        monkeypatch,
+        ps_stdout="\n".join(
+            ["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]
+        ),
+        volume_stdout="",
+        dangling_stdout="",
+    )
+    run = _cleanup_run({"status": "IDLE", "extras": {}})
+    run.diagnostic_stop = "progressing_hard_cap"
+    run.diagnostic_release_confirmed = True
+    run.product_evidence = {
+        "diagnostic_stop": {
+            "kind": "progressing_hard_cap",
+            "sandbox_instance_ids": ["sbx_this_conv"],
+        }
+    }
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        cast(DiscoApiClient, _CleanupKillClient()),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=[],
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+        allow_global_cleanup_fallback=False,
+    )
+
+    assert ev["cleanup"] == {
+        "orphans": 0,
+        "workspace_released": True,
+        "scope": "conversation",
+        "container_orphans": 0,
+        "volume_orphans": 0,
+        "volume_scope": "conversation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_parallel_without_id_refuses_global_attribution(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman(
+        monkeypatch,
+        ps_stdout="\n".join(
+            ["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]
+        ),
+        volume_stdout="",
+        dangling_stdout="",
+    )
+    run = _cleanup_run({"status": "IDLE", "extras": {}})
+    run.diagnostic_stop = "progressing_hard_cap"
+    run.diagnostic_release_confirmed = True
+    timeline: list[str] = []
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        cast(DiscoApiClient, _CleanupKillClient()),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=timeline,
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+        allow_global_cleanup_fallback=False,
+    )
+
+    assert "cleanup" not in ev
+    assert any("refused contaminated global container delta" in line for line in timeline)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallel", [False, True])
+async def test_cleanup_scoped_volume_probe_failure_omits_adjudication(
+    monkeypatch, parallel
+):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman(monkeypatch, ps_stdout="", volume_stdout="", dangling_stdout="")
+    monkeypatch.setattr(_run_mod, "_disco_volume_names", lambda: None)
+    run = _cleanup_run(
+        {"status": "FINISHED", "extras": {"sandbox_instance_ids": ["sbx_this_conv"]}}
+    )
+    timeline: list[str] = []
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        cast(DiscoApiClient, _CleanupKillClient()),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=timeline,
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+        allow_global_cleanup_fallback=not parallel,
+    )
+
+    assert "cleanup" not in ev
+    assert any("applicable volume probe was unavailable" in line for line in timeline)
 
 
 @pytest.mark.asyncio

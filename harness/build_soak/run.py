@@ -884,6 +884,11 @@ async def drive_scenario(
                     "kill_acknowledged": kill_acknowledged,
                     "kill_response_epoch": kill_response_epoch,
                     "pre_stop_watermark_trusted": pre_stop_watermark_trusted,
+                    # The kill route returns ids before runtime teardown removes
+                    # them from subsequent state reads. Preserve that one scoped
+                    # attribution source so a parallel wave never falls back to
+                    # counting other trials' live containers as this run's leaks.
+                    "sandbox_instance_ids": _extract_sandbox_instance_ids(kill_response),
                 }
             },
             diagnostic_stop="progressing_hard_cap",
@@ -1959,6 +1964,7 @@ async def _collect_terminal_cleanup_evidence(
     timeline: list[str],
     baseline_dangling_volumes: set[str] | None = None,
     grace_s: float = 8.0,
+    allow_global_cleanup_fallback: bool = True,
 ) -> dict[str, Any]:
     """[REL-5] Make terminal cleanup ADJUDICATED instead of SKIPPED on the headless soak. The
     build has reached terminal and its §6 evidence is already frozen into `run`; here we measure
@@ -2085,7 +2091,11 @@ async def _collect_terminal_cleanup_evidence(
     # after the container is gone. If the server version cannot expose ids, keep the old global
     # baseline delta as the serial/fail-closed fallback; for unnamed image VOLUME leaks, use the
     # newly-dangling volume delta from the run window.
-    sandbox_ids = _extract_sandbox_instance_ids(getattr(run, "state_final", {}) or {}, release_resp)
+    sandbox_ids = _extract_sandbox_instance_ids(
+        getattr(run, "state_final", {}) or {},
+        release_resp,
+        ev.get("diagnostic_stop"),
+    )
     if sandbox_ids and after_container_names is not None:
         container_orphans = _scoped_disco_container_count(after_container_names, sandbox_ids)
         named_volume_orphans = (
@@ -2096,38 +2106,62 @@ async def _collect_terminal_cleanup_evidence(
         unnamed_volume_orphans = _new_dangling_volume_count(
             baseline_dangling_volumes, after_dangling_volumes, exclude_disco_named=True
         )
-        volume_parts = [
-            count for count in (named_volume_orphans, unnamed_volume_orphans) if count is not None
-        ]
-        volume_orphans = sum(volume_parts) if volume_parts else None
-        total_orphans = (
-            container_orphans + volume_orphans if volume_orphans is not None else container_orphans
+        if not allow_global_cleanup_fallback:
+            # A parallel trial cannot own a host-global unnamed-volume delta.
+            # Keep exact sandbox-id named volumes, but refuse contaminated
+            # attribution from siblings that may finish concurrently.
+            unnamed_volume_orphans = None
+        volume_measurement_complete = named_volume_orphans is not None and (
+            not allow_global_cleanup_fallback or unnamed_volume_orphans is not None
         )
-        ev["cleanup"] = {
-            "orphans": total_orphans,
-            "workspace_released": released_ok and volume_orphans is not None and total_orphans == 0,
-            "scope": "conversation",
-            "container_orphans": container_orphans,
-            "volume_orphans": volume_orphans,
-            "volume_scope": "conversation",
-        }
-    elif baseline_containers is not None and after_container_names is not None:
+        if volume_measurement_complete:
+            volume_orphans = int(named_volume_orphans or 0) + int(
+                unnamed_volume_orphans or 0
+            )
+            total_orphans = container_orphans + volume_orphans
+            ev["cleanup"] = {
+                "orphans": total_orphans,
+                "workspace_released": released_ok and total_orphans == 0,
+                "scope": "conversation",
+                "container_orphans": container_orphans,
+                "volume_orphans": volume_orphans,
+                "volume_scope": "conversation",
+            }
+        else:
+            timeline.append(
+                "REL-5 scoped cleanup evidence incomplete: an applicable volume "
+                "probe was unavailable; omitted cleanup adjudication"
+            )
+    elif (
+        allow_global_cleanup_fallback
+        and baseline_containers is not None
+        and after_container_names is not None
+    ):
         after_containers = len(after_container_names)
         container_orphans = max(0, after_containers - baseline_containers)
         volume_orphans = _new_dangling_volume_count(
             baseline_dangling_volumes, after_dangling_volumes, exclude_disco_named=False
         )
-        total_orphans = (
-            container_orphans + volume_orphans if volume_orphans is not None else container_orphans
+        if volume_orphans is not None:
+            total_orphans = container_orphans + volume_orphans
+            ev["cleanup"] = {
+                "orphans": total_orphans,
+                "workspace_released": released_ok and total_orphans == 0,
+                "scope": "global",
+                "container_orphans": container_orphans,
+                "volume_orphans": volume_orphans,
+                "volume_scope": "global_dangling",
+            }
+        else:
+            timeline.append(
+                "REL-5 global cleanup evidence incomplete: dangling-volume probe "
+                "was unavailable; omitted cleanup adjudication"
+            )
+    elif not allow_global_cleanup_fallback:
+        timeline.append(
+            "REL-5 cleanup attribution unavailable: parallel run exposed no sandbox "
+            "instance id; refused contaminated global container delta"
         )
-        ev["cleanup"] = {
-            "orphans": total_orphans,
-            "workspace_released": released_ok and volume_orphans is not None and total_orphans == 0,
-            "scope": "global",
-            "container_orphans": container_orphans,
-            "volume_orphans": volume_orphans,
-            "volume_scope": "global_dangling",
-        }
 
     with contextlib.suppress(Exception):
         run.product_evidence = ev  # CollectedRun is a plain dataclass — attach the populated slices
@@ -2150,6 +2184,7 @@ async def run_once(
     timeout_s: float,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
     require_inspect_trace: bool = False,
+    parallel_workers: int = 1,
 ) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     # §9 pre-create infra gate (the ONLY infra source). No conversation exists yet, so a
@@ -2194,6 +2229,7 @@ async def run_once(
                         relay_log=_relay_log_path(),
                         timeline=frozen.timeline,
                         baseline_dangling_volumes=baseline_dangling_volumes,
+                        allow_global_cleanup_fallback=parallel_workers <= 1,
                     )
                 except Exception as cleanup_exc:  # noqa: BLE001 — retain partial dossier
                     frozen.timeline.append(
@@ -2363,6 +2399,7 @@ async def run_once(
                 relay_log=_relay_log_path(),
                 timeline=getattr(run, "timeline", []),
                 baseline_dangling_volumes=baseline_dangling_volumes,
+                allow_global_cleanup_fallback=parallel_workers <= 1,
             )
         except Exception as exc:  # noqa: BLE001
             ev = {}
@@ -2763,6 +2800,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     timeout_s=args.timeout,
                     hard_cap_s=args.hard_cap,
                     require_inspect_trace=require_inspect,
+                    parallel_workers=resolved_workers,
                 )
         except TimeoutError as exc:
             classification = _infra_failure_record(
