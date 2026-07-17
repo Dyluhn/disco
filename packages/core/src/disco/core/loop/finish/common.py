@@ -37,7 +37,7 @@ from ...contract.export_render import (
     latest_export_render_facts,
     latest_export_render_index,
 )
-from ...dod import FileExistsPredicate
+from ...dod import DoDSpec, FileExistsPredicate, predicate_fingerprint, predicate_fingerprints
 from ...dod_evaluator import DoDEvaluator, HttpProbeResult
 from ...env import disco_env
 from ...events import (
@@ -51,6 +51,7 @@ from ...events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
+    PlanVerifierFailure,
     StatusEvent,
     ToolCall,
     VerifierShadowEvent,
@@ -96,13 +97,9 @@ _LOG = logging.getLogger("disco.loop")
 # auto-stripped (bounded by _finish_verify_strips so it can't be gamed as a free finish).
 _FINISH_VERIFY_CAP = 3
 
-# C1c DoD-gate refusal cap. The external Definition-of-Done gate refuses `finish`
-# while the spec is unmet, but — exactly like the verify cap above — it MUST be
-# bounded: an agent that cannot satisfy the external DoD would otherwise be
-# trapped in an unbounded refuse-and-continue loop, accumulating events without
-# end (this is the OOM the uncapped first cut caused). After N consecutive
-# refusals the gate RELEASES (finish lands) with a LOUD warning; the prior
-# refusal events remain the visible audit trail.
+# C1c external DoD retry cap. External authority never auto-releases: once
+# the bounded repair budget is exhausted, the run pauses fail-closed for user
+# review without weakening the acceptance boundary or looping forever.
 _DOD_REFUSAL_CAP = 3
 
 # REL-RC-O — quoted user literals are hard content floors at finish, but the
@@ -434,15 +431,15 @@ def _safe_deliverable_file_path(path: str, *, app_root: bool = False) -> str | N
 
 def _plan_file_exists_paths(events: list[Event]) -> list[str]:
     out: list[str] = []
-    for ev in events:
-        if not isinstance(ev, PlanEvent):
-            continue
-        for step in ev.steps:
-            dc = getattr(step, "done_condition", None)
-            if isinstance(dc, FileExistsPredicate):
-                p = _safe_deliverable_file_path(dc.path)
-                if p is not None:
-                    out.append(p)
+    plan = signals.latest_approved_plan(events)
+    if plan is None:
+        return out
+    for step in plan.steps:
+        dc = step.done_condition
+        if isinstance(dc, FileExistsPredicate):
+            p = _safe_deliverable_file_path(dc.path)
+            if p is not None:
+                out.append(p)
     return out
 
 

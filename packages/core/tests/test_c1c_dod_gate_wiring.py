@@ -1,22 +1,4 @@
-"""C1c DoD finish-gate WIRING — the gate is now armed from the plan's own
-machine-checkable `file_exists` done_conditions on plan approval.
-
-Before this, `set_dod_spec` had no production caller, so `get_dod_spec` was
-always None and `finish_dod_gate_passed` was a permanent no-op (the agent
-could declare "done" with the requested deliverables absent). This wires
-`AgentLoop._arm_dod_from_plan()` at every plan-approval exit so `finish` is
-blocked until the files the model said it would create actually exist —
-the strongest anti-gaming check that needs no human (Devin/Kiro/Terminal-Bench
-all anchor "done" to externally-checkable state, never to self-assessment).
-
-Scope of the slice under test (deliberately conservative):
-  * file_exists ONLY (command/http_ok deferred — infra-false-block ambiguity).
-  * empty-guard: a plan with no file_exists predicate arms NOTHING (an empty
-    spec would deterministic-block; we keep the gate dark instead).
-  * write-once: a revision's re-arm is swallowed (the first plan's DoD holds).
-
-Mirrors the fakes harness in test_c18_plan_step_done_condition.py.
-"""
+"""C1c/H368 wiring for revision-scoped plan verification conditions."""
 
 from __future__ import annotations
 
@@ -30,6 +12,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import OperatingMode
+from disco.core.loop import signals
 from loop_fakes import ScriptedAgent, action_step, build_loop
 
 CID = "conv-c1c"
@@ -46,7 +29,10 @@ def _dod_refused(events: list) -> bool:
     return any(
         isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
-        and "Definition-of-Done evaluator found" in e.message.content
+        and (
+            "Definition-of-Done evaluator found" in e.message.content
+            or "plan's verification conditions failed" in e.message.content
+        )
         for e in events
     )
 
@@ -102,9 +88,7 @@ def _final_status(events: list):
 
 
 @pytest.mark.asyncio
-async def test_arms_dod_spec_from_file_exists_on_approval(tmp_path):
-    """A plan with a file_exists done_condition arms a DoDSpec on approval —
-    the previously-dark gate is now wired."""
+async def test_approves_file_exists_as_plan_owned_without_external_copy(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "index.html").write_text("<h1>home</h1>")  # satisfy it so the run finishes
@@ -126,20 +110,19 @@ async def test_arms_dod_spec_from_file_exists_on_approval(tmp_path):
             _finish_call(),
         ]
     )
-    _events, store = await _run(agent, sbx)
-    spec = await store.get_dod_spec(CID)
-    assert spec is not None, "the gate must be armed from the plan's file_exists condition"
-    assert [p.path for p in spec.predicates] == ["index.html"]
-    assert all(getattr(p, "kind", None) == "file_exists" for p in spec.predicates)
+    events, store = await _run(agent, sbx)
+    assert await store.get_external_dod_spec(CID) is None
+    plan = signals.latest_approved_plan(events)
+    assert plan is not None
+    assert [step.done_condition.path for step in plan.steps] == ["index.html"]
 
 
 @pytest.mark.asyncio
 async def test_blocks_finish_when_declared_file_missing(tmp_path):
     """The model declares it will create index.html, then finishes WITHOUT
-    creating it → the armed gate REFUSES finish and names the missing deliverable.
-    This is the declare-then-skip hole closed by construction. (After the bounded
-    refusal cap the gate releases to avoid trapping a stuck run forever — that
-    safety-valve is correct and covered elsewhere; here we assert the BLOCK fired.)"""
+    creating it → the current plan verifier REFUSES finish and names the missing
+    deliverable. Repeated unchanged failure enters bounded replan/STUCK recovery;
+    it never turns the unmet predicate into a pass."""
     ws = tmp_path / "ws"
     ws.mkdir()  # index.html deliberately NOT planted
     sbx = _FakeSandbox(str(ws))
@@ -161,13 +144,14 @@ async def test_blocks_finish_when_declared_file_missing(tmp_path):
         ]
     )
     events, store = await _run(agent, sbx)
-    assert await store.get_dod_spec(CID) is not None  # gate was armed
+    assert signals.latest_approved_plan(events) is not None
     assert _dod_refused(events), "finish must be REFUSED while the declared deliverable is missing"
     # the refusal must NAME the unmet predicate so the model knows what to fix
     refusal = next(
         e
         for e in events
-        if isinstance(e, MessageEvent) and "Definition-of-Done evaluator found" in e.message.content
+        if isinstance(e, MessageEvent)
+        and "plan's verification conditions failed" in e.message.content
     )
     assert "index.html" in refusal.message.content
 
@@ -225,12 +209,7 @@ async def test_empty_guard_no_predicate_leaves_gate_dark(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_arms_after_restart_from_persisted_plan_event(tmp_path):
-    """RESUME DURABILITY (codex P1): a process restart between submit_plan and
-    approval loses the in-memory `_plan_step_predicates` map. Because the
-    done_condition is now persisted ON the PlanEvent, a FRESH loop rebuilt from
-    the same store still arms the gate at approval — read off the durable event,
-    not the lost map."""
+async def test_approved_plan_authority_reconstructs_after_restart(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     (ws / "index.html").write_text("<h1>home</h1>")
@@ -264,22 +243,20 @@ async def test_arms_after_restart_from_persisted_plan_event(tmp_path):
     )
     assert loop2._plan_step_predicates == {}  # the in-memory map is genuinely gone
     await loop2.approve_plan()
-    spec = await store.get_dod_spec(CID)
-    assert spec is not None, "the gate must re-arm from the persisted PlanEvent after restart"
-    assert [p.path for p in spec.predicates] == ["index.html"]
+    events = await store.get_events(CID)
+    plan = signals.latest_approved_plan(events)
+    assert plan is not None
+    assert [step.done_condition.path for step in plan.steps] == ["index.html"]
+    assert await store.get_external_dod_spec(CID) is None
 
 
 @pytest.mark.asyncio
-async def test_revision_monotonically_extends_the_dod(tmp_path):
-    """v2: a mid-build steer that ADDS scope (a revised plan with a new
-    file-producing step) EXTENDS the armed DoD to require the new deliverable —
-    the gate now enforces the STEERED scope, not just the first plan's. The
-    extension is monotonic (the original deliverable stays required)."""
+async def test_approved_revision_replaces_plan_predicates_instead_of_unioning(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
     loop, store = build_loop(ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id=CID)
-    # First plan → arms {index.html}.
+    # First approved plan requires index.html.
     p1 = loop._plan_from_args(
         {
             "summary": "v1",
@@ -293,8 +270,7 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
         [],
     )
     await loop._emit(p1)
-    await loop._arm_dod_from_plan()
-    assert {p.path for p in (await store.get_dod_spec(CID)).predicates} == {"index.html"}
+    await loop._emit(await loop._plan_approval_status(p1, await store.get_events(CID)))
 
     # Revision (the steer "also add a Contact page") → EXTENDS to require contact.html.
     events = await store.get_events(CID)
@@ -311,12 +287,16 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
         },
         events,
     )
+    # A replacement may remove the old plan-owned predicate; it does not union.
+    p2 = p2.model_copy(update={"steps": [p2.steps[1]]})
     await loop._emit(p2)
-    await loop._arm_dod_from_plan()
-    assert {p.path for p in (await store.get_dod_spec(CID)).predicates} == {
-        "index.html",
-        "contact.html",
-    }, "the steered deliverable (contact.html) must now be required at finish"
+    await loop._emit(await loop._plan_approval_status(p2, await store.get_events(CID)))
+    events = await store.get_events(CID)
+    current = signals.latest_approved_plan(events)
+    assert current is not None and current.id == p2.id
+    assert [step.done_condition.path for step in current.steps] == ["contact.html"]
+    assert any(isinstance(event, type(p1)) and event.id == p1.id for event in events)
+    assert await store.get_external_dod_spec(CID) is None
 
 
 @pytest.mark.asyncio
@@ -357,10 +337,7 @@ async def test_infra_failure_blocks_finish_with_visible_unverified_reason(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_command_predicate_arms_in_v2(tmp_path):
-    """v2.1: a `command` done_condition NOW arms the gate (the evaluator's infra-vs-task
-    channel makes it safe — a denied/unrunnable command releases, only a ran-and-failed
-    command blocks). The predicate uses the real `cmd` field."""
+async def test_command_predicate_is_current_plan_owned_condition(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
@@ -381,7 +358,8 @@ async def test_command_predicate_arms_in_v2(tmp_path):
             _finish_call(),
         ]
     )
-    _events, store = await _run(agent, sbx)
-    spec = await store.get_dod_spec(CID)
-    assert spec is not None, "command predicates now arm the gate (v2.1)"
-    assert [getattr(p, "kind", None) for p in spec.predicates] == ["command"]
+    events, store = await _run(agent, sbx)
+    plan = signals.latest_approved_plan(events)
+    assert plan is not None
+    assert [getattr(step.done_condition, "kind", None) for step in plan.steps] == ["command"]
+    assert await store.get_external_dod_spec(CID) is None

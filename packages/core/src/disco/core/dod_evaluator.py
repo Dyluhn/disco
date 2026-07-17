@@ -23,7 +23,7 @@ and it does NOT receive:
   * any LLM "self-justify" string the agent may have produced.
 
 To grade a predicate the evaluator re-runs the predicate's own check from
-scratch (`os.path.exists`, a fresh `subprocess.run`, a fresh `urllib` GET).
+scratch (`os.path.exists`, a fresh bounded subprocess, a fresh `urllib` GET).
 The verdict records WHAT was checked and the per-predicate result, so the
 audit trail can answer "did the judge actually look?" without trusting the
 agent's prose.
@@ -35,10 +35,9 @@ the agent cannot fake the answer with prose). The evaluator runs each
 deterministic kind directly:
 
     file_exists   → `Path.exists()` (read-only)
-    command       → `subprocess.run(cmd, cwd=workspace_root, timeout=…)`
-                    (re-runs the agent's own acceptance check; gated through
-                    the engine's destructive-command deny-list, same as the
-                    agent's own verify-on-finish probe)
+    command       → bounded process-group subprocess with closed stdin
+                    (re-runs the acceptance check; gated through the engine's
+                    destructive-command deny-list)
     http_ok       → `urllib.request.urlopen(url, timeout=…)`
                     (loopback / private-RFC1918 by default; same egress
                     discipline the live loop uses for its finish-probe)
@@ -89,7 +88,10 @@ import asyncio
 import hashlib
 import json
 import os
+import selectors
+import signal
 import subprocess
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -136,6 +138,9 @@ class CommandResult(BaseModel):
     # was unsafe to run".
     denied: bool = False
     deny_reason: str = ""
+    # Executor-owned deadline evidence, distinct from a command that happens
+    # to return a conventional timeout exit code itself.
+    timed_out: bool = False
 
 
 class HttpProbeResult(BaseModel):
@@ -258,6 +263,9 @@ class SubjectiveJudge(Protocol):
 
 
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 30.0
+_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS = 1.0
+_COMMAND_CAPTURE_HEAD_BYTES = 64 * 1024
+_COMMAND_CAPTURE_TAIL_BYTES = 64 * 1024
 _DEFAULT_HTTP_TIMEOUT_SECONDS = 10.0
 
 # Egress allow-list for the HTTP probe. Loopback + private RFC1918 by default
@@ -305,8 +313,41 @@ async def _default_command_runner(
         )
     started = datetime.now(UTC).timestamp()
 
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+    class _BoundedCapture:
+        def __init__(self, stream: str) -> None:
+            self.stream = stream
+            self.total = 0
+            self.small = bytearray()
+            self.head = bytearray()
+            self.tail = bytearray()
+
+        def feed(self, chunk: bytes) -> None:
+            self.total += len(chunk)
+            return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
+            if len(self.small) <= return_cap:
+                room = return_cap + 1 - len(self.small)
+                self.small.extend(chunk[:room])
+            if len(self.head) < _COMMAND_CAPTURE_HEAD_BYTES:
+                self.head.extend(chunk[: _COMMAND_CAPTURE_HEAD_BYTES - len(self.head)])
+            self.tail.extend(chunk)
+            if len(self.tail) > _COMMAND_CAPTURE_TAIL_BYTES:
+                del self.tail[:-_COMMAND_CAPTURE_TAIL_BYTES]
+
+        def render(self) -> str:
+            return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
+            if self.total <= return_cap:
+                data = bytes(self.small[: self.total])
+            else:
+                omitted = max(0, self.total - len(self.head) - len(self.tail))
+                marker = (
+                    f"\n[disco: {self.stream} truncated; {self.total} bytes total, "
+                    f"{omitted} omitted]\n"
+                ).encode()
+                data = bytes(self.head) + marker + bytes(self.tail)
+            return data.decode("utf-8", errors="replace")
+
+    def _run() -> tuple[int | None, str, str, bool]:
+        proc = subprocess.Popen(  # noqa: S602 - model command is deny-gated above
             command,
             shell=True,
             # H342: match sandbox ``exec_shell`` and persistent sessions.  An
@@ -314,35 +355,79 @@ async def _default_command_runner(
             # which made valid Bash predicates impossible only at finish.
             executable="/bin/bash",
             cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-            # Inherit a clean env (no leaked agent secrets). The agent
-            # cannot influence the env through the spec — the spec is
-            # write-once and captured at task start.
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            # Inherit a clean env (no leaked agent secrets). Neither an external
+            # spec nor a plan-owned predicate can inject ambient environment.
             env={"PATH": os.environ.get("PATH", "")},
+        )
+        stdout_capture = _BoundedCapture("stdout")
+        stderr_capture = _BoundedCapture("stderr")
+        selector = selectors.DefaultSelector()
+        assert proc.stdout is not None and proc.stderr is not None
+        streams = {
+            proc.stdout.fileno(): proc.stdout,
+            proc.stderr.fileno(): proc.stderr,
+        }
+        selector.register(proc.stdout.fileno(), selectors.EVENT_READ, stdout_capture)
+        selector.register(proc.stderr.fileno(), selectors.EVENT_READ, stderr_capture)
+
+        def _drain_until(deadline: float) -> bool:
+            while True:
+                if proc.poll() is not None and not selector.get_map():
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return proc.poll() is not None and not selector.get_map()
+                for key, _mask in selector.select(timeout=min(remaining, 0.1)):
+                    fd = key.fd
+                    try:
+                        chunk = os.read(fd, 64 * 1024)
+                    except BlockingIOError:
+                        continue
+                    if chunk:
+                        key.data.feed(chunk)
+                    else:
+                        selector.unregister(fd)
+                        streams.pop(fd).close()
+
+        timed_out = not _drain_until(time.monotonic() + timeout_seconds)
+        if timed_out:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            terminated = _drain_until(time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
+            if not terminated:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                _drain_until(time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
+        for key in list(selector.get_map().values()):
+            selector.unregister(key.fd)
+            streams.pop(key.fd).close()
+        selector.close()
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+        return (
+            None if timed_out else int(proc.returncode),
+            stdout_capture.render(),
+            stderr_capture.render(),
+            timed_out,
         )
 
     try:
-        completed = await asyncio.to_thread(_run)
-    except subprocess.TimeoutExpired as exc:
-        duration = datetime.now(UTC).timestamp() - started
-        return CommandResult(
-            exit_code=None,
-            stdout=(
-                (exc.stdout or b"").decode("utf-8", errors="replace")
-                if isinstance(exc.stdout, (bytes, bytearray))
-                else (exc.stdout or "")
-            ),
-            stderr=(
-                (exc.stderr or b"").decode("utf-8", errors="replace")
-                if isinstance(exc.stderr, (bytes, bytearray))
-                else (exc.stderr or "")
-            ),
-            error_message=f"timeout after {timeout_seconds}s",
-            duration_seconds=duration,
-        )
+        exit_code, stdout, stderr, timed_out = await asyncio.to_thread(_run)
     except Exception as exc:  # pragma: no cover - defensive executor surface
         duration = datetime.now(UTC).timestamp() - started
         return CommandResult(
@@ -354,11 +439,12 @@ async def _default_command_runner(
         )
     duration = datetime.now(UTC).timestamp() - started
     return CommandResult(
-        exit_code=int(completed.returncode),
-        stdout=completed.stdout or "",
-        stderr=completed.stderr or "",
-        error_message="",
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        error_message=f"timeout after {timeout_seconds}s" if timed_out else "",
         duration_seconds=duration,
+        timed_out=timed_out,
     )
 
 
@@ -438,8 +524,8 @@ class DoDEvaluator:
     Construction is dependency-injected:
 
       * `command_runner(cmd: str) -> CommandResult`: how a `command`
-        predicate is run. Default: `subprocess.run` with a timeout, gated
-        through the engine's destructive-command deny-list.
+        predicate is run. Default: bounded process-group execution with closed
+        stdin, gated through the engine's destructive-command deny-list.
       * `http_probe(url: str, expected_status: int) -> HttpProbeResult`:
         how an `http_ok` predicate is probed. Default: `urllib` GET with a
         loopback + RFC1918 egress allow-list.
@@ -662,6 +748,7 @@ class DoDEvaluator:
         result = await self._command_runner(predicate.cmd)
         passed = (
             not result.denied
+            and not result.timed_out
             and result.exit_code is not None
             and result.exit_code == predicate.expect_exit
         )
@@ -693,7 +780,12 @@ class DoDEvaluator:
             passed=False,
             # INFRA if the command could not RUN (denied / executor error / no exit code);
             # a TASK failure only when it ran and exited with the wrong code.
-            unverifiable=bool(result.denied or result.error_message or result.exit_code is None),
+            unverifiable=bool(
+                result.denied
+                or result.timed_out
+                or result.error_message
+                or result.exit_code is None
+            ),
             reason=reason,
             details={
                 "kind": "command",
@@ -705,6 +797,7 @@ class DoDEvaluator:
                 "error_message": result.error_message,
                 "denied": result.denied,
                 "deny_reason": result.deny_reason,
+                "timed_out": result.timed_out,
                 "duration_seconds": result.duration_seconds,
             },
         )

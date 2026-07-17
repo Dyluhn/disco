@@ -277,12 +277,14 @@ async def test_h342_default_command_runner_pins_bash_and_clean_context(
 
     captured: dict[str, object] = {}
 
-    def _run(command: str, **kwargs):  # noqa: ANN003, ANN202
+    real_popen = evaluator_module.subprocess.Popen
+
+    def _popen(command: str, **kwargs):  # noqa: ANN003, ANN202
         captured["command"] = command
         captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, stdout="verified", stderr="")
+        return real_popen(command, **kwargs)
 
-    monkeypatch.setattr(evaluator_module.subprocess, "run", _run)
+    monkeypatch.setattr(evaluator_module.subprocess, "Popen", _popen)
     command = "read -r value < <(printf 71); [[ $value == 71 ]]"
     verdict = await DoDEvaluator(tmp_path).evaluate(
         DoDSpec(predicates=[CommandExitPredicate(cmd=command)])
@@ -293,8 +295,65 @@ async def test_h342_default_command_runner_pins_bash_and_clean_context(
     assert captured["shell"] is True
     assert captured["executable"] == "/bin/bash"
     assert captured["cwd"] == str(tmp_path)
-    assert captured["timeout"] == 30.0
+    assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["stdout"] is subprocess.PIPE
+    assert captured["stderr"] is subprocess.PIPE
+    assert captured["start_new_session"] is True
     assert captured["env"] == {"PATH": os.environ.get("PATH", "")}
+
+
+async def test_h368_default_command_runner_timeout_terminates_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import signal
+
+    import disco.core.dod_evaluator as evaluator_module
+
+    calls: list[tuple[int, signal.Signals]] = []
+    real_killpg = evaluator_module.os.killpg
+
+    monkeypatch.setattr(
+        evaluator_module.os,
+        "killpg",
+        lambda pid, sig: (calls.append((pid, sig)), real_killpg(pid, sig))[1],
+    )
+    verdict = await DoDEvaluator(tmp_path, command_timeout_seconds=0.01).evaluate(
+        DoDSpec(predicates=[CommandExitPredicate(cmd="python -c 'import time; time.sleep(5)'")])
+    )
+
+    assert verdict.passed is False
+    assert verdict.results[0].details["timed_out"] is True
+    assert verdict.results[0].unverifiable is True
+    assert calls and calls[0][1] == signal.SIGTERM
+
+
+async def test_h368_default_command_runner_bounds_fast_producer_output(tmp_path: Path) -> None:
+    payload_bytes = 2_000_000
+    verdict = await DoDEvaluator(tmp_path, command_timeout_seconds=2).evaluate(
+        DoDSpec(
+            predicates=[
+                CommandExitPredicate(
+                    cmd=f"python -c 'import sys; sys.stdout.write(\"x\" * {payload_bytes})'"
+                )
+            ]
+        )
+    )
+
+    assert verdict.passed is True
+    output = str(verdict.results[0].details.get("stdout_tail", ""))
+    # The verdict itself intentionally stores only a short tail; exercise the
+    # runner directly below to prove the process boundary was bounded first.
+    from disco.core.dod_evaluator import _default_command_runner
+
+    result = await _default_command_runner(
+        f"python -c 'import sys; sys.stdout.write(\"x\" * {payload_bytes})'",
+        cwd=tmp_path,
+        timeout_seconds=2,
+    )
+    assert result.exit_code == 0 and result.timed_out is False
+    assert len(result.stdout) < 140_000
+    assert "[disco: stdout truncated; 2000000 bytes total" in result.stdout
+    assert len(output) <= 2_000
 
 
 async def test_unmet_http_predicate_is_named_in_verdict(tmp_path: Path) -> None:

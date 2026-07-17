@@ -504,11 +504,30 @@ class SqliteEventStore(_ClosableSqliteStore):
             return None
         return DoDSpec.from_json_dict(json.loads(row["spec"]))
 
+    async def get_external_dod_spec(self, conversation_id: str) -> DoDSpec | None:
+        """Return the immutable external authority row, excluding legacy plan rows.
+
+        Before H368's authority split, plan approval copied model predicates into
+        ``dod_specs`` with ``set_by=system:plan_approval``. Keep those bytes for
+        audit and compatibility through ``get_dod_spec``, but never reinterpret
+        them as user/system/profile/harness requirements.
+        """
+        from ..dod import DoDSpec
+
+        row = self._conn.execute(
+            "SELECT spec, set_by FROM dod_specs WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if row is None or str(row["set_by"]).startswith("system:plan_approval"):
+            return None
+        return DoDSpec.from_json_dict(json.loads(row["spec"]))
+
     async def replace_dod_spec(
         self, conversation_id: str, spec: DoDSpec, *, actor: str = "system"
     ) -> DoDSpec:
-        """Write-once BOOTSTRAP + MONOTONIC replacement (v2). The spec can be
-        EXTENDED (a mid-build steer that adds scope) but never WEAKENED — the
+        """Write-once BOOTSTRAP + MONOTONIC external replacement (v2).
+
+        The spec can be EXTENDED by an external authority but never WEAKENED — the
         monotonic guard (`is_monotonic_extension`) is enforced HERE, in the
         store, so no caller can route around it. The contract:
 
@@ -516,9 +535,8 @@ class SqliteEventStore(_ClosableSqliteStore):
           * Spec exists AND `new` is a monotonic extension (only adds / renames
             within, never drops a committed deliverable) → UPDATE in place.
           * Spec exists AND `new` would WEAKEN it → raise `DoDSpecAlreadySet`
-            (original preserved). A revision can tighten its own acceptance bar,
-            never relax it — that is the security property write-once protected,
-            now preserved as monotonicity instead of pure immutability.
+            (original preserved). Model-authored plan revisions are revision-scoped
+            in the append-only event log and never call this method.
 
         `actor` is recorded as `set_by` on an accepted update (audit), but does
         NOT buy a weakening: even a human operator cannot drop a committed bar

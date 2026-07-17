@@ -256,7 +256,12 @@ def test_dod_methods_on_protocol_do_not_appear_on_agent_tools() -> None:
     asserting no attribute names a DoD method.
     """
     reg = build_default_registry()
-    forbidden_method_names = ("set_dod_spec", "replace_dod_spec", "get_dod_spec")
+    forbidden_method_names = (
+        "set_dod_spec",
+        "replace_dod_spec",
+        "get_dod_spec",
+        "get_external_dod_spec",
+    )
     for name in reg.names():
         tool = reg.get(name, scope=agent_scope(model_policy=ModelExecutionPolicy.standard()))  # type: ignore[arg-type]
         if tool is None:
@@ -333,7 +338,31 @@ def test_dod_methods_are_on_the_event_store_protocol() -> None:
     # Protocol is runtime_checkable
     assert hasattr(EventStore, "set_dod_spec")
     assert hasattr(EventStore, "get_dod_spec")
+    assert hasattr(EventStore, "get_external_dod_spec")
     assert hasattr(EventStore, "replace_dod_spec")
+
+
+@pytest.mark.parametrize("authority", ["user", "system", "profile", "harness"])
+async def test_external_authority_round_trips_byte_for_byte(
+    store: SqliteEventStore, authority: str
+) -> None:
+    spec = _spec()
+    original = spec.model_dump_json()
+    await store.set_dod_spec(CID, spec, set_by=authority)
+
+    external = await store.get_external_dod_spec(CID)
+    assert external is not None
+    assert external.model_dump_json() == original
+
+
+async def test_legacy_plan_approval_row_is_audit_only_not_external_authority(
+    store: SqliteEventStore,
+) -> None:
+    spec = DoDSpec(predicates=[FileExistsPredicate(path="legacy-plan-output.txt")])
+    await store.set_dod_spec(CID, spec, set_by="system:plan_approval:r42")
+
+    assert await store.get_dod_spec(CID) == spec
+    assert await store.get_external_dod_spec(CID) is None
 
 
 async def test_dod_spec_survives_reopen(tmp_path) -> None:

@@ -124,12 +124,21 @@ class EventStore(Protocol):
         a `ValidationError`)."""
         ...
 
+    async def get_external_dod_spec(self, conversation_id: str) -> Any:
+        """Return only user/system/profile/harness-owned requirements.
+
+        Legacy rows audited as ``system:plan_approval`` are model-plan state
+        from the pre-H368 authority model and must not be promoted to external
+        authority after the split.
+        """
+        ...
+
     async def replace_dod_spec(
         self, conversation_id: str, spec: Any, *, actor: str = "system"
     ) -> Any:
-        """Write-once BOOTSTRAP + MONOTONIC replacement. The spec may be
-        EXTENDED (a mid-build steer that adds acceptance scope) but never
-        WEAKENED. Contract:
+        """Write-once BOOTSTRAP + MONOTONIC external-requirement replacement.
+        The spec may be EXTENDED by an external authority but never WEAKENED.
+        Model plan revisions never call this method. Contract:
           * no spec exists → bootstrap (equivalent to `set_dod_spec`);
           * spec exists AND the new spec is a monotonic extension of it
             (`dod.is_monotonic_extension` — only adds predicates, or renames a

@@ -74,6 +74,8 @@ and immutability primitives here are what make that wire step correct.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -167,13 +169,14 @@ def predicate_to_dict(p: DoDPredicate) -> dict[str, Any]:
 
 
 class DoDSpec(BaseModel):
-    """A write-once Definition-of-Done for one conversation.
+    """External Definition-of-Done requirements for one conversation.
 
-    Captured at task START (from the user request or the approved
-    `submit_plan`). Lives in the store's `dod_specs` table — a sibling to
-    `conversations` and `events`, OUTSIDE the agent-editable event stream.
-    Frozen: in-process mutation is a `ValidationError`; the store refuses
-    to overwrite an existing row.
+    Captured from a user, system, profile, or harness authority. Lives in the
+    store's `dod_specs` table — a sibling to `conversations` and `events`,
+    OUTSIDE the agent-editable event stream. Model-authored plan verification
+    conditions do not belong in this object: they remain on their PlanEvent and
+    are selected by the append-only approval record. Frozen: in-process
+    mutation is a `ValidationError`; the store refuses weakening replacements.
 
     `predicates` is the ORDERED list of acceptance checks. ALL must pass for
     the spec to be satisfied; partial pass is failure (C1b is responsible for
@@ -201,6 +204,21 @@ class DoDSpec(BaseModel):
         """Validate a plain dict against the spec. Rejects unknown fields and
         invalid predicate shapes."""
         return cls.model_validate(obj)
+
+
+def predicate_fingerprint(predicate: DoDPredicate) -> str:
+    """Stable SHA-256 identity for one predicate, excluding revision metadata."""
+    encoded = json.dumps(
+        predicate_to_dict(predicate),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def predicate_fingerprints(predicates: list[DoDPredicate]) -> list[str]:
+    """Ordered predicate identities used by plan-approval audit records."""
+    return [predicate_fingerprint(predicate) for predicate in predicates]
 
 
 def is_monotonic_extension(old: DoDSpec, new: DoDSpec) -> bool:

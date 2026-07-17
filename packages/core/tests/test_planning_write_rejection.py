@@ -23,6 +23,7 @@ from disco.core import (
 from disco.core.dod import FileExistsPredicate
 from disco.core.events import ConversationStatus, EventSource
 from disco.core.llm import OperatingMode
+from disco.core.loop import signals
 from loop_fakes import ScriptedAgent, action_step
 
 
@@ -129,9 +130,14 @@ async def test_unsafe_done_conditions_rejected_then_corrected_plan_arms_cleanly(
     assert any("Invalid plan attempt 1/3" in message for message in feedback)
 
     await loop.approve_plan()
-    spec = await store.get_dod_spec("pw-invalid-done-condition-recovers")
-    assert spec is not None
-    assert spec.predicates == [FileExistsPredicate(path="release/fonts/proof.woff2")]
+    assert await store.get_external_dod_spec("pw-invalid-done-condition-recovers") is None
+    approved = signals.latest_approved_plan(
+        await store.get_events("pw-invalid-done-condition-recovers")
+    )
+    assert approved is not None
+    assert [step.done_condition for step in approved.steps] == [
+        FileExistsPredicate(path="release/fonts/proof.woff2")
+    ]
 
 
 async def test_repeated_unsafe_done_conditions_land_bounded_stuck():
@@ -541,24 +547,19 @@ async def test_ask_user_allowed_in_planning_halts_for_input():
 
 
 # ---------------------------------------------------------------------------
-# H368 — interactive-prompt / stdin-dependent command rejection
+# H368 — model command strings are plan-owned, not external DoD
 # ---------------------------------------------------------------------------
 
 
-async def test_h368_interactive_input_predicate_rejected_then_corrected_finite_command_accepted():
-    """The exact RUN-768 defect: an input()-gated predicate is rejected before
-    persistence; a corrected finite-verification command predicate is accepted,
-    persisted, and armed.  Only the corrected PlanEvent persists; after approval
-    only the corrected predicate is armed."""
+async def test_h368_interactive_input_predicate_is_approved_as_plan_owned_only():
+    """The exact RUN-768 command remains valid syntax, but approval does not copy
+    it into immutable external acceptance storage."""
     from disco.core.dod import CommandExitPredicate
 
     # The exact observed defect predicate from RUN-768.
     bad_input_cmd = (
         "python -c \"import sys; exec(open('primes.py').read()) if input('check?') else None\""
     )
-    # Corrected: finite file-exists check, no stdin/interaction.
-    good_command = "test -f primes.py"
-
     bad_plan = action_step(
         "submit_plan",
         {
@@ -575,64 +576,32 @@ async def test_h368_interactive_input_predicate_rejected_then_corrected_finite_c
             ],
         },
     )
-    corrected_plan = action_step(
-        "submit_plan",
-        {
-            "summary": "corrected finite verification",
-            "steps": [
-                {
-                    "title": "Verify primes exists",
-                    "done_condition": {
-                        "kind": "command",
-                        "cmd": good_command,
-                        "expect_exit": 0,
-                    },
-                }
-            ],
-        },
-    )
-
-    agent = ScriptedAgent([bad_plan, corrected_plan])
+    agent = ScriptedAgent([bad_plan])
     loop, store = build_plan_loop(
         agent,
-        conversation_id="pw-h368-input-rejected",
+        conversation_id="pw-h368-input-plan-owned",
         executor=BuildExecutor(),
     )
     await loop.send_message("verify the primes")
     await loop.run()
 
-    events = await store.get_events("pw-h368-input-rejected")
+    events = await store.get_events("pw-h368-input-plan-owned")
     plans = [e for e in events if isinstance(e, PlanEvent)]
-    # Only the corrected plan was persisted.
     assert len(plans) == 1
-    assert plans[0].summary == "corrected finite verification"
+    assert plans[0].summary == "bad input-gated predicate"
     assert [s.done_condition for s in plans[0].steps] == [
-        CommandExitPredicate(cmd=good_command, expect_exit=0)
+        CommandExitPredicate(cmd=bad_input_cmd, expect_exit=0)
     ]
-    # Exactly one invalid_plan_done_conditions status.
-    assert (
-        sum(
-            isinstance(e, StatusEvent) and e.detail == "invalid_plan_done_conditions"
-            for e in events
-        )
-        == 1
-    )
-    # The feedback mentions the interactive prompt / stdin rejection.
-    feedback = [
-        e.message.content
-        for e in events
-        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
-    ]
-    assert any("input()" in m for m in feedback), (
-        f"expected feedback to mention input(), got {feedback}"
-    )
-    assert any("reads from stdin" in m or "prompts interactively" in m for m in feedback), (
-        f"expected stdin/prompt guidance in feedback, got {feedback}"
-    )
-    assert any("Invalid plan attempt 1/3" in m for m in feedback)
-
-    # After approval, only the corrected predicate is armed.
     await loop.approve_plan()
-    spec = await store.get_dod_spec("pw-h368-input-rejected")
-    assert spec is not None
-    assert spec.predicates == [CommandExitPredicate(cmd=good_command, expect_exit=0)]
+    assert await store.get_external_dod_spec("pw-h368-input-plan-owned") is None
+    events = await store.get_events("pw-h368-input-plan-owned")
+    approved = signals.latest_approved_plan(events)
+    assert approved is not None and approved.id == plans[0].id
+    transition = next(
+        event.plan_verification_transition
+        for event in events
+        if isinstance(event, StatusEvent) and event.detail == "plan_approved"
+    )
+    assert transition is not None
+    assert transition.new_plan_event_id == plans[0].id
+    assert transition.external_predicate_fingerprints == []

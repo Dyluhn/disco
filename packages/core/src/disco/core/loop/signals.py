@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..dod import predicate_fingerprints
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -213,6 +214,48 @@ def _plan_approval_seqs(events: list[Event]) -> list[int]:
     return [
         e.seq or 0 for e in events if isinstance(e, StatusEvent) and e.detail == "plan_approved"
     ]
+
+
+def latest_approved_plan(events: list[Event]) -> PlanEvent | None:
+    """Return the PlanEvent selected by the latest durable approval marker.
+
+    New approvals bind an exact event id in ``plan_verification_transition``.
+    Legacy approvals are reconstructed as the latest PlanEvent preceding the
+    marker, preserving restart compatibility without treating a newer,
+    unapproved proposal as current authority state.
+    """
+    approval: StatusEvent | None = None
+    for event in reversed(events):
+        if isinstance(event, StatusEvent) and event.detail == "plan_approved":
+            approval = event
+            break
+    if approval is None:
+        return None
+    transition = approval.plan_verification_transition
+    if transition is not None:
+        plan = next(
+            (
+                event
+                for event in events
+                if isinstance(event, PlanEvent)
+                and event.id == transition.new_plan_event_id
+                and event.revision == transition.new_plan_revision
+                and (event.seq or 0) < (approval.seq or 0)
+            ),
+            None,
+        )
+        if plan is None:
+            return None
+        actual_fingerprints = predicate_fingerprints(
+            [step.done_condition for step in plan.steps if step.done_condition is not None]
+        )
+        return plan if actual_fingerprints == transition.new_predicate_fingerprints else None
+    candidates = [
+        event
+        for event in events
+        if isinstance(event, PlanEvent) and (event.seq or 0) < (approval.seq or 0)
+    ]
+    return max(candidates, key=lambda event: (event.seq or 0, event.revision), default=None)
 
 
 def _step_is_finish_intent(step: PlanStep) -> bool:

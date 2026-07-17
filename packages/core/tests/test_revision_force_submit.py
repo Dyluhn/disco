@@ -246,7 +246,7 @@ def test_synth_planevent_needs_fresh_id_not_model_copy():
 @pytest.mark.asyncio
 async def test_fresh_synth_plan_wins_latest_plan_in_store():
     """End-to-end pin: after an empty plan, a fresh synth PlanEvent persists and _latest_plan
-    returns IT (with the step), so _arm_dod_from_plan/_seed_context see the real 1-step plan."""
+    returns IT (with the step), so approval audit/context seeding see the real 1-step plan."""
     from disco.core import SqliteEventStore
     from disco.core.events import PlanEvent, PlanStep
     from disco.core.view import _latest_plan

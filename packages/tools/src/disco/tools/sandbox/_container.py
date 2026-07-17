@@ -259,6 +259,7 @@ proc = subprocess.Popen(
     # Debian's dash via /bin/sh, so one-shot shell/DoD commands used a different
     # language than persistent shell sessions.  Pin the shared command contract.
     executable=shell_executable,
+    stdin=subprocess.DEVNULL,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     start_new_session=True,

@@ -2132,10 +2132,10 @@ class MetaToolHandlers:
                         meta={"diagnostic": _IDENTICAL_PLAN_NUDGE_DIAGNOSTIC},
                     )
                 )
-            self._loop.mode = self._loop._execution_mode
             await self._loop._emit(
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+                await self._loop._plan_approval_status(new_plan, events_with_new_plan)
             )
+            self._loop.mode = self._loop._execution_mode
             # 2026-07-09 overnight-soak fix (steer scenario → identical-revision
             # churn → bookkeeping_only STUCK): the auto-approval above was
             # INVISIBLE to the model — a StatusEvent is not rendered into its
@@ -2163,9 +2163,6 @@ class MetaToolHandlers:
                     meta={"diagnostic": "auto_approval_ack"},
                 )
             )
-            # C1c: arm the DoD gate (write-once → a mid-run revision's re-arm is swallowed;
-            # this is the hook point where the monotonic steer-scope extension will land).
-            await self._loop._arm_dod_from_plan()
             await self._loop._seed_context_from_plan()
             return Disp.CONTINUE
         await self._loop._emit(

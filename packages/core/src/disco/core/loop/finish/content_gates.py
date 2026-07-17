@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from typing import cast
 
 from .common import *
@@ -238,7 +240,7 @@ class _ContentGateMixin(_FinishGateProto):
         else:
             paths.extend(_plan_file_exists_paths(events))
             paths.extend(_deliverable_event_paths(events))
-            spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
+            spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
             if spec is not None:
                 for pred in spec.predicates:
                     if isinstance(pred, FileExistsPredicate):
@@ -647,48 +649,62 @@ class _ContentGateMixin(_FinishGateProto):
         return False
 
     async def finish_dod_gate_passed(self) -> bool:
-        """C1c DoD gate. Returns True iff the finish should be allowed.
-
-        Algorithm (in order):
-          1. Read the DoD spec from the store. None → no spec → True
-             (LEGACY BYTE-IDENTICAL PATH — no events emitted, no state
-             changed, control flow identical to pre-C1c).
-          2. Build a DoDEvaluator. Factory-injected if the loop was
-             constructed with one; otherwise build a default over the
-             executor's sandbox evidence APIs. Missing evidence pauses
-             fail-closed rather than turning the requirement into a pass.
-          3. Run the verdict against the spec.
-          4. Verdict passed → True (the finish lands).
-          5. Verdict failed → emit a MessageEvent carrying the SPECIFIC
-             unmet predicates (visible to the agent AND the audit), bump
-             the refusal streak, return False so the caller `continue`s.
-
-        Visible: the refusal is a `<system-reminder>` MessageEvent with the
-        spec fingerprint, the number of unmet predicates, and a per-
-        predicate line naming kind + reason. Never silent: a refused finish
-        ALWAYS leaves a trace event. Same shape as verify-on-finish's
-        refusal, distinct content (the predicates are external, not the
-        agent's own command)."""
-        spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
-        if spec is None:
-            # LEGACY: no DoD spec for this conversation → the gate is a
-            # no-op. Today's finish path is reproduced EXACTLY — no events,
-            # no state change, no log query beyond a single SELECT. The
-            # read is observable as a side-effect-free DB query; it does
-            # NOT change the events, status transitions, or final state.
+        """Evaluate immutable external requirements and the current plan separately."""
+        events = await self._loop._events()
+        external_spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
+        plan = signals.latest_approved_plan(events)
+        approval_exists = any(
+            isinstance(event, StatusEvent) and event.detail == "plan_approved" for event in events
+        )
+        if approval_exists and plan is None:
+            _LOG.error(
+                "Approved plan evidence for %s is dangling or fingerprint-mismatched; pausing.",
+                self._loop.conversation_id,
+            )
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="plan_verification_evidence_invalid",
+                )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\nThe approved-plan verification record "
+                            "does not match a complete persisted PlanEvent. The task is "
+                            "NOT complete and has been paused fail-closed; repair the "
+                            "event evidence before continuing.\n</system-reminder>"
+                        ),
+                    ),
+                    meta={"blocking": "plan_verification_evidence_invalid"},
+                )
+            )
+            self._loop._pause_requested.set()
+            return False
+        plan_predicates = (
+            [step.done_condition for step in plan.steps if step.done_condition is not None]
+            if plan is not None
+            else []
+        )
+        plan_spec = (
+            DoDSpec(
+                predicates=plan_predicates,
+                created_at=plan.timestamp.isoformat(),
+                note=f"approved-plan:{plan.id}:revision:{plan.revision}",
+            )
+            if plan_predicates and plan is not None
+            else None
+        )
+        if external_spec is None and plan_spec is None:
             return True
-        # Spec exists → run the evaluator. The factory seam is the test
-        # injection point (fakes for command_runner / http_probe); the
-        # default builds a real DoDEvaluator over the executor's workspace.
         try:
             evaluator = await self.build_dod_evaluator()
         except _DoDWorkspaceUnavailable as exc:
-            # S-W5 D4: absence of the evidence surface cannot turn a committed
-            # acceptance bar into a pass. Pause visibly; an operator can repair
-            # the backend or begin a new conversation, but the model cannot earn
-            # FINISHED by making verification unavailable.
             _LOG.warning(
-                "DoD spec set for %s but no workspace_root available; pausing fail-closed: %s",
+                "Acceptance verification for %s has no workspace evidence; pausing: %s",
                 self._loop.conversation_id,
                 exc,
             )
@@ -698,10 +714,10 @@ class _ContentGateMixin(_FinishGateProto):
                     message=LLMMessage(
                         role="user",
                         content=(
-                            "<system-reminder>\nThe external Definition-of-Done "
-                            "could not be evaluated because its sandbox evidence surface "
+                            "<system-reminder>\nThe acceptance requirements "
+                            "could not be evaluated because the sandbox evidence surface "
                             "is unavailable. The task is NOT complete and has been paused "
-                            "fail-closed; repair the sandbox or start a new conversation.\n"
+                            "fail-closed; repair the sandbox before continuing.\n"
                             "</system-reminder>"
                         ),
                     ),
@@ -709,16 +725,31 @@ class _ContentGateMixin(_FinishGateProto):
             )
             self._loop._pause_requested.set()
             return False
-        verdict = await evaluator.evaluate(spec, conversation_id=self._loop.conversation_id)
-        if verdict.passed:
-            self._loop._dod_refusals = 0  # clean pass → reset the streak (mirror verify)
+
+        if external_spec is not None:
+            external_verdict = await evaluator.evaluate(
+                external_spec,
+                conversation_id=self._loop.conversation_id,
+            )
+            if not external_verdict.passed:
+                return await self._record_external_dod_failure(external_verdict)
+            self._loop._dod_refusals = 0
+
+        if plan_spec is None or plan is None:
             return True
-        # Bound the model retry loop without weakening the acceptance bar. Once
-        # the refusal budget is spent, PAUSE for the user; never auto-release to
-        # FINISHED. Unverifiable is still unmet—breaking the checker is not a pass.
+        plan_verdict = await evaluator.evaluate(
+            plan_spec,
+            conversation_id=self._loop.conversation_id,
+        )
+        if plan_verdict.passed:
+            return True
+        return await self._record_plan_verifier_failure(plan, plan_verdict, events)
+
+    async def _record_external_dod_failure(self, verdict: Any) -> bool:
+        """Fail closed on immutable external authority with a bounded pause."""
         if self._loop._dod_refusals >= _DOD_REFUSAL_CAP:
             _LOG.warning(
-                "DoD for %s still unmet after %d refusals (cap %d) — pausing "
+                "External DoD for %s still unmet after %d refusals (cap %d) — pausing "
                 "fail-closed instead of auto-releasing.",
                 self._loop.conversation_id,
                 self._loop._dod_refusals,
@@ -741,10 +772,7 @@ class _ContentGateMixin(_FinishGateProto):
             )
             self._loop._pause_requested.set()
             return False
-        # Refuse + keep working. The agent sees the SPECIFIC unmet
-        # predicates (named by `kind` + the frozen-predicate `repr`); the
-        # audit sees the spec fingerprint + the per-predicate results.
-        self._loop._dod_refusals += 1  # bounded by _DOD_REFUSAL_CAP (see above)
+        self._loop._dod_refusals += 1
         unmet_lines: list[str] = []
         for result in verdict.results:
             if result.passed:
@@ -766,14 +794,155 @@ class _ContentGateMixin(_FinishGateProto):
                         f"predicate(s) (spec fingerprint {verdict.spec_fingerprint}):\n\n"
                         f"{unmet_block}\n\n"
                         "The task is NOT complete. These predicates were captured at "
-                        "task start and live outside the agent's tool surface — you "
-                        "cannot edit them, you can only satisfy them. Fix what they "
+                        "an external authority and live outside the agent's tool surface — "
+                        "a plan revision cannot edit, remove, or shadow them. Fix what they "
                         "surface (the predicates name the gap), then finish again.\n"
                         "</system-reminder>"
                     ),
                 ),
             )
         )
+        return False
+
+    async def _record_plan_verifier_failure(
+        self,
+        plan: PlanEvent,
+        verdict: Any,
+        events: list[Event],
+    ) -> bool:
+        """Record a typed plan failure, then bound repair → replan → STUCK."""
+        predicate_fps = predicate_fingerprints(
+            [step.done_condition for step in plan.steps if step.done_condition is not None]
+        )
+        failed_results = [result for result in verdict.results if not result.passed]
+        failure_kinds = [
+            (
+                "timeout"
+                if bool(result.details.get("timed_out"))
+                else "denied"
+                if bool(result.details.get("denied"))
+                else "unverifiable"
+                if result.unverifiable
+                else str(result.details.get("kind") or result.predicate.kind)
+            )
+            for result in failed_results
+        ]
+        failure_payload = [
+            {
+                "predicate": predicate_fingerprint(result.predicate),
+                "kind": failure_kinds[index],
+                "reason": result.reason,
+                "exit_code": result.details.get("exit_code"),
+                "status_code": result.details.get("status_code"),
+                "timed_out": bool(result.details.get("timed_out")),
+            }
+            for index, result in enumerate(failed_results)
+        ]
+        failure_fingerprint = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(failure_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        )
+        prior_same_plan = [
+            event.plan_verifier_failure
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.plan_verifier_failure is not None
+            and event.plan_verifier_failure.plan_event_id == plan.id
+        ]
+        approvals_with_same_predicates = sum(
+            1
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.plan_verification_transition is not None
+            and event.plan_verification_transition.new_predicate_fingerprints == predicate_fps
+        )
+        prior_same_set_failures = sum(
+            1
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.plan_verifier_failure is not None
+            and event.plan_verifier_failure.predicate_fingerprints == predicate_fps
+        )
+        replan_exhausted = approvals_with_same_predicates >= 2 and prior_same_set_failures + 1 >= 3
+        failure = PlanVerifierFailure(
+            plan_revision=plan.revision,
+            plan_event_id=plan.id,
+            predicate_fingerprints=predicate_fps,
+            spec_fingerprint=verdict.spec_fingerprint,
+            failure_fingerprint=failure_fingerprint,
+            failure_kinds=failure_kinds,
+            attempt_for_approved_plan=len(prior_same_plan) + 1,
+            approvals_with_same_predicates=max(1, approvals_with_same_predicates),
+            replan_allowed=not replan_exhausted,
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="plan_verification_failed",
+                plan_verifier_failure=failure,
+            )
+        )
+        unmet_block = "\n".join(
+            f"  - {result.predicate!r}\n      reason: {result.reason}" for result in failed_results
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\nThe current approved plan's verification "
+                        f"conditions failed (plan revision {plan.revision}, "
+                        f"failure {failure_fingerprint}):\n\n{unmet_block}\n\n"
+                        "The task is NOT complete. These conditions belong only to the "
+                        "current plan revision. Fix the deliverable and retry, or submit a "
+                        "revised plan for approval; a newer approved plan may replace these "
+                        "plan-owned conditions but cannot alter external acceptance requirements.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+
+        if replan_exhausted:
+            await self._loop._land_blocked(
+                reason="unchanged plan verifier failed after approved replan",
+                guidance=(
+                    "The same plan-owned predicate set failed again after a replacement "
+                    "plan was approved. External requirements remain intact; explicit "
+                    "user review is required before another unchanged plan can run."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="plan_verifier_replan_exhausted",
+            )
+            return False
+
+        if len(prior_same_plan) + 1 >= 2:
+            self._loop.mode = OperatingMode.PLANNING
+            self._loop._plan_explore_reads = 0
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="planning",
+                )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\nThe same unchanged plan-owned verifier "
+                            "has failed twice. Re-planning is now required. Submit a corrected "
+                            "plan; it must preserve every external requirement.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                    meta={"blocking": "plan_verifier_replan_required"},
+                )
+            )
         return False
 
     async def build_dod_evaluator(self) -> DoDEvaluator:
@@ -948,6 +1117,7 @@ class _ContentGateMixin(_FinishGateProto):
                         stdout=res.stdout or "",
                         stderr=res.stderr or "",
                         error_message="timeout after 30s in sandbox",
+                        timed_out=True,
                     )
                 return CommandResult(
                     exit_code=int(res.exit_code),

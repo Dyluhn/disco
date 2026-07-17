@@ -36,10 +36,9 @@ async def seed_approved_workflow_plan(
         ),
     )
     await loop._emit(plan)
+    await loop._emit(await loop._plan_approval_status(plan, await loop._events()))
     loop._workflow_run = workflow_run
     loop.mode = loop._execution_mode
-    await loop._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
-    await loop._arm_dod_from_plan()
     await loop._seed_context_from_plan()
 
 

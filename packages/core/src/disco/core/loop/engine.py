@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from ..security import RiskAssessment
     from .boundaries import StreamHook
 
-from ..dod import DoDPredicate, DoDSpec, DoDSpecAlreadySet
+from ..dod import DoDPredicate, predicate_fingerprints
 from ..dod_evaluator import DoDEvaluator
 from ..events import (
     ActionEvent,
@@ -40,6 +40,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
     PlanStep,
+    PlanVerificationTransition,
     StatusEvent,
     ToolCall,
     ToolResult,
@@ -1207,9 +1208,8 @@ class AgentLoop:
             # No human to approve → auto-approve INLINE, emitting the
             # exact same events approve_plan() would, so the event log
             # is identical whether a human or the harness approved.
+            await self._emit(await self._plan_approval_status(plan, await self._events()))
             self.mode = self._execution_mode
-            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
-            await self._arm_dod_from_plan()
             await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
             return Disp.CONTINUE
         await self._emit(
@@ -2110,72 +2110,47 @@ class AgentLoop:
             await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
         return await self.get_state()
 
-    async def _arm_dod_from_plan(self) -> None:
-        """C1c WIRING — on plan approval, arm the (previously dark) Definition-of-Done
-        finish gate from the plan's OWN committed, machine-checkable done_conditions,
-        so `finish` is blocked until the files, commands, and HTTP checks the model
-        declared are satisfied. This closes "declare a step then skip it" by
-        construction (the strongest anti-gaming the agentic-builder literature found that
-        needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
-        state, never to the model's free-text self-assessment).
+    @staticmethod
+    def _plan_verification_predicates(plan: PlanEvent | None) -> list[DoDPredicate]:
+        """Revision-scoped model predicates retained on an approved PlanEvent."""
+        if plan is None:
+            return []
+        return [step.done_condition for step in plan.steps if step.done_condition is not None]
 
-        Safety contract:
-          * Pre-approval validation rejects cross-step file/directory contradictions and
-            loopback HTTP preview guesses. Command/http_ok have an explicit infra-vs-task
-            channel; unverifiable evidence remains visible and fail-closed.
-          * Empty-guard: no accepted predicate ⇒ DO NOT set a spec. An empty spec makes the
-            evaluator return passed=False (a deterministic block loop), so a plan that declared
-            no checkable deliverable must leave the gate dark, not armed-and-failing.
-          * Write-once (by store design): the FIRST approved plan captures the DoD; a later
-            revision's re-arm raises DoDSpecAlreadySet and is swallowed. Extending the DoD with
-            steer-added scope is a separate MONOTONIC slice (may only ADD predicates, never
-            weaken) — not done here, so we never let a revision relax its own acceptance gate.
-        Only the build loop reaches this (PLANNING + submit_plan); research/chat loops never
-        approve a plan, so the gate stays inert for them."""
-        # Read the predicates off the PERSISTED PlanEvent (resume-durable), NOT the
-        # in-memory `_plan_step_predicates` map: a restart between submit_plan and approval
-        # loses the map, but the PlanEvent — with `done_condition` now persisted on each
-        # step — survives, so the gate still arms after a crash (codex backstop P1).
-        from ..view import _latest_plan
+    async def _plan_approval_status(
+        self,
+        plan: PlanEvent,
+        events: list[Event],
+    ) -> StatusEvent:
+        """Build the single append-only event that approves and audits a plan.
 
-        events = await self._events()
-        plan = _latest_plan(events)
-        if plan is None or not getattr(plan, "steps", None):
-            return
-        # v1 armed file_exists only; v2.1 includes command + http_ok now that the evaluator
-        # has an infra-vs-task channel. A denied command / unprobeable server is visibly
-        # UNVERIFIABLE and remains fail-closed rather than weakening the acceptance bar;
-        # command/http_ok add real build/test + runtime-serve verification.
-        _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
-        # Narrow via a local (pyright cannot narrow through getattr) so the list is
-        # typed list[DoDPredicate], not list[DoDPredicate | None]. (pre-existing
-        # reportAssignmentType, fixed while touching this file for CXT-6.)
-        gateable_preds: list[DoDPredicate] = []
-        for s in plan.steps:
-            dc = getattr(s, "done_condition", None)
-            if dc is not None and getattr(dc, "kind", None) in _GATEABLE_KINDS:
-                gateable_preds.append(dc)
-        if not gateable_preds:
-            return
-        try:
-            # replace_dod_spec = write-once BOOTSTRAP on the first arm + MONOTONIC
-            # extension on a revision: a steer that ADDS scope (e.g. "also add a
-            # Contact page") tightens the bar to require contact.html; a revision that
-            # would DROP a committed deliverable (without an explicit rename) is
-            # rejected store-side and the existing, stronger bar holds.
-            await self.store.replace_dod_spec(
-                self.conversation_id,
-                DoDSpec(predicates=gateable_preds),
-                actor="system:plan_approval",
-            )
-        except DoDSpecAlreadySet:
-            # The revised plan would WEAKEN the DoD (a committed deliverable was
-            # dropped without an explicit rename). Keep the stronger existing bar —
-            # the model cannot relax its own acceptance criteria mid-build.
-            _LOG.warning(
-                "DoD revision for %s rejected as a weakening; existing acceptance bar preserved.",
-                self.conversation_id,
-            )
+        No mutable plan-verifier row exists: the latest such event selects the
+        current PlanEvent after a restart. External DoD bytes are read only so a
+        model approval can neither remove nor shadow them.
+        """
+        old_plan = signals.latest_approved_plan(events)
+        external = await self.store.get_external_dod_spec(self.conversation_id)
+        transition = PlanVerificationTransition(
+            old_plan_revision=old_plan.revision if old_plan is not None else None,
+            old_plan_event_id=old_plan.id if old_plan is not None else None,
+            old_predicate_fingerprints=predicate_fingerprints(
+                self._plan_verification_predicates(old_plan)
+            ),
+            new_plan_revision=plan.revision,
+            new_plan_event_id=plan.id,
+            new_predicate_fingerprints=predicate_fingerprints(
+                self._plan_verification_predicates(plan)
+            ),
+            external_predicate_fingerprints=predicate_fingerprints(
+                external.predicates if external is not None else []
+            ),
+            reason=("approved_plan_revision" if old_plan is not None else "approved_initial_plan"),
+        )
+        return StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail="plan_approved",
+            plan_verification_transition=transition,
+        )
 
     async def approve_plan(self) -> ConversationState:
         """Approve the pending plan: flip into execution mode (full tools restored)
@@ -2185,9 +2160,24 @@ class AgentLoop:
             state = await self.get_state()
             if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
                 return state
+            events = await self._events()
+            plan = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if isinstance(event, PlanEvent) and event.id == state.pending_plan_id
+                ),
+                None,
+            )
+            if plan is None:
+                _LOG.error(
+                    "Plan approval for %s had no persisted pending PlanEvent; "
+                    "preserving prior approval.",
+                    self.conversation_id,
+                )
+                return state
+            await self._emit(await self._plan_approval_status(plan, events))
             self.mode = self._execution_mode
-            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
-            await self._arm_dod_from_plan()
             await self._seed_context_from_plan()
         return await self.get_state()
 
@@ -2659,7 +2649,7 @@ async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: l
                     content=(
                         "<system-reminder>\n"
                         "Your proposed plan was NOT accepted because its done_condition "
-                        "values would become immutable external finish gates and are "
+                        "values would become approved plan verifiers and are "
                         f"unsafe or internally inconsistent:\n{rendered}\n\n"
                         "Submit a corrected plan. Do not replace a required directory "
                         "with a file and do not guess a local preview port or a future/"

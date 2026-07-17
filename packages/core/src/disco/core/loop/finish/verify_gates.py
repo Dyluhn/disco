@@ -640,7 +640,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         paths.extend(_deliverable_event_paths(events))
         paths.extend(_plan_file_exists_paths(events))
         paths.extend(self._contract_required_deliverable_paths())
-        spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
+        spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
         if spec is not None:
             for pred in spec.predicates:
                 if isinstance(pred, FileExistsPredicate):

@@ -362,14 +362,12 @@ def _command_plan(command: str) -> PlanEvent:
         "npm run --silent dev",
         "yarn run --cwd app dev",
         "command -- npm run dev",
-        "nice -n 10 npm run dev",
-        "stdbuf -oL curl http://localhost:8080",
     ],
 )
 def test_command_done_condition_rejects_local_preview_lifecycle_shapes(command: str) -> None:
     errors = validate_plan_done_conditions(_command_plan(command))
     assert len(errors) == 1
-    assert "immutable finish gate" in errors[0]
+    assert "approved plan verifier" in errors[0]
     assert "preview_start" in errors[0]
 
 
@@ -385,272 +383,25 @@ def test_command_done_condition_rejects_local_preview_lifecycle_shapes(command: 
         "curl -H x:y https://example.com/health",
         "http --auth user:pass GET https://example.com",
         "test -f index.html && npm test",
-        "nice -n 10 npm test",
-        "stdbuf -oL grep -q ok output.txt",
     ],
 )
 def test_command_done_condition_preserves_finite_verification_shapes(command: str) -> None:
     assert validate_plan_done_conditions(_command_plan(command)) == []
 
 
-# ---------------------------------------------------------------------------
-# H368 — stdin-dependent / interactive-prompt rejection (negative)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "command, expected_substring",
-    [
-        # Exact RUN-768 predicate — input() without source
-        (
-            "python -c \"import sys; exec(open('primes.py').read()) if input('check?') else None\"",
-            "calls input()",
-        ),
-        # Python input() even with piped input (always rejected)
-        (
-            "echo yes | python -c "
-            "\"import sys; exec(open('primes.py').read()) if input('check?') else None\"",
-            "calls input()",
-        ),
-        (
-            "python -c \"import builtins; builtins.input('check?')\"",
-            "calls input()",
-        ),
-        (
-            "python -c \"from builtins import input as ask; ask('check?')\"",
-            "calls input()",
-        ),
-        # Python input() with < redirection (always rejected — prompt API)
-        (
-            "python -c \"x = input('enter: '); print(x)\" < /dev/null",
-            "calls input()",
-        ),
-        # Python sys.stdin.readline() without explicit source
-        (
-            'python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            'python -c "from sys import stdin; stdin.readline()"',
-            "sys.stdin",
-        ),
-        # Python open(0).read() without source
-        (
-            'python -c "open(0).read()"',
-            "open(0)",
-        ),
-        # Python os.read(0, ...) without source
-        (
-            'python -c "import os; os.read(0, 1024)"',
-            "os.read(0",
-        ),
-        (
-            'python -c "import os as operating_system; operating_system.read(0, 1024)"',
-            "os.read(0",
-        ),
-        (
-            'python -c "from os import read as read_fd; read_fd(0, 1024)"',
-            "os.read(0",
-        ),
-        (
-            'python -c "import os; os.fdopen(0).read()"',
-            "reads from stdin",
-        ),
-        (
-            'python -c "fd = 0; open(fd).read()"',
-            "reads from stdin",
-        ),
-        (
-            'python -c "open(file=0).read()"',
-            "reads from stdin",
-        ),
-        (
-            'python -c "import sys; sys.__stdin__.readline()"',
-            "sys.stdin",
-        ),
-        (
-            'python -c "from sys import __stdin__; __stdin__.readline()"',
-            "sys.stdin",
-        ),
-        # Direct shell read without source
-        ("read -r line", "calls the shell `read` builtin"),
-        # Shell readarray without source
-        ("readarray -t lines", "calls the shell `readarray` builtin"),
-        # Shell mapfile without source
-        ("mapfile -t lines", "calls the shell `mapfile` builtin"),
-        # Shell select without source
-        ("select opt in a b c; do break; done", "calls the shell `select` builtin"),
-        # while read without source
-        ("while read -r line; do echo $line; done", "uses `while read`"),
-        ("builtin read -r line", "calls the shell `read` builtin"),
-        (
-            "if true; then read -r line; fi",
-            "calls the shell `read` builtin",
-        ),
-        (
-            "for item in one; do read -r line; done",
-            "calls the shell `read` builtin",
-        ),
-        (
-            "bash -c '(read -r value)'",
-            "calls the shell `read` builtin",
-        ),
-        (
-            "bash -c '{ read -r value; }'",
-            "calls the shell `read` builtin",
-        ),
-        (
-            "if python -c \"input('check?')\"; then true; fi",
-            "calls input()",
-        ),
-        (
-            "time node -e \"prompt('check?')\"",
-            "calls prompt()",
-        ),
-        (
-            'time -f %E python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            "bash -c '(python -c \"input(1)\")'",
-            "calls input()",
-        ),
-        (
-            'nice -n 10 python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            'stdbuf -oL python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            "ionice -c 3 bash -c 'read -r value'",
-            "calls the shell `read` builtin",
-        ),
-        (
-            'chrt -f 10 python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            'chrt -T 100 -D 200 -P 300 -f 10 python -c "import sys; sys.stdin.readline()"',
-            "sys.stdin",
-        ),
-        (
-            'rlwrap python -c "import sys; sys.stdin.readline()"',
-            "interactive `rlwrap` wrapper",
-        ),
-        (
-            "time rlwrap true",
-            "interactive `rlwrap` wrapper",
-        ),
-        # Nested shell reader without outer source
-        ("bash -c 'read -r value'", "calls the shell `read` builtin"),
-        (
-            "bash -c 'bash -c \"read -r value\"'",
-            "calls the shell `read` builtin",
-        ),
-        # JS process.stdin without source
-        (
-            "node -e \"process.stdin.on('data', d => console.log(d))\"",
-            "process.stdin",
-        ),
-        # JS Deno.stdin without source
-        (
-            'deno eval "await Deno.stdin.readable"',
-            "Deno.stdin",
-        ),
-        # JS Bun.stdin without source
-        (
-            'bun -e "const d = Bun.stdin"',
-            "Bun.stdin",
-        ),
-        # JS prompt() — always rejected
-        (
-            "node -e \"const x = prompt('enter value')\"",
-            "calls prompt()",
-        ),
-        (
-            "node -e \"const rl = require('node:readline').createInterface("
-            "{input: process.stdin}); rl.question('value?', () => {})\"",
-            "calls prompt()",
-        ),
-        # JS prompt() even with piped input — always rejected
-        (
-            "echo yes | node -e \"const x = prompt('ok?')\"",
-            "calls prompt()",
-        ),
-        # 2<file does NOT provide stdin, so shell read is still rejected
-        ("read -r line 2</dev/null", "calls the shell `read` builtin"),
-        ("read -r line 2<</dev/null", "calls the shell `read` builtin"),
-        ("read -r line 2<>/dev/null", "calls the shell `read` builtin"),
-    ],
-)
-def test_command_done_condition_rejects_stdin_dependent_commands(
-    command: str, expected_substring: str
-) -> None:
-    errors = validate_plan_done_conditions(_command_plan(command))
-    assert len(errors) == 1, f"expected 1 error, got {errors}"
-    assert expected_substring in errors[0], f"expected {expected_substring!r} in {errors[0]!r}"
-    assert "immutable finish gate" in errors[0]
-    assert "reads from stdin" in errors[0] or "prompts interactively" in errors[0]
-
-
-# ---------------------------------------------------------------------------
-# H368 — legitimate stdin-supplied commands (positive — must NOT be rejected)
-# ---------------------------------------------------------------------------
-
-
+# H368 — command strings are not statically interpreted as programming
+# languages. Safety/liveness is enforced by the execution boundary and plan
+# authority lifecycle, so both the historical bad verifier and legitimate
+# lookalikes remain structurally valid plan-owned conditions.
 @pytest.mark.parametrize(
     "command",
     [
-        # H342: read -r with process substitution (< <(...) supplies stdin)
-        "read -r value < <(printf 71); [[ $value == 71 ]]",
-        # Python sys.stdin with < input.txt
-        'python -c "import sys; print(sys.stdin.read())" < input.txt',
-        # Python sys.stdin with pipe source
-        'printf 42 | python -c "import sys; print(sys.stdin.read())"',
-        # Bash |& also supplies the next command's stdin.
-        'printf 42 |& python -c "import sys; print(sys.stdin.read())"',
-        # <> and <& are explicit fd-0 sources.
-        'python -c "import sys; print(sys.stdin.read())" <> input.txt',
-        'python -c "import sys; print(sys.stdin.read())" 0<&3',
-        # Python open(0) with pipe source
-        'echo ok | python -c "print(open(0).read())"',
-        # Nested bash -c with outer < redirection inheriting stdin
-        "bash -c 'read -r value; echo $value' < input.txt",
-        "bash -c 'bash -c \"read -r value\"' < input.txt",
-        "bash -c 'if true; then read -r value; fi' < input.txt",
-        "bash -c 'for item in one; do read -r value; done' < input.txt",
-        ("bash -c 'if python -c \"import sys; sys.stdin.read()\"; then true; fi' < input.txt"),
-        'time python -c "import sys; sys.stdin.read()" < input.txt',
-        'time -f %E python -c "from sys import __stdin__; __stdin__.read()" < input.txt',
-        'printf x | nice -n 10 python -c "import sys; sys.stdin.read()"',
-        'stdbuf -oL python -c "open(file=0).read()" < input.txt',
-        'ionice -c 3 bash -c "read -r value" < input.txt',
-        'chrt -f 10 python -c "import sys; sys.__stdin__.read()" < input.txt',
-        ('chrt -T 100 -D 200 -P 300 -f 10 python -c "import sys; sys.stdin.read()" < input.txt'),
-        # Nested bash -c read with heredoc source
-        "bash -c 'read -r value' <<< 'hello'",
-        # JS process.stdin with pipe source (piped, stdin supplied)
-        "echo data | node -e \"process.stdin.on('data', d => console.log(d))\"",
-        # JS Deno.stdin with < source
-        'deno eval "await Deno.stdin.readable" < input.txt',
-        # JS Bun.stdin with <<< source
-        'bun -e "process.stdout.write(Bun.stdin.value)" <<< hello',
-        # Ordinary finite verification (no stdin dependency at all)
-        "test -f index.html && npm test",
-        'printf 42 | python -c "import sys; print(sys.stdin.read())" | grep -q 42',
-        "grep -q success output.txt",
-        # Python string literal containing 'input()' text — must not false-positive
-        "python -c \"print('input() is a builtin')\"",
-        # Python string literal containing 'sys.stdin' — must not false-positive
-        "python -c \"msg = 'use sys.stdin'; print(msg)\"",
-        # Shell grep containing 'read' in a string — must not false-positive
-        "grep -q 'read the docs' README.md",
+        "python -c \"import sys; exec(open('primes.py').read()) if input('check?') else None\"",
+        "python -c \"input=lambda prompt: 'ok'; assert input('check?') == 'ok'\"",
+        'node -e "const x={question:()=>42}; if(x.question()!=42) process.exit(1)"',
+        'python -c "import sys; assert not sys.stdin.isatty()"',
+        "bash -c 'bash -c \"printf ok | grep -q ok\"'",
     ],
 )
-def test_command_done_condition_preserves_legitimate_stdin_commands(
-    command: str,
-) -> None:
-    errors = validate_plan_done_conditions(_command_plan(command))
-    assert errors == [], f"unexpected rejection: {errors}"
+def test_h368_command_language_is_not_statically_adjudicated(command: str) -> None:
+    assert validate_plan_done_conditions(_command_plan(command)) == []

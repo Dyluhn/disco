@@ -137,6 +137,7 @@ def test_h342_bounded_shell_argv_pins_non_login_bash():
     assert "-l" not in argv[5:]
     assert "shell_executable = sys.argv[3]" in _BOUNDED_EXEC_HELPER
     assert "executable=shell_executable" in _BOUNDED_EXEC_HELPER
+    assert "stdin=subprocess.DEVNULL" in _BOUNDED_EXEC_HELPER
 
 
 async def test_h342_process_shell_runs_bash_process_substitution():

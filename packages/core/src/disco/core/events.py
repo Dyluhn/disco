@@ -614,6 +614,47 @@ class CondensationEvent(BaseEvent):
     reason: Literal["request", "tokens", "events", "hard_reset"] = "tokens"
 
 
+class PlanVerificationTransition(BaseModel):
+    """Append-only authority record carried by one plan_approved status event.
+
+    The StatusEvent envelope supplies timestamp and sequence. Fingerprints bind
+    the old and new revision-scoped model predicates without copying them into
+    the immutable external DoD row; the referenced PlanEvents retain the full
+    predicate bytes.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    old_plan_revision: int | None = None
+    old_plan_event_id: str | None = None
+    old_predicate_fingerprints: list[str] = Field(default_factory=list)
+    new_plan_revision: int
+    new_plan_event_id: str
+    new_predicate_fingerprints: list[str] = Field(default_factory=list)
+    old_authority: Literal["plan"] = "plan"
+    new_authority: Literal["plan"] = "plan"
+    external_authority: Literal["external"] = "external"
+    external_predicate_fingerprints: list[str] = Field(default_factory=list)
+    reason: str = "approved_plan_revision"
+
+
+class PlanVerifierFailure(BaseModel):
+    """Typed failure of the currently approved plan-owned verifier set."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan_revision: int
+    plan_event_id: str
+    predicate_fingerprints: list[str]
+    spec_fingerprint: str
+    failure_fingerprint: str
+    failure_kinds: list[str]
+    attempt_for_approved_plan: int = Field(ge=1)
+    approvals_with_same_predicates: int = Field(ge=1)
+    authority: Literal["plan"] = "plan"
+    replan_allowed: bool = True
+
+
 class StatusEvent(BaseEvent):
     """A lifecycle/status transition. NOT LLMConvertible. Drives the UI and the
     loop's state machine reconstruction (§3)."""
@@ -622,6 +663,8 @@ class StatusEvent(BaseEvent):
     source: EventSource = EventSource.SYSTEM
     status: ConversationStatus
     detail: str | None = None
+    plan_verification_transition: PlanVerificationTransition | None = None
+    plan_verifier_failure: PlanVerifierFailure | None = None
 
 
 class WorkspaceVersionEvent(BaseEvent):
