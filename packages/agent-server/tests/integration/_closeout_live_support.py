@@ -449,14 +449,18 @@ def appkit_fixture() -> tuple[FixtureWorkspace, AppSpec, str]:
     return workspace, app, worker_src
 
 
-def appkit_record_plan(app: AppSpec, worker_src: str) -> tuple[str, dict[str, object], str]:
+def appkit_record_plan(app: AppSpec, worker_src: str) -> tuple[str, dict[str, object], str, str]:
     """Derive, from the GENERATED AppSpec + worker source, an FK-free writable record
-    route, a valid POST payload, and a unique read-back marker.
+    route, a valid POST payload, a unique read-back marker, and a ROLE whose session
+    may write that route (acceptance-v5: the generated app's documented auth model is
+    session + RBAC, so §12.6 drives register→login→cookie with a real role).
 
-    Reads the real artifacts (no hard-coded route): pick the first entity whose
+    Reads the real artifacts (no hard-coded route/role): pick the first entity whose
     required fields are all scalar (no ``*_id`` foreign-key column), match it to the
-    worker's literal ``/api/<table>`` route, and build a typed payload from its
-    required fields (email -> the marker email, numeric -> a number, else -> text)."""
+    worker's literal ``/api/<table>`` route, build a typed payload from its required
+    fields (email -> the marker email, numeric -> a number, else -> text), and pick
+    the entity's first declared write role (else read role, else the app's first
+    role — an empty write_roles means any authenticated session may write)."""
     routes = set(re.findall(r'"(/api/[A-Za-z0-9_]+)"', worker_src))
 
     def _is_fk(field_name: str, field_type: str) -> bool:
@@ -483,11 +487,48 @@ def appkit_record_plan(app: AppSpec, worker_src: str) -> tuple[str, dict[str, ob
                 payload[name] = "2026-07-12T00:00:00Z"
             else:
                 payload[name] = marker
-        return route, payload, marker
+        role_pool = tuple(entity.write_roles) or tuple(entity.read_roles) or tuple(app.roles)
+        assert role_pool, "the generated auth app declares no roles to register with"
+        return route, payload, marker, str(role_pool[0])
     raise AssertionError(
         "no foreign-key-free writable record entity with a matching /api route was "
         f"found in the generated AppKit worker (routes={sorted(routes)})"
     )
+
+
+def http_response(
+    port: int,
+    path: str,
+    *,
+    method: str = "GET",
+    headers: Mapping[str, str] | None = None,
+    data: bytes | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    """Like ``http_status_body`` but ALSO returns the response headers (lower-cased
+    names), so a login's ``Set-Cookie`` session can be captured (acceptance-v5
+    §12.6 register→login→cookie flow)."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        method=method,
+        data=data,
+        headers=dict(headers or {}),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, {k.lower(): v for k, v in exc.headers.items()}, exc.read()
+
+
+def session_cookie_from(headers: Mapping[str, str]) -> str:
+    """The ``session=<token>`` pair from a login response's ``Set-Cookie`` header
+    (attributes stripped), ready to send back as a ``Cookie`` request header."""
+    raw = headers.get("set-cookie", "")
+    pair = raw.split(";", 1)[0].strip()
+    assert pair.startswith("session=") and len(pair) > len("session="), (
+        f"login did not set a session cookie: {raw!r}"
+    )
+    return pair
 
 
 # ---------------------------------------------------------------------------
@@ -509,10 +550,16 @@ class ComposeBundle:
     # -- primitives -------------------------------------------------------------
 
     def compose(
-        self, *args: str, timeout: int = _DEFAULT_COMPOSE_TIMEOUT
+        self, *args: str, timeout: int = _DEFAULT_COMPOSE_TIMEOUT, record: bool = True
     ) -> subprocess.CompletedProcess[str]:
         """Run ``docker compose -p <project> <args>`` from the bundle dir. Fixed
-        argv list, no shell. Output is captured (and recorded for the secret scan)."""
+        argv list, no shell. Output is captured (and recorded for the secret scan).
+
+        ``record=False`` exists for EXACTLY ONE caller — ``exec_env``'s deliberate
+        sanitized secret-presence probe (§12.9), whose stdout IS the secret by
+        design and would otherwise self-poison the leak sweep it feeds
+        (acceptance-v5 correction, owner-adjudicated 2026-07-17). Every ordinary
+        Compose lifecycle surface stays recorded and swept."""
         proc = subprocess.run(
             ["docker", "compose", "-p", self.project, *args],
             cwd=self.bundle_dir,
@@ -521,8 +568,9 @@ class ComposeBundle:
             timeout=timeout,
             check=False,
         )
-        self.captured_output.append(proc.stdout)
-        self.captured_output.append(proc.stderr)
+        if record:
+            self.captured_output.append(proc.stdout)
+            self.captured_output.append(proc.stderr)
         return proc
 
     def docker(
@@ -586,8 +634,16 @@ class ComposeBundle:
 
     def exec_env(self, service: str, name: str) -> str:
         """The value of ``$name`` inside a running service container (used to PROVE
-        the runtime secret is present — a SANITIZED inspection, plan §12.9)."""
-        proc = self.compose("exec", "-T", service, "printenv", name)
+        the runtime secret is present — a SANITIZED inspection, plan §12.9). The ONE
+        ``record=False`` caller: this probe's stdout is the secret by design, so it
+        is excluded from the ``captured_output`` leak-sweep surface (the sweep would
+        otherwise deterministically find the value the probe just printed). The
+        probe must itself SUCCEED — a failed exec must never read as an empty
+        (secret-free-looking) value."""
+        proc = self.compose("exec", "-T", service, "printenv", name, record=False)
+        assert proc.returncode == 0, (
+            f"the sanitized secret-presence probe failed (exit {proc.returncode}): {proc.stderr}"
+        )
         return proc.stdout.strip()
 
     def image_history_text(self, service: str) -> str:

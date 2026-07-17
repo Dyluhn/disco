@@ -72,6 +72,7 @@ from ._closeout_live_support import (
     docker_compose_available,
     express_fixture,
     fastapi_fixture,
+    http_response,
     http_status_body,
     imported_node_fixture,
     ingress_service_id,
@@ -82,6 +83,7 @@ from ._closeout_live_support import (
     scan_dir_bytes,
     scan_zip_bytes,
     seed_and_cut,
+    session_cookie_from,
     vite_fixture,
     write_env_file,
 )
@@ -380,11 +382,14 @@ def test_live_appkit_persistence_and_migration_idempotence(
     """WO-C8 §12 (AppKit) — §12.1–§12.9, §12.11.
 
     The stateful fixture: full lifecycle, plus a missing ``ADMIN_TOKEN`` fails before
-    healthy (§12.8); a unique record written through the public POST API survives a
-    ``restart`` and is read back EXACTLY through the authenticated GET API — with an
-    UNauthenticated read rejected, so an in-memory substitute cannot pass (§12.6);
-    ``down`` WITHOUT ``-v`` then ``up`` stays healthy with the record still present
-    and migration initialization succeeds a second time over existing state (§12.7);
+    healthy (§12.8); §12.6 drives the generated app's DOCUMENTED auth model
+    (acceptance-v5, owner-adjudicated 2026-07-17): a unique user is registered via
+    ``/api/register`` under Bearer ``ADMIN_TOKEN``, logged in via ``/api/login``, and
+    the returned session cookie writes a unique record; an UNauthenticated read is
+    rejected (401); after a ``restart`` the SAME session cookie reads the EXACT
+    record back, so an in-memory substitute cannot pass; ``down`` WITHOUT ``-v``
+    then ``up`` stays healthy with the session AND record still present and
+    migration initialization succeeds a second time over existing state (§12.7);
     and the admin secret is absent from every prohibited surface while present
     (sanitized) only in the container env (§12.9)."""
     require_live_runtime()
@@ -432,41 +437,70 @@ def test_live_appkit_persistence_and_migration_idempotence(
     assert up.returncode == 0, f"AppKit `up -d` failed:\n{up.stderr}"
     assert fx.body_marker in await_http_ok(port, fx.health_path)
 
-    # §12.6: write a unique record via the public API; the authenticated read is gated.
-    route, payload, marker = appkit_record_plan(app, worker_src)
-    post_status, _ = http_status_body(
+    # §12.6 (acceptance-v5): drive the generated app's documented session-auth model.
+    route, payload, marker, role = appkit_record_plan(app, worker_src)
+    json_headers = {"Content-Type": "application/json"}
+    email = f"{_cid(closeout_name, 'user')}@example.test"
+    password = _cid(closeout_name, "pw-session")  # seeded, >=8 chars, throwaway
+
+    # 1. register a unique user through /api/register under Bearer ADMIN_TOKEN.
+    reg_status, _, reg_body = http_response(
+        port,
+        "/api/register",
+        method="POST",
+        headers={**json_headers, "Authorization": f"Bearer {SECRET_ENV_SENTINEL}"},
+        data=json.dumps({"email": email, "password": password, "role": role}).encode("utf-8"),
+    )
+    assert reg_status < 400, f"admin register failed: {reg_status} {reg_body!r}"
+
+    # 2./3. login and capture the returned session cookie.
+    login_status, login_headers, login_body = http_response(
+        port,
+        "/api/login",
+        method="POST",
+        headers=json_headers,
+        data=json.dumps({"email": email, "password": password}).encode("utf-8"),
+    )
+    assert login_status == 200, f"login failed: {login_status} {login_body!r}"
+    cookie = {"Cookie": session_cookie_from(login_headers)}
+
+    # 4. create the unique record with that session cookie.
+    post_status, _, post_body = http_response(
         port,
         route,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={**json_headers, **cookie},
         data=json.dumps(payload).encode("utf-8"),
     )
-    assert post_status < 400, f"record POST to {route} failed: {post_status}"
+    assert post_status < 400, f"session record POST to {route} failed: {post_status} {post_body!r}"
+
+    # 5. an unauthenticated read is rejected.
     unauth_status, _ = http_status_body(port, route)
     assert unauth_status == 401, (
         f"an unauthenticated read of {route} must be rejected (401); got {unauth_status} — "
-        "the read-back must go through the authenticated API"
+        "entity reads require a valid session"
     )
 
+    # 6. restart; the SAME session cookie reads the EXACT record back.
     bundle.restart()  # §12.5
     assert fx.body_marker in await_http_ok(port, fx.health_path)
-    auth = {"Authorization": f"Bearer {SECRET_ENV_SENTINEL}"}
-    read_status, read_body = http_status_body(port, route, headers=auth)
+    read_status, read_body = http_status_body(port, route, headers=cookie)
     assert read_status == 200 and marker.encode("utf-8") in read_body, (
-        "the exact record did not survive restart on the persistent volume (§12.6); an "
-        "in-memory substitute would have lost it"
+        "the exact record (or the session that reads it) did not survive restart on the "
+        "persistent volume (§12.6); an in-memory substitute would have lost them"
     )
 
-    # §12.7: down WITHOUT -v, up again — still healthy, record present, migration re-runs.
+    # 7. §12.7: down WITHOUT -v, up again — healthy, session + record persist,
+    # migration initialization succeeds a SECOND time over existing state.
     bundle.down_keep_volume()
     up2 = bundle.up()
     assert up2.returncode == 0, f"second AppKit `up -d` failed:\n{up2.stderr}"
     assert fx.body_marker in await_http_ok(port, fx.health_path), (
         "migration initialization must succeed a SECOND time over existing state (§12.7)"
     )
-    read2_status, read2_body = http_status_body(port, route, headers=auth)
+    read2_status, read2_body = http_status_body(port, route, headers=cookie)
     assert read2_status == 200 and marker.encode("utf-8") in read2_body, (
-        "the record must remain after a down (keeping the volume) + up (§12.7)"
+        "the session and record must remain after a down (keeping the volume) + up (§12.7)"
     )
 
     # §12.9: sanitized runtime env carries the secret; no prohibited surface does.
