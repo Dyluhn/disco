@@ -9,6 +9,7 @@ to `self._loop.`.
 
 from __future__ import annotations
 
+import ast
 import ipaddress
 import logging
 import re
@@ -136,6 +137,35 @@ _PACKAGE_OPTIONS_WITH_VALUES = frozenset(
 )
 _ENV_OPTIONS_WITH_VALUES = frozenset({"--chdir", "--split-string", "--unset", "-c", "-s", "-u"})
 _TIMEOUT_OPTIONS_WITH_VALUES = frozenset({"--kill-after", "--signal", "-k", "-s"})
+_CHRT_OPTIONS_WITH_VALUES = frozenset(
+    {
+        "--sched-deadline",
+        "--sched-period",
+        "--sched-runtime",
+        "-D",
+        "-P",
+        "-T",
+    }
+)
+_EXEC_WRAPPER_OPTIONS_WITH_VALUES = {
+    "ionice": frozenset(
+        {
+            "--class",
+            "--classdata",
+            "--pid",
+            "--pgid",
+            "--uid",
+            "-c",
+            "-n",
+            "-p",
+            "-P",
+            "-u",
+        }
+    ),
+    "nice": frozenset({"--adjustment", "-n"}),
+    "stdbuf": frozenset({"--error", "--input", "--output", "-e", "-i", "-o"}),
+    "time": frozenset({"--format", "--output", "-f", "-o"}),
+}
 _VITE_OPTIONS_WITH_VALUES = frozenset(
     {"--base", "--config", "--host", "--loglevel", "--mode", "--port", "-c", "-l", "-m"}
 )
@@ -263,6 +293,28 @@ def _discard_option_prefix(words: list[str], options_with_values: frozenset[str]
     return remaining
 
 
+def _discard_case_sensitive_option_prefix(
+    words: list[str],
+    options_with_values: frozenset[str],
+) -> list[str]:
+    """Case-preserving counterpart for CLIs whose short flags differ by case."""
+    remaining = list(words)
+    while remaining:
+        token = remaining[0]
+        if token == "--":
+            return remaining[1:]
+        option = token.split("=", 1)[0]
+        if option in options_with_values:
+            consumed = 1 if "=" in token else 2
+            remaining = remaining[consumed:]
+            continue
+        if token.startswith("-"):
+            remaining.pop(0)
+            continue
+        break
+    return remaining
+
+
 def _shell_nested_command(words: list[str]) -> str | None:
     """Return the command string passed through a shell's short ``-c`` options."""
     if not words or _basename(words[0]) not in {"bash", "dash", "sh", "zsh"}:
@@ -321,6 +373,22 @@ def _strip_command_prefix(words: list[str]) -> list[str]:
             remaining = _discard_option_prefix(remaining, _TIMEOUT_OPTIONS_WITH_VALUES)
             if remaining:  # duration
                 remaining.pop(0)
+            continue
+        if head == "chrt":
+            remaining.pop(0)
+            remaining = _discard_case_sensitive_option_prefix(
+                remaining,
+                _CHRT_OPTIONS_WITH_VALUES,
+            )
+            if remaining and remaining[0].isdigit():
+                remaining.pop(0)  # scheduling priority before the command
+            continue
+        if head in _EXEC_WRAPPER_OPTIONS_WITH_VALUES:
+            remaining.pop(0)
+            remaining = _discard_option_prefix(
+                remaining,
+                _EXEC_WRAPPER_OPTIONS_WITH_VALUES[head],
+            )
             continue
         break
     return remaining
@@ -513,6 +581,512 @@ def _unsafe_command_done_condition_reason(command: str) -> str | None:
             return probe_issue
         if _segment_launches_local_server(segment):
             return "launches a local server"
+    stdin_issue = _stdin_dependent_command_reason(command, tokens=tokens, depth=0)
+    if stdin_issue is not None:
+        return stdin_issue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# H368 — reject interactive prompts and stdin-dependent commands whose stdin
+# is not explicitly supplied by the immutable command itself.
+# ---------------------------------------------------------------------------
+
+_STDIN_DEPENDENT_REASON = (
+    "reads from stdin or prompts for interactive input without an explicit "
+    "source in the immutable command. Done-condition gates run unattended — "
+    "they cannot prompt the user, and they may read stdin only when the "
+    "immutable command supplies it via an explicit pipe, < redirect, "
+    "<<< here-string, << here-document, <&/<> fd-0 redirect, or <(...) "
+    "process substitution"
+)
+
+_SHELL_STDIN_BUILTINS = frozenset({"read", "readarray", "mapfile", "select"})
+_INTERACTIVE_STDIN_WRAPPERS = frozenset({"rlwrap"})
+_SHELL_READER_PREFIXES = frozenset(
+    {
+        "!",
+        "(",
+        "{",
+        "builtin",
+        "do",
+        "elif",
+        "else",
+        "if",
+        "then",
+        "time",
+        "until",
+        "while",
+    }
+)
+_JS_STDIN_RUNTIMES = frozenset({"node", "nodejs", "bun", "deno"})
+_STDIN_REDIRECTION_TOKENS = frozenset({"<", "<<", "<<<", "<&", "<>"})
+_STDIN_SEGMENT_SEPARATORS = _COMMAND_SEPARATOR_TOKENS | frozenset({"|&"})
+
+
+def _is_nonzero_fd(token: str) -> bool:
+    """True if *token* is a numeric file descriptor other than 0 (stdin)."""
+    return bool(token.isdigit() and token != "0")
+
+
+def _segment_has_explicit_stdin_source(seg_tokens: list[str]) -> bool:
+    """True if *seg_tokens* contain an explicit stdin redirection.
+
+    Recognises ``<``, ``<<``, ``<<<``, ``<&``, and ``<>`` unless preceded by
+    a non-0 fd number like ``2<``; ``< <(...)`` process substitution is
+    recognized by its leading fd-0 ``<``.
+
+    Note: shlex groups runs of punctuation characters, so multi-character
+    redirects arrive as single tokens.
+    """
+    for i, token in enumerate(seg_tokens):
+        if token not in _STDIN_REDIRECTION_TOKENS:
+            continue
+        # Skip non-stdin fd redirects (2<, 3<<, 4<>, etc.). The shell lexer
+        # emits the numeric fd as the immediately preceding token.
+        if i > 0 and _is_nonzero_fd(seg_tokens[i - 1]):
+            continue
+        return True
+    return False
+
+
+def _segment_tokens_with_pipe_stdin(
+    tokens: list[str],
+) -> list[tuple[list[str], bool]]:
+    """Split *tokens* into segments (as ``_command_segments`` does) while also
+    tracking whether each segment receives stdin from a preceding ``|`` or
+    ``|&`` pipe.
+
+    Returns ``[(segment_tokens, stdin_from_pipe), ...]``.
+    """
+    result: list[tuple[list[str], bool]] = []
+    current: list[str] = []
+    prev_was_pipe = False
+    for token in tokens:
+        if token in _STDIN_SEGMENT_SEPARATORS:
+            if current:
+                result.append((current, prev_was_pipe))
+                current = []
+                prev_was_pipe = False
+            if token in {"|", "|&"}:
+                prev_was_pipe = True
+            continue
+        current.append(token)
+    if current:
+        result.append((current, prev_was_pipe))
+    return result
+
+
+# -- Python -c code inspection (AST, no execution) ----------------------------
+
+
+def _python_c_inline_code(words: list[str]) -> str | None:
+    """Return the Python code string from a ``python* -c <code>`` invocation."""
+    if (
+        not words
+        or re.fullmatch(
+            r"(?:python|pypy)(?:\d+(?:\.\d+)*)?",
+            _basename(words[0]),
+        )
+        is None
+    ):
+        return None
+    for i, token in enumerate(words):
+        if token == "-c" and i + 1 < len(words):
+            return words[i + 1]
+    return None
+
+
+class _PythonStdinVisitor(ast.NodeVisitor):
+    """Track common Python prompt/stdin spellings without executing inline code.
+
+    Import aliases and simple ``fd = 0`` bindings are followed so trivial
+    qualification cannot turn the same unattended read into an accepted gate.
+    Dynamic attribute construction remains outside this bounded static check.
+    """
+
+    def __init__(self) -> None:
+        self._found_input_prompt = False
+        self._found_stdin_access = False
+        self._builtins_modules = {"builtins"}
+        self._input_functions = {"input"}
+        self._open_functions = {"open"}
+        self._sys_modules = {"sys"}
+        self._stdin_names: set[str] = set()
+        self._os_modules = {"os"}
+        self._os_fd_functions: set[str] = set()
+        self._io_modules = {"io"}
+        self._io_fd_functions: set[str] = set()
+        self._zero_fd_names: set[str] = set()
+
+    @property
+    def has_input_prompt(self) -> bool:
+        return self._found_input_prompt
+
+    @property
+    def needs_stdin_source(self) -> bool:
+        return self._found_stdin_access
+
+    @staticmethod
+    def _bound_import_name(alias: ast.alias) -> str:
+        return alias.asname or alias.name.split(".", 1)[0]
+
+    def _is_fd_zero(self, node: ast.expr) -> bool:
+        return (isinstance(node, ast.Constant) and type(node.value) is int and node.value == 0) or (
+            isinstance(node, ast.Name) and node.id in self._zero_fd_names
+        )
+
+    def _call_uses_fd_zero(self, node: ast.Call) -> bool:
+        if node.args and self._is_fd_zero(node.args[0]):
+            return True
+        return any(
+            keyword.arg in {"fd", "file"} and self._is_fd_zero(keyword.value)
+            for keyword in node.keywords
+        )
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            bound = self._bound_import_name(alias)
+            if alias.name == "builtins":
+                self._builtins_modules.add(bound)
+            elif alias.name == "sys":
+                self._sys_modules.add(bound)
+            elif alias.name == "os":
+                self._os_modules.add(bound)
+            elif alias.name == "io":
+                self._io_modules.add(bound)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        module = node.module or ""
+        for alias in node.names:
+            bound = alias.asname or alias.name
+            if module == "builtins" and alias.name == "input":
+                self._input_functions.add(bound)
+            elif module == "builtins" and alias.name == "open":
+                self._open_functions.add(bound)
+            elif module == "sys" and alias.name in {"stdin", "__stdin__"}:
+                self._stdin_names.add(bound)
+            elif module == "os" and alias.name in {"read", "fdopen"}:
+                self._os_fd_functions.add(bound)
+            elif module == "io" and alias.name in {"open", "FileIO"}:
+                self._io_fd_functions.add(bound)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if self._is_fd_zero(node.value):
+            self._zero_fd_names.update(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if (
+            node.value is not None
+            and self._is_fd_zero(node.value)
+            and isinstance(node.target, ast.Name)
+        ):
+            self._zero_fd_names.add(node.target.id)
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in self._input_functions:
+            self._found_input_prompt = True
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr == "input"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in self._builtins_modules
+        ):
+            self._found_input_prompt = True
+
+        first_arg_is_stdin = self._call_uses_fd_zero(node)
+        if isinstance(func, ast.Name):
+            if func.id in self._open_functions and first_arg_is_stdin:
+                self._found_stdin_access = True
+            elif func.id in self._os_fd_functions and first_arg_is_stdin:
+                self._found_stdin_access = True
+            elif func.id in self._io_fd_functions and first_arg_is_stdin:
+                self._found_stdin_access = True
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            if (
+                func.value.id in self._os_modules
+                and func.attr in {"read", "fdopen"}
+                and first_arg_is_stdin
+            ):
+                self._found_stdin_access = True
+            elif (
+                func.value.id in self._io_modules
+                and func.attr in {"open", "FileIO"}
+                and first_arg_is_stdin
+            ):
+                self._found_stdin_access = True
+        self.generic_visit(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if (
+            node.attr in {"stdin", "__stdin__"}
+            and isinstance(node.value, ast.Name)
+            and node.value.id in self._sys_modules
+        ):
+            self._found_stdin_access = True
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id in self._stdin_names:
+            self._found_stdin_access = True
+
+
+def _python_c_stdin_issue(
+    code: str,
+    *,
+    strip_one_group_closer: bool = False,
+) -> str | None:
+    """Return a rejection reason if *code* uses interactive prompts or accesses
+    stdin.  AST-only — never executes the code.  String-literal mentions of
+    ``input()`` / ``sys.stdin`` / … do not false-positive.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        if not strip_one_group_closer or not code.endswith(")"):
+            return None  # unparseable — let execution surface any real error
+        try:
+            tree = ast.parse(code[:-1])
+        except SyntaxError:
+            return None
+    visitor = _PythonStdinVisitor()
+    visitor.visit(tree)
+    if visitor.has_input_prompt:
+        return "calls input() which prompts interactively — " + _STDIN_DEPENDENT_REASON
+    if visitor.needs_stdin_source:
+        return "accesses sys.stdin, open(0), or os.read(0, …) which " + _STDIN_DEPENDENT_REASON
+    return None
+
+
+# -- Shell-reader detection --------------------------------------------------
+
+
+def _strip_stdin_command_prefix(
+    seg_tokens: list[str],
+) -> tuple[list[str], str | None, bool]:
+    """Expose a command behind common shell control/group prefixes.
+
+    This is intentionally bounded: it recognizes ordinary command positions
+    such as ``if command``, ``then command``, ``! command``, and ``(command)``
+    without attempting to become a general shell parser.  The optional second
+    return value preserves an ``if``/``while``/``until`` label for diagnostics;
+    the third reports a compact ``(command)`` group whose closer may have been
+    joined to the final argument by the lifecycle tokenizer.
+    """
+    words = list(seg_tokens)
+    control_head: str | None = None
+    compact_group = False
+    while words:
+        words = _strip_command_prefix(words)
+        if not words:
+            return [], control_head, compact_group
+        head = _basename(words[0]).lower()
+        # A compact subshell such as `(read value)` remains one shlex word at
+        # its opening edge because parentheses are outside our lifecycle
+        # tokenizer's punctuation set. Normalize that one shell grouping form
+        # without mistaking arithmetic `((...))` for a command group.
+        if head == "(":
+            compact_group = True
+            words.pop(0)
+            continue
+        if head.startswith("(") and not head.startswith("(("):
+            compact_group = True
+            head = head[1:]
+            words[0] = words[0][1:]
+        if head not in _SHELL_READER_PREFIXES:
+            return words, control_head, compact_group
+        if head in {"if", "while", "until"} and control_head is None:
+            control_head = head
+        words.pop(0)
+        # `builtin -p read` and `time -p read` remain direct reader forms.
+        if head in {"builtin", "time"}:
+            while words and words[0].startswith("-"):
+                words.pop(0)
+    return [], control_head, compact_group
+
+
+def _segment_has_shell_reader(seg_tokens: list[str]) -> str | None:
+    """Return a reason if *seg_tokens* calls a shell stdin builtin or a
+    reader in a common shell control/group command position."""
+    words, control_head, _ = _strip_stdin_command_prefix(seg_tokens)
+    if not words:
+        return None
+    head = _basename(words[0]).lower()
+    if head not in _SHELL_STDIN_BUILTINS:
+        return None
+    if control_head is not None:
+        return f"uses `{control_head} {head}` which " + _STDIN_DEPENDENT_REASON
+    return f"calls the shell `{head}` builtin which " + _STDIN_DEPENDENT_REASON
+
+
+# -- JS runtime-code detection -----------------------------------------------
+
+
+def _js_runtime_inline_code(words: list[str]) -> tuple[str, str] | None:
+    """Return (runtime, code) for ``node -e <code>``, ``deno eval <code>``,
+    ``bun -e <code>``, etc.  or None."""
+    if not words:
+        return None
+    head = _basename(words[0]).lower()
+    if head not in _JS_STDIN_RUNTIMES:
+        return None
+    if head == "deno":
+        # deno eval <code>
+        for i, token in enumerate(words):
+            if token.lower() == "eval" and i + 1 < len(words):
+                return ("deno", words[i + 1])
+        return None
+    # node / bun — -e/--eval <code>
+    for i, token in enumerate(words):
+        if token in {"-e", "--eval"} and i + 1 < len(words):
+            return (head, words[i + 1])
+        if token.startswith("--eval="):
+            return (head, token.split("=", 1)[1])
+    return None
+
+
+# Minimal patterns stripped from JS code before scanning for stdin APIs so
+# string literals containing prompt / stdin don't false-positive.  This is a
+# conservative heuristic — false negatives (missing a real stdin dependency) are
+# safer than false positives (rejecting a valid command).
+_JS_STRING_STRIP_RE = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|`(?:[^`\\]|\\.)*`")
+# Interactive prompt / readline-question — always reject.
+_JS_PROMPT_RE = re.compile(r"\bprompt\s*\(|\.\s*question\s*\(")
+# Stdin accessors that need an explicit source.
+_JS_STDIN_RE = re.compile(
+    r"\bprocess\s*\.\s*stdin\b|\bDeno\s*\.\s*stdin\b|"
+    r"\bBun\s*\.\s*stdin\b|\{[^{}]*\bstdin\b[^{}]*\}\s*=\s*process\b"
+)
+
+
+def _js_code_stdin_issue(code: str) -> str | None:
+    """Return a reason if JS *code* uses interactive prompts or accesses stdin."""
+    # Strip string literals so print('prompt()') doesn't false-positive.
+    stripped = _JS_STRING_STRIP_RE.sub(" ", code)
+    if _JS_PROMPT_RE.search(stripped):
+        return (
+            "calls prompt() or a readline question which prompts interactively — "
+            + _STDIN_DEPENDENT_REASON
+        )
+    if _JS_STDIN_RE.search(stripped):
+        return "accesses process.stdin, Deno.stdin, or Bun.stdin which " + _STDIN_DEPENDENT_REASON
+    return None
+
+
+# -- Main entry point --------------------------------------------------------
+
+
+def _stdin_dependent_command_reason(
+    command: str,
+    *,
+    tokens: list[str] | None = None,
+    depth: int = 0,
+    inherited_stdin: bool = False,
+) -> str | None:
+    """Return a rejection reason if *command* reads stdin or prompts
+    interactively without an explicit immutable source.
+
+    Recursively inspects ``bash -c`` / ``sh -c`` / … wrappers, inheriting
+    an outer explicit stdin source and honouring inner sources.
+    """
+    if tokens is None:
+        tokens = _shell_tokens(command)
+    if tokens is None:
+        return None
+    segments_with_pipe = _segment_tokens_with_pipe_stdin(tokens)
+    for seg_tokens, stdin_from_pipe in segments_with_pipe:
+        words = _strip_command_prefix(seg_tokens)
+        if not words:
+            continue
+        head = _basename(words[0]).lower()
+        effective_stdin = (
+            inherited_stdin or stdin_from_pipe or _segment_has_explicit_stdin_source(seg_tokens)
+        )
+        # Recursively inspect shell -c wrappers — the inner command inherits
+        # the outer explicit stdin source.
+        if head in {"bash", "dash", "sh", "zsh"}:
+            nested_command = _shell_nested_command(words)
+            if nested_command is not None:
+                if depth >= 2:
+                    return (
+                        "nests shell -c wrappers beyond the bounded unattended "
+                        "verification analysis"
+                    )
+                inner_tokens = _shell_tokens(nested_command)
+                if inner_tokens is None:
+                    return "contains a nested shell command that cannot be parsed safely"
+                reason = _stdin_dependent_command_reason(
+                    nested_command,
+                    tokens=inner_tokens,
+                    depth=depth + 1,
+                    inherited_stdin=effective_stdin,
+                )
+                if reason is not None:
+                    return reason
+                continue
+
+        # Check this segment's stdin needs against its explicit source flag.
+        reason = _check_segment_stdin(words, effective_stdin)
+        if reason:
+            return reason
+
+    return None
+
+
+def _check_segment_stdin(
+    words: list[str],
+    has_explicit_stdin: bool,
+) -> str | None:
+    """Check a single command segment for stdin dependencies.
+
+    *has_explicit_stdin* is True when the segment's stdin is already supplied
+    by the immutable command (pipe, <, <<<, <<, <(...)).
+    """
+    stdin_words, _, compact_group = _strip_stdin_command_prefix(words)
+    if not stdin_words:
+        return None
+    stdin_head = _basename(stdin_words[0]).lower()
+    if stdin_head in _INTERACTIVE_STDIN_WRAPPERS:
+        return f"uses the interactive `{stdin_head}` wrapper which " + _STDIN_DEPENDENT_REASON
+
+    # -- Python -c --------------------------------------------------------
+    python_code = _python_c_inline_code(stdin_words)
+    if python_code is not None:
+        issue = _python_c_stdin_issue(
+            python_code,
+            strip_one_group_closer=compact_group,
+        )
+        if issue is not None:
+            # input() always rejected; sys.stdin/open(0)/os.read(0) need source
+            if "calls input()" in issue:
+                return issue
+            if not has_explicit_stdin:
+                return issue
+        return None
+
+    # -- JS runtimes ------------------------------------------------------
+    js_info = _js_runtime_inline_code(stdin_words)
+    if js_info is not None:
+        _, code = js_info
+        issue = _js_code_stdin_issue(code)
+        if issue is not None:
+            if "calls prompt()" in issue or "readline question" in issue:
+                return issue
+            if not has_explicit_stdin:
+                return issue
+        return None
+
+    # -- Shell readers ----------------------------------------------------
+    reader_issue = _segment_has_shell_reader(words)
+    if reader_issue is not None:
+        if not has_explicit_stdin:
+            return reader_issue
+
     return None
 
 
@@ -615,8 +1189,11 @@ def validate_plan_done_conditions(plan: PlanEvent) -> list[str]:
                     f"step {index} command condition {lifecycle_issue} and therefore "
                     "cannot become an immutable finish gate. Command conditions must "
                     "be finite, deterministic verification such as `test -f index.html` "
-                    "or `npm test`; they must not start/background a server or probe a "
-                    "local/runtime-selected preview URL. Omit this condition and use "
+                    "or `npm test`; they must not start/background a server, probe a "
+                    "local/runtime-selected preview URL, or read from stdin / prompt "
+                    "interactively without an explicit immutable source (|/|& pipe, "
+                    "< / <& / <> fd-0 redirect, <<< here-string, << here-document, "
+                    "or <(...) process substitution). Omit this condition and use "
                     "`preview_start` plus platform browser verification during execution."
                 )
         elif isinstance(predicate, HTTPOkPredicate):

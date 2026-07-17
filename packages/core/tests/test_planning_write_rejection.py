@@ -538,3 +538,101 @@ async def test_ask_user_allowed_in_planning_halts_for_input():
     events = await store.get_events("pw-ask")
     assert not any(isinstance(e, AgentErrorEvent) for e in events), "ask_user was wrongly rejected"
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_USER_QUESTION
+
+
+# ---------------------------------------------------------------------------
+# H368 — interactive-prompt / stdin-dependent command rejection
+# ---------------------------------------------------------------------------
+
+
+async def test_h368_interactive_input_predicate_rejected_then_corrected_finite_command_accepted():
+    """The exact RUN-768 defect: an input()-gated predicate is rejected before
+    persistence; a corrected finite-verification command predicate is accepted,
+    persisted, and armed.  Only the corrected PlanEvent persists; after approval
+    only the corrected predicate is armed."""
+    from disco.core.dod import CommandExitPredicate
+
+    # The exact observed defect predicate from RUN-768.
+    bad_input_cmd = (
+        "python -c \"import sys; exec(open('primes.py').read()) if input('check?') else None\""
+    )
+    # Corrected: finite file-exists check, no stdin/interaction.
+    good_command = "test -f primes.py"
+
+    bad_plan = action_step(
+        "submit_plan",
+        {
+            "summary": "bad input-gated predicate",
+            "steps": [
+                {
+                    "title": "Verify primes with input gate",
+                    "done_condition": {
+                        "kind": "command",
+                        "cmd": bad_input_cmd,
+                        "expect_exit": 0,
+                    },
+                }
+            ],
+        },
+    )
+    corrected_plan = action_step(
+        "submit_plan",
+        {
+            "summary": "corrected finite verification",
+            "steps": [
+                {
+                    "title": "Verify primes exists",
+                    "done_condition": {
+                        "kind": "command",
+                        "cmd": good_command,
+                        "expect_exit": 0,
+                    },
+                }
+            ],
+        },
+    )
+
+    agent = ScriptedAgent([bad_plan, corrected_plan])
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-h368-input-rejected",
+        executor=BuildExecutor(),
+    )
+    await loop.send_message("verify the primes")
+    await loop.run()
+
+    events = await store.get_events("pw-h368-input-rejected")
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    # Only the corrected plan was persisted.
+    assert len(plans) == 1
+    assert plans[0].summary == "corrected finite verification"
+    assert [s.done_condition for s in plans[0].steps] == [
+        CommandExitPredicate(cmd=good_command, expect_exit=0)
+    ]
+    # Exactly one invalid_plan_done_conditions status.
+    assert (
+        sum(
+            isinstance(e, StatusEvent) and e.detail == "invalid_plan_done_conditions"
+            for e in events
+        )
+        == 1
+    )
+    # The feedback mentions the interactive prompt / stdin rejection.
+    feedback = [
+        e.message.content
+        for e in events
+        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+    ]
+    assert any("input()" in m for m in feedback), (
+        f"expected feedback to mention input(), got {feedback}"
+    )
+    assert any("reads from stdin" in m or "prompts interactively" in m for m in feedback), (
+        f"expected stdin/prompt guidance in feedback, got {feedback}"
+    )
+    assert any("Invalid plan attempt 1/3" in m for m in feedback)
+
+    # After approval, only the corrected predicate is armed.
+    await loop.approve_plan()
+    spec = await store.get_dod_spec("pw-h368-input-rejected")
+    assert spec is not None
+    assert spec.predicates == [CommandExitPredicate(cmd=good_command, expect_exit=0)]
