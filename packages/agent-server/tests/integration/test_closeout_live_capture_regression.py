@@ -189,3 +189,93 @@ def test_exec_env_is_the_sole_record_false_caller() -> None:
 
     _V().visit(tree)
     assert callers == ["exec_env"], f"record=False call sites: {callers}"
+
+
+def test_ruled_source_shapes_are_pinned_on_the_ast() -> None:
+    """Verifier-demonstrated coverage gaps (VERDICT-ABE §6): pin the ruled SOURCE
+    shapes so a ruling-violating mutation cannot leave the behavioral tests green.
+
+    Pins: (A) ``exec_env`` asserts its probe's ``returncode``; (E) ``config_json``
+    makes exactly two ``self.compose`` calls — the quiet gate ``("config",
+    "--quiet")`` with NEITHER structural flag, and a rendering call carrying BOTH
+    ``--no-interpolate`` AND ``--no-env-resolution``; config_json introduces no
+    stand-in env (no ``write_env_file``/file-writes/env kwargs); and every ordinary
+    lifecycle wrapper routes through ``compose()`` — no direct ``subprocess`` use
+    outside the three documented primitives."""
+    import ast
+    import inspect
+
+    from . import _closeout_live_support as sup
+
+    tree = ast.parse(inspect.getsource(sup))
+    bundle = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name == "ComposeBundle"
+    )
+    methods = {node.name: node for node in bundle.body if isinstance(node, ast.FunctionDef)}
+
+    def compose_calls(fn: ast.FunctionDef) -> list[ast.Call]:
+        return [
+            node
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "compose"
+        ]
+
+    def str_args(call: ast.Call) -> list[str]:
+        return [
+            a.value for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)
+        ]
+
+    # (A) exec_env asserts the probe's returncode.
+    exec_env = methods["exec_env"]
+    assert any(
+        isinstance(node, ast.Assert)
+        and any(
+            isinstance(sub, ast.Attribute) and sub.attr == "returncode"
+            for sub in ast.walk(node.test)
+        )
+        for node in ast.walk(exec_env)
+    ), "exec_env no longer asserts the sanitized probe's returncode (ruling A)"
+
+    # (E) config_json: exactly two compose calls with the ruled argvs.
+    config_json = methods["config_json"]
+    calls = compose_calls(config_json)
+    assert len(calls) == 2, f"config_json must make exactly 2 compose calls, saw {len(calls)}"
+    quiet, rendered = str_args(calls[0]), str_args(calls[1])
+    assert quiet == ["config", "--quiet"], f"quiet gate argv changed: {quiet}"
+    assert "--no-interpolate" in rendered and "--no-env-resolution" in rendered, (
+        f"the structural rendering must carry BOTH ruled flags: {rendered}"
+    )
+    assert "--no-interpolate" not in quiet and "--no-env-resolution" not in quiet
+    for call in calls:
+        assert not any(kw.arg == "env" for kw in call.keywords), (
+            "config_json must not inject env into compose (no stand-in values, ruling E)"
+        )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "write_env_file"
+        for node in ast.walk(config_json)
+    ), "config_json must not rewrite the .env (no stand-in values, ruling E)"
+
+    # Every ordinary lifecycle wrapper routes through compose(): no direct subprocess
+    # CALL outside the three documented primitives (type annotations may reference the
+    # subprocess module; only a call is a bypass).
+    primitives = {"compose", "docker", "docker_binary"}
+    for name, fn in methods.items():
+        if name in primitives:
+            continue
+        direct_calls = [
+            node
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "subprocess"
+        ]
+        assert not direct_calls, (
+            f"ComposeBundle.{name} bypasses compose() with a direct subprocess call"
+        )

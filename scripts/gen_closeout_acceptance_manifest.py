@@ -623,8 +623,9 @@ REMEDIATION_V5: dict[str, object] = {
         },
         "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
             "before_v4": None,
-            "after_v5": "6f016245999a5c26cb665bec3bf1276a3a813c551528916ddb0fe4c32315a708",
-            "why": "NEW frozen file: the six ruled regressions for A + E",
+            "after_v5": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
+            "why": "NEW frozen file: the seven ruled regressions for A + E (incl. the "
+            "verifier-required AST source-shape pin, VERDICT-ABE §6)",
         },
         "scripts/gen_closeout_acceptance_manifest.py": {
             "before_v4": "4637fceff6d622d351cbf3fb89ede4d5ed709a3b1ef8867f297d925c96669fd8",
