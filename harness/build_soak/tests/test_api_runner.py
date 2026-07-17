@@ -31,7 +31,11 @@ from harness.build_soak.adapters.disco_api import (
     HttpTransport,
     SnapshotNotReadyError,
 )
-from harness.build_soak.classify import classify, classify_run_folder
+from harness.build_soak.classify import (
+    _successful_browser_verification_paths,
+    classify,
+    classify_run_folder,
+)
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
@@ -1537,6 +1541,329 @@ def test_h191_required_browser_verification_fails_closed_when_observation_or_byt
     assert verifier_without_bytes["first_broken_link"] == (
         "browser_verification -> durable_screenshot_evidence"
     )
+
+
+def _preview_start_observation(port: int) -> dict[str, Any]:
+    return {
+        "id": "evt_10",
+        "seq": 10,
+        "kind": "observation",
+        "source": "environment",
+        "action_id": "act_preview",
+        "tool_result": {
+            "call_id": "call_9",
+            "tool_name": "preview_start",
+            "success": True,
+            "content": "Preview running",
+            "structured": {
+                "name": "live-server",
+                "port": port,
+                "status": "running",
+                "url": "http://127.0.0.1:44973",
+            },
+        },
+    }
+
+
+def _strict_direct_browser_observation(
+    path: str, *, url: str = "http://localhost:8000/"
+) -> dict[str, Any]:
+    event = _browser_screenshot_observation(path, seq=12, tool_name="browser")
+    event["tool_result"]["structured"].update(
+        {
+            "ok": True,
+            "url": url,
+            "title": "Live Server",
+            "text": "Live Server Up",
+            "elements": [],
+            "console": [],
+            "network": [],
+            "visible_semantic_elements": 1,
+        }
+    )
+    return event
+
+
+def _h191_direct_browser_events(
+    path: str,
+    *,
+    selected_port: int = 8000,
+    action_url: str | None = None,
+    observed_url: str | None = None,
+) -> list[dict[str, Any]]:
+    events = clean_smoke_log()
+    events[-2]["seq"] = 15
+    events[-2]["id"] = "evt_15"
+    events[-1]["seq"] = 16
+    events[-1]["id"] = "evt_16"
+    browser_url = action_url or f"http://localhost:{selected_port}/"
+    events[-2:-2] = [
+        action(
+            9,
+            "preview_start",
+            args={"name": "live-server", "command": "python -m http.server"},
+            action_id="act_preview",
+        ),
+        _preview_start_observation(selected_port),
+        action(
+            11,
+            "browser",
+            args={"action": "navigate", "url": browser_url},
+            action_id="act_11",
+        ),
+        _strict_direct_browser_observation(path, url=observed_url or browser_url),
+    ]
+    return events
+
+
+def test_h191_strict_direct_browser_with_locked_screenshot_satisfies_contract():
+    path = ".pmx/screenshots/browser.png"
+    record = classify(
+        _h191_direct_browser_events(path),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "PASS", record
+
+
+def test_h191_strict_direct_browser_accepts_dynamic_selected_preview_port():
+    path = ".pmx/screenshots/browser.png"
+    record = classify(
+        _h191_direct_browser_events(path, selected_port=5173),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "PASS", record
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ok", False),
+        ("url", "https://example.com:443/"),
+        ("console", [{"level": "error", "text": "boom"}]),
+        ("network", [{"url": "http://localhost:8000/api", "status": 500}]),
+        ("visible_semantic_elements", 0),
+        ("visible_semantic_elements", True),
+        ("screenshot_path", ""),
+    ],
+)
+def test_h191_direct_browser_fails_closed_without_strict_pass_facts(field, value):
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    structured = events[-3]["tool_result"]["structured"]
+    structured[field] = value
+    if field == "visible_semantic_elements":
+        structured["title"] = ""
+        structured["text"] = "Live Server Up"
+        structured["elements"] = []
+
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda events: events.__setitem__(
+            -4, action(11, "shell", args={"cmd": "true"}, action_id="act_11")
+        ),
+        lambda events: events.pop(-4),
+        lambda events: events[-3]["tool_result"].__setitem__("call_id", "call_forged"),
+        lambda events: events[-3]["tool_result"]["structured"].__setitem__("console", [{}]),
+        lambda events: events[-3]["tool_result"]["structured"].update(
+            {
+                "title": "",
+                "text": "short",
+                "visible_semantic_elements": 0,
+                "elements": [{}],
+            }
+        ),
+    ],
+)
+def test_h191_direct_browser_rejects_unbound_or_malformed_evidence(mutate):
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    mutate(events)
+
+    assert path not in _successful_browser_verification_paths(events)
+
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+
+
+@pytest.mark.parametrize(
+    ("selected_port", "action_url", "observed_url"),
+    [
+        (5173, "http://localhost:8000/", "http://localhost:8000/"),
+        (8000, "http://localhost:7777/", "http://localhost:8000/"),
+        (8000, "http://localhost:8000/", "http://localhost:9999/"),
+    ],
+)
+def test_h191_direct_browser_rejects_wrong_or_mismatched_preview_target(
+    selected_port, action_url, observed_url
+):
+    path = ".pmx/screenshots/browser.png"
+    record = classify(
+        _h191_direct_browser_events(
+            path,
+            selected_port=selected_port,
+            action_url=action_url,
+            observed_url=observed_url,
+        ),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+def test_h191_direct_browser_rejects_missing_preview_start_evidence():
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    del events[-6:-4]
+
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+def test_h191_direct_browser_rejects_preview_stopped_before_navigation():
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    events[-4]["seq"] = 13
+    events[-4]["tool_call"]["call_id"] = "call_13"
+    events[-3]["seq"] = 14
+    events[-3]["tool_result"]["call_id"] = "call_13"
+    events[-2]["seq"] = 17
+    events[-2]["id"] = "evt_17"
+    events[-1]["seq"] = 18
+    events[-1]["id"] = "evt_18"
+    events[-4:-4] = [
+        action(11, "preview_stop", args={}, action_id="act_stop"),
+        {
+            "id": "evt_12",
+            "seq": 12,
+            "kind": "observation",
+            "source": "environment",
+            "action_id": "act_stop",
+            "tool_result": {
+                "call_id": "call_11",
+                "tool_name": "preview_stop",
+                "success": True,
+                "content": "Stopped previews",
+                "structured": {"stopped": ["live-server"]},
+            },
+        },
+    ]
+
+    assert path not in _successful_browser_verification_paths(events)
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+@pytest.mark.parametrize(
+    "mutation_tool",
+    ["file_write", "safe_write_file", "file_str_replace", "exact_replace", "write_file"],
+)
+def test_h191_direct_browser_rejects_proof_stale_after_deliverable_mutation(mutation_tool):
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    events[-2:-2] = [
+        action(
+            13,
+            mutation_tool,
+            args={"path": "index.html", "content": "<script>throw Error()</script>"},
+            action_id="act_after_proof",
+        ),
+        {
+            "id": "evt_14",
+            "seq": 14,
+            "kind": "observation",
+            "source": "environment",
+            "action_id": "act_after_proof",
+            "tool_result": {
+                "call_id": "call_13",
+                "tool_name": mutation_tool,
+                "success": True,
+                "content": "Wrote index.html",
+            },
+        },
+    ]
+
+    assert path not in _successful_browser_verification_paths(events)
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+def test_h191_direct_browser_accepts_fresh_proof_after_preview_then_mutation():
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path)
+    events[-4]["seq"] = 13
+    events[-4]["tool_call"]["call_id"] = "call_13"
+    events[-3]["seq"] = 14
+    events[-3]["tool_result"]["call_id"] = "call_13"
+    events[-4:-4] = [
+        action(
+            11,
+            "file_write",
+            args={"path": "index.html", "content": "<h1>Final content</h1>"},
+            action_id="act_final_edit",
+        ),
+        {
+            "id": "evt_12",
+            "seq": 12,
+            "kind": "observation",
+            "source": "environment",
+            "action_id": "act_final_edit",
+            "tool_result": {
+                "call_id": "call_11",
+                "tool_name": "file_write",
+                "success": True,
+                "content": "Wrote index.html",
+            },
+        },
+    ]
+
+    assert _successful_browser_verification_paths(events) == {path}
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "PASS", record
 
 
 def test_h191_unverifiable_or_generic_available_evidence_cannot_spoof_contract():

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import failure_codes as fc
 from .events import NormalizationError, normalize_events
@@ -285,6 +286,27 @@ def _first_fail(results: list[OracleResult]) -> OracleResult | None:
 
 
 _BROWSER_VERIFICATION_TOOLS = frozenset({"verify_web_app", "verify_appkit_app"})
+_DELIVERABLE_MUTATION_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_edit",
+        "file_append",
+        "file_replace_lines",
+        "file_insert_lines",
+        "file_str_replace",
+        "exact_replace",
+        "safe_write_file",
+        "write_file",
+        "app_create",
+        "app_update_content",
+        "app_add_section",
+        "app_remove_section",
+        "app_reorder_section",
+        "app_set_design",
+        "app_set_tweak",
+        "app_add_primitive",
+    }
+)
 
 
 def _admissible_browser_screenshot_path(path: str) -> bool:
@@ -303,17 +325,22 @@ def _admissible_browser_screenshot_path(path: str) -> bool:
 
 
 def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[str]:
-    """Return screenshot paths claimed by successful, passing verifier evidence.
+    """Return screenshot paths claimed by strict passing browser evidence.
 
     A tool-level success is insufficient: ``verify_web_app`` also uses successful
     tool transport for an ``unverifiable`` verdict.  Requiring ``structured.passed``
     to be exactly true keeps that branch from satisfying a browser-verification
-    contract.  Screenshot keys may be nested (notably for AppKit interactions), so
-    collect the same explicit path-key family retained by the H190 capture.  Host
-    ``verifier_verdict`` events are accepted only with exact verified/pass fields and
-    one admissible top-level screenshot path.
+    contract. A direct ``browser`` observation is admissible only when it carries
+    the same strict facts the product finish gate consumes: successful render on an
+    explicit loopback preview port, clean console/network, meaningful content, and
+    a screenshot path. Screenshot keys may be nested (notably for AppKit
+    interactions), so collect the same explicit path-key family retained by the
+    H190 capture. Host ``verifier_verdict`` events are accepted only with exact
+    verified/pass fields and one admissible top-level screenshot path.
     """
     paths: set[str] = set()
+    actions_by_id: dict[str, dict[str, Any]] = {}
+    active_previews: dict[str, tuple[int, int]] = {}
 
     def visit(value: Any) -> None:
         if isinstance(value, dict):
@@ -327,11 +354,128 @@ def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[
             for child in value:
                 visit(child)
 
+    def local_url_port(value: Any) -> int | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = urlsplit(value)
+            explicit_port = parsed.port
+        except ValueError:
+            return None
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+            or explicit_port is None
+        ):
+            return None
+        return explicit_port
+
+    def paired_action(event: dict[str, Any], result: dict[str, Any]) -> dict[str, Any] | None:
+        action_id = event.get("action_id")
+        if not isinstance(action_id, str):
+            return None
+        candidate = actions_by_id.get(action_id)
+        if candidate is None:
+            return None
+        tool_call = candidate.get("tool_call")
+        if not isinstance(tool_call, dict):
+            return None
+        call_id = tool_call.get("call_id")
+        if not isinstance(call_id, str) or result.get("call_id") != call_id:
+            return None
+        if result.get("tool_name") != tool_call.get("tool_name"):
+            return None
+        return candidate
+
+    mutation_actions: dict[str, dict[str, Any]] = {}
+    last_mutation_observation_seq = 0
     for event in events:
+        if event.get("kind") == "action":
+            event_id = event.get("id")
+            if isinstance(event_id, str):
+                mutation_actions[event_id] = event
+            continue
+        if event.get("kind") != "observation":
+            continue
+        result = event.get("tool_result")
+        action_id = event.get("action_id")
+        seq = event.get("seq")
+        if (
+            not isinstance(result, dict)
+            or result.get("success") is not True
+            or not isinstance(action_id, str)
+            or not isinstance(seq, int)
+        ):
+            continue
+        action_event = mutation_actions.get(action_id)
+        tool_call = action_event.get("tool_call") if isinstance(action_event, dict) else None
+        if not isinstance(tool_call, dict):
+            continue
+        tool_name = tool_call.get("tool_name")
+        if (
+            tool_name in _DELIVERABLE_MUTATION_TOOLS
+            and result.get("tool_name") == tool_name
+            and result.get("call_id") == tool_call.get("call_id")
+        ):
+            last_mutation_observation_seq = max(last_mutation_observation_seq, seq)
+
+    def strict_direct_browser(
+        structured: dict[str, Any], action_event: dict[str, Any], selected_port: int | None
+    ) -> bool:
+        if structured.get("ok") is not True:
+            return False
+        tool_call = action_event.get("tool_call")
+        if not isinstance(tool_call, dict) or tool_call.get("tool_name") != "browser":
+            return False
+        arguments = tool_call.get("arguments")
+        if not isinstance(arguments, dict) or arguments.get("action") != "navigate":
+            return False
+        action_port = local_url_port(arguments.get("url"))
+        observed_port = local_url_port(structured.get("url"))
+        if selected_port is None or action_port != selected_port or observed_port != selected_port:
+            return False
+        console = structured.get("console")
+        network = structured.get("network")
+        if not isinstance(console, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("level"), str)
+            and isinstance(item.get("text"), str)
+            for item in console
+        ):
+            return False
+        if any(item["level"].lower() == "error" for item in console):
+            return False
+        if not isinstance(network, list) or network:
+            return False
+        title = structured.get("title")
+        text = structured.get("text")
+        if not isinstance(title, str) or not isinstance(text, str):
+            return False
+        semantic_count = structured.get("visible_semantic_elements")
+        if not isinstance(semantic_count, int) or isinstance(semantic_count, bool):
+            return False
+        semantic = semantic_count > 0
+        elements = structured.get("elements")
+        if not isinstance(elements, list) or not all(
+            isinstance(item, str) and bool(item.strip()) for item in elements
+        ):
+            return False
+        meaningful = len((title + " " + text).strip()) >= 20 or semantic or bool(elements)
+        path = structured.get("screenshot_path")
+        return meaningful and isinstance(path, str) and bool(path)
+
+    for event in events:
+        if event.get("kind") == "action":
+            event_id = event.get("id")
+            if isinstance(event_id, str):
+                actions_by_id[event_id] = event
+            continue
         if event.get("kind") == "verifier_verdict":
             path = event.get("screenshot_path")
             if (
-                event.get("verified") is True
+                isinstance(event.get("seq"), int)
+                and event["seq"] > last_mutation_observation_seq
+                and event.get("verified") is True
                 and event.get("verdict") == "pass"
                 and isinstance(path, str)
                 and _admissible_browser_screenshot_path(path)
@@ -340,15 +484,61 @@ def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[
             continue
         if event.get("kind") != "observation":
             continue
+        event_seq = event.get("seq")
+        proof_is_fresh = isinstance(event_seq, int) and event_seq > last_mutation_observation_seq
         result = event.get("tool_result")
         if not isinstance(result, dict):
-            continue
-        if result.get("tool_name") not in _BROWSER_VERIFICATION_TOOLS:
             continue
         if result.get("success") is not True:
             continue
         structured = result.get("structured")
-        if not isinstance(structured, dict) or structured.get("passed") is not True:
+        if not isinstance(structured, dict):
+            continue
+        tool_name = result.get("tool_name")
+        action_event = paired_action(event, result)
+        if action_event is None:
+            continue
+        if tool_name == "preview_start":
+            name = structured.get("name")
+            port = structured.get("port")
+            seq = event.get("seq")
+            if (
+                isinstance(name, str)
+                and bool(name)
+                and isinstance(port, int)
+                and not isinstance(port, bool)
+                and 1 <= port <= 65535
+                and isinstance(seq, int)
+                and structured.get("status") == "running"
+            ):
+                active_previews[name] = (seq, port)
+            continue
+        if tool_name == "preview_stop":
+            stopped = structured.get("stopped")
+            if isinstance(stopped, list) and all(
+                isinstance(name, str) and bool(name) for name in stopped
+            ):
+                for name in stopped:
+                    active_previews.pop(name, None)
+            else:
+                # A successful but malformed stop result cannot leave stale preview
+                # state admissible as proof. A later strict preview_start re-arms it.
+                active_previews.clear()
+            continue
+        if tool_name == "browser":
+            selected_port = (
+                max(active_previews.values(), key=lambda preview: preview[0])[1]
+                if active_previews
+                else None
+            )
+            if proof_is_fresh and strict_direct_browser(structured, action_event, selected_port):
+                visit(structured)
+            continue
+        if (
+            not proof_is_fresh
+            or tool_name not in _BROWSER_VERIFICATION_TOOLS
+            or structured.get("passed") is not True
+        ):
             continue
         visit(structured)
     return paths
