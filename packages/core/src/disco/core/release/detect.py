@@ -1907,6 +1907,23 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
     )
 
 
+def _port_contract_start(start_cmd: tuple[str, ...], port_env: str) -> tuple[str, ...]:
+    """Bind a declared bare ``uvicorn <module>:app`` start to the platform port
+    contract (R7 live-fastapi defect). uvicorn's defaults are ``127.0.0.1:8000``, so a
+    bare declaration can NEVER satisfy the contract the emitted bundle establishes
+    (compose ``PORT``, ``EXPOSE``, loopback healthcheck) — the container is unreachable
+    and never becomes healthy. Mirror the source-detection shape by appending
+    ``--host 0.0.0.0 --port ${<port_env>}`` for EXACTLY that shape: head ``uvicorn``
+    with neither ``--host`` nor ``--port`` declared (spaced or ``=``-form). An
+    owner-declared binding always wins verbatim; every other command is untouched."""
+    if not start_cmd or start_cmd[0].rsplit("/", 1)[-1].lower() != "uvicorn":
+        return start_cmd
+    for token in start_cmd[1:]:
+        if token in ("--host", "--port") or token.startswith(("--host=", "--port=")):
+            return start_cmd
+    return start_cmd + ("--host", "0.0.0.0", "--port", "${" + port_env + "}")
+
+
 def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
     # R2 (G03/G06): a static site (a prebuilt tree, or a build-then-serve bundle) is
     # SERVED, not started, so it has no `start_cmd`. It is recognized when the intent
@@ -1991,7 +2008,7 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         lockfile=lockfile,
         install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
-        start_cmd=intent.start_cmd,
+        start_cmd=_port_contract_start(intent.start_cmd, intent.port_env),
         port_env=intent.port_env,
         health_path=intent.health_path,
     )
