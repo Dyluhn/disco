@@ -20,7 +20,9 @@ import pytest
 from ._closeout_live_support import (
     SECRET_ENV_SENTINEL,
     ComposeBundle,
+    assert_no_host_coupling,
     assert_sentinel_absent,
+    ingress_service_id,
     require_live_runtime,
 )
 
@@ -74,3 +76,116 @@ def test_record_false_is_excluded_and_default_recording_is_unchanged(
     assert recorded.returncode == 0, recorded.stderr
     assert len(bundle.captured_output) == 2
     assert SECRET_ENV_SENTINEL in "".join(bundle.captured_output)
+
+
+# ---------------------------------------------------------------------------
+# Ruling E regressions (owner-adjudicated 2026-07-17): the topology rendering is
+# STRUCTURAL (no external env resolution), stays recorded, and stays swept.
+# ---------------------------------------------------------------------------
+
+
+def _external_env_bundle(tmp_path: Path) -> ComposeBundle:
+    """A bundle whose secret arrives ONLY through the runner's external ``.env``
+    (the frozen fixtures' shape): compose.yaml references ``${LEAKED:?}``."""
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n"
+        "  web:\n"
+        '    image: "busybox:1.37"\n'
+        "    environment:\n"
+        '      LEAKED: "${LEAKED:?Set LEAKED}"\n'
+        "    ports:\n"
+        '      - "127.0.0.1:45999:8080"\n'
+    )
+    (tmp_path / ".env").write_text(f"LEAKED={SECRET_ENV_SENTINEL}\n")
+    return ComposeBundle(project="capture-regression-e", bundle_dir=tmp_path)
+
+
+def test_external_env_secret_is_absent_from_the_structural_rendering(
+    tmp_path: Path,
+) -> None:
+    """Ruling E #1: a sentinel supplied only through the external ``.env`` does not
+    appear in the structural JSON rendering — which stays RECORDED and SWEPT."""
+    require_live_runtime()
+    bundle = _external_env_bundle(tmp_path)
+    doc = bundle.config_json()
+    assert isinstance(doc, dict)
+    assert SECRET_ENV_SENTINEL not in "".join(bundle.captured_output)
+    assert_sentinel_absent(
+        SECRET_ENV_SENTINEL,
+        [("captured compose output", "".join(bundle.captured_output).encode("utf-8"))],
+    )
+
+
+def test_structural_rendering_supports_the_topology_assertions(tmp_path: Path) -> None:
+    """Ruling E #2: the structural rendering is valid JSON and satisfies the exact
+    topology assertions the lane relies on (ingress discovery + host-coupling scan),
+    including a named volume normalized to a typed mount."""
+    require_live_runtime()
+    (tmp_path / "Dockerfile").write_text('FROM busybox:1.37\nCMD ["httpd", "-f"]\n')
+    (tmp_path / "compose.yaml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    build:\n"
+        '      context: "."\n'
+        "    environment:\n"
+        '      TOKEN: "${TOKEN:?Set TOKEN}"\n'
+        "    ports:\n"
+        '      - "127.0.0.1:45998:8080"\n'
+        "    volumes:\n"
+        '      - "state:/data"\n'
+        "volumes:\n"
+        "  state: {}\n"
+    )
+    (tmp_path / ".env").write_text(f"TOKEN={SECRET_ENV_SENTINEL}\n")
+    bundle = ComposeBundle(project="capture-regression-e2", bundle_dir=tmp_path)
+    doc = bundle.config_json()
+    assert_no_host_coupling(doc)
+    assert ingress_service_id(doc) == "web"
+    assert SECRET_ENV_SENTINEL not in "".join(bundle.captured_output)
+
+
+def test_secret_embedded_in_compose_yaml_still_fails_the_sweep(tmp_path: Path) -> None:
+    """Ruling E #3: a sentinel LITERALLY embedded in compose.yaml (a real product
+    leak, not runner-supplied env) still appears in the recorded structural
+    rendering and still fails the sweep."""
+    require_live_runtime()
+    bundle = _sentinel_bundle(tmp_path)  # sentinel is a literal default in the yaml
+    doc = bundle.config_json()
+    assert isinstance(doc, dict)
+    assert SECRET_ENV_SENTINEL in "".join(bundle.captured_output)
+    with pytest.raises(AssertionError):
+        assert_sentinel_absent(
+            SECRET_ENV_SENTINEL,
+            [("captured compose output", "".join(bundle.captured_output).encode("utf-8"))],
+        )
+
+
+def test_exec_env_is_the_sole_record_false_caller() -> None:
+    """Ruling E #4: ``record=False`` has exactly ONE call site in the live support
+    module, and it is inside ``exec_env`` — proven on the AST, not by grep."""
+    import ast
+    import inspect
+
+    from . import _closeout_live_support as sup
+
+    tree = ast.parse(inspect.getsource(sup))
+    callers: list[str] = []
+
+    class _V(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.stack: list[str] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            for kw in node.keywords:
+                is_false = isinstance(kw.value, ast.Constant) and kw.value.value is False
+                if kw.arg == "record" and is_false:
+                    callers.append(self.stack[-1] if self.stack else "<module>")
+            self.generic_visit(node)
+
+    _V().visit(tree)
+    assert callers == ["exec_env"], f"record=False call sites: {callers}"

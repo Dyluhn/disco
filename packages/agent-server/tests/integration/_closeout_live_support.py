@@ -604,11 +604,22 @@ class ComposeBundle:
     # -- lifecycle --------------------------------------------------------------
 
     def config_json(self) -> dict[str, object]:
-        """``docker compose config --format json`` parsed. Also asserts the plain
-        ``config --quiet`` exits 0 (plan §12.2)."""
+        """The STRUCTURAL compose model, parsed. Also asserts the plain
+        ``config --quiet`` exits 0 with the REAL ``.env`` (plan §12.2).
+
+        acceptance-v5 (owner-adjudicated 2026-07-17, ruling E): the JSON rendering
+        feeds ONLY the topology assertions, so it runs with ``--no-interpolate
+        --no-env-resolution`` — the structural model WITHOUT resolving externally
+        supplied env values. A secret supplied through the runner's ``.env`` never
+        enters this output, so the rendering stays RECORDED and inside the §12.9
+        sweep (a secret literally embedded in ``compose.yaml`` itself still appears
+        here and still fails the sweep). The ``config --quiet`` validation gate is
+        unchanged and evaluates the real interpolation."""
         quiet = self.compose("config", "--quiet")
         assert quiet.returncode == 0, f"`docker compose config --quiet` failed:\n{quiet.stderr}"
-        rendered = self.compose("config", "--format", "json")
+        rendered = self.compose(
+            "config", "--no-interpolate", "--no-env-resolution", "--format", "json"
+        )
         assert rendered.returncode == 0, rendered.stderr
         doc = json.loads(rendered.stdout)
         assert isinstance(doc, dict)
