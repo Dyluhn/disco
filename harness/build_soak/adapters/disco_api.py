@@ -60,7 +60,15 @@ from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.projects.store import tree_digest as project_tree_digest
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
-from ..events import NormalizationError, normalize_events
+from ..events import (
+    KIND_ACTION,
+    KIND_AGENT_ERROR,
+    KIND_OBSERVATION,
+    NormalizationError,
+    normalize_events,
+    seq_of,
+    tool_name_of,
+)
 from ..oracles.thrash import ThrashOracle
 
 # Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
@@ -109,6 +117,14 @@ WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
 # AWAITING_USER_DECISION until the user picks one (the WS `pick_alternative` frame →
 # runtime.pick_alternative). A non-interactive soak auto-resolves it (resolve_decision).
 AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
+
+# H347: the harness may not call a durable action inactive before the product's
+# executor can legally finish it and persist its typed observation/error. These
+# values are pinned to the product definitions by cross-module regression tests.
+_DEFAULT_TOOL_TIMEOUT_S = 300.0
+_SLIDES_GENERATE_TIMEOUT_S = 900.0
+_TOOL_TIMEOUT_OVERRIDES_S = {"slides_generate": _SLIDES_GENERATE_TIMEOUT_S}
+_ACTION_RESULT_PERSISTENCE_GRACE_S = 10.0
 
 # ---- progress-aware terminal-wait sentinels (Bug 15) ------------------------
 # The terminal wait is PROGRESS-AWARE, not a blind wall-clock: while the conversation
@@ -779,6 +795,84 @@ class DiscoApiClient:
             conn.close()
         return (int(row[0]), int(row[1])) if row else (0, -1)
 
+    def _durable_action_state(
+        self, conversation_id: str
+    ) -> tuple[tuple[int, int], tuple[str, str] | None] | None:
+        """Read one durable progress/action snapshot, or fail closed on bad evidence.
+
+        The returned marker and action pairing come from the SAME SQLite read. This
+        prevents a response persisted between separate marker/pairing reads from being
+        mistaken for inactivity. Only the most recent action can still be executing:
+        an older missing response followed by a newer completed action is an evidence
+        defect, not a reason to grant another tool deadline.
+        """
+        try:
+            raw_events = self._read_events(conversation_id)
+            events = normalize_events(raw_events)
+        except (sqlite3.Error, NormalizationError, TypeError, ValueError):
+            return None
+
+        # Payload fields normally mirror these indexed row columns. A mismatch is
+        # corrupt evidence: fail closed instead of letting payload-wins normalization
+        # oscillate against the SQL progress marker or invent an in-flight action.
+        row_identity = [
+            (event.get("seq"), event.get("id"), event.get("kind"), event.get("source"))
+            for event in raw_events
+        ]
+        payload_identity = [
+            (event.get("seq"), event.get("id"), event.get("kind"), event.get("source"))
+            for event in events
+        ]
+        if row_identity != payload_identity:
+            return None
+
+        marker = (
+            len(raw_events),
+            max((int(event["seq"]) for event in raw_events), default=-1),
+        )
+
+        for event in events:
+            kind = event.get("kind")
+            if kind not in {KIND_ACTION, KIND_OBSERVATION, KIND_AGENT_ERROR}:
+                continue
+            if seq_of(event) < 0:
+                return None
+            if kind == KIND_ACTION and (
+                event.get("id") is None or tool_name_of(event) is None
+            ):
+                return None
+
+        latest_action = next(
+            (event for event in reversed(events) if event.get("kind") == KIND_ACTION),
+            None,
+        )
+        if latest_action is None:
+            return marker, None
+
+        action_id = str(latest_action["id"])
+        action_seq = seq_of(latest_action)
+        tool_name = tool_name_of(latest_action)
+        if tool_name is None:  # guarded above; keep the trust boundary explicit
+            return None
+        paired = any(
+            event.get("kind") in {KIND_OBSERVATION, KIND_AGENT_ERROR}
+            and event.get("action_id") is not None
+            and str(event["action_id"]) == action_id
+            and seq_of(event) > action_seq
+            for event in events
+        )
+        dangling = None if paired else (action_id, tool_name)
+        return marker, dangling
+
+    def _latest_dangling_action(self, conversation_id: str) -> tuple[str, str] | None:
+        """Return the most recent durable action iff it lacks a later typed response."""
+        state = self._durable_action_state(conversation_id)
+        return None if state is None else state[1]
+
+    @staticmethod
+    def _action_timeout_s(tool_name: str) -> float:
+        return _TOOL_TIMEOUT_OVERRIDES_S.get(tool_name, _DEFAULT_TOOL_TIMEOUT_S)
+
     async def _poll_progress_aware(
         self,
         conversation_id: str,
@@ -790,15 +884,17 @@ class DiscoApiClient:
     ) -> str:
         """The shared PROGRESS-AWARE terminal wait (Bug 15). Poll GET /state until EITHER:
           (a) a genuine terminal / gate / pause status is reached → return it; OR
-          (b) the build goes GENUINELY INACTIVE — no NEW events and no status change for
-              `inactivity_s` → return INACTIVE_TIMEOUT (a real wedge: classify normally); OR
+          (b) the build goes GENUINELY INACTIVE — no NEW events/status change for
+              `inactivity_s`, and no durable action remains legally in flight through its
+              product timeout + persistence grace → return INACTIVE_TIMEOUT; OR
           (c) the generous `hard_cap_s` ceiling is hit. If the build was STILL progressing
               within the last inactivity window when the cap hit → PROGRESSING_TIMEOUT
               (inconclusive, NOT a product fail); otherwise → INACTIVE_TIMEOUT.
 
         A still-actively-progressing build is NEVER cut off by a mere wall-clock elapsing:
         the inactivity timer RESETS whenever the event count / max seq advances OR the status
-        transitions. Only genuine silence or the safety ceiling ends the wait.
+        transitions. A durable unpaired action suppresses only the ordinary inactivity window;
+        its own bounded deadline and the unchanged hard ceiling still end the wait.
 
         IDLE RACE (live-surfaced): POST /messages KICKS the loop ASYNCHRONOUSLY, so a freshly
         -created conversation reads IDLE for a beat before the kick stamps RUNNING. IDLE is
@@ -810,6 +906,8 @@ class DiscoApiClient:
         marker = self._progress_marker(conversation_id)
         last_status: str | None = None
         seen_active = False
+        dangling_action_id: str | None = None
+        dangling_action_deadline = 0.0
         while True:
             last = self._status_of(await self.get_state(conversation_id))
             thrash_crossed = await self._sample_live_thrash(conversation_id, terminal_status=last)
@@ -858,12 +956,42 @@ class DiscoApiClient:
                 last_status = last
                 last_progress = now
 
+            if last == "RUNNING":
+                action_state = self._durable_action_state(conversation_id)
+                if action_state is not None:
+                    action_marker, dangling = action_state
+                    if action_marker != marker:
+                        marker = action_marker
+                        last_progress = now
+                    if dangling is None:
+                        dangling_action_id = None
+                        dangling_action_deadline = 0.0
+                    else:
+                        action_id, tool_name = dangling
+                        if action_id != dangling_action_id:
+                            dangling_action_id = action_id
+                            dangling_action_deadline = (
+                                now
+                                + self._action_timeout_s(tool_name)
+                                + _ACTION_RESULT_PERSISTENCE_GRACE_S
+                            )
+                # An unreadable/malformed snapshot never starts a deadline. If a
+                # prior valid snapshot already proved one, retain its ORIGINAL bound:
+                # clearing it here would let intermittent read failures restart the
+                # same action's full timeout indefinitely on the next valid poll.
+            else:
+                dangling_action_id = None
+                dangling_action_deadline = 0.0
+
             inactive_for = now - last_progress
             if now - start >= hard_cap_s:
                 # Safety ceiling. Was it still progressing recently? Then this is an
                 # inconclusive model-speed cutoff, NOT a wedge → PROGRESSING_TIMEOUT.
                 return PROGRESSING_TIMEOUT if inactive_for < inactivity_s else INACTIVE_TIMEOUT
-            if inactive_for >= inactivity_s:
+            if dangling_action_id is not None:
+                if now >= dangling_action_deadline:
+                    return INACTIVE_TIMEOUT
+            elif inactive_for >= inactivity_s:
                 return INACTIVE_TIMEOUT
             await asyncio.sleep(self._poll)
 
