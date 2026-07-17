@@ -111,6 +111,41 @@ def check_head(repo: Path, expect_head: str) -> Check:
 # ---------------------------------------------------------------------------
 
 
+def check_base_sha(repo: Path, base_sha: str) -> Check:
+    """The scope base must be a REAL, exact, 40-hex commit distinct from HEAD.
+
+    Independent verification demonstrated a GREEN bypass: a symbolic base (``HEAD``)
+    makes the git-derived range empty, so an empty inventory 'covers' it while
+    binding NOTHING. Fail closed on anything but a resolvable full sha that is not
+    HEAD itself."""
+    want = base_sha.strip().lower()
+    if len(want) != 40 or not all(c in "0123456789abcdef" for c in want):
+        return Check(
+            "scope base is an exact 40-hex commit",
+            False,
+            f"base_sha must be a full 40-hex sha (symbolic refs are a bypass); got {base_sha!r}",
+            {"base_sha": base_sha},
+        )
+    try:
+        resolved = git(repo, "rev-parse", f"{want}^{{commit}}").lower()
+    except subprocess.CalledProcessError:
+        return Check(
+            "scope base is an exact 40-hex commit",
+            False,
+            f"base_sha does not resolve to a commit: {want}",
+            {"base_sha": want},
+        )
+    head = git(repo, "rev-parse", "HEAD").lower()
+    ok = resolved == want and resolved != head
+    return Check(
+        "scope base is an exact 40-hex commit",
+        ok,
+        f"base={want} resolved={resolved} head={head}"
+        + ("" if ok else " — base must resolve to itself and differ from HEAD"),
+        {"base_sha": want, "resolved": resolved, "head": head},
+    )
+
+
 def check_worktree_pristine(repo: Path) -> Check:
     """A commit only certifies what is on disk if the worktree adds nothing to it.
 
@@ -177,6 +212,15 @@ def check_inventory_binding(repo: Path, inventory: dict[str, object], base_sha: 
 
     scope.discard(INVENTORY_REL)  # excludes-self (documented above)
 
+    checks.append(
+        Check(
+            "recovery scope is non-empty",
+            bool(scope),
+            f"{len(scope)} file(s) in {base_sha}..HEAD"
+            + ("" if scope else " — an empty scope binds nothing and certifies nothing"),
+            {"scope_count": len(scope)},
+        )
+    )
     additional = sorted(scope - set(declared))
     stale = sorted(set(declared) - scope)
     checks.append(
@@ -244,6 +288,17 @@ def check_external_evidence(inventory: dict[str, object]) -> list[Check]:
         assert isinstance(entry, dict)
         path = Path(str(entry["path"]))
         expected = str(entry["sha256"])
+        if not path.is_absolute():
+            checks.append(
+                Check(
+                    f"external evidence bytes pinned: {path.name}",
+                    False,
+                    f"external evidence must be an ABSOLUTE path (it lives outside the "
+                    f"repo by definition); got {path}",
+                    {"path": str(path), "expected": expected, "actual": None},
+                )
+            )
+            continue
         if not path.is_file():
             checks.append(
                 Check(
@@ -266,13 +321,74 @@ def check_external_evidence(inventory: dict[str, object]) -> list[Check]:
     return checks
 
 
+def check_proof_suite_binding(repo: Path, inventory: dict[str, object]) -> Check:
+    """Every pinned proof suite must be a repo-relative, inventory-BOUND file that is
+    NOT a declared external-evidence path.
+
+    Independent verification demonstrated a GREEN bypass: ``expected_proof.tests``
+    accepted arbitrary paths, so the byte-pinned-but-never-executed external probe
+    (or any unpinned out-of-repo file) could be handed to pytest and executed. Proof
+    suites must therefore live inside the repo AND inside the hash inventory."""
+    expected = inventory.get("expected_proof")
+    assert isinstance(expected, dict), "inventory 'expected_proof' must be an object"
+    tests_obj = expected.get("tests")
+    assert isinstance(tests_obj, list), "expected_proof 'tests' must be a list"
+    files_obj = inventory.get("files")
+    assert isinstance(files_obj, dict)
+    declared = {str(k) for k in files_obj}
+    evidence_paths = set()
+    for entry in inventory.get("external_evidence") or []:
+        if isinstance(entry, dict):
+            try:
+                evidence_paths.add(Path(str(entry["path"])).resolve())
+            except OSError:
+                pass
+    problems: list[str] = []
+    repo_root = repo.resolve()
+    if not tests_obj:
+        problems.append("expected_proof.tests is EMPTY — a vacuous proof proves nothing")
+    for raw in tests_obj:
+        rel = str(raw)
+        p = Path(rel)
+        if p.is_absolute() or ".." in p.parts:
+            problems.append(f"not repo-relative: {rel}")
+            continue
+        resolved = (repo / p).resolve()
+        if not resolved.is_relative_to(repo_root):
+            problems.append(f"escapes the repo: {rel}")
+            continue
+        if resolved in evidence_paths:
+            problems.append(f"names declared external evidence (never executable): {rel}")
+            continue
+        if not resolved.is_file():
+            problems.append(f"missing: {rel}")
+            continue
+        if rel not in declared:
+            problems.append(f"not bound by the inventory: {rel}")
+    return Check(
+        "proof suites are repo-relative, inventory-bound, and never external evidence",
+        not problems,
+        (
+            f"{len(tests_obj)} pinned suite(s); problems={problems}"
+            if problems
+            else f"{len(tests_obj)} pinned suite(s), all bound"
+        ),
+        {"problems": problems, "tests": [str(t) for t in tests_obj]},
+    )
+
+
 def gate_checks(
     repo: Path, expect_head: str, inventory: dict[str, object], base_sha: str
 ) -> list[Check]:
     """Every fail-closed gate, evaluated BEFORE any execution step."""
-    checks = [check_head(repo, expect_head), check_worktree_pristine(repo)]
+    checks = [
+        check_head(repo, expect_head),
+        check_base_sha(repo, base_sha),
+        check_worktree_pristine(repo),
+    ]
     checks.extend(check_inventory_binding(repo, inventory, base_sha))
     checks.extend(check_external_evidence(inventory))
+    checks.append(check_proof_suite_binding(repo, inventory))
     return checks
 
 
@@ -308,10 +424,22 @@ def run_proof_tests(repo: Path, inventory: dict[str, object], python: Path) -> C
         f"--junitxml={junit}",
     ]
     proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True)
-    root = ET.parse(junit).getroot()
-    ts = root if root.tag == "testsuite" else root.find("testsuite")
-    assert ts is not None
+    try:
+        root = ET.parse(junit).getroot()
+        ts = root if root.tag == "testsuite" else root.find("testsuite")
+    except ET.ParseError:
+        ts = None
     junit.unlink(missing_ok=True)
+    if ts is None:
+        # A crashed proof process (SIGSEGV, OOM-kill) leaves no parseable junit; that
+        # is a RED check with structured evidence, never an unhandled traceback.
+        return Check(
+            f"proof suites == {want_passed} passed / {want_failed} failed",
+            False,
+            f"proof run produced no parseable junit (pytest exit {proc.returncode}); "
+            "the run crashed or was killed — refusing to infer any result",
+            {"argv": argv[1:], "returncode": proc.returncode, "junit": None},
+        )
     total = int(ts.get("tests", "-1"))
     failed = int(ts.get("failures", "-1"))
     errors = int(ts.get("errors", "-1"))

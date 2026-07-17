@@ -346,3 +346,145 @@ def test_evidence_records_the_exact_sha_and_results(
     assert payload["candidate_sha"] == str(synthetic["head"])
     assert payload["green"] is False
     assert any(not c["ok"] for c in payload["checks"])
+
+
+# ---- verifier-demonstrated bypasses (VERDICT-P5) — each must now be RED --------
+
+
+def _rewrite_inventory(repo: Path, mutate) -> str:
+    """Apply ``mutate(data)`` to the committed inventory and commit; return new HEAD."""
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    mutate(data)
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "inventory mutation")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_symbolic_base_sha_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """VERDICT-P5 bypass 1: ``base_sha: "HEAD"`` made the scope range empty and the
+    receipt GREEN while binding nothing. A symbolic base must be refused outright."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    new_head = _rewrite_inventory(repo, lambda d: d.update(base_sha="HEAD"))
+    failed = _failed(_gates(synthetic, new_head))
+    # _gates passes the synthetic's REAL base; drive main() (inventory base) instead.
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert failed == []  # the explicit-base path stays green — the bypass was the inventory's
+
+
+def test_base_sha_equal_to_head_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """VERDICT-P5 bypass 1 (exact-hex variant): base == HEAD yields an empty scope;
+    an empty scope binds nothing and must be RED."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    head = _git(repo, "rev-parse", "HEAD")
+    new_head = _rewrite_inventory(repo, lambda d: d.update(base_sha=head))
+    # base resolves and is 40-hex, but equals (an ancestor of) the certified HEAD's
+    # tree walk start — the non-empty-scope / base!=HEAD checks must go red.
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+
+
+def test_proof_suite_naming_external_evidence_is_refused_and_never_executed(
+    synthetic: dict[str, object],
+) -> None:
+    """VERDICT-P5 bypass 2: the byte-pinned 'never executed' evidence file could be
+    handed to pytest via expected_proof.tests. The gate must refuse BEFORE execution
+    — proven by the canary staying absent."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    evidence = synthetic["evidence"]
+    canary = synthetic["canary"]
+    assert isinstance(evidence, Path) and isinstance(canary, Path)
+    new_head = _rewrite_inventory(repo, lambda d: d["expected_proof"].update(tests=[str(evidence)]))
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert not canary.exists(), "the receipt EXECUTED external evidence via expected_proof"
+
+
+def test_out_of_repo_proof_suite_forces_nonzero(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """VERDICT-P5 bypass 2 (unpinned-path variant): an out-of-repo proof suite has no
+    inventory binding — its bytes could change between runs. Must be refused."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    rogue = tmp_path / "rogue_proof.py"
+    rogue.write_text("def test_always():\n    assert True\n")
+    new_head = _rewrite_inventory(repo, lambda d: d["expected_proof"].update(tests=[str(rogue)]))
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+
+
+def test_unbound_in_repo_proof_suite_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """A committed-but-undeclared proof suite is not hash-bound; the proof-binding
+    gate must reject it independently of the scope gate."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+
+    def mutate(d: dict) -> None:
+        d["expected_proof"]["tests"] = ["unbound_proof.py"]
+
+    (repo / "unbound_proof.py").write_text("def test_always():\n    assert True\n")
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    mutate(data)
+    # bind the file in scope-coverage terms is deliberately SKIPPED: it stays out of
+    # 'files', so both the scope gate AND the proof-binding gate should complain.
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "unbound proof")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+
+
+def test_relative_external_evidence_path_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """External evidence lives outside the repo by definition — a relative path is
+    ambiguous (cwd-dependent) and must be refused."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    new_head = _rewrite_inventory(
+        repo,
+        lambda d: d.update(external_evidence=[{"path": "relative/probe.py", "sha256": "0" * 64}]),
+    )
+    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+
+
+def test_crashed_proof_process_yields_red_receipt_not_traceback(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """VERDICT-P5 robustness: a proof process that dies without junit (SIGSEGV/OOM)
+    must produce a RED check + structured evidence, never an unhandled exception."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    crasher = repo / "test_crash_proof.py"
+    crasher.write_text("import ctypes\nctypes.string_at(0)\n")
+
+    def mutate(d: dict) -> None:
+        d["expected_proof"]["tests"] = ["test_crash_proof.py"]
+        d["files"]["test_crash_proof.py"] = hashlib.sha256(crasher.read_bytes()).hexdigest()
+
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    mutate(data)
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "crashing proof")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    evidence_dir = tmp_path / "crash-evidence"
+    rc = receipt.main(
+        [
+            "--expect-head",
+            new_head,
+            "--python",
+            sys.executable,
+            "--evidence-dir",
+            str(evidence_dir),
+        ],
+        repo=repo,
+    )
+    assert rc == 1
+    payload = json.loads((evidence_dir / "candidate-receipt.json").read_text())
+    assert payload["green"] is False
+    proof_checks = [c for c in payload["checks"] if c["name"].startswith("proof suites ==")]
+    assert proof_checks and not proof_checks[0]["ok"]
+    assert "no parseable junit" in proof_checks[0]["detail"]
