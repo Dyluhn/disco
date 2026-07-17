@@ -47,8 +47,11 @@ _THRASH_STUCK_DETAILS = {
 _SHELL_TOOLS = frozenset({"shell", "shell_exec"})
 _RUNTIME_CLEANUP_TOOLS = frozenset({"shell_kill_process"})
 _SHELL_CONTROL_OPERATORS = frozenset({";", "&", "&&", "|", "|&", "||"})
+_SHELL_PIPE_OPERATORS = frozenset({"|", "|&"})
 _RUNTIME_CLEANUP_COMMANDS = frozenset({"kill", "killall", "pkill"})
 _SHELL_PUNCTUATION = ";&|<>"
+_STATIC_TEE_SINK_UNSAFE = re.compile(r"[$`*?\[\]{}()~\r\n]")
+_STATIC_TEE_SINK_VIRTUAL_ROOTS = ("/dev", "/proc", "/sys")
 _QUOTED_PUNCTUATION_MASK = str.maketrans(
     {char: chr(0xE100 + index) for index, char in enumerate(_SHELL_PUNCTUATION)}
 )
@@ -253,6 +256,71 @@ def _shell_segments(command: str) -> list[tuple[list[str], str]]:
     return segments
 
 
+def _static_tee_sinks(segment: list[str], cwd: str) -> tuple[str, ...]:
+    """Return proven static file operands for one terminal ``tee`` stage.
+
+    The shell action reports only the complete command's final exit status.  Callers
+    must therefore invoke this helper only for a ``tee`` that is both the final
+    pipeline stage and the final shell segment, so later control flow cannot hide
+    its failure.
+    Unknown options and shell/redirection syntax deliberately return no identity:
+    an unproven side effect must never become a thrash bypass.
+    """
+
+    if not segment or posixpath.basename(segment[0]).lower() != "tee":
+        return ()
+    args = segment[1:]
+    if any(token and set(token) <= set("<>") for token in args):
+        return ()
+    operands: list[str] = []
+    options_done = False
+    for token in args:
+        if not options_done and token == "--":
+            options_done = True
+            continue
+        if not options_done and token.startswith("--"):
+            if token not in {"--append", "--ignore-interrupts"}:
+                return ()
+            continue
+        if not options_done and token.startswith("-") and token != "-":
+            if not re.fullmatch(r"-[ai]+", token):
+                return ()
+            continue
+        operands.append(token)
+
+    sinks: set[str] = set()
+    for operand in operands:
+        if operand == "-" or _STATIC_TEE_SINK_UNSAFE.search(operand):
+            continue
+        sink = posixpath.normpath(
+            operand if operand.startswith("/") else posixpath.join(cwd, operand)
+        )
+        if sink == "/" or any(
+            sink == root or sink.startswith(root + "/") for root in _STATIC_TEE_SINK_VIRTUAL_ROOTS
+        ):
+            continue
+        sinks.add(sink)
+    return tuple(sorted(sinks))
+
+
+def _downstream_static_tee_sinks(
+    segments: list[tuple[list[str], str]], script_index: int, cwd: str
+) -> tuple[str, ...]:
+    """Bind a direct script run to a trustworthy downstream output artifact."""
+
+    index = script_index
+    pipeline: list[tuple[list[str], str]] = []
+    while index < len(segments) - 1 and segments[index][1] in _SHELL_PIPE_OPERATORS:
+        index += 1
+        pipeline.append(segments[index])
+    if not pipeline:
+        return ()
+    final_segment, final_terminator = pipeline[-1]
+    if index != len(segments) - 1 or final_terminator != "":
+        return ()
+    return _static_tee_sinks(final_segment, cwd)
+
+
 def _direct_script_invocations(command: str) -> list[tuple[str, str, bool]]:
     """Return conservative direct-script invocations with lifecycle role.
 
@@ -264,9 +332,10 @@ def _direct_script_invocations(command: str) -> list[tuple[str, str, bool]]:
     not hide the direct invocation.
     """
 
+    segments = _shell_segments(command)
     cwd = "/workspace"
     invocations: list[tuple[str, str, bool]] = []
-    for segment, terminator in _shell_segments(command):
+    for index, (segment, terminator) in enumerate(segments):
         if len(segment) == 2 and segment[0] == "cd" and terminator != "&":
             destination = segment[1]
             cwd = posixpath.normpath(
@@ -288,9 +357,19 @@ def _direct_script_invocations(command: str) -> list[tuple[str, str, bool]]:
             script_path = posixpath.normpath(
                 script_arg if script_arg.startswith("/") else posixpath.join(cwd, script_arg)
             )
-            fingerprint = json.dumps(
-                [family, script_path, segment[2:]], separators=(",", ":"), ensure_ascii=True
+            fingerprint_parts: list[Any] = [family, script_path, segment[2:]]
+            # ``shlex`` treats a literal newline as whitespace, while the shell
+            # treats an unquoted newline as a command separator.  Without retaining
+            # quote provenance we cannot prove which meaning applied, so multiline
+            # commands never receive side-effect identity.
+            sinks = (
+                ()
+                if "\n" in command or "\r" in command
+                else _downstream_static_tee_sinks(segments, index, cwd)
             )
+            if sinks:
+                fingerprint_parts.append({"tee_sinks": list(sinks)})
+            fingerprint = json.dumps(fingerprint_parts, separators=(",", ":"), ensure_ascii=True)
             invocations.append((fingerprint, family, terminator == "&"))
             break
     return invocations

@@ -1061,10 +1061,20 @@ async def drive_scenario(
     # Late-terminal race guard: if a real work terminal landed after the poll's
     # inactivity decision but before this frozen read, use the ordinary strict
     # terminal snapshot path. Never downgrade that terminal to a diagnostic slice.
-    inactive_without_terminal = (
-        drive_status == INACTIVE_TIMEOUT and not frozen_work_terminal
+    inactive_without_terminal = drive_status == INACTIVE_TIMEOUT and not frozen_work_terminal
+    confirmed_live_thrash_without_terminal = (
+        drive_status == LIVE_THRASH_STOP
+        and not frozen_work_terminal
+        and _strict_live_thrash_stop_boundary(
+            events,
+            state_final,
+            client.live_thrash_monitor,
+        )
     )
-    terminal_snapshot_available = not inactive_without_terminal
+    nonterminal_without_snapshot = (
+        inactive_without_terminal or confirmed_live_thrash_without_terminal
+    )
+    terminal_snapshot_available = not nonterminal_without_snapshot
     if terminal_snapshot_available:
         workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
     else:
@@ -1095,7 +1105,11 @@ async def drive_scenario(
                 "reason": "strict browser bytes require the unavailable terminal snapshot",
                 "facts": {"referenced_paths": referenced_paths},
                 "conversation_id": cid,
-                "preserved_for": "nonterminal_product_adjudication",
+                "preserved_for": (
+                    "confirmed_live_thrash_adjudication"
+                    if confirmed_live_thrash_without_terminal
+                    else "nonterminal_product_adjudication"
+                ),
                 "admissible_as_browser_evidence": False,
             }
     else:
@@ -1134,27 +1148,27 @@ async def drive_scenario(
         f"collected {len(events)} events; workspace files={list(workspace)}; "
         f"browser evidence files={list(browser_evidence)}"
     )
-    nonterminal_product_evidence = (
-        {
-            "nonterminal_adjudication": {
-                "schema_version": 1,
-                "drive_status": drive_status,
-                "terminal_baseline_seq": drive_terminal_baseline_seq,
-                "frozen_max_seq": max(
-                    (
-                        int(event["seq"])
-                        for event in frozen_events
-                        if type(event.get("seq")) is int
-                    ),
-                    default=-1,
-                ),
-                "terminal_snapshot_available": False,
-                "terminal_only_evidence_unavailable": ["workspace", "browser"],
-            }
+    nonterminal_product_evidence: dict[str, Any] = {}
+    if nonterminal_without_snapshot:
+        nonterminal_adjudication: dict[str, Any] = {
+            "schema_version": 1,
+            "drive_status": drive_status,
+            "terminal_baseline_seq": drive_terminal_baseline_seq,
+            "frozen_max_seq": max(
+                (int(event["seq"]) for event in frozen_events if type(event.get("seq")) is int),
+                default=-1,
+            ),
+            "terminal_snapshot_available": False,
+            "terminal_only_evidence_unavailable": ["workspace", "browser"],
         }
-        if inactive_without_terminal
-        else {}
-    )
+        if confirmed_live_thrash_without_terminal:
+            nonterminal_adjudication.update(
+                {
+                    "preserved_for": "strictly_confirmed_live_thrash_stop",
+                    "strict_monitor_confirmed": True,
+                }
+            )
+        nonterminal_product_evidence = {"nonterminal_adjudication": nonterminal_adjudication}
     run = CollectedRun(
         conversation_id=cid,
         events=events,
@@ -1426,8 +1440,12 @@ def _first_killed_idle_epoch(events: list[dict[str, Any]]) -> float | None:
     return first
 
 
-def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
-    """Whether the live monitor proved thrash before killing this run.
+def _strict_live_thrash_stop_boundary(
+    events: list[dict[str, Any]],
+    state_final: dict[str, Any],
+    monitor: dict[str, Any],
+) -> bool:
+    """Whether strict retained monitor evidence proves a pre-kill thrash stop.
 
     The monitor stops an actively thrashing conversation through ``POST /kill``.
     The resulting durable terminal is ``IDLE(detail=killed)``, not a normal Build
@@ -1435,9 +1453,8 @@ def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
     monitor record contains a confirmed strict ThrashOracle failure.
     """
 
-    if DiscoApiClient._status_of(run.state_final) != "IDLE":
+    if DiscoApiClient._status_of(state_final) != "IDLE":
         return False
-    monitor = run.thrash_monitor
     if not isinstance(monitor, dict) or monitor.get("enabled") is not True:
         return False
     minimum = monitor.get("minimum_confirmation_samples")
@@ -1459,8 +1476,8 @@ def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
     findings = monitor.get("findings")
     if not isinstance(findings, list):
         return False
-    run_start = _min_event_epoch(run.events)
-    killed_at = _first_killed_idle_epoch(run.events)
+    run_start = _min_event_epoch(events)
+    killed_at = _first_killed_idle_epoch(events)
     if run_start is None or killed_at is None or run_start > killed_at:
         return False
     for finding in findings:
@@ -1511,6 +1528,16 @@ def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
         ):
             return True
     return False
+
+
+def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
+    """Whether the frozen run satisfies the strict pre-kill monitor boundary."""
+
+    return _strict_live_thrash_stop_boundary(
+        run.events,
+        run.state_final,
+        run.thrash_monitor,
+    )
 
 
 def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:

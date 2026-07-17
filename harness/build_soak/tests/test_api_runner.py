@@ -6089,15 +6089,110 @@ async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp
 
 
 @pytest.mark.asyncio
-async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_fail(
+async def test_confirmed_live_thrash_skips_impossible_terminal_snapshot_and_classifies_fail(
     tmp_path, monkeypatch
 ):
-    """Post-stop screenshot loss cannot erase an already-proven thrash failure."""
-
     scenario = _smoke_scenario()
     started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
     events = clean_smoke_log()
     events[-1] = status(10, "IDLE", "killed")
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(
+        db,
+        states=["IDLE"],
+        workspace={"index.html": "<h1>must not be collected</h1>"},
+        preview_html="<h1>Build Smoke OK</h1>",
+    )
+    client = _client(transport, tmp_path, require_workspace_commit=True)
+
+    async def confirmed_thrash_stop(*_args, **_kwargs):
+        monitor = _strict_live_thrash_monitor()
+        client._live_thrash_samples = monitor["sample_count"]
+        client._live_thrash_findings = monitor["findings"]
+        return LIVE_THRASH_STOP
+
+    async def strict_workspace_must_not_run(*_args, **_kwargs):
+        raise AssertionError("killed IDLE cannot produce a finish-triggered snapshot")
+
+    def browser_capture_must_not_run(*_args, **_kwargs):
+        raise AssertionError("browser bytes require the unavailable terminal snapshot")
+
+    trace = _fake_inspect_trace()
+    trace["spans"].extend(
+        [
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+        ]
+    )
+
+    async def collect_trace(_conversation_id):
+        return trace
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", confirmed_thrash_stop)
+    monkeypatch.setattr(client, "collect_workspace", strict_workspace_must_not_run)
+    monkeypatch.setattr(client, "collect_browser_evidence", browser_capture_must_not_run)
+    monkeypatch.setattr(client, "collect_inspect_trace", collect_trace)
+    monkeypatch.setattr(client, "observe_live_thrash_snapshot", lambda *_args, **_kwargs: False)
+
+    run = await drive_scenario(
+        client,
+        scenario,
+        model="m",
+        autonomous=False,
+        timeout_s=5,
+    )
+
+    assert _run_mod._confirmed_live_thrash_stop(run) is True
+    assert run.workspace_manifest == {
+        "files": {},
+        "_capture": {
+            "status": "not_collected_nonterminal",
+            "drive_status": LIVE_THRASH_STOP,
+            "reason": "strict atomic workspace evidence requires a durable terminal",
+        },
+    }
+    assert run.browser_evidence == {}
+    assert run.product_evidence["nonterminal_adjudication"] == {
+        "schema_version": 1,
+        "drive_status": LIVE_THRASH_STOP,
+        "terminal_baseline_seq": None,
+        "frozen_max_seq": 10,
+        "terminal_snapshot_available": False,
+        "terminal_only_evidence_unavailable": ["workspace", "browser"],
+        "preserved_for": "strictly_confirmed_live_thrash_stop",
+        "strict_monitor_confirmed": True,
+    }
+    base = assemble_dossier(
+        tmp_path / "out",
+        "run_confirmed_thrash_nonterminal_capture",
+        scenario,
+        run,
+        model="m",
+        autonomous=False,
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    replay = classify_run_folder(base)
+    assert classification["status"] == "FAIL", classification
+    assert classification["code"] == "MODEL_REPAIR_THRASH"
+    assert classification["required_evidence_present"] is True
+    assert replay["status"] == "FAIL", replay
+    assert replay["code"] == "MODEL_REPAIR_THRASH"
+
+
+@pytest.mark.asyncio
+async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_fail(
+    tmp_path, monkeypatch
+):
+    """A late work terminal stays strict; later screenshot loss cannot erase thrash."""
+
+    scenario = _smoke_scenario()
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events.append(status(11, "IDLE", "killed"))
     for offset, event in enumerate(events):
         event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
 
@@ -6138,6 +6233,22 @@ async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_f
     async def collect_trace(_conversation_id):
         return trace
 
+    workspace_calls = 0
+
+    async def collect_strict_workspace(_conversation_id, _declared_paths):
+        nonlocal workspace_calls
+        workspace_calls += 1
+        return {
+            "index.html": {
+                "present": True,
+                "size": len(content.encode()),
+                "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                "content": content,
+                "proof": "raw_sha",
+                "content_stable": True,
+            }
+        }
+
     def missing_screenshot(conversation_id, _events, _workspace, **_kwargs):
         raise BrowserEvidenceCollectionError(
             "referenced browser screenshot is missing from the workspace snapshot",
@@ -6150,6 +6261,7 @@ async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_f
 
     monkeypatch.setattr(_run_mod, "_drive_to_terminal", confirmed_thrash_stop)
     monkeypatch.setattr(client, "collect_inspect_trace", collect_trace)
+    monkeypatch.setattr(client, "collect_workspace", collect_strict_workspace)
     monkeypatch.setattr(client, "collect_browser_evidence", missing_screenshot)
     monkeypatch.setattr(client, "observe_live_thrash_snapshot", lambda *_args, **_kwargs: False)
 
@@ -6162,6 +6274,7 @@ async def test_h302_confirmed_live_thrash_retains_browser_collection_error_and_f
     )
 
     assert _run_mod._confirmed_live_thrash_stop(run) is True
+    assert workspace_calls == 1
     assert run.browser_evidence == {}
     assert run.inspect_trace == trace
     assert run.thrash_monitor == _strict_live_thrash_monitor()

@@ -49,6 +49,104 @@ def test_semantically_repeated_direct_script_verification_fails_across_shell_wra
     assert result.code == fc.TOOL_CALL_THRASH
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 3, 5]
+    assert result.facts["fingerprint"] == '["python","/workspace/inventory.py",[]]'
+
+
+def test_h469_output_materialization_is_not_a_third_pure_script_verification() -> None:
+    commands = (
+        "python3 primes.py",
+        r"python3 primes.py | grep -oP '\d+' | tail -1",
+        "python3 primes.py | tee /tmp/primes_output.txt",
+    )
+    events = []
+    for seq, command in zip((9, 11, 24), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["largest_semantic_shell_repeat_group"] == 2
+
+
+def test_repeated_same_static_tee_sink_remains_bounded_across_append_and_cwd_forms() -> None:
+    commands = (
+        "python3 primes.py | tee /workspace/primes.out",
+        "python3 primes.py | tee -a primes.out",
+        "cd /workspace && python3 primes.py | tee --append ./primes.out",
+    )
+    events = []
+    for seq, command in zip((1, 3, 5), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+    assert result.facts["action_seqs"] == [1, 3, 5]
+    assert result.facts["fingerprint"].endswith(',{"tee_sinks":["/workspace/primes.out"]}]')
+
+
+def test_distinct_static_tee_artifacts_do_not_collapse_into_one_repeat_group() -> None:
+    events = []
+    for seq, sink in zip((1, 3, 5), ("first.out", "second.out", "/tmp/third.out"), strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(
+                seq,
+                "shell",
+                action_id=action_id,
+                args={"command": f"python3 primes.py | tee {sink}"},
+            ),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["largest_semantic_shell_repeat_group"] == 1
+
+
+@pytest.mark.parametrize(
+    "tee_stage",
+    (
+        'tee "$OUTPUT_PATH"',
+        "tee",
+        "tee /dev/null",
+        'tee "$(mktemp)"',
+        "tee output.txt | tail -1",
+        "tee output.txt; true",
+        "tee /definitely-missing-h469-parent/out.txt && false || true",
+        "tee /definitely-missing-h469-parent/out.txt\ntrue",
+        "tee --output-error=warn output.txt",
+    ),
+)
+def test_unproven_tee_sink_cannot_evade_pure_repeat_limit(tee_stage: str) -> None:
+    commands = (
+        "python3 primes.py",
+        "cd /workspace && python3 primes.py",
+        f"python3 primes.py | {tee_stage}",
+    )
+    events = []
+    for seq, command in zip((1, 3, 5), commands, strict=True):
+        action_id = f"run{seq}"
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            observation(seq + 1, action_id, tool="shell", success=True),
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+    assert result.facts["action_seqs"] == [1, 3, 5]
 
 
 def test_semantic_script_repeats_do_not_equate_changed_args_or_module_runners() -> None:
