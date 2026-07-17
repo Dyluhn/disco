@@ -1882,6 +1882,9 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
     env = _intent_env_result(intent)
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
+    env = _intent_build_env(env, intent, files)
+    if isinstance(env, _DetectBlocker):
+        return _fail_closed(env)
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -1905,6 +1908,31 @@ def _static_from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes])
             "(build command, output directory, and env names supplied).",
         ),
     )
+
+
+def _intent_build_env(
+    env: tuple[EnvVarDecl, ...],
+    intent: ReleaseIntent,
+    files: Mapping[str, str | bytes],
+) -> tuple[EnvVarDecl, ...] | _DetectBlocker:
+    """Source build-env parity for the typed-intent paths (R7 live-pubvite defect).
+
+    The source-detection path conserves SOURCE-DISCOVERED public client build vars
+    (`import.meta.env.VITE_*`) into the spec for a build-requiring service — they must
+    lower to a Compose build arg + Dockerfile ARG or the built asset ships without
+    them — and fails closed on a secret-SHAPED discovered build var
+    (`secret_build_env_unsupported`, §8.4). The intent paths lowered only DECLARED
+    env, so an undeclared public build var silently never reached the build and an
+    undeclared secret-shaped one silently never rejected. Apply the same two source
+    rules when the intent declares a `build_cmd`; a declared name keeps explicit-wins
+    precedence (it is never duplicated or reclassified here)."""
+    if not intent.build_cmd:
+        return env
+    secret = _secret_build_env_blocker(files)
+    if secret is not None:
+        return secret
+    existing = {var.name for var in env}
+    return env + tuple(decl for decl in _build_env_decls(files) if decl.name not in existing)
 
 
 def _port_contract_start(start_cmd: tuple[str, ...], port_env: str) -> tuple[str, ...]:
@@ -1998,6 +2026,9 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         return _fail_closed(install_outcome)
     install_cmd, package_manager, lockfile = install_outcome
     env = _intent_env_result(intent)
+    if isinstance(env, _DetectBlocker):
+        return _fail_closed(env)
+    env = _intent_build_env(env, intent, files)
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
     service = ReleaseService(
