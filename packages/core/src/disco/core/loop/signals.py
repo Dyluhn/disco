@@ -121,6 +121,8 @@ _ACTIONABLE_BUILD_VERB_RE = re.compile(
 SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
 PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
 READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
+STUCK_ESCAPE_BLOCK_DETAIL_PREFIX = "stuck_escape_block:"
+_STUCK_ESCAPE_BLOCKABLE_TOOLS = frozenset({"file_read"})
 
 _READ_CHURN_SMALL_LIMIT = 25
 _READ_CHURN_WARNING_COUNTS = frozenset({5, 10, 15})
@@ -521,6 +523,49 @@ def stuck_escape_seq(events: list[Event]) -> int | None:
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
             return None
     return None
+
+
+def stuck_escape_blocked_tools(events: list[Event]) -> frozenset[str]:
+    """Return host-typed tools quarantined for the current escape turn.
+
+    The block is load-bearing state, so it is encoded in SYSTEM StatusEvent
+    details immediately before the existing ``stuck_escape`` marker rather
+    than volatile metadata. Exact adjacency binds the block to that escape;
+    a stale marker, intervening event, or non-system spoof is inert.
+    """
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+            return frozenset()
+        if not (
+            isinstance(event, StatusEvent)
+            and event.source == EventSource.SYSTEM
+            and event.status == ConversationStatus.RUNNING
+            and event.detail == "stuck_escape"
+        ):
+            continue
+        blocked: set[str] = set()
+        cursor = index - 1
+        while cursor >= 0:
+            marker = events[cursor]
+            if not (
+                isinstance(marker, StatusEvent)
+                and marker.source == EventSource.SYSTEM
+                and marker.status == ConversationStatus.RUNNING
+                and isinstance(marker.detail, str)
+                and marker.detail.startswith(STUCK_ESCAPE_BLOCK_DETAIL_PREFIX)
+            ):
+                break
+            tool_name = marker.detail.removeprefix(STUCK_ESCAPE_BLOCK_DETAIL_PREFIX)
+            if (
+                re.fullmatch(r"[a-z][a-z0-9_]*", tool_name) is None
+                or tool_name not in _STUCK_ESCAPE_BLOCKABLE_TOOLS
+            ):
+                return frozenset()
+            blocked.add(tool_name)
+            cursor -= 1
+        return frozenset(blocked)
+    return frozenset()
 
 
 def stuck_escape_attempt_count(events: list[Event]) -> int:

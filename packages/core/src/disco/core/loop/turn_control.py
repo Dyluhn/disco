@@ -77,6 +77,10 @@ _BOOKKEEPING_PLAN_SLACK = 2
 # plan's steps are byte-identical to the immediately-prior plan for >= this many
 # consecutive auto-approved revisions, feed the existing bookkeeping-stuck valve.
 _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
+_STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON: dict[str, frozenset[str]] = {
+    "redundant_read_after_churn_nudge": frozenset({"file_read"}),
+    "redundant_read_coverage": frozenset({"file_read"}),
+}
 _IDENTICAL_PLAN_NUDGE_DIAGNOSTIC = "identical_plan_nudge"
 _IDENTICAL_PLAN_NUDGE_TEXT = (
     "This revision is IDENTICAL to the already-approved plan — proposing it "
@@ -1254,6 +1258,9 @@ class Valve:
                 # sampling-variance half, and together they break the
                 # self-imitation chain the way neither could alone.
                 attempt = signals.stuck_escape_attempt_count(events)
+                blocked_tools = _STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON.get(
+                    stuck_result.reason or "", frozenset()
+                )
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -1263,6 +1270,13 @@ class Valve:
                         ),
                     )
                 )
+                for tool_name in sorted(blocked_tools):
+                    await self._loop._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail=f"{signals.STUCK_ESCAPE_BLOCK_DETAIL_PREFIX}{tool_name}",
+                        )
+                    )
                 await self._loop._emit(
                     StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape")
                 )

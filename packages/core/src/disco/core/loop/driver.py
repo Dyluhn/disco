@@ -376,6 +376,7 @@ class Driver:
         suppress_meta_tools: bool = False,
         force_submit_only: bool = False,
         force_read_tools: frozenset[str] | None = None,
+        blocked_tools: frozenset[str] = frozenset(),
         mode: OperatingMode | None = None,
         available_tools: list | None = None,
     ) -> list:
@@ -414,7 +415,11 @@ class Driver:
         )
 
         effective_mode = mode or self._loop.mode
-        tools = self._available_tools(available_tools)
+        tools = [
+            tool
+            for tool in self._available_tools(available_tools)
+            if getattr(tool, "name", None) not in blocked_tools
+        ]
         if effective_mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
             # stuck prose-planning segment, narrow the offered
@@ -575,7 +580,11 @@ class Driver:
                     else []
                 ),
             ]
-        return list(tools) + virtuals
+        return [
+            tool
+            for tool in list(tools) + virtuals
+            if getattr(tool, "name", None) not in blocked_tools
+        ]
 
     def _executor_callable_tool_names(self) -> set[str]:
         _cn = getattr(self._loop.executor, "callable_tool_names", None)
@@ -623,7 +632,11 @@ class Driver:
         return known_tool_names | self._virtual_tool_names()
 
     def allowed_tool_names_for_mode(
-        self, mode: OperatingMode, *, available_tools: list
+        self,
+        mode: OperatingMode,
+        *,
+        available_tools: list,
+        blocked_tools: frozenset[str] = frozenset(),
     ) -> set[str]:
         """Names the loop would accept for the current model request.
 
@@ -635,13 +648,14 @@ class Driver:
         evidence must still report that those names are not callable.
         """
         if mode == OperatingMode.PLANNING:
-            return set(self.planning_allowed_tool_names(available_tools))
+            return set(self.planning_allowed_tool_names(available_tools)) - blocked_tools
         allowed = self._executor_callable_tool_names() | self._virtual_tool_names()
         plan_name = getattr(self._loop._plan_tool, "name", self._loop._plan_tool)
         # These signals are valid only before approval. Keep them in the broader
         # requery-recognition set so a hallucination gets its canonical typed
         # refusal, but do not report them as allowed execution capabilities.
         allowed.difference_update({plan_name, "questions_v2", "plan_step"})
+        allowed.difference_update(blocked_tools)
         return allowed
 
     def unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
@@ -654,12 +668,20 @@ class Driver:
 
     def _prepare_drive_context(
         self, view: View, events: list[Event]
-    ) -> tuple[OperatingMode, float | None, bool, bool, frozenset[str] | None]:
+    ) -> tuple[
+        OperatingMode,
+        float | None,
+        bool,
+        bool,
+        frozenset[str] | None,
+        frozenset[str],
+    ]:
         """Compute the request-context invariants for a single drive step.
 
         Returns ``(mode, escape_temp, fresh_session, force_submit_only,
-        force_read_tools)``. Kept inline with drive_step's original logic so
-        retry counters, event ordering, and model requests are unchanged.
+        force_read_tools, escape_blocked_tools)``. Kept inline with
+        drive_step's original logic so retry counters, event ordering, and
+        model requests are unchanged outside the typed escape turn.
         """
         escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
@@ -667,6 +689,9 @@ class Driver:
         )
         in_escape = escape_seq is not None and not acted_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
+        escape_blocked_tools = (
+            signals.stuck_escape_blocked_tools(events) if in_escape else frozenset()
+        )
 
         cached_mode = self._loop.mode
         mode = self._loop._reconcile_mode_from_events(events)
@@ -694,7 +719,14 @@ class Driver:
             signals.prose_plan_force_submit(events) or planning_refusal_force
         )
         force_read_tools = _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None
-        return mode, escape_temp, fresh_session, force_submit_only, force_read_tools
+        return (
+            mode,
+            escape_temp,
+            fresh_session,
+            force_submit_only,
+            force_read_tools,
+            escape_blocked_tools,
+        )
 
     async def _repair_degenerate_step(
         self,
@@ -752,9 +784,14 @@ class Driver:
         # set is mode-scoped: while PLANNING the agent sees ONLY the plan
         # tool (so it can't act before approval); while executing it sees
         # everything except the plan tool.
-        mode, escape_temp, fresh_session, force_submit_only, force_read_tools = (
-            self._prepare_drive_context(view, events)
-        )
+        (
+            mode,
+            escape_temp,
+            fresh_session,
+            force_submit_only,
+            force_read_tools,
+            escape_blocked_tools,
+        ) = self._prepare_drive_context(view, events)
         try:
             attempts = 0
             requery_count = 0
@@ -779,6 +816,7 @@ class Driver:
                         suppress_meta_tools=fresh_session,
                         force_submit_only=force_submit_only,
                         force_read_tools=force_read_tools,
+                        blocked_tools=escape_blocked_tools,
                         mode=mode,
                         available_tools=available_tools,
                     )
@@ -792,7 +830,9 @@ class Driver:
                                 if isinstance((name := getattr(tool, "name", None)), str)
                             },
                             allowed_tools=self.allowed_tool_names_for_mode(
-                                mode, available_tools=available_tools
+                                mode,
+                                available_tools=available_tools,
+                                blocked_tools=escape_blocked_tools,
                             ),
                             attempt=attempts + 1,
                         )
@@ -838,6 +878,44 @@ class Driver:
                     if should_continue:
                         continue
 
+                    blocked_tool_call = step.tool_call
+                    if (
+                        blocked_tool_call is not None
+                        and blocked_tool_call.tool_name in escape_blocked_tools
+                    ):
+                        # Share Rung 7's two-requery budget: a model that
+                        # alternates blocked and unknown tools cannot multiply
+                        # hidden repair turns beyond the existing campaign cap.
+                        if requery_count < 2:
+                            requery_count += 1
+                            self._record_model_repair(
+                                "stuck_escape_withheld_tool",
+                                attempt=requery_count,
+                                tool_name=blocked_tool_call.tool_name,
+                            )
+                            transient_messages.append(
+                                LLMMessage(
+                                    role="user",
+                                    content=(
+                                        f"`{blocked_tool_call.tool_name}` is temporarily withheld "
+                                        "for this one stuck-escape turn because repeating it "
+                                        "caused the current loop. Choose one different tool "
+                                        "from the offered set now."
+                                    ),
+                                )
+                            )
+                            continue
+                        await self._loop._land_blocked(
+                            reason="stuck_escape_tool_quarantine",
+                            guidance=(
+                                "The model selected a temporarily withheld loop-causing tool "
+                                "after two bounded repair requests. The tool was not executed."
+                            ),
+                            legacy_status=ConversationStatus.STUCK,
+                            legacy_detail="stuck_escape_tool_quarantine",
+                        )
+                        return None, Disp.HALT
+
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
                     # Valid JSON but unknown tool name -> if we haven't
                     # hit the requery bound, inject a hint and retry
@@ -853,6 +931,7 @@ class Driver:
                         fresh_session=fresh_session,
                         force_submit_only=force_submit_only,
                         force_read_tools=force_read_tools,
+                        blocked_tools=escape_blocked_tools,
                         mode=mode,
                     )
                     if next_requery_count is not None:
@@ -979,6 +1058,7 @@ def _prepare_unknown_tool_requery(
     fresh_session: bool,
     force_submit_only: bool,
     force_read_tools: frozenset[str] | None,
+    blocked_tools: frozenset[str],
     mode: OperatingMode,
 ) -> int | None:
     """Append one balanced unknown-tool repair turn, if rerouting is safe."""
@@ -1004,6 +1084,7 @@ def _prepare_unknown_tool_requery(
             suppress_meta_tools=fresh_session,
             force_submit_only=force_submit_only,
             force_read_tools=force_read_tools,
+            blocked_tools=blocked_tools,
             mode=mode,
         )
     }
