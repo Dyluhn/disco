@@ -10,6 +10,7 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     StatusEvent,
     ToolResult,
 )
@@ -28,6 +29,7 @@ class _CoverageExecutor(FakeExecutor):
                 ToolSpec(name="file_read", description="read", parameters_schema={}),
                 ToolSpec(name="file_list", description="list", parameters_schema={}),
                 ToolSpec(name="file_write", description="write", parameters_schema={}),
+                ToolSpec(name="file_append", description="append", parameters_schema={}),
                 ToolSpec(name="shell", description="shell", parameters_schema={}),
                 ToolSpec(name="think", description="think", parameters_schema={}),
             ]
@@ -38,7 +40,7 @@ class _CoverageExecutor(FakeExecutor):
         if call.tool_name == "file_read":
             content = "[lines 1-2 of 2]\n1\tstable-a\n2\tstable-b"
             structured = None
-        elif call.tool_name == "file_write":
+        elif call.tool_name in {"file_write", "file_append"}:
             content = "wrote changed bytes"
             structured = {
                 "path": str(call.arguments.get("path") or "styles.css"),
@@ -71,6 +73,25 @@ class _FailFirstWriteCoverageExecutor(_CoverageExecutor):
                 success=False,
                 content="simulated write failure",
                 error="simulated write failure",
+            )
+        return await super().execute(call)
+
+
+class _FailFirstVerificationReadExecutor(_CoverageExecutor):
+    """Fail the first post-escape verification read, then allow the retry."""
+
+    async def execute(self, call):  # noqa: ANN001, ANN201 - fake protocol seam
+        if (
+            call.tool_name == "file_read"
+            and sum(previous.tool_name == "file_read" for previous in self.calls) == 5
+        ):
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=False,
+                content="simulated verification read failure",
+                error="simulated verification read failure",
             )
         return await super().execute(call)
 
@@ -220,6 +241,164 @@ async def test_read_coverage_escape_quarantines_read_until_productive_action():
     assert {"file_write", "think", "finish"} <= allowed
     assert "file_read" not in set(agent.seen_tools[6])
     assert "file_read" in set(agent.seen_tools[7])
+
+
+async def test_h553_recovery_receipt_allows_one_read_then_forces_deliverable_progress():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_append", {"path": "styles.css", "content": "main{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step(
+                "file_write",
+                {"path": "index.html", "content": "<main>bakery</main>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" not in set(agent.seen_tools[5])
+    assert "file_read" in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert [call.tool_name for call in executor.calls][-3:] == [
+        "file_append",
+        "file_read",
+        "file_write",
+    ]
+    assert executor.calls[-1].arguments == {
+        "path": "index.html",
+        "content": "<main>bakery</main>",
+    }
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 6
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 0
+
+    index_write = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent)
+        and event.tool_call is not None
+        and event.tool_call.tool_name == "file_write"
+        and event.tool_call.arguments.get("path") == "index.html"
+    )
+    reconstructed = [
+        event.model_copy()
+        for event in events
+        if event.seq is not None and index_write.seq is not None and event.seq < index_write.seq
+    ]
+    assert loop._driver.active_stuck_escape_blocked_tools(reconstructed) == frozenset({"file_read"})
+
+
+async def test_h553_second_post_receipt_read_is_refused_not_executed():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step("file_read", {"path": "styles.css", "limit": 105}),
+            action_step(
+                "file_write",
+                {"path": "index.html", "content": "<main>bakery</main>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 6
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
+    refusal = next(
+        event
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:file_read"
+    )
+    refused_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == refusal.action_id
+    )
+    assert refusal.tool_call_id == refused_action.tool_call.call_id
+    assert [call.tool_name for call in executor.calls][-1] == "file_write"
+
+
+async def test_h553_failed_verification_read_does_not_consume_receipt_budget():
+    executor = _FailFirstVerificationReadExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step(
+                "file_write",
+                {"path": "index.html", "content": "<main>bakery</main>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" in set(agent.seen_tools[6])
+    assert "file_read" in set(agent.seen_tools[7])
+    assert "file_read" not in set(agent.seen_tools[8])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 7
+
+
+async def test_h553_newer_mutation_replenishes_exactly_one_verification_read():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step("file_append", {"path": "styles.css", "content": "main{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            action_step("file_read", {"path": "styles.css", "limit": 105}),
+            action_step(
+                "file_write",
+                {"path": "index.html", "content": "<main>bakery</main>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert "file_read" not in set(agent.seen_tools[9])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 7
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
+    assert [call.tool_name for call in executor.calls][-4:] == [
+        "file_read",
+        "file_append",
+        "file_read",
+        "file_write",
+    ]
 
 
 async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
@@ -505,6 +684,38 @@ def test_escape_block_marker_requires_exact_system_adjacency():
     assert signals.stuck_escape_blocked_tools([unsupported, escape]) == frozenset()
     non_system_escape = escape.model_copy(update={"source": EventSource.AGENT})
     assert signals.stuck_escape_blocked_tools([block, non_system_escape]) == frozenset()
+
+
+def test_h553_delayed_pre_escape_mutation_result_cannot_open_verification_budget():
+    executor = _CoverageExecutor()
+    loop, _store = build_loop(ScriptedAgent([]), executor=executor)
+    stale_write = action(
+        tool="file_write",
+        args={"path": "styles.css", "content": "body{}"},
+    ).model_copy(update={"seq": 1})
+    block = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape_block:file_read",
+    ).model_copy(update={"seq": 2})
+    escape = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape",
+    ).model_copy(update={"seq": 3})
+    delayed_result = ObservationEvent(
+        source=EventSource.ENVIRONMENT,
+        action_id=stale_write.id,
+        tool_result=ToolResult(
+            call_id=stale_write.tool_call.call_id,
+            tool_name="file_write",
+            success=True,
+            content="wrote changed bytes",
+            structured={"path": "styles.css", "sha256": "a" * 64},
+        ),
+    ).model_copy(update={"seq": 4})
+
+    assert loop._driver.active_stuck_escape_blocked_tools(  # noqa: SLF001
+        [stale_write, block, escape, delayed_result]
+    ) == frozenset({"file_read"})
 
 
 async def test_non_read_stuck_reason_preserves_existing_escape_surface():

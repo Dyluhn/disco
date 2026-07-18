@@ -740,24 +740,75 @@ class Driver:
         )
 
     def active_stuck_escape_blocked_tools(self, events: list[Event]) -> frozenset[str]:
-        """Return the current receipt-gated quarantine reconstructed from events."""
+        """Return the current receipt-gated quarantine reconstructed from events.
+
+        A trusted mutation earns one successful verification use of each tool
+        withheld by the current escape.  It does not permanently reopen the
+        loop-causing tool: after that verification succeeds, the tool is
+        quarantined again until a newer trusted mutation receipt lands.  The
+        budget is derived entirely from append-only event pairs so restart and
+        replay reconstruct the same offered-tool surface.
+        """
         escape_seq = signals.stuck_escape_seq(events)
         if escape_seq is None:
+            return frozenset()
+        blocked_tools = signals.stuck_escape_blocked_tools(events)
+        if not blocked_tools:
             return frozenset()
         actions = {
             event.id: event
             for event in events
             if isinstance(event, ActionEvent) and event.tool_call is not None
         }
-        if any(
-            isinstance(event, ObservationEvent)
-            and event.seq is not None
-            and event.seq > escape_seq
-            and successful_mutation_with_receipt(event, actions.get(event.action_id or ""))
-            for event in events
-        ):
-            return frozenset()
-        return signals.stuck_escape_blocked_tools(events)
+        receipt_seqs: list[int] = []
+        for event in events:
+            if (
+                not isinstance(event, ObservationEvent)
+                or event.source != EventSource.ENVIRONMENT
+                or event.seq is None
+                or event.seq <= escape_seq
+            ):
+                continue
+            action = actions.get(event.action_id or "")
+            if (
+                action is None
+                or action.source != EventSource.AGENT
+                or action.seq is None
+                or not escape_seq < action.seq < event.seq
+                or action.tool_call is None
+                or event.tool_result.call_id != action.tool_call.call_id
+                or not successful_mutation_with_receipt(event, action)
+            ):
+                continue
+            receipt_seqs.append(event.seq)
+        if not receipt_seqs:
+            return blocked_tools
+        latest_receipt_seq = max(receipt_seqs)
+
+        consumed: set[str] = set()
+        for event in events:
+            if (
+                not isinstance(event, ObservationEvent)
+                or event.source != EventSource.ENVIRONMENT
+                or event.seq is None
+                or event.seq <= latest_receipt_seq
+                or not event.tool_result.success
+            ):
+                continue
+            action = actions.get(event.action_id or "")
+            if (
+                action is None
+                or action.source != EventSource.AGENT
+                or action.seq is None
+                or not latest_receipt_seq < action.seq < event.seq
+                or action.tool_call is None
+                or action.tool_call.tool_name not in blocked_tools
+                or event.tool_result.tool_name != action.tool_call.tool_name
+                or event.tool_result.call_id != action.tool_call.call_id
+            ):
+                continue
+            consumed.add(action.tool_call.tool_name)
+        return frozenset(consumed)
 
     async def _repair_degenerate_step(
         self,
