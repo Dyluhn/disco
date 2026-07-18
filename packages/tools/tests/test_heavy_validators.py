@@ -89,4 +89,58 @@ def test_validate_pptx_renders_flags_corrupt_zip():
         p.write_bytes(b"this is not a pptx")
         problems = validate_pptx_renders(str(p))
         assert problems, "corrupt pptx produced an empty problem list"
-        assert "did not render" in problems[0] or "convert failed" in problems[0]
+        # Non-zip bytes are rejected by the OPC pre-check before LibreOffice is invoked.
+        assert "not a valid zip" in problems[0] or "did not render" in problems[0], problems
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
+def test_validate_pptx_renders_flags_missing_part_that_libreoffice_recovers():
+    """C9-01 verifier defect 1: a VALID zip whose slide references a MISSING part
+    (a dangling ``_rels`` target) is structurally corrupt even though LibreOffice
+    silently recovers and renders it. The OPC integrity pre-check must flag it."""
+    import io
+    import tempfile
+    import zipfile
+
+    clean = _contentful_pptx_bytes()
+    # Drop a slideLayout part while a slide still references it → dangling relationship.
+    with zipfile.ZipFile(io.BytesIO(clean)) as zf:
+        names = zf.namelist()
+        victim = next((n for n in names if "slideLayouts/slideLayout1.xml" in n), None)
+        assert victim is not None, "fixture deck has no slideLayout1 to drop"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
+            for n in names:
+                if n == victim:
+                    continue
+                out.writestr(n, zf.read(n))
+    corrupt = buf.getvalue()
+    # Sanity: the mutated archive is still a VALID zip (the render path can't rely on
+    # a CRC failure here — the reference-integrity check is what must catch it).
+    assert zipfile.ZipFile(io.BytesIO(corrupt)).testzip() is None
+
+    with tempfile.TemporaryDirectory() as d:
+        p = pathlib.Path(d) / "dangling.pptx"
+        p.write_bytes(corrupt)
+        problems = validate_pptx_renders(str(p))
+        assert problems, "a slide referencing a missing part produced an empty problem list"
+        assert any("missing part" in msg for msg in problems), problems
+
+
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
+def test_validate_pptx_renders_accepts_a_relative_workdir():
+    """C9-01 verifier defect 2: the documented optional ``workdir`` may be relative;
+    it is resolved before the profile file-URI is built, so it no longer raises."""
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        deck = pathlib.Path(d) / "deck.pptx"
+        deck.write_bytes(_contentful_pptx_bytes())
+        cwd = os.getcwd()
+        try:
+            os.chdir(d)
+            os.mkdir("relwork")
+            assert validate_pptx_renders(str(deck), workdir="relwork") == []
+        finally:
+            os.chdir(cwd)
