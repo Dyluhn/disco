@@ -51,12 +51,15 @@ def test_validate_pptx_renders_guards_when_soffice_absent(
 ) -> None:
     """The unavailable-tool guard, exercised WITHOUT skipping regardless of whether the
     host has LibreOffice (C9-01): an isolated empty PATH makes ``soffice`` unresolvable
-    for this test only."""
+    for this test only. The input is a STRUCTURALLY VALID deck so it passes the OPC
+    pre-check and actually reaches the soffice-missing guard."""
     empty = tmp_path / "empty-path"
     empty.mkdir()
+    deck = tmp_path / "deck.pptx"
+    deck.write_bytes(_contentful_pptx_bytes())
     monkeypatch.setenv("PATH", str(empty))
     assert shutil.which("soffice") is None
-    problems = validate_pptx_renders("anything.pptx")
+    problems = validate_pptx_renders(str(deck))
     assert problems == [
         "soffice unavailable — run this heavy validator on the VM 201 evidence host"
     ]
@@ -65,23 +68,31 @@ def test_validate_pptx_renders_guards_when_soffice_absent(
 @pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
 def test_validate_pptx_renders_real_clean_pptx():
     """When soffice IS present, a CONTENTFUL deck renders with no problems — the render
-    path is exercised end-to-end (pinned-filter convert → PDF → page/text checks)."""
+    path is exercised end-to-end (pinned-filter convert → PDF → page/text checks). Also
+    covers the C9-01 verifier defect-2 fix: a RELATIVE ``workdir`` is resolved before the
+    profile file-URI is built (it used to raise ``ValueError``)."""
+    import os
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
         p = pathlib.Path(d) / "deck.pptx"
         p.write_bytes(_contentful_pptx_bytes())
         assert validate_pptx_renders(str(p)) == []
+        # A relative workdir must be accepted (resolved), not raise.
+        cwd = os.getcwd()
+        try:
+            os.chdir(d)
+            os.mkdir("relwork")
+            assert validate_pptx_renders(str(p), workdir="relwork") == []
+        finally:
+            os.chdir(cwd)
 
 
 def test_validate_pptx_renders_flags_corrupt_zip():
-    """A zip-INVALID .pptx must be flagged even though LibreOffice EXITS ZERO on
-    "source file could not be loaded" (C9-01): the pinned Impress import filter blocks
-    the generic text-import fallback, and the fresh per-invocation outdir + isolated
-    user profile mean a missing output is THIS invocation's failure — never a stale or
-    foreign PDF standing in."""
-    if shutil.which("soffice") is None:
-        pytest.skip("LibreOffice not installed")
+    """A zip-INVALID .pptx must be flagged BEFORE LibreOffice is even consulted (C9-01):
+    the OPC structural pre-check runs first, so ZIP-invalid bytes are rejected on any
+    host — no renderer, no skip. (LibreOffice would otherwise EXIT ZERO on "source file
+    could not be loaded" and, absent the pinned import filter, recover garbage.)"""
     import tempfile
 
     with tempfile.TemporaryDirectory() as d:
@@ -89,15 +100,14 @@ def test_validate_pptx_renders_flags_corrupt_zip():
         p.write_bytes(b"this is not a pptx")
         problems = validate_pptx_renders(str(p))
         assert problems, "corrupt pptx produced an empty problem list"
-        # Non-zip bytes are rejected by the OPC pre-check before LibreOffice is invoked.
-        assert "not a valid zip" in problems[0] or "did not render" in problems[0], problems
+        assert "not a valid zip" in problems[0], problems
 
 
-@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
 def test_validate_pptx_renders_flags_missing_part_that_libreoffice_recovers():
     """C9-01 verifier defect 1: a VALID zip whose slide references a MISSING part
     (a dangling ``_rels`` target) is structurally corrupt even though LibreOffice
-    silently recovers and renders it. The OPC integrity pre-check must flag it."""
+    silently recovers and renders it. The OPC integrity pre-check must flag it —
+    renderer-independent, so it needs no soffice and never skips."""
     import io
     import tempfile
     import zipfile
@@ -125,22 +135,3 @@ def test_validate_pptx_renders_flags_missing_part_that_libreoffice_recovers():
         problems = validate_pptx_renders(str(p))
         assert problems, "a slide referencing a missing part produced an empty problem list"
         assert any("missing part" in msg for msg in problems), problems
-
-
-@pytest.mark.skipif(shutil.which("soffice") is None, reason="LibreOffice not installed")
-def test_validate_pptx_renders_accepts_a_relative_workdir():
-    """C9-01 verifier defect 2: the documented optional ``workdir`` may be relative;
-    it is resolved before the profile file-URI is built, so it no longer raises."""
-    import os
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as d:
-        deck = pathlib.Path(d) / "deck.pptx"
-        deck.write_bytes(_contentful_pptx_bytes())
-        cwd = os.getcwd()
-        try:
-            os.chdir(d)
-            os.mkdir("relwork")
-            assert validate_pptx_renders(str(deck), workdir="relwork") == []
-        finally:
-            os.chdir(cwd)

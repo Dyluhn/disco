@@ -94,11 +94,14 @@ def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]
       exist there afterwards. LibreOffice exits 0 on "source file could not be loaded",
       so the exit code alone is NEVER trusted as success.
     """
-    if _missing("soffice"):
-        return ["soffice unavailable — run this heavy validator on the VM 201 evidence host"]
+    # The structural OPC pre-check needs no renderer, so it runs FIRST — corruption is
+    # detected identically on the PR gate and the VM host, and a corrupt package never
+    # depends on LibreOffice being present to be rejected.
     structural = _opc_integrity_problems(path)
     if structural:
         return structural
+    if _missing("soffice"):
+        return ["soffice unavailable — run this heavy validator on the VM 201 evidence host"]
     # `workdir` (documented optional) may be relative; resolve it before building the
     # profile file URI, which requires an absolute path (C9-01 defect-2 correction).
     work = (
