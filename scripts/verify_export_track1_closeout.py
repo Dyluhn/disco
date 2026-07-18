@@ -74,6 +74,7 @@ _CLOSEOUT_REPORT_PLUGIN = "closeout_pytest_report"
 _NONLIVE_REPORT_FILE = "closeout-report-nonlive.json"
 _CLOSEOUT_REPORT_FILE = "closeout-report-closeout.json"
 _LIVE_REPORT_FILE = "closeout-report-live.json"
+_CAPTURE_REPORT_FILE = "closeout-report-capture.json"
 # The one green category; every other category (failed/error/skipped/xfailed/xpassed) — and
 # a governed-selected node that produced NO result (a within-selection deselection) — is a
 # violation that forces the lane NON-green with a distinct, specific reason.
@@ -85,7 +86,7 @@ _DOCKER_HOST_ARTIFACTS = (
     "bundle-digests.json",
     "docker-inspect-sanitized.json",
     "compose-ps.json",
-    "cleanup.txt",
+    "cleanup.json",
 )
 
 # ---- evidence-hygiene scan: registered planted-credential sentinels (WO-B) -----
@@ -107,6 +108,7 @@ _HYGIENE_SCAN_FILES: tuple[str, ...] = (
     "pytest-nonlive.xml",
     "pytest-closeout.xml",
     "pytest-live.xml",
+    "pytest-capture.xml",
     "frontend-vitest.json",
     # R6: the structured Firefox e2e report is a written text artifact too — a planted
     # credential sentinel here must likewise force passed:false (plan §9.4 / criterion 6).
@@ -974,6 +976,72 @@ def _write_docker_versions(repo: Path, evidence_dir: Path) -> dict[str, str]:
     return versions
 
 
+def _run_capture_lane(
+    repo: Path, evidence_dir: Path, frozen_capture_inventory: list[str]
+) -> LaneResult:
+    """The governed A/E capture-regression lane (C9-03): run the seven capture tests
+    under the live marker and require BOTH every governed-selected test to PASS AND the
+    observed node inventory to EXACTLY equal the frozen ``governed_capture_inventory``
+    (a missing / renamed / skipped / extra / unexecuted capture test is fatal). Same
+    fail-closed structure as the other governed pytest lanes."""
+    junit_path = evidence_dir / "pytest-capture.xml"
+    report_path = evidence_dir / _CAPTURE_REPORT_FILE
+    junit_path.unlink(missing_ok=True)
+    report_path.unlink(missing_ok=True)
+    proc = _run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            manifest_mod.CAPTURE_TEST_FILE,
+            "-o",
+            "addopts=",
+            "-m",
+            manifest_mod.CLOSEOUT_MARKER_LIVE,
+            "-ra",
+            "-p",
+            _CLOSEOUT_REPORT_PLUGIN,
+            "--closeout-report-json",
+            str(report_path),
+            f"--junitxml={junit_path}",
+        ],
+        cwd=repo,
+        env=_pytest_env(),
+    )
+    lane = LaneResult(
+        name="live-capture",
+        status="ran",
+        exit_code=proc.returncode,
+        junit=_parse_junit(junit_path),
+        junit_path=str(junit_path),
+        report_path=str(report_path),
+    )
+    observed = manifest_mod.collect_capture_node_ids(repo)
+    expected = sorted(frozen_capture_inventory)
+    missing = sorted(set(expected) - set(observed))
+    extra = sorted(set(observed) - set(expected))
+    inventory_ok = bool(expected) and not missing and not extra
+    inventory_reasons = (
+        []
+        if inventory_ok
+        else [f"governed capture inventory mismatch: missing={missing} extra={extra}"]
+    )
+    summary = _finalize_pytest_lane(
+        lane,
+        report=_load_structured_report(report_path),
+        extra_reasons=inventory_reasons,
+    )
+    lane.detail = {
+        "inventory_ok": inventory_ok,
+        "expected_count": len(expected),
+        "observed_count": len(observed),
+        "missing": missing,
+        "extra": extra,
+        "structured": summary,
+    }
+    return lane
+
+
 def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     docker_versions = _write_docker_versions(repo, evidence_dir)
     junit_path = evidence_dir / "pytest-live.xml"
@@ -983,6 +1051,11 @@ def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     # report and the fail-closed path fires, rather than a reused dir's earlier green result.
     junit_path.unlink(missing_ok=True)
     report_path.unlink(missing_ok=True)
+    # C9-02: the live lane emits GENUINE per-fixture evidence into the evidence dir
+    # (the support module reads CLOSEOUT_EVIDENCE_DIR); the verifier aggregates and
+    # validates it below before `passed:true`.
+    live_env = _pytest_env()
+    live_env["CLOSEOUT_EVIDENCE_DIR"] = str(evidence_dir)
     proc = _run(
         [
             sys.executable,
@@ -1001,7 +1074,7 @@ def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
             f"--junitxml={junit_path}",
         ],
         cwd=repo,
-        env=_pytest_env(),
+        env=live_env,
     )
     lane = LaneResult(
         name="live-docker",
@@ -1395,7 +1468,13 @@ def _observed_command_ids(repo: Path) -> set[str]:
     present. On a real acceptance host (all tools present) this equals
     ``manifest_mod.REQUIRED_COMMAND_IDS``; a host missing a toolchain OMITS commands and
     the inventory gate then fails (an acceptance run cannot omit a required command)."""
-    ids = {"python_nonlive", "python_closeout", "python_closeout_collect", "live_docker"}
+    ids = {
+        "python_nonlive",
+        "python_closeout",
+        "python_closeout_collect",
+        "live_docker",
+        "live_capture",
+    }
     if shutil.which("npx") is not None and shutil.which("npm") is not None:
         ids |= {
             "frontend_vitest",
@@ -1592,6 +1671,105 @@ def _write_docker_host_artifacts(
     return written
 
 
+# ---- genuine live-run evidence: aggregate + validate (C9-02) ------------------
+
+_EVIDENCE_FIXTURE_SUBDIR = "live-fixtures"
+_REQUIRED_EVIDENCE_FAMILIES = (
+    "express",
+    "fastapi",
+    "imported_node",
+    "vite_static",
+    "appkit",
+    "public_build_env_vite",
+)
+
+
+def _read_family_evidence(fixtures_dir: Path, kind: str) -> dict[str, dict[str, object]]:
+    """Load every ``<family>.<kind>.json`` under the per-fixture evidence dir, keyed by
+    family. Unparseable/malformed files are dropped (they surface as a missing family in
+    validation), never raised."""
+    out: dict[str, dict[str, object]] = {}
+    for path in sorted(fixtures_dir.glob(f"*.{kind}.json")):
+        family = path.name[: -len(f".{kind}.json")]
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict):
+            out[family] = data
+    return out
+
+
+def _finalize_live_evidence(evidence_dir: Path) -> tuple[bool, list[str]]:
+    """Aggregate the live lane's GENUINE per-fixture evidence into the four required
+    artifacts and VALIDATE their contents before ``passed:true`` (C9-02). Overwrites the
+    honest placeholder markers written by ``_write_docker_host_artifacts`` with the real
+    aggregate. Returns ``(ok, reasons)``.
+
+    Validation (fail-closed): all six bundle families present; each digest carries a
+    response + zip SHA-256, a non-empty parsed ``release.json``, and a
+    ``binding_matches_response`` proof; each family has an inspect record with at least
+    one image Id; each family's compose-ps has at least one row; each family's cleanup
+    proves zero remaining labelled resources with disk before/after captured. A status
+    string or bare file existence can never satisfy this gate."""
+    fixtures_dir = evidence_dir / _EVIDENCE_FIXTURE_SUBDIR
+    digests = _read_family_evidence(fixtures_dir, "digest")
+    ps_rows = _read_family_evidence(fixtures_dir, "compose-ps")
+    inspects = _read_family_evidence(fixtures_dir, "inspect")
+    cleanups = _read_family_evidence(fixtures_dir, "cleanup")
+
+    reasons: list[str] = []
+    for family in _REQUIRED_EVIDENCE_FAMILIES:
+        d = digests.get(family)
+        if d is None:
+            reasons.append(f"live evidence: no bundle-digest for family {family!r}")
+        else:
+            if not d.get("response_sha256") or not d.get("zip_sha256"):
+                reasons.append(f"live evidence: {family} digest missing response/zip sha256")
+            if not isinstance(d.get("release_json"), dict) or not d.get("release_json"):
+                reasons.append(f"live evidence: {family} has an empty parsed release.json")
+            if d.get("binding_matches_response") is not True:
+                reasons.append(
+                    f"live evidence: {family} source binding does not match the response"
+                )
+        ins = inspects.get(family)
+        images = ins.get("images") if isinstance(ins, dict) else None
+        has_image_id = isinstance(images, list) and any(
+            isinstance(i, dict) and i.get("Id") for i in images
+        )
+        if not has_image_id:
+            reasons.append(f"live evidence: {family} inspect has no real image Id")
+        ps = ps_rows.get(family)
+        rows = ps.get("rows") if isinstance(ps, dict) else None
+        if not (isinstance(rows, list) and rows):
+            reasons.append(f"live evidence: {family} compose-ps captured no rows")
+        cl = cleanups.get(family)
+        if not isinstance(cl, dict):
+            reasons.append(f"live evidence: {family} has no cleanup record")
+        else:
+            if cl.get("zero_remaining") is not True:
+                reasons.append(
+                    f"live evidence: {family} cleanup did not reach zero remaining resources"
+                )
+            if not cl.get("disk_before") or not cl.get("disk_after"):
+                reasons.append(f"live evidence: {family} cleanup missing disk before/after")
+
+    # Aggregate the four required artifacts (overwriting the placeholder markers).
+    (evidence_dir / "bundle-digests.json").write_text(
+        json.dumps({"families": digests}, indent=2) + "\n", encoding="utf-8"
+    )
+    (evidence_dir / "docker-inspect-sanitized.json").write_text(
+        json.dumps({"families": inspects}, indent=2) + "\n", encoding="utf-8"
+    )
+    (evidence_dir / "compose-ps.json").write_text(
+        json.dumps({"families": ps_rows}, indent=2) + "\n", encoding="utf-8"
+    )
+    (evidence_dir / "cleanup.json").write_text(
+        json.dumps({"families": cleanups}, indent=2) + "\n", encoding="utf-8"
+    )
+    return (not reasons), reasons
+
+
 # ---- evidence-hygiene scan (WO-B) ---------------------------------------------
 
 
@@ -1606,8 +1784,17 @@ def _scan_evidence_hygiene(evidence_dir: Path) -> tuple[bool, list[dict[str, obj
     sentinel is ASCII, so a ``replace``-errors decode cannot hide it and a non-UTF-8
     artifact cannot crash the gate."""
     violations: list[dict[str, object]] = []
-    for name in _HYGIENE_SCAN_FILES:
-        path = evidence_dir / name
+    # Every fixed top-level artifact, PLUS every per-fixture live-evidence file (C9-02:
+    # the hygiene scan must cover EVERY textual evidence artifact, including the genuine
+    # per-family digests/inspects/ps/cleanup the live lane emits).
+    scan_paths: list[tuple[str, Path]] = [
+        (name, evidence_dir / name) for name in _HYGIENE_SCAN_FILES
+    ]
+    fixtures_dir = evidence_dir / _EVIDENCE_FIXTURE_SUBDIR
+    if fixtures_dir.is_dir():
+        for path in sorted(fixtures_dir.glob("*.json")):
+            scan_paths.append((f"{_EVIDENCE_FIXTURE_SUBDIR}/{path.name}", path))
+    for name, path in scan_paths:
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1658,12 +1845,14 @@ def _final_verdict(
     author: bool,
     hygiene_ok: bool,
     command_inventory_ok: bool = True,
+    live_evidence_ok: bool = True,
 ) -> bool:
     """The single release-verdict conjunction: ``passed`` is true iff the frozen manifest
     verified, EVERY lane is green, the checkout is clean, this is NOT an ``--author`` run,
-    the evidence-hygiene scan found no planted credential, AND the observed command
-    inventory exactly equals the frozen required inventory (G19 / plan §9 criterion 3). Any
-    one false forces ``passed`` false; ``--author`` can never pass."""
+    the evidence-hygiene scan found no planted credential, the observed command inventory
+    exactly equals the frozen required inventory (G19 / plan §9 criterion 3), AND the
+    live lane's genuine per-fixture evidence validated (C9-02). Any one false forces
+    ``passed`` false; ``--author`` can never pass."""
     return bool(
         frozen_ok
         and all_lanes_green
@@ -1671,6 +1860,7 @@ def _final_verdict(
         and not author
         and hygiene_ok
         and command_inventory_ok
+        and live_evidence_ok
     )
 
 
@@ -1683,6 +1873,7 @@ def _not_passed_reasons(
     hygiene_ok: bool,
     command_inventory_ok: bool = True,
     command_inventory_detail: dict[str, object] | None = None,
+    live_evidence_reasons: list[str] | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if author:
@@ -1713,6 +1904,8 @@ def _not_passed_reasons(
             "command inventory does not equal the frozen required inventory "
             f"(missing={detail.get('missing')} extra={detail.get('extra')})"
         )
+    if live_evidence_reasons:
+        reasons.extend(live_evidence_reasons)
     return reasons
 
 
@@ -1757,11 +1950,15 @@ def main(argv: list[str] | None = None) -> int:
     stored, load_note = _load_manifest(repo)
     frozen_ok, frozen_note = _verify_frozen_manifest(repo, stored, load_note)
     frozen_inventory: list[str] = []
+    frozen_capture_inventory: list[str] = []
     frontend_inventory: dict[str, object] = {}
     if stored is not None:
         raw_py = stored.get("python_closeout_inventory", [])
         if isinstance(raw_py, list):
             frozen_inventory = [str(x) for x in raw_py]
+        raw_cap = stored.get("governed_capture_inventory", [])
+        if isinstance(raw_cap, list):
+            frozen_capture_inventory = [str(x) for x in raw_cap]
         raw_fe = stored.get("frontend_closeout_inventory", {})
         if isinstance(raw_fe, dict):
             frontend_inventory = raw_fe
@@ -1838,6 +2035,12 @@ def main(argv: list[str] | None = None) -> int:
     live = _run_live_lane(repo, evidence_dir)
     lanes.append(live)
 
+    # C9-03: the governed A/E capture lane is a SEPARATE required lane with a frozen exact
+    # node inventory — the seven capture regressions can no longer be omitted from an
+    # authoritative run without making certification red.
+    capture = _run_capture_lane(repo, evidence_dir, frozen_capture_inventory)
+    lanes.append(capture)
+
     scanner = _run_scanner_lane(repo, evidence_dir)
     lanes.append(scanner)
 
@@ -1847,6 +2050,15 @@ def main(argv: list[str] | None = None) -> int:
     docker_host_artifacts = _write_docker_host_artifacts(
         evidence_dir, docker_available, live_lifecycle_ok=live.green is True
     )
+    # C9-02: when the live lane genuinely ran (docker present + lane green), aggregate and
+    # VALIDATE its per-fixture evidence, overwriting the honest placeholder markers with
+    # real content. The validation gates `passed`. When the lane did not run (no docker /
+    # lane failed), the honest markers above stand and this gate is vacuously satisfied
+    # (the failed lane already forces passed:false).
+    if docker_available and live.green is True:
+        live_evidence_ok, live_evidence_reasons = _finalize_live_evidence(evidence_dir)
+    else:
+        live_evidence_ok, live_evidence_reasons = True, []
 
     # G19 / §9 criterion 3: the observed command inventory must EXACTLY equal the frozen
     # required inventory (omitted OR substitute/extra commands rejected).
@@ -1869,6 +2081,7 @@ def main(argv: list[str] | None = None) -> int:
         author=args.author,
         hygiene_ok=hygiene_ok,
         command_inventory_ok=command_inventory_ok,
+        live_evidence_ok=live_evidence_ok,
     )
 
     browser_written = browser_summary.get("status") in {"executed", "browser_run_failed"}
@@ -1898,6 +2111,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "browser_e2e": browser_summary,
         "evidence_hygiene": {"ok": hygiene_ok, "violations": hygiene_violations},
+        "live_evidence": {"ok": live_evidence_ok, "reasons": live_evidence_reasons},
         "lanes": [asdict(lane) for lane in lanes],
         "evidence_files": {
             "pytest-nonlive.xml": "written",
@@ -1910,6 +2124,9 @@ def main(argv: list[str] | None = None) -> int:
                 "written" if Path(closeout.report_path or "").is_file() else "absent"
             ),
             _LIVE_REPORT_FILE: "written" if Path(live.report_path or "").is_file() else "absent",
+            _CAPTURE_REPORT_FILE: (
+                "written" if Path(capture.report_path or "").is_file() else "absent"
+            ),
             "frontend-vitest.json": "written" if frontend.detail.get("npx_available") else "absent",
             "frontend-e2e.json": "written" if browser_written else "absent",
             "g11-typecheck.txt": "written",
@@ -1925,6 +2142,7 @@ def main(argv: list[str] | None = None) -> int:
             hygiene_ok=hygiene_ok,
             command_inventory_ok=command_inventory_ok,
             command_inventory_detail=command_inventory_detail,
+            live_evidence_reasons=live_evidence_reasons,
         ),
     }
     (evidence_dir / "evidence.json").write_text(

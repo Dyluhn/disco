@@ -26,7 +26,7 @@ from ._closeout_live_support import (
     require_live_runtime,
 )
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.export_track1_closeout, pytest.mark.integration]
 
 
 def _sentinel_bundle(tmp_path: Path) -> ComposeBundle:

@@ -78,6 +78,7 @@ from ._closeout_live_support import (
     ingress_service_id,
     public_build_env_vite_fixture,
     public_only_build_env_vite_fixture,
+    record_bundle_digest,
     release_body,
     release_client,
     require_live_runtime,
@@ -145,11 +146,25 @@ def live_project(request: pytest.FixtureRequest, closeout_name: object) -> _Make
 
     def _make(slug: str, bundle_dir: Path) -> ComposeBundle:
         project = _cid(closeout_name, slug)
-        bundle = ComposeBundle(project=project, bundle_dir=bundle_dir)
+        bundle = ComposeBundle(
+            project=project, bundle_dir=bundle_dir, family=_SLUG_FAMILY.get(slug)
+        )
         request.addfinalizer(bundle.teardown_and_assert_clean)
         return bundle
 
     return _make
+
+
+# slug -> evidence family (C9-02). The six families that actually ship a bundle; the
+# public-build REJECTION case (c8pubvite) offers no bundle, so it maps to None.
+_SLUG_FAMILY: dict[str, str] = {
+    "c8express": "express",
+    "c8fastapi": "fastapi",
+    "c8imported": "imported_node",
+    "c8vite": "vite_static",
+    "c8appkit": "appkit",
+    "c8pubonly": "public_build_env_vite",
+}
 
 
 def _run_stateless_core(
@@ -228,6 +243,7 @@ def test_live_express_node_bundle_lifecycle(
 
     body = release_body(client, cid)  # §12.1 real authenticated /release
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("express", client, cid, body)
     zip_bytes = bundle_zip_bytes(client, cid, body)
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")  # §12.1 bound /download
 
@@ -300,6 +316,7 @@ def test_live_fastapi_bundle_lifecycle(
 
     body = release_body(client, cid)
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("fastapi", client, cid, body)
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
     bundle = live_project("c8fastapi", extract)
     _run_stateless_core(bundle, fx, assign_loopback_port())
@@ -336,6 +353,7 @@ def test_live_imported_node_bundle_lifecycle(
 
     body = release_body(client, cid)
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("imported_node", client, cid, body)
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
     bundle = live_project("c8imported", extract)
     _run_stateless_core(bundle, fx, assign_loopback_port())
@@ -364,6 +382,7 @@ def test_live_vite_static_bundle_lifecycle(
 
     body = release_body(client, cid)
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("vite_static", client, cid, body)
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
     bundle = live_project("c8vite", extract)
     _run_stateless_core(bundle, fx, assign_loopback_port())
@@ -402,6 +421,7 @@ def test_live_appkit_persistence_and_migration_idempotence(
 
     body = release_body(client, cid)
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("appkit", client, cid, body)
     zip_bytes = bundle_zip_bytes(client, cid, body)
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
     assert_sentinel_absent(
@@ -613,6 +633,7 @@ def test_live_public_only_build_env_vite_serves_the_marker(
 
     body = release_body(client, cid)
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    record_bundle_digest("public_build_env_vite", client, cid, body)
 
     extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
     bundle = live_project("c8pubonly", extract)

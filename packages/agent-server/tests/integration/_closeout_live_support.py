@@ -26,6 +26,7 @@ executes for real.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -568,6 +569,110 @@ def session_cookie_from(headers: Mapping[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Genuine live-run evidence collection (C9-02). When CLOSEOUT_EVIDENCE_DIR is set
+# (the omnibus verifier sets it for the live lane), each fixture records a REAL
+# per-family evidence file the verifier aggregates + validates before passed:true.
+# When it is unset (a direct `-m export_track1_closeout and integration` run), every
+# recorder is a no-op, so the frozen tests behave identically either way.
+# ---------------------------------------------------------------------------
+
+EVIDENCE_DIR_ENV = "CLOSEOUT_EVIDENCE_DIR"
+_EVIDENCE_SUBDIR = "live-fixtures"
+
+# The six §12 bundle families the evidence contract requires one entry for each of.
+EVIDENCE_FAMILIES = (
+    "express",
+    "fastapi",
+    "imported_node",
+    "vite_static",
+    "appkit",
+    "public_build_env_vite",
+)
+
+
+def evidence_dir() -> Path | None:
+    """The per-family evidence output dir, or ``None`` when evidence collection is
+    off (a direct live run). Created on first use."""
+    raw = os.environ.get(EVIDENCE_DIR_ENV)
+    if not raw:
+        return None
+    out = Path(raw) / _EVIDENCE_SUBDIR
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _write_family_evidence(family: str, kind: str, payload: dict[str, object]) -> None:
+    out = evidence_dir()
+    if out is None:
+        return
+    (out / f"{family}.{kind}.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def record_bundle_digest(
+    family: str, client: TestClient, cid: str, body: Mapping[str, object]
+) -> None:
+    """Record the bundle-digest evidence for ``family`` (C9-02): the response and zip
+    SHA-256, the parsed ``release.json`` from inside the zip, the release response's
+    version_seq / spec_digest / source binding, and PROOF the parsed binding matches
+    the response. A no-op when evidence collection is off."""
+    if evidence_dir() is None:
+        return
+    res = client.get(f"/api/projects/{cid}/release")
+    response_bytes = res.content
+    seq = body.get("version_seq")
+    digest = body.get("spec_digest")
+    # The bound download is the SERVER-ENFORCED binding (plan §12.1): the operator-supplied
+    # ``?version_seq=&spec_digest=`` is validated against the committed version's real spec
+    # digest, so a 200 non-empty zip PROVES the artifact is the one the release response
+    # named. A mismatched digest would 4xx here.
+    zip_res = client.get(f"/api/projects/{cid}/download?version_seq={seq}&spec_digest={digest}")
+    zip_status = zip_res.status_code
+    zip_bytes = zip_res.content if zip_status == 200 else b""
+    release_json: dict[str, object] = {}
+    if zip_bytes:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            if RELEASE_JSON_PATH in zf.namelist():
+                release_json = json.loads(zf.read(RELEASE_JSON_PATH))
+    provenance = release_json.get("provenance")
+    bundle_assessment = provenance.get("assessment") if isinstance(provenance, dict) else None
+    binding_matches = (
+        seq is not None
+        and isinstance(digest, str)
+        and digest != ""
+        and zip_status == 200
+        and len(zip_bytes) > 0
+        and bool(release_json)
+        and bundle_assessment == body.get("assessment")
+    )
+    _write_family_evidence(
+        family,
+        "digest",
+        {
+            "family": family,
+            "conversation_id": cid,
+            "response_sha256": hashlib.sha256(response_bytes).hexdigest(),
+            "zip_sha256": hashlib.sha256(zip_bytes).hexdigest(),
+            "release_response": {
+                "assessment": body.get("assessment"),
+                "self_host": body.get("self_host"),
+                "version_seq": seq,
+                "spec_digest": digest,
+            },
+            "release_json": release_json,
+            "source_binding": {
+                "bound_version_seq": seq,
+                "bound_spec_digest": digest,
+                "download_status": zip_status,
+                "bundle_assessment": bundle_assessment,
+            },
+            "binding_matches_response": bool(binding_matches),
+        },
+    )
+
+
 @dataclass
 class ComposeBundle:
     """A downloaded bundle under a UNIQUE compose project name. Every ``docker
@@ -577,6 +682,7 @@ class ComposeBundle:
     project: str
     bundle_dir: Path
     captured_output: list[str] = field(default_factory=list)
+    family: str | None = None
 
     # -- primitives -------------------------------------------------------------
 
@@ -661,7 +767,91 @@ class ComposeBundle:
         assert proc.returncode == 0, f"`docker compose build --no-cache` failed:\n{proc.stderr}"
 
     def up(self) -> subprocess.CompletedProcess[str]:
-        return self.compose("up", "-d")
+        proc = self.compose("up", "-d")
+        if proc.returncode == 0:
+            self._record_compose_ps()
+        return proc
+
+    # -- evidence capture (C9-02; no-op when evidence collection is off) ---------
+
+    def _sanitize(self, text: str) -> str:
+        for secret in (SECRET_ENV_SENTINEL, SECRET_BUILD_SENTINEL):
+            text = text.replace(secret, "<redacted-secret>")
+        return text
+
+    def _record_compose_ps(self) -> None:
+        if self.family is None or evidence_dir() is None:
+            return
+        proc = self.compose("ps", "--format", "json")
+        rows: list[dict[str, object]] = []
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                rows.extend(r for r in parsed if isinstance(r, dict))
+            elif isinstance(parsed, dict):
+                rows.append(parsed)
+        keep = ("Project", "Service", "Name", "State", "Health", "Publishers")
+        sanitized = [{k: row.get(k) for k in keep if k in row} for row in rows]
+        _write_family_evidence(
+            self.family,
+            "compose-ps",
+            {"family": self.family, "project": self.project, "rows": sanitized},
+        )
+
+    def _disk_usage(self) -> dict[str, object]:
+        proc = self.docker("system", "df", "--format", "json")
+        try:
+            return {"raw": json.loads(proc.stdout)} if proc.stdout.strip() else {}
+        except json.JSONDecodeError:
+            return {"text": proc.stdout.strip()[:2000]}
+
+    def _record_inspect(self) -> None:
+        if self.family is None or evidence_dir() is None:
+            return
+        image_ids = self._ids("images", "-q", "--filter", f"reference={self.project}-*")
+        images: list[dict[str, object]] = []
+        for image_id in image_ids:
+            proc = self.docker("image", "inspect", image_id)
+            try:
+                data = json.loads(self._sanitize(proc.stdout))
+            except json.JSONDecodeError:
+                continue
+            for entry in data if isinstance(data, list) else []:
+                if isinstance(entry, dict):
+                    images.append(
+                        {
+                            "Id": entry.get("Id"),
+                            "RepoTags": entry.get("RepoTags"),
+                            "Size": entry.get("Size"),
+                            "Architecture": entry.get("Architecture"),
+                            "Os": entry.get("Os"),
+                        }
+                    )
+        container_ids = self._ids("ps", "-aq", "--filter", self._label_filter())
+        containers: list[dict[str, object]] = []
+        for cid_ in container_ids:
+            proc = self.docker(
+                "inspect",
+                "--format",
+                "{{.Id}}||{{.Name}}||{{.State.Status}}||{{.Config.Image}}",
+                cid_,
+            )
+            parts = self._sanitize(proc.stdout).strip().split("||")
+            if len(parts) == 4:
+                containers.append(
+                    {"Id": parts[0], "Name": parts[1], "Status": parts[2], "Image": parts[3]}
+                )
+        _write_family_evidence(
+            self.family,
+            "inspect",
+            {"family": self.family, "images": images, "containers": containers},
+        )
 
     def restart(self) -> None:
         proc = self.compose("restart")
@@ -720,10 +910,35 @@ class ComposeBundle:
         ``require_live_runtime``), so there is nothing to clean or assert."""
         if shutil.which("docker") is None:
             return
+        collecting = self.family is not None and evidence_dir() is not None
+        disk_before = self._disk_usage() if collecting else {}
+        if collecting:
+            self._record_inspect()  # image IDs + sanitized inspect, BEFORE purge
         if (self.bundle_dir / COMPOSE_PATH).is_file():
             self.compose("down", "-v", "--rmi", "local", "--remove-orphans")
         self._force_purge_labelled()
-        self._assert_zero_labelled_resources()
+        remaining = self._remaining_labelled_resources()
+        if collecting:
+            assert self.family is not None
+            _write_family_evidence(
+                self.family,
+                "cleanup",
+                {
+                    "family": self.family,
+                    "project": self.project,
+                    "queries": {
+                        "containers": ["ps", "-aq", "--filter", self._label_filter()],
+                        "images": ["images", "-q", "--filter", f"reference={self.project}-*"],
+                        "volumes": ["volume", "ls", "-q", "--filter", self._label_filter()],
+                        "networks": ["network", "ls", "-q", "--filter", self._label_filter()],
+                    },
+                    "remaining": remaining,
+                    "zero_remaining": all(not v for v in remaining.values()),
+                    "disk_before": disk_before,
+                    "disk_after": self._disk_usage(),
+                },
+            )
+        self._assert_no_remaining(remaining)
 
     def _ids(self, *args: str) -> list[str]:
         proc = self.docker(*args)
@@ -746,15 +961,20 @@ class ComposeBundle:
         for net in networks:
             self.docker("network", "rm", net)
 
+    def _remaining_labelled_resources(self) -> dict[str, list[str]]:
+        return {
+            "containers": self._ids("ps", "-aq", "--filter", self._label_filter()),
+            "images": self._ids("images", "-q", "--filter", f"reference={self.project}-*"),
+            "volumes": self._ids("volume", "ls", "-q", "--filter", self._label_filter()),
+            "networks": self._ids("network", "ls", "-q", "--filter", self._label_filter()),
+        }
+
+    def _assert_no_remaining(self, remaining: dict[str, list[str]]) -> None:
+        for kind, ids in remaining.items():
+            assert not ids, f"leaked {kind} for {self.project}: {ids}"
+
     def _assert_zero_labelled_resources(self) -> None:
-        containers = self._ids("ps", "-aq", "--filter", self._label_filter())
-        images = self._ids("images", "-q", "--filter", f"reference={self.project}-*")
-        volumes = self._ids("volume", "ls", "-q", "--filter", self._label_filter())
-        networks = self._ids("network", "ls", "-q", "--filter", self._label_filter())
-        assert not containers, f"leaked containers for {self.project}: {containers}"
-        assert not images, f"leaked test-only images for {self.project}: {images}"
-        assert not volumes, f"leaked volumes for {self.project}: {volumes}"
-        assert not networks, f"leaked networks for {self.project}: {networks}"
+        self._assert_no_remaining(self._remaining_labelled_resources())
 
 
 # ---------------------------------------------------------------------------

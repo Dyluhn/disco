@@ -46,9 +46,9 @@
     "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py": "19db9a3acb3fcbbd35dd6db992691163d4e5a50287302c6bb4418bba74550e21",
     "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "3d90bfc39a976be1ea952c6d893efc1cdc6a532e8ea946ab20e4891071355dac",
     "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
-    "packages/agent-server/tests/integration/_closeout_live_support.py": "8d29a9720dc2047e1b56e3962531d91565c9c619da8a90eb4bfcf20a18ec052c",
-    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
-    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "30345254ab6096a256c9e72b126bb141e3b20926e4600dbaf1cefba2e03802bc",
+    "packages/agent-server/tests/integration/_closeout_live_support.py": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
     "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/core/tests/export_track1_closeout/test_c4_build_secret_validate_gate.py": "68709d61f8a3e68073b4c67ca438524cd0985abe36a12ec252b9a60ec3332b9e",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py": "050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06",
@@ -58,8 +58,8 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
-    "scripts/gen_closeout_acceptance_manifest.py": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8",
-    "scripts/verify_export_track1_closeout.py": "25e8580360bb87ccb32d8f9a58fbea672fdd805a588510190c02b35228c31e04"
+    "scripts/gen_closeout_acceptance_manifest.py": "cba9dc3238af39d0a629f6dc20934f682f1cf67567a1c87d34b504b2d04ef353",
+    "scripts/verify_export_track1_closeout.py": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
@@ -257,13 +257,14 @@
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_hygiene_violation_forces_verdict_false",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[anti-bypass-scan.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[bundle-digests.json]",
-    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[cleanup.txt]",
+    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[cleanup.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[compose-ps.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[docker-inspect-sanitized.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[docker-versions.txt]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[frontend-e2e.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[frontend-vitest.json]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[g11-typecheck.txt]",
+    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-capture.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-closeout.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-live.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-nonlive.xml]",
@@ -463,6 +464,15 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[uvicorn_module]",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py::test_declared_static_output_dir_round_trips_into_sidecar"
+  ],
+  "governed_capture_inventory": [
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_exec_env_is_the_sole_record_false_caller",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_external_env_secret_is_absent_from_the_structural_rendering",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_ordinary_recorded_compose_output_with_sentinel_still_fails_the_sweep",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_record_false_is_excluded_and_default_recording_is_unchanged",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_ruled_source_shapes_are_pinned_on_the_ast",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_secret_embedded_in_compose_yaml_still_fails_the_sweep",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_structural_rendering_supports_the_topology_assertions"
   ],
   "frontend_closeout_inventory": {
     "c3-candidate-copy.test.tsx": {

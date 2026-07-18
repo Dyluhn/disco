@@ -94,6 +94,11 @@ CLOSEOUT_MARKER_NONLIVE = "export_track1_closeout and not integration"
 # The live Docker lane (plan §3.4).
 LIVE_TEST_FILE = "packages/agent-server/tests/integration/test_export_track1_closeout_live.py"
 CLOSEOUT_MARKER_LIVE = "export_track1_closeout and integration"
+# C9-03: the governed A/E capture-regression lane — a SEPARATE required live selection
+# with its own frozen exact node inventory (missing/skipped/extra/unexecuted is fatal).
+CAPTURE_TEST_FILE = (
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py"
+)
 
 # The frontend lanes (plan §3.3).
 FRONTEND_VITEST_DIR = "frontend/src/test/export-track1-closeout"
@@ -150,6 +155,12 @@ COMMAND_INVENTORY: dict[str, str] = {
     "live_docker": (
         "python -m pytest "
         "packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
+        "-o addopts= -m 'export_track1_closeout and integration' -ra "
+        "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
+    ),
+    "live_capture": (
+        "python -m pytest "
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py "
         "-o addopts= -m 'export_track1_closeout and integration' -ra "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
@@ -886,6 +897,26 @@ def collect_python_closeout_ids(root: Path) -> list[str]:
     return sorted(parse_collect_only_ids(proc.stdout))
 
 
+def collect_capture_node_ids(root: Path) -> list[str]:
+    """The sorted node-ID inventory of the governed A/E capture lane (C9-03), via a real
+    ``pytest --collect-only`` over ``CAPTURE_TEST_FILE`` under the live marker. Frozen so
+    a missing/renamed/dropped capture test makes the lane non-green."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        CAPTURE_TEST_FILE,
+        "-o",
+        "addopts=",
+        "-m",
+        CLOSEOUT_MARKER_LIVE,
+        "--collect-only",
+        "-q",
+    ]
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
+    return sorted(parse_collect_only_ids(proc.stdout))
+
+
 _DESCRIBE_RE = re.compile(r"""\bdescribe\(\s*(["'])((?:\\.|(?!\1).)*)\1""")
 _IT_RE = re.compile(r"""\b(?:it|test)\(\s*(["'])((?:\\.|(?!\1).)*)\1""")
 
@@ -951,6 +982,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "files": dict(sorted(files.items())),
         "missing_frozen_paths": missing,
         "python_closeout_inventory": collect_python_closeout_ids(root),
+        "governed_capture_inventory": collect_capture_node_ids(root),
         "frontend_closeout_inventory": frontend_closeout_inventory(root),
         "red_tests": list(RED_TESTS),
         "remediation_r0": REMEDIATION_R0,
