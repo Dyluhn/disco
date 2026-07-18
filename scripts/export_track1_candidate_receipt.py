@@ -281,27 +281,35 @@ def check_evidence_dir_outside(evidence_dir: Path | None, repo: Path) -> Check:
     )
 
 
-def check_interpreter_trust(inventory: dict[str, object], interpreter: dict[str, object]) -> Check:
-    """When the inventory declares a ``trusted_interpreter_sha256`` (an operator trust
-    root), the ACTUAL running interpreter's realpath sha256 must equal it — recording the
-    identity is not enough when the launching interpreter can be attacker-controlled and
-    fabricate proof output (C9-06 P5-3). With no declared trust root, the identity is
-    recorded and trust is explicitly the operator's."""
-    expected = inventory.get("trusted_interpreter_sha256")
+def check_interpreter_trust(
+    inventory: dict[str, object],
+    interpreter: dict[str, object],
+    cli_trusted: str | None,
+) -> Check:
+    """A trust root MUST be supplied and the ACTUAL running interpreter's realpath sha256
+    MUST equal it (C9-06 P5-3, owner round): recording whatever interpreter ran the
+    receipt is not proof — an attacker-controlled launching interpreter can fabricate
+    proof output. The trust root is the operator-supplied ``--trusted-interpreter-sha256``
+    (preferred) or the inventory's ``trusted_interpreter_sha256``. With NEITHER supplied,
+    the certification FAILS CLOSED (no more green-with-untrusted-interpreter)."""
+    expected = cli_trusted or inventory.get("trusted_interpreter_sha256")
     actual = interpreter.get("sha256")
     if not expected:
         return Check(
-            "interpreter identity recorded (no trust root declared)",
-            True,
-            f"interpreter realpath={interpreter.get('realpath')} sha256={actual}; "
-            "no trusted_interpreter_sha256 declared — trust is the operator's",
+            "interpreter matches an explicit operator trust root",
+            False,
+            "NO trust root supplied — pass --trusted-interpreter-sha256 <hex> (or declare "
+            "trusted_interpreter_sha256 in the inventory). Recording the interpreter is "
+            f"not trust; the running realpath is {interpreter.get('realpath')} "
+            f"(sha256={actual}).",
             {"interpreter": interpreter, "trust_root": None},
         )
-    ok = isinstance(expected, str) and actual == expected
+    ok = isinstance(expected, str) and bool(actual) and actual == expected
     return Check(
-        "interpreter matches the declared trust root",
+        "interpreter matches an explicit operator trust root",
         ok,
-        f"actual={actual} expected={expected}",
+        f"actual={actual} expected={expected}"
+        + ("" if ok else " — the running interpreter is NOT the trusted one"),
         {"interpreter": interpreter, "trust_root": expected},
     )
 
@@ -503,6 +511,7 @@ def gate_checks(
     inventory: dict[str, object],
     base_sha: str,
     evidence_dir: Path | None,
+    cli_trusted_interpreter: str | None = None,
 ) -> list[Check]:
     """Every fail-closed gate, evaluated BEFORE any execution step."""
     checks = [
@@ -511,7 +520,7 @@ def gate_checks(
         check_base_ancestry(repo, base_sha),
         check_worktree_pristine(repo),
         check_evidence_dir_outside(evidence_dir, repo),
-        check_interpreter_trust(inventory, interpreter_identity()),
+        check_interpreter_trust(inventory, interpreter_identity(), cli_trusted_interpreter),
     ]
     checks.extend(check_inventory_binding(repo, inventory, base_sha))
     checks.append(check_no_undeclared_deletions(repo, inventory, base_sha))
@@ -656,6 +665,11 @@ def emit_inventory(repo: Path, base_sha: str, template: dict[str, object]) -> di
     # Explicit deletion tombstones (C9-06): every path removed in base..HEAD, so the
     # certification's no-undeclared-deletion gate has an exact declared set.
     out["deletions"] = sorted(recovery_deletions(repo, base_sha) - {INVENTORY_REL})
+    # Declare the authoring interpreter's realpath sha256 as the trust root (C9-06 P5-3,
+    # owner round): the operator reviews this hash and the certification refuses to run
+    # green under any other interpreter. The operator may override it with
+    # --trusted-interpreter-sha256 at certification time.
+    out["trusted_interpreter_sha256"] = interpreter_identity().get("sha256")
     return out
 
 
@@ -740,6 +754,14 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
         action="store_true",
         help="AUTHORING: regenerate the inventory from the tree (never emits a receipt).",
     )
+    parser.add_argument(
+        "--trusted-interpreter-sha256",
+        default=None,
+        help="REQUIRED for a GREEN certification unless the inventory declares "
+        "'trusted_interpreter_sha256': the sha256 of the trusted interpreter's realpath. "
+        "The receipt refuses to certify green under any other interpreter (the recorded "
+        "identity alone is not trust).",
+    )
     args = parser.parse_args(argv)
 
     inventory = load_inventory(repo)
@@ -775,7 +797,14 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     evidence_location_ok = evidence_dir is None or check_evidence_dir_outside(evidence_dir, repo).ok
 
     # ---- Gates first: every one fails CLOSED, and none of them execute anything. ----
-    checks = gate_checks(repo, args.expect_head, inventory, base_sha, evidence_dir)
+    checks = gate_checks(
+        repo,
+        args.expect_head,
+        inventory,
+        base_sha,
+        evidence_dir,
+        args.trusted_interpreter_sha256,
+    )
     head = git(repo, "rev-parse", "HEAD")
 
     if all(c.ok for c in checks):

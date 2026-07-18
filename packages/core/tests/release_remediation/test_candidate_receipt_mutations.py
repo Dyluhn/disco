@@ -106,6 +106,9 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
         "excludes_self": str(receipt.INVENTORY_REL),
         "external_evidence": [{"path": str(evidence), "sha256": _sha256(evidence)}],
         "deletions": [],
+        "trusted_interpreter_sha256": hashlib.sha256(
+            Path(sys.executable).resolve().read_bytes()
+        ).hexdigest(),
         "expected_proof": {"tests": ["test_receipt_proof.py"], "passed": 1, "failed": 0},
         "files": {"recovery.py": _sha256(campaign), "test_receipt_proof.py": _sha256(proof)},
     }
@@ -709,5 +712,45 @@ def test_interpreter_trust_root_mismatch_forces_nonzero(synthetic: dict[str, obj
     _git(repo, "commit", "-q", "-m", "declare a trust root the interpreter cannot match")
     new_head = _git(repo, "rev-parse", "HEAD")
     failed = _failed(_gates(synthetic, new_head))
-    assert any("declared trust root" in f for f in failed)
+    assert any("operator trust root" in f for f in failed)
     assert receipt.main(["--expect-head", new_head], repo=repo) == 1
+
+
+def test_no_trust_root_declared_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """C9-06 P5-3 (owner round): with NO trust root (neither CLI nor inventory), the
+    certification must fail closed — recording the interpreter is not trust."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    del data["trusted_interpreter_sha256"]
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "drop the trust root")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    failed = _failed(_gates(synthetic, new_head))
+    assert any("explicit operator trust root" in f for f in failed)
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
+
+
+def test_cli_trusted_interpreter_matching_is_green(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """A matching --trusted-interpreter-sha256 (with the inventory's dropped) certifies
+    green — the operator-supplied trust root is honored."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    del data["trusted_interpreter_sha256"]
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "drop inventory trust root; rely on CLI")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    good = hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()
+    rc = receipt.main(["--expect-head", new_head, "--trusted-interpreter-sha256", good], repo=repo)
+    assert rc == 0
+    rc_bad = receipt.main(
+        ["--expect-head", new_head, "--trusted-interpreter-sha256", "0" * 64], repo=repo
+    )
+    assert rc_bad == 1
