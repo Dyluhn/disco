@@ -46,7 +46,7 @@
     "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py": "19db9a3acb3fcbbd35dd6db992691163d4e5a50287302c6bb4418bba74550e21",
     "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "3d90bfc39a976be1ea952c6d893efc1cdc6a532e8ea946ab20e4891071355dac",
     "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
-    "packages/agent-server/tests/integration/_closeout_live_support.py": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+    "packages/agent-server/tests/integration/_closeout_live_support.py": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
     "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
@@ -58,8 +58,8 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
-    "scripts/gen_closeout_acceptance_manifest.py": "dc698b97fff9ce3fdd46075413074931d11dc4fed085cd44b67552e0ac76c6b9",
-    "scripts/verify_export_track1_closeout.py": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2"
+    "scripts/gen_closeout_acceptance_manifest.py": "59930a0027d0d1df7ee1d008545e5f338fe0a4e069d4d20102a8cd008cf40aae",
+    "scripts/verify_export_track1_closeout.py": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
@@ -764,7 +764,7 @@
     "frozen_byte_changes_v5_to_v6": {
       "packages/agent-server/tests/integration/_closeout_live_support.py": {
         "before_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
-        "after_v6": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+        "after_v6": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
         "why": "C9-02 genuine evidence collection (record_bundle_digest, compose-ps / inspect / cleanup capture) + C9-05 public-only fixture"
       },
       "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
@@ -779,7 +779,7 @@
       },
       "scripts/verify_export_track1_closeout.py": {
         "before_v5": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d",
-        "after_v6": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2",
+        "after_v6": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c",
         "why": "C9-01 nonlive baseline allowlist; C9-02 live-evidence aggregate+validate gate; C9-03 governed capture lane"
       },
       "scripts/gen_closeout_acceptance_manifest.py": {

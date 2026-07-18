@@ -631,7 +631,7 @@ REMEDIATION_V6: dict[str, object] = {
     "frozen_byte_changes_v5_to_v6": {
         "packages/agent-server/tests/integration/_closeout_live_support.py": {
             "before_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
-            "after_v6": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+            "after_v6": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
             "why": "C9-02 genuine evidence collection (record_bundle_digest, compose-ps / "
             "inspect / cleanup capture) + C9-05 public-only fixture",
         },
@@ -648,7 +648,7 @@ REMEDIATION_V6: dict[str, object] = {
         },
         "scripts/verify_export_track1_closeout.py": {
             "before_v5": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d",
-            "after_v6": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2",
+            "after_v6": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c",
             "why": "C9-01 nonlive baseline allowlist; C9-02 live-evidence aggregate+"
             "validate gate; C9-03 governed capture lane",
         },
