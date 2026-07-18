@@ -265,6 +265,16 @@ _INCOHERENT_UVICORN_INTENTS: list[tuple[str, tuple[str, ...]]] = [
     ("unix-socket-opt", ("uvicorn", "main:app", "--uds", "app.sock")),
     ("reload-opt", ("uvicorn", "main:app", "--reload")),
     ("log-level-opt", ("uvicorn", "main:app", "--log-level", "debug")),
+    # C9-04 owner round: a COMPLETE binding whose VALUES do not match the platform
+    # contract (host 0.0.0.0 + port ${PORT}) is a predictably-broken candidate and must
+    # fail closed, NOT be accepted verbatim.
+    ("host-localhost", ("uvicorn", "main:app", "--host=localhost", "--port=${PORT}")),
+    ("host-loopback-spaced", ("uvicorn", "main:app", "--host", "127.0.0.1", "--port", "${PORT}")),
+    ("port-literal-9999", ("uvicorn", "main:app", "--host=0.0.0.0", "--port=9999")),
+    ("port-literal-8080", ("uvicorn", "main:app", "--host=0.0.0.0", "--port=8080")),
+    ("port-other-var", ("uvicorn", "main:app", "--host=0.0.0.0", "--port=${OTHER}")),
+    ("port-negative", ("uvicorn", "main:app", "--host=0.0.0.0", "--port=-1")),
+    ("port-spaced-literal", ("uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3000")),
 ]
 
 

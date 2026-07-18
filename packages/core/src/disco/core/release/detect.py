@@ -2152,6 +2152,30 @@ def _uvicorn_start_contract(
         )
     if not has_host:
         return start_cmd + ("--host", "0.0.0.0", "--port", "${" + port_env + "}")
+    # A COMPLETE binding must bind the PLATFORM CONTRACT exactly (C9-04): the emitted
+    # bundle publishes / injects / health-checks the container port via `${<port_env>}`
+    # on all interfaces, so the only compatible declared binding is host `0.0.0.0` and
+    # port `${<port_env>}`. Any other value — a loopback/hostname host, a literal or
+    # different-variable port, a negative/out-of-range port — binds the wrong interface
+    # or port (or fails at runtime) and must fail closed, NOT be accepted verbatim.
+    port_ref = "${" + port_env + "}"
+    host_val = options["--host"]
+    port_val = options["--port"]
+    if host_val != "0.0.0.0":
+        return _uvicorn_blocker(
+            f"the declared --host {host_val!r} does not bind all interfaces; the platform "
+            "publishes the port on the container's external interface, so --host must be "
+            "'0.0.0.0' (a loopback/hostname bind is unreachable through the port mapping)",
+            f"incompatible host binding {host_val!r}",
+        )
+    if port_val != port_ref:
+        return _uvicorn_blocker(
+            f"the declared --port {port_val!r} does not bind the platform port contract "
+            f"{port_ref!r}; the emitted bundle injects/publishes/health-checks that exact "
+            "variable, so a literal, out-of-range, or different-variable port would bind "
+            "the wrong port or fail at runtime",
+            f"incompatible port binding {port_val!r} (want {port_ref!r})",
+        )
     return start_cmd
 
 
