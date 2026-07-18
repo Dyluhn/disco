@@ -4,7 +4,7 @@
   "excludes_self": "docs/export-track1-recovery-inventory.json",
   "expected_proof": {
     "failed": 0,
-    "passed": 96,
+    "passed": 105,
     "tests": [
       "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
       "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
@@ -27,17 +27,18 @@
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
     "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py": "dadc38c955441d6901a0548e573cd0a8fc47d1a1b09075eef9a1aea5925dba83",
     "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "fcfffb64b82962a85d1717c9ac540043822909885ac4b9f6c3b6aaaa037c501f",
-    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "43236bcf198c0a2534bf0700f8acb7fb848ee48500727ceeadcf8d8081bcb486",
+    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "c79ec6c51d58f358feecf67f793ea134127ee6aa6585195758de55024c4ad100",
     "packages/agent-server/tests/test_disco_verify_runner.py": "d7bf919bdaabc5f16ddfad2c40a974a0e20ec4aa0e943831b892162c164f8bf2",
-    "packages/core/src/disco/core/release/detect.py": "7c05bbfbffaea391596b502833f5543c73e9efa5721892c922d60579f772fa79",
-    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "4541469d5766b08568315f937ab49c5d58f50ede80f148ebb1017671f1d569fe",
+    "packages/core/src/disco/core/release/detect.py": "3b1031fed467a335135aafd1c48600458a83111772be93ce982e78d8a5cd54cd",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "a030e73790a78b7dd5a43f095b4c71786921f0efbfd47b8c62426ba99866863c",
     "packages/tools/src/disco/tools/verify/heavy_validators.py": "ed67c2e157176248de4375364c9ea42ad11b04c9520ba1fcb8c5d4f1f31b54a9",
     "packages/tools/tests/test_heavy_validators.py": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
     "packages/tools/tests/test_security.py": "45b311043f39a4cc7868d7ba5d1fe086a46adaf7989c7643eed22dbbf900f533",
-    "scripts/export_track1_candidate_receipt.py": "b2f70e88e9fb6c713b4247876c594d49a8a33dabacf7692eb38220c9b21412d7",
+    "scripts/export_track1_candidate_receipt.py": "c59de92e06e93952488929f9e3854abd32b20945147911710224a51c8f5a868b",
     "scripts/gen_closeout_acceptance_manifest.py": "59930a0027d0d1df7ee1d008545e5f338fe0a4e069d4d20102a8cd008cf40aae",
     "scripts/verify_export_track1_closeout.py": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c"
   },
   "note": "Hash inventory for the Export Track-1 recovery (base c0c4f728..HEAD). Regenerate with scripts/export_track1_candidate_receipt.py --emit-inventory (authoring aid; the protection is human review of this file's diff + the operator-supplied HEAD). external_evidence is OPTIONAL and NON-AUTHORITATIVE (owner policy 2026-07-17): bytes are pinned for a tamper-evident trail; the receipt never executes it.",
-  "schema": "export-track1-recovery-inventory/v1"
+  "schema": "export-track1-recovery-inventory/v1",
+  "trusted_interpreter_sha256": "74fceb0fdd29c31cf066ac8d92465975ea4ac8592308d7c888e26a70092d8eeb"
 }
