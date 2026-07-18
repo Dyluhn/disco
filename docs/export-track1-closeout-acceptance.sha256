@@ -1,7 +1,7 @@
 {
   "schema": "export-track1-closeout-acceptance/v1",
-  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v5 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (see remediation_r0.ratification_status). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, the ratification_status (the v4 candidacy is SUPERSEDED by acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
-  "acceptance_tag": "export-track1-closeout-acceptance-v5",
+  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v6 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (the CURRENT candidacy is acceptance-v6 — see remediation_v6.ratification_status; remediation_r0 is a HISTORICAL record). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, the ratification_status (the v4 candidacy is SUPERSEDED by acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v6",
   "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
   "seed": {
     "env": "CLOSEOUT_SEED",
@@ -58,7 +58,7 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
-    "scripts/gen_closeout_acceptance_manifest.py": "cba9dc3238af39d0a629f6dc20934f682f1cf67567a1c87d34b504b2d04ef353",
+    "scripts/gen_closeout_acceptance_manifest.py": "dc698b97fff9ce3fdd46075413074931d11dc4fed085cd44b67552e0ac76c6b9",
     "scripts/verify_export_track1_closeout.py": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2"
   },
   "missing_frozen_paths": [],
@@ -755,5 +755,39 @@
     },
     "live_lane_result_at_authoring": "frozen R7 lane 7 passed / 0 failed on Docker 29.6.1 / Compose v5.3.1 (express, fastapi, imported-node, vite-static, appkit, public-build-env vite, availability)",
     "ratification_status": "acceptance-v5 is a CANDIDATE for independent human review. No human has reviewed, signed, or protected any v5 tag; ratification succeeds only when a human creates the signed annotated export-track1-closeout-acceptance-v5 tag and publishes it to the protected authoritative remote."
+  },
+  "remediation_v6": {
+    "authored": "2026-07-17",
+    "supersedes": "acceptance-v5",
+    "authority": "Independent C9 review FAILED the acceptance-v5 candidate a1b5025e (evidence: /var/home/dylan/closeout-evidence-archive/2026-07-17-export-track1-c9-independent/C9-REVIEW.md). This v6 re-freezes the legitimately-changed frozen files after the bounded C9-01..C9-06 recovery: C9-01 (real-LibreOffice G17: OPC relationship-integrity pre-check + pinned Impress filters + isolated profile; frozen nonlive baseline reconciled to the exact §3.2 router-skip/appkit-xfail allowlist), C9-04 (a small recognized-shape/arity uvicorn contract failing closed on incoherent starts), C9-05 (build/runtime scope-conflict fails closed; a public-ONLY Docker proof of the §12.10 accepted branch), C9-02 (genuine per-fixture live evidence aggregated + validated before passed:true), C9-03 (the seven A/E capture regressions are a governed required lane with a frozen exact node inventory), C9-06 (the candidate receipt's --python/--base/deletion/evidence-dir bypasses closed with post-run rechecks). Product source changed ONLY detect.py + heavy_validators.py; the AppKit generator, session auth, and RBAC were NOT modified.",
+    "c9_failure_report": "/var/home/dylan/closeout-evidence-archive/2026-07-17-export-track1-c9-independent/C9-REVIEW.md",
+    "frozen_byte_changes_v5_to_v6": {
+      "packages/agent-server/tests/integration/_closeout_live_support.py": {
+        "before_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
+        "after_v6": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+        "why": "C9-02 genuine evidence collection (record_bundle_digest, compose-ps / inspect / cleanup capture) + C9-05 public-only fixture"
+      },
+      "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+        "before_v5": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
+        "after_v6": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+        "why": "C9-02 record_bundle_digest calls + slug->family map; C9-05 public-only live test"
+      },
+      "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
+        "before_v5": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
+        "after_v6": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
+        "why": "C9-03 export_track1_closeout marker so the capture lane is governed"
+      },
+      "scripts/verify_export_track1_closeout.py": {
+        "before_v5": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d",
+        "after_v6": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2",
+        "why": "C9-01 nonlive baseline allowlist; C9-02 live-evidence aggregate+validate gate; C9-03 governed capture lane"
+      },
+      "scripts/gen_closeout_acceptance_manifest.py": {
+        "before_v5": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8",
+        "after_v6": "(self-referential: see the files map of this manifest)",
+        "why": "acceptance-v6 authoring: tag, this remediation_v6 record, the governed_capture_inventory + live_capture command, C9-03 collector"
+      }
+    },
+    "ratification_status": "acceptance-v6 is a CANDIDATE for independent human review. No human has reviewed, signed, or protected any v6 tag; a v5 tag was never signed either. Ratification succeeds only when a human creates the signed annotated export-track1-closeout-acceptance-v6 tag and publishes it to the protected authoritative remote. This authoring claims NO human ratification and moves no tag."
   }
 }

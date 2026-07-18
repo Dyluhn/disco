@@ -79,7 +79,7 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v5"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v6"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -604,6 +604,72 @@ RED_TESTS: tuple[dict[str, object], ...] = (
 # `pytest --collect-only` (the machine-truth python_closeout_inventory).
 _R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
 _R0_TOOLS = "packages/tools/tests/export_track1_closeout"
+REMEDIATION_V6: dict[str, object] = {
+    "authored": "2026-07-17",
+    "supersedes": "acceptance-v5",
+    "authority": (
+        "Independent C9 review FAILED the acceptance-v5 candidate a1b5025e "
+        "(evidence: /var/home/dylan/closeout-evidence-archive/"
+        "2026-07-17-export-track1-c9-independent/C9-REVIEW.md). This v6 re-freezes the "
+        "legitimately-changed frozen files after the bounded C9-01..C9-06 recovery: "
+        "C9-01 (real-LibreOffice G17: OPC relationship-integrity pre-check + pinned "
+        "Impress filters + isolated profile; frozen nonlive baseline reconciled to the "
+        "exact §3.2 router-skip/appkit-xfail allowlist), C9-04 (a small recognized-shape/"
+        "arity uvicorn contract failing closed on incoherent starts), C9-05 (build/"
+        "runtime scope-conflict fails closed; a public-ONLY Docker proof of the §12.10 "
+        "accepted branch), C9-02 (genuine per-fixture live evidence aggregated + "
+        "validated before passed:true), C9-03 (the seven A/E capture regressions are a "
+        "governed required lane with a frozen exact node inventory), C9-06 (the "
+        "candidate receipt's --python/--base/deletion/evidence-dir bypasses closed with "
+        "post-run rechecks). Product source changed ONLY detect.py + heavy_validators.py; "
+        "the AppKit generator, session auth, and RBAC were NOT modified."
+    ),
+    "c9_failure_report": (
+        "/var/home/dylan/closeout-evidence-archive/2026-07-17-export-track1-c9-independent/"
+        "C9-REVIEW.md"
+    ),
+    "frozen_byte_changes_v5_to_v6": {
+        "packages/agent-server/tests/integration/_closeout_live_support.py": {
+            "before_v5": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
+            "after_v6": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+            "why": "C9-02 genuine evidence collection (record_bundle_digest, compose-ps / "
+            "inspect / cleanup capture) + C9-05 public-only fixture",
+        },
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+            "before_v5": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
+            "after_v6": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+            "why": "C9-02 record_bundle_digest calls + slug->family map; C9-05 public-only "
+            "live test",
+        },
+        "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": {
+            "before_v5": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
+            "after_v6": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
+            "why": "C9-03 export_track1_closeout marker so the capture lane is governed",
+        },
+        "scripts/verify_export_track1_closeout.py": {
+            "before_v5": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d",
+            "after_v6": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2",
+            "why": "C9-01 nonlive baseline allowlist; C9-02 live-evidence aggregate+"
+            "validate gate; C9-03 governed capture lane",
+        },
+        "scripts/gen_closeout_acceptance_manifest.py": {
+            "before_v5": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8",
+            "after_v6": "(self-referential: see the files map of this manifest)",
+            "why": "acceptance-v6 authoring: tag, this remediation_v6 record, the "
+            "governed_capture_inventory + live_capture command, C9-03 collector",
+        },
+    },
+    "ratification_status": (
+        "acceptance-v6 is a CANDIDATE for independent human review. No human has "
+        "reviewed, signed, or protected any v6 tag; a v5 tag was never signed either. "
+        "Ratification succeeds only when a human creates the signed annotated "
+        "export-track1-closeout-acceptance-v6 tag and publishes it to the protected "
+        "authoritative remote. This authoring claims NO human ratification and moves no "
+        "tag."
+    ),
+}
+
+
 REMEDIATION_V5: dict[str, object] = {
     "authored": "2026-07-17",
     "authority": (
@@ -949,7 +1015,8 @@ def build_manifest(root: Path) -> dict[str, object]:
         "EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag "
         f"{ACCEPTANCE_TAG} is a CANDIDATE: an independent human must create the signed "
         "annotated tag and protect it in the authoritative remote — it does not yet exist "
-        "and no human has ratified it (see remediation_r0.ratification_status). "
+        "and no human has ratified it (the CURRENT candidacy is acceptance-v6 — see "
+        "remediation_v6.ratification_status; remediation_r0 is a HISTORICAL record). "
         "python_closeout_inventory is generated deterministically from "
         "`pytest --collect-only` over the closeout dirs (marker "
         "'export_track1_closeout and not integration'); the verifier reads it back FROM "
@@ -987,6 +1054,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "red_tests": list(RED_TESTS),
         "remediation_r0": REMEDIATION_R0,
         "remediation_v5": REMEDIATION_V5,
+        "remediation_v6": REMEDIATION_V6,
     }
 
 
