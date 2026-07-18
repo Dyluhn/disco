@@ -15,6 +15,7 @@ Covers, through the real tool interface against an in-memory sandbox:
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -46,6 +47,42 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
         owner_id="local",
         conversation_id="conv-appkit",
     )
+
+
+class _AdversarialSandbox(FakeSandboxInstance):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commits: list[str] = []
+        self.fail_read: str | None = None
+        self.fail_on_commit: int | None = None
+
+    def arm(self, *, fail_read: str | None = None, fail_on_commit: int | None = None) -> None:
+        self.commits.clear()
+        self.fail_read = fail_read
+        self.fail_on_commit = fail_on_commit
+
+    async def read_file(self, path: str) -> bytes:
+        if path == self.fail_read:
+            raise PermissionError(f"injected read failure for {path}")
+        return await super().read_file(path)
+
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        self.commits.append(path)
+        if self.fail_on_commit is not None and len(self.commits) == self.fail_on_commit:
+            raise OSError(f"injected commit failure for {path}")
+        self._fs[path] = data
+
+
+class _LostAckAppSpecSandbox(FakeSandboxInstance):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lose_next_appspec_ack = False
+
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        self._fs[path] = data
+        if self.lose_next_appspec_ack and path == APPSPEC_RELPATH:
+            self.lose_next_appspec_ack = False
+            raise OSError("injected failure after AppSpec commit")
 
 
 async def _create(sbx: FakeSandboxInstance, *, recipe="editorial-ledger", **kw):
@@ -101,6 +138,12 @@ async def test_app_create_writes_tree_and_both_specs():
     # the persisted appspec is valid JSON and declares the lead entity
     spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
     assert any(e["id"] == "lead" for e in spec["entities"])
+    assert [receipt.resource.identifier for receipt in out.effect_receipts] == out.artifacts
+    for receipt in out.effect_receipts:
+        assert receipt.after is not None
+        assert (
+            receipt.after.digest == hashlib.sha256(sbx._fs[receipt.resource.identifier]).hexdigest()
+        )
 
 
 async def test_app_create_is_clean_against_the_same_committed_direction_as_final_verify():
@@ -168,7 +211,11 @@ async def test_app_create_refuses_overwrite_then_allows_with_flag():
     blocked = await _create(sbx)
     assert not blocked.success
     assert blocked.error == "app_create_refused"
-    assert (await _create(sbx, overwrite=True)).success
+    no_op = await _create(sbx, overwrite=True)
+    assert not no_op.success
+    assert "no-op" in no_op.content
+    assert no_op.effect_receipts == ()
+    assert (await _create(sbx, recipe="field-notes", overwrite=True)).success
 
 
 async def test_app_create_rejects_unknown_recipe():
@@ -239,6 +286,37 @@ async def test_app_add_section_touches_only_affected_files():
     assert "src/styles.css" not in touched
     assert "worker/index.ts" not in touched
     assert "schema.sql" not in touched
+
+
+async def test_app_add_section_exact_retry_after_lost_appspec_ack_reports_complete():
+    sbx = _LostAckAppSpecSandbox()
+    assert (await _create(sbx)).success
+    args = AppAddSectionArgs(
+        page_id="home",
+        after_section_id="features",
+        section={
+            "id": "retry-safe",
+            "kind": "cta",
+            "variant_id": "cta.banner-inline",
+            "content": {"heading": "Ready?", "cta_label": "Start now"},
+        },
+    )
+    sbx.lose_next_appspec_ack = True
+
+    interrupted = await AppAddSectionTool().run(args, _ctx(sbx))
+
+    assert not interrupted.success
+    assert interrupted.error == "BATCH_COMMIT_INTERRUPTED"
+    assert interrupted.structured["failed_path_state"] == "committed"
+
+    retried = await AppAddSectionTool().run(args, _ctx(sbx))
+
+    assert not retried.success
+    assert retried.error == "app_add_section_refused"
+    assert "no-op" in retried.content
+    assert "COMPLETE" in retried.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH])
+    assert [section["id"] for section in spec["pages"][0]["sections"]].count("retry-safe") == 1
 
 
 async def test_app_add_section_rejects_wrong_kind_variant():
@@ -328,6 +406,87 @@ async def test_app_update_content_touches_only_content_and_spec():
     )
     # the new copy is in content.ts
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
+
+
+async def test_appkit_unreadable_planned_file_refuses_before_any_write():
+    sbx = _AdversarialSandbox()
+    assert (await _create(sbx)).success
+    before = dict(sbx._fs)
+    sbx.arm(fail_read="index.html")
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home",
+            section_id="hero",
+            updates={"heading": "Must not partially land"},
+        ),
+        _ctx(sbx),
+    )
+
+    assert not out.success
+    assert out.error == "BATCH_PREVALIDATION_READ_FAILED"
+    assert sbx.commits == []
+    assert sbx._fs == before
+    assert out.effect_receipts == ()
+
+
+async def test_appkit_serialization_failure_happens_before_any_write(monkeypatch):
+    import disco.tools.builtin.app_kit as app_kit
+
+    sbx = _AdversarialSandbox()
+    assert (await _create(sbx)).success
+    before = dict(sbx._fs)
+    sbx.arm()
+
+    def _raise_serialization(_spec):
+        raise ValueError("injected serialized AppSpec size cap")
+
+    monkeypatch.setattr(app_kit, "serialize_app_spec", _raise_serialization)
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home",
+            section_id="hero",
+            updates={"heading": "Still must not land"},
+        ),
+        _ctx(sbx),
+    )
+
+    assert not out.success
+    assert out.error == "app_update_content_refused"
+    assert "before writing" in out.content
+    assert sbx.commits == []
+    assert sbx._fs == before
+    assert out.effect_receipts == ()
+
+
+async def test_appkit_partial_tree_failure_keeps_appspec_as_retry_marker():
+    sbx = _AdversarialSandbox()
+    assert (await _create(sbx)).success
+    before_spec = sbx._fs[APPSPEC_RELPATH]
+    sbx.arm(fail_on_commit=2)
+
+    args = AppUpdateContentArgs(
+        page_id="home",
+        section_id="hero",
+        updates={"heading": "Recoverable target"},
+    )
+    failed = await AppUpdateContentTool().run(args, _ctx(sbx))
+
+    assert not failed.success
+    assert failed.error == "BATCH_PARTIAL_COMMIT"
+    assert failed.structured["applied"] == ["src/generated/content.ts"]
+    assert [receipt.resource.identifier for receipt in failed.effect_receipts] == [
+        "src/generated/content.ts"
+    ]
+    assert sbx._fs[APPSPEC_RELPATH] == before_spec
+
+    sbx.arm()
+    repaired = await AppUpdateContentTool().run(args, _ctx(sbx))
+    assert repaired.success, repaired.content
+    assert (
+        json.loads(sbx._fs[APPSPEC_RELPATH])["pages"][0]["sections"][0]["content"]["heading"]
+        == "Recoverable target"
+    )
 
 
 async def test_app_update_content_unwraps_minimax_items_wrapper():

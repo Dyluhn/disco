@@ -59,6 +59,19 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
     )
 
 
+class _FailAppSpecSandbox(FakeSandboxInstance):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_appspec = False
+        self.commits: list[str] = []
+
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        self.commits.append(path)
+        if self.fail_appspec and path == APPSPEC_RELPATH:
+            raise OSError("injected AppSpec commit failure")
+        self._fs[path] = data
+
+
 async def _create_hello_app(sbx: FakeSandboxInstance):
     return await AppCreateTool().run(
         AppCreateArgs(recipe_id="editorial-ledger", primitive_id="hello", brief="Acme Studio"),
@@ -144,6 +157,30 @@ async def test_apply_hello_spec_updates_tree_and_persists_record():
     assert record["primitive_id"] == "hello"
     assert record["tier"] == "fillable"
     assert record["spec"] == {"headline": "Handcrafted since 1994"}
+
+
+async def test_provenance_precedes_appspec_and_partial_failure_is_retryable():
+    sbx = _FailAppSpecSandbox()
+    assert (await _create_hello_app(sbx)).success
+    before_spec = sbx._fs[APPSPEC_RELPATH]
+    sbx.commits.clear()
+    sbx.fail_appspec = True
+
+    failed = await _add(sbx, "hello", {"headline": "Retry-safe"})
+
+    assert not failed.success
+    assert failed.error == "BATCH_PARTIAL_COMMIT"
+    record_path = ".disco/primitives/hello.json"
+    assert record_path in sbx._fs
+    assert sbx.commits.index(record_path) < sbx.commits.index(APPSPEC_RELPATH)
+    assert sbx._fs[APPSPEC_RELPATH] == before_spec
+    assert record_path in [receipt.resource.identifier for receipt in failed.effect_receipts]
+
+    sbx.fail_appspec = False
+    sbx.commits.clear()
+    repaired = await _add(sbx, "hello", {"headline": "Retry-safe"})
+    assert repaired.success, repaired.content
+    assert json.loads(sbx._fs[APPSPEC_RELPATH])["pages"][0]["title"] == "Retry-safe"
 
 
 async def test_identical_reapply_is_loud_noop():

@@ -72,6 +72,18 @@ class FakeSandboxInstance:
         self._alive()
         self._fs[path] = data
 
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        await self.write_file(path, data)
+
+    async def delete_file(self, path: str) -> None:
+        self._alive()
+        if path not in self._fs:
+            raise SandboxFileNotFoundError(f"no such file: {path}")
+        del self._fs[path]
+
+    async def resolve_relpath(self, path: str) -> str:
+        return path
+
     async def list_dir(self, path: str) -> list[str]:
         self._alive()
         return sorted(self._fs)

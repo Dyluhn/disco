@@ -9,6 +9,8 @@ VM-201 check; here we prove the backend drives Docker correctly.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections import namedtuple
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,13 @@ from disco.tools.sandbox import (
     SandboxSpec,
     SandboxUnavailableError,
 )
-from disco.tools.sandbox._container import INTERNAL_PORTS, loopback_port_bindings
+from disco.tools.sandbox._container import (
+    INTERNAL_PORTS,
+    bounded_delete_argv,
+    bounded_delete_result,
+    loopback_port_bindings,
+)
+from disco.tools.sandbox.base import SandboxPermissionError
 from docker.errors import ImageNotFound
 
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
@@ -100,6 +108,14 @@ class FakeContainer:
                 code, out, err = 0, self.fs[path], b""
             else:
                 code, out, err = 44, b"", b"DISCO_READ_MISSING:no file"
+        elif cmd[0] == "python3" and "DISCO_DELETE_" in cmd[2]:
+            path = cmd[3].rstrip("/") + "/" + cmd[4]
+            if path in self.fs:
+                self.fs.pop(path)
+                self.tar_mtimes.pop(path, None)
+                code, out, err = 0, b"", b""
+            else:
+                code, out, err = 44, b"", b"DISCO_DELETE_MISSING:no file"
         elif cmd[0] == "realpath":
             code, out, err = 0, f"{cmd[-1]}\n".encode(), b""
         elif cmd[0] == "cat":
@@ -639,6 +655,68 @@ async def test_atomic_write_stages_archive_outside_workspace_then_guest_renames(
     assert client.last.put_archive_paths[-1] == "/tmp"
     assert not any("disco-upload-" in path for path in client.last.fs)
     assert not any(".disco-tmp-" in path for path in client.last.fs)
+
+
+async def test_delete_file_removes_the_resolved_guest_file(tmp_path):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    await inst.write_file("site/stale.html", b"stale")
+
+    await inst.delete_file("site/stale.html")
+
+    assert "/workspace/site/stale.html" not in client.last.fs
+    delete_calls = [
+        call
+        for call in client.last.exec_calls
+        if call[0] == "python3" and "DISCO_DELETE_" in call[2]
+    ]
+    assert delete_calls
+    assert delete_calls[-1][3:] == ["/workspace", "site/stale.html"]
+
+
+async def test_delete_file_does_not_re_resolve_path_after_lexical_jail_check(tmp_path, monkeypatch):
+    """The guest helper owns the no-follow check+unlink; no second realpath race exists."""
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="delete-race")
+    await inst.write_file("site/stale.html", b"stale")
+    client.last.exec_calls.clear()
+
+    def _unexpected_realpath(_path):
+        raise AssertionError("delete_file must not resolve a mutable path twice")
+
+    monkeypatch.setattr(inst, "_guest_realpath", _unexpected_realpath)
+    await inst.delete_file("site/stale.html")
+
+    assert "/workspace/site/stale.html" not in client.last.fs
+    assert not any(call[0] == "rm" for call in client.last.exec_calls)
+
+
+@pytest.mark.parametrize("alias_kind", ["final", "parent"])
+def test_guest_delete_helper_refuses_symlink_alias_and_preserves_outside_file(tmp_path, alias_kind):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    victim = outside / "victim.txt"
+    victim.write_bytes(b"preserve-me")
+    if alias_kind == "final":
+        (workspace / "stale.txt").symlink_to(victim)
+        relpath = "stale.txt"
+    else:
+        (workspace / "generated").symlink_to(outside, target_is_directory=True)
+        relpath = "generated/victim.txt"
+
+    completed = subprocess.run(
+        bounded_delete_argv(str(workspace), relpath, python=sys.executable),
+        capture_output=True,
+        check=False,
+    )
+
+    with pytest.raises(SandboxPermissionError):
+        bounded_delete_result(relpath, completed.returncode, completed.stderr)
+    assert victim.read_bytes() == b"preserve-me"
 
 
 async def test_atomic_write_recovers_legacy_selinux_labeled_existing_file(tmp_path):

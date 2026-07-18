@@ -4,9 +4,8 @@ Covers, against in-memory sandboxes:
   * app_create(primitive_id="directory") writes the static directory tree + both
     .disco specs and persists app_kind="directory"; an unknown primitive_id and a
     primitive_id/app_spec mismatch are refused; existing lead-gen creation is intact;
-  * the cross-primitive overwrite GUARD refuses replacing a lead-gen app with a
-    directory app in place (stale-file safety), while a same-primitive overwrite is
-    still allowed;
+  * cross-primitive overwrite removes the prior generator's stale owned files and
+    binds that deletion to an exact mutation receipt;
   * verify_appkit_app on a generated directory app runs the DIRECTORY check set and
     passes; a static worker that grew a lead API fails static_worker_contract.
 """
@@ -27,7 +26,12 @@ from disco.core.appkit import (
 )
 from disco.tools.anatomy import Capability, ToolContext, ToolOutcome
 from disco.tools.builtin import browser as browser_mod
-from disco.tools.builtin.app_kit import AppCreateArgs, AppCreateTool
+from disco.tools.builtin.app_kit import (
+    AppAddPrimitiveArgs,
+    AppAddPrimitiveTool,
+    AppCreateArgs,
+    AppCreateTool,
+)
 from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppArgs, VerifyAppKitAppTool
 from tool_fakes import FakeSandboxInstance
 
@@ -103,28 +107,74 @@ async def test_app_create_lead_gen_still_default():
     assert ".dev.vars.example" in sbx._fs
 
 
-# ---- the cross-primitive overwrite guard ---------------------------------------
+# ---- cross-primitive overwrite cleanup -----------------------------------------
 
 
-async def test_cross_primitive_overwrite_is_refused():
+async def test_cross_primitive_overwrite_deletes_stale_owned_files(stub_browser):
     sbx = FakeSandboxInstance()
     assert (
         await AppCreateTool().run(
             AppCreateArgs(recipe_id="editorial-ledger", brief="Acme"), _ctx(sbx)
         )
     ).success
-    # replacing a lead-gen app with a directory app in place is refused (stale files)
-    blocked = await AppCreateTool().run(
+    changed = await AppCreateTool().run(
         AppCreateArgs(recipe_id="editorial-ledger", primitive_id="directory", overwrite=True),
         _ctx(sbx),
     )
-    assert not blocked.success
-    assert "overwrite" in blocked.content.lower()
-    # ... but a SAME-primitive overwrite is still allowed
-    same = await AppCreateTool().run(
-        AppCreateArgs(recipe_id="field-notes", brief="Acme", overwrite=True), _ctx(sbx)
+    assert changed.success, changed.content
+    assert ".dev.vars.example" not in sbx._fs
+    assert ".dev.vars.example" in changed.structured["files_deleted"]
+    deletion = next(
+        receipt
+        for receipt in changed.effect_receipts
+        if receipt.resource.identifier == ".dev.vars.example"
     )
-    assert same.success, same.content
+    assert deletion.before is not None
+    assert deletion.after is None
+
+    verified = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _vctx(_FakeSandbox(dict(sbx._fs)))
+    )
+    assert verified.success, verified.content
+
+
+async def test_cross_primitive_overwrite_clears_stale_add_on_provenance(stub_browser):
+    sbx = FakeSandboxInstance()
+    assert (
+        await AppCreateTool().run(
+            AppCreateArgs(recipe_id="editorial-ledger", primitive_id="hello", brief="Acme"),
+            _ctx(sbx),
+        )
+    ).success
+    added = await AppAddPrimitiveTool().run(
+        AppAddPrimitiveArgs(primitive_id="hello", spec={"headline": "Prior hello add-on"}),
+        _ctx(sbx),
+    )
+    assert added.success, added.content
+    record_path = ".disco/primitives/hello.json"
+    assert record_path in sbx._fs
+
+    changed = await AppCreateTool().run(
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id="directory", overwrite=True),
+        _ctx(sbx),
+    )
+
+    assert changed.success, changed.content
+    assert record_path not in sbx._fs
+    assert record_path in changed.structured["files_deleted"]
+    deletion = next(
+        receipt for receipt in changed.effect_receipts if receipt.resource.identifier == record_path
+    )
+    assert deletion.before is not None
+    assert deletion.after is None
+
+    verified = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _vctx(_FakeSandbox(dict(sbx._fs)))
+    )
+    assert verified.success, verified.content
+    assert not any(
+        check["name"].startswith("primitive_verify:") for check in verified.structured["checks"]
+    )
 
 
 # ---- verify_appkit_app on a directory app --------------------------------------

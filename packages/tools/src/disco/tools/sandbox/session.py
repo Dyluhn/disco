@@ -437,6 +437,9 @@ class SandboxSession:
     async def write_file(self, path: str, data: bytes) -> None:
         await self._resilient(lambda i: i.write_file(path, data))
 
+    async def delete_file(self, path: str) -> None:
+        await self._resilient(lambda i: i.delete_file(path))
+
     async def atomic_write(self, path: str, data: bytes) -> None:
         """Use the backend's atomic primitive when available, otherwise its ordinary write.
 

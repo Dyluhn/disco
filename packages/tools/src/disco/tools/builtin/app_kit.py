@@ -97,8 +97,14 @@ from pydantic import (
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
 from .design_lint import lint_design, load_committed_direction
+from .mutation_batch import (
+    DeterministicBatchResult,
+    PlannedFileMutation,
+    commit_deterministic_file_batch,
+)
 
 _FS = frozenset({Capability.FILESYSTEM})
+_PRIMITIVES_RELDIR = ".disco/primitives"
 
 
 def _unwrap_weak_fc_items_wrapper(value: Any) -> Any:
@@ -155,15 +161,40 @@ class _AppKitError(Exception):
 async def _read_spec_bytes(ctx: ToolContext, relpath: str) -> bytes | None:
     assert ctx.sandbox is not None
     try:
-        exists = await ctx.sandbox.file_exists(relpath)
-    except Exception:  # noqa: BLE001 — treat a probe failure as absent
-        exists = False
-    if not exists:
-        return None
-    try:
         return await ctx.sandbox.read_file(relpath)
-    except Exception:  # noqa: BLE001 — vanished between probe and read
+    except FileNotFoundError:
         return None
+    except Exception as exc:  # noqa: BLE001 — unreadable is never absence
+        raise _AppKitError(f"cannot read {relpath}: {type(exc).__name__}: {exc}") from exc
+
+
+async def _primitive_record_paths(ctx: ToolContext) -> set[str]:
+    """List existing AppKit add-on provenance without treating IO failure as empty."""
+    assert ctx.sandbox is not None
+    try:
+        entries = await ctx.sandbox.list_dir(_PRIMITIVES_RELDIR)
+    except FileNotFoundError:
+        return set()
+    except Exception as exc:  # noqa: BLE001 - cleanup ownership must be known before overwrite
+        raise _AppKitError(
+            f"cannot inspect {_PRIMITIVES_RELDIR} before app creation: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    records: set[str] = set()
+    prefix = _PRIMITIVES_RELDIR + "/"
+    for entry in entries:
+        normalized = str(entry).replace("\\", "/")
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        if normalized.startswith(prefix):
+            candidate = normalized
+        elif "/" not in normalized:
+            candidate = prefix + normalized
+        else:
+            continue
+        if candidate.endswith(".json"):
+            records.add(candidate)
+    return records
 
 
 async def _load_app_spec(ctx: ToolContext) -> AppSpec:
@@ -308,34 +339,56 @@ async def _lint_gate(
         )
 
 
-async def _apply_tree(ctx: ToolContext, tree: dict[str, str]) -> list[str]:
-    """Write back ONLY the generated files whose content differs from what's already
-    in the sandbox (write-on-diff). Returns the touched paths, sorted. New files
-    (absent) are always written. This is what keeps the touched set minimal and
-    the spec ⇄ tree projection exact."""
-    assert ctx.sandbox is not None
-    touched: list[str] = []
-    for path in sorted(tree):
-        new = tree[path].encode("utf-8")
-        old: bytes | None
-        try:
-            old = await ctx.sandbox.read_file(path)
-        except Exception:  # noqa: BLE001 — absent / unreadable → treat as new
-            old = None
-        if old != new:
-            await ctx.sandbox.write_file(path, new)
-            touched.append(path)
-    return touched
+def _appkit_plan(
+    tree: dict[str, str],
+    *,
+    app: AppSpec | None = None,
+    design: DesignSpec | None = None,
+    extra_writes: dict[str, bytes] | None = None,
+    deletes: set[str] | None = None,
+) -> list[PlannedFileMutation]:
+    """Materialize every generated/spec/provenance byte before the first write."""
+    try:
+        intents = [
+            PlannedFileMutation(path=path, after=content.encode("utf-8"))
+            for path, content in sorted(tree.items())
+        ]
+        if extra_writes:
+            intents.extend(
+                PlannedFileMutation(path=path, after=content)
+                for path, content in sorted(extra_writes.items())
+            )
+        if design is not None:
+            intents.append(
+                PlannedFileMutation(
+                    path=DESIGNSPEC_RELPATH,
+                    after=serialize_design_spec(design).encode("utf-8"),
+                )
+            )
+        if app is not None:
+            intents.append(
+                PlannedFileMutation(
+                    path=APPSPEC_RELPATH,
+                    after=serialize_app_spec(app).encode("utf-8"),
+                )
+            )
+        intents.extend(
+            PlannedFileMutation(path=path, after=None) for path in sorted(deletes or set())
+        )
+        return intents
+    except Exception as exc:  # noqa: BLE001 — serialization is a pre-write gate
+        raise _AppKitError(
+            f"refused before writing because the complete AppKit output could not be "
+            f"serialized: {type(exc).__name__}: {exc}"
+        ) from exc
 
 
-async def _save_app_spec(ctx: ToolContext, spec: AppSpec) -> None:
-    assert ctx.sandbox is not None
-    await ctx.sandbox.write_file(APPSPEC_RELPATH, serialize_app_spec(spec).encode("utf-8"))
-
-
-async def _save_design_spec(ctx: ToolContext, spec: DesignSpec) -> None:
-    assert ctx.sandbox is not None
-    await ctx.sandbox.write_file(DESIGNSPEC_RELPATH, serialize_design_spec(spec).encode("utf-8"))
+def _changed_generated(
+    result: DeterministicBatchResult,
+    tree: dict[str, str],
+) -> list[str]:
+    generated = set(tree)
+    return [path for path in result.changed_paths if path in generated]
 
 
 def _validate_variant(section: Section) -> None:
@@ -358,15 +411,6 @@ def _validate_variant(section: Section) -> None:
 def _unknown_primitive_msg(prim_id: str) -> str:
     known = ", ".join(sorted(primitive_ids()))
     return f"unknown primitive_id: {prim_id!r}. Known primitives: {known}."
-
-
-def _safe_load_app_kind(spec_bytes: bytes) -> str | None:
-    """The `app_kind` of an on-disk AppSpec, or None if it won't load — used only by
-    the overwrite guard to compare the prior primitive against the new one."""
-    try:
-        return load_app_spec_from_bytes(spec_bytes).app_kind
-    except Exception:  # noqa: BLE001 — an unreadable prior spec doesn't block overwrite
-        return None
 
 
 class AppCreateArgs(BaseModel):
@@ -498,35 +542,55 @@ class AppCreateTool:
                 raise _AppKitError(f"invalid {primitive.id!r} app_spec: {exc}") from exc
 
             existing = await _read_spec_bytes(ctx, APPSPEC_RELPATH)
+            prior_tree: dict[str, str] = {}
             if existing is not None:
                 if not args.overwrite:
                     raise _AppKitError(
                         f"{APPSPEC_RELPATH} already exists — pass overwrite=true to "
                         "replace the app."
                     )
-                # Overwrite guard: a CROSS-PRIMITIVE overwrite changes the generated path
-                # set (e.g. lead-gen's .dev.vars.example / lead components are not part of
-                # a directory tree). The sandbox protocol has no delete, so write-on-diff
-                # would leave those stale files behind. Refuse rather than ship a polluted
-                # tree; the owner clears the workspace and re-creates.
-                prior = _safe_load_app_kind(existing)
-                if prior is not None and resolve_primitive(prior).id != primitive.id:
+                try:
+                    prior_app = load_app_spec_from_bytes(existing)
+                    prior_design = await _load_design_spec(ctx)
+                    prior_tree = generate(prior_app, prior_design)
+                except _AppKitError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - prove the prior owned path set
                     raise _AppKitError(
-                        f"refused: cannot overwrite an existing "
-                        f"'{resolve_primitive(prior).id}' app with a '{primitive.id}' app "
-                        "in place — the generated file sets differ, and stale files from "
-                        "the old primitive can't be removed through the sandbox. Clear the "
-                        "workspace (or use a fresh one) before scaffolding a different "
-                        "primitive."
-                    )
+                        "refused: cannot safely overwrite because the existing AppKit tree "
+                        f"cannot be reconstructed for stale-file cleanup: {exc}. Use a fresh "
+                        "workspace if the prior app is intentionally being discarded."
+                    ) from exc
 
-            tree = generate(app, design)
+            try:
+                tree = generate(app, design)
+            except Exception as exc:  # noqa: BLE001 - typed tool boundary
+                raise _AppKitError(f"generating the {primitive.id!r} app failed: {exc}") from exc
             await _lint_gate(tree, design, ctx, direction=direction)
-
-            touched = await _apply_tree(ctx, tree)
-            await _save_app_spec(ctx, app)
-            await _save_design_spec(ctx, design)
-            artifacts = sorted({*touched, APPSPEC_RELPATH, DESIGNSPEC_RELPATH})
+            stale_generated = set(prior_tree) - set(tree)
+            stale_records = await _primitive_record_paths(ctx)
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                _appkit_plan(
+                    tree,
+                    app=app,
+                    design=design,
+                    deletes=stale_generated | stale_records,
+                ),
+                commit_last=(DESIGNSPEC_RELPATH, APPSPEC_RELPATH),
+            )
+            if isinstance(committed, ToolOutcome):
+                return committed
+            if not committed.changed_paths:
+                raise _AppKitError(
+                    "no-op: the workspace already contains this exact generated app and specs; "
+                    "the requested scaffold is COMPLETE. Move on to verify/finish instead of "
+                    "rewriting identical bytes."
+                )
+            touched = _changed_generated(committed, tree)
+            deleted_paths = stale_generated | stale_records
+            deleted = [path for path in committed.changed_paths if path in deleted_paths]
+            artifacts = [path for path in committed.changed_paths if path not in deleted_paths]
             return ToolOutcome(
                 success=True,
                 content=(
@@ -540,9 +604,15 @@ class AppCreateTool:
                     "app_name": app.name,
                     "direction_id": direction.id if direction is not None else None,
                     "files_written": touched,
-                    "specs": [APPSPEC_RELPATH, DESIGNSPEC_RELPATH],
+                    "files_deleted": deleted,
+                    "specs": [
+                        path
+                        for path in (APPSPEC_RELPATH, DESIGNSPEC_RELPATH)
+                        if path in committed.changed_paths
+                    ],
                 },
                 artifacts=artifacts,
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_create_refused")
@@ -602,6 +672,36 @@ class AppAddSectionTool:
                 raise _AppKitError(f"no page with id {args.page_id!r}")
             secs = list(page["sections"])
             sec_json = section.model_dump(mode="json")
+            duplicate_index = next(
+                (index for index, existing in enumerate(secs) if existing["id"] == section.id),
+                None,
+            )
+            if duplicate_index is not None:
+                if args.after_section_id is None:
+                    placement_matches = duplicate_index == len(secs) - 1
+                else:
+                    anchor_index = next(
+                        (
+                            index
+                            for index, existing in enumerate(secs)
+                            if existing["id"] == args.after_section_id
+                        ),
+                        None,
+                    )
+                    placement_matches = (
+                        anchor_index is not None and duplicate_index == anchor_index + 1
+                    )
+                if secs[duplicate_index] == sec_json and placement_matches:
+                    raise _AppKitError(
+                        f"no-op: section {section.id!r} already exists with exactly this "
+                        "content and placement. The requested add is COMPLETE; move on to "
+                        "verify/finish instead of retrying it."
+                    )
+                raise _AppKitError(
+                    f"duplicate section id {section.id!r}: an existing section with that id "
+                    "has different content or placement. Choose a new id or update the "
+                    "existing section."
+                )
             if args.after_section_id is not None:
                 idx = next(
                     (i for i, s in enumerate(secs) if s["id"] == args.after_section_id),
@@ -622,8 +722,14 @@ class AppAddSectionTool:
 
             tree = generate(new_app, design)
             await _lint_gate(tree, design, ctx)
-            touched = await _apply_tree(ctx, tree)
-            await _save_app_spec(ctx, new_app)
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                _appkit_plan(tree, app=new_app),
+                commit_last=(APPSPEC_RELPATH,),
+            )
+            if isinstance(committed, ToolOutcome):
+                return committed
+            touched = _changed_generated(committed, tree)
             return ToolOutcome(
                 success=True,
                 content=(
@@ -631,7 +737,8 @@ class AppAddSectionTool:
                     f"page '{args.page_id}' — updated {len(touched)} file(s)."
                 ),
                 structured={"files_written": touched, "spec": APPSPEC_RELPATH},
-                artifacts=sorted({*touched, APPSPEC_RELPATH}),
+                artifacts=list(committed.changed_paths),
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_add_section_refused")
@@ -748,8 +855,14 @@ class AppUpdateContentTool:
 
             tree = generate(new_app, design)
             await _lint_gate(tree, design, ctx)
-            touched = await _apply_tree(ctx, tree)
-            await _save_app_spec(ctx, new_app)
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                _appkit_plan(tree, app=new_app),
+                commit_last=(APPSPEC_RELPATH,),
+            )
+            if isinstance(committed, ToolOutcome):
+                return committed
+            touched = _changed_generated(committed, tree)
             return ToolOutcome(
                 success=True,
                 content=(
@@ -757,7 +870,8 @@ class AppUpdateContentTool:
                     f"'{args.page_id}' — updated {len(touched)} file(s)."
                 ),
                 structured={"files_written": touched, "spec": APPSPEC_RELPATH},
-                artifacts=sorted({*touched, APPSPEC_RELPATH}),
+                artifacts=list(committed.changed_paths),
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_update_content_refused")
@@ -812,6 +926,7 @@ class AppSetDesignTool:
             if (args.recipe_id is None) == (args.design_spec is None):
                 raise _AppKitError("provide exactly one of recipe_id (P0) or design_spec (P1).")
             app = await _load_app_spec(ctx)
+            prior_design = await _load_design_spec(ctx)
 
             recipe = None
             direction = await load_committed_direction(ctx)
@@ -832,6 +947,7 @@ class AppSetDesignTool:
                 raise _AppKitError("variant_policy must be 'preserve' or 'recipe'.")
 
             app_changed = False
+            data: dict[str, Any] | None = None
             if args.variant_policy == "recipe":
                 if recipe is None:
                     raise _AppKitError("variant_policy='recipe' requires recipe_id.")
@@ -843,34 +959,44 @@ class AppSetDesignTool:
                         if new_vid is not None and sec.get("variant_id") != new_vid:
                             sec["variant_id"] = new_vid
                             app_changed = True
-                if app_changed:
-                    app = AppSpec.model_validate(data)
+            if app_changed:
+                assert data is not None
+                app = AppSpec.model_validate(data)
+
+            if not app_changed and design == prior_design:
+                raise _AppKitError(
+                    "no-op: this exact design is already persisted; the requested design "
+                    "change is COMPLETE. Move on to verify/finish or choose a different design."
+                )
 
             tree = generate(app, design)
             await _lint_gate(tree, design, ctx, direction=direction)
-            touched = await _apply_tree(ctx, tree)
-            if not touched and not app_changed:
-                # Same RC-M rule as app_update_content: an identical design applied
-                # to an unchanged app regenerates an identical tree — refuse loudly
-                # instead of reporting a hollow success the model will retry.
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                _appkit_plan(tree, app=app if app_changed else None, design=design),
+                commit_last=(
+                    (DESIGNSPEC_RELPATH, APPSPEC_RELPATH) if app_changed else (DESIGNSPEC_RELPATH,)
+                ),
+            )
+            if isinstance(committed, ToolOutcome):
+                return committed
+            if not committed.changed_paths:
                 raise _AppKitError(
-                    "no-op: this design produced an identical generated tree — the app "
-                    "ALREADY uses this design; if that is what you wanted, it is "
-                    "COMPLETE (move on to verify/finish). Otherwise the "
-                    "app already uses it. Pick a different recipe_id/design_spec or "
-                    "change sections first."
+                    "no-op: this design produced no byte change; move on to verify/finish."
                 )
-            await _save_design_spec(ctx, design)
-            specs = [DESIGNSPEC_RELPATH]
-            if app_changed:
-                await _save_app_spec(ctx, app)
-                specs.append(APPSPEC_RELPATH)
+            touched = _changed_generated(committed, tree)
+            specs = [
+                path
+                for path in (DESIGNSPEC_RELPATH, APPSPEC_RELPATH)
+                if path in committed.changed_paths
+            ]
             label = f"recipe '{recipe.id}'" if recipe is not None else "a custom DesignSpec"
             return ToolOutcome(
                 success=True,
                 content=(f"app_set_design: applied {label} — updated {len(touched)} file(s)."),
                 structured={"files_written": touched, "specs": specs},
-                artifacts=sorted({*touched, *specs}),
+                artifacts=list(committed.changed_paths),
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_set_design_refused")
@@ -990,10 +1116,19 @@ class AppSnapshotVersionTool:
                 "file_count": len(file_hashes),
                 "drift": drift,
             }
-            await ctx.sandbox.write_file(
-                relpath,
-                (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                [
+                    PlannedFileMutation(
+                        path=relpath,
+                        after=(json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode(
+                            "utf-8"
+                        ),
+                    )
+                ],
             )
+            if isinstance(committed, ToolOutcome):
+                return committed
 
             drift_note = (
                 "in sync with the specs"
@@ -1016,7 +1151,8 @@ class AppSnapshotVersionTool:
                     "tree_digest": t_digest,
                     "drift": drift,
                 },
-                artifacts=[relpath],
+                artifacts=list(committed.changed_paths),
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(
@@ -1025,10 +1161,6 @@ class AppSnapshotVersionTool:
 
 
 # ---- app_add_primitive (WO-A1) --------------------------------------------------
-
-# Where the applied primitive specs land — under `.disco/` for the same reason as
-# the snapshots: they ride snapshot/rehydrate but are never emitted by `generate`.
-_PRIMITIVES_RELDIR = ".disco/primitives"
 
 
 def _addable_primitive_ids() -> list[str]:
@@ -1152,7 +1284,9 @@ class AppAddPrimitiveTool:
                             "existing webhook provenance is invalid; refusing to widen "
                             "the security-sensitive endpoint set"
                         ) from exc
-                webhook_specs.append(validated.model_dump(mode="json"))
+                validated_json = validated.model_dump(mode="json")
+                if validated_json not in webhook_specs:
+                    webhook_specs.append(validated_json)
 
             try:
                 new_app = prim.apply_spec(app, validated)
@@ -1187,8 +1321,6 @@ class AppAddPrimitiveTool:
                     f"{prim.id!r} failed: {exc}"
                 ) from exc
             await _lint_gate(tree, design, ctx)
-            touched = await _apply_tree(ctx, tree)
-            await _save_app_spec(ctx, new_app)
 
             record_relpath = f"{_PRIMITIVES_RELDIR}/{prim.id}.json"
             record: dict[str, Any] = {
@@ -1200,10 +1332,24 @@ class AppAddPrimitiveTool:
                 record["specs"] = webhook_specs
             else:
                 record["spec"] = validated.model_dump(mode="json")
-            await ctx.sandbox.write_file(
-                record_relpath,
-                (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+            committed = await commit_deterministic_file_batch(
+                ctx,
+                _appkit_plan(
+                    tree,
+                    app=new_app,
+                    extra_writes={
+                        record_relpath: (
+                            json.dumps(record, indent=2, ensure_ascii=False) + "\n"
+                        ).encode("utf-8")
+                    },
+                ),
+                # Provenance lands before AppSpec, the canonical retry marker. A
+                # retry after a partial webhook record write de-duplicates its spec.
+                commit_last=(record_relpath, APPSPEC_RELPATH),
             )
+            if isinstance(committed, ToolOutcome):
+                return committed
+            touched = _changed_generated(committed, tree)
 
             tier_note = (
                 " Its generated output is Disco-owned (template_only): contribute via "
@@ -1224,7 +1370,8 @@ class AppAddPrimitiveTool:
                     "spec_record": record_relpath,
                     "spec": APPSPEC_RELPATH,
                 },
-                artifacts=sorted({*touched, APPSPEC_RELPATH, record_relpath}),
+                artifacts=list(committed.changed_paths),
+                effect_receipts=committed.receipts,
             )
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_add_primitive_refused")

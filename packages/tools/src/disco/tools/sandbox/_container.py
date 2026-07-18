@@ -426,6 +426,69 @@ def bounded_read_result(path: str, rc: int, out: bytes, err: bytes) -> bytes:
     raise OSError(f"read_file {path!r} failed safely: {detail or f'exit {rc}'}")
 
 
+_BOUNDED_DELETE_HELPER = r"""
+import errno
+import os
+import stat
+import sys
+
+root, relpath = sys.argv[1:3]
+parts = [part for part in relpath.split("/") if part not in ("", ".")]
+
+
+def fail(kind, detail, code):
+    sys.stderr.write("DISCO_DELETE_" + kind + ":" + detail[:512])
+    raise SystemExit(code)
+
+
+if not parts or any(part == ".." for part in parts):
+    fail("DENIED", "invalid relative path", 45)
+
+dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+opened = []
+try:
+    current = os.open(root, dir_flags)
+    opened.append(current)
+    for part in parts[:-1]:
+        current = os.open(part, dir_flags, dir_fd=current)
+        opened.append(current)
+    info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode):
+        fail("DENIED", "only regular, non-symlink files may be deleted", 45)
+    os.unlink(parts[-1], dir_fd=current)
+except FileNotFoundError as exc:
+    fail("MISSING", str(exc), 44)
+except OSError as exc:
+    if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
+        fail("DENIED", str(exc), 45)
+    fail("ERROR", str(exc), 47)
+finally:
+    for descriptor in reversed(opened):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+"""
+
+
+def bounded_delete_argv(workspace: str, relpath: str, *, python: str = "python3") -> list[str]:
+    """Unlink a regular workspace entry through no-follow directory descriptors."""
+    return [python, "-c", _BOUNDED_DELETE_HELPER, workspace, relpath]
+
+
+def bounded_delete_result(path: str, rc: int, err: bytes) -> None:
+    detail = err.decode("utf-8", "replace")
+    if rc == 0:
+        return
+    if detail.startswith("DISCO_DELETE_MISSING:"):
+        raise FileNotFoundError(path)
+    if detail.startswith("DISCO_DELETE_DENIED:"):
+        raise SandboxPermissionError(
+            f"delete_file {path!r}: only regular, non-symlink workspace files may be deleted"
+        )
+    raise OSError(f"delete_file {path!r} failed safely: {detail or f'exit {rc}'}")
+
+
 _BOUNDED_LIST_HELPER = r"""
 import json
 import os
@@ -1392,6 +1455,19 @@ class ContainerInstance:
     async def write_file(self, path: str, data: bytes) -> None:
         """Binary-safe workspace write through the atomic SELinux-safe path."""
         await self.atomic_write(path, data)
+
+    async def delete_file(self, path: str) -> None:
+        """Unlink one regular file through guest-side no-follow directory descriptors."""
+        self._alive()
+
+        def _delete() -> None:
+            target = self._container_path(path)  # lexical jail; helper enforces no-follow
+            relpath = posixpath.relpath(target, self._ws)
+            result = self._container.exec_run(bounded_delete_argv(self._ws, relpath), demux=True)
+            err = (result[1][1] if result[1] else b"") or b""
+            bounded_delete_result(path, int(result[0] or 0), err)
+
+        await self._guarded(_delete)
 
     async def list_dir(self, path: str) -> list[str]:
         """List a workspace dir via `exec ls`."""

@@ -450,6 +450,47 @@ class ProcessSandboxInstance:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
+    async def delete_file(self, path: str) -> None:
+        """Unlink one regular file through no-follow directory descriptors."""
+        self._alive()
+        path = strip_redundant_workspace_prefix(path)
+
+        def _delete_securely() -> None:
+            import posixpath
+
+            normalized = posixpath.normpath(path.replace("\\", "/"))
+            if normalized in {"", ".", ".."} or normalized.startswith("../"):
+                raise SandboxPermissionError(f"delete_file path escapes workspace: {path!r}")
+            parts = [part for part in normalized.split("/") if part not in {"", "."}]
+            dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+            opened: list[int] = []
+            try:
+                current = os.open(self._workspace, dir_flags)
+                opened.append(current)
+                for part in parts[:-1]:
+                    current = os.open(part, dir_flags, dir_fd=current)
+                    opened.append(current)
+                info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    raise SandboxPermissionError(
+                        f"delete_file {path!r}: only regular, non-symlink files may be deleted"
+                    )
+                os.unlink(parts[-1], dir_fd=current)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
+                    raise SandboxPermissionError(
+                        f"delete_file {path!r}: symlink and non-regular paths are denied"
+                    ) from exc
+                raise
+            finally:
+                for descriptor in reversed(opened):
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+        await asyncio.to_thread(_delete_securely)
+
     async def atomic_write(self, path: str, data: bytes) -> None:
         """CD-TOOLS-3: write `data` to `path` atomically — a tmp in the SAME dir + os.replace, so
         a reader/crash never observes a partially-written file (os.replace is atomic on the same

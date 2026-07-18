@@ -1001,6 +1001,53 @@ async def _commit_file_mutation(
     return receipt
 
 
+async def _commit_file_deletion(
+    ctx: ToolContext,
+    path: str,
+    *,
+    expected_before: bytes | None,
+) -> MutationReceipt | ToolOutcome:
+    """Optimistically compare, then no-follow delete one already-resolved file.
+
+    Unlike writes, deletion must not resolve the path a second time: an entry that
+    becomes a symlink after batch prevalidation must reach the sandbox's no-follow
+    deletion primitive and be refused, never be translated into its new target.
+    """
+    assert ctx.sandbox is not None
+    resolved = _canonical(path)
+    try:
+        current: bytes | None = await ctx.sandbox.read_file(resolved)
+    except FileNotFoundError:
+        current = None
+    if current != expected_before:
+        expected = (
+            "absent"
+            if expected_before is None
+            else hashlib.sha256(expected_before).hexdigest()[:12] + "…"
+        )
+        actual = "absent" if current is None else hashlib.sha256(current).hexdigest()[:12] + "…"
+        return ToolOutcome(
+            success=False,
+            error="STALE_FILE_CONTEXT",
+            content=(
+                f"Delete refused — {path} changed while this operation was being prepared "
+                f"(expected {expected}, now {actual}). Nothing was written. Read the "
+                "current file, then re-apply the intended change to that revision."
+            ),
+            structured={
+                "kind": "stale_file_context",
+                "path": resolved,
+                "next_required_action": "file_read",
+                "suggested_args": {"path": resolved},
+            },
+        )
+    if current is None:
+        raise ValueError("cannot emit a deletion receipt for an absent resource")
+    receipt = _file_mutation_receipt(resolved, before=current, after=None)
+    await ctx.sandbox.delete_file(resolved)
+    return receipt
+
+
 def _number_lines(text: str, start: int = 1) -> str:
     """Render text with right-aligned 1-based line numbers + a tab, so the model
     can target precise ranges with file_replace_lines / file_insert_lines — the

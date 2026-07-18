@@ -312,6 +312,41 @@ async def test_backend_swap_identical_results_process_vs_fake():
     await proc.destroy()
 
 
+async def test_process_and_session_delete_file_use_the_jailed_backend_contract():
+    svc = ProcessSandboxService()
+    proc = await svc.create(SandboxSpec(), owner_id="local", conversation_id="delete-direct")
+    await proc.write_file("generated/stale.txt", b"stale")
+    await proc.delete_file("generated/stale.txt")
+    assert not await proc.file_exists("generated/stale.txt")
+    await proc.destroy()
+
+    session = SandboxSession(svc, owner_id="local", conversation_id="delete-session")
+    await session.write_file("generated/stale.txt", b"stale")
+    await session.delete_file("generated/stale.txt")
+    assert not await session.file_exists("generated/stale.txt")
+    await session.destroy()
+
+
+async def test_process_delete_file_refuses_symlink_and_preserves_target():
+    from disco.tools.sandbox.base import SandboxPermissionError
+
+    svc = ProcessSandboxService()
+    proc = await svc.create(SandboxSpec(), owner_id="local", conversation_id="delete-symlink")
+    try:
+        await proc.write_file("user-owned.txt", b"preserve-me")
+        linked = await proc.exec_shell("ln -s user-owned.txt stale.txt", timeout_s=10)
+        assert linked.exit_code == 0, linked.stderr
+
+        with pytest.raises(SandboxPermissionError, match="non-symlink"):
+            await proc.delete_file("stale.txt")
+
+        assert await proc.read_file("user-owned.txt") == b"preserve-me"
+        still_linked = await proc.exec_shell("test -L stale.txt", timeout_s=10)
+        assert still_linked.exit_code == 0
+    finally:
+        await proc.destroy()
+
+
 async def test_shell_and_code_exec_run_in_process_sandbox():
     svc = ProcessSandboxService()
     session = SandboxSession(svc, owner_id="local", conversation_id="c")
