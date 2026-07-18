@@ -7,6 +7,8 @@ action.
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from disco.core import (
     ActionEvent,
@@ -21,6 +23,7 @@ from disco.core import (
 )
 from disco.core.llm import DefaultLLMRouter, ProposedToolCall
 from disco.core.loop import AgentStep, ConfirmRisky, NeverConfirm, RouterAgent
+from disco.core.loop.control import Disp
 from llm_fakes import simple_config
 from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
 
@@ -392,3 +395,215 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
         _app_verify_command(f"http://127.0.0.1:{port}/"), shell=True, capture_output=True
     )
     assert bad.returncode != 0
+
+
+# ---- H567: verify receipt reuse ----------------------------------------------
+
+
+async def test_h567_reuse_exact_latest_paired_shell_success():
+    """H567 Product rule 1 — the most recent ActionEvent of any tool is a
+    matching shell command with a correlated successful ObservationEvent,
+    so the receipt is reused without re-execution."""
+    agent = _agent([_finish(verify=None)])
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    # Emit a shell ActionEvent with the command we will verify against.
+    call = ToolCall(tool_name="shell", arguments={"command": "pytest -q"}, call_id="c1")
+    action = ActionEvent(thought="run tests", tool_call=call)
+    await loop._emit(action)
+
+    # Emit its correlated successful ObservationEvent.
+    await loop._emit(
+        ObservationEvent(
+            action_id=action.id,
+            tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+        )
+    )
+
+    # Call normalize_finish_step with the same verify command.
+    step = AgentStep(
+        finished=False,
+        tool_call=ToolCall(
+            tool_name="finish",
+            arguments={"summary": "done", "verify": "pytest -q"},
+        ),
+    )
+    events = await store.get_events(CID)
+    step_out, disp = await loop._finish.normalize_finish_step(step, events)
+
+    # Reuse succeeded — step finished, no re-execution.
+    assert step_out.finished
+    assert executor.calls == []
+    assert disp is Disp.FALLTHROUGH
+
+    # Audit marker was emitted with correct fields.
+    after = await store.get_events(CID)
+    markers = [
+        e
+        for e in after
+        if isinstance(e, MessageEvent) and e.meta.get("finish_verify_receipt_reused") is True
+    ]
+    assert len(markers) == 1
+    m = markers[0]
+    assert m.meta["prior_action_id"] == action.id
+    assert "command_fingerprint_sha256" in m.meta
+    assert m.meta["command_fingerprint_sha256"] == hashlib.sha256(b"pytest -q").hexdigest()
+    # No raw command metadata in the marker.
+    assert "command" not in m.meta
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "failed_observation",
+        "unpaired",
+        "mismatched_command",
+        "mismatched_call_id",
+        "observation_before_action",
+        "intervening_later_action",
+    ],
+)
+async def test_h567_reuse_rejected(scenario: str):
+    """Various non-qualifying evidence patterns must NOT trigger receipt reuse,
+    forcing real shell execution of the verify command."""
+    agent = _agent([_finish(verify=None)])
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    matching_call = ToolCall(tool_name="shell", arguments={"command": "pytest -q"}, call_id="c1")
+
+    if scenario == "failed_observation":
+        # Observation has success=False → must not reuse.
+        action = ActionEvent(thought="run tests", tool_call=matching_call)
+        await loop._emit(action)
+        await loop._emit(
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(
+                    call_id="c1", tool_name="shell", success=False, content="FAILED"
+                ),
+            )
+        )
+
+    elif scenario == "unpaired":
+        # Shell action with no ObservationEvent at all → must not reuse.
+        await loop._emit(ActionEvent(thought="run tests", tool_call=matching_call))
+
+    elif scenario == "mismatched_command":
+        # Shell action has a different command → must not reuse.
+        different_call = ToolCall(
+            tool_name="shell", arguments={"command": "make test"}, call_id="c1"
+        )
+        action = ActionEvent(thought="run tests", tool_call=different_call)
+        await loop._emit(action)
+        await loop._emit(
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+            )
+        )
+
+    elif scenario == "mismatched_call_id":
+        action = ActionEvent(thought="run tests", tool_call=matching_call)
+        await loop._emit(action)
+        await loop._emit(
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(
+                    call_id="wrong-call", tool_name="shell", success=True, content="ok"
+                ),
+            )
+        )
+
+    elif scenario == "observation_before_action":
+        action = ActionEvent(thought="run tests", tool_call=matching_call)
+        await loop._emit(
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+            )
+        )
+        await loop._emit(action)
+
+    elif scenario == "intervening_later_action":
+        # Matching shell + observation, then a LATER non-shell ActionEvent.
+        action = ActionEvent(thought="run tests", tool_call=matching_call)
+        await loop._emit(action)
+        await loop._emit(
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+            )
+        )
+        # A later file_write action means the shell action is no longer latest.
+        later = ToolCall(tool_name="file_write", arguments={"path": "extra.txt"}, call_id="c2")
+        await loop._emit(ActionEvent(thought="write extra", tool_call=later))
+
+    # Call normalize_finish_step with the verify command.
+    step = AgentStep(
+        finished=False,
+        tool_call=ToolCall(
+            tool_name="finish",
+            arguments={"summary": "done", "verify": "pytest -q"},
+        ),
+    )
+    events = await store.get_events(CID)
+    await loop._finish.normalize_finish_step(step, events)
+
+    # Reuse must NOT have happened — the executor ran the verify command
+    # (FakeExecutor returns success by default, so the verify passes and
+    # the step would finish, but the key check is that execute() was called).
+    assert len(executor.calls) == 1
+    assert executor.calls[0].arguments["command"] == "pytest -q"
+
+
+async def test_h567_reused_optional_receipt_cannot_bypass_external_dod(tmp_path):
+    """The model-owned receipt is only an optimization; immutable external
+    acceptance still runs after it and refuses an unmet deliverable."""
+    from disco.core.dod import DoDSpec, FileExistsPredicate
+    from disco.core.dod_evaluator import DoDEvaluator
+
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        _agent([]),
+        executor=executor,
+        policy=NeverConfirm(),
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    await store.set_dod_spec(
+        CID,
+        DoDSpec(predicates=[FileExistsPredicate(path="harness-required.txt")]),
+        set_by="harness",
+    )
+    call = ToolCall(tool_name="shell", arguments={"command": "pytest -q"}, call_id="c1")
+    action = ActionEvent(thought="run tests", tool_call=call)
+    await loop._emit(action)
+    await loop._emit(
+        ObservationEvent(
+            action_id=action.id,
+            tool_result=ToolResult(call_id="c1", tool_name="shell", success=True, content="ok"),
+        )
+    )
+
+    normalized, disp = await loop._finish.normalize_finish_step(
+        AgentStep(
+            tool_call=ToolCall(
+                tool_name="finish",
+                arguments={"summary": "done", "verify": "pytest -q"},
+            )
+        ),
+        await store.get_events(CID),
+    )
+
+    assert disp is Disp.CONTINUE
+    assert normalized.finished is False
+    assert executor.calls == []
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(event, MessageEvent) and event.meta.get("finish_verify_receipt_reused") is True
+        for event in events
+    )
+    assert not any(
+        getattr(event, "status", None) == ConversationStatus.FINISHED for event in events
+    )

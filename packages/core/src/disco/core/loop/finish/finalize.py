@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
+from ..stuck import successful_mutation_with_receipt
 from .common import (
     _APP_VERIFY_PREFIX,
     _FINISH_VERIFY_CAP,
     _STATIC_VERIFY_PREFIX,
+    ActionEvent,
     AgentStep,
     ConversationState,
     ConversationStatus,
@@ -16,12 +19,14 @@ from .common import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     StatusEvent,
     ToolCall,
     VerifierVerdictEvent,
     _app_verify_command,
     _FinishGateProto,
     _static_verify_command,
+    predicate_fingerprints,
     signals,
 )
 
@@ -155,7 +160,15 @@ class _FinalizeMixin(_FinishGateProto):
             verify_cmd = ""
 
         if verify_cmd:
-            passed, malformed = await self.finish_verify_passed(verify_cmd)
+            # An already-failing authoritative plan gate comes before repeated
+            # optional model verification when no trusted repair has landed.
+            if await self._preflight_failed_plan_verifier(events):
+                return step, Disp.CONTINUE
+
+            if await self._reuse_finish_verify_receipt(verify_cmd, events):
+                passed, malformed = True, False
+            else:
+                passed, malformed = await self.finish_verify_passed(verify_cmd)
             if passed:
                 self._loop._finish_verify_refusals = 0  # reset streak on clean pass
             elif malformed and self._loop._finish_verify_strips < 3:
@@ -278,6 +291,121 @@ class _FinalizeMixin(_FinishGateProto):
             }
         )
         return step, Disp.FALLTHROUGH
+
+    async def _reuse_finish_verify_receipt(self, verify_cmd: str, events: list[Event]) -> bool:
+        """Reuse one exact, immediately preceding executor-backed shell result.
+
+        When the most recent ActionEvent of any tool matches the resolved
+        verify command exactly and its correlated ObservationEvent succeeded,
+        and no ``plan_verifier_failure`` intervened after that observation,
+        skip re-execution and emit an audit marker.
+        """
+        most_recent_action: ActionEvent | None = None
+        for ev in reversed(events):
+            if isinstance(ev, ActionEvent):
+                most_recent_action = ev
+                break
+        if most_recent_action is None:
+            return False
+
+        if most_recent_action.tool_call.tool_name != "shell":
+            return False
+        if most_recent_action.tool_call.arguments.get("command") != verify_cmd:
+            return False
+
+        # The receipt must be the one-and-only correlated observation after
+        # the action.  An earlier, duplicate, or mismatched record is not an
+        # executor receipt for this action and cannot authorize reuse.
+        action_index = events.index(most_recent_action)
+        correlated = [
+            ev
+            for ev in events[action_index + 1 :]
+            if isinstance(ev, ObservationEvent) and ev.action_id == most_recent_action.id
+        ]
+        if len(correlated) != 1:
+            return False
+        observation = correlated[0]
+        result = observation.tool_result
+        if not (
+            result.call_id == most_recent_action.tool_call.call_id
+            and result.tool_name == "shell"
+            and result.success
+        ):
+            return False
+
+        observation_index = events.index(observation)
+        for ev in events[observation_index + 1 :]:
+            if isinstance(ev, StatusEvent) and ev.plan_verifier_failure is not None:
+                return False
+
+        fingerprint = hashlib.sha256(verify_cmd.encode()).hexdigest()
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "Finish verify receipt reused from prior successful "
+                        "shell execution — the correlated observation's success "
+                        "is carried forward without re-executing the command.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+                meta={
+                    "finish_verify_receipt_reused": True,
+                    "prior_action_id": most_recent_action.id,
+                    "command_fingerprint_sha256": fingerprint,
+                },
+            )
+        )
+        return True
+
+    async def _preflight_failed_plan_verifier(self, events: list[Event]) -> bool:
+        """Recheck an unchanged failing plan gate before optional verification.
+
+        Find the currently approved plan predicate fingerprints. If the same
+        predicate set has a prior typed ``plan_verifier_failure`` and no
+        successful trusted mutation receipt after the latest such failure, call
+        ``finish_dod_gate_passed`` first. If it returns False, return True so
+        the caller returns ``Disp.CONTINUE`` before the optional verifier.
+
+        Returns True when the optional shell verifier must be skipped (the
+        caller should return CONTINUE).
+        """
+        plan = signals.latest_approved_plan(events)
+        if plan is None:
+            return False
+        plan_predicates = [
+            step.done_condition for step in plan.steps if step.done_condition is not None
+        ]
+        if not plan_predicates:
+            return False
+        current_predicate_fps = predicate_fingerprints(plan_predicates)
+
+        latest_failure_seq: int | None = None
+        for ev in reversed(events):
+            if isinstance(ev, StatusEvent) and ev.plan_verifier_failure is not None:
+                if ev.plan_verifier_failure.predicate_fingerprints == current_predicate_fps:
+                    latest_failure_seq = ev.seq
+                    break
+        if latest_failure_seq is None:
+            return False
+
+        action_by_id = {
+            ev.id: ev for ev in events if isinstance(ev, ActionEvent) and ev.tool_call is not None
+        }
+        for ev in events:
+            if (ev.seq or 0) <= latest_failure_seq or not isinstance(ev, ObservationEvent):
+                continue
+            action = action_by_id.get(ev.action_id) if ev.action_id is not None else None
+            if successful_mutation_with_receipt(ev, action):
+                return False
+
+        if not await self.finish_dod_gate_passed():
+            return True
+
+        return False
 
     async def finalize_finish(
         self, step: AgentStep, state: ConversationState, events: list[Event]

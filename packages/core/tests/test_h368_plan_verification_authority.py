@@ -7,12 +7,16 @@ from pathlib import Path
 
 import pytest
 from disco.core import (
+    ActionEvent,
     ConversationStatus,
     DoDSpec,
+    ObservationEvent,
     PlanEvent,
     PlanVerificationTransition,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
+    ToolResult,
 )
 from disco.core.dod import CommandExitPredicate, FileExistsPredicate, predicate_fingerprints
 from disco.core.dod_evaluator import DoDEvaluator
@@ -20,7 +24,7 @@ from disco.core.llm import OperatingMode
 from disco.core.loop import signals
 from disco.core.loop.control import Disp
 from disco.core.loop.finish.common import _plan_file_exists_paths
-from loop_fakes import ScriptedAgent, action_step, build_loop
+from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop
 
 pytestmark = pytest.mark.asyncio
 
@@ -338,4 +342,225 @@ async def test_unchanged_plan_retry_bound_survives_alternating_failure_payloads(
     # The failure payload changed from two unmet checks to one, but the approved
     # verifier set did not. The second attempt must still force re-planning.
     assert await loop._finish_dod_gate_passed() is False
+    assert loop.mode is OperatingMode.PLANNING
+
+
+async def _emit_successful_shell_receipt(loop, command: str) -> ActionEvent:
+    action = ActionEvent(
+        thought="verified deliverable",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": command}),
+    )
+    await loop._emit(action)
+    await loop._emit(
+        ObservationEvent(
+            action_id=action.id,
+            tool_result=ToolResult(
+                call_id=action.tool_call.call_id,
+                tool_name="shell",
+                success=True,
+                content="VERIFIED: 20 primes, last is 71",
+            ),
+        )
+    )
+    return action
+
+
+async def test_h567_exact_finish_retry_replans_then_finishes_without_thrash(
+    tmp_path: Path,
+) -> None:
+    """Reproduce r14: an exact prior verifier receipt, malformed plan-owned
+    predicate, repeated finish request, approved correction, then FINISHED.
+
+    The authoritative retry is evaluated before optional repeated shell work,
+    and the corrected revision finishes without a three-action exact streak.
+    """
+    (tmp_path / "primes.py").write_text(
+        "print('First 20 prime numbers:')\n"
+        "print(''.join(f'{i:2}: {p}\\n' for i, p in enumerate("
+        "[2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71], 1)), "
+        "end='')\n"
+    )
+    verify_cmd = "cd /workspace && python3 verify_primes.py"
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        executor=executor,
+        conversation_id="h567-exact-flow",
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    bad = CommandExitPredicate(
+        cmd=(
+            'python3 -c "import subprocess; '
+            "out=subprocess.check_output(['python3','primes.py'],text=True); "
+            "lines=out.strip().split(); assert len(lines)==20; "
+            "assert lines[-1]=='71'\""
+        )
+    )
+    old_plan = await _approve(loop, summary="malformed verifier", predicate=bad)
+    await _emit_successful_shell_receipt(loop, verify_cmd)
+    finish_step = action_step(
+        "finish",
+        {"summary": "verified", "verify": verify_cmd},
+    )
+
+    first, first_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert first.finished is False and first_disp is Disp.CONTINUE
+    assert len(executor.calls) == 0
+
+    second, second_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert second.finished is False and second_disp is Disp.CONTINUE
+    assert loop.mode is OperatingMode.PLANNING
+    assert len(executor.calls) == 0
+
+    replacement = await _approve(
+        loop,
+        summary="corrected verifier",
+        predicate=CommandExitPredicate(cmd="test -s primes.py"),
+    )
+    normalized, disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert normalized.finished is True and disp is Disp.FALLTHROUGH
+    assert len(executor.calls) == 1
+    assert (
+        await loop._finish.finalize_finish(
+            normalized,
+            await loop.get_state(),
+            await store.get_events(loop.conversation_id),
+        )
+        is Disp.HALT
+    )
+    assert (await loop.get_state()).execution_status == ConversationStatus.FINISHED
+
+    events = await store.get_events(loop.conversation_id)
+    exact_shell_actions = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent)
+        and event.tool_call.tool_name == "shell"
+        and event.tool_call.arguments == {"command": verify_cmd}
+    ]
+    assert len(exact_shell_actions) == 2
+    failures = [
+        event.plan_verifier_failure
+        for event in events
+        if isinstance(event, StatusEvent)
+        and event.plan_verifier_failure is not None
+        and event.plan_verifier_failure.plan_event_id == old_plan.id
+    ]
+    assert len(failures) == 2
+    assert signals.latest_approved_plan(events).id == replacement.id  # type: ignore[union-attr]
+
+
+async def test_h567_unchanged_replacement_stucks_before_optional_verify_repeat(
+    tmp_path: Path,
+) -> None:
+    verify_cmd = "python3 verify_primes.py"
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        executor=executor,
+        conversation_id="h567-unchanged-replacement",
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    bad = CommandExitPredicate(cmd="test -f never-created.txt")
+    await _approve(loop, summary="bad verifier", predicate=bad)
+    finish_step = action_step("finish", {"summary": "done", "verify": verify_cmd})
+
+    first, first_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert first.finished is False and first_disp is Disp.CONTINUE
+    assert len(executor.calls) == 1
+
+    second, second_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert second.finished is False and second_disp is Disp.CONTINUE
+    assert loop.mode is OperatingMode.PLANNING
+    assert len(executor.calls) == 1
+
+    await _approve(loop, summary="unchanged replacement", predicate=bad)
+    third, third_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert third.finished is False and third_disp is Disp.CONTINUE
+    assert len(executor.calls) == 1
+    events = await store.get_events(loop.conversation_id)
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.detail == "plan_verifier_replan_exhausted"
+        for event in events
+    )
+
+
+async def test_h567_trusted_mutation_preserves_normal_verify_then_dod_retry(
+    tmp_path: Path,
+) -> None:
+    verify_cmd = "python3 verify_primes.py"
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        executor=executor,
+        conversation_id="h567-trusted-mutation",
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    await _approve(
+        loop,
+        summary="bad verifier",
+        predicate=CommandExitPredicate(cmd="test -f never-created.txt"),
+    )
+    finish_step = action_step("finish", {"summary": "done", "verify": verify_cmd})
+    await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert len(executor.calls) == 1
+
+    mutation = ActionEvent(
+        thought="repair deliverable",
+        tool_call=ToolCall(
+            tool_name="file_write",
+            arguments={"path": "repair.txt", "content": "fixed"},
+        ),
+    )
+    await loop._emit(mutation)
+    await loop._emit(
+        ObservationEvent(
+            action_id=mutation.id,
+            tool_result=ToolResult(
+                call_id=mutation.tool_call.call_id,
+                tool_name="file_write",
+                success=True,
+                content="wrote repair.txt",
+                structured={
+                    "path": "repair.txt",
+                    "sha256": "f" * 64,
+                },
+            ),
+        )
+    )
+
+    retried, retried_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert retried.finished is False and retried_disp is Disp.CONTINUE
+    assert len(executor.calls) == 2
+    events = await store.get_events(loop.conversation_id)
+    assert (
+        len(
+            [
+                event
+                for event in events
+                if isinstance(event, ActionEvent)
+                and event.tool_call.tool_name == "shell"
+                and event.tool_call.arguments == {"command": verify_cmd}
+            ]
+        )
+        == 2
+    )
     assert loop.mode is OperatingMode.PLANNING
