@@ -101,14 +101,15 @@ async def test_w3_write_bad_python_over_good_file_reverted():
     assert "SyntaxError" in out.content
     assert "NOT applied" in out.content
     assert "DO NOT re-run" in out.content
-    # workspace reverted
+    # Rejection is pre-commit: no transient write/revert interval is allowed.
     assert sbx._fs["foo.py"] == good
+    assert sbx.writes == []
+    assert out.effect_receipts == ()
 
 
 @pytest.mark.asyncio
-async def test_w3_write_bad_python_new_file_applied_and_flagged():
-    """W3: a NEW file with a syntax error has no prior content to revert to,
-    so the write IS applied but the failure outcome still flags the error."""
+async def test_w3_write_bad_python_new_file_rejected_without_mutation():
+    """W3: a failed NEW-file write must not leave hidden workspace state."""
     sbx = _FakeSandbox({})
     out = await FileWriteTool().run(
         FileWriteArgs(path="new.py", content="def broken(\n"),
@@ -117,9 +118,11 @@ async def test_w3_write_bad_python_new_file_applied_and_flagged():
     assert out.success is False
     assert out.error == "syntax_gate_reverted"
     assert "SyntaxError" in out.content
-    # applied (no old to revert to) — flag wording says "it was applied"
-    assert "applied" in out.content
-    assert "new.py" in sbx._fs  # file was written
+    assert "NOT applied" in out.content
+    assert "workspace unchanged" in out.content
+    assert out.effect_receipts == ()
+    assert "new.py" not in sbx._fs
+    assert sbx.writes == []
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from disco.core import ToolCall
 from disco.core.loop import AgentStep
-from disco.tools.sandbox.base import ExecResult, SandboxError, SandboxSpec
+from disco.tools.sandbox.base import (
+    ExecResult,
+    SandboxError,
+    SandboxFileNotFoundError,
+    SandboxSpec,
+)
 from disco.tools.sandbox.kernel import KernelResult
 
 
@@ -60,7 +65,7 @@ class FakeSandboxInstance:
     async def read_file(self, path: str) -> bytes:
         self._alive()
         if path not in self._fs:
-            raise SandboxError(f"no such file: {path}")
+            raise SandboxFileNotFoundError(f"no such file: {path}")
         return self._fs[path]
 
     async def write_file(self, path: str, data: bytes) -> None:

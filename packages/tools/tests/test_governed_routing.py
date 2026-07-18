@@ -161,6 +161,8 @@ async def test_governed_guard_works_through_sandbox_session():
             return ExecResult(exit_code=0, stdout="", stderr="")
 
         async def read_file(self, path: str) -> bytes:
+            if path not in self._fs:
+                raise FileNotFoundError(path)
             return self._fs[path]
 
         async def write_file(self, path: str, data: bytes) -> None:

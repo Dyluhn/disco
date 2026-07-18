@@ -16,6 +16,7 @@ from disco.core.effects import (
     CoverageSpan,
     CoverageUnit,
     EffectCapability,
+    MutationReceipt,
     ObservationReceipt,
     ResourceCoverage,
     ResourceKey,
@@ -909,6 +910,94 @@ def _write_artifact_structured(
     return out
 
 
+def _workspace_file_revision(path: str, content: bytes) -> ResourceRevision:
+    """Return the exact byte revision for one canonical workspace file."""
+    resource = ResourceKey(namespace="workspace.file", identifier=_canonical(path))
+    return ResourceRevision(resource=resource, digest=hashlib.sha256(content).hexdigest())
+
+
+def _file_mutation_receipt(
+    path: str,
+    *,
+    before: bytes | None,
+    after: bytes | None,
+) -> MutationReceipt:
+    """Bind a successful deterministic file mutation to its exact byte transition.
+
+    ``None`` means the resource was absent. Empty files remain real revisions, so
+    callers must preserve the absence sentinel instead of relying on truthiness.
+    """
+    resource = ResourceKey(namespace="workspace.file", identifier=_canonical(path))
+    return MutationReceipt(
+        resource=resource,
+        before=_workspace_file_revision(path, before) if before is not None else None,
+        after=_workspace_file_revision(path, after) if after is not None else None,
+        after_size_bytes=len(after) if after is not None else None,
+    )
+
+
+async def _resolved_workspace_file(sandbox: Any, path: str) -> str:
+    """Resolve aliases in the sandbox's namespace before naming an exact receipt."""
+    resolver = getattr(sandbox, "resolve_relpath", None)
+    if resolver is None:
+        return _canonical(path)
+    return _canonical(await resolver(path))
+
+
+async def _commit_file_mutation(
+    ctx: ToolContext,
+    path: str,
+    new_bytes: bytes,
+    *,
+    expected_before: bytes | None,
+) -> MutationReceipt | ToolOutcome:
+    """Optimistically compare current bytes, then atomically commit one file.
+
+    The second read is intentionally adjacent to the backend's atomic replacement:
+    a change since the mutator computed ``new_bytes`` fails as stale context instead
+    of being silently clobbered or attributed to the older revision. The resolved
+    path is used for both the commit and receipt, so an in-workspace alias cannot
+    split one resource into two identities.
+    """
+    assert ctx.sandbox is not None
+    resolved = await _resolved_workspace_file(ctx.sandbox, path)
+    try:
+        current: bytes | None = await ctx.sandbox.read_file(resolved)
+    except FileNotFoundError:
+        current = None
+    if current != expected_before:
+        expected = (
+            "absent"
+            if expected_before is None
+            else hashlib.sha256(expected_before).hexdigest()[:12] + "…"
+        )
+        actual = "absent" if current is None else hashlib.sha256(current).hexdigest()[:12] + "…"
+        return ToolOutcome(
+            success=False,
+            error="STALE_FILE_CONTEXT",
+            content=(
+                f"Write refused — {path} changed while this edit was being prepared "
+                f"(expected {expected}, now {actual}). Nothing was written. Read the "
+                "current file, then re-apply the intended change to that revision."
+            ),
+            structured={
+                "kind": "stale_file_context",
+                "path": resolved,
+                "next_required_action": "file_read",
+                "suggested_args": {"path": resolved},
+            },
+        )
+    # Build and validate the receipt before entering the mutation boundary. A
+    # successful backend atomic_write commits exactly new_bytes or raises.
+    receipt = _file_mutation_receipt(
+        resolved,
+        before=current,
+        after=new_bytes,
+    )
+    await _atomic_write(ctx.sandbox, resolved, new_bytes)
+    return receipt
+
+
 def _number_lines(text: str, start: int = 1) -> str:
     """Render text with right-aligned 1-based line numbers + a tab, so the model
     can target precise ranges with file_replace_lines / file_insert_lines — the
@@ -976,39 +1065,39 @@ async def _gated_write(
     path: str,
     new_bytes: bytes,
     old_text: str | None,
-) -> ToolOutcome | None:
-    """Write new_bytes to path; auto-revert to old_text if new content introduces
-    syntax errors that were not already present (W3 diff-filter).
+    *,
+    expected_before: bytes | None,
+) -> MutationReceipt | ToolOutcome:
+    """Validate and write ``new_bytes`` without a write-then-revert interval.
 
-    Returns a failure ToolOutcome when new errors are introduced, None otherwise.
-    Callers proceed to their own success outcome when None is returned.
+    Returns a failure ToolOutcome when new errors are introduced or the file
+    changed concurrently; otherwise returns the exact committed mutation receipt.
     The diff-filter compares error-KIND tokens (not messages/line numbers) so
     pre-existing messy files aren't punished by whole-file rewrites that shift
-    line numbers without changing the nature of the breakage.
+    line numbers without changing the nature of the breakage. A rejected write
+    never changes the workspace, including when the target did not exist before.
     """
     assert ctx.sandbox is not None
     new_text = new_bytes.decode("utf-8", errors="replace")
     pre = _syntax_errors(path, old_text) if old_text is not None else []
     post = _syntax_errors(path, new_text)
     introduced = [e for e in post if e not in pre]
-    await _atomic_write(ctx.sandbox, path, new_bytes)
-    if not introduced:
-        return None
-    if old_text is not None:
-        # AUTO-REVERT: restore previous content so the workspace stays consistent.
-        await _atomic_write(ctx.sandbox, path, old_text.encode("utf-8"))
-        kept = "it was NOT applied (previous content kept)"
-    else:
-        kept = "it was applied (new file; no prior content to revert)"
-    return ToolOutcome(
-        success=False,
-        error="syntax_gate_reverted",
-        content=(
-            f"Your edit to {path} introduced syntax error(s); {kept}: "
-            f"{'; '.join(introduced)}. "
-            "Fix the snippet and try a DIFFERENT edit. "
-            "DO NOT re-run the same failed edit — it will fail identically."
-        ),
+    if introduced:
+        return ToolOutcome(
+            success=False,
+            error="syntax_gate_reverted",
+            content=(
+                f"Your edit to {path} introduced syntax error(s); it was NOT applied "
+                f"(workspace unchanged): {'; '.join(introduced)}. "
+                "Fix the snippet and try a DIFFERENT edit. "
+                "DO NOT re-run the same failed edit — it will fail identically."
+            ),
+        )
+    return await _commit_file_mutation(
+        ctx,
+        path,
+        new_bytes,
+        expected_before=expected_before,
     )
 
 
@@ -1389,6 +1478,7 @@ class FileWriteTool:
             )
         ) is not None:
             return g
+        mutation_path = await _resolved_workspace_file(ctx.sandbox, args.path)
         if _has_elision_marker(args.content):
             return ToolOutcome(
                 success=False,
@@ -1411,10 +1501,10 @@ class FileWriteTool:
         old_bytes: bytes | None = None
         old_text: str | None = None
         try:
-            old_bytes = await ctx.sandbox.read_file(args.path)
+            old_bytes = await ctx.sandbox.read_file(mutation_path)
             if old_bytes is not None:
                 old_text = old_bytes.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
+        except FileNotFoundError:  # absent file is fine; every other read failure is real
             old_bytes = None
             old_text = None
         # F1 — read-before-rewrite guard (ALL tiers, no assist gate). Refuse a
@@ -1453,7 +1543,7 @@ class FileWriteTool:
                         f"instead of rewriting the whole file from memory."
                     ),
                 )
-        # W3 — syntax gate: write new bytes; auto-revert if new content introduces errors.
+        # W3 — syntax gate: validate first, then commit only accepted bytes.
         raw = args.content.encode("utf-8")
         if old_bytes is not None and raw == old_bytes:
             return _no_op_write_refusal(
@@ -1501,8 +1591,14 @@ class FileWriteTool:
             )
         ) is not None:
             return m
-        gated = await _gated_write(ctx, args.path, raw, old_text)
-        if gated is not None:
+        gated = await _gated_write(
+            ctx,
+            mutation_path,
+            raw,
+            old_text,
+            expected_before=old_bytes,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         return ToolOutcome(
             success=True,
@@ -1515,6 +1611,7 @@ class FileWriteTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, raw),
+            effect_receipts=(gated,),
         )
 
 
@@ -1551,12 +1648,13 @@ class FileAppendTool:
             )
         ) is not None:
             return g
+        mutation_path = await _resolved_workspace_file(ctx.sandbox, args.path)
         old_text: str | None = None
         existing = b""
         try:
-            existing = await ctx.sandbox.read_file(args.path)
+            existing = await ctx.sandbox.read_file(mutation_path)
             old_text = existing.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — absent file → start empty
+        except FileNotFoundError:  # absent file → start empty; other failures must surface
             existing = b""
             old_text = None
         append_bytes = args.content.encode("utf-8")
@@ -1590,9 +1688,16 @@ class FileAppendTool:
             is not None
         ):
             return m
-        # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
-        gated = await _gated_write(ctx, args.path, combined, old_text)
-        if gated is not None:
+        # W3 — syntax gate: validate combined content before committing it.
+        before = existing if old_text is not None else None
+        gated = await _gated_write(
+            ctx,
+            mutation_path,
+            combined,
+            old_text,
+            expected_before=before,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         changed = _post_change_line_span(old_text or "", combined.decode("utf-8", errors="replace"))
         return ToolOutcome(
@@ -1606,6 +1711,7 @@ class FileAppendTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, combined),
+            effect_receipts=(gated,),
         )
 
 
@@ -1795,9 +1901,15 @@ class FileEditTool:
                 current_bytes=_raw,
                 attempted_lines=_matched_old_lines(text, args.old),
             )
-        # W3 — syntax gate: write updated; auto-revert to text if errors introduced.
-        gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
-        if gated is not None:
+        # W3 — syntax gate: validate updated content before committing it.
+        gated = await _gated_write(
+            ctx,
+            args.path,
+            updated.encode("utf-8"),
+            text,
+            expected_before=_raw,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         updated_bytes = updated.encode("utf-8")
         return ToolOutcome(
@@ -1811,6 +1923,7 @@ class FileEditTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, updated_bytes),
+            effect_receipts=(gated,),
         )
 
 
@@ -1910,9 +2023,15 @@ class FileReplaceLinesTool:
                 current_bytes=_raw,
                 attempted_lines=(args.start_line, min(args.end_line, max(n, 1))),
             )
-        # W3 — syntax gate: write result; auto-revert to text if errors introduced.
-        gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
-        if gated is not None:
+        # W3 — syntax gate: validate the result before committing it.
+        gated = await _gated_write(
+            ctx,
+            args.path,
+            out.encode("utf-8"),
+            text,
+            expected_before=_raw,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         replaced = max(0, end - args.start_line + 1)
         changed_hi = args.start_line + max(len(new_lines), 1) - 1
@@ -1931,6 +2050,7 @@ class FileReplaceLinesTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, out_bytes),
+            effect_receipts=(gated,),
         )
 
 
@@ -2011,9 +2131,15 @@ class FileInsertLinesTool:
                 current_bytes=_raw,
                 attempted_lines=(max(args.after_line, 1), max(args.after_line, 1)),
             )
-        # W3 — syntax gate: write result; auto-revert to text if errors introduced.
-        gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
-        if gated is not None:
+        # W3 — syntax gate: validate the result before committing it.
+        gated = await _gated_write(
+            ctx,
+            args.path,
+            out.encode("utf-8"),
+            text,
+            expected_before=_raw,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         changed_start = args.after_line + 1
         changed_hi = changed_start + max(len(ins), 1) - 1
@@ -2029,6 +2155,7 @@ class FileInsertLinesTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, out_bytes),
+            effect_receipts=(gated,),
         )
 
 
@@ -2134,8 +2261,25 @@ class FileStrReplaceTool:
                 retry_count = text.count(stripped)
                 if retry_count == 1:
                     new_text = text.replace(stripped, args.new_str, 1)
-                    gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
-                    if gated is not None:
+                    if new_text == text:
+                        return _no_op_edit_refusal(
+                            ctx.conversation_id,
+                            args.path,
+                            base_content=(
+                                f"file_str_replace refused: {args.path} already contains "
+                                "the requested replacement; nothing changed."
+                            ),
+                            current_bytes=_raw,
+                            attempted_lines=_matched_old_lines(text, stripped),
+                        )
+                    gated = await _gated_write(
+                        ctx,
+                        args.path,
+                        new_text.encode("utf-8"),
+                        text,
+                        expected_before=_raw,
+                    )
+                    if isinstance(gated, ToolOutcome):
                         return gated
                     new_bytes = new_text.encode("utf-8")
                     return ToolOutcome(
@@ -2149,6 +2293,7 @@ class FileStrReplaceTool:
                         ),
                         artifacts=[args.path],
                         structured=_write_artifact_structured(args.path, new_bytes),
+                        effect_receipts=(gated,),
                     )
             return _old_text_not_found_refusal(
                 ctx.conversation_id,
@@ -2166,8 +2311,25 @@ class FileStrReplaceTool:
 
         # Exactly one occurrence — apply and pass through W3 gate.
         new_text = text.replace(args.old_str, args.new_str, 1)
-        gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
-        if gated is not None:
+        if new_text == text:
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
+                    f"file_str_replace refused: {args.path} already contains the "
+                    "requested replacement; nothing changed."
+                ),
+                current_bytes=_raw,
+                attempted_lines=_matched_old_lines(text, args.old_str),
+            )
+        gated = await _gated_write(
+            ctx,
+            args.path,
+            new_text.encode("utf-8"),
+            text,
+            expected_before=_raw,
+        )
+        if isinstance(gated, ToolOutcome):
             return gated
         new_bytes = new_text.encode("utf-8")
         return ToolOutcome(
@@ -2181,6 +2343,7 @@ class FileStrReplaceTool:
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, new_bytes),
+            effect_receipts=(gated,),
         )
 
 
@@ -2493,6 +2656,18 @@ class ExactReplaceTool:
         for s, end, repl in sorted(spans, key=lambda t: t[0], reverse=True):
             new_text = new_text[:s] + repl + new_text[end:]
 
+        if new_text == text:
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
+                    f"exact_replace refused: the requested batch leaves {args.path} "
+                    "byte-identical; nothing changed."
+                ),
+                current_bytes=raw,
+                attempted_lines=None,
+            )
+
         # (7) syntax pre-check IN MEMORY (no write yet): the batch must not INTRODUCE new errors.
         pre = _syntax_errors(args.path, text)
         introduced = [er for er in _syntax_errors(args.path, new_text) if er not in pre]
@@ -2508,7 +2683,14 @@ class ExactReplaceTool:
 
         # (8) all checks passed → ONE atomic write (never write-then-revert). All-or-nothing.
         new_bytes = new_text.encode("utf-8")
-        await _atomic_write(ctx.sandbox, args.path, new_bytes)
+        committed = await _commit_file_mutation(
+            ctx,
+            args.path,
+            new_bytes,
+            expected_before=raw,
+        )
+        if isinstance(committed, ToolOutcome):
+            return committed
         return ToolOutcome(
             success=True,
             content=_updated_region_success_content(
@@ -2524,6 +2706,7 @@ class ExactReplaceTool:
                 new_bytes,
                 {"bytes": len(new_bytes), "applied": applied},
             ),
+            effect_receipts=(committed,),
         )
 
 
@@ -2596,13 +2779,14 @@ class SafeWriteFileTool:
             )
         ) is not None:
             return g
+        mutation_path = await _resolved_workspace_file(ctx.sandbox, args.path)
         # (3) inspect the existing file (None = new).
         old_text: str | None = None
         old_bytes = b""
         try:
-            old_bytes = await ctx.sandbox.read_file(args.path)
+            old_bytes = await ctx.sandbox.read_file(mutation_path)
             old_text = old_bytes.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — absent file → a new write, no prior content to guard
+        except FileNotFoundError:  # absent file → new write; other read failures must surface
             old_text = None
         matching_sha = False
         if old_text is not None:
@@ -2667,6 +2851,14 @@ class SafeWriteFileTool:
                         "new_chars": len(args.content),
                     },
                 )
+        new_bytes = args.content.encode("utf-8")
+        if old_text is not None and new_bytes == old_bytes:
+            return _no_op_write_refusal(
+                ctx.conversation_id,
+                args.path,
+                tool_name="safe_write_file",
+                current_bytes=old_bytes,
+            )
         # (4) syntax pre-check IN MEMORY — never introduce a new syntax error
         # (no write-then-revert).
         pre = _syntax_errors(args.path, old_text or "")
@@ -2682,8 +2874,14 @@ class SafeWriteFileTool:
                 ),
             )
         # (5) all checks passed → ONE atomic commit (tmp+rename where supported).
-        new_bytes = args.content.encode("utf-8")
-        await _atomic_write(ctx.sandbox, args.path, new_bytes)
+        committed = await _commit_file_mutation(
+            ctx,
+            mutation_path,
+            new_bytes,
+            expected_before=old_bytes if old_text is not None else None,
+        )
+        if isinstance(committed, ToolOutcome):
+            return committed
         _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
@@ -2694,4 +2892,5 @@ class SafeWriteFileTool:
                 new_bytes,
                 {"bytes": len(new_bytes)},
             ),
+            effect_receipts=(committed,),
         )
