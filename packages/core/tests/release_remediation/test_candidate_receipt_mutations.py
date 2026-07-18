@@ -620,3 +620,94 @@ def _has_master(repo: Path) -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+# ---- C9-06 P5 verifier corrections (each demonstrated bypass now RED) -----------
+
+
+def test_external_evidence_overwritten_after_proof_is_caught_post_run(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """P5-1: a hash-bound proof that overwrites the declared external evidence AFTER the
+    pre-run gate must be caught by the post-run external re-pin — no green receipt."""
+    repo = synthetic["repo"]
+    evidence = synthetic["evidence"]
+    assert isinstance(repo, Path) and isinstance(evidence, Path)
+    # A proof test that mutates the external evidence file as a side effect of running.
+    proof = repo / "test_receipt_proof.py"
+    proof.write_text(
+        "def test_green():\n"
+        f"    open({str(evidence)!r}, 'w').write('mutated after the pre-run gate')\n"
+        "    assert True\n"
+    )
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    data["files"]["test_receipt_proof.py"] = _sha256(proof)
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "proof mutates external evidence")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    evidence_dir = tmp_path / "evidence"
+    rc = receipt.main(["--expect-head", new_head, "--evidence-dir", str(evidence_dir)], repo=repo)
+    assert rc == 1
+    payload = json.loads((evidence_dir / "candidate-receipt.json").read_text())
+    assert any(
+        c["name"] == "post-run: external evidence still byte-pinned" and not c["ok"]
+        for c in payload["post_run_checks"]
+    )
+
+
+def test_symlink_evidence_dir_is_rejected_and_not_written(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """P5-2: an absolute symlink evidence dir (even one initially pointing outside) is
+    rejected AND no receipt is written through it — closing the retarget TOCTOU."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "evlink"
+    link.symlink_to(outside)
+    rc = receipt.main(
+        ["--expect-head", str(synthetic["head"]), "--evidence-dir", str(link)], repo=repo
+    )
+    # Gate fails (symlink) → red, and nothing is written through the link.
+    assert rc == 1
+    assert not (outside / "candidate-receipt.json").exists()
+    failed = _failed(_gates_with_evidence(synthetic, link))
+    assert any("not a symlink" in f for f in failed)
+
+
+def test_evidence_never_written_inside_the_checkout_even_on_red(
+    synthetic: dict[str, object],
+) -> None:
+    """P5-2 (write side): a failed location gate must SUPPRESS the write — the receipt
+    never drops a candidate-receipt.json inside the checkout, on green or red."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inside = repo / "inside-evidence"
+    rc = receipt.main(
+        ["--expect-head", str(synthetic["head"]), "--evidence-dir", str(inside)], repo=repo
+    )
+    assert rc == 1
+    assert not (inside / "candidate-receipt.json").exists()
+    # And the tree is not dirtied by a stray receipt.
+    assert receipt.check_worktree_pristine(repo).ok
+
+
+def test_interpreter_trust_root_mismatch_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """P5-3: when the inventory declares a trusted_interpreter_sha256, a running
+    interpreter whose realpath sha differs must fail closed (an attacker-controlled
+    launching interpreter cannot fabricate proof under a declared trust root)."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    data["trusted_interpreter_sha256"] = "0" * 64  # never the real interpreter
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "declare a trust root the interpreter cannot match")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    failed = _failed(_gates(synthetic, new_head))
+    assert any("declared trust root" in f for f in failed)
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1

@@ -266,13 +266,43 @@ def check_evidence_dir_outside(evidence_dir: Path | None, repo: Path) -> Check:
     resolved = evidence_dir.resolve()
     repo_resolved = repo.resolve()
     inside = resolved == repo_resolved or repo_resolved in resolved.parents
-    ok = evidence_dir.is_absolute() and not inside
+    # Reject a SYMLINK evidence dir (or a symlinked ancestor): a link checked as external
+    # here can be retargeted inside the repo before the write (TOCTOU). The receipt writes
+    # to the RESOLVED real path captured at gate time, and refuses a link outright (C9-06
+    # P5-2).
+    is_link = evidence_dir.is_symlink() or any(p.is_symlink() for p in evidence_dir.parents)
+    ok = evidence_dir.is_absolute() and not inside and not is_link
     return Check(
-        "evidence dir is absolute and outside the checkout",
+        "evidence dir is absolute, outside the checkout, and not a symlink",
         ok,
         f"evidence_dir={evidence_dir} "
-        f"(absolute={evidence_dir.is_absolute()}, inside_repo={inside})",
-        {"evidence_dir": str(evidence_dir), "inside_repo": inside},
+        f"(absolute={evidence_dir.is_absolute()}, inside_repo={inside}, symlink={is_link})",
+        {"evidence_dir": str(evidence_dir), "inside_repo": inside, "symlink": is_link},
+    )
+
+
+def check_interpreter_trust(inventory: dict[str, object], interpreter: dict[str, object]) -> Check:
+    """When the inventory declares a ``trusted_interpreter_sha256`` (an operator trust
+    root), the ACTUAL running interpreter's realpath sha256 must equal it — recording the
+    identity is not enough when the launching interpreter can be attacker-controlled and
+    fabricate proof output (C9-06 P5-3). With no declared trust root, the identity is
+    recorded and trust is explicitly the operator's."""
+    expected = inventory.get("trusted_interpreter_sha256")
+    actual = interpreter.get("sha256")
+    if not expected:
+        return Check(
+            "interpreter identity recorded (no trust root declared)",
+            True,
+            f"interpreter realpath={interpreter.get('realpath')} sha256={actual}; "
+            "no trusted_interpreter_sha256 declared — trust is the operator's",
+            {"interpreter": interpreter, "trust_root": None},
+        )
+    ok = isinstance(expected, str) and actual == expected
+    return Check(
+        "interpreter matches the declared trust root",
+        ok,
+        f"actual={actual} expected={expected}",
+        {"interpreter": interpreter, "trust_root": expected},
     )
 
 
@@ -481,6 +511,7 @@ def gate_checks(
         check_base_ancestry(repo, base_sha),
         check_worktree_pristine(repo),
         check_evidence_dir_outside(evidence_dir, repo),
+        check_interpreter_trust(inventory, interpreter_identity()),
     ]
     checks.extend(check_inventory_binding(repo, inventory, base_sha))
     checks.append(check_no_undeclared_deletions(repo, inventory, base_sha))
@@ -517,6 +548,17 @@ def post_run_rechecks(
             "post-run: inventory bytes + scope unchanged",
             all(c.ok for c in binding),
             "re-checked the complete inventory binding after proof execution",
+            {},
+        )
+    )
+    # C9-06 P5-1: re-pin the EXTERNAL evidence too — a hash-bound proof could overwrite it
+    # between the pre-run gate and now.
+    external = check_external_evidence(inventory)
+    checks.append(
+        Check(
+            "post-run: external evidence still byte-pinned",
+            all(c.ok for c in external),
+            "re-verified declared external evidence after proof execution",
             {},
         )
     )
@@ -725,6 +767,12 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     base_sha = str(inventory["base_sha"])
     evidence_dir = Path(args.evidence_dir) if args.evidence_dir else None
     interpreter = interpreter_identity()
+    # Capture the RESOLVED real evidence directory at gate time and check the location
+    # gate independently, so the receipt can (a) only ever write to the vetted real path
+    # and (b) refuse to write at all when the location gate failed (C9-06 P5-2). The
+    # symlink cannot be retargeted between gate and write because we never re-follow it.
+    evidence_target = evidence_dir.resolve() if evidence_dir is not None else None
+    evidence_location_ok = evidence_dir is None or check_evidence_dir_outside(evidence_dir, repo).ok
 
     # ---- Gates first: every one fails CLOSED, and none of them execute anything. ----
     checks = gate_checks(repo, args.expect_head, inventory, base_sha, evidence_dir)
@@ -749,14 +797,23 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
         )
 
     green = render(checks, head)
-    if evidence_dir is not None:
+    # Write evidence ONLY to the vetted resolved real path, and ONLY when the location
+    # gate passed — never through a (possibly retargeted) symlink or into the checkout,
+    # on the green OR the red path (C9-06 P5-2).
+    if evidence_target is not None and evidence_location_ok:
         write_evidence(
-            evidence_dir / "candidate-receipt.json",
+            evidence_target / "candidate-receipt.json",
             head,
             base_sha,
             checks,
             green,
             interpreter=interpreter,
+        )
+    elif evidence_dir is not None:
+        print(
+            "evidence NOT written: the --evidence-dir location gate failed (symlink or "
+            "inside the checkout); refusing to write a receipt there.",
+            file=sys.stderr,
         )
     return 0 if green else 1
 
