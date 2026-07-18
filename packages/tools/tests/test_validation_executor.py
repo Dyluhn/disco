@@ -262,7 +262,7 @@ async def test_nested_shape_hint_is_generic_across_tools():
         async def run(self, args, ctx):
             return ToolOutcome(success=True, content="ran")
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(_NestedTool())
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"nested_tool"})))
     res = await ex.execute(call("nested_tool", items=["nope"]))
@@ -367,7 +367,7 @@ async def test_execute_always_returns_never_raises_on_tool_exception():
         async def run(self, args, ctx):
             raise RuntimeError("kaboom")
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(BoomTool())
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"boom"})))
     res = await ex.execute(call("boom"))
@@ -398,7 +398,7 @@ async def test_timeout_yields_timeout_result():
             await asyncio.sleep(10)
             return ToolOutcome(success=True, content="never")
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(SlowTool())
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"slow"})), default_timeout_s=0)
     res = await ex.execute(call("slow"))

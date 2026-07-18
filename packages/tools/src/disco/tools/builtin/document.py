@@ -16,9 +16,11 @@ import textwrap
 from typing import Literal
 
 from disco.core.contract.export_render import EXPORT_RENDER_KEY, check_export_render
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..sandbox.base import strip_redundant_workspace_prefix
 
 _FS = frozenset({Capability.FILESYSTEM})
@@ -366,6 +368,7 @@ class DocSetSectionTool:
         needs=_FS,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: DocSetSectionArgs, ctx: ToolContext) -> ToolOutcome:
@@ -406,6 +409,7 @@ class DocExportTool:
         needs=_FS,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: DocExportArgs, ctx: ToolContext) -> ToolOutcome:

@@ -5,6 +5,7 @@ import hashlib
 import pytest
 from disco.core import (
     ActionProfile,
+    ControlReceipt,
     EffectCapability,
     MutationReceipt,
     ObservationEvent,
@@ -22,6 +23,7 @@ from disco.core import (
     validate_effect_receipts,
 )
 from disco.core.effects import CoverageSpan, CoverageUnit
+from disco.core.llm import ToolSpec
 from pydantic import ValidationError
 
 _SHA_A = "a" * 64
@@ -64,9 +66,11 @@ def test_old_tool_result_without_receipts_is_backward_compatible() -> None:
     )
 
     assert result.effect_receipts == ()
+    assert result.action_profile is None
 
 
 def test_effect_receipts_round_trip_through_observation_event() -> None:
+    profile = ActionProfile(capabilities=frozenset({EffectCapability.WORKSPACE_CONTENT_READ}))
     event = ObservationEvent(
         action_id="evt_action",
         tool_result=ToolResult(
@@ -75,6 +79,7 @@ def test_effect_receipts_round_trip_through_observation_event() -> None:
             success=True,
             content="abc",
             effect_receipts=(_observation(),),
+            action_profile=profile,
         ),
     )
 
@@ -82,6 +87,36 @@ def test_effect_receipts_round_trip_through_observation_event() -> None:
 
     assert isinstance(restored, ObservationEvent)
     assert restored.tool_result.effect_receipts == (_observation(),)
+    assert restored.tool_result.action_profile == profile
+
+
+def test_run_control_is_distinct_and_round_trips() -> None:
+    receipt = ControlReceipt(
+        capability=EffectCapability.RUN_CONTROL,
+        transition_kind="request_custom_build",
+        prior_state="planning",
+        new_state="customizing",
+    )
+
+    assert ControlReceipt.model_validate(receipt.model_dump()).capability is (
+        EffectCapability.RUN_CONTROL
+    )
+
+
+def test_tool_behavior_is_host_only_and_never_changes_provider_payload() -> None:
+    base = ToolSpec(name="probe", description="x", parameters_schema={"type": "object"})
+    classified = ToolSpec(
+        name="probe",
+        description="x",
+        parameters_schema={"type": "object"},
+        behavior=ToolBehavior(
+            planner_safe=True,
+            possible_capabilities=frozenset({EffectCapability.EXTERNAL_OBSERVE}),
+        ),
+    )
+
+    assert base.model_dump(mode="json") == classified.model_dump(mode="json")
+    assert base.model_dump_json() == classified.model_dump_json()
 
 
 def test_rendered_observation_proof_requires_size_and_digest_together() -> None:

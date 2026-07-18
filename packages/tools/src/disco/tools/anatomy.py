@@ -159,6 +159,7 @@ class ToolDef(BaseModel):
             name=self.name,
             description=self.description,
             parameters_schema=_inline_schema_refs(self.args_model.model_json_schema()),
+            behavior=self.behavior,
         )
 
 

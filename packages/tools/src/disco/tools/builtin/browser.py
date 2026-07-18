@@ -40,10 +40,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from disco.core import SecurityRisk
+from disco.core.effects import ActionProfile, EffectCapability
 from disco.core.env import disco_env
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares, narrows
 from ._outcomes import fail_outcome
 
 _DAEMON_PATH = "/workspace/.pmx/_browser_daemon.py"
@@ -53,6 +55,7 @@ _STARTUP_SECRET_RE = re.compile(
     r"(?i)\b(?:authorization|api[_-]?key|token|secret)\b"
     r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s;]+"
 )
+_OBSERVATION_ONLY_ACTIONS = frozenset({"navigate", "screenshot", "back", "console_view"})
 
 # ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
 # backend has no usable browser" (for example, a missing Playwright/Chromium
@@ -326,7 +329,23 @@ class BrowserTool:
         needs=frozenset({Capability.NETWORK, Capability.DISPLAY}),
         base_risk=SecurityRisk.MEDIUM,  # a read is low; the analyzer ranks submit HIGH
         runs_in="sandbox",
+        behavior=declares(
+            EffectCapability.WEB_OBSERVE,
+            EffectCapability.OPAQUE_EXECUTE,
+            planner_safe=False,
+        ),
     )
+
+    def action_profile(self, args: BrowserArgs) -> ActionProfile:
+        if args.action in _OBSERVATION_ONLY_ACTIONS:
+            return narrows(EffectCapability.WEB_OBSERVE)
+        # Fail broad for every interactive action, including a future schema
+        # addition whose effect has not yet been reviewed. New observation-only
+        # actions must be added deliberately to the allowlist above.
+        return narrows(
+            EffectCapability.WEB_OBSERVE,
+            EffectCapability.OPAQUE_EXECUTE,
+        )
 
     async def run(self, args: BrowserArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None

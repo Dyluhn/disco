@@ -33,6 +33,7 @@ from disco.tools.appkit_scope import (
     AppKitPhaseState,
     appkit_effective_scope,
 )
+from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
 from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
 from disco.tools.builtin.app_kit import AppSnapshotVersionTool as V2AppSnapshotVersionTool
 from disco.tools.builtin.design_lint import DesignLintTool
@@ -50,6 +51,7 @@ class _FakeMcpTool:
         description="a remote MCP tool",
         args_model=BaseModel,
         runs_in="in_process",
+        behavior=OPAQUE_MCP_BEHAVIOR,
     )
 
     async def run(self, args, ctx) -> ToolOutcome:  # pragma: no cover - not executed

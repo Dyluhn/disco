@@ -34,7 +34,7 @@ _STANDARD_POLICY = ModelExecutionPolicy.standard()
 
 
 def _executor(*, model_policy: ModelExecutionPolicy) -> DefaultToolExecutor:
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     return DefaultToolExecutor(
         reg, ToolScope(allowed_tools=frozenset({"probe"})), model_policy=model_policy
     )
@@ -55,7 +55,7 @@ async def test_build_context_stamps_assist_false():
 async def test_build_context_assist_defaults_off():
     """Construction with no model_policy → standard policy → ctx.assist False, so the
     capable-model default carries through the executor unchanged."""
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"probe"})))
     ctx = await ex._build_context(_TOOL_DEF)
     assert ctx.assist is False
@@ -71,7 +71,7 @@ async def test_build_context_stamps_host_live_primitive_verifier():
         del live_id, app, design, tree
         return PrimitiveVerifyResult(ok=False, detail="not invoked")
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     ex = DefaultToolExecutor(
         reg,
         ToolScope(allowed_tools=frozenset({"probe"})),

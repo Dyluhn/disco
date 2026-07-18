@@ -14,12 +14,14 @@ import re
 from typing import cast
 
 import openpyxl
+from disco.core.effects import EffectCapability
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 # ---- formula whitelist -------------------------------------------------------
 
@@ -269,6 +271,7 @@ class SheetsTool:
         base_risk=None,  # file write — sandbox-jailed, no network needed
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: SheetGenerateArgs, ctx: ToolContext) -> ToolOutcome:

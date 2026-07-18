@@ -59,7 +59,7 @@ def _clear_tracker():
 
 
 def _executor(sbx: _FakeSandbox, conv_id: str = "conv-grnd") -> DefaultToolExecutor:
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(FileWriteTool())
     reg.register(FileReadTool())
     return DefaultToolExecutor(

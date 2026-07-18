@@ -20,9 +20,11 @@ from __future__ import annotations
 from typing import Any
 
 from disco.core import SecurityRisk
+from disco.core.effects import ActionProfile, EffectCapability
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares, narrows
 
 
 def _manager(ctx: ToolContext) -> Any:
@@ -141,7 +143,27 @@ class PreviewStartTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(
+            EffectCapability.OPAQUE_EXECUTE,
+            EffectCapability.PROCESS_CONTROL,
+            EffectCapability.PROCESS_OUTPUT_READ,
+            planner_safe=False,
+        ),
     )
+
+    def action_profile(self, args: PreviewStartArgs) -> ActionProfile:
+        capabilities = {
+            EffectCapability.PROCESS_CONTROL,
+            EffectCapability.PROCESS_OUTPUT_READ,
+        }
+        # A directory/static/http launch is the platform's fixed file server.
+        # Raw commands and every other framework hint may execute arbitrary
+        # project scripts. Unknown future hints remain safely opaque without
+        # constraining which targets PreviewManager may learn to support.
+        framework = (args.framework or "").strip().lower()
+        if args.command or framework not in {"", "static", "http"}:
+            capabilities.add(EffectCapability.OPAQUE_EXECUTE)
+        return narrows(*capabilities)
 
     async def run(self, args: PreviewStartArgs, ctx: ToolContext) -> ToolOutcome:
         if ctx.sandbox is None:
@@ -203,6 +225,7 @@ class PreviewStatusTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.PROCESS_OUTPUT_READ, planner_safe=True),
     )
 
     async def run(self, args: PreviewStatusArgs, ctx: ToolContext) -> ToolOutcome:
@@ -244,6 +267,7 @@ class PreviewLogsTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.PROCESS_OUTPUT_READ, planner_safe=True),
     )
 
     async def run(self, args: PreviewLogsArgs, ctx: ToolContext) -> ToolOutcome:
@@ -277,6 +301,7 @@ class PreviewStopTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.PROCESS_CONTROL, planner_safe=False),
     )
 
     async def run(self, args: PreviewStopArgs, ctx: ToolContext) -> ToolOutcome:

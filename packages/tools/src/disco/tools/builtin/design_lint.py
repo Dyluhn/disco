@@ -60,9 +60,11 @@ from disco.core.appkit import (
 from disco.core.appkit.spec import DesignSpec
 from disco.core.context import ArtifactMemoryStore
 from disco.core.design import DesignDirection, direction_from_markdown
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ._outcomes import fail_outcome
 
 if TYPE_CHECKING:
@@ -2222,6 +2224,7 @@ class DesignLintTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=True,  # observes only — safe for the planner + a non-productive probe
+        behavior=declares(EffectCapability.ARTIFACT_VERIFY, planner_safe=True),
     )
 
     async def run(self, args: DesignLintArgs, ctx: ToolContext) -> ToolOutcome:

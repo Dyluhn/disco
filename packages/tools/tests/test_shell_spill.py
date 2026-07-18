@@ -62,8 +62,7 @@ def _assert_no_binary_output(value: Any) -> None:
         assert "wOF2" not in value
         assert "\ufffd" not in value
         assert not any(
-            (ord(char) < 32 or 127 <= ord(char) <= 159)
-            and char not in {"\t", "\n", "\r"}
+            (ord(char) < 32 or 127 <= ord(char) <= 159) and char not in {"\t", "\n", "\r"}
             for char in value
         )
     elif isinstance(value, dict):
@@ -76,8 +75,7 @@ def _assert_no_binary_output(value: Any) -> None:
     elif isinstance(value, bytes):
         assert b"wOF2" not in value
         assert not any(
-            (byte < 32 or 127 <= byte <= 159) and byte not in {9, 10, 13}
-            for byte in value
+            (byte < 32 or 127 <= byte <= 159) and byte not in {9, 10, 13} for byte in value
         )
 
 
@@ -189,7 +187,7 @@ async def test_failed_shell_binary_output_never_reaches_durable_agent_error_deta
         exit_code=1,
         stderr="failure diagnostic\n" + "E" * 6_000,
     )
-    registry = ToolRegistry()
+    registry = ToolRegistry(allow_unclassified_for_testing=True)
     registry.register(ShellTool())
     executor = DefaultToolExecutor(
         registry,

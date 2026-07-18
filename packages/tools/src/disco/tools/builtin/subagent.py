@@ -47,9 +47,11 @@ helper is available to the driver in execution mode only.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class DelegateExploreArgs(BaseModel):
@@ -114,6 +116,12 @@ class DelegateExploreTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=False,  # C20: dispatching a subagent is an ACTION, not a pure read
+        behavior=declares(
+            EffectCapability.WORKSPACE_CONTENT_READ,
+            EffectCapability.WORKSPACE_INVENTORY_READ,
+            EffectCapability.EXTERNAL_OBSERVE,
+            planner_safe=False,
+        ),
     )
 
     async def run(self, args: DelegateExploreArgs, ctx: ToolContext) -> ToolOutcome:

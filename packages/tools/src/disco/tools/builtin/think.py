@@ -19,6 +19,7 @@ from disco.core import SecurityRisk
 from pydantic import BaseModel, Field, field_validator
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class ThinkArgs(BaseModel):
@@ -60,6 +61,7 @@ class ThinkTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,  # pure observation of the model's own reasoning — no mutation
+        behavior=declares(planner_safe=True),
     )
 
     async def run(self, args: ThinkArgs, ctx: ToolContext) -> ToolOutcome:

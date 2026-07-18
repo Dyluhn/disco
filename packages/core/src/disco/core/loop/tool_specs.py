@@ -18,6 +18,23 @@ verify-command + fan-out machinery and are out of scope for this Wave-1 move.)
 
 from __future__ import annotations
 
+from ..effects import EffectCapability, ToolBehavior
+
+
+def _declares(
+    *capabilities: EffectCapability,
+    planner_safe: bool,
+) -> ToolBehavior:
+    return ToolBehavior(
+        planner_safe=planner_safe,
+        possible_capabilities=frozenset(capabilities),
+    )
+
+
+_PLANNING_RUN_CONTROL = _declares(EffectCapability.RUN_CONTROL, planner_safe=True)
+_EXECUTION_RUN_CONTROL = _declares(EffectCapability.RUN_CONTROL, planner_safe=False)
+_EXECUTION_PLAN_CONTROL = _declares(EffectCapability.PLAN_CONTROL, planner_safe=False)
+
 # The virtual ask_user tool — the model's escape hatch when it (in its own
 # reasoning, not at harness nudging) decides it needs the human's judgment.
 # This is the Claude Code pattern done honestly: the tool is described, it's
@@ -231,6 +248,7 @@ def _ask_user_tool_spec():
         name=_ASK_USER_TOOL_NAME,
         description=_ASK_USER_DESCRIPTION,
         parameters_schema=_ASK_USER_PARAMETERS_SCHEMA,
+        behavior=_PLANNING_RUN_CONTROL,
     )
 
 
@@ -289,6 +307,7 @@ def _propose_plan_update_tool_spec():
         name="propose_plan_update",
         description=_PROPOSE_PLAN_UPDATE_DESCRIPTION,
         parameters_schema=_PROPOSE_PLAN_UPDATE_SCHEMA,
+        behavior=_EXECUTION_PLAN_CONTROL,
     )
 
 
@@ -299,6 +318,7 @@ def _clarify_tool_spec():
         name=_CLARIFY_TOOL_NAME,
         description=_CLARIFY_DESCRIPTION,
         parameters_schema=_CLARIFY_PARAMETERS_SCHEMA,
+        behavior=_PLANNING_RUN_CONTROL,
     )
 
 
@@ -309,6 +329,7 @@ def _questions_v2_tool_spec():
         name=_QUESTIONS_V2_TOOL_NAME,
         description=_QUESTIONS_V2_DESCRIPTION,
         parameters_schema=_QUESTIONS_V2_PARAMETERS_SCHEMA,
+        behavior=_PLANNING_RUN_CONTROL,
     )
 
 
@@ -371,6 +392,7 @@ def _notify_user_tool_spec():
         name="notify_user",
         description=_NOTIFY_USER_DESCRIPTION,
         parameters_schema=_NOTIFY_USER_SCHEMA,
+        behavior=_EXECUTION_RUN_CONTROL,
     )
 
 

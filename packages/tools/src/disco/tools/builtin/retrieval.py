@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 _NET = frozenset({Capability.NETWORK})
 
@@ -86,6 +88,7 @@ class SearchTool:
         uses_capabilities=frozenset({"search"}),
         runs_in="in_process",  # orchestrator-mediated; provider key stays out of the box
         read_only=True,  # observes only — safe for the planner to gather context
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )
 
     async def run(self, args: SearchArgs, ctx: ToolContext) -> ToolOutcome:
@@ -113,6 +116,7 @@ class ExtractTool:
         uses_capabilities=frozenset({"extract"}),
         runs_in="in_process",
         read_only=True,  # observes only — safe for the planner to gather context
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )
 
     async def run(self, args: ExtractArgs, ctx: ToolContext) -> ToolOutcome:

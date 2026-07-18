@@ -24,9 +24,11 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core.dod import DoDPredicate
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import SecurityRisk, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class PlanStepInput(BaseModel):
@@ -117,6 +119,7 @@ class SubmitPlanTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,  # emits a plan for approval — no environment mutation
+        behavior=declares(EffectCapability.PLAN_CONTROL, planner_safe=True),
     )
 
     async def run(self, args: SubmitPlanArgs, ctx: ToolContext) -> ToolOutcome:
@@ -149,6 +152,7 @@ class PlanStepTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=False,
+        behavior=declares(EffectCapability.PLAN_CONTROL, planner_safe=False),
     )
 
     async def run(self, args: PlanStepArgs, ctx: ToolContext) -> ToolOutcome:
@@ -226,6 +230,7 @@ class UpdatePlanProgressTool:
         # it is NOT read-only and must NOT be planner-eligible. (Confirmation is risk-based,
         # not read_only-based, so this adds no approval prompt.)
         read_only=False,
+        behavior=declares(EffectCapability.PLAN_CONTROL, planner_safe=False),
     )
 
     async def run(self, args: UpdatePlanProgressArgs, ctx: ToolContext) -> ToolOutcome:

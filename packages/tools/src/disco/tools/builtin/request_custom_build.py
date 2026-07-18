@@ -9,9 +9,11 @@ scope.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class RequestCustomBuildArgs(BaseModel):
@@ -44,6 +46,7 @@ class RequestCustomBuildTool:
         base_risk=SecurityRisk.HIGH,
         runs_in="in_process",
         read_only=False,
+        behavior=declares(EffectCapability.RUN_CONTROL, planner_safe=False),
     )
 
     async def run(self, args: RequestCustomBuildArgs, ctx: ToolContext) -> ToolOutcome:

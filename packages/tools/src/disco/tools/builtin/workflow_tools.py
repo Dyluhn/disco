@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from disco.core.owners import install_owner_id
 from disco.core.workflow import (
     McpMount,
@@ -32,6 +33,7 @@ from disco.core.workflow import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..anatomy import Tool, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..workflow_scope import WorkflowPhase, WorkflowPhaseState
 
 _SAFE_INSTANCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
@@ -163,6 +165,7 @@ class ListWorkflowsTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )
 
     async def run(self, args: ListWorkflowsArgs, ctx: ToolContext) -> ToolOutcome:
@@ -206,6 +209,7 @@ class ReadWorkflowCardTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )
 
     async def run(self, args: ReadWorkflowCardArgs, ctx: ToolContext) -> ToolOutcome:
@@ -260,6 +264,7 @@ class EnterWorkflowTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.RUN_CONTROL, planner_safe=True),
     )
 
     async def run(self, args: EnterWorkflowArgs, ctx: ToolContext) -> ToolOutcome:
@@ -347,6 +352,7 @@ class WorkflowAbortTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.RUN_CONTROL, planner_safe=True),
     )
 
     async def run(self, args: WorkflowAbortArgs, ctx: ToolContext) -> ToolOutcome:
@@ -454,6 +460,7 @@ class DraftWorkflowTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.PLAN_CONTROL, planner_safe=True),
     )
 
     async def run(self, args: DraftWorkflowArgs, ctx: ToolContext) -> ToolOutcome:

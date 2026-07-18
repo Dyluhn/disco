@@ -18,10 +18,12 @@ from typing import Any, Self
 
 import httpx
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from disco.core.think import strip_think_spans
 from pydantic import BaseModel, Field, model_validator
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..sandbox.base import strip_redundant_workspace_prefix
 from ._slides_pipeline import (
     _extract_json_object,
@@ -576,6 +578,7 @@ class FindAndEditTool:
         base_risk=SecurityRisk.MEDIUM,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FindAndEditArgs, ctx: ToolContext) -> ToolOutcome:

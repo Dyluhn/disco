@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from disco.core.trusted_components.lockfile import (
     LOCKFILE_RELPATH,
     ComponentsLock,
@@ -33,6 +34,7 @@ from disco.core.trusted_components.registry import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from .files import _atomic_write
 
 # Single source of truth for the install layout lives in core's verify module
@@ -100,6 +102,7 @@ class AddTrustedComponentTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AddTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:
@@ -250,6 +253,7 @@ class EjectTrustedComponentTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: EjectTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:

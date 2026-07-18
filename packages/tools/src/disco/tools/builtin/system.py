@@ -11,9 +11,11 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..sandbox.base import ExecResult
 from ._shell_caps import cap_shell_observation, sanitize_execution_output
 
@@ -136,6 +138,12 @@ class ShellTool:
         needs=frozenset({Capability.SHELL}),
         base_risk=SecurityRisk.MEDIUM,  # inherently riskier than read-only tools
         runs_in="sandbox",
+        behavior=declares(
+            EffectCapability.OPAQUE_EXECUTE,
+            EffectCapability.PROCESS_CONTROL,
+            EffectCapability.PROCESS_OUTPUT_READ,
+            planner_safe=False,
+        ),
     )
 
     async def run(self, args: ShellArgs, ctx: ToolContext) -> ToolOutcome:
@@ -163,6 +171,12 @@ class CodeExecTool:
         needs=frozenset({Capability.CODE_EXEC}),
         base_risk=SecurityRisk.MEDIUM,
         runs_in="sandbox",
+        behavior=declares(
+            EffectCapability.OPAQUE_EXECUTE,
+            EffectCapability.PROCESS_CONTROL,
+            EffectCapability.PROCESS_OUTPUT_READ,
+            planner_safe=False,
+        ),
     )
 
     async def run(self, args: CodeExecArgs, ctx: ToolContext) -> ToolOutcome:

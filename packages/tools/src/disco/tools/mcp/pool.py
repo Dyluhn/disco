@@ -20,6 +20,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import BaseModel
 
 from ..anatomy import ToolDef
+from ..behavior import OPAQUE_MCP_BEHAVIOR
 from .approval import (
     ApprovalRequired,
     ConfigApprovalRequired,
@@ -219,6 +220,7 @@ class McpPool:
                 runs_in="in_process",  # stdio subprocess executes on the host
                 read_only=False,  # MCP tools are not assumed read-only
                 uses_capabilities=frozenset(),
+                behavior=OPAQUE_MCP_BEHAVIOR,
             )
 
     def snapshot(self) -> list[ToolDef]:

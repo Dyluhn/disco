@@ -15,6 +15,7 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from ..effects import ActionProfile, EffectCapability
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -46,6 +47,15 @@ _ERROR_DETAIL_CAP = 600
 # structured["delivered_read"]) must not be capped: the content IS the recovery. Bounded by the
 # tools-side _REFUSAL_READ_FULL_MAX_BYTES (64KB) + message overhead.
 _DELIVERED_DETAIL_CAP = 80_000
+_DELEGATE_ACTION_PROFILE = ActionProfile(
+    capabilities=frozenset(
+        {
+            EffectCapability.WORKSPACE_CONTENT_READ,
+            EffectCapability.WORKSPACE_INVENTORY_READ,
+            EffectCapability.EXTERNAL_OBSERVE,
+        }
+    )
+)
 
 
 def _error_detail(err: str, content: str | None, *, carries_delivery: bool = False) -> str | None:
@@ -673,4 +683,5 @@ class Observer:
                 "context_chars": len(context),
                 "stub": True,
             },
+            action_profile=_DELEGATE_ACTION_PROFILE,
         )

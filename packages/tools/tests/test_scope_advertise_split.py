@@ -39,7 +39,7 @@ def _make_executor(
     advertised: frozenset[str] | None = None,
     read_only_names: frozenset[str] = frozenset(),
 ) -> DefaultToolExecutor:
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     for name in tool_names:
         reg.register(_SimpleTool(name, read_only=name in read_only_names))
     scope = ToolScope(allowed_tools=allowed, advertised_tools=advertised)

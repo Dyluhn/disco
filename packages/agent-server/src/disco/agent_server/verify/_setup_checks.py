@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass
 from typing import Literal
 
+from disco.core.effects import EffectCapability
 from disco.core.events import LLMMessage
 from disco.core.llm.types import (
     CapabilityProfile,
@@ -44,6 +45,7 @@ from disco.core.llm.types import (
     Requirement,
     ToolSpec,
 )
+from disco.tools.behavior import declares
 
 Status = Literal["PASS", "FAIL", "SKIP"]
 
@@ -67,6 +69,7 @@ _WEATHER_TOOL = ToolSpec(
         "properties": {"city": {"type": "string", "description": "City name"}},
         "required": ["city"],
     },
+    behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
 )
 
 

@@ -21,7 +21,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .dod import DoDPredicate
-from .effects import EffectReceipt, FinalWorkspaceSeal
+from .effects import ActionProfile, EffectReceipt, FinalWorkspaceSeal
 
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
@@ -159,6 +159,10 @@ class ToolResult(BaseModel):
     # deliberately separate from model/domain-controlled ``structured`` data.
     # The empty default keeps every historical event log backward compatible.
     effect_receipts: tuple[EffectReceipt, ...] = ()
+    # Host-classified behavior of this validated invocation. Persisting the
+    # profile on the result makes progress/recovery reconstruction deterministic
+    # across restart and replay. Calls refused before execution leave it absent.
+    action_profile: ActionProfile | None = None
 
 
 class PlanStep(BaseModel):

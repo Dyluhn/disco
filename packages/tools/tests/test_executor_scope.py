@@ -69,7 +69,7 @@ def test_in_process_tool_reports_in_process():
             return ToolOutcome(success=True, content="ok")
 
     scope = ToolScope(allowed_tools=frozenset({"ip_tool"}))
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(_IPTool())
     ex = DefaultToolExecutor(reg, scope)
     assert ex.tool_scope("ip_tool") == "in_process"
@@ -103,7 +103,7 @@ def test_out_of_scope_tool_reports_unknown():
             return ToolOutcome(success=True, content="ok")
 
     scope = ToolScope(allowed_tools=frozenset({"shell"}))  # other_sandboxed not in scope
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(_OtherTool())
     ex = DefaultToolExecutor(reg, scope, sandbox=FakeSandboxInstance())
     assert ex.tool_scope("other_sandboxed") == "unknown"

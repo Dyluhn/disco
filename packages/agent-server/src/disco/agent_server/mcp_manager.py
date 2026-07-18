@@ -499,6 +499,7 @@ class McpManager:
         approvals: dict[str, str],
     ) -> None:
         """Connect one HTTP MCP server, build ToolDefs, verify approval hash."""
+        from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
         from disco.tools.mcp.approval import (
             ApprovalRequired,
             compute_description_hash,
@@ -573,6 +574,7 @@ class McpManager:
                 runs_in="in_process",  # HTTP always runs in_process (orchestrator-side)
                 read_only=False,
                 uses_capabilities=frozenset(),
+                behavior=OPAQUE_MCP_BEHAVIOR,
             )
 
         _LOG.info(

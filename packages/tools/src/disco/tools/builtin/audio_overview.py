@@ -30,9 +30,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ._audio_mixer import encode_mp3, mix_pcm
 from ._tts_normalize import normalize_tts_text
 
@@ -688,6 +690,7 @@ class AudioOverviewTool:
         base_risk=None,
         runs_in="sandbox",  # HTTP calls + sandbox-backed file writes
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     def execution_scope(self, args: AudioOverviewArgs) -> str:

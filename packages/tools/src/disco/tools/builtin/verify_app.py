@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from disco.core.loop.finish import _PREVIEW_PORTS
 from disco.core.trusted_components.lockfile import (
     LOCKFILE_RELPATH,
@@ -55,6 +56,7 @@ from disco.tools.verify.web_app_probe import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ._outcomes import fail_outcome
 from .browser import BROWSER_UNAVAILABLE_MSG, BrowserArgs, BrowserTool
 
@@ -137,6 +139,7 @@ class VerifyWebAppTool:
         needs=frozenset({Capability.NETWORK, Capability.DISPLAY, Capability.SHELL}),
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.ARTIFACT_VERIFY, planner_safe=False),
     )
 
     async def run(self, args: VerifyWebAppArgs, ctx: ToolContext) -> ToolOutcome:

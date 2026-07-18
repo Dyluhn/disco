@@ -12,6 +12,7 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
 )
+from disco.core.effects import EffectCapability
 from disco.core.llm import LLMTransientError, OperatingMode
 from disco.core.loop import signals
 from loop_fakes import (
@@ -230,6 +231,12 @@ async def test_dedup_remember():
     ]
     assert len(obs) == 2  # the two duplicate calls
     assert "Already recorded" in obs[0].tool_result.content
+    assert all(
+        event.tool_result.action_profile is not None
+        and event.tool_result.action_profile.capabilities
+        == frozenset({EffectCapability.RUN_CONTROL})
+        for event in obs
+    )
 
 
 # ---- DEFECT-5: LLMTransientError retry + PAUSED, never ERROR -------------------

@@ -208,7 +208,7 @@ async def test_executor_relay_error_falls_back_to_content():
         async def run(self, args, ctx):
             return ToolOutcome(success=False, content="rich diagnosis", error=None)
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(_DiagTool())
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"diag_stub"})))
     result = await ex.execute(call("diag_stub"))
@@ -229,7 +229,7 @@ async def test_executor_relay_success_keeps_error_none():
         async def run(self, args, ctx):
             return ToolOutcome(success=True, content="all good", error=None)
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(_OkTool())
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"ok_stub"})))
     result = await ex.execute(call("ok_stub"))

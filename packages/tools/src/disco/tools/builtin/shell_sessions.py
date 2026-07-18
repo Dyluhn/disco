@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..sandbox.shell_sessions import SessionBusy
 from ._outcomes import fail_outcome as _fail
 from ._shell_caps import cap_shell_observation, sanitize_execution_output
@@ -53,6 +55,12 @@ class ShellExecTool:
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(
+            EffectCapability.OPAQUE_EXECUTE,
+            EffectCapability.PROCESS_CONTROL,
+            EffectCapability.PROCESS_OUTPUT_READ,
+            planner_safe=False,
+        ),
         base_risk=SecurityRisk.MEDIUM,
     )
 
@@ -110,6 +118,7 @@ class ShellViewTool:
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.PROCESS_OUTPUT_READ, planner_safe=True),
         base_risk=SecurityRisk.LOW,
     )
 
@@ -152,6 +161,7 @@ class ShellWaitTool:
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.PROCESS_OUTPUT_READ, planner_safe=True),
         base_risk=SecurityRisk.LOW,
     )
 
@@ -195,6 +205,11 @@ class ShellWriteTool:
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(
+            EffectCapability.OPAQUE_EXECUTE,
+            EffectCapability.PROCESS_CONTROL,
+            planner_safe=False,
+        ),
         base_risk=SecurityRisk.MEDIUM,
     )
 
@@ -225,6 +240,7 @@ class ShellKillTool:
         needs=frozenset({Capability.SHELL}),
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.PROCESS_CONTROL, planner_safe=False),
         base_risk=SecurityRisk.MEDIUM,
     )
 

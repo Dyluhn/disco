@@ -26,9 +26,11 @@ import copy
 import json
 from typing import Annotated, Any, Literal
 
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..registry import Tool
 from ._outcomes import fail_outcome
 
@@ -352,6 +354,7 @@ class DeckPatchTool:
         needs=frozenset({Capability.FILESYSTEM}),
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: DeckPatchArgs, ctx: ToolContext) -> ToolOutcome:

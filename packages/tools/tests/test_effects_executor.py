@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal
+import asyncio
+from typing import Literal, cast
 
 import pytest
 from disco.core import (
@@ -17,6 +18,8 @@ from disco.core import (
 )
 from disco.core.effects import CoverageSpan, CoverageUnit
 from disco.tools import DefaultToolExecutor, ToolDef, ToolOutcome, ToolRegistry, ToolScope
+from disco.tools.sandbox.base import SandboxError
+from disco.tools.secrets import CapabilityDenied
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 _SHA_A = "a" * 64
@@ -92,7 +95,7 @@ class _MixedTool(_EffectTool):
 
 
 def _executor(*tools: _EffectTool) -> DefaultToolExecutor:
-    registry = ToolRegistry()
+    registry = ToolRegistry(allow_unclassified_for_testing=True)
     for tool in tools:
         registry.register(tool)
     names = frozenset(tool.definition.name for tool in tools)
@@ -114,6 +117,7 @@ async def test_executor_maps_permitted_typed_receipts_without_activation() -> No
 
     assert result.success is True
     assert result.effect_receipts == (_read_receipt(),)
+    assert result.action_profile == behavior.static_profile()
     assert executor.tool_names_with_capability(EffectCapability.WORKSPACE_CONTENT_READ) == {
         "read_probe"
     }
@@ -174,6 +178,171 @@ def test_argument_classifier_narrows_a_mixed_tool_and_cannot_expand_behavior() -
     assert expanding_executor.action_profile_for_call("expanding", {}) is None
 
 
+@pytest.mark.asyncio
+async def test_invalid_classifier_persists_broad_profile_but_trusts_no_exact_receipt() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset(
+            {
+                EffectCapability.WORKSPACE_CONTENT_READ,
+                EffectCapability.WORKSPACE_MUTATE,
+            }
+        ),
+    )
+
+    class _ExpandingTool(_MixedTool):
+        def action_profile(self, args: _Args) -> ActionProfile:
+            del args
+            return ActionProfile(capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}))
+
+    tool = _ExpandingTool(name="expanding_run", behavior=behavior, receipt=_read_receipt())
+    result = await _executor(tool).execute(
+        ToolCall(tool_name="expanding_run", arguments={"operation": "read"})
+    )
+
+    assert result.action_profile == behavior.static_profile()
+    assert isinstance(result.effect_receipts[0], OpaqueEffectReceipt)
+    assert "classifier" in result.effect_receipts[0].reason
+
+
+@pytest.mark.asyncio
+async def test_profile_persists_on_tool_reported_failure_and_raised_exception() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+
+    class _ReportedFailure(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            return ToolOutcome(success=False, content="failed", error="failed")
+
+    class _RaisedFailure(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            raise RuntimeError("boom")
+
+    reported = _ReportedFailure(name="reported", behavior=behavior, receipt=_read_receipt())
+    raised = _RaisedFailure(name="raised", behavior=behavior, receipt=_read_receipt())
+    executor = _executor(reported, raised)
+
+    reported_result = await executor.execute(ToolCall(tool_name="reported", arguments={}))
+    raised_result = await executor.execute(ToolCall(tool_name="raised", arguments={}))
+
+    assert reported_result.success is False
+    assert raised_result.success is False
+    assert reported_result.action_profile == behavior.static_profile()
+    assert raised_result.action_profile == behavior.static_profile()
+
+
+@pytest.mark.asyncio
+async def test_wrong_runtime_outcome_is_a_profiled_execution_failure() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+
+    class _WrongReturn(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            return cast(ToolOutcome, None)
+
+    tool = _WrongReturn(name="wrong_return", behavior=behavior, receipt=_read_receipt())
+    result = await _executor(tool).execute(ToolCall(tool_name="wrong_return", arguments={}))
+
+    assert result.success is False
+    assert result.structured is not None
+    assert result.structured["kind"] == "execution_error"
+    assert result.action_profile == behavior.static_profile()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "expected_kind"),
+    [(CapabilityDenied("search"), "denied"), (SandboxError("gone"), "sandbox_error")],
+)
+async def test_profile_persists_on_mapped_execution_failures(
+    raised: Exception,
+    expected_kind: str,
+) -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+
+    class _MappedFailure(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            raise raised
+
+    tool = _MappedFailure(name="mapped", behavior=behavior, receipt=_read_receipt())
+    result = await _executor(tool).execute(ToolCall(tool_name="mapped", arguments={}))
+
+    assert result.success is False
+    assert result.structured is not None
+    assert result.structured["kind"] == expected_kind
+    assert result.action_profile == behavior.static_profile()
+
+
+@pytest.mark.asyncio
+async def test_profile_persists_on_timeout_and_context_construction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+
+    class _Slow(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            await asyncio.sleep(1)
+            return ToolOutcome(success=True, content="late")
+
+    slow = _Slow(name="slow", behavior=behavior, receipt=_read_receipt())
+    registry = ToolRegistry()
+    registry.register(slow)
+    timeout_executor = DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=frozenset({"slow"})),
+        default_timeout_s=0,
+    )
+    timed_out = await timeout_executor.execute(ToolCall(tool_name="slow", arguments={}))
+
+    async def _broken_context(definition: ToolDef) -> object:
+        del definition
+        raise RuntimeError("context unavailable")
+
+    context_executor = _executor(slow)
+    monkeypatch.setattr(context_executor, "_build_context", _broken_context)
+    context_failed = await context_executor.execute(ToolCall(tool_name="slow", arguments={}))
+
+    assert timed_out.structured is not None
+    assert timed_out.structured["kind"] == "timeout"
+    assert timed_out.action_profile == behavior.static_profile()
+    assert context_failed.structured is not None
+    assert context_failed.structured["kind"] == "execution_error"
+    assert context_failed.action_profile == behavior.static_profile()
+
+
+@pytest.mark.asyncio
+async def test_pre_execution_refusals_have_no_action_profile() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+    tool = _EffectTool(name="probe", behavior=behavior, receipt=_read_receipt())
+    executor = _executor(tool)
+
+    unknown = await executor.execute(ToolCall(tool_name="unknown", arguments={}))
+    invalid = await executor.execute(
+        ToolCall(tool_name="probe", arguments={"operation": "not-valid"})
+    )
+
+    assert unknown.action_profile is None
+    assert invalid.action_profile is None
+
+
 def test_registry_completeness_fails_for_a_new_callable_unclassified_tool() -> None:
     classified = _EffectTool(
         name="classified",
@@ -189,6 +358,42 @@ def test_registry_completeness_fails_for_a_new_callable_unclassified_tool() -> N
     assert executor.unclassified_tool_names() == {"new_callable"}
     with pytest.raises(ValueError, match="new_callable"):
         executor.assert_behavior_complete()
+
+
+def test_registry_is_strict_by_default_with_an_explicit_test_only_escape() -> None:
+    tool = _EffectTool(name="legacy", behavior=None, receipt=_read_receipt())
+    with pytest.raises(ValueError, match="no behavior metadata"):
+        ToolRegistry().register(tool)
+
+    registry = ToolRegistry(allow_unclassified_for_testing=True)
+    registry.register(tool)
+    assert registry.names() == {"legacy"}
+
+
+def test_registry_revalidates_model_copy_forged_behavior() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+    tool = _EffectTool(name="forged", behavior=behavior, receipt=_read_receipt())
+    forged = tool.definition.model_copy(
+        update={
+            "behavior": ToolBehavior(
+                planner_safe=True,
+                possible_capabilities=frozenset({EffectCapability.EXTERNAL_OBSERVE}),
+            )
+        }
+    )
+
+    class _ForgedTool:
+        definition = forged
+
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            return ToolOutcome(success=True, content="should not run")
+
+    with pytest.raises(ValueError, match="must match read_only"):
+        ToolRegistry().register(_ForgedTool())
 
 
 def test_shadow_behavior_cannot_change_legacy_planner_safety() -> None:

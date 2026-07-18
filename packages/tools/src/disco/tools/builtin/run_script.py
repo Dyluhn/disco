@@ -14,9 +14,11 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Literal
 
+from disco.core.effects import ActionProfile, EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares, narrows
 from ..sandbox.base import SandboxFileNotFoundError, SandboxPermissionError
 from .files import (
     _BINARY_DELIVERABLE_EXTS,
@@ -119,7 +121,24 @@ class RunProjectScriptTool:
         args_model=RunScriptArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(
+            EffectCapability.WORKSPACE_CONTENT_READ,
+            EffectCapability.WORKSPACE_INVENTORY_READ,
+            EffectCapability.WORKSPACE_MUTATE,
+            planner_safe=False,
+        ),
     )
+
+    def action_profile(self, args: RunScriptArgs) -> ActionProfile:
+        capabilities: set[EffectCapability] = set()
+        for operation in args.operations:
+            if operation.op == "read":
+                capabilities.add(EffectCapability.WORKSPACE_CONTENT_READ)
+            elif operation.op == "ls":
+                capabilities.add(EffectCapability.WORKSPACE_INVENTORY_READ)
+            else:
+                capabilities.add(EffectCapability.WORKSPACE_MUTATE)
+        return narrows(*capabilities)
 
     async def run(self, args: RunScriptArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None

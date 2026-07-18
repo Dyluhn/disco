@@ -84,6 +84,7 @@ from disco.core.appkit.spec import (
     Typography,
 )
 from disco.core.design import DesignDirection, to_brand_tokens
+from disco.core.effects import EffectCapability
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -94,6 +95,7 @@ from pydantic import (
 )
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from .design_lint import lint_design, load_committed_direction
 
 _FS = frozenset({Capability.FILESYSTEM})
@@ -435,6 +437,7 @@ class AppCreateTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppCreateArgs, ctx: ToolContext) -> ToolOutcome:
@@ -579,6 +582,7 @@ class AppAddSectionTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppAddSectionArgs, ctx: ToolContext) -> ToolOutcome:
@@ -690,6 +694,7 @@ class AppUpdateContentTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppUpdateContentArgs, ctx: ToolContext) -> ToolOutcome:
@@ -798,6 +803,7 @@ class AppSetDesignTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppSetDesignArgs, ctx: ToolContext) -> ToolOutcome:
@@ -940,6 +946,7 @@ class AppSnapshotVersionTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppSnapshotVersionArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1070,6 +1077,7 @@ class AppAddPrimitiveTool:
         needs=_FS,
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: AppAddPrimitiveArgs, ctx: ToolContext) -> ToolOutcome:

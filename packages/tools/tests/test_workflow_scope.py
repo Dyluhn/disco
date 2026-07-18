@@ -6,6 +6,7 @@ import json
 
 import pytest
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability, ToolBehavior
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.workflow import (
     BROWSER_AUTOMATION_DEFINITION,
@@ -158,6 +159,16 @@ class _FakeMcpTool:
             base_risk=SecurityRisk.LOW,
             runs_in="in_process",
             read_only=read_only,
+            behavior=ToolBehavior(
+                planner_safe=read_only,
+                possible_capabilities=frozenset(
+                    {
+                        EffectCapability.EXTERNAL_OBSERVE
+                        if read_only
+                        else EffectCapability.OPAQUE_EXECUTE
+                    }
+                ),
+            ),
         )
 
     async def run(self, args: _FakeMcpArgs, ctx: ToolContext) -> ToolOutcome:  # noqa: ARG002
@@ -632,7 +643,7 @@ def test_simulate_definition_writes_fixture_output(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_enter_workflow_requires_enabled_and_approved() -> None:
     state = WorkflowPhaseState()
-    registry = ToolRegistry()
+    registry = ToolRegistry(allow_unclassified_for_testing=True)
     store = _MemoryWorkflowStore(
         {
             "disabled": _instance(enabled=False, approved=True),
@@ -941,7 +952,7 @@ def test_seed_builtin_workflows_refreshes_stale_builtin_digest(tmp_path) -> None
 
 @pytest.mark.asyncio
 async def test_draft_workflow_returns_unpersisted_definition_json() -> None:
-    registry = ToolRegistry()
+    registry = ToolRegistry(allow_unclassified_for_testing=True)
     registry.register(DraftWorkflowTool())
     executor = DefaultToolExecutor(
         registry,

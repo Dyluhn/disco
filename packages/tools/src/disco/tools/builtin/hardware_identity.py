@@ -13,9 +13,11 @@ import re
 from typing import Literal
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field, field_validator
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 _PCI_ID = re.compile(r"(?:0x)?([0-9a-fA-F]{4})\Z")
 _PCI_DATABASE_PATHS = (
@@ -116,6 +118,7 @@ class HardwareIdentityTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )
 
     async def run(self, args: HardwareIdentityArgs, ctx: ToolContext) -> ToolOutcome:

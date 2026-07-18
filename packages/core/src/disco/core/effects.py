@@ -38,6 +38,7 @@ class EffectCapability(str, Enum):
     EXTERNAL_OBSERVE = "external.observe"
     ARTIFACT_VERIFY = "artifact.verify"
     PLAN_CONTROL = "plan.control"
+    RUN_CONTROL = "run.control"
     RUN_FINALIZE = "run.finalize"
 
 
@@ -280,7 +281,11 @@ class ControlReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal[EffectReceiptKind.CONTROL] = EffectReceiptKind.CONTROL
-    capability: Literal[EffectCapability.PLAN_CONTROL, EffectCapability.RUN_FINALIZE]
+    capability: Literal[
+        EffectCapability.PLAN_CONTROL,
+        EffectCapability.RUN_CONTROL,
+        EffectCapability.RUN_FINALIZE,
+    ]
     transition_kind: str = Field(min_length=1)
     prior_state: str = Field(min_length=1)
     new_state: str = Field(min_length=1)

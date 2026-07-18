@@ -8,9 +8,11 @@ side effects; direct execution is a defensive no-op acknowledgement.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class WorkflowSkipArgs(BaseModel):
@@ -37,6 +39,7 @@ class WorkflowSkipTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.RUN_FINALIZE, planner_safe=True),
     )
 
     async def run(self, args: WorkflowSkipArgs, ctx: ToolContext) -> ToolOutcome:  # noqa: ARG002
@@ -58,6 +61,7 @@ class WorkflowNeedsInputTool:
         base_risk=SecurityRisk.LOW,
         runs_in="in_process",
         read_only=True,
+        behavior=declares(EffectCapability.RUN_CONTROL, planner_safe=True),
     )
 
     async def run(

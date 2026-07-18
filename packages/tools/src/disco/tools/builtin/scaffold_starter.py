@@ -22,11 +22,13 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from disco.core.flags import appkit_enabled
 from disco.core.kits import StarterKitRegistry
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 StarterKind = Literal[
     "app_shell",
@@ -107,6 +109,7 @@ class ScaffoldStarterTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: ScaffoldStarterArgs, ctx: ToolContext) -> ToolOutcome:

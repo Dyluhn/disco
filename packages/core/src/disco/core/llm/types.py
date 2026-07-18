@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..effects import ToolBehavior
 from ..events import LLMMessage  # the wire-level message shape (event contract)
 
 EMPTY_REASONING_ONLY_METADATA_KEY = "empty_reasoning_only"
@@ -94,6 +95,10 @@ class ToolSpec(BaseModel):
     name: str
     description: str
     parameters_schema: dict[str, Any]  # JSON Schema for arguments
+    # Host-only reliability metadata. ``exclude=True`` keeps provider payloads
+    # and prompt-cache bytes unchanged while loop-owned virtual tools participate
+    # in the same exhaustive behavior inventory as executor-backed tools.
+    behavior: ToolBehavior | None = Field(default=None, exclude=True)
 
 
 # ---- the request ------------------------------------------------------------

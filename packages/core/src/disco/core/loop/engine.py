@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from ..dod import DoDPredicate, predicate_fingerprints
 from ..dod_evaluator import DoDEvaluator
+from ..effects import EffectCapability, ToolBehavior
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -124,6 +125,33 @@ from .view_render import (  # noqa: F401 — re-exported for back-compat (moved 
     _WS_PER_FILE_CHARS,
     _WS_READ_TIMEOUT_S,
     _WS_TOTAL_CHARS,
+)
+
+
+def _virtual_behavior(
+    *capabilities: EffectCapability,
+    planner_safe: bool = False,
+) -> ToolBehavior:
+    return ToolBehavior(
+        planner_safe=planner_safe,
+        possible_capabilities=frozenset(capabilities),
+    )
+
+
+_FINISH_BEHAVIOR = _virtual_behavior(
+    EffectCapability.RUN_FINALIZE,
+    EffectCapability.ARTIFACT_VERIFY,
+    EffectCapability.OPAQUE_EXECUTE,
+)
+_FINALIZE_ONLY_BEHAVIOR = _virtual_behavior(EffectCapability.RUN_FINALIZE)
+_REMEMBER_BEHAVIOR = _virtual_behavior(
+    EffectCapability.RUN_CONTROL,
+    EffectCapability.WORKSPACE_MUTATE,
+)
+_DELEGATE_BEHAVIOR = _virtual_behavior(
+    EffectCapability.WORKSPACE_CONTENT_READ,
+    EffectCapability.WORKSPACE_INVENTORY_READ,
+    EffectCapability.EXTERNAL_OBSERVE,
 )
 
 _LOG = logging.getLogger("disco.loop")
@@ -514,7 +542,10 @@ def _finish_tool_spec():
     from ..llm.types import ToolSpec
 
     return ToolSpec(
-        name="finish", description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA
+        name="finish",
+        description=_FINISH_DESCRIPTION,
+        parameters_schema=_FINISH_SCHEMA,
+        behavior=_FINISH_BEHAVIOR,
     )
 
 
@@ -524,7 +555,12 @@ def _finish_alias_tool_spec(alias: str):
     singleton."""
     from ..llm.types import ToolSpec
 
-    return ToolSpec(name=alias, description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA)
+    return ToolSpec(
+        name=alias,
+        description=_FINISH_DESCRIPTION,
+        parameters_schema=_FINISH_SCHEMA,
+        behavior=_FINISH_BEHAVIOR,
+    )
 
 
 def _workflow_finish_tool_spec(workflow_run: WorkflowRun, *, name: str = "finish"):
@@ -539,6 +575,7 @@ def _workflow_finish_tool_spec(workflow_run: WorkflowRun, *, name: str = "finish
         name=name,
         description=workflow_finish_tool_description(workflow_run.definition),
         parameters_schema=workflow_finish_tool_schema(workflow_run.definition),
+        behavior=_FINISH_BEHAVIOR,
     )
 
 
@@ -546,14 +583,22 @@ def _remember_tool_spec():
     from ..llm.types import ToolSpec
 
     return ToolSpec(
-        name="remember", description=_REMEMBER_DESCRIPTION, parameters_schema=_REMEMBER_SCHEMA
+        name="remember",
+        description=_REMEMBER_DESCRIPTION,
+        parameters_schema=_REMEMBER_SCHEMA,
+        behavior=_REMEMBER_BEHAVIOR,
     )
 
 
 def _serve_tool_spec():
     from ..llm.types import ToolSpec
 
-    return ToolSpec(name="serve", description=_SERVE_DESCRIPTION, parameters_schema=_SERVE_SCHEMA)
+    return ToolSpec(
+        name="serve",
+        description=_SERVE_DESCRIPTION,
+        parameters_schema=_SERVE_SCHEMA,
+        behavior=_FINALIZE_ONLY_BEHAVIOR,
+    )
 
 
 # _STATIC/_APP verify-command builders moved to loop/finish.py (re-exported above).
@@ -656,6 +701,7 @@ def _delegate_explore_tool_spec():
         name="delegate_explore",
         description=_DELEGATE_EXPLORE_DESCRIPTION,
         parameters_schema=_DELEGATE_EXPLORE_SCHEMA,
+        behavior=_DELEGATE_BEHAVIOR,
     )
 
 

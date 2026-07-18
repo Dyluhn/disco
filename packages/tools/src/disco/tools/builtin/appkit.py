@@ -21,11 +21,13 @@ from typing import Any
 from disco.core import SecurityRisk
 from disco.core.appkit import AppSection, AppSpec, render_html
 from disco.core.appkit.models import DEFAULT_DESIGN
+from disco.core.effects import EffectCapability
 from disco.core.kits import lead_form_appspec
 from disco.core.tweaks import TweakEditor, TweakField, TweakSpec
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from .tweaks_io import TWEAKS_PATH, read_tweakspec, write_tweakspec
 
 _SPEC_PATH = ".disco/appspec.json"
@@ -87,6 +89,7 @@ def _def(name: str, desc: str, args_model: type[BaseModel]) -> ToolDef:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
 

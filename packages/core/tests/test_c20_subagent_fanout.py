@@ -53,6 +53,7 @@ from disco.core import (
     ObservationEvent,
     ToolResult,
 )
+from disco.core.effects import EffectCapability
 from disco.core.loop.engine import (
     _FANOUT_INPUT_MAX_CHARS,
     _FANOUT_MAX_PER_RUN,
@@ -211,6 +212,14 @@ async def test_c20_fanout_under_cap_dispatches_and_folds_back_as_observation():
     assert "src/foo.py" in obs.tool_result.content
     assert "Foo.bar" in obs.tool_result.content
     assert obs.tool_result.success is True
+    assert obs.tool_result.action_profile is not None
+    assert obs.tool_result.action_profile.capabilities == frozenset(
+        {
+            EffectCapability.WORKSPACE_CONTENT_READ,
+            EffectCapability.WORKSPACE_INVENTORY_READ,
+            EffectCapability.EXTERNAL_OBSERVE,
+        }
+    )
     assert obs.tool_result.structured == {
         "recommendation": "src/foo.py:Foo.bar",
         "call_sites": ["src/baz.py:42", "src/baz.py:88"],

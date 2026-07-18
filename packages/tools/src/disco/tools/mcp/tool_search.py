@@ -19,9 +19,11 @@ from __future__ import annotations
 from typing import Any
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel
 
 from ..anatomy import ToolDef
+from ..behavior import declares
 
 
 class _ToolSearchArgs(BaseModel):
@@ -85,4 +87,5 @@ def meta_tool_search() -> ToolDef:
         runs_in="in_process",
         read_only=True,
         uses_capabilities=frozenset(),
+        behavior=declares(EffectCapability.EXTERNAL_OBSERVE, planner_safe=True),
     )

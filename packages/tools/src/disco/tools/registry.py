@@ -12,7 +12,7 @@ from __future__ import annotations
 from disco.core.llm import ModelExecutionPolicy
 from pydantic import BaseModel, ConfigDict
 
-from .anatomy import Tool
+from .anatomy import Tool, ToolDef
 
 
 class ToolScope(BaseModel):
@@ -41,11 +41,30 @@ class ToolRegistry:
     tools and to resolve a name within a scope. `get()` returns None if the name
     is absent OR out-of-scope — the executor turns that into `unknown_tool`."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, allow_unclassified_for_testing: bool = False) -> None:
         self._tools: dict[str, Tool] = {}
+        self._allow_unclassified_for_testing = allow_unclassified_for_testing
 
     def register(self, tool: Tool) -> None:
-        self._tools[tool.definition.name] = tool
+        # Pydantic's model_copy(update=...) intentionally skips validation. A
+        # specialized or dynamically wrapped definition must not use that seam
+        # to bypass planner parity or any future ToolDef invariant. Revalidate a
+        # materialized payload at the registry's production trust boundary.
+        candidate = getattr(tool, "definition", None)
+        if not isinstance(candidate, ToolDef):
+            raise ValueError("tool definition for '<unknown>' is not a ToolDef")
+        try:
+            definition = ToolDef.model_validate(candidate.model_dump())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"tool definition for {getattr(candidate, 'name', '<unknown>')!r} is invalid: {exc}"
+            ) from exc
+        if definition.behavior is None and not self._allow_unclassified_for_testing:
+            raise ValueError(
+                f"tool {definition.name!r} has no behavior metadata; "
+                "production registries require an exhaustive declaration"
+            )
+        self._tools[definition.name] = tool
 
     def get(self, name: str, *, scope: ToolScope) -> Tool | None:
         if name not in scope.allowed_tools:

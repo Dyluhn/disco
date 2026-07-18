@@ -23,6 +23,7 @@ import logging
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from ..effects import ActionProfile, EffectCapability
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -47,7 +48,7 @@ from .bootstrap import _detect_project_bootstrap
 from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
-from .observe import _FANOUT_INPUT_MAX_CHARS
+from .observe import _DELEGATE_ACTION_PROFILE, _FANOUT_INPUT_MAX_CHARS
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .stuck import (
     F6_FILE_MUTATING_TOOLS,
@@ -1762,6 +1763,9 @@ class MetaToolHandlers:
                     tool_name="remember",
                     success=True,
                     content="Already recorded — not stored again.",
+                    action_profile=ActionProfile(
+                        capabilities=frozenset({EffectCapability.RUN_CONTROL})
+                    ),
                 )
                 await self._loop._emit(action)
                 await self._loop._emit(ObservationEvent(tool_result=res, action_id=action.id))
@@ -1898,6 +1902,10 @@ class MetaToolHandlers:
             events,
             call_id=(action.tool_call.call_id if action.tool_call else ""),
         )
+        # Runtime overrides return the same ToolResult shape as the default
+        # helper. Bind the host-owned profile here as well so every actually
+        # dispatched fan-out is restart-stable regardless of the override.
+        result = result.model_copy(update={"action_profile": _DELEGATE_ACTION_PROFILE})
         await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
         # Fan-out is non-blocking — the driver keeps working
         # right after. The actionless valve still applies if

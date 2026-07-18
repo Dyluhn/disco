@@ -25,6 +25,7 @@ from disco.core.effects import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ..sandbox.base import strip_redundant_workspace_prefix
 
 _FS = frozenset({Capability.FILESYSTEM})
@@ -1377,6 +1378,7 @@ class FileWriteTool:
         args_model=FileWriteArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1538,6 +1540,7 @@ class FileAppendTool:
         args_model=FileAppendArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileAppendArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1621,6 +1624,7 @@ class FileListTool:
         needs=_FS,
         runs_in="sandbox",
         read_only=True,  # observes only — safe for the planner
+        behavior=declares(EffectCapability.WORKSPACE_INVENTORY_READ, planner_safe=True),
     )
 
     async def run(self, args: FileListArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1697,6 +1701,7 @@ class FileEditTool:
         args_model=FileEditArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileEditArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1833,6 +1838,7 @@ class FileReplaceLinesTool:
         args_model=FileReplaceLinesArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileReplaceLinesArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1950,6 +1956,7 @@ class FileInsertLinesTool:
         args_model=FileInsertLinesArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileInsertLinesArgs, ctx: ToolContext) -> ToolOutcome:
@@ -2073,6 +2080,7 @@ class FileStrReplaceTool:
         args_model=FileStrReplaceArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: FileStrReplaceArgs, ctx: ToolContext) -> ToolOutcome:
@@ -2352,6 +2360,7 @@ class ExactReplaceTool:
         args_model=ExactReplaceArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: ExactReplaceArgs, ctx: ToolContext) -> ToolOutcome:
@@ -2553,6 +2562,7 @@ class SafeWriteFileTool:
         args_model=SafeWriteFileArgs,
         needs=_FS,
         runs_in="sandbox",
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     async def run(self, args: SafeWriteFileArgs, ctx: ToolContext) -> ToolOutcome:

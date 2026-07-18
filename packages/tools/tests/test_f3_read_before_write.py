@@ -401,7 +401,7 @@ async def test_executor_refuses_blind_write_to_existing_file():
     """DefaultToolExecutor with any model_policy → file_write to an existing
     unread file hits the F1 gate. Guard is no longer assist-gated."""
     sbx = _FakeSandbox({"x.py": b"old\n"})
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(FileWriteTool())
     reg.register(FileReadTool())
     ex = DefaultToolExecutor(
@@ -425,7 +425,7 @@ async def test_executor_refuses_blind_write_to_existing_file():
 async def test_executor_assist_on_refuses_blind_write():
     """Same guard fires with weak model_policy (assist=True)."""
     sbx = _FakeSandbox({"x.py": b"old\n"})
-    reg = ToolRegistry()
+    reg = ToolRegistry(allow_unclassified_for_testing=True)
     reg.register(FileWriteTool())
     reg.register(FileReadTool())
     ex = DefaultToolExecutor(

@@ -17,9 +17,11 @@ from typing import Literal
 from disco.core import SecurityRisk
 from disco.core.context import ArtifactMemoryKind, ArtifactMemoryStore, ContextRecoveryError
 from disco.core.context.store import _MD_KINDS, _SINGLETON_KINDS
+from disco.core.effects import ActionProfile, EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares, narrows
 
 # [REL-2a] ARTIFACT_MANIFEST is an INTERNAL runtime manifest (host-folded per-artifact state), not
 # narrative/context memory the model reads or writes — exclude it from the model-facing kind list.
@@ -57,7 +59,20 @@ class ContextMemoryTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(
+            EffectCapability.WORKSPACE_CONTENT_READ,
+            EffectCapability.WORKSPACE_INVENTORY_READ,
+            EffectCapability.WORKSPACE_MUTATE,
+            planner_safe=False,
+        ),
     )
+
+    def action_profile(self, args: ContextMemoryArgs) -> ActionProfile:
+        if args.action == "read":
+            return narrows(EffectCapability.WORKSPACE_CONTENT_READ)
+        if args.action == "list":
+            return narrows(EffectCapability.WORKSPACE_INVENTORY_READ)
+        return narrows(EffectCapability.WORKSPACE_MUTATE)
 
     async def run(self, args: ContextMemoryArgs, ctx: ToolContext) -> ToolOutcome:
         if args.action == "list":

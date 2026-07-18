@@ -33,7 +33,7 @@ from disco.core.events import find_elided_arg_markers
 from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
 
-from .anatomy import Tool, ToolContext, ToolDef, ToolExecutionError
+from .anatomy import Tool, ToolContext, ToolDef, ToolExecutionError, ToolOutcome
 from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxError, SandboxInstance
@@ -621,20 +621,54 @@ class DefaultToolExecutor:
         # only determines whether new typed receipts may be trusted as exact.
         action_profile, profile_error = self._profile_for_validated_call(tool, args)
 
-        # 3. build context (sandbox handle + scoped capabilities; NO secrets)
-        ctx = await self._build_context(tool.definition)
+        # Invalid classifiers cannot authorize exact receipts, but the broad
+        # declared behavior is still durable evidence of what this invocation
+        # may have done. This fallback never expands beyond ToolBehavior.
+        persisted_profile = action_profile
+        if persisted_profile is None and tool.definition.behavior is not None:
+            persisted_profile = tool.definition.behavior.static_profile()
 
-        # 4. execute with a timeout; map every failure mode to a failed ToolResult
+        # 3–4. Build context and execute within one failure boundary. Context
+        # construction is part of a validated invocation and must not escape the
+        # executor or disappear from restart/replay evidence.
         try:
-            outcome = await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
+            ctx = await self._build_context(tool.definition)
+            raw_outcome = await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
+            # The Tool protocol is a runtime trust boundary, not merely a type
+            # hint. Revalidate even ToolOutcome instances so model_copy cannot
+            # smuggle an invalid result past the mapped failure path.
+            outcome = ToolOutcome.model_validate(
+                raw_outcome.model_dump() if isinstance(raw_outcome, ToolOutcome) else raw_outcome
+            )
         except TimeoutError:
-            return self._fail(call, "timeout", f"exceeded {ctx.timeout_s}s")
+            timeout_s = tool.definition.timeout_s or self._default_timeout_s
+            return self._fail(
+                call,
+                "timeout",
+                f"exceeded {timeout_s}s",
+                action_profile=persisted_profile,
+            )
         except CapabilityDenied as e:
-            return self._fail(call, "denied", f"capability not granted: {e}")
+            return self._fail(
+                call,
+                "denied",
+                f"capability not granted: {e}",
+                action_profile=persisted_profile,
+            )
         except SandboxError as e:
-            return self._fail(call, "sandbox_error", str(e))
+            return self._fail(
+                call,
+                "sandbox_error",
+                str(e),
+                action_profile=persisted_profile,
+            )
         except Exception as e:  # noqa: BLE001 — the tool's own failure is an observation
-            return self._fail(call, "execution_error", str(e))
+            return self._fail(
+                call,
+                "execution_error",
+                str(e),
+                action_profile=persisted_profile,
+            )
 
         # CONTRACT-ACTIVATE: advance the build-phase tracker on a successful call
         # (best-effort — a tracker error must never fail an otherwise-good tool run).
@@ -658,6 +692,7 @@ class DefaultToolExecutor:
                 action_profile,
                 profile_error,
             ),
+            action_profile=persisted_profile,
         )
 
     # ---- kill switch (§6.4) -------------------------------------------------
@@ -776,6 +811,7 @@ class DefaultToolExecutor:
         *,
         validation_errors: list[dict[str, Any]] | None = None,
         expected_schema: dict[str, Any] | None = None,
+        action_profile: ActionProfile | None = None,
     ) -> ToolResult:
         err = ToolExecutionError(
             kind=kind,
@@ -790,6 +826,7 @@ class DefaultToolExecutor:
             content=message,
             structured=err.model_dump(mode="json"),
             error=message,
+            action_profile=action_profile,
         )
 
     def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:

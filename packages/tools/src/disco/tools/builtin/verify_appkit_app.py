@@ -125,9 +125,11 @@ from disco.core.appkit.worker_inspect import (
     inspect_submit_support,
     inspect_worker,
 )
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from ._outcomes import fail_outcome
 from .browser import BrowserArgs, BrowserTool
 from .design_lint import DesignLintArgs, DesignLintTool
@@ -372,6 +374,7 @@ class VerifyAppKitAppTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=False,  # runs platform-owned npm build/preview work when Vite needs it
+        behavior=declares(EffectCapability.ARTIFACT_VERIFY, planner_safe=False),
     )
 
     async def run(self, args: VerifyAppKitAppArgs, ctx: ToolContext) -> ToolOutcome:

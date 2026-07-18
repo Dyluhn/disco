@@ -31,9 +31,11 @@ from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
 )
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 from .image_gen import ImageGenNotConfigured, select_image_backend
 
 # ---- args model --------------------------------------------------------------
@@ -367,6 +369,7 @@ class SlidesTool:
         base_risk=None,
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
         # The C2 path is two LLM stages (outline + fill) + one image generation PER
         # SLIDE (~10-30s each on a remote backend) + a render. On a real image-rich
         # deck that legitimately runs into minutes; the generic 300s executor cap was

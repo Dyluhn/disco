@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.effects import EffectCapability
 from pydantic import BaseModel
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 
 class ServerStatusArgs(BaseModel):
@@ -22,6 +24,7 @@ class ServerStatusTool:
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
         read_only=True,
+        behavior=declares(EffectCapability.PROCESS_OUTPUT_READ, planner_safe=True),
     )
 
     async def run(self, args: ServerStatusArgs, ctx: ToolContext) -> ToolOutcome:

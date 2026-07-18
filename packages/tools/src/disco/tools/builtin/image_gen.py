@@ -69,12 +69,14 @@ import time
 from typing import Protocol
 
 import httpx
+from disco.core.effects import EffectCapability
 from disco.core.llm.config_store import ConfigStore
 from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
 from disco.core.llm.secrets import SecretStore
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..behavior import declares
 
 _SVG_FALLBACK_HINT = (
     "Draw a bespoke inline SVG in the committed palette instead; do not leave the "
@@ -814,6 +816,7 @@ class ImageGenTool:
         # same binary write path.
         runs_in="sandbox",
         read_only=False,
+        behavior=declares(EffectCapability.WORKSPACE_MUTATE, planner_safe=False),
     )
 
     def __init__(self, backend: ImageBackend | None = None) -> None:
