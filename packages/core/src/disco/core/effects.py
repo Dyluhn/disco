@@ -302,6 +302,34 @@ class OpaqueEffectReceipt(BaseModel):
     trusted: Literal[False] = False
 
 
+class FinalWorkspaceSeal(BaseModel):
+    """Host-owned proof of the immutable workspace delivered after completion.
+
+    Per-action mutation receipts answer *which observed call changed a resource*.
+    This seal answers the separate question *which exact tree was persisted and
+    delivered*.  Keeping those claims separate lets arbitrary compilers and
+    shell-heavy custom targets remain usable without pretending that command
+    strings provide byte attribution.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    scope: ResourceKey
+    terminal_seq: int = Field(ge=1)
+    latest_effect_seq: int | None = Field(default=None, ge=1)
+    version_seq: int = Field(ge=1)
+    tree_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    file_count: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _ordered_fence(self) -> FinalWorkspaceSeal:
+        if self.latest_effect_seq is not None and self.latest_effect_seq >= self.terminal_seq:
+            raise ValueError("latest effect sequence must precede terminal sequence")
+        return self
+
+
 type EffectReceipt = Annotated[
     ObservationReceipt
     | MutationReceipt

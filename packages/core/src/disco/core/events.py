@@ -18,10 +18,10 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .dod import DoDPredicate
-from .effects import EffectReceipt
+from .effects import EffectReceipt, FinalWorkspaceSeal
 
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
@@ -688,6 +688,22 @@ class WorkspaceVersionEvent(BaseEvent):
     version_seq: int
     tree_digest: str
     trigger: str
+    # K6 final-state proof. Historical events remain valid with no seal; strict
+    # promotion requires this field only after the lifecycle/store migration.
+    final_seal: FinalWorkspaceSeal | None = None
+
+    @model_validator(mode="after")
+    def _seal_matches_version_event(self) -> WorkspaceVersionEvent:
+        seal = self.final_seal
+        if seal is None:
+            return self
+        if seal.version_seq != self.version_seq:
+            raise ValueError("final seal version sequence does not match event")
+        if seal.tree_digest != self.tree_digest:
+            raise ValueError("final seal tree digest does not match event")
+        if self.seq is not None and seal.terminal_seq >= self.seq:
+            raise ValueError("final seal terminal sequence must precede version event")
+        return self
 
 
 class WorkspaceRestoredEvent(BaseEvent):

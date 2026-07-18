@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..events import Event, EventAdapter, event_to_json_dict
+from ..events import Event, EventAdapter, WorkspaceVersionEvent, event_to_json_dict
 from ..migration import migrate_event
 from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
@@ -607,7 +607,14 @@ class SqliteEventStore(_ClosableSqliteStore):
         ).fetchone()
         next_seq = int(row["next"])
 
-        stored = event.model_copy(update={"seq": next_seq})
+        if isinstance(event, WorkspaceVersionEvent) and event.final_seal is not None:
+            scope = event.final_seal.scope
+            if scope.namespace != "workspace.tree" or scope.identifier != conversation_id:
+                raise ValueError("final workspace seal scope must match the persisted conversation")
+        # Sequence-dependent model invariants must run after the store assigns
+        # the canonical sequence. model_copy(update=...) intentionally skips
+        # validation and would allow an invalid terminal/version fence onto disk.
+        stored = EventAdapter.validate_python(event.model_dump(mode="python") | {"seq": next_seq})
         payload = event_to_json_dict(stored)
         estimate = _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
         if estimate > MAX_EVENT_PAYLOAD_BYTES:
