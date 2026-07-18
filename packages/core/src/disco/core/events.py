@@ -21,6 +21,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .dod import DoDPredicate
+from .effects import EffectReceipt
 
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
@@ -154,6 +155,10 @@ class ToolResult(BaseModel):
     content: str  # human/LLM-readable result text
     structured: dict[str, Any] | None = None  # optional machine payload
     error: str | None = None  # populated iff success is False
+    # K1 reliability-kernel shadow schema. Host-produced effect evidence is
+    # deliberately separate from model/domain-controlled ``structured`` data.
+    # The empty default keeps every historical event log backward compatible.
+    effect_receipts: tuple[EffectReceipt, ...] = ()
 
 
 class PlanStep(BaseModel):

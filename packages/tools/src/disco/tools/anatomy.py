@@ -23,8 +23,9 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from disco.core import SecurityRisk
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
+from disco.core.effects import EffectReceipt, ToolBehavior
 from disco.core.llm import ToolSpec
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Capability(str, Enum):
@@ -100,6 +101,9 @@ class ToolOutcome(BaseModel):
     # Artifacts produced in the workspace (paths), surfaced to the UI's
     # Inspector/Assets view (BoD §13.4/§13.5).
     artifacts: list[str] = Field(default_factory=list)
+    # Host-authored reliability evidence. Domain/model-controlled payloads stay
+    # in ``structured`` and are never promoted into these typed receipts.
+    effect_receipts: tuple[EffectReceipt, ...] = ()
 
 
 class ToolDef(BaseModel):
@@ -136,6 +140,19 @@ class ToolDef(BaseModel):
     # legitimately exceeds 300s — must declare a bigger budget here or the executor
     # kills it mid-run and the deliverable silently degrades (the plain-deck bug).
     timeout_s: int | None = None
+    # K1 shadow metadata. None explicitly means "not classified yet" during the
+    # K1→K3 migration; it is never inferred from a tool name. Existing behavior
+    # continues to use ``read_only`` until K3 classifies the complete inventory.
+    behavior: ToolBehavior | None = None
+
+    @model_validator(mode="after")
+    def _planner_safety_stays_compatible(self) -> ToolDef:
+        # K1 is schema-only: an explicit shadow declaration may not silently
+        # change the live planner surface. K3 can migrate the sole authority in
+        # an owner-reviewed package after every tool is classified.
+        if self.behavior is not None and self.behavior.planner_safe != self.read_only:
+            raise ValueError("behavior.planner_safe must match read_only during shadow mode")
+        return self
 
     def to_spec(self) -> ToolSpec:
         return ToolSpec(
@@ -210,6 +227,10 @@ class Tool(Protocol):
     definition: ToolDef
 
     async def run(self, args: Any, ctx: ToolContext) -> ToolOutcome: ...
+
+    # Mixed tools may optionally expose ``action_profile(args) -> ActionProfile``.
+    # It is intentionally duck-typed by the executor rather than required by
+    # this protocol, so existing tools remain source- and behavior-compatible.
 
 
 class ToolExecutionError(BaseModel):

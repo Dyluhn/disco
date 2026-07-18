@@ -21,11 +21,19 @@ from uuid import uuid4
 from disco.core import ToolCall, ToolResult
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.contract import ContractScopeGuard
+from disco.core.effects import (
+    ActionProfile,
+    EffectCapability,
+    EffectReceipt,
+    downgrade_effect_receipts,
+    validate_action_profile,
+    validate_effect_receipts,
+)
 from disco.core.events import find_elided_arg_markers
 from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
 
-from .anatomy import ToolContext, ToolDef, ToolExecutionError
+from .anatomy import Tool, ToolContext, ToolDef, ToolExecutionError
 from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxError, SandboxInstance
@@ -464,6 +472,67 @@ class DefaultToolExecutor:
             if t.definition.read_only
         )
 
+    def tool_names_with_capability(
+        self,
+        capability: EffectCapability,
+    ) -> frozenset[str]:
+        """Names of callable tools whose declared behavior may use ``capability``.
+
+        This is a shadow metadata query only: it does not alter advertising,
+        planning, confirmation, or execution policy. Unclassified tools are
+        omitted rather than guessed from their names or legacy flags.
+        """
+
+        return frozenset(
+            tool.definition.name
+            for tool in self._registry.in_scope(self._scope)
+            if tool.definition.behavior is not None
+            and capability in tool.definition.behavior.possible_capabilities
+        )
+
+    def unclassified_tool_names(self) -> frozenset[str]:
+        """Callable in-scope tools still awaiting K3 behavior metadata."""
+
+        return frozenset(
+            tool.definition.name
+            for tool in self._registry.in_scope(self._scope)
+            if tool.definition.behavior is None
+        )
+
+    def assert_behavior_complete(self) -> None:
+        """Fail a registry conformance gate if any callable tool is unclassified."""
+
+        missing = sorted(self.unclassified_tool_names())
+        if missing:
+            raise ValueError(f"callable tools lack behavior metadata: {', '.join(missing)}")
+
+    def action_profile_for_call(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> ActionProfile | None:
+        """Return the validated shadow action profile for one concrete call.
+
+        ``None`` is conservative and means unknown, out-of-scope, invalid
+        arguments, unclassified behavior, or an invalid classifier result. The
+        normal execute path still reports its existing detailed argument error.
+        """
+
+        tool = self._registry.get(tool_name, scope=self._scope)
+        if tool is None:
+            return None
+        normalized = normalize_list_item_wrappers(
+            tool_name,
+            tool.definition.args_model,
+            arguments,
+        )
+        try:
+            args = tool.definition.args_model.model_validate(normalized)
+        except (TypeError, ValueError, ValidationError):
+            return None
+        profile, _reason = self._profile_for_validated_call(tool, args)
+        return profile
+
     async def execute(self, call: ToolCall) -> ToolResult:
         if self._killed:
             return self._fail(call, "sandbox_error", "executor killed; instance revoked")
@@ -548,6 +617,10 @@ class DefaultToolExecutor:
                 expected_schema=tool.definition.args_model.model_json_schema(),
             )
 
+        # K1 shadow classification. It does not gate or reroute execution; it
+        # only determines whether new typed receipts may be trusted as exact.
+        action_profile, profile_error = self._profile_for_validated_call(tool, args)
+
         # 3. build context (sandbox handle + scoped capabilities; NO secrets)
         ctx = await self._build_context(tool.definition)
 
@@ -580,6 +653,11 @@ class DefaultToolExecutor:
             # DEFECT-2: tools report failure via content, not error; fall back so
             # AgentErrorEvent receives the diagnosis instead of bare "tool failed".
             error=outcome.error or (None if outcome.success else outcome.content),
+            effect_receipts=self._validated_receipts(
+                outcome.effect_receipts,
+                action_profile,
+                profile_error,
+            ),
         )
 
     # ---- kill switch (§6.4) -------------------------------------------------
@@ -612,6 +690,49 @@ class DefaultToolExecutor:
         mark_read(self._conversation_id, path)
 
     # ---- helpers ------------------------------------------------------------
+
+    @staticmethod
+    def _profile_for_validated_call(
+        tool: Tool,
+        args: BaseModel,
+    ) -> tuple[ActionProfile | None, str | None]:
+        behavior = tool.definition.behavior
+        if behavior is None:
+            return None, "tool behavior is unclassified"
+
+        classifier = getattr(tool, "action_profile", None)
+        if classifier is None:
+            return behavior.static_profile(), None
+        if not callable(classifier):
+            return None, "tool action_profile attribute is not callable"
+        try:
+            profile = classifier(args)
+            if not isinstance(profile, ActionProfile):
+                return None, "tool action classifier returned a non-ActionProfile value"
+            return validate_action_profile(behavior, profile), None
+        except Exception as exc:  # noqa: BLE001 — shadow metadata must not alter execution
+            return None, f"tool action classifier was invalid: {exc}"
+
+    @staticmethod
+    def _validated_receipts(
+        receipts: tuple[EffectReceipt, ...],
+        profile: ActionProfile | None,
+        profile_error: str | None,
+    ) -> tuple[EffectReceipt, ...]:
+        if not receipts:
+            return ()
+        if profile is None:
+            return downgrade_effect_receipts(
+                receipts,
+                reason=f"exact effect receipt not trusted: {profile_error or 'unknown profile'}",
+            )
+        try:
+            return validate_effect_receipts(profile, receipts)
+        except ValueError as exc:
+            return downgrade_effect_receipts(
+                receipts,
+                reason=f"exact effect receipt not trusted: {exc}",
+            )
 
     async def _build_context(self, tool_def: ToolDef) -> ToolContext:
         sandbox = self._sandbox if tool_def.runs_in == "sandbox" else None
