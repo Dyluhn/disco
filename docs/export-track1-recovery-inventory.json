@@ -1,12 +1,14 @@
 {
   "base_sha": "c0c4f728e8669dd27f88a9515383cc9a4a58f0d3",
+  "deletions": [],
   "excludes_self": "docs/export-track1-recovery-inventory.json",
   "expected_proof": {
     "failed": 0,
-    "passed": 41,
+    "passed": 88,
     "tests": [
       "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
       "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
+      "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py",
       "packages/tools/tests/test_security.py",
       "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py"
     ]
@@ -19,17 +21,22 @@
     }
   ],
   "files": {
-    "docs/export-track1-closeout-acceptance.sha256": "7f3199816ae71c49b72a6b1bf314f4ce2a10e36c36a5428db696d4d815d9fcd1",
-    "packages/agent-server/tests/integration/_closeout_live_support.py": "e34e0f1092a9e31b012199df75df26b373fecd26892a2b3c94e7786358cbc093",
-    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "55bdd6c0357bb9a260fbb5f23e346605200b0bdf03ec0ea8ed320aeeb68bed31",
-    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "920388773bcd14638d2562e813dfa40c835ca163b51433ec3b62c1ce3c4e1676",
-    "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "35df19742f1c3c28dbe797bc208e68640a44f4a8040803614bee64624e6ca55d",
-    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "69a5fa265646aec68822b243a9cfac13f886d04acde3ce9923460b77b1b4cc4e",
-    "packages/core/src/disco/core/release/detect.py": "c63b15361f2038009274d76dd1a81a912c96b8a5cac60507c0ade9846a904c29",
-    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "aa8b20bac23367758e0f1cdc3b5eb53210e2bdd21b9d640e7b8e8fce48c3b573",
-    "packages/tools/tests/test_security.py": "da91672ffb43aa7a4994c77b46a62de5c07506e64e3abf1cc569ea9bcf103b7e",
-    "scripts/export_track1_candidate_receipt.py": "ebeb852be395db6758bacf8ecbfa6f39ad5fc8016072eb906d75ce807c06a4df",
-    "scripts/gen_closeout_acceptance_manifest.py": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8"
+    "docs/export-track1-closeout-acceptance.sha256": "c81f17188e04ae6671a9a0ee7f2f2c311ce4a5372cdf7696bce40a58ff81a8ca",
+    "packages/agent-server/tests/integration/_closeout_live_support.py": "90d26cf2f78e68db5d769c1b9693387ece5f99779824241aad99168e7d0f1636",
+    "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+    "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py": "dadc38c955441d6901a0548e573cd0a8fc47d1a1b09075eef9a1aea5925dba83",
+    "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "4b10912b1005c225950d4a17ff5f05149304a83344cfe4e7ffc4edcf5d0d4bfe",
+    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "4a0df4a387b94b17efa949c17eecf52b5354cd894858927e895497e96d3d8e7e",
+    "packages/agent-server/tests/test_disco_verify_runner.py": "d7bf919bdaabc5f16ddfad2c40a974a0e20ec4aa0e943831b892162c164f8bf2",
+    "packages/core/src/disco/core/release/detect.py": "a33cf05773a54f94c7af01ca2a8550d87e50101fc5804c8c732a882f81fe2e77",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "7d615cdcab6f109a99901802ad080c53bc7008dc95e26ab1a34e988b2e9eb6ea",
+    "packages/tools/src/disco/tools/verify/heavy_validators.py": "ed67c2e157176248de4375364c9ea42ad11b04c9520ba1fcb8c5d4f1f31b54a9",
+    "packages/tools/tests/test_heavy_validators.py": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
+    "packages/tools/tests/test_security.py": "45b311043f39a4cc7868d7ba5d1fe086a46adaf7989c7643eed22dbbf900f533",
+    "scripts/export_track1_candidate_receipt.py": "6e77a2a24e945c8a20be0cf605acabff1f287b0ba1fbbd51cbc724889b0e01fd",
+    "scripts/gen_closeout_acceptance_manifest.py": "dc698b97fff9ce3fdd46075413074931d11dc4fed085cd44b67552e0ac76c6b9",
+    "scripts/verify_export_track1_closeout.py": "2871dfd3ba08dabfc02314515d22a8c131d9f72ac6c45f4542bd47e7824ad1f2"
   },
   "note": "Hash inventory for the Export Track-1 recovery (base c0c4f728..HEAD). Regenerate with scripts/export_track1_candidate_receipt.py --emit-inventory (authoring aid; the protection is human review of this file's diff + the operator-supplied HEAD). external_evidence is OPTIONAL and NON-AUTHORITATIVE (owner policy 2026-07-17): bytes are pinned for a tamper-evident trail; the receipt never executes it.",
   "schema": "export-track1-recovery-inventory/v1"
