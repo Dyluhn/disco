@@ -4,7 +4,7 @@
   "excludes_self": "docs/export-track1-recovery-inventory.json",
   "expected_proof": {
     "failed": 0,
-    "passed": 88,
+    "passed": 91,
     "tests": [
       "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
       "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
@@ -27,9 +27,9 @@
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
     "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py": "dadc38c955441d6901a0548e573cd0a8fc47d1a1b09075eef9a1aea5925dba83",
     "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "4b10912b1005c225950d4a17ff5f05149304a83344cfe4e7ffc4edcf5d0d4bfe",
-    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "4a0df4a387b94b17efa949c17eecf52b5354cd894858927e895497e96d3d8e7e",
+    "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "43236bcf198c0a2534bf0700f8acb7fb848ee48500727ceeadcf8d8081bcb486",
     "packages/agent-server/tests/test_disco_verify_runner.py": "d7bf919bdaabc5f16ddfad2c40a974a0e20ec4aa0e943831b892162c164f8bf2",
-    "packages/core/src/disco/core/release/detect.py": "a33cf05773a54f94c7af01ca2a8550d87e50101fc5804c8c732a882f81fe2e77",
+    "packages/core/src/disco/core/release/detect.py": "da306abcdf51009f20041c777dc12a72f689a2b97d62b69264f695711c3c8142",
     "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "7d615cdcab6f109a99901802ad080c53bc7008dc95e26ab1a34e988b2e9eb6ea",
     "packages/tools/src/disco/tools/verify/heavy_validators.py": "ed67c2e157176248de4375364c9ea42ad11b04c9520ba1fcb8c5d4f1f31b54a9",
     "packages/tools/tests/test_heavy_validators.py": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
