@@ -107,6 +107,14 @@ _EMPTY_REASONING_REPAIR_REMINDER = (
 _PROSE_NOOP_REPAIR_REMINDER = (
     "You described the next action instead of performing it — call the tool for it in THIS turn."
 )
+# During an authenticated redundant-read escape, general execution and the
+# read-only fan-out helper are equivalent content-access capabilities: r15 used
+# ``shell`` + ``wc``/``sed``, while ``delegate_explore`` is explicitly wired to
+# a helper with ``file_read``. Bind the capability at the tool surface rather
+# than parsing arbitrary command languages or prompts.
+_STUCK_ESCAPE_EQUIVALENT_READ_BYPASS_TOOLS = frozenset(
+    {"shell", "shell_exec", "code_exec", "delegate_explore"}
+)
 
 
 def _view_has_current_objective(view: View) -> bool:
@@ -702,7 +710,7 @@ class Driver:
         # may not launder the escape state and silently re-enable it.
         in_escape = escape_seq is not None and not recovered_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-        escape_blocked_tools = self.active_stuck_escape_blocked_tools(events)
+        escape_blocked_tools = self.stuck_escape_blocked_tools_for_step(events)
 
         cached_mode = self._loop.mode
         mode = self._loop._reconcile_mode_from_events(events)
@@ -749,12 +757,49 @@ class Driver:
         budget is derived entirely from append-only event pairs so restart and
         replay reconstruct the same offered-tool surface.
         """
-        escape_seq = signals.stuck_escape_seq(events)
-        if escape_seq is None:
-            return frozenset()
-        blocked_tools = signals.stuck_escape_blocked_tools(events)
+        blocked_tools, latest_receipt_seq, consumed = self._stuck_escape_verification_state(events)
         if not blocked_tools:
             return frozenset()
+        if latest_receipt_seq is None:
+            return blocked_tools
+        return frozenset(consumed)
+
+    def stuck_escape_verification_consumptions(self, events: list[Event]) -> dict[str, int]:
+        """Latest successful one-shot verifications for the current receipt.
+
+        Values are durable ObservationEvent sequence numbers.  The engine binds
+        one model-facing progression reminder to each value, so a restart neither
+        loses the decision-point guidance nor emits it on every subsequent turn.
+        """
+        _blocked_tools, _latest_receipt_seq, consumed = self._stuck_escape_verification_state(
+            events
+        )
+        return consumed
+
+    def stuck_escape_blocked_tools_for_step(self, events: list[Event]) -> frozenset[str]:
+        """Complete temporary tool boundary for the current read-loop escape.
+
+        ``file_read`` keeps H553's receipt-gated one-shot verification budget.
+        General execution stays withheld for the full authenticated escape
+        episode because it can bypass that capability boundary without yielding
+        a typed read receipt.  A new user turn clears the underlying escape marker
+        and restores the ordinary surface.
+        """
+        active = set(self.active_stuck_escape_blocked_tools(events))
+        if "file_read" in signals.stuck_escape_blocked_tools(events):
+            active.update(_STUCK_ESCAPE_EQUIVALENT_READ_BYPASS_TOOLS)
+        return frozenset(active)
+
+    def _stuck_escape_verification_state(
+        self, events: list[Event]
+    ) -> tuple[frozenset[str], int | None, dict[str, int]]:
+        """Reconstruct authenticated receipt and verification-consumption state."""
+        escape_seq = signals.stuck_escape_seq(events)
+        if escape_seq is None:
+            return frozenset(), None, {}
+        blocked_tools = signals.stuck_escape_blocked_tools(events)
+        if not blocked_tools:
+            return frozenset(), None, {}
         actions = {
             event.id: event
             for event in events
@@ -782,10 +827,10 @@ class Driver:
                 continue
             receipt_seqs.append(event.seq)
         if not receipt_seqs:
-            return blocked_tools
+            return blocked_tools, None, {}
         latest_receipt_seq = max(receipt_seqs)
 
-        consumed: set[str] = set()
+        consumed: dict[str, int] = {}
         for event in events:
             if (
                 not isinstance(event, ObservationEvent)
@@ -807,8 +852,8 @@ class Driver:
                 or event.tool_result.call_id != action.tool_call.call_id
             ):
                 continue
-            consumed.add(action.tool_call.tool_name)
-        return frozenset(consumed)
+            consumed[action.tool_call.tool_name] = event.seq
+        return blocked_tools, latest_receipt_seq, consumed
 
     async def _repair_degenerate_step(
         self,

@@ -92,6 +92,7 @@ from .finish import (  # noqa: F401 — finish helpers/consts re-exported for ba
     _static_verify_command,
     host_verify_authoritative_enabled,
 )
+from .messages import STUCK_ESCAPE_PROGRESS_DIAGNOSTIC, stuck_escape_progress_reminder
 from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
     _FANOUT_INPUT_MAX_CHARS,
     Observer,
@@ -1437,11 +1438,25 @@ class AgentLoop:
         tool_call = step.tool_call
         if tool_call is None:
             return Disp.FALLTHROUGH
-        blocked_tools = self._driver.active_stuck_escape_blocked_tools(events)
+        blocked_tools = self._driver.stuck_escape_blocked_tools_for_step(events)
         if tool_call.tool_name not in blocked_tools:
             return Disp.FALLTHROUGH
 
         prior_refusals = signals.stuck_escape_refusal_count(events, tool_call.tool_name)
+        loop_causing_tools = signals.stuck_escape_blocked_tools(events)
+        if tool_call.tool_name in loop_causing_tools:
+            refusal_detail = (
+                f"`{tool_call.tool_name}` is withheld because repeating it caused the "
+                "current loop. It remains unavailable until a different tool produces "
+                "a trusted changed-state receipt. Choose a different offered tool now."
+            )
+        else:
+            refusal_detail = (
+                f"`{tool_call.tool_name}` is temporarily withheld during the current "
+                "read-loop recovery because general execution or delegated exploration "
+                "can bypass the typed read quarantine. Use a structured mutation, "
+                "verifier, or finish tool instead."
+            )
         action = ActionEvent(
             thought=step.thought,
             tool_call=tool_call,
@@ -1452,11 +1467,7 @@ class AgentLoop:
         await self._emit(
             AgentErrorEvent(
                 error=(f"{signals.STUCK_ESCAPE_REFUSAL_ERROR_PREFIX}{tool_call.tool_name}"),
-                detail=(
-                    f"`{tool_call.tool_name}` is withheld because repeating it caused the "
-                    "current loop. It remains unavailable until a different tool produces "
-                    "a trusted changed-state receipt. Choose a different offered tool now."
-                ),
+                detail=refusal_detail,
                 action_id=action.id,
                 tool_call_id=tool_call.call_id,
             )
@@ -1465,14 +1476,45 @@ class AgentLoop:
             await self._land_blocked(
                 reason="stuck_escape_tool_quarantine",
                 guidance=(
-                    "The model selected the same quarantined loop-causing tool twice "
-                    "without a trusted intervening mutation. The tool was not executed."
+                    "The model selected the same quarantined recovery tool twice during "
+                    "the current escape episode. The tool was not executed."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="stuck_escape_tool_quarantine",
             )
             return Disp.HALT
         return Disp.CONTINUE
+
+    async def _gate_stuck_escape_progression(self, events: list[Event]) -> Disp:
+        """Persist one progress-only instruction after each consumed read allowance."""
+        for tool_name, observation_seq in sorted(
+            self._driver.stuck_escape_verification_consumptions(events).items()
+        ):
+            already_emitted = any(
+                isinstance(event, MessageEvent)
+                and event.source == EventSource.ENVIRONMENT
+                and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
+                and event.meta.get("verification_observation_seq") == observation_seq
+                for event in events
+            )
+            if already_emitted:
+                continue
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=stuck_escape_progress_reminder(tool_name),
+                    ),
+                    meta={
+                        "diagnostic": STUCK_ESCAPE_PROGRESS_DIAGNOSTIC,
+                        "tool_name": tool_name,
+                        "verification_observation_seq": observation_seq,
+                    },
+                )
+            )
+            return Disp.CONTINUE
+        return Disp.FALLTHROUGH
 
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
         # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
@@ -1806,6 +1848,13 @@ class AgentLoop:
                     continue
                 if disp is Disp.HALT:
                     return await self.get_state()
+
+                # H583: once the single post-receipt verification read is consumed,
+                # persist an observation-bound instruction before the next provider
+                # request. This is append-only/restart-stable, not a hidden requery.
+                disp = await self._gate_stuck_escape_progression(events)
+                if disp is Disp.CONTINUE:
+                    continue
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)

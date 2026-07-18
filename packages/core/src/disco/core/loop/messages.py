@@ -309,6 +309,9 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "different sub-task entirely. Do not retry what just failed. "
     "If the work is already complete, do NOT re-verify by re-reading "
     "unchanged files — call `serve`/`finish` now.\n"
+    "During this read-loop recovery, general shell/code execution and delegated "
+    "exploration are also unavailable: do not use them to reread the same bytes "
+    "under another name.\n"
     "Before you move, `think` for one line about WHY the last attempt failed, "
     "then pick a genuinely different action.\n"
     "<!-- disco:escape-attempt=0 -->\n"
@@ -342,6 +345,22 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "<!-- disco:escape-attempt=4 -->\n"
     "</system-reminder>",
 )
+
+STUCK_ESCAPE_PROGRESS_DIAGNOSTIC = "stuck_escape_progress_required"
+
+
+def stuck_escape_progress_reminder(tool_name: str) -> str:
+    """Decision-point guidance after the one allowed verification is consumed."""
+    return (
+        "<system-reminder>\n"
+        f"The one allowed `{tool_name}` verification for the latest changed-state receipt "
+        "has completed. That read allowance is consumed and the tool is quarantined again. "
+        "Do not reread the same content through file tools, shell/code execution, "
+        "or delegated exploration. "
+        "Advance the actual deliverable now: create or edit a missing required artifact, "
+        "use a structured verifier, or call `serve`/`finish` if the work is complete.\n"
+        "</system-reminder>"
+    )
 
 
 def _stuck_escape_reminder(attempt_count: int) -> str:

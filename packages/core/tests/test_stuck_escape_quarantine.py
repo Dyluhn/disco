@@ -16,6 +16,8 @@ from disco.core import (
 )
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import StuckDetector, StuckThresholds, signals
+from disco.core.loop.control import Disp
+from disco.core.loop.messages import STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
 from event_fakes import action, observation
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 
@@ -31,6 +33,9 @@ class _CoverageExecutor(FakeExecutor):
                 ToolSpec(name="file_write", description="write", parameters_schema={}),
                 ToolSpec(name="file_append", description="append", parameters_schema={}),
                 ToolSpec(name="shell", description="shell", parameters_schema={}),
+                ToolSpec(name="shell_exec", description="shell exec", parameters_schema={}),
+                ToolSpec(name="code_exec", description="code exec", parameters_schema={}),
+                ToolSpec(name="verify_web_app", description="verify app", parameters_schema={}),
                 ToolSpec(name="think", description="think", parameters_schema={}),
             ]
         )
@@ -399,6 +404,14 @@ async def test_h553_newer_mutation_replenishes_exactly_one_verification_read():
         "file_read",
         "file_write",
     ]
+    reminders = [
+        event
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
+    ]
+    assert len(reminders) == 2
+    assert len({event.meta["verification_observation_seq"] for event in reminders}) == 2
 
 
 async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
@@ -505,8 +518,10 @@ async def test_h536_receiptless_success_cannot_release_quarantine():
     assert "file_read" not in set(agent.seen_tools[6])
     assert "file_read" not in set(agent.seen_tools[7])
     assert "file_read" in set(agent.seen_tools[8])
+    assert all("shell" not in set(tools) for tools in agent.seen_tools[5:])
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
-    assert [call.tool_name for call in executor.calls][-2:] == ["shell", "file_write"]
+    assert [call.tool_name for call in executor.calls][-1] == "file_write"
+    assert all(call.tool_name != "shell" for call in executor.calls)
     assert (
         sum(
             isinstance(event, ActionEvent)
@@ -516,6 +531,200 @@ async def test_h536_receiptless_success_cannot_release_quarantine():
         )
         == 6
     )
+    assert signals.stuck_escape_refusal_count(events, "shell") == 1
+
+
+async def test_h583_general_exec_bypass_is_refused_then_progress_reminder_drives_deliverable():
+    executor = _CoverageExecutor()
+
+    def write_missing_deliverable(view):  # noqa: ANN001, ANN202 - scripted agent seam
+        reminders = [
+            message
+            for message in view.messages
+            if "The one allowed `file_read` verification" in message.content
+        ]
+        assert len(reminders) == 1
+        assert "Advance the actual deliverable now" in reminders[0].content
+        return action_step(
+            "file_write",
+            {"path": "index.html", "content": "<main>bakery</main>"},
+        )
+
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step(
+                "shell",
+                {"command": "wc -l index.html && sed -n '1,200p' index.html"},
+            ),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            action_step("file_read", {"path": "styles.css"}),
+            write_missing_deliverable,
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    async def forbidden_fanout(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("delegate_explore bypass reached fan-out execution")
+
+    loop._run_fanout = forbidden_fanout  # noqa: SLF001 - production-wired capability surface
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    for tools in agent.seen_tools[5:]:
+        assert {"shell", "shell_exec", "code_exec", "delegate_explore"}.isdisjoint(tools)
+    assert {"file_write", "verify_web_app", "serve", "finish"} <= set(agent.seen_tools[5])
+    assert "file_read" not in set(agent.seen_tools[5])
+    assert "file_read" not in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert "file_read" not in set(agent.seen_tools[9])
+    assert [call.tool_name for call in executor.calls][-3:] == [
+        "file_write",
+        "file_read",
+        "file_write",
+    ]
+    assert all(call.tool_name != "shell" for call in executor.calls)
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
+    assert signals.stuck_escape_refusal_count(events, "shell") == 1
+    assert not any(
+        isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:file_read"
+        and event.seq is not None
+        and event.seq
+        > next(
+            reminder.seq
+            for reminder in events
+            if isinstance(reminder, MessageEvent)
+            and reminder.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
+        )
+        for event in events
+    )
+
+    reminders = [
+        event
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
+    ]
+    assert len(reminders) == 1
+    verification_seq = reminders[0].meta["verification_observation_seq"]
+    verification = next(event for event in events if event.seq == verification_seq)
+    assert isinstance(verification, ObservationEvent)
+    assert verification.tool_result.tool_name == "file_read"
+    assert verification.tool_result.success is True
+
+    restarted, _ = build_loop(ScriptedAgent([finish_step()]), store=store, executor=executor)
+    assert (  # noqa: SLF001 - direct restart reconstruction contract
+        await restarted._gate_stuck_escape_progression(events)
+    ) is Disp.FALLTHROUGH
+    after_restart_check = await store.get_events("conv")
+    assert len(after_restart_check) == len(events)
+
+
+def test_h583_general_exec_boundary_is_authenticated_and_resets_on_new_user_turn():
+    executor = _CoverageExecutor()
+    loop, _store = build_loop(ScriptedAgent([]), executor=executor)
+    block = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape_block:file_read",
+    ).model_copy(update={"seq": 1})
+    escape = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape",
+    ).model_copy(update={"seq": 2})
+
+    blocked = loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
+        [block, escape]
+    )
+    assert blocked == frozenset(
+        {"file_read", "shell", "shell_exec", "code_exec", "delegate_explore"}
+    )
+    allowed = loop._driver.allowed_tool_names_for_mode(  # noqa: SLF001
+        OperatingMode.LONG_HORIZON,
+        available_tools=executor.available_tools(),
+        blocked_tools=blocked,
+    )
+    assert {
+        "shell",
+        "shell_exec",
+        "code_exec",
+        "delegate_explore",
+        "file_read",
+    }.isdisjoint(allowed)
+    assert {"file_write", "verify_web_app", "serve", "finish"} <= allowed
+    spoofed_block = block.model_copy(update={"source": EventSource.AGENT})
+    assert (
+        loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
+            [spoofed_block, escape]
+        )
+        == frozenset()
+    )
+    new_turn = MessageEvent(
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="continue with a revised request"),
+    ).model_copy(update={"seq": 3})
+    assert (
+        loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
+            [block, escape, new_turn]
+        )
+        == frozenset()
+    )
+
+
+async def test_h587_delegate_explore_cannot_proxy_quarantined_file_read():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step(
+                "delegate_explore",
+                {
+                    "question": "Read index.html and return the missing middle section",
+                    "context": "Use file_read on index.html",
+                },
+            ),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+    fanout_calls = 0
+
+    async def fanout(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal fanout_calls
+        fanout_calls += 1
+        raise AssertionError("quarantined delegate_explore reached fan-out execution")
+
+    loop._run_fanout = fanout  # noqa: SLF001 - production-wired capability surface
+
+    await loop.send_message("build the bakery landing page")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "delegate_explore" not in set(agent.seen_tools[5])
+    assert fanout_calls == 0
+    assert signals.stuck_escape_refusal_count(events, "delegate_explore") == 1
+    refusal = next(
+        event
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:delegate_explore"
+    )
+    refused_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == refusal.action_id
+    )
+    assert refused_action.tool_call.tool_name == "delegate_explore"
+    assert refusal.tool_call_id == refused_action.tool_call.call_id
 
 
 async def test_hallucinated_quarantined_read_is_paired_not_executed():
@@ -582,7 +791,8 @@ async def test_quarantined_read_requery_exhaustion_lands_explicitly():
 
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
-    assert [call.tool_name for call in executor.calls][-1] == "shell"
+    assert all(call.tool_name != "shell" for call in executor.calls)
+    assert signals.stuck_escape_refusal_count(events, "shell") == 1
     assert signals.stuck_escape_refusal_count(events, "file_read") == 2
     refused_actions = [
         event
