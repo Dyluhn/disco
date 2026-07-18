@@ -50,6 +50,7 @@ import ast
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -1042,7 +1043,7 @@ def _run_capture_lane(
     return lane
 
 
-def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
+def _run_live_lane(repo: Path, evidence_dir: Path, run_id: str) -> LaneResult:
     docker_versions = _write_docker_versions(repo, evidence_dir)
     junit_path = evidence_dir / "pytest-live.xml"
     report_path = evidence_dir / _LIVE_REPORT_FILE
@@ -1051,11 +1052,18 @@ def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     # report and the fail-closed path fires, rather than a reused dir's earlier green result.
     junit_path.unlink(missing_ok=True)
     report_path.unlink(missing_ok=True)
+    # C9-02 P4-2: CLEAR the per-fixture evidence dir before the run and bind every record
+    # to this run's nonce, so a stale family from a prior run in a reused evidence dir can
+    # never satisfy completeness.
+    fixtures_dir = evidence_dir / _EVIDENCE_FIXTURE_SUBDIR
+    if fixtures_dir.exists():
+        shutil.rmtree(fixtures_dir)
     # C9-02: the live lane emits GENUINE per-fixture evidence into the evidence dir
     # (the support module reads CLOSEOUT_EVIDENCE_DIR); the verifier aggregates and
     # validates it below before `passed:true`.
     live_env = _pytest_env()
     live_env["CLOSEOUT_EVIDENCE_DIR"] = str(evidence_dir)
+    live_env["CLOSEOUT_EVIDENCE_RUN_ID"] = run_id
     proc = _run(
         [
             sys.executable,
@@ -1700,59 +1708,103 @@ def _read_family_evidence(fixtures_dir: Path, kind: str) -> dict[str, dict[str, 
     return out
 
 
-def _finalize_live_evidence(evidence_dir: Path) -> tuple[bool, list[str]]:
+def _finalize_live_evidence(evidence_dir: Path, run_id: str) -> tuple[bool, list[str]]:
     """Aggregate the live lane's GENUINE per-fixture evidence into the four required
     artifacts and VALIDATE their contents before ``passed:true`` (C9-02). Overwrites the
     honest placeholder markers written by ``_write_docker_host_artifacts`` with the real
     aggregate. Returns ``(ok, reasons)``.
 
-    Validation (fail-closed): all six bundle families present; each digest carries a
-    response + zip SHA-256, a non-empty parsed ``release.json``, and a
-    ``binding_matches_response`` proof; each family has an inspect record with at least
-    one image Id; each family's compose-ps has at least one row; each family's cleanup
-    proves zero remaining labelled resources with disk before/after captured. A status
-    string or bare file existence can never satisfy this gate."""
+    Validation is STRICT SCHEMA + INTERNAL CONSISTENCY, not truthiness (C9-02 P4-1):
+    every record must carry the run's nonce (``run_id``, P4-2); digest SHA-256s must be
+    64-hex and the zip differs from the response; the parsed ``release.json`` must carry
+    a ``provenance.assessment`` that agrees with the recorded response and the recorded
+    download status must be 200; each image Id must be a real docker id; each ps row
+    must carry a service+state; and cleanup's ``zero_remaining`` must be CONSISTENT with
+    an all-empty ``remaining`` (not merely asserted) with real disk before/after. A
+    contradictory or self-reported payload cannot satisfy this gate."""
     fixtures_dir = evidence_dir / _EVIDENCE_FIXTURE_SUBDIR
     digests = _read_family_evidence(fixtures_dir, "digest")
     ps_rows = _read_family_evidence(fixtures_dir, "compose-ps")
     inspects = _read_family_evidence(fixtures_dir, "inspect")
     cleanups = _read_family_evidence(fixtures_dir, "cleanup")
 
+    hex64 = re.compile(r"^[0-9a-f]{64}$")
+    image_id_re = re.compile(r"^(sha256:)?[0-9a-f]{12,64}$")
     reasons: list[str] = []
+
+    def _run_id_ok(rec: object) -> bool:
+        return isinstance(rec, dict) and rec.get("_run_id") == run_id
+
     for family in _REQUIRED_EVIDENCE_FAMILIES:
         d = digests.get(family)
         if d is None:
             reasons.append(f"live evidence: no bundle-digest for family {family!r}")
+        elif not _run_id_ok(d):
+            reasons.append(f"live evidence: {family} digest is not from this run (run_id mismatch)")
         else:
-            if not d.get("response_sha256") or not d.get("zip_sha256"):
-                reasons.append(f"live evidence: {family} digest missing response/zip sha256")
-            if not isinstance(d.get("release_json"), dict) or not d.get("release_json"):
-                reasons.append(f"live evidence: {family} has an empty parsed release.json")
+            if d.get("family") != family:
+                reasons.append(f"live evidence: {family} digest payload family mislabelled")
+            resp_sha, zip_sha = str(d.get("response_sha256", "")), str(d.get("zip_sha256", ""))
+            if not hex64.match(resp_sha) or not hex64.match(zip_sha):
+                reasons.append(f"live evidence: {family} digest sha256 not 64-hex")
+            elif resp_sha == zip_sha:
+                reasons.append(f"live evidence: {family} response and zip sha256 identical")
+            rj = d.get("release_json")
+            prov = rj.get("provenance") if isinstance(rj, dict) else None
+            resp = d.get("release_response")
+            resp_assessment = resp.get("assessment") if isinstance(resp, dict) else None
+            if not (isinstance(prov, dict) and prov.get("assessment")):
+                reasons.append(f"live evidence: {family} release.json lacks provenance.assessment")
+            elif prov.get("assessment") != resp_assessment:
+                reasons.append(f"live evidence: {family} provenance/response assessment disagree")
+            sb = d.get("source_binding")
+            if not (isinstance(sb, dict) and sb.get("download_status") == 200):
+                reasons.append(f"live evidence: {family} bound download was not a 200")
             if d.get("binding_matches_response") is not True:
                 reasons.append(
                     f"live evidence: {family} source binding does not match the response"
                 )
         ins = inspects.get(family)
-        images = ins.get("images") if isinstance(ins, dict) else None
-        has_image_id = isinstance(images, list) and any(
-            isinstance(i, dict) and i.get("Id") for i in images
-        )
-        if not has_image_id:
-            reasons.append(f"live evidence: {family} inspect has no real image Id")
-        ps = ps_rows.get(family)
-        rows = ps.get("rows") if isinstance(ps, dict) else None
-        if not (isinstance(rows, list) and rows):
-            reasons.append(f"live evidence: {family} compose-ps captured no rows")
-        cl = cleanups.get(family)
-        if not isinstance(cl, dict):
-            reasons.append(f"live evidence: {family} has no cleanup record")
+        if not _run_id_ok(ins):
+            reasons.append(
+                f"live evidence: {family} inspect is not from this run (run_id mismatch)"
+            )
         else:
-            if cl.get("zero_remaining") is not True:
+            images = ins.get("images") if isinstance(ins, dict) else None
+            has_image_id = isinstance(images, list) and any(
+                isinstance(i, dict) and image_id_re.match(str(i.get("Id", ""))) for i in images
+            )
+            if not has_image_id:
+                reasons.append(f"live evidence: {family} inspect has no valid docker image Id")
+        ps = ps_rows.get(family)
+        if not _run_id_ok(ps):
+            reasons.append(
+                f"live evidence: {family} compose-ps is not from this run (run_id mismatch)"
+            )
+        else:
+            rows = ps.get("rows") if isinstance(ps, dict) else None
+            has_row = isinstance(rows, list) and any(
+                isinstance(r, dict) and r.get("Service") and r.get("State") for r in rows
+            )
+            if not has_row:
+                reasons.append(f"live evidence: {family} compose-ps has no service+state row")
+        cl = cleanups.get(family)
+        if not _run_id_ok(cl):
+            reasons.append(
+                f"live evidence: {family} cleanup is not from this run (run_id mismatch)"
+            )
+        else:
+            remaining = cl.get("remaining") if isinstance(cl, dict) else None
+            all_empty = isinstance(remaining, dict) and all(
+                isinstance(v, list) and not v for v in remaining.values()
+            )
+            if cl.get("zero_remaining") is not True or not all_empty:
                 reasons.append(
-                    f"live evidence: {family} cleanup did not reach zero remaining resources"
+                    f"live evidence: {family} cleanup did not consistently reach zero remaining"
                 )
-            if not cl.get("disk_before") or not cl.get("disk_after"):
-                reasons.append(f"live evidence: {family} cleanup missing disk before/after")
+            db, da = cl.get("disk_before"), cl.get("disk_after")
+            if not (isinstance(db, dict) and db) or not (isinstance(da, dict) and da):
+                reasons.append(f"live evidence: {family} cleanup missing real disk before/after")
 
     # Aggregate the four required artifacts (overwriting the placeholder markers).
     (evidence_dir / "bundle-digests.json").write_text(
@@ -2032,7 +2084,8 @@ def main(argv: list[str] | None = None) -> int:
     g11 = _run_g11_compile_lane(repo, evidence_dir)
     lanes.append(g11)
 
-    live = _run_live_lane(repo, evidence_dir)
+    live_run_id = secrets.token_hex(16)
+    live = _run_live_lane(repo, evidence_dir, live_run_id)
     lanes.append(live)
 
     # C9-03: the governed A/E capture lane is a SEPARATE required lane with a frozen exact
@@ -2056,7 +2109,7 @@ def main(argv: list[str] | None = None) -> int:
     # lane failed), the honest markers above stand and this gate is vacuously satisfied
     # (the failed lane already forces passed:false).
     if docker_available and live.green is True:
-        live_evidence_ok, live_evidence_reasons = _finalize_live_evidence(evidence_dir)
+        live_evidence_ok, live_evidence_reasons = _finalize_live_evidence(evidence_dir, live_run_id)
     else:
         live_evidence_ok, live_evidence_reasons = True, []
 

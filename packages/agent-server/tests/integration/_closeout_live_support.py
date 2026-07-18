@@ -602,12 +602,19 @@ def evidence_dir() -> Path | None:
     return out
 
 
+EVIDENCE_RUN_ID_ENV = "CLOSEOUT_EVIDENCE_RUN_ID"
+
+
 def _write_family_evidence(family: str, kind: str, payload: dict[str, object]) -> None:
     out = evidence_dir()
     if out is None:
         return
+    # Bind every record to the current run's nonce (C9-02 P4-2): the aggregator requires
+    # all families share ONE run id, so a stale file from a prior run can never satisfy
+    # completeness for a reused evidence dir.
+    stamped = {"_run_id": os.environ.get(EVIDENCE_RUN_ID_ENV, ""), **payload}
     (out / f"{family}.{kind}.json").write_text(
-        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        json.dumps(stamped, indent=2) + "\n", encoding="utf-8"
     )
 
 
