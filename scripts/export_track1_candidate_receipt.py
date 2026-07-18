@@ -175,15 +175,105 @@ def check_worktree_pristine(repo: Path) -> Check:
 
 
 def recovery_scope(repo: Path, base_sha: str) -> set[str]:
-    """The recovery's file scope, derived from GIT (``base..HEAD``), never hand-kept.
+    """The recovery's on-disk file scope, derived from GIT (``base..HEAD``).
 
-    ``--diff-filter=d`` drops deletions (a deleted file has no on-disk bytes to bind).
-    Deriving scope from Git is what makes ADDITIONAL detection real: the inventory is
-    checked against the repository's own account of what the recovery changed, so it
-    cannot silently under-declare.
+    ``--diff-filter=d`` drops DELETIONS (a deleted file has no on-disk bytes to bind);
+    deletions are bound SEPARATELY by ``recovery_deletions`` + a tombstone list, so an
+    undeclared deletion can never slip through the inventory silently (C9-06). Deriving
+    scope from Git is what makes ADDITIONAL detection real: the inventory is checked
+    against the repository's own account of what the recovery changed, so it cannot
+    silently under-declare.
     """
     out = git(repo, "diff", "--name-only", "--diff-filter=d", f"{base_sha}..HEAD")
     return {ln.strip() for ln in out.splitlines() if ln.strip()}
+
+
+def recovery_deletions(repo: Path, base_sha: str) -> set[str]:
+    """The paths DELETED between ``base`` and HEAD (``--diff-filter=D``)."""
+    out = git(repo, "diff", "--name-only", "--diff-filter=D", f"{base_sha}..HEAD")
+    return {ln.strip() for ln in out.splitlines() if ln.strip()}
+
+
+def interpreter_identity() -> dict[str, object]:
+    """The ACTUAL interpreter running this receipt — path, realpath, version, and (when
+    readable) SHA-256 (C9-06: no ``--python`` override, so the recorded interpreter is
+    the one that runs the proof suites)."""
+    exe = Path(sys.executable)
+    real = exe.resolve()
+    sha = None
+    try:
+        sha = hashlib.sha256(real.read_bytes()).hexdigest()
+    except OSError:
+        sha = None
+    return {
+        "executable": str(exe),
+        "realpath": str(real),
+        "version": sys.version.split()[0],
+        "sha256": sha,
+    }
+
+
+def check_base_ancestry(repo: Path, base_sha: str) -> Check:
+    """The scope base must be an ANCESTOR of HEAD (C9-06): a base that is not an
+    ancestor cannot define a meaningful ``base..HEAD`` scope."""
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", base_sha, "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return Check(
+            "scope base is an ancestor of HEAD",
+            False,
+            f"base {base_sha} is not an ancestor of HEAD",
+            {"base_sha": base_sha},
+        )
+    return Check(
+        "scope base is an ancestor of HEAD", True, f"{base_sha} is an ancestor of HEAD", {}
+    )
+
+
+def check_no_undeclared_deletions(repo: Path, inventory: dict[str, object], base_sha: str) -> Check:
+    """Every path deleted in ``base..HEAD`` must be declared as an explicit tombstone in
+    the inventory's ``deletions`` list (C9-06): an undeclared deletion — a file the
+    recovery removed without recording it — fails closed."""
+    declared = inventory.get("deletions", [])
+    declared_set = {str(x) for x in declared} if isinstance(declared, list) else set()
+    actual = recovery_deletions(repo, base_sha)
+    undeclared = sorted(actual - declared_set)
+    stale = sorted(declared_set - actual)
+    ok = not undeclared and not stale
+    return Check(
+        "deletions are declared exactly (no undeclared/stale tombstones)",
+        ok,
+        f"deleted={sorted(actual)}; undeclared={undeclared}; stale_tombstones={stale}",
+        {"deleted": sorted(actual), "undeclared": undeclared, "stale": stale},
+    )
+
+
+def check_evidence_dir_outside(evidence_dir: Path | None, repo: Path) -> Check:
+    """``--evidence-dir`` must be an ABSOLUTE path OUTSIDE the checkout (C9-06): writing
+    the receipt inside the tree would dirty the very worktree the receipt certifies."""
+    if evidence_dir is None:
+        return Check(
+            "evidence dir is absolute and outside the checkout",
+            True,
+            "no --evidence-dir supplied (nothing written into the tree)",
+            {},
+        )
+    resolved = evidence_dir.resolve()
+    repo_resolved = repo.resolve()
+    inside = resolved == repo_resolved or repo_resolved in resolved.parents
+    ok = evidence_dir.is_absolute() and not inside
+    return Check(
+        "evidence dir is absolute and outside the checkout",
+        ok,
+        f"evidence_dir={evidence_dir} "
+        f"(absolute={evidence_dir.is_absolute()}, inside_repo={inside})",
+        {"evidence_dir": str(evidence_dir), "inside_repo": inside},
+    )
 
 
 def check_inventory_binding(repo: Path, inventory: dict[str, object], base_sha: str) -> list[Check]:
@@ -378,17 +468,58 @@ def check_proof_suite_binding(repo: Path, inventory: dict[str, object]) -> Check
 
 
 def gate_checks(
-    repo: Path, expect_head: str, inventory: dict[str, object], base_sha: str
+    repo: Path,
+    expect_head: str,
+    inventory: dict[str, object],
+    base_sha: str,
+    evidence_dir: Path | None,
 ) -> list[Check]:
     """Every fail-closed gate, evaluated BEFORE any execution step."""
     checks = [
         check_head(repo, expect_head),
         check_base_sha(repo, base_sha),
+        check_base_ancestry(repo, base_sha),
         check_worktree_pristine(repo),
+        check_evidence_dir_outside(evidence_dir, repo),
     ]
     checks.extend(check_inventory_binding(repo, inventory, base_sha))
+    checks.append(check_no_undeclared_deletions(repo, inventory, base_sha))
     checks.extend(check_external_evidence(inventory))
     checks.append(check_proof_suite_binding(repo, inventory))
+    return checks
+
+
+def post_run_rechecks(
+    repo: Path, expect_head: str, inventory: dict[str, object], base_sha: str
+) -> list[Check]:
+    """After the proof suites execute, RE-VERIFY that nothing shifted underfoot
+    (C9-06): HEAD is still the operator-named commit, the worktree is still pristine,
+    the inventory bytes are still bound, and the git-derived scope is unchanged. Each is
+    named ``post-run: …`` so the receipt records both the pre-run gate and its post-run
+    counterpart."""
+    checks = [
+        Check(
+            "post-run: HEAD unchanged",
+            check_head(repo, expect_head).ok,
+            "re-checked after proof execution",
+            {},
+        ),
+        Check(
+            "post-run: worktree still pristine",
+            check_worktree_pristine(repo).ok,
+            "re-checked after proof execution",
+            {},
+        ),
+    ]
+    binding = check_inventory_binding(repo, inventory, base_sha)
+    checks.append(
+        Check(
+            "post-run: inventory bytes + scope unchanged",
+            all(c.ok for c in binding),
+            "re-checked the complete inventory binding after proof execution",
+            {},
+        )
+    )
     return checks
 
 
@@ -480,6 +611,9 @@ def emit_inventory(repo: Path, base_sha: str, template: dict[str, object]) -> di
     out["base_sha"] = base_sha
     out["excludes_self"] = INVENTORY_REL
     out["files"] = {rel: sha256_file(repo / rel) for rel in scope}
+    # Explicit deletion tombstones (C9-06): every path removed in base..HEAD, so the
+    # certification's no-undeclared-deletion gate has an exact declared set.
+    out["deletions"] = sorted(recovery_deletions(repo, base_sha) - {INVENTORY_REL})
     return out
 
 
@@ -502,24 +636,37 @@ def render(checks: list[Check], head: str) -> bool:
     return all_ok
 
 
-def write_evidence(path: Path, head: str, base_sha: str, checks: list[Check], green: bool) -> None:
+def write_evidence(
+    path: Path,
+    head: str,
+    base_sha: str,
+    checks: list[Check],
+    green: bool,
+    *,
+    interpreter: dict[str, object] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema": "export-track1-recovery-receipt/v1",
-                "candidate_sha": head,
-                "base_sha": base_sha,
-                "green": green,
-                "checks": [
-                    {"name": c.name, "ok": c.ok, "detail": c.detail, "data": c.data} for c in checks
-                ],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    )
+    payload: dict[str, object] = {
+        "schema": "export-track1-recovery-receipt/v2",
+        "candidate_sha": head,
+        "base_sha": base_sha,
+        "green": green,
+        "interpreter": interpreter or {},
+        "pre_run_checks": [
+            {"name": c.name, "ok": c.ok, "detail": c.detail, "data": c.data}
+            for c in checks
+            if not c.name.startswith("post-run:")
+        ],
+        "post_run_checks": [
+            {"name": c.name, "ok": c.ok, "detail": c.detail, "data": c.data}
+            for c in checks
+            if c.name.startswith("post-run:")
+        ],
+        "checks": [
+            {"name": c.name, "ok": c.ok, "detail": c.detail, "data": c.data} for c in checks
+        ],
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
@@ -536,44 +683,60 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     parser.add_argument(
         "--base",
         default=None,
-        help="Recovery base for GIT-DERIVED scope (default: inventory 'base_sha'). This is "
-        "NOT an expected HEAD — it only defines which files the recovery touched.",
+        help="AUTHORING ONLY (with --emit-inventory): the base for git-derived scope. In "
+        "the CERTIFICATION path the base is ALWAYS the inventory's frozen 'base_sha' and "
+        "this flag is rejected — a candidate cannot re-scope itself.",
     )
     parser.add_argument(
-        "--python",
+        "--evidence-dir",
         default=None,
-        help="Interpreter for the proof suites (default: <repo>/.venv/bin/python3).",
-    )
-    parser.add_argument(
-        "--evidence-dir", default=None, help="Write a structured JSON receipt here."
+        help="Write a structured JSON receipt here (MUST be an absolute path OUTSIDE the "
+        "checkout).",
     )
     parser.add_argument(
         "--emit-inventory",
         action="store_true",
-        help="Regenerate the inventory from the tree (authoring aid, not a proof).",
+        help="AUTHORING: regenerate the inventory from the tree (never emits a receipt).",
     )
     args = parser.parse_args(argv)
 
     inventory = load_inventory(repo)
-    base_sha = args.base or str(inventory["base_sha"])
-    python = Path(args.python) if args.python else repo / ".venv" / "bin" / "python3"
 
     if args.emit_inventory:
+        # Authoring is VISIBLY separate from certification: it writes the inventory and
+        # exits 0 WITHOUT ever running the gates, executing the proof suites, or writing a
+        # certification receipt — it can never emit a green certification (C9-06).
+        base_sha = args.base or str(inventory["base_sha"])
         fresh = emit_inventory(repo, base_sha, inventory)
         (repo / INVENTORY_REL).write_text(json.dumps(fresh, indent=2, sort_keys=True) + "\n")
         files_map = fresh["files"]
         assert isinstance(files_map, dict)
-        print(f"wrote {INVENTORY_REL} ({len(files_map)} files)")
+        print(f"wrote {INVENTORY_REL} ({len(files_map)} files) [authoring — NOT a receipt]")
         return 0
 
+    # Certification: the base is the inventory's frozen base — never operator-overridable.
+    if args.base is not None:
+        print(
+            "--base is authoring-only; the certification path always uses the inventory's "
+            "frozen base_sha (refusing to re-scope the candidate).",
+            file=sys.stderr,
+        )
+        return 2
+    base_sha = str(inventory["base_sha"])
+    evidence_dir = Path(args.evidence_dir) if args.evidence_dir else None
+    interpreter = interpreter_identity()
+
     # ---- Gates first: every one fails CLOSED, and none of them execute anything. ----
-    checks = gate_checks(repo, args.expect_head, inventory, base_sha)
+    checks = gate_checks(repo, args.expect_head, inventory, base_sha, evidence_dir)
     head = git(repo, "rev-parse", "HEAD")
 
     if all(c.ok for c in checks):
         # Gates green -> the tree is the named commit, complete, and any declared
-        # external evidence is byte-verified. Only now is it safe to execute.
-        checks.append(run_proof_tests(repo, inventory, python))
+        # external evidence is byte-verified. Only now is it safe to execute, with the
+        # ACTUAL running interpreter (no override).
+        checks.append(run_proof_tests(repo, inventory, Path(sys.executable)))
+        # Post-run: prove nothing shifted underfoot during execution (C9-06).
+        checks.extend(post_run_rechecks(repo, args.expect_head, inventory, base_sha))
     else:
         checks.append(
             Check(
@@ -586,9 +749,14 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
         )
 
     green = render(checks, head)
-    if args.evidence_dir:
+    if evidence_dir is not None:
         write_evidence(
-            Path(args.evidence_dir) / "candidate-receipt.json", head, base_sha, checks, green
+            evidence_dir / "candidate-receipt.json",
+            head,
+            base_sha,
+            checks,
+            green,
+            interpreter=interpreter,
         )
     return 0 if green else 1
 

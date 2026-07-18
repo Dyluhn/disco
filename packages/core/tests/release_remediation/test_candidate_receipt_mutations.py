@@ -79,6 +79,10 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
     _git(repo, "config", "user.name", "receipt mutation suite")
 
     (repo / "README.md").write_text("base\n")
+    # Mirror the real repo: __pycache__ is gitignored, so running the proof suite (which
+    # byte-compiles the test module) does not dirty the tree and trip the post-run
+    # pristine recheck. Without this the synthetic repo would show untracked *.pyc.
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     base_sha = _git(repo, "rev-parse", "HEAD")
@@ -101,6 +105,7 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
         "base_sha": base_sha,
         "excludes_self": str(receipt.INVENTORY_REL),
         "external_evidence": [{"path": str(evidence), "sha256": _sha256(evidence)}],
+        "deletions": [],
         "expected_proof": {"tests": ["test_receipt_proof.py"], "passed": 1, "failed": 0},
         "files": {"recovery.py": _sha256(campaign), "test_receipt_proof.py": _sha256(proof)},
     }
@@ -117,7 +122,7 @@ def _gates(synthetic: dict[str, object], head: str | None = None) -> list[Any]:
     assert isinstance(repo, Path)
     inventory = receipt.load_inventory(repo)
     return receipt.gate_checks(
-        repo, head or str(synthetic["head"]), inventory, str(synthetic["base"])
+        repo, head or str(synthetic["head"]), inventory, str(synthetic["base"]), None
     )
 
 
@@ -125,7 +130,7 @@ def _run_main(synthetic: dict[str, object], head: str | None = None) -> int:
     repo = synthetic["repo"]
     assert isinstance(repo, Path)
     return receipt.main(
-        ["--expect-head", head or str(synthetic["head"]), "--python", sys.executable],
+        ["--expect-head", head or str(synthetic["head"])],
         repo=repo,
     )
 
@@ -334,8 +339,6 @@ def test_evidence_records_the_exact_sha_and_results(
         [
             "--expect-head",
             str(synthetic["head"]),
-            "--python",
-            sys.executable,
             "--evidence-dir",
             str(evidence_dir),
         ],
@@ -370,7 +373,7 @@ def test_symbolic_base_sha_forces_nonzero(synthetic: dict[str, object]) -> None:
     new_head = _rewrite_inventory(repo, lambda d: d.update(base_sha="HEAD"))
     failed = _failed(_gates(synthetic, new_head))
     # _gates passes the synthetic's REAL base; drive main() (inventory base) instead.
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
     assert failed == []  # the explicit-base path stays green — the bypass was the inventory's
 
 
@@ -383,7 +386,7 @@ def test_base_sha_equal_to_head_forces_nonzero(synthetic: dict[str, object]) -> 
     new_head = _rewrite_inventory(repo, lambda d: d.update(base_sha=head))
     # base resolves and is 40-hex, but equals (an ancestor of) the certified HEAD's
     # tree walk start — the non-empty-scope / base!=HEAD checks must go red.
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
 
 
 def test_proof_suite_naming_external_evidence_is_refused_and_never_executed(
@@ -398,7 +401,7 @@ def test_proof_suite_naming_external_evidence_is_refused_and_never_executed(
     canary = synthetic["canary"]
     assert isinstance(evidence, Path) and isinstance(canary, Path)
     new_head = _rewrite_inventory(repo, lambda d: d["expected_proof"].update(tests=[str(evidence)]))
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
     assert not canary.exists(), "the receipt EXECUTED external evidence via expected_proof"
 
 
@@ -412,7 +415,7 @@ def test_out_of_repo_proof_suite_forces_nonzero(
     rogue = tmp_path / "rogue_proof.py"
     rogue.write_text("def test_always():\n    assert True\n")
     new_head = _rewrite_inventory(repo, lambda d: d["expected_proof"].update(tests=[str(rogue)]))
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
 
 
 def test_unbound_in_repo_proof_suite_forces_nonzero(synthetic: dict[str, object]) -> None:
@@ -434,7 +437,7 @@ def test_unbound_in_repo_proof_suite_forces_nonzero(synthetic: dict[str, object]
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "unbound proof")
     new_head = _git(repo, "rev-parse", "HEAD")
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
 
 
 def test_relative_external_evidence_path_forces_nonzero(synthetic: dict[str, object]) -> None:
@@ -446,7 +449,7 @@ def test_relative_external_evidence_path_forces_nonzero(synthetic: dict[str, obj
         repo,
         lambda d: d.update(external_evidence=[{"path": "relative/probe.py", "sha256": "0" * 64}]),
     )
-    assert receipt.main(["--expect-head", new_head, "--python", sys.executable], repo=repo) == 1
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
 
 
 def test_crashed_proof_process_yields_red_receipt_not_traceback(
@@ -475,8 +478,6 @@ def test_crashed_proof_process_yields_red_receipt_not_traceback(
         [
             "--expect-head",
             new_head,
-            "--python",
-            sys.executable,
             "--evidence-dir",
             str(evidence_dir),
         ],
@@ -488,3 +489,134 @@ def test_crashed_proof_process_yields_red_receipt_not_traceback(
     proof_checks = [c for c in payload["checks"] if c["name"].startswith("proof suites ==")]
     assert proof_checks and not proof_checks[0]["ok"]
     assert "no parseable junit" in proof_checks[0]["detail"]
+
+
+# ---- C9-06: the demonstrated receipt bypasses are now each RED ------------------
+
+
+def test_python_override_flag_is_rejected(synthetic: dict[str, object]) -> None:
+    """C9-06 bypass 1: ``--python`` accepted an arbitrary interpreter (a fake one wrote a
+    fabricated green JUnit). The flag is gone — argparse rejects it (SystemExit)."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    with pytest.raises(SystemExit):
+        receipt.main(
+            ["--expect-head", str(synthetic["head"]), "--python", sys.executable], repo=repo
+        )
+
+
+def test_interpreter_identity_is_recorded_in_evidence(
+    synthetic: dict[str, object], tmp_path: Path
+) -> None:
+    """C9-06: the receipt records the ACTUAL running interpreter (path/realpath/version/
+    sha256) — the evidence omitted it before."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    evidence_dir = tmp_path / "evidence"
+    rc = receipt.main(
+        ["--expect-head", str(synthetic["head"]), "--evidence-dir", str(evidence_dir)],
+        repo=repo,
+    )
+    assert rc == 0
+    payload = json.loads((evidence_dir / "candidate-receipt.json").read_text())
+    interp = payload["interpreter"]
+    assert interp["realpath"] and interp["version"] and interp["sha256"]
+    assert payload["post_run_checks"], "post-run rechecks must be recorded"
+
+
+def test_base_override_is_rejected_in_certification(synthetic: dict[str, object]) -> None:
+    """C9-06 bypass 2: ``--base`` could re-scope the candidate. The certification path
+    now rejects it (exit 2) and always uses the inventory's frozen base."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    rc = receipt.main(
+        ["--expect-head", str(synthetic["head"]), "--base", str(synthetic["base"])], repo=repo
+    )
+    assert rc == 2
+
+
+def test_undeclared_deletion_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """C9-06 bypass 3: deletions were excluded from scope. A file deleted in base..HEAD
+    that is not declared as an inventory tombstone must fail closed."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    (repo / "README.md").unlink()  # README exists at the base commit
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "delete README.md")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    # README is deleted in base..HEAD but declared as no tombstone (deletions == []).
+    failed = _failed(_gates(synthetic, new_head))
+    assert any("deletions are declared exactly" in f for f in failed)
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 1
+
+
+def test_declared_deletion_tombstone_is_accepted(synthetic: dict[str, object]) -> None:
+    """A deletion DECLARED as an inventory tombstone (and removed from files) is clean."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    (repo / "README.md").unlink()
+    inventory_path = repo / str(receipt.INVENTORY_REL)
+    data = json.loads(inventory_path.read_text())
+    data["deletions"] = ["README.md"]
+    inventory_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "delete README.md + tombstone")
+    new_head = _git(repo, "rev-parse", "HEAD")
+    assert _failed(_gates(synthetic, new_head)) == []
+    assert receipt.main(["--expect-head", new_head], repo=repo) == 0
+
+
+def test_evidence_dir_inside_checkout_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """C9-06 bypass 4: the evidence dir was not required outside the checkout. Writing
+    the receipt inside the tree would dirty the very worktree it certifies — rejected."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inside = repo / "inside-evidence"
+    rc = receipt.main(
+        ["--expect-head", str(synthetic["head"]), "--evidence-dir", str(inside)], repo=repo
+    )
+    assert rc == 1
+    failed = _failed(_gates_with_evidence(synthetic, inside))
+    assert any("outside the checkout" in f for f in failed)
+
+
+def test_relative_evidence_dir_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """A relative ``--evidence-dir`` is ambiguous (cwd-dependent) and rejected."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    failed = _failed(_gates_with_evidence(synthetic, Path("relative-evidence")))
+    assert any("outside the checkout" in f for f in failed)
+
+
+def test_base_not_ancestor_of_head_forces_nonzero(synthetic: dict[str, object]) -> None:
+    """C9-06: a base that is not an ancestor of HEAD cannot define a real scope."""
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    # Create an unrelated orphan commit and point the inventory base at it.
+    _git(repo, "checkout", "-q", "--orphan", "orphanbranch")
+    (repo / "unrelated.txt").write_text("x\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "orphan")
+    orphan = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-f", "master") if _has_master(repo) else _git(
+        repo, "checkout", "-q", "-f", str(synthetic["head"])
+    )
+    check = receipt.check_base_ancestry(repo, orphan)
+    assert not check.ok
+
+
+def _gates_with_evidence(synthetic: dict[str, object], evidence_dir: Path) -> list[Any]:
+    repo = synthetic["repo"]
+    assert isinstance(repo, Path)
+    inventory = receipt.load_inventory(repo)
+    return receipt.gate_checks(
+        repo, str(synthetic["head"]), inventory, str(synthetic["base"]), evidence_dir
+    )
+
+
+def _has_master(repo: Path) -> bool:
+    try:
+        _git(repo, "rev-parse", "--verify", "master")
+        return True
+    except subprocess.CalledProcessError:
+        return False
