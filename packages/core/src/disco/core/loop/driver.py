@@ -702,9 +702,7 @@ class Driver:
         # may not launder the escape state and silently re-enable it.
         in_escape = escape_seq is not None and not recovered_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-        escape_blocked_tools = (
-            signals.stuck_escape_blocked_tools(events) if in_escape else frozenset()
-        )
+        escape_blocked_tools = self.active_stuck_escape_blocked_tools(events)
 
         cached_mode = self._loop.mode
         mode = self._loop._reconcile_mode_from_events(events)
@@ -740,6 +738,26 @@ class Driver:
             force_read_tools,
             escape_blocked_tools,
         )
+
+    def active_stuck_escape_blocked_tools(self, events: list[Event]) -> frozenset[str]:
+        """Return the current receipt-gated quarantine reconstructed from events."""
+        escape_seq = signals.stuck_escape_seq(events)
+        if escape_seq is None:
+            return frozenset()
+        actions = {
+            event.id: event
+            for event in events
+            if isinstance(event, ActionEvent) and event.tool_call is not None
+        }
+        if any(
+            isinstance(event, ObservationEvent)
+            and event.seq is not None
+            and event.seq > escape_seq
+            and successful_mutation_with_receipt(event, actions.get(event.action_id or ""))
+            for event in events
+        ):
+            return frozenset()
+        return signals.stuck_escape_blocked_tools(events)
 
     async def _repair_degenerate_step(
         self,
@@ -890,44 +908,6 @@ class Driver:
                     )
                     if should_continue:
                         continue
-
-                    blocked_tool_call = step.tool_call
-                    if (
-                        blocked_tool_call is not None
-                        and blocked_tool_call.tool_name in escape_blocked_tools
-                    ):
-                        # Share Rung 7's two-requery budget: a model that
-                        # alternates blocked and unknown tools cannot multiply
-                        # hidden repair turns beyond the existing campaign cap.
-                        if requery_count < 2:
-                            requery_count += 1
-                            self._record_model_repair(
-                                "stuck_escape_withheld_tool",
-                                attempt=requery_count,
-                                tool_name=blocked_tool_call.tool_name,
-                            )
-                            transient_messages.append(
-                                LLMMessage(
-                                    role="user",
-                                    content=(
-                                        f"`{blocked_tool_call.tool_name}` is temporarily withheld "
-                                        "for this one stuck-escape turn because repeating it "
-                                        "caused the current loop. Choose one different tool "
-                                        "from the offered set now."
-                                    ),
-                                )
-                            )
-                            continue
-                        await self._loop._land_blocked(
-                            reason="stuck_escape_tool_quarantine",
-                            guidance=(
-                                "The model selected a temporarily withheld loop-causing tool "
-                                "after two bounded repair requests. The tool was not executed."
-                            ),
-                            legacy_status=ConversationStatus.STUCK,
-                            legacy_detail="stuck_escape_tool_quarantine",
-                        )
-                        return None, Disp.HALT
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
                     # Valid JSON but unknown tool name -> if we haven't

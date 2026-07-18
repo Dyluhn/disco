@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from disco.core import (
     ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     Event,
     EventSource,
@@ -252,8 +253,20 @@ async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
             and event.tool_call.tool_name == "file_read"
             for event in events
         )
-        == 5
+        == 6
     )
+    refusal = next(
+        event
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:file_read"
+    )
+    refused_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == refusal.action_id
+    )
+    assert refusal.tool_call_id == refused_action.tool_call.call_id
 
 
 async def test_h533_failed_mutation_does_not_release_quarantine():
@@ -287,7 +300,7 @@ async def test_h533_failed_mutation_does_not_release_quarantine():
             and event.tool_call.tool_name == "file_read"
             for event in events
         )
-        == 5
+        == 6
     )
 
 
@@ -322,11 +335,11 @@ async def test_h536_receiptless_success_cannot_release_quarantine():
             and event.tool_call.tool_name == "file_read"
             for event in events
         )
-        == 5
+        == 6
     )
 
 
-async def test_hallucinated_quarantined_read_is_requeried_not_executed():
+async def test_hallucinated_quarantined_read_is_paired_not_executed():
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
@@ -353,9 +366,23 @@ async def test_hallucinated_quarantined_read_is_requeried_not_executed():
             and event.tool_call.tool_name == "file_read"
             for event in events
         )
-        == 5
+        == 6
     )
     assert [call.tool_name for call in executor.calls][-1] == "file_write"
+    refusals = [
+        event
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:file_read"
+    ]
+    assert len(refusals) == 1
+    refused_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == refusals[0].action_id
+    )
+    assert refusals[0].tool_call_id == refused_action.tool_call.call_id
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
 
 
 async def test_quarantined_read_requery_exhaustion_lands_explicitly():
@@ -363,8 +390,9 @@ async def test_quarantined_read_requery_exhaustion_lands_explicitly():
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("file_read", {"path": "index.html", "limit": limit})
-            for limit in (105, 106, 107)
+            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("shell", {"command": "mkdir -p /workspace/js"}),
+            action_step("file_read", {"path": "index.html", "limit": 106}),
         ]
     )
     loop, store = build_loop(agent, executor=executor)
@@ -375,18 +403,81 @@ async def test_quarantined_read_requery_exhaustion_lands_explicitly():
 
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
-    assert not any(
-        isinstance(event, ActionEvent)
+    assert [call.tool_name for call in executor.calls][-1] == "shell"
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 2
+    refused_actions = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent)
         and event.seq is not None
         and signals.stuck_escape_seq(events) is not None
         and event.seq > signals.stuck_escape_seq(events)
-        for event in events
+        and event.tool_call.tool_name == "file_read"
+    ]
+    assert len(refused_actions) == 2
+    assert all(
+        any(
+            isinstance(error, AgentErrorEvent)
+            and error.action_id == action.id
+            and error.tool_call_id == action.tool_call.call_id
+            for error in events
+        )
+        for action in refused_actions
     )
     assert any(
         isinstance(event, StatusEvent)
         and event.meta.get("blocked_reason") == "stuck_escape_tool_quarantine"
         for event in events
     )
+
+
+def test_escape_refusal_count_requires_current_exact_paired_events():
+    old_escape = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape",
+    ).model_copy(update={"seq": 1})
+    stale_action = action(tool="file_read", args={"path": "old"}).model_copy(update={"seq": 2})
+    stale_error = AgentErrorEvent(
+        error="stuck_escape_tool_quarantine:file_read",
+        action_id=stale_action.id,
+        tool_call_id=stale_action.tool_call.call_id,
+    ).model_copy(update={"seq": 3})
+    current_escape = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="stuck_escape",
+    ).model_copy(update={"seq": 4})
+    current_action = action(tool="file_read", args={"path": "current"}).model_copy(
+        update={"seq": 5}
+    )
+    unpaired = AgentErrorEvent(
+        error="stuck_escape_tool_quarantine:file_read",
+        action_id=current_action.id,
+        tool_call_id="wrong-call-id",
+    ).model_copy(update={"seq": 6})
+    different_code = AgentErrorEvent(
+        error="stuck_escape_tool_quarantine:file_list",
+        action_id=current_action.id,
+        tool_call_id=current_action.tool_call.call_id,
+    ).model_copy(update={"seq": 7})
+    paired = AgentErrorEvent(
+        error="stuck_escape_tool_quarantine:file_read",
+        action_id=current_action.id,
+        tool_call_id=current_action.tool_call.call_id,
+    ).model_copy(update={"seq": 8})
+
+    events = [
+        old_escape,
+        stale_action,
+        stale_error,
+        current_escape,
+        current_action,
+        unpaired,
+        different_code,
+        paired,
+    ]
+
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
+    assert signals.stuck_escape_refusal_count(events, "file_list") == 0
 
 
 def test_escape_block_marker_requires_exact_system_adjacency():

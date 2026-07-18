@@ -123,6 +123,7 @@ SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
 PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
 READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
 STUCK_ESCAPE_BLOCK_DETAIL_PREFIX = "stuck_escape_block:"
+STUCK_ESCAPE_REFUSAL_ERROR_PREFIX = "stuck_escape_tool_quarantine:"
 _STUCK_ESCAPE_BLOCKABLE_TOOLS = frozenset({"file_read"})
 
 _READ_CHURN_SMALL_LIMIT = 25
@@ -609,6 +610,40 @@ def stuck_escape_blocked_tools(events: list[Event]) -> frozenset[str]:
             cursor -= 1
         return frozenset(blocked)
     return frozenset()
+
+
+def stuck_escape_refusal_count(events: list[Event], tool_name: str) -> int:
+    """Count canonical paired refusals in the current authenticated escape.
+
+    A quarantine refusal is load-bearing retry state, so the count is derived
+    from append-only ActionEvent/AgentErrorEvent pairs rather than volatile
+    inspect spans, metadata, or an in-memory drive-step counter. Only exact
+    post-escape pairs for the requested blocked tool count; stale, unpaired, or
+    forged-looking errors are inert. This makes the bound restart-stable.
+    """
+    escape_seq = stuck_escape_seq(events)
+    if escape_seq is None:
+        return 0
+    actions = {
+        event.id: event
+        for event in events
+        if isinstance(event, ActionEvent)
+        and event.seq is not None
+        and event.seq > escape_seq
+        and event.tool_call is not None
+        and event.tool_call.tool_name == tool_name
+    }
+    expected_error = f"{STUCK_ESCAPE_REFUSAL_ERROR_PREFIX}{tool_name}"
+    return sum(
+        1
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.seq is not None
+        and event.seq > escape_seq
+        and event.error == expected_error
+        and event.action_id in actions
+        and event.tool_call_id == actions[event.action_id].tool_call.call_id
+    )
 
 
 def stuck_escape_attempt_count(events: list[Event]) -> int:

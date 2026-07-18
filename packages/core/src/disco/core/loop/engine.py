@@ -1423,6 +1423,57 @@ class AgentLoop:
                 await self._planner.note_planning_read_and_maybe_force()
         return Disp.FALLTHROUGH
 
+    async def _gate_stuck_escape_tool_quarantine(
+        self, step: AgentStep, events: list[Event]
+    ) -> Disp:
+        """Persist and bound a model call to an actively quarantined tool.
+
+        The tool is absent from the provider schema, but a model may still
+        hallucinate its name. Treat that as an explicit paired refusal, not a
+        hidden in-call requery: the append-only pair is visible on the next
+        ordinary turn and survives restart. A second same-tool refusal in the
+        same escape episode lands through the existing blocked path.
+        """
+        tool_call = step.tool_call
+        if tool_call is None:
+            return Disp.FALLTHROUGH
+        blocked_tools = self._driver.active_stuck_escape_blocked_tools(events)
+        if tool_call.tool_name not in blocked_tools:
+            return Disp.FALLTHROUGH
+
+        prior_refusals = signals.stuck_escape_refusal_count(events, tool_call.tool_name)
+        action = ActionEvent(
+            thought=step.thought,
+            tool_call=tool_call,
+            self_assessed_risk=step.self_assessed_risk,
+            llm_response_id=step.llm_response_id,
+        )
+        await self._emit(action)
+        await self._emit(
+            AgentErrorEvent(
+                error=(f"{signals.STUCK_ESCAPE_REFUSAL_ERROR_PREFIX}{tool_call.tool_name}"),
+                detail=(
+                    f"`{tool_call.tool_name}` is withheld because repeating it caused the "
+                    "current loop. It remains unavailable until a different tool produces "
+                    "a trusted changed-state receipt. Choose a different offered tool now."
+                ),
+                action_id=action.id,
+                tool_call_id=tool_call.call_id,
+            )
+        )
+        if prior_refusals >= 1:
+            await self._land_blocked(
+                reason="stuck_escape_tool_quarantine",
+                guidance=(
+                    "The model selected the same quarantined loop-causing tool twice "
+                    "without a trusted intervening mutation. The tool was not executed."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="stuck_escape_tool_quarantine",
+            )
+            return Disp.HALT
+        return Disp.CONTINUE
+
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
         # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
         # outright, BEFORE the confirm gate. No approval, policy, or LLM
@@ -1767,6 +1818,15 @@ class AgentLoop:
                 # drive_step returns a None step ONLY paired with CONTINUE/HALT
                 # (handled above); a fall-through disp always carries a real step.
                 assert step is not None
+
+                # A model can hallucinate a tool name even when the provider
+                # schema omits it. Quarantine refusals must be durable, paired,
+                # restart-stable, and bounded across drive_step calls.
+                disp = await self._gate_stuck_escape_tool_quarantine(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
 
                 # (e.3) PLANNING PHASE GATE — runs BEFORE the per-tool meta/finish
                 # handlers below so NOTHING outside the planning allowlist reaches
