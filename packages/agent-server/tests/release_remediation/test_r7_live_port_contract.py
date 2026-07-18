@@ -13,10 +13,16 @@ marker) and drive the SAME public boundary the frozen suites use: the real
 only ``ConfigStore.load`` is seamed. Assertions are on the actual downloaded
 ``Dockerfile`` bytes, never on ``detect``/``emit`` called directly.
 
-The invariant is NARROW by design (owner policy: no general command interpreter):
-ONLY a start argv whose head is ``uvicorn`` with neither ``--host`` nor ``--port``
-(spaced or ``=``-form) is normalized; every owner-declared binding wins verbatim, and
-non-uvicorn commands are never touched.
+The invariant is NARROW by design (owner policy: no general command interpreter).
+C9-04 (2026-07-17) tightened it into a recognized-shape/arity CONTRACT: exactly one
+valid ``module:attr`` APP target; only ``--host``/``--port`` accepted (each once, each
+with a value); NO binding -> the platform appends ``0.0.0.0`` + ``${port_env}``;
+a COMPLETE binding wins verbatim; every other recognizably-uvicorn shape (bare
+``uvicorn``, flag-only, dangling values, unsupported options, extra/malformed
+operands, path-qualified/case-variant executables, ``python -m uvicorn``) fails
+CLOSED with the typed ``uvicorn_start_incoherent`` blocker through the REAL
+release/download boundary — no self-host bundle is offered. Non-uvicorn commands are
+never touched.
 """
 
 from __future__ import annotations
@@ -31,7 +37,14 @@ import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
-from disco.core.release.local_compose import DOCKERFILE_PATH
+from disco.core.release.local_compose import (
+    COMPOSE_PATH,
+    DOCKERFILE_PATH,
+    DOCKERIGNORE_PATH,
+    ENV_EXAMPLE_PATH,
+    RELEASE_JSON_PATH,
+    SELFHOST_DOC_PATH,
+)
 from disco.core.release.spec import ReleaseIntent
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
@@ -93,6 +106,41 @@ def _seed(
     store.create_conversation(cid, owner_id="local", title=cid, surface="build")
     cut = ps.cut_version(cid, trigger="r7d2")
     assert cut is not None and cut.seq == 1
+
+
+_OVERLAY_NAMES = frozenset(
+    {
+        COMPOSE_PATH,
+        DOCKERFILE_PATH,
+        DOCKERIGNORE_PATH,
+        ENV_EXAMPLE_PATH,
+        SELFHOST_DOC_PATH,
+        RELEASE_JSON_PATH,
+    }
+)
+
+
+def _release_body(client: TestClient, cid: str) -> dict[str, object]:
+    res = client.get(f"/api/projects/{cid}/release")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert isinstance(body, dict)
+    return body
+
+
+def _assert_failed_closed(client: TestClient, cid: str, body: dict[str, object]) -> None:
+    """needs_review + self_host:false + the typed uvicorn blocker + NO overlay offered
+    through the real download — the full no-self-host-bundle proof."""
+    assert body["assessment"] == "needs_review", body
+    assert body["self_host"] is False and body["spec_digest"] is None, body
+    blockers = body["blockers"]
+    assert isinstance(blockers, list)
+    codes = {str(b["code"]) for b in blockers}
+    assert "uvicorn_start_incoherent" in codes, sorted(codes)
+    dl = client.get(f"/api/projects/{cid}/download")
+    assert dl.status_code == 200, dl.text
+    with zipfile.ZipFile(io.BytesIO(dl.content)) as zf:
+        assert _OVERLAY_NAMES & set(zf.namelist()) == frozenset(), zf.namelist()
 
 
 def _dockerfile(client: TestClient, cid: str) -> str:
@@ -198,35 +246,40 @@ def test_non_uvicorn_start_is_never_touched(
     assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile
 
 
-def test_case_variant_head_is_never_touched(
-    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+_INCOHERENT_UVICORN_INTENTS: list[tuple[str, tuple[str, ...]]] = [
+    ("bare-no-app", ("uvicorn",)),
+    ("factory-flag-only", ("uvicorn", "--factory")),
+    ("workers-no-app", ("uvicorn", "--workers", "2")),
+    ("dangling-workers", ("uvicorn", "main:app", "--workers")),
+    ("only-host", ("uvicorn", "main:app", "--host", "0.0.0.0")),
+    ("only-port", ("uvicorn", "main:app", "--port", "${PORT}")),
+    ("dangling-port", ("uvicorn", "main:app", "--port")),
+    ("module-form", ("python", "-m", "uvicorn", "main:app")),
+    ("case-variant-exe", ("UVICORN", "main:app")),
+    ("path-qualified-exe", ("/usr/local/bin/uvicorn", "main:app")),
+    ("extra-positional", ("uvicorn", "main:app", "other:app")),
+    ("malformed-app", ("uvicorn", "notanapp")),
+    ("duplicate-host", ("uvicorn", "main:app", "--host", "a", "--host", "b", "--port", "1")),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,start_cmd",
+    _INCOHERENT_UVICORN_INTENTS,
+    ids=[c[0] for c in _INCOHERENT_UVICORN_INTENTS],
+)
+def test_incoherent_uvicorn_intents_fail_closed(
+    case_id: str,
+    start_cmd: tuple[str, ...],
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verifier-demonstrated defect: ``UVICORN`` is not ``uvicorn`` under case-sensitive
-    exec — a case-variant head is a different declaration and must stay verbatim."""
-    cid = _uid("conv_r7d2case")
+    """C9-04 pinned negatives: every recognizably-uvicorn shape outside the supported
+    contract predictably exits or binds the wrong interface at runtime, so it must be
+    needs_review with the typed blocker and NO self-host bundle — proven through the
+    real release/download boundary."""
+    cid = _uid(f"conv_r7d2neg_{case_id}".replace("-", "_"))
     client, ps = _client(_store, tmp_path, monkeypatch)
-    _seed(ps, _store, cid, _FASTAPI_FILES, intent=ReleaseIntent(start_cmd=("UVICORN", "main:app")))
-
-    dockerfile = _dockerfile(client, cid)
-    assert 'CMD ["UVICORN", "main:app"]' in dockerfile, dockerfile
-    assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile
-
-
-def test_path_qualified_head_is_never_touched(
-    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Verifier-demonstrated defect: a path-qualified head is a different declaration
-    than the bare token the live defect reproduced; preservation wins."""
-    cid = _uid("conv_r7d2path")
-    client, ps = _client(_store, tmp_path, monkeypatch)
-    _seed(
-        ps,
-        _store,
-        cid,
-        _FASTAPI_FILES,
-        intent=ReleaseIntent(start_cmd=("/usr/local/bin/uvicorn", "main:app")),
-    )
-
-    dockerfile = _dockerfile(client, cid)
-    assert 'CMD ["/usr/local/bin/uvicorn", "main:app"]' in dockerfile, dockerfile
-    assert "--host" not in dockerfile and "--port" not in dockerfile, dockerfile
+    _seed(ps, _store, cid, _FASTAPI_FILES, intent=ReleaseIntent(start_cmd=start_cmd))
+    _assert_failed_closed(client, cid, _release_body(client, cid))

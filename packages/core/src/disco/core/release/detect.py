@@ -1935,24 +1935,140 @@ def _intent_build_env(
     return env + tuple(decl for decl in _build_env_decls(files) if decl.name not in existing)
 
 
-def _port_contract_start(start_cmd: tuple[str, ...], port_env: str) -> tuple[str, ...]:
-    """Bind a declared bare ``uvicorn <module>:app`` start to the platform port
-    contract (R7 live-fastapi defect). uvicorn's defaults are ``127.0.0.1:8000``, so a
-    bare declaration can NEVER satisfy the contract the emitted bundle establishes
-    (compose ``PORT``, ``EXPOSE``, loopback healthcheck) — the container is unreachable
-    and never becomes healthy. Mirror the source-detection shape by appending
-    ``--host 0.0.0.0 --port ${<port_env>}`` for EXACTLY that shape: head EXACTLY the
-    bare token ``uvicorn`` (exec is case-sensitive and a path-qualified or case-variant
-    head is a DIFFERENT declaration — independent verification demonstrated both were
-    being over-matched), with neither ``--host`` nor ``--port`` declared (spaced or
-    ``=``-form). An owner-declared binding always wins verbatim; every other command
-    is untouched."""
-    if not start_cmd or start_cmd[0] != "uvicorn":
-        return start_cmd
-    for token in start_cmd[1:]:
-        if token in ("--host", "--port") or token.startswith(("--host=", "--port=")):
-            return start_cmd
-    return start_cmd + ("--host", "0.0.0.0", "--port", "${" + port_env + "}")
+# The DELIBERATELY SMALL supported uvicorn typed-intent contract (C9-04, 2026-07-17).
+# One APP target of the exact `module[.module]*:attribute` shape; the ONLY accepted
+# options are --host/--port (spaced or `=`-form, each exactly once, each with a value);
+# either NEITHER is present (the platform appends `0.0.0.0` + `${port_env}`) or BOTH
+# are (the owner's complete binding wins verbatim). Everything else — a bare `uvicorn`,
+# flag-only invocations, dangling values, extra positionals, any other option, a
+# path-qualified or case-variant executable, or the `python -m uvicorn` module form —
+# fails CLOSED with a typed, actionable blocker: those commands predictably exit or
+# bind the wrong interface at runtime, so accepting them ships a broken bundle. This is
+# a recognized-shape/arity table, NOT a general command parser.
+_UVICORN_APP_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+)
+_UVICORN_VALUE_OPTIONS = frozenset({"--host", "--port"})
+
+
+def _uvicorn_blocker(detail: str, evidence: str) -> _DetectBlocker:
+    return _DetectBlocker(
+        code="uvicorn_start_incoherent",
+        message=(
+            f"the declared uvicorn start command is outside the supported shape: {detail}. "
+            "Supported: `uvicorn <module>:<app>` with either NO host/port binding (the "
+            "platform then binds 0.0.0.0:${PORT}) or BOTH --host and --port declared with "
+            "values. Anything else predictably fails or binds the wrong interface at "
+            "runtime, so it cannot ship as a self-host bundle."
+        ),
+        field="start_cmd",
+        evidence=(f"uvicorn contract evidence: {evidence}",),
+    )
+
+
+def _uvicorn_module_form(start_cmd: tuple[str, ...]) -> bool:
+    """True for the `python -m uvicorn …` module form (any python-ish head)."""
+    if len(start_cmd) < 3:
+        return False
+    head = start_cmd[0].rsplit("/", 1)[-1].lower()
+    if not (head.startswith("python") or head in ("python", "python3")):
+        return False
+    return any(
+        start_cmd[i] == "-m" and start_cmd[i + 1] == "uvicorn" for i in range(1, len(start_cmd) - 1)
+    )
+
+
+def _uvicorn_start_contract(
+    start_cmd: tuple[str, ...], port_env: str
+) -> tuple[str, ...] | _DetectBlocker | None:
+    """Apply the supported uvicorn intent contract (C9-04).
+
+    Returns ``None`` when the command is not recognizably uvicorn (left untouched for
+    the non-uvicorn paths), an argv tuple when accepted (normalized for the no-binding
+    shape, verbatim for a complete binding), or a ``_DetectBlocker`` when the command
+    is recognizably uvicorn but outside the contract."""
+    if not start_cmd:
+        return None
+    if _uvicorn_module_form(start_cmd):
+        return _uvicorn_blocker(
+            "the `python -m uvicorn` module form is unsupported; declare the bare "
+            "`uvicorn <module>:<app>` form",
+            f"module form {' '.join(start_cmd[:4])!r}",
+        )
+    head = start_cmd[0]
+    if head.rsplit("/", 1)[-1].lower() != "uvicorn":
+        return None
+    if head != "uvicorn":
+        return _uvicorn_blocker(
+            "a path-qualified or case-variant uvicorn executable is unsupported; declare "
+            "the bare `uvicorn` token",
+            f"unsupported executable form {head!r}",
+        )
+    apps: list[str] = []
+    options: dict[str, str] = {}
+    i = 1
+    while i < len(start_cmd):
+        token = start_cmd[i]
+        if token.startswith("-"):
+            name, eq, inline = token.partition("=")
+            if name not in _UVICORN_VALUE_OPTIONS:
+                return _uvicorn_blocker(
+                    f"option {name!r} is outside the supported option set (--host/--port "
+                    "only); remove it or start the app through a committed script",
+                    f"unsupported option {token!r}",
+                )
+            if name in options:
+                return _uvicorn_blocker(
+                    f"option {name!r} is declared more than once (ambiguous binding)",
+                    f"duplicate option {name!r}",
+                )
+            if eq:
+                if not inline:
+                    return _uvicorn_blocker(
+                        f"option {name!r} declares no value",
+                        f"dangling `=`-form option {token!r}",
+                    )
+                options[name] = inline
+            else:
+                nxt = start_cmd[i + 1] if i + 1 < len(start_cmd) else None
+                if nxt is None or nxt.startswith("-"):
+                    return _uvicorn_blocker(
+                        f"option {name!r} declares no value (dangling argument)",
+                        f"dangling option {name!r}",
+                    )
+                options[name] = nxt
+                i += 1
+        else:
+            apps.append(token)
+        i += 1
+    if not apps:
+        return _uvicorn_blocker(
+            "no application target is declared",
+            "missing APP operand",
+        )
+    if len(apps) > 1:
+        return _uvicorn_blocker(
+            f"multiple positional operands {apps!r} — exactly one `module:app` target is supported",
+            f"extra positional operands {apps[1:]!r}",
+        )
+    if _UVICORN_APP_RE.fullmatch(apps[0]) is None:
+        return _uvicorn_blocker(
+            f"the application target {apps[0]!r} is not a `module[.module]:attribute` reference",
+            f"malformed APP operand {apps[0]!r}",
+        )
+    has_host = "--host" in options
+    has_port = "--port" in options
+    if has_host != has_port:
+        missing = "--port" if has_host else "--host"
+        present = "--host" if has_host else "--port"
+        return _uvicorn_blocker(
+            f"an incomplete binding: {present} is declared without {missing}; declare "
+            "BOTH or NEITHER (the platform then binds 0.0.0.0:${PORT})",
+            f"incomplete binding: only {present}",
+        )
+    if not has_host:
+        return start_cmd + ("--host", "0.0.0.0", "--port", "${" + port_env + "}")
+    return start_cmd
 
 
 def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
@@ -2034,6 +2150,12 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
     env = _intent_build_env(env, intent, files)
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
+    # C9-04: a recognizably-uvicorn start must satisfy the supported shape/arity
+    # contract (normalized or complete binding) or fail closed; every other command
+    # is left verbatim.
+    start_outcome = _uvicorn_start_contract(intent.start_cmd, intent.port_env)
+    if isinstance(start_outcome, _DetectBlocker):
+        return _fail_closed(start_outcome)
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -2042,7 +2164,7 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         lockfile=lockfile,
         install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
-        start_cmd=_port_contract_start(intent.start_cmd, intent.port_env),
+        start_cmd=start_outcome if start_outcome is not None else intent.start_cmd,
         port_env=intent.port_env,
         health_path=intent.health_path,
     )
