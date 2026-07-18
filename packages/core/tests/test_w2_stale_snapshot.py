@@ -8,12 +8,11 @@ file in full on every turn, which caused a large file (e.g. windows.js,
 8047 B) to produce repeated "too large — call file_read" markers → the
 model re-read the same file on every turn (20× measured in the golden trace).
 
-W2 changes three things:
+The evolved contract changes four things:
 
-1. **Pointer for unchanged known files.** When a ``FileStateTracker`` is
-   supplied, files whose disk SHA matches the last-seen SHA are collapsed to
-   a one-line "✓ {path} — current, shown earlier" pointer. Full body is
-   emitted only for (stale ∪ never-shown-in-tracker).
+1. **Stateless current bodies.** Every provider request carries the current
+   bounded body. A tracker may detect external change, but prior-turn delivery
+   never becomes a pointer because it is absent from the new request.
 
 2. **Stale notice (silent when nothing changed).** ``file_state_notice``
    returns None for an empty stale list; otherwise a NAMED block listing
@@ -24,21 +23,18 @@ W2 changes three things:
    pointing at ``file_read(path, offset=L, limit=M)`` + file_edit. The
    "do NOT call file_write" wording is gone.
 
-4. **Render-time superseded-read collapse (dedup.py / ALL tiers).**
-   ``collapse_superseded_reads`` replaces every earlier file_read tool-result
-   for a path with a "[superseded...]" stub, keeping only the most-recent
-   result. Not assist-gated.
+4. **Receipt-aware read collapse.** Exact revision/range coverage, never path
+   recency, determines whether a body is redundant. Legacy reads remain.
 
 # Acceptance (this file)
 
-1. Unchanged file across turns → body shown once then pointer on the second
-   call (not re-dumped).
+1. Unchanged file across turns → each stateless request contains the body.
 2. Externally-changed file → named in the stale notice (``file_state_notice``
    + ``stale_paths``).
 3. Oversize-file branch → windowed directive present; the old "do NOT call
    file_write" wording is ABSENT.
 4. ``file_state_notice([])`` → None (silent fast-path).
-5. ``collapse_superseded_reads`` collapses older file_read results.
+5. Legacy reads without receipts are not guessed equivalent.
 """
 
 from __future__ import annotations
@@ -48,10 +44,7 @@ import hashlib
 from typing import Any
 
 from disco.core import ActionEvent, LLMMessage, ObservationEvent, ToolCall, ToolResult
-from disco.core.loop.dedup import (
-    _SUPERSEDED_READ_NOTICE,
-    collapse_superseded_reads,
-)
+from disco.core.loop.dedup import collapse_superseded_reads
 from disco.core.loop.file_state import (
     _STALE_NOTICE_SENTINEL,
     FileStateTracker,
@@ -170,19 +163,12 @@ def test_file_state_notice_single_path():
 
 
 # ---------------------------------------------------------------------------
-# (1) Unchanged file across turns → pointer on second call
+# (1) Every stateless request receives the current bounded body
 # ---------------------------------------------------------------------------
 
 
-def test_unchanged_file_shown_once_then_pointer():
-    """An unchanged file is shown with full BEGIN/END body on the first call,
-    then collapsed to a one-line "✓ … current, shown earlier" pointer on the
-    second call (disk SHA matches tracker SHA → not stale → pointer).
-
-    This is the core W2 fix: windows.js was re-dumped 20× because every turn
-    produced the same truncated body + "call file_read" marker. With W2 the
-    snapshot shows it once; on every subsequent unchanged turn it is a pointer.
-    """
+def test_unchanged_file_is_present_in_each_stateless_request():
+    """A prior provider call is not context for the current provider call."""
     tracker = FileStateTracker()
     events = [_write_event("app.js", "const x = 1;")]
     content = b"const x = 1;"
@@ -193,25 +179,24 @@ def test_unchanged_file_shown_once_then_pointer():
     assert "BEGIN FILE app.js" in text1, "first call must show full body"
     assert "const x = 1;" in text1
 
-    # Second call: tracker now has the SHA, disk unchanged → pointer
+    # Second call: tracker knows the SHA, but the provider request is stateless.
     text2 = _snapshot({"app.js": content}, events, tracker=tracker, stale=frozenset())
     assert text2 is not None
-    assert "BEGIN FILE app.js" not in text2, (
-        "second call must NOT re-dump the body (file unchanged)"
-    )
-    assert "app.js" in text2
-    assert "current, shown earlier" in text2
+    assert "BEGIN FILE app.js" in text2
+    assert "const x = 1;" in text2
+    assert "current, shown earlier" not in text2
+    assert text2 == text1
 
 
-def test_pointer_uses_checkmark_format():
-    """The pointer line starts with '✓' and names the path."""
+def test_tracker_does_not_create_a_prior_turn_pointer():
     tracker = FileStateTracker()
     events = [_write_event("hello.py", "x=1")]
     _snapshot({"hello.py": b"x=1"}, events, tracker=tracker, stale=frozenset())
-    # Second call → pointer
+    # Second call still carries the body; "shown earlier" is never sufficient.
     text = _snapshot({"hello.py": b"x=1"}, events, tracker=tracker, stale=frozenset())
     assert text is not None
-    assert "✓ hello.py" in text
+    assert "BEGIN FILE hello.py" in text
+    assert "current, shown earlier" not in text
 
 
 def test_no_tracker_always_shows_full_body():
@@ -347,11 +332,8 @@ def test_oversize_file_still_shows_head_and_tail():
     assert "more chars" in text
 
 
-def test_oversize_file_with_tracker_shows_pointer_after_first_display():
-    """An oversize file shown (truncated) on turn 1 is shown as a pointer on
-    turn 2 when disk is unchanged. The pointer replaces the truncated body,
-    which is the key W2 improvement for files like windows.js.
-    """
+def test_oversize_file_with_tracker_remains_truthfully_windowed():
+    """A bounded head/tail window is re-derived for every stateless request."""
     tracker = FileStateTracker()
     large_bytes = b"Z" * (_WS_PER_FILE_CHARS + 200)
     events = [_write_event("windows.js", "Z" * (_WS_PER_FILE_CHARS + 200))]
@@ -361,14 +343,13 @@ def test_oversize_file_with_tracker_shows_pointer_after_first_display():
     assert t1 is not None
     assert "BEGIN FILE windows.js" in t1  # full (truncated) block shown
 
-    # Second call → pointer (disk unchanged)
+    # Second call → the same explicit bounded window, never a prior-turn pointer.
     t2 = _snapshot({"windows.js": large_bytes}, events, tracker=tracker, stale=frozenset())
     assert t2 is not None
-    assert "BEGIN FILE windows.js" not in t2, (
-        "second turn must show pointer, not the truncated body again"
-    )
-    assert "windows.js" in t2
-    assert "current, shown earlier" in t2
+    assert "BEGIN FILE windows.js" in t2
+    assert "more chars" in t2
+    assert "current, shown earlier" not in t2
+    assert t2 == t1
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +357,8 @@ def test_oversize_file_with_tracker_shows_pointer_after_first_display():
 # ---------------------------------------------------------------------------
 
 
-def test_collapse_superseded_reads_replaces_older_results():
-    """``collapse_superseded_reads`` replaces every earlier file_read tool-
-    result for a path with a '[superseded...]' stub, keeping only the latest.
-    """
+def test_collapse_keeps_legacy_reads_without_exact_receipts():
+    """Path and recency alone cannot prove two historical bodies equivalent."""
     r1 = _read_event("foo.py", call_id="c1")
     r2 = _read_event("foo.py", call_id="c2")  # later read of same path
     events = with_seqs([r1, _read_obs(r1, "old content"), r2, _read_obs(r2, "new content")])
@@ -391,10 +370,8 @@ def test_collapse_superseded_reads_replaces_older_results():
     ]
     result = collapse_superseded_reads(messages, events)
     assert len(result) == 2
-    # First (older) result superseded
-    assert _SUPERSEDED_READ_NOTICE.format(path="foo.py") in result[0].content
+    assert result[0].content == "old content"
     assert result[0].tool_call_id == "c1"
-    # Latest result kept in full
     assert result[1].content == "new content"
     assert result[1].tool_call_id == "c2"
 

@@ -23,6 +23,7 @@ from ..events import ActionEvent, Event, EventSource, LLMMessage, MessageEvent
 from ..llm import LLMError
 from ..view import _latest_plan, effective_plan_progress
 from .dedup import _WORKSPACE_MUTATING_TOOLS, _WORKSPACE_READ_TOOLS
+from .resource_context import canonical_workspace_identifier
 
 # (B2/B6) Cap on consecutive PLANNING-mode read/list tool calls before the loop
 # forces a plan. A re-plan model can stay in an "execution frame of mind" and
@@ -147,9 +148,10 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
         if not isinstance(e, ActionEvent) or e.tool_call is None:
             continue  # defensive: a tool_call-less ActionEvent (finish mirror) has no path
         name = e.tool_call.tool_name
-        p = e.tool_call.arguments.get("path")
-        if not isinstance(p, str) or not p:
+        raw_path = e.tool_call.arguments.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
             continue
+        p = canonical_workspace_identifier(raw_path)
         if name in _WORKSPACE_MUTATING_TOOLS:
             read_only.pop(p, None)  # promote a previously read-only file to mutated
             mutated.pop(p, None)

@@ -7,10 +7,21 @@ instance's jailed workspace (the instance rejects path escapes).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
 
+from disco.core.effects import (
+    CoverageSpan,
+    CoverageUnit,
+    EffectCapability,
+    ObservationReceipt,
+    ResourceCoverage,
+    ResourceKey,
+    ResourceRevision,
+    ToolBehavior,
+)
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
@@ -1012,6 +1023,42 @@ class FileReadArgs(BaseModel):
     )
 
 
+def _file_read_receipt(
+    path: str,
+    *,
+    sha256: str,
+    total_lines: int,
+    start_line_index: int,
+    end_line_index: int,
+    complete: bool,
+    raw_size_bytes: int,
+    rendered_content: str,
+) -> ObservationReceipt:
+    """Typed exact-coverage receipt for bytes physically returned by file_read."""
+
+    rendered_bytes = rendered_content.encode("utf-8")
+    spans = (
+        (CoverageSpan(start=start_line_index, end=end_line_index),)
+        if end_line_index > start_line_index
+        else ()
+    )
+    return ObservationReceipt(
+        capability=EffectCapability.WORKSPACE_CONTENT_READ,
+        revision=ResourceRevision(
+            resource=ResourceKey(
+                namespace="workspace.file",
+                identifier=_canonical(path),
+            ),
+            digest=sha256,
+        ),
+        coverage=ResourceCoverage(unit=CoverageUnit.LINES, spans=spans, total=total_lines),
+        complete=complete,
+        raw_size_bytes=raw_size_bytes,
+        rendered_size_bytes=len(rendered_bytes),
+        rendered_sha256=hashlib.sha256(rendered_bytes).hexdigest(),
+    )
+
+
 class FileReadTool:
     definition = ToolDef(
         name="file_read",
@@ -1028,6 +1075,10 @@ class FileReadTool:
         needs=_FS,
         runs_in="sandbox",
         read_only=True,  # observes only — safe for the planner
+        behavior=ToolBehavior(
+            planner_safe=True,
+            possible_capabilities=frozenset({EffectCapability.WORKSPACE_CONTENT_READ}),
+        ),
     )
 
     async def run(self, args: FileReadArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1038,10 +1089,21 @@ class FileReadTool:
         # mutators also set this via their returned numbered observations.
         # Internal ctx.sandbox.read_file() calls inside _gated_write and each
         # mutator's own preflight read do NOT set the bit by themselves.
-        import hashlib
-
         _disk_sha = hashlib.sha256(data).hexdigest()  # CD-TOOLS-1 fresh-edit grounding
-        text = data.decode("utf-8", errors="replace")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return ToolOutcome(
+                success=False,
+                error="invalid_utf8_text",
+                content=(
+                    f"{args.path} is not valid UTF-8 text. No replacement-decoded content "
+                    "was returned because it would silently change the bytes. The file "
+                    "remains untouched; use a binary-safe asset workflow or replace it only "
+                    "with deliberate source bytes."
+                ),
+            )
+        byte_exact_text = True
         lines = text.splitlines()
         total = len(lines)
         start = max((args.offset or 1) - 1, 0)
@@ -1100,9 +1162,24 @@ class FileReadTool:
                 f"[lines 1-{head_to} of {total} (file: {len(text)} chars) — "
                 f"HEAD-ONLY under context pressure]\n"
             )
+            content = header + "\n".join(head) + "\n\n" + _PRESSURE_DIRECTIVE
             return ToolOutcome(
                 success=True,
-                content=header + "\n".join(head) + "\n\n" + _PRESSURE_DIRECTIVE,
+                content=content,
+                effect_receipts=(
+                    _file_read_receipt(
+                        args.path,
+                        sha256=_disk_sha,
+                        total_lines=total,
+                        start_line_index=0,
+                        end_line_index=head_to,
+                        complete=head_to >= total,
+                        raw_size_bytes=len(data),
+                        rendered_content=content,
+                    ),
+                )
+                if byte_exact_text
+                else (),
             )
         # A page that fits under the snip cap, line-numbered from the absolute start
         # so line numbers are correct. If `limit` is given, respect it but still cap
@@ -1156,7 +1233,25 @@ class FileReadTool:
         # stopped on the char budget or the caller's limit)
         more = f"; read more with offset={shown_to + 1}" if shown_to < total else ""
         header = f"[lines {start + 1}-{shown_to} of {total}{more}]\n"
-        return ToolOutcome(success=True, content=header + "\n".join(out))
+        content = header + "\n".join(out)
+        return ToolOutcome(
+            success=True,
+            content=content,
+            effect_receipts=(
+                _file_read_receipt(
+                    args.path,
+                    sha256=_disk_sha,
+                    total_lines=total,
+                    start_line_index=start,
+                    end_line_index=shown_to,
+                    complete=start == 0 and shown_to >= total,
+                    raw_size_bytes=len(data),
+                    rendered_content=content,
+                ),
+            )
+            if byte_exact_text
+            else (),
+        )
 
 
 # MONO-1 — monolith write gate (all tiers, like F1/ROOT-2). A single giant source

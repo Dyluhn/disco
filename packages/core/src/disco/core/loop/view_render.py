@@ -10,6 +10,7 @@ the former AgentLoop methods.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -21,6 +22,7 @@ from ..context import (
     VerifierFailureRef,
     context_compact_if_needed,
 )
+from ..effects import ObservationReceipt
 from ..events import (
     WORKSPACE_SNAPSHOT_SENTINEL,
     ActionEvent,
@@ -49,6 +51,11 @@ from .dedup import (
 from .file_state import FileStateTracker, file_state_notice
 from .messages import _workspace_paths_from_events
 from .observe import _ground_read
+from .resource_context import (
+    current_prompt_coverage_lines,
+    snapshot_receipt,
+    snapshot_window_receipt,
+)
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
@@ -204,6 +211,7 @@ async def workspace_snapshot_message(
     caps: ContextCaps | None = None,
     pin_full: bool = False,
     out_pinned_full: set[str] | None = None,
+    out_prompt_receipts: list[ObservationReceipt] | None = None,
 ) -> LLMMessage | None:
     """Re-derive the CURRENT on-disk content of the working-set files from the
     sandbox each turn and render it as an authoritative, always-fresh message.
@@ -224,17 +232,12 @@ async def workspace_snapshot_message(
     condenser (which acts on EVENTS) can never erase it. Returns None if there
     is no sandbox or no tracked files — degrading to prior behavior.
 
-    W2 — stale-aware rendering (tracker + stale set):
-      * tracker is None (default): backward-compat mode — all files shown in full
-        every turn (identical to the pre-W2 behavior; used by the loop's own
-        _workspace_snapshot_message delegator and legacy tests).
-      * tracker provided: emit FULL body only for files in
-        (stale ∪ never-shown-in-tracker); collapse every other file to a
-        one-line "✓ {path} — current on disk, unchanged since last shown" pointer.
-        The stale set
-        is pre-computed by ViewBuilder.build (via FileStateTracker.stale_paths)
-        and passed in so the snapshot does not re-read just for staleness.
-        After showing a file in full, the tracker is updated.
+    Every provider request is stateless. A file shown on a prior turn is therefore
+    never replaced by a "shown earlier" pointer. ``tracker`` and ``stale`` still
+    support external-change notices, while every request independently carries the
+    current bounded body. Full, untruncated, byte-exact UTF-8 bodies also emit typed
+    receipts through ``out_prompt_receipts``; those receipts are the sole authority
+    for compacting an equivalent historical read.
 
     Layering-safe: reaches the sandbox via the same duck-typed
     getattr(self.executor, "sandbox", None) seam as _execute_and_observe."""
@@ -244,7 +247,9 @@ async def workspace_snapshot_message(
     # (caps is None) is the byte-identical assist-ON baseline used by the engine's
     # back-compat delegator and legacy tests.
     _caps = caps if caps is not None else _BASELINE_CAPS
-    _stale: frozenset[str] = stale if stale is not None else frozenset()
+    # Keep the stale argument as an API-compatible input. Staleness affects the
+    # separate warning message, not whether this stateless request receives bytes.
+    _ = stale
     mutated, read_only = _workspace_paths_from_events(events)
     ordered = mutated + read_only  # mutated first → never evicted by reads (#1)
     if not ordered:
@@ -258,11 +263,13 @@ async def workspace_snapshot_message(
     # keeps the assist-ON rendered prompt byte-identical to pre-CW-3 (P1-c).
     preamble = _workspace_snapshot_preamble(pin_full)
     blocks: list[str] = []
+    prompt_receipts: list[ObservationReceipt] = []
     # E4 (T8) — per-file notes appended to the trailing omitted-notice.
     # Each note tells the model exactly WHY a file it touched is NOT
     # rendered as a BEGIN/END block (binary, deleted, permission). The
     # model can then `file_read` it itself when it needs the content.
     omitted_notes: list[str] = []
+    budget_omitted: list[str] = []
     budget = _caps.total_chars - len(preamble)
     shown_count = 0
     # E4 (T8) — .disco-spill-* are T10's overflow logs (head/tail markers
@@ -272,50 +279,29 @@ async def workspace_snapshot_message(
     # Match the leaf filename (basename) so an absolute path the model
     # might use (e.g. /workspace/.disco-spill-abc.log) is caught too.
     spill_basename_prefix = ".disco-spill-"
-    for path in ordered:
+    candidates = [
+        path
+        for path in ordered
+        if not os.path.basename(path).startswith(spill_basename_prefix)
+        and ".pmx" not in path.split("/")
+    ]
+    for index, path in enumerate(candidates):
         if shown_count >= _caps.max_files or budget <= 0:
+            budget_omitted.extend(candidates[index:])
             break
-        # E4 (T8) — skip T10's overflow-log paths up-front
-        if os.path.basename(path).startswith(spill_basename_prefix):
-            continue
-        # C5 — skip the `.pmx/` write-through mirror. It is the on-disk
-        # durable copy of the in-View KnowledgeEvent channel (see
-        # _write_pmx_memory_fact in this file). The View is the
-        # authoritative in-session source; the file is just a recovery
-        # aid for hard filesystem resets. Surfacing it in the working-
-        # set snapshot would (a) be a divergent second store from the
-        # model's POV and (b) double-count the same fact (once in the
-        # View, once in the mirror). Exclude it like `.disco-spill-*`.
-        if ".pmx" in path.split("/"):
-            continue
         raw = await _read_working_file(sbx, path, omitted_notes)
         if isinstance(raw, _SnapshotHalt):
+            budget_omitted.extend(candidates[index:])
             break  # hung read ⇒ wedged sandbox; degrade to the snapshot so far
         if raw is None:
             continue  # gone / unreadable / directory / binary — note already added
-        text = raw.decode("utf-8", "replace")
-        # W2 — pointer for unchanged known files (tracker mode only).
-        # If the tracker is active, this file has been shown in full before,
-        # and its disk SHA has NOT changed since (not in the stale set), emit
-        # a one-line pointer instead of re-dumping the whole body. This is the
-        # primary context-reduction mechanism: a file shown on turn 1 that
-        # hasn't changed costs 1 line on every subsequent turn.
-        #
-        # CW-3 — `pin_full` SUPPRESSES the pointer collapse. When the block lives
-        # in the cacheable PREFIX (capable models), a turn-dependent full→pointer
-        # transition would make the block bytes DIFFER turn-over-turn for an
-        # UNCHANGED file → never a stable cache prefix. With pin_full the block is
-        # a pure function of (on-disk content + working-set order): byte-identical
-        # across turns until a file actually changes, so prompt caching rebills it
-        # at ~10%. The tracker is STILL updated below (so external-change staleness
-        # detection keeps working); only the pointer shortcut is skipped.
-        if not pin_full and tracker is not None and tracker.is_known(path) and path not in _stale:
-            # CW P1-c — this pointer only renders when NOT pin_full (assist-ON), where
-            # the pre-CW-3 wording is byte-identical for the tail-placed block.
-            pointer = f"✓ {path} — current, shown earlier"
-            budget -= len(pointer)
-            blocks.append(pointer)
-            shown_count += 1
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            omitted_notes.append(
+                f"[invalid UTF-8 text omitted without lossy replacement: {path}; "
+                "the exact bytes remain on disk]"
+            )
             continue
         # Full body: file is stale, never-shown-in-tracker, or tracker is None
         # (backward-compat mode). Render head + tail when oversize.
@@ -331,18 +317,41 @@ async def workspace_snapshot_message(
                 "file_replace_lines on a freshly-read range.] …\n"
                 f"{text[-tail:]}"
             )
+            head_bytes = len(text[:head].encode("utf-8"))
+            tail_bytes = len(text[-tail:].encode("utf-8")) if tail else 0
+            byte_spans = tuple(
+                span
+                for span in (
+                    (0, head_bytes) if head_bytes else None,
+                    (len(raw) - tail_bytes, len(raw)) if tail_bytes else None,
+                )
+                if span is not None
+            )
+            prompt_receipts.append(
+                snapshot_window_receipt(
+                    path=path,
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                    raw_size_bytes=len(raw),
+                    byte_spans=byte_spans,
+                    rendered_content=shown,
+                )
+            )
         else:
             shown = text
-            # CW-4 (truthful pointers): this file is rendered in FULL (untruncated)
-            # in the block this turn → record it so the caller's
-            # collapse_superseded_reads can truthfully point a superseded-read stub
-            # at the WORKSPACE block for this path. Truncated files (the `if` branch
-            # above) and pointer-collapsed / omitted / skipped files are NOT
-            # recorded → their stubs use the no-claim notice. Output-only side
-            # channel: it never affects the returned message bytes (assist-ON stays
-            # byte-identical when the caller ignores it).
+            # Only an untruncated, losslessly decoded body proves the disk revision
+            # byte-for-byte. Replacement-decoded text remains useful context, but it
+            # cannot authorize compaction or satisfy read grounding as "exact".
             if out_pinned_full is not None:
                 out_pinned_full.add(path)
+            prompt_receipts.append(
+                snapshot_receipt(
+                    path=path,
+                    sha256=hashlib.sha256(raw).hexdigest(),
+                    total_lines=len(text.splitlines()),
+                    raw_size_bytes=len(raw),
+                    rendered_content=shown,
+                )
+            )
         # Plain text delimiters — NOT markdown ``` fences. A fenced snapshot
         # invites the model to reflexively copy the ``` into its file_write
         # (models are trained to wrap code in ```), polluting the real file and
@@ -364,22 +373,40 @@ async def workspace_snapshot_message(
     # If every file was omitted (binary / gone / permission / spill) we
     # still want to surface the notes so the model knows the working
     # set is not empty on disk — it just couldn't be rendered.
-    if not blocks and not omitted_notes:
+    if not blocks and not omitted_notes and not budget_omitted:
         return None
-    omitted = len(ordered) - shown_count
     # Compose the trailing notice: budget-omitted count (existing
     # behavior) PLUS the E4 per-file notes. A single trailing paragraph
     # keeps the snapshot's shape consistent; the notes are short
     # one-liners the model can act on (`file_read`, recreate, etc.).
     notice_parts: list[str] = []
-    if omitted > 0:
+    if budget_omitted:
+        shown_names = budget_omitted[:12]
+        remaining = len(budget_omitted) - len(shown_names)
+        suffix = f", +{remaining} more" if remaining else ""
         notice_parts.append(
-            f"[{omitted} more file(s) you have touched are not shown here "
-            f"(snapshot budget) — file_read them when you need their content.]"
+            "[not present in this request because of the snapshot budget: "
+            + ", ".join(shown_names)
+            + suffix
+            + ". Their current bytes remain on disk; file_read only a path/range needed "
+            "for the next action.]"
         )
     notice_parts.extend(omitted_notes)
     notice = ("\n\n" + "\n".join(notice_parts)) if notice_parts else ""
-    return LLMMessage(role="user", content=preamble + "\n\n".join(blocks) + notice)
+    coverage_lines = current_prompt_coverage_lines(prompt_receipts)
+    coverage = ""
+    if coverage_lines:
+        coverage = (
+            "\n\n# CURRENT PROMPT FILE COVERAGE\n"
+            "Host-observed exact resource ranges physically present in this request:\n"
+            + "\n".join(f"- {line}" for line in coverage_lines)
+        )
+    if out_prompt_receipts is not None:
+        out_prompt_receipts.extend(prompt_receipts)
+    return LLMMessage(
+        role="user",
+        content=preamble + "\n\n".join(blocks) + coverage + notice,
+    )
 
 
 def f8_shrink_file_write_args(messages: list[LLMMessage], events: list[Event]) -> list[LLMMessage]:
@@ -392,15 +419,13 @@ def f8_shrink_file_write_args(messages: list[LLMMessage], events: list[Event]) -
     transform runs AFTER ``View.of`` (and the existing
     ``_ARG_SNIP_CHARS`` shaper in events.py) so it OVERRIDES the
     generic "[[DISCO-ELIDED: N chars ...]]" marker with a more
-    useful form: a real 200-char prefix + a path-aware hint. The
-    on-disk full content is the recovery surface (file_read /
-    workspace snapshot).
+    useful form: a real 200-char prefix + a path-aware history marker. The
+    always-fresh workspace snapshot remains the normal grounding surface.
 
-    Lossless for the wire (the marker names the file's path, so
-    ``file_read <path>`` recovers the full content) and lossless
-    for the event log (the event's ``tool_call.arguments["content"]``
-    is never modified — only the rendered message the provider
-    sees is trimmed).
+    The marker does not command a full reread: it identifies the resource and
+    asks for only the minimal range if a future action actually needs more
+    context. The event log remains lossless because the event's
+    ``tool_call.arguments["content"]`` is never modified.
 
     Assist OFF (the default) → caller does not invoke this method;
     messages are byte-identical to today.
@@ -618,16 +643,13 @@ class ViewBuilder:
         # W2: call the module-level function directly (bypasses the loop's
         # _workspace_snapshot_message delegator) so we can pass the tracker +
         # pre-computed stale set. The loop delegator is kept for back-compat tests.
-        # CW-3 — capable models (assist OFF) pin the working set in FULL and place
-        # the block in the cacheable PREFIX, so suppress the per-turn pointer
-        # collapse (pin_full): the block must be byte-identical turn-over-turn for
-        # an unchanged file to be a stable cache prefix. assist ON keeps the W2
-        # pointer behavior + tail placement (byte-identical to today).
-        # CW-4 — collect the set of paths pinned in FULL in the block this turn, so
-        # the superseded-read collapse below can point a stub at the WORKSPACE block
-        # ONLY for paths whose current content is actually present there in full
-        # (assist-OFF). Output-only: it never changes the snapshot bytes.
+        # Capable models place the byte-stable block in the cacheable prefix;
+        # assist mode keeps it in the recent tail. Both are stateless provider
+        # requests and therefore receive current bounded bodies every turn.
+        # Collect exact full-body paths for write grounding and typed revision/
+        # range receipts for safe historical-read compaction.
         pinned_full: set[str] = set()
+        snapshot_receipts: list[ObservationReceipt] = []
         snapshot = await workspace_snapshot_message(
             sbx,
             events,
@@ -636,6 +658,7 @@ class ViewBuilder:
             caps=caps,
             pin_full=not self._loop._assist,
             out_pinned_full=pinned_full,
+            out_prompt_receipts=snapshot_receipts,
         )
         # Every path pinned in FULL (untruncated) in the CURRENT WORKSPACE block
         # this turn has its disk-fresh current content in front of the model — a
@@ -687,25 +710,22 @@ class ViewBuilder:
         # is appended AFTER the gate regardless of the gate's verdict
         # (it's authoritative on-disk content the model needs).
         view = self._loop._gate_recitation(view, events, context_pack_active=context_pack_active)
-        # W2 — collapse superseded reads (ALL tiers, NOT assist-gated).
-        # Rewrite every earlier file_read tool-result for a path to a short
-        # "[superseded...]" stub; keep only the most-recent result in full.
-        # This is a pure render-time compaction — the event log is unchanged.
-        # CW-4 — assist-OFF: pass the pinned-in-full set so a stub only claims
-        # "current content is in the WORKSPACE block" for paths that are actually
-        # there in full this turn; the rest get the no-claim notice. assist-ON: pass
-        # None → byte-identical to before CW-4 (every stub points to the block,
-        # matching that tier's tail-snapshot contract).
+        # Pure render-time compaction: only exact same-revision/range receipts may
+        # replace a historical read. Bare paths and prior-turn delivery confer no
+        # authority; a later partial read cannot evict an earlier full read.
         _pinned_arg = None if self._loop._assist else frozenset(pinned_full)
         view = view.model_copy(
             update={
                 "messages": collapse_superseded_reads(
-                    view.messages, events, pinned_full_paths=_pinned_arg
+                    view.messages,
+                    events,
+                    pinned_full_paths=_pinned_arg,
+                    prompt_receipts=tuple(snapshot_receipts),
                 )
             }
         )
         # CW P1-a (round-2) — assist-OFF: retarget every elided tool-call ARGUMENT marker
-        # to the NEUTRAL non-dangling marker (re-issue / file_read recovery only). An
+        # to the neutral metadata-only marker. An
         # elided arg is a write/edit body — NOT the file's current content — so it is not
         # in the CURRENT WORKSPACE block even when the path is pinned; the old per-pin
         # "it's in the block" pointer was therefore a dangling claim. `_snip_args` rendered
@@ -718,9 +738,9 @@ class ViewBuilder:
         # reclaim). When assist is ON, replace the long `content` argument
         # in any past assistant message whose `file_write` tool call was
         # CONFIRMED successful with a short prefix + a path-aware marker.
-        # Lossless: the full content lives on disk (and in the snapshot) —
-        # `file_read <path>` recovers it. Render-time only: the persisted
-        # event log is unchanged. Assist OFF (the capable-model default)
+        # The current snapshot is the ordinary grounding surface; if more context
+        # is genuinely needed, the marker asks only for an exact minimal range.
+        # Render-time only: the persisted event log is unchanged. Assist OFF
         # → no-op; the rendered messages are byte-identical to today.
         # Runs AFTER the collapse so the F8 marker is applied to history
         # and after the snapshot append so the snapshot (authoritative

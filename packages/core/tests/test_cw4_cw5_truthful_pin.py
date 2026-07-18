@@ -1,15 +1,8 @@
-"""CW-4 (truthful pointers) + CW-5 (pin covers the working set, survives condense).
+"""CW-4 context truth + CW-5 pin survival through condensation.
 
-CW-4: a superseded-read stub must never claim "current content is in the CURRENT
-WORKSPACE block" for a path that is NOT actually pinned in FULL in that block this
-turn (omitted by the snapshot's breadth/budget cap, head/tail-truncated, or skipped
-as gone/binary). collapse_superseded_reads takes ``pinned_full_paths`` (assist-OFF)
-and uses the block-pointing notice ONLY for pinned-in-full paths; everything else
-gets the no-claim notice. assist-ON passes None → byte-identical to before CW-4.
-
-The truthfulness invariant collapse already guarantees: a stub is emitted ONLY when
-a LATER result for the same path is KEPT IN FULL — so the no-claim notice ("a more
-recent file_read of this path is present in this prompt") is always TRUE.
+CW-4 now requires typed revision/range evidence. A bare ``pinned_full_paths`` entry
+cannot prove byte identity, and legacy observations without receipts remain verbatim.
+The exact receipt cases live in ``test_resource_context.py``.
 
 CW-5: for assist-OFF the pinned working-set block is built from disk and positioned
 in the cacheable PREFIX AFTER the §8 condenser fires. This proves the invariant: a
@@ -32,11 +25,7 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.events import WORKSPACE_SNAPSHOT_SENTINEL, CondensationEvent, EventSource
-from disco.core.loop.dedup import (
-    _SUPERSEDED_READ_NOTICE,
-    _SUPERSEDED_READ_NOTICE_NO_PIN,
-    collapse_superseded_reads,
-)
+from disco.core.loop.dedup import collapse_superseded_reads
 from disco.core.loop.view_render import ViewBuilder
 from disco.core.view import CondensationRequest, NoOpCondenser, View
 
@@ -172,40 +161,31 @@ def _two_reads_of(path: str) -> tuple[list[LLMMessage], list]:
     return messages, [a1, a2]
 
 
-def test_collapse_pinned_full_uses_block_notice():
+def test_bare_pinned_path_cannot_compact_legacy_reads():
     msgs, events = _two_reads_of("app.js")
     out = collapse_superseded_reads(msgs, events, pinned_full_paths=frozenset({"app.js"}))
-    # earlier (c1) stubbed with the block-pointing notice; latest (c2) kept full.
-    assert out[1].content == _SUPERSEDED_READ_NOTICE.format(path="app.js")
+    # A path is not byte identity. Legacy observations have no revision receipts.
+    assert out[1].content == "FULL-BODY-READ-1"
     assert out[3].content == "FULL-BODY-READ-2"
-    assert "CURRENT WORKSPACE block in this prompt" in out[1].content
 
 
-def test_collapse_not_pinned_uses_no_claim_notice():
+def test_unpinned_legacy_reads_are_retained():
     msgs, events = _two_reads_of("big.js")
     # big.js was read but is NOT pinned in full this turn (e.g. truncated/omitted).
     out = collapse_superseded_reads(msgs, events, pinned_full_paths=frozenset())
-    # earlier read → the no-claim notice (NOT a "content is in the block" lie).
-    assert out[1].content == _SUPERSEDED_READ_NOTICE_NO_PIN.format(path="big.js")
-    assert "CURRENT WORKSPACE block" not in out[1].content
-    # The truthful claim it DOES make resolves: the latest read is kept in full.
+    assert out[1].content == "FULL-BODY-READ-1"
     assert out[3].content == "FULL-BODY-READ-2"
-    assert _DIRECTIONAL.search(out[1].content) is None
 
 
-def test_collapse_assist_on_none_is_byte_identical():
-    """pinned_full_paths=None (assist-ON / back-compat) → every stub points to the
-    block, exactly as before CW-4 (no per-path branching)."""
+def test_legacy_reads_are_retained_in_both_assist_modes():
     msgs, events = _two_reads_of("app.js")
     out_none = collapse_superseded_reads(msgs, events)  # default None
     out_explicit_none = collapse_superseded_reads(msgs, events, pinned_full_paths=None)
-    assert out_none[1].content == _SUPERSEDED_READ_NOTICE.format(path="app.js")
+    assert out_none[1].content == "FULL-BODY-READ-1"
     assert out_explicit_none[1].content == out_none[1].content
-    # Even for a path that is NOT pinned, None keeps the legacy block notice
-    # (assist-ON contract: its tail snapshot governs truthfulness, untouched here).
     msgs2, events2 = _two_reads_of("big.js")
     out2 = collapse_superseded_reads(msgs2, events2, pinned_full_paths=None)
-    assert out2[1].content == _SUPERSEDED_READ_NOTICE.format(path="big.js")
+    assert out2[1].content == "FULL-BODY-READ-1"
 
 
 # ===========================================================================
@@ -239,7 +219,7 @@ def _build_events_read_twice(paths: list[str]) -> list:
     return out
 
 
-def test_e2e_assist_off_gone_path_gets_no_claim_notice():
+def test_e2e_assist_off_legacy_reads_are_not_guessed_equivalent():
     # app.js is on disk (pinned full); gone.js was read then deleted (NOT in the
     # block). Both read twice → both stubbed; the notices must differ truthfully.
     sbx = _FakeSandbox({"app.js": b"const x = 1;\n"})  # gone.js intentionally absent
@@ -254,25 +234,20 @@ def test_e2e_assist_off_gone_path_gets_no_claim_notice():
 
     bodies = [m.content for m in view.messages if m.role == "tool"]
     joined = "\n".join(bodies)
-    # app.js (pinned full) → block notice; gone.js (not pinned) → no-claim notice.
-    assert _SUPERSEDED_READ_NOTICE.format(path="app.js") in joined
-    assert _SUPERSEDED_READ_NOTICE_NO_PIN.format(path="gone.js") in joined
-    # The dangerous lie must NOT appear for the gone path.
-    assert _SUPERSEDED_READ_NOTICE.format(path="gone.js") not in joined
+    assert "READ-1" in joined
+    assert "READ-2" in joined
+    assert "superseded file_read" not in joined
 
 
-def test_e2e_assist_on_byte_identical_block_notice_for_all():
-    # Same setup, assist ON → collapse gets None → every superseded stub uses the
-    # legacy block notice (byte-identical to pre-CW-4), even for the gone path.
+def test_e2e_assist_on_legacy_reads_are_not_guessed_equivalent():
     sbx = _FakeSandbox({"app.js": b"const x = 1;\n"})
     events = _build_events_read_twice(["app.js", "gone.js"])
     loop = _FakeLoop(assist=True, sandbox=sbx, events=events)
     view = asyncio.run(ViewBuilder(loop).build(loop._log))
     joined = "\n".join(m.content for m in view.messages if m.role == "tool")
-    assert _SUPERSEDED_READ_NOTICE.format(path="app.js") in joined
-    assert _SUPERSEDED_READ_NOTICE.format(path="gone.js") in joined
-    # The no-claim notice is an assist-OFF-only construct → never on assist-ON.
-    assert _SUPERSEDED_READ_NOTICE_NO_PIN.format(path="gone.js") not in joined
+    assert "READ-1" in joined
+    assert "READ-2" in joined
+    assert "superseded file_read" not in joined
 
 
 # ===========================================================================

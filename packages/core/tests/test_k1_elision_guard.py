@@ -480,7 +480,9 @@ def test_snip_args_rewords_to_sentinel_and_round_trips():
     assert out.startswith("[[DISCO-ELIDED:")
     assert out.endswith("]]")
     assert "history display only" in out
-    assert "file_read" in out
+    assert "file_read" not in out
+    assert "not file content" in out
+    assert "minimal range needed" in out
     assert "CURRENT WORKSPACE" not in out
     # Round-trip: the shaper's own output is detected by the guard (so a copied
     # placeholder is always caught regardless of future rewording).

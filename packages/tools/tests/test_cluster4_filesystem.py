@@ -40,6 +40,35 @@ async def test_file_read_whole_file_unchanged():
     await inst.destroy()
 
 
+async def test_file_read_emits_revision_and_line_coverage_for_exact_utf8():
+    ctx, inst = await _ctx()
+    await inst.write_file("exact.txt", b"alpha\nbeta\n")
+
+    out = await FileReadTool().run(FileReadTool().definition.args_model(path="exact.txt"), ctx)
+
+    assert len(out.effect_receipts) == 1
+    receipt = out.effect_receipts[0]
+    assert receipt.kind.value == "observation"
+    assert receipt.complete is True
+    assert receipt.coverage.unit.value == "lines"
+    assert receipt.coverage.covers_total()
+    await inst.destroy()
+
+
+async def test_file_read_rejects_invalid_utf8_instead_of_returning_lossy_text():
+    ctx, inst = await _ctx()
+    await inst.write_file("invalid.txt", b"valid\n\xff\xfe\n")
+
+    out = await FileReadTool().run(FileReadTool().definition.args_model(path="invalid.txt"), ctx)
+
+    assert not out.success
+    assert out.error == "invalid_utf8_text"
+    assert "No replacement-decoded content was returned" in out.content
+    assert "\ufffd" not in out.content
+    assert out.effect_receipts == ()
+    await inst.destroy()
+
+
 async def test_file_read_line_range_slice():
     ctx, inst = await _ctx()
     body = "\n".join(f"line{i}" for i in range(1, 21))  # 20 lines

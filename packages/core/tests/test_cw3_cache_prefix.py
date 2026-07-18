@@ -6,7 +6,7 @@ cache-hits → re-billed every turn (the 60k/turn pain). CW-3 moves the pinned
 CURRENT WORKSPACE block to BEFORE the event history (the stable prefix, right
 after the system prompt) for capable models, keeps it byte-identical turn-over-
 turn while the working set is unchanged, and adds an Anthropic cache breakpoint
-after it. assist-ON behavior is byte-identical to before (tail + W2 pointer).
+after it. Assist mode keeps the same block in the recent tail.
 
 Coverage:
   (a) two consecutive assist-OFF turns with NO file change → the pinned block is
@@ -14,8 +14,7 @@ Coverage:
   (b) the Anthropic payload gets a cache_control breakpoint AFTER the prefix block.
   (c) the OpenAI/OpenRouter path keeps the block in the prefix (a plain string at
       index 1, within the prompt_cache_key prefix span).
-  (d) assist-ON render is unchanged: snapshot in the TAIL + the W2 pointer collapse
-      still fires on the second unchanged turn.
+  (d) assist-ON renders the current body in the TAIL on every stateless request.
   (e) NO directional words (below/above/earlier/later/following/preceding) in the
       assist-OFF generated workspace/recovery PROSE.
 """
@@ -148,11 +147,11 @@ def test_assist_off_block_is_byte_stable_and_in_the_prefix():
 
 
 # ---------------------------------------------------------------------------
-# (d) assist-ON: snapshot in the TAIL + W2 pointer collapse preserved
+# (d) assist-ON: snapshot in the tail, with current bytes in every request
 # ---------------------------------------------------------------------------
 
 
-def test_assist_on_keeps_tail_placement_and_pointer_collapse():
+def test_assist_on_keeps_tail_placement_without_prior_turn_pointer():
     files = {"app.js": b"const x = 1;\n"}
     sbx = _FakeSandbox(files)
     builder = ViewBuilder(_FakeLoop(assist=True, sandbox=sbx))
@@ -165,15 +164,14 @@ def test_assist_on_keeps_tail_placement_and_pointer_collapse():
     snap1 = _snapshot_msg(view1)
     assert snap1 is not None and "BEGIN FILE app.js" in snap1.content
 
-    # Second unchanged turn → the W2 pointer collapse fires (byte-identical to
-    # the pre-CW-3 assist-ON behavior): no full body, a one-line pointer instead.
-    # CW P1-c — assist-ON renders the pre-CW-3 pointer wording ("current, shown
-    # earlier"), not the CW-3 location-independent wording (which is assist-OFF only).
+    # Second unchanged turn is a new stateless provider request, so it receives
+    # the current body again rather than a pointer into an absent prior request.
     view2 = asyncio.run(builder.build(events))
     snap2 = _snapshot_msg(view2)
     assert snap2 is not None
-    assert "BEGIN FILE app.js" not in snap2.content
-    assert "current, shown earlier" in snap2.content
+    assert "BEGIN FILE app.js" in snap2.content
+    assert "current, shown earlier" not in snap2.content
+    assert snap2.content == snap1.content
     assert _snapshot_index(view2) == len(view2.messages) - 1
 
 

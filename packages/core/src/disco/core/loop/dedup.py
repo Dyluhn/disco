@@ -23,6 +23,7 @@ engine import (no cycle).
 
 from __future__ import annotations
 
+from ..effects import ObservationReceipt
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -30,6 +31,14 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+)
+from .resource_context import (
+    canonical_workspace_identifier,
+    latest_read_revision_by_resource,
+    read_receipt_records,
+    receipt_covered_in_current_prompt,
+    rendered_content_matches_receipt,
+    select_prompt_read_records,
 )
 
 # A8 (file-state survival): single-file tools whose `path` arg names a file the
@@ -105,7 +114,9 @@ _F8_PREFIX_CHARS = 200
 # a visual cue that the original content was longer (matches the
 # existing snip convention in events._ARG_SNIP_CHARS).
 _F8_TRUNCATION_MARKER_TEMPLATE = (
-    "\n… [written to {path}; full content on disk — file_read to recover]"
+    "\n… [written to {path}; history display only; this marker is not file content. "
+    "Current disk state is authoritative. Do not copy or re-send this marker; request "
+    "only the exact range needed for the next change.]"
 )
 
 
@@ -317,48 +328,39 @@ def _f9_path_was_mutated_after(events: list[Event], path: str, after_seq: int) -
 # "[superseded...]" notice when a LATER result for the same path exists in
 # the prompt. This eliminates the bulk of repeated file_read context (e.g.
 # the same file read 5× across history → 4 pages replaced by 4 one-liners).
-# The model sees only the final current version, which is what matters.
-#
-# NOT assist-gated: unlike F9 (execution-time dedup), this is purely a
-# render-time compaction that never changes observable behavior — the model
-# always sees at least one full copy of each file_read result. Applying it
-# unconditionally on all tiers reduces context bloat for every model.
+# Exact observation receipts make read compaction revision/range aware. A full
+# current-prompt snapshot may replace equivalent historical reads; within read
+# history, only coverage already supplied by a retained read of the SAME active
+# revision is redundant. Legacy reads remain verbatim. Older authenticated
+# revisions become explicit stale facts rather than misleading grounding.
 #
 # Keep F9's EXECUTION-TIME short-circuit assist-gated (it changes which
 # tool calls actually execute; changing that on capable models would hide
 # information). This W2 collapse is render-only and always safe.
 # ---------------------------------------------------------------------------
 
-# CW-3 (REVISION 2) — LOCATION-INDEPENDENT: the current content is now pinned in
-# the CURRENT WORKSPACE block, which moved to the cacheable PREFIX (before history)
-# for capable models, so "shown later" is wrong. Name the block instead of pointing
-# in a direction.
-#
-# CW-4 (truthful pointers): this notice asserts the path's CURRENT content is in
-# the CURRENT WORKSPACE block — a TRUE claim ONLY when the path is actually pinned
-# in FULL in that block this turn. When the path is NOT pinned in full (omitted by
-# the snapshot's breadth/budget cap, head/tail-TRUNCATED there, or skipped as
-# binary/gone), the claim is a partial lie. The caller passes ``pinned_full_paths``
-# (assist-OFF) so this stub is used ONLY for paths confirmed pinned-in-full;
-# everything else gets ``_SUPERSEDED_READ_NOTICE_NO_PIN`` below (which makes no
-# "current content is here" claim — it only states a more-recent read exists and
-# tells the model to re-read for authority, both always TRUE because collapse keeps
-# the latest read in full).
+# This notice is emitted only after an exact same-revision/range prompt receipt
+# proves that the CURRENT WORKSPACE block physically contains the replacement.
 _SUPERSEDED_READ_NOTICE = (
     "[superseded file_read of {path} — current content is in the "
     "CURRENT WORKSPACE block in this prompt]"
 )
 
-# CW-4 — truthful stub for a superseded read whose path is NOT pinned in full this
-# turn. Makes NO claim about WHERE the current content lives (it may be only in a
-# more-recent file_read result, which could itself predate a later write → not
-# authoritative). Asserts only what is always TRUE when a stub is emitted: a more
-# recent read of this path is present (collapse keeps the latest read in full), and
-# the safe move for the authoritative copy is to file_read again. Location-
-# independent (no below/above/earlier/later) per REVISION 2.
+# Compatibility-only legacy constant. The revision-aware renderer never emits it;
+# absence of exact receipts now preserves the original body instead.
 _SUPERSEDED_READ_NOTICE_NO_PIN = (
-    "[superseded file_read of {path} — a more recent file_read of this path is "
-    "present in this prompt; file_read again for the authoritative current content]"
+    "[historical file_read of {path} — no exact current revision is proven elsewhere; "
+    "the original body must remain in the prompt]"
+)
+
+_REDUNDANT_READ_NOTICE = (
+    "[redundant file_read of {path} — the same resource revision and exact "
+    "range are retained elsewhere in this prompt]"
+)
+
+_STALE_READ_NOTICE = (
+    "[stale file_read of {path} @ sha256:{digest} — a newer authenticated revision "
+    "of this resource is retained in this prompt; this body is not current grounding]"
 )
 
 
@@ -367,39 +369,24 @@ def collapse_superseded_reads(
     events: list[Event],
     *,
     pinned_full_paths: frozenset[str] | None = None,
+    prompt_receipts: tuple[ObservationReceipt, ...] = (),
 ) -> list[LLMMessage]:
     """W2 RENDER-TIME transform — NOT assist-gated.
 
-    For every file_read path in the prompt history, the LATEST tool-result
-    message is kept in full; every EARLIER tool-result for the same path is
-    replaced with a stub.
+    Typed reads are compacted only when the same revision/range remains exact in
+    another retained read or in ``prompt_receipts`` (normally a full CURRENT
+    WORKSPACE body). A later partial read can therefore never evict an earlier
+    complete read. Legacy reads without revision receipts are retained
+    conservatively; historical delivery is not assumed to be current prompt
+    presence.
 
-    Effect: eliminates repeated-read context (the same file read 5× across
-    history → 4 full pages replaced by 4 one-liners each). The model sees
-    the final current version and can identify that earlier copies existed.
+    ``prompt_receipts`` describes exact bytes already present in non-history
+    request blocks. The old ``pinned_full_paths`` argument remains as a source-
+    compatible migration seam but confers no authority: a bare path cannot prove
+    that a snapshot contains the same revision as a historical read.
 
-    CW-4 (truthful pointers): ``pinned_full_paths`` is the set of paths that ARE
-    pinned in FULL in the CURRENT WORKSPACE block this turn (computed by the
-    snapshot builder via ``out_pinned_full``). When it is provided (assist-OFF):
-
-      * a path IN the set → ``_SUPERSEDED_READ_NOTICE`` (which truthfully points to
-        the pinned, disk-fresh block);
-      * a path NOT in the set (omitted/truncated/skipped from the block) →
-        ``_SUPERSEDED_READ_NOTICE_NO_PIN`` (makes no false "current content is in
-        the block" claim — only that a more-recent read exists + re-read advice).
-
-    When ``pinned_full_paths`` is None (assist-ON and the back-compat / legacy
-    callers) the behavior is BYTE-IDENTICAL to before CW-4: every stub uses
-    ``_SUPERSEDED_READ_NOTICE``. This carve-out keeps the assist-ON render exactly
-    as today (the assist-ON snapshot lives in the tail and may pointer-collapse
-    unchanged files, so its truthfulness is governed by that tier's contract).
-
-    Does NOT collapse:
-      * The MOST RECENT tool-result for each path (the current authoritative
-        copy — it must stay readable).
-      * Tool results that do not correspond to a file_read ActionEvent
-        (other tool names, or results with no matching action in events).
-      * Non-tool-result messages (assistant, user, system).
+    Does not collapse legacy/no-receipt reads, a revision/range not covered by a
+    retained observation, non-file-read results, or non-tool messages.
 
     Returns a new list; input is not mutated.
     """
@@ -415,41 +402,109 @@ def collapse_superseded_reads(
         ):
             p = e.tool_call.arguments.get("path")
             if isinstance(p, str) and p:
-                file_read_calls[e.tool_call.call_id] = p
+                file_read_calls[e.tool_call.call_id] = canonical_workspace_identifier(p)
 
     if not file_read_calls:
         return messages
 
-    # Forward scan: for each path, record the index of the LAST tool-result
-    # message whose call_id maps to a file_read of that path. This is the
-    # one we must keep in full.
-    last_idx: dict[str, int] = {}  # path → index of its latest tool-result
-    for i, msg in enumerate(messages):
-        if msg.role == "tool" and msg.tool_call_id in file_read_calls:
-            path = file_read_calls[msg.tool_call_id]
-            last_idx[path] = i
+    records = read_receipt_records(events)
+    record_by_call = {record.call_id: record for record in records}
+    latest_revisions = latest_read_revision_by_resource(records)
+    prompt_receipt_tuple = tuple(prompt_receipts)
+    # A host-rebuilt CURRENT WORKSPACE body is newer authority than every
+    # historical read in the append-only log, even when the bounded body covers
+    # only a head/tail window.
+    for receipt in prompt_receipt_tuple:
+        latest_revisions[receipt.revision.resource] = receipt.revision
+    selected_calls = {record.call_id for record in select_prompt_read_records(records)}
+    messages_by_call: dict[str, list[LLMMessage]] = {}
+    for message in messages:
+        if message.role == "tool" and message.tool_call_id is not None:
+            messages_by_call.setdefault(message.tool_call_id, []).append(message)
 
-    if not last_idx:
-        return messages
+    def _exact_body_is_present(record_call_id: str) -> bool:
+        record = record_by_call.get(record_call_id)
+        candidates = messages_by_call.get(record_call_id, [])
+        if record is None or len(candidates) != 1:
+            return False
+        content = candidates[0].content
+        receipt = record.receipt
 
-    # Build the output list: replace any non-last file_read result.
+        if rendered_content_matches_receipt(receipt, content):
+            return True
+        # View.of adds one deterministic presentation prefix after the exact
+        # tool body has been rendered. The prefix is not resource content; strip
+        # only the seq-selected form, then authenticate the remaining bytes.
+        seq = record.observation_seq
+        prefix = ("", "Observation: ", "Output: ")[seq % 3] if seq is not None else ""
+        return bool(
+            prefix
+            and content.startswith(prefix)
+            and rendered_content_matches_receipt(receipt, content[len(prefix) :])
+        )
+
+    physically_present_calls = {
+        call_id for call_id in selected_calls if _exact_body_is_present(call_id)
+    }
+    retained_read_receipts = (
+        *prompt_receipt_tuple,
+        *(
+            record.receipt
+            for record in records
+            if record.call_id in selected_calls and record.call_id in physically_present_calls
+        ),
+    )
+
+    # Keep the compatibility parameter deliberately inert until all callers have
+    # migrated to exact prompt receipts.
+    _ = pinned_full_paths
+
+    # Build the output list: replace only receipt-proven redundant reads.
     out: list[LLMMessage] = []
-    for i, msg in enumerate(messages):
+    for msg in messages:
         if msg.role == "tool" and msg.tool_call_id in file_read_calls:
             path = file_read_calls[msg.tool_call_id]
-            if last_idx.get(path) != i:
-                # Earlier result for this path → replace with a stub. CW-4:
-                # only claim "current content is in the WORKSPACE block" when the
-                # path is actually pinned in full there this turn; otherwise use
-                # the no-claim stub. When pinned_full_paths is None (assist-ON /
-                # back-compat) keep the block-pointing stub for every path (byte-
-                # identical to pre-CW-4).
-                if pinned_full_paths is None or path in pinned_full_paths:
-                    notice = _SUPERSEDED_READ_NOTICE.format(path=path)
-                else:
-                    notice = _SUPERSEDED_READ_NOTICE_NO_PIN.format(path=path)
-                out.append(msg.model_copy(update={"content": notice}))
+            record = record_by_call.get(msg.tool_call_id or "")
+            if record is None:
+                # No revision/range receipt (an old persisted event or a fake
+                # executor). Keep its bytes; latest-path guessing is the context
+                # loss this transform exists to remove.
+                out.append(msg)
                 continue
+            if receipt_covered_in_current_prompt(record.receipt, prompt_receipt_tuple):
+                out.append(
+                    msg.model_copy(update={"content": _SUPERSEDED_READ_NOTICE.format(path=path)})
+                )
+                continue
+            latest = latest_revisions.get(record.receipt.revision.resource)
+            if latest is not None and latest != record.receipt.revision:
+                if any(retained.revision == latest for retained in retained_read_receipts):
+                    out.append(
+                        msg.model_copy(
+                            update={
+                                "content": _STALE_READ_NOTICE.format(
+                                    path=path,
+                                    digest=record.receipt.revision.digest[:12],
+                                )
+                            }
+                        )
+                    )
+                    continue
+                out.append(msg)
+                continue
+            if record.call_id in selected_calls:
+                out.append(msg)
+                continue
+            if receipt_covered_in_current_prompt(
+                record.receipt,
+                retained_read_receipts,
+            ):
+                out.append(
+                    msg.model_copy(update={"content": _REDUNDANT_READ_NOTICE.format(path=path)})
+                )
+                continue
+            out.append(msg)
+            continue
         out.append(msg)
     return out
 

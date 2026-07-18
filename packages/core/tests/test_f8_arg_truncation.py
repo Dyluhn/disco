@@ -199,10 +199,12 @@ async def test_assist_on_confirmed_write_shrinks_content_to_prefix_marker():
     # content — the model sees a real window into what it wrote.
     assert content.startswith(LONG_CONTENT[:_F8_PREFIX_CHARS])
     # The marker names the file path so the model can `file_read <path>`
-    # to recover the full content. This is the load-bearing piece —
-    # the marker is the recovery surface.
+    # The marker identifies the successful historical write without directing
+    # an unconditional full reread.
     assert f"[written to {LONG_PATH}" in content
-    assert "file_read to recover" in content
+    assert "not file content" in content
+    assert "file_read" not in content
+    assert "only the exact range needed" in content
     # The rendered content is now meaningfully shorter than the original
     # (1,600 chars → ~265 chars) — context reclaimed.
     assert len(content) < len(LONG_CONTENT)
@@ -576,7 +578,8 @@ async def test_multiple_confirmed_writes_all_shrink():
         if isinstance(tc, dict) and tc.get("name") == "file_write"
     ]
     # Both are shrunk and name their respective paths.
-    assert all("file_read to recover" in c for c in contents)
+    assert all("not file content" in c for c in contents)
+    assert all("file_read" not in c for c in contents)
     assert any("[written to a.py" in c for c in contents)
     assert any("[written to b.py" in c for c in contents)
 
@@ -621,7 +624,8 @@ async def test_input_messages_list_not_mutated_by_f8_transform():
                     # The input dict still has the original (snipped) content.
                     assert tc_in["arguments"]["content"] == pre_contents[id(m_in)][id(tc_in)]
                     # The output dict has the F8 prefix+marker.
-                    assert "file_read to recover" in tc_out["arguments"]["content"]
+                    assert "not file content" in tc_out["arguments"]["content"]
+                    assert "file_read" not in tc_out["arguments"]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -676,11 +680,11 @@ def test_f8_confirmed_file_writes_includes_path_and_full_content():
 
 def test_f8_truncation_marker_template_includes_path():
     """The marker template is a single source of truth — the F8 method
-    uses it via `.format(path=...)`. The marker names the path so
-    `file_read <path>` is the recovery action; the marker also
-    includes the literal substring "file_read to recover" so the
-    model recognizes the recovery affordance without parsing the
-    template."""
+    uses it via `.format(path=...)`. It identifies the historical write, says
+    explicitly that the marker is not content, and permits only a minimal
+    range request if fresh context is actually needed."""
     rendered = _F8_TRUNCATION_MARKER_TEMPLATE.format(path="src/foo.py")
     assert "src/foo.py" in rendered
-    assert "file_read to recover" in rendered
+    assert "not file content" in rendered
+    assert "file_read" not in rendered
+    assert "only the exact range needed" in rendered

@@ -118,8 +118,12 @@ def test_large_file_body_is_elided_in_the_action_message():
     assert big not in str(args["content"])  # the 50k body is gone from the prompt
     assert str(args["content"]).startswith("[[DISCO-ELIDED:")
     assert "history display only" in str(args["content"])
-    # The recoverable marker's structural signature is the DISCO-ELIDED sentinel.
-    assert "chars" in args["content"] and "file_read the path" in args["content"]
+    # The marker identifies historical metadata without forcing a redundant
+    # whole-file reread. Current resource context remains authoritative, and a
+    # later action may request only the range it actually needs.
+    assert "chars" in args["content"] and "metadata, not file content" in args["content"]
+    assert "minimal range needed" in args["content"]
+    assert "file_read the path" not in args["content"]
 
 
 def test_small_args_are_left_intact():

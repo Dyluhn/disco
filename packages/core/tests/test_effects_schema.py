@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from disco.core import (
     ActionProfile,
@@ -47,6 +49,7 @@ def _observation() -> ObservationReceipt:
         complete=True,
         raw_size_bytes=3,
         rendered_size_bytes=3,
+        rendered_sha256=hashlib.sha256(b"abc").hexdigest(),
     )
 
 
@@ -79,6 +82,13 @@ def test_effect_receipts_round_trip_through_observation_event() -> None:
 
     assert isinstance(restored, ObservationEvent)
     assert restored.tool_result.effect_receipts == (_observation(),)
+
+
+def test_rendered_observation_proof_requires_size_and_digest_together() -> None:
+    payload = _observation().model_dump()
+    payload.pop("rendered_sha256")
+    with pytest.raises(ValidationError, match="must be declared together"):
+        ObservationReceipt.model_validate(payload)
 
 
 def test_model_controlled_structured_payload_cannot_forge_effect_receipts() -> None:

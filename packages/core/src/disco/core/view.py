@@ -298,12 +298,20 @@ def effective_plan_progress(
 
 
 def _pinned_seqs(events: list[Event]) -> set[int]:
-    """Seqs that condensation must NEVER forget: the latest PlanEvent (GAP D) plus
-    every KnowledgeEvent and DatasourceEvent (Cluster 7 — standing guidance and
-    durable API contracts must survive verbatim across a long run instead of
-    dissolving into a lossy summary). The head user message is already protected
-    by `keep_head`."""
-    pinned: set[int] = set()
+    """Seqs that condensation/masking must not remove from this request.
+
+    This includes the latest plan, durable knowledge/data-source guidance, and
+    the minimal revision/range-aware file-read set whose exact bytes are not yet
+    duplicated by another retained read. Action and observation halves are
+    pinned together so provider tool pairing remains valid. The head user
+    message is already protected by ``keep_head``.
+    """
+    # Import locally: view is a foundational module while the resource fold is
+    # a loop projection. The fold itself imports only event/effect value types,
+    # so this call introduces no runtime cycle.
+    from .loop.resource_context import essential_read_pair_seqs
+
+    pinned: set[int] = set(essential_read_pair_seqs(events))
     plan = _latest_plan(events)
     if plan is not None and plan.seq is not None:
         pinned.add(plan.seq)
@@ -433,6 +441,20 @@ class View(BaseModel):
         # GAP D: the latest PlanEvent is pinned — never forgotten even if a
         # tombstone range covers it.
         pinned = _pinned_seqs(events)
+        # Authenticated exact file-read bodies in the bounded active resource
+        # set must bypass the generic observation snip. Otherwise BP-06 can pin
+        # a message whose middle was already destroyed by to_llm_message().
+        from .loop.resource_context import (
+            read_receipt_records,
+            rendered_content_matches_receipt,
+            select_prompt_read_records,
+        )
+
+        prompt_read_by_observation_seq = {
+            record.observation_seq: record
+            for record in select_prompt_read_records(read_receipt_records(events))
+            if record.observation_seq is not None
+        }
 
         def is_forgotten(seq: int | None) -> bool:
             if seq is not None and seq in pinned:
@@ -547,7 +569,23 @@ class View(BaseModel):
                 visible.append(e.seq)
                 return
 
-            msg = e.to_llm_message()
+            exact_read = (
+                prompt_read_by_observation_seq.get(e.seq)
+                if isinstance(e, ObservationEvent) and e.seq is not None
+                else None
+            )
+            if (
+                isinstance(e, ObservationEvent)
+                and exact_read is not None
+                and rendered_content_matches_receipt(exact_read.receipt, e.tool_result.content)
+            ):
+                msg = LLMMessage(
+                    role="tool",
+                    content=e.tool_result.content,
+                    tool_call_id=e.tool_result.call_id,
+                )
+            else:
+                msg = e.to_llm_message()
             # BP-00: attach image ONLY to the latest browser screenshot.
             if (
                 isinstance(e, ObservationEvent)

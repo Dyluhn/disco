@@ -210,6 +210,7 @@ class ObservationReceipt(BaseModel):
     complete: bool = False
     raw_size_bytes: int | None = Field(default=None, ge=0)
     rendered_size_bytes: int | None = Field(default=None, ge=0)
+    rendered_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _valid_observation(self) -> ObservationReceipt:
@@ -217,6 +218,8 @@ class ObservationReceipt(BaseModel):
             raise ValueError(f"{self.capability.value} is not an observation capability")
         if self.complete and not self.coverage.covers_total():
             raise ValueError("complete observation must cover the declared total exactly")
+        if (self.rendered_size_bytes is None) != (self.rendered_sha256 is None):
+            raise ValueError("rendered size and digest must be declared together")
         return self
 
 

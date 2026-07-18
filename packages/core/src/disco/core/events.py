@@ -386,8 +386,10 @@ _ELISION_PARAPHRASE_RE = re.compile(
 
 def _arg_snip_marker(n: int) -> str:
     return (
-        f"[[DISCO-ELIDED: {n:,} chars — history display only; "
-        "file_read the path if you need this content]]"
+        f"[[DISCO-ELIDED: {n:,} chars — history display only; metadata, not file content; "
+        "this historical tool argument was already submitted. Do not copy or "
+        "re-send this marker. Use current resource state and request only the "
+        "minimal range needed for the next action.]]"
     )
 
 
