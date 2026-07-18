@@ -25,7 +25,9 @@ class _CoverageExecutor(FakeExecutor):
         super().__init__(
             tools=[
                 ToolSpec(name="file_read", description="read", parameters_schema={}),
+                ToolSpec(name="file_list", description="list", parameters_schema={}),
                 ToolSpec(name="file_write", description="write", parameters_schema={}),
+                ToolSpec(name="shell", description="shell", parameters_schema={}),
                 ToolSpec(name="think", description="think", parameters_schema={}),
             ]
         )
@@ -34,14 +36,42 @@ class _CoverageExecutor(FakeExecutor):
         self.calls.append(call)
         if call.tool_name == "file_read":
             content = "[lines 1-2 of 2]\n1\tstable-a\n2\tstable-b"
+            structured = None
+        elif call.tool_name == "file_write":
+            content = "wrote changed bytes"
+            structured = {
+                "path": str(call.arguments.get("path") or "styles.css"),
+                "sha256": "a" * 64,
+            }
         else:
             content = "wrote changed bytes"
+            structured = None
         return ToolResult(
             call_id=call.call_id,
             tool_name=call.tool_name,
             success=True,
             content=content,
+            structured=structured,
         )
+
+
+class _FailFirstWriteCoverageExecutor(_CoverageExecutor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_write = False
+
+    async def execute(self, call):  # noqa: ANN001, ANN201 - fake protocol seam
+        if call.tool_name == "file_write" and not self.failed_write:
+            self.failed_write = True
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=False,
+                content="simulated write failure",
+                error="simulated write failure",
+            )
+        return await super().execute(call)
 
 
 def _coverage_reads() -> list:
@@ -155,11 +185,12 @@ def _block_details(events) -> list[str]:  # noqa: ANN001
     ]
 
 
-async def test_read_coverage_escape_quarantines_read_for_exactly_one_action():
+async def test_read_coverage_escape_quarantines_read_until_productive_action():
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
         + [
+            action_step("file_list", {"path": "/workspace"}),
             action_step("file_write", {"path": "styles.css", "content": "body{}"}),
             finish_step(),
         ]
@@ -186,7 +217,113 @@ async def test_read_coverage_escape_quarantines_read_for_exactly_one_action():
     )
     assert "file_read" not in allowed
     assert {"file_write", "think", "finish"} <= allowed
-    assert "file_read" in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[6])
+    assert "file_read" in set(agent.seen_tools[7])
+
+
+async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_list", {"path": "/workspace"}),
+            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the site")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" not in set(agent.seen_tools[5])
+    assert "file_read" not in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
+    assert [call.tool_name for call in executor.calls][-2:] == ["file_list", "file_write"]
+    assert (
+        sum(
+            isinstance(event, ActionEvent)
+            and event.tool_call is not None
+            and event.tool_call.tool_name == "file_read"
+            for event in events
+        )
+        == 5
+    )
+
+
+async def test_h533_failed_mutation_does_not_release_quarantine():
+    executor = _FailFirstWriteCoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("file_write", {"path": "styles.css", "content": "broken"}),
+            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the site")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" not in set(agent.seen_tools[5])
+    assert "file_read" not in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
+    assert sum(call.tool_name == "file_write" for call in executor.calls) == 2
+    assert (
+        sum(
+            isinstance(event, ActionEvent)
+            and event.tool_call is not None
+            and event.tool_call.tool_name == "file_read"
+            for event in events
+        )
+        == 5
+    )
+
+
+async def test_h536_receiptless_success_cannot_release_quarantine():
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        _coverage_reads()
+        + [
+            action_step("shell", {"command": "pwd"}),
+            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the site")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "file_read" not in set(agent.seen_tools[5])
+    assert "file_read" not in set(agent.seen_tools[6])
+    assert "file_read" not in set(agent.seen_tools[7])
+    assert "file_read" in set(agent.seen_tools[8])
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
+    assert [call.tool_name for call in executor.calls][-2:] == ["shell", "file_write"]
+    assert (
+        sum(
+            isinstance(event, ActionEvent)
+            and event.tool_call is not None
+            and event.tool_call.tool_name == "file_read"
+            for event in events
+        )
+        == 5
+    )
 
 
 async def test_hallucinated_quarantined_read_is_requeried_not_executed():

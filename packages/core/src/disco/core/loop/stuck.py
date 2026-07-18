@@ -1061,8 +1061,13 @@ def _verifier_fingerprint(structured: dict) -> tuple[str, str] | None:
     return (raw if len(raw) <= 256 else f"sha256:{digest}", digest)
 
 
-def _effective_verifier_mutation(event: ObservationEvent, action: ActionEvent | None) -> bool:
-    """True only for a successful mutation carrying a concrete changed-state receipt."""
+def successful_mutation_with_receipt(event: ObservationEvent, action: ActionEvent | None) -> bool:
+    """True only for a successful mutation carrying a concrete changed-state receipt.
+
+    This is the shared trust boundary for semantic verifier recovery and the
+    stuck-escape quarantine. Tool-name taxonomy alone is insufficient: an
+    all-purpose tool can succeed without changing the deliverable.
+    """
 
     result = event.tool_result
     if not result.success or action is None or action.tool_call is None:
@@ -1134,7 +1139,7 @@ def repeated_failed_verifier_no_progress(
         if not isinstance(event, ObservationEvent):
             continue
         action = action_by_id.get(event.action_id)
-        if _effective_verifier_mutation(event, action):
+        if successful_mutation_with_receipt(event, action):
             streaks.clear()
             continue
 

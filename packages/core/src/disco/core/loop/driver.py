@@ -45,6 +45,7 @@ from .control import Disp
 from .fc_kit import _nearest_tool_name
 from .messages import _PLAN_EXPLORE_READ_CAP, _describe_llm_error
 from .stream_extract import extract_partial_string_field
+from .stuck import successful_mutation_with_receipt
 from .tool_specs import (
     _ask_user_tool_singleton,
     _clarify_tool_singleton,
@@ -684,10 +685,22 @@ class Driver:
         model requests are unchanged outside the typed escape turn.
         """
         escape_seq = signals.stuck_escape_seq(events)
-        acted_since_escape = escape_seq is not None and any(
-            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq for e in events
+        action_by_id = {
+            e.id: e for e in events if isinstance(e, ActionEvent) and e.tool_call is not None
+        }
+        recovered_since_escape = escape_seq is not None and any(
+            isinstance(e, ObservationEvent)
+            and e.seq is not None
+            and e.seq > escape_seq
+            and successful_mutation_with_receipt(e, action_by_id.get(e.action_id or ""))
+            for e in events
         )
-        in_escape = escape_seq is not None and not acted_since_escape
+        # H533: a read-only bridge (notably an unchanged file_list) is not a
+        # recovery from the read loop that created this quarantine. Keep the
+        # loop-causing tool withheld until the environment confirms a
+        # receipt-backed mutation; failed mutations and inspection-only actions
+        # may not launder the escape state and silently re-enable it.
+        in_escape = escape_seq is not None and not recovered_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
         escape_blocked_tools = (
             signals.stuck_escape_blocked_tools(events) if in_escape else frozenset()
