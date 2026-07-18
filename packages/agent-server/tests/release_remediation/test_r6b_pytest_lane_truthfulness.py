@@ -377,3 +377,87 @@ def test_governed_lanes_wire_the_plugin_and_report_flag() -> None:
 
 def test_plugin_is_frozen() -> None:
     assert "scripts/closeout_pytest_report.py" in manifest_mod.FROZEN_FILES
+
+
+# ---- C9-01 reconciliation: the frozen §3.2 baseline allowlist is EXACT ---------
+
+
+_ROUTER = "packages/core/tests/test_router_overflow.py"
+_APPKIT_XFAIL = (
+    "packages/core/tests/test_appkit_directory.py"
+    "::test_unknown_app_kind_lowers_as_lead_gen_byte_identical"
+)
+
+
+def test_nonlive_baseline_pairs_are_accepted_exactly() -> None:
+    """The two §3.2-permitted pre-existing outcomes (dormant router collection skip +
+    stale-upstream AppKit xfail) are accepted for the non-live lane when they appear
+    with EXACTLY their frozen categories — and are recorded in the summary."""
+    report = _report(
+        ["a::t1", _APPKIT_XFAIL],
+        {"a::t1": "passed", _APPKIT_XFAIL: "xfailed", _ROUTER: "skipped"},
+    )
+    ok, reasons, summary = verify._evaluate_structured_pytest_report(
+        report, lane=_LANE, baseline_allowlist=verify._NONLIVE_BASELINE_ALLOWLIST
+    )
+    assert ok, reasons
+    assert {e["nodeid"] for e in summary["baseline_allowlisted"]} == {_ROUTER, _APPKIT_XFAIL}
+
+
+def test_nonlive_extra_skip_stays_fatal_despite_the_allowlist() -> None:
+    """ANY additional skip — even alongside the permitted pair — remains fatal."""
+    report = _report(
+        ["a::t1", "a::t2", _APPKIT_XFAIL],
+        {
+            "a::t1": "passed",
+            "a::t2": "skipped",
+            _APPKIT_XFAIL: "xfailed",
+            _ROUTER: "skipped",
+        },
+    )
+    ok, reasons, _ = verify._evaluate_structured_pytest_report(
+        report, lane=_LANE, baseline_allowlist=verify._NONLIVE_BASELINE_ALLOWLIST
+    )
+    assert not ok
+    assert any("a::t2" in r and "SKIPPED" in r for r in reasons)
+
+
+def test_nonlive_allowlisted_node_in_a_different_category_stays_fatal() -> None:
+    """A CHANGED baseline outcome (the xfail node XPASSING) is not the frozen pair
+    and must remain fatal — the allowlist matches (nodeid, category) exactly."""
+    report = _report(
+        ["a::t1", _APPKIT_XFAIL],
+        {"a::t1": "passed", _APPKIT_XFAIL: "xpassed", _ROUTER: "skipped"},
+    )
+    ok, reasons, _ = verify._evaluate_structured_pytest_report(
+        report, lane=_LANE, baseline_allowlist=verify._NONLIVE_BASELINE_ALLOWLIST
+    )
+    assert not ok
+    assert any(_APPKIT_XFAIL in r and "XPASSED" in r for r in reasons)
+
+
+def test_focused_and_live_lanes_take_no_allowlist() -> None:
+    """The baseline applies to python-nonlive ONLY: the same pair presented to a lane
+    evaluated WITHOUT an allowlist (the default — focused closeout / live) is fatal."""
+    report = _report(
+        ["a::t1", _APPKIT_XFAIL],
+        {"a::t1": "passed", _APPKIT_XFAIL: "xfailed", _ROUTER: "skipped"},
+    )
+    ok, reasons, _ = verify._evaluate_structured_pytest_report(report, lane="python-closeout")
+    assert not ok
+    assert any(_APPKIT_XFAIL in r for r in reasons)
+    assert any(_ROUTER in r for r in reasons)
+
+
+def test_junit_skip_count_must_equal_the_baseline_exactly() -> None:
+    """The coarse JUnit backstop is exact: fewer skips than the frozen baseline (a
+    silently 'fixed' dormant module) is as fatal as more — divergence either way is a
+    governance event, not a silent pass."""
+    ok_junit = {"tests": 100, "failures": 0, "errors": 0, "skipped": 2}
+    assert verify._junit_reasons(ok_junit, 0, _LANE, allowed_skipped=2) == []
+    high = {"tests": 100, "failures": 0, "errors": 0, "skipped": 3}
+    assert any("exactly 2" in r for r in verify._junit_reasons(high, 0, _LANE, allowed_skipped=2))
+    low = {"tests": 100, "failures": 0, "errors": 0, "skipped": 1}
+    assert any("exactly 2" in r for r in verify._junit_reasons(low, 0, _LANE, allowed_skipped=2))
+    zero_default = {"tests": 100, "failures": 0, "errors": 0, "skipped": 1}
+    assert any("exactly 0" in r for r in verify._junit_reasons(zero_default, 0, "python-closeout"))

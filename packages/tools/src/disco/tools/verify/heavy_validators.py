@@ -14,6 +14,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import uuid
 
 
 def _missing(tool: str) -> bool:
@@ -22,21 +23,54 @@ def _missing(tool: str) -> bool:
 
 def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]:
     """Render a ``.pptx`` to PDF with headless LibreOffice — proves the deck actually opens
-    and lays out, then reuses the cheap PDF checks on the result."""
+    and lays out AS A PRESENTATION, then reuses the cheap PDF checks on the result.
+
+    Hardened for the C9-01 findings (2026-07-17):
+
+    * The IMPORT filter is pinned to Impress's pptx filter and the EXPORT filter to
+      ``impress_pdf_Export`` — corrupt bytes can no longer succeed through LibreOffice's
+      generic import fallback (which happily renders garbage as a text document).
+    * Every invocation gets an ISOLATED LibreOffice user profile
+      (``-env:UserInstallation``), so a concurrently running soffice instance can never
+      absorb the request and return without producing our output.
+    * The output directory is FRESH and unique per invocation, and the expected PDF must
+      exist there afterwards. LibreOffice exits 0 on "source file could not be loaded",
+      so the exit code alone is NEVER trusted as success.
+    """
     if _missing("soffice"):
         return ["soffice unavailable — run this heavy validator on the VM 201 evidence host"]
-    work = workdir or tempfile.mkdtemp(prefix="deckrender-")
+    work = pathlib.Path(workdir or tempfile.mkdtemp(prefix="deckrender-"))
+    invocation = work / f"render-{uuid.uuid4().hex}"
+    outdir = invocation / "out"
+    profile = invocation / "profile"
+    outdir.mkdir(parents=True)
+    profile.mkdir(parents=True)
     proc = subprocess.run(
-        ["soffice", "--headless", "--convert-to", "pdf", "--outdir", work, path],
+        [
+            "soffice",
+            "--headless",
+            f"-env:UserInstallation={profile.as_uri()}",
+            "--infilter=Impress MS PowerPoint 2007 XML",
+            "--convert-to",
+            "pdf:impress_pdf_Export",
+            "--outdir",
+            str(outdir),
+            path,
+        ],
         capture_output=True,
         text=True,
         timeout=180,
     )
     if proc.returncode != 0:
         return [f"soffice convert failed: {proc.stderr.strip()[:200]}"]
-    pdf = pathlib.Path(work) / (pathlib.Path(path).stem + ".pdf")
+    pdf = outdir / (pathlib.Path(path).stem + ".pdf")
     if not pdf.exists() or pdf.stat().st_size == 0:
-        return ["pptx did not render to a pdf (deck does not open)"]
+        detail = (proc.stderr.strip() or proc.stdout.strip())[:200]
+        return [
+            "pptx did not render to a pdf (deck does not open as a presentation"
+            + (f": {detail}" if detail else "")
+            + ")"
+        ]
     from disco.tools.verify.artifact_validators import validate_pdf
 
     return validate_pdf(str(pdf))

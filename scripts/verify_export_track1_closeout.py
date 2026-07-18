@@ -379,19 +379,44 @@ def _run_pytest_lane(
     )
 
 
-def _junit_reasons(junit: dict[str, int], exit_code: int | None, lane: str) -> list[str]:
+def _junit_reasons(
+    junit: dict[str, int], exit_code: int | None, lane: str, *, allowed_skipped: int = 0
+) -> list[str]:
     """The JUnit-aggregate rejection reasons for a governed pytest lane (plan §1.2/§3.2):
-    a nonzero exit, any failure/error/skip, or a zero-test collection. Kept as the coarse
-    backstop; the fine-grained per-test truth comes from the structured report."""
+    a nonzero exit, any failure/error, a skip count that is not EXACTLY the lane's
+    permitted baseline (0 for every lane except python-nonlive's frozen §3.2 pairs —
+    JUnit counts both a collection skip and an xfail under ``skipped``), or a zero-test
+    collection. Kept as the coarse backstop; the fine-grained per-test truth comes from
+    the structured report."""
     reasons: list[str] = []
     if exit_code != 0:
         reasons.append(f"{lane} pytest exit code {exit_code} (expected 0)")
-    for bad in ("failures", "errors", "skipped"):
+    for bad in ("failures", "errors"):
         if junit.get(bad, 0) > 0:
             reasons.append(f"{lane} lane has {junit[bad]} {bad} (must be 0)")
+    skipped = junit.get("skipped", 0)
+    if skipped != allowed_skipped:
+        reasons.append(
+            f"{lane} lane has {skipped} skipped (must be exactly {allowed_skipped}: "
+            "the frozen §3.2 baseline, nothing more, nothing less)"
+        )
     if junit.get("tests", 0) == 0:
         reasons.append(f"{lane} lane collected zero tests")
     return reasons
+
+
+# The work-order §3.2-permitted PRE-EXISTING non-pass baseline, applied to the FULL
+# non-integration lane (python-nonlive) ONLY. Exact (nodeid -> category) pairs, frozen:
+# any OTHER non-pass outcome, an allowlisted node in a DIFFERENT category, or a change
+# in the baseline's junit-level count stays fatal. The focused closeout and live lanes
+# take no allowlist and remain strictly zero-skip (C9-01 reconciliation, 2026-07-17).
+_NONLIVE_BASELINE_ALLOWLIST: dict[str, str] = {
+    # Dormant v1.2 router revival harness — documented module-level collection skip.
+    "packages/core/tests/test_router_overflow.py": "skipped",
+    # Historical stale-upstream xfail, documented in-marker at nightly HEAD b6cc4a1a.
+    "packages/core/tests/test_appkit_directory.py"
+    "::test_unknown_app_kind_lowers_as_lead_gen_byte_identical": "xfailed",
+}
 
 
 # Human-readable clause per non-passing category, for the not_passed_reasons narrative.
@@ -405,7 +430,10 @@ _CATEGORY_REASON: dict[str, str] = {
 
 
 def _evaluate_structured_pytest_report(
-    report: dict[str, object] | None, *, lane: str
+    report: dict[str, object] | None,
+    *,
+    lane: str,
+    baseline_allowlist: dict[str, str] | None = None,
 ) -> tuple[bool, list[str], dict[str, object]]:
     """Decide, from the structured ``{nodeid: category}`` report the closeout plugin wrote,
     whether EVERY governed-selected test is represented as ``passed`` — the fine-grained
@@ -443,8 +471,11 @@ def _evaluate_structured_pytest_report(
     if not selected_set:
         return False, [f"{lane}: structured report selected zero tests"], {}
 
+    baseline_allowlist = baseline_allowlist or {}
+    allowlisted: list[dict[str, str]] = []
     reasons: list[str] = []
-    # (a) every governed-selected node must be represented as passed.
+    # (a) every governed-selected node must be represented as passed (or be an EXACT
+    # frozen §3.2 baseline pair — python-nonlive only; see _NONLIVE_BASELINE_ALLOWLIST).
     for nid in sorted(selected_set):
         cat = cats.get(nid)
         if cat is None:
@@ -453,6 +484,9 @@ def _evaluate_structured_pytest_report(
                 "(deselected / vanished within the governed selection)"
             )
         elif cat != _PASS_CATEGORY:
+            if baseline_allowlist.get(nid) == cat:
+                allowlisted.append({"nodeid": nid, "category": cat})
+                continue
             clause = _CATEGORY_REASON.get(cat, f"reported category {cat!r}")
             reasons.append(f"{lane}: test {nid} {clause} (must PASS)")
     # (b) any outcome outside the selection: a collection-level skip/error, or a stray pass.
@@ -462,6 +496,8 @@ def _evaluate_structured_pytest_report(
         cat = cats[nid]
         if cat == _PASS_CATEGORY:
             reasons.append(f"{lane}: unexpected passed result {nid} not in the governed selection")
+        elif baseline_allowlist.get(nid) == cat:
+            allowlisted.append({"nodeid": nid, "category": cat})
         else:
             clause = _CATEGORY_REASON.get(cat, f"reported category {cat!r}")
             reasons.append(
@@ -479,6 +515,7 @@ def _evaluate_structured_pytest_report(
         "collection_errors": report.get("collection_errors", []),
         "deselected_count": report.get("deselected_count"),
         "counts": report.get("counts", {}),
+        "baseline_allowlisted": allowlisted,
     }
     return (not reasons), reasons, summary
 
@@ -488,13 +525,19 @@ def _finalize_pytest_lane(
     *,
     report: dict[str, object] | None,
     extra_reasons: list[str] | None = None,
+    baseline_allowlist: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Set a governed pytest lane's green from BOTH the JUnit aggregate AND the structured
     per-test report (and any lane-specific ``extra_reasons``, e.g. the closeout frozen
     node-ID inventory mismatch), in place. Green ONLY when there are zero reasons across all
     sources. Returns the structured summary for the lane detail."""
-    reasons = _junit_reasons(lane.junit or {}, lane.exit_code, lane.name)
-    _, structured_reasons, summary = _evaluate_structured_pytest_report(report, lane=lane.name)
+    baseline = baseline_allowlist or {}
+    reasons = _junit_reasons(
+        lane.junit or {}, lane.exit_code, lane.name, allowed_skipped=len(baseline)
+    )
+    _, structured_reasons, summary = _evaluate_structured_pytest_report(
+        report, lane=lane.name, baseline_allowlist=baseline
+    )
     reasons.extend(structured_reasons)
     if extra_reasons:
         reasons.extend(extra_reasons)
@@ -1740,7 +1783,9 @@ def main(argv: list[str] | None = None) -> int:
     # exit code AND to JUnit. Gate on the structured per-test report (plan §9.3): the lane is
     # green ONLY when every governed-selected test truly PASSED.
     nonlive_summary = _finalize_pytest_lane(
-        nonlive, report=_load_structured_report(Path(nonlive.report_path or ""))
+        nonlive,
+        report=_load_structured_report(Path(nonlive.report_path or "")),
+        baseline_allowlist=_NONLIVE_BASELINE_ALLOWLIST,
     )
     nonlive.detail = {"structured": nonlive_summary}
     lanes.append(nonlive)

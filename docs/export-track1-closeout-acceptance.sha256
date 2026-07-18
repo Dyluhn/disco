@@ -59,7 +59,7 @@
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
     "scripts/gen_closeout_acceptance_manifest.py": "866140128a416a8a1c31ca30ff0945529cdf5a69fa31440ff611cbaa358ba9b8",
-    "scripts/verify_export_track1_closeout.py": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d"
+    "scripts/verify_export_track1_closeout.py": "25e8580360bb87ccb32d8f9a58fbea672fdd805a588510190c02b35228c31e04"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
