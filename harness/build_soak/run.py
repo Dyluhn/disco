@@ -59,6 +59,7 @@ from .adapters.disco_api import (
 from .classify import CLASSIFICATION_NAME, classify
 from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
+from .oracles.thrash import ThrashOracle
 from .product_evidence import (
     PRODUCT_EVIDENCE_NAME,
     PROVIDER_LEDGER_NAME,
@@ -1052,10 +1053,7 @@ async def drive_scenario(
         and event.get("source") == "system"
         and event.get("status") in terminal_snapshot_states
         and type(event.get("seq")) is int
-        and (
-            drive_terminal_baseline_seq is None
-            or int(event["seq"]) > drive_terminal_baseline_seq
-        )
+        and (drive_terminal_baseline_seq is None or int(event["seq"]) > drive_terminal_baseline_seq)
         for event in frozen_events
     )
     # Late-terminal race guard: if a real work terminal landed after the poll's
@@ -1538,6 +1536,45 @@ def _confirmed_live_thrash_stop(run: CollectedRun) -> bool:
         run.state_final,
         run.thrash_monitor,
     )
+
+
+def _current_thrash_failure_matches_retained(run: CollectedRun, scenario: dict[str, Any]) -> bool:
+    """Require current deterministic agreement with one retained monitor finding."""
+
+    try:
+        current = [
+            result.to_dict()
+            for result in ThrashOracle().check(
+                normalize_events(run.events),
+                scenario=scenario,
+                inspect_trace=run.inspect_trace,
+            )
+            if result.failed
+        ]
+    except (NormalizationError, ValueError, TypeError):
+        return False
+    retained = [
+        result
+        for finding in (run.thrash_monitor or {}).get("findings") or []
+        if isinstance(finding, dict)
+        for result in finding.get("oracle_results") or []
+        if isinstance(result, dict)
+        and result.get("oracle") == "ThrashOracle"
+        and result.get("status") == fc.FAIL
+    ]
+    for observed in retained:
+        if not isinstance(observed.get("first_broken_link"), str) or not isinstance(
+            observed.get("facts"), dict
+        ):
+            continue
+        if any(
+            candidate.get("code") == observed.get("code")
+            and candidate.get("first_broken_link") == observed.get("first_broken_link")
+            and candidate.get("facts") == observed.get("facts")
+            for candidate in current
+        ):
+            return True
+    return False
 
 
 def _provider_ledger_for_run(run: CollectedRun) -> list[dict[str, Any]] | None:
@@ -2142,9 +2179,7 @@ async def _collect_terminal_cleanup_evidence(
             not allow_global_cleanup_fallback or unnamed_volume_orphans is not None
         )
         if volume_measurement_complete:
-            volume_orphans = int(named_volume_orphans or 0) + int(
-                unnamed_volume_orphans or 0
-            )
+            volume_orphans = int(named_volume_orphans or 0) + int(unnamed_volume_orphans or 0)
             total_orphans = container_orphans + volume_orphans
             ev["cleanup"] = {
                 "orphans": total_orphans,
@@ -2445,13 +2480,26 @@ async def run_once(
         _required = ("lifecycle", "sidecar", "cleanup")
         _missing = [k for k in _required if k not in ev]
         nonterminal_adjudication = ev.get("nonterminal_adjudication")
-        trusted_nonterminal = (
+        trusted_inactive_nonterminal = (
             isinstance(nonterminal_adjudication, dict)
             and nonterminal_adjudication.get("schema_version") == 1
             and nonterminal_adjudication.get("drive_status") == INACTIVE_TIMEOUT
             and nonterminal_adjudication.get("terminal_snapshot_available") is False
             and type(nonterminal_adjudication.get("frozen_max_seq")) is int
         )
+        trusted_live_thrash_nonterminal = (
+            isinstance(nonterminal_adjudication, dict)
+            and nonterminal_adjudication.get("schema_version") == 1
+            and nonterminal_adjudication.get("drive_status") == LIVE_THRASH_STOP
+            and nonterminal_adjudication.get("terminal_snapshot_available") is False
+            and type(nonterminal_adjudication.get("frozen_max_seq")) is int
+            and nonterminal_adjudication.get("preserved_for")
+            == "strictly_confirmed_live_thrash_stop"
+            and nonterminal_adjudication.get("strict_monitor_confirmed") is True
+            and _confirmed_live_thrash_stop(run)
+            and _current_thrash_failure_matches_retained(run, scenario)
+        )
+        trusted_nonterminal = trusted_inactive_nonterminal or trusted_live_thrash_nonterminal
         if _live_measure and _missing and not trusted_nonterminal:
             # Verdict-invalidating evidence gaps need the same retained diagnostic
             # dossier as the inspect-trace validity gate above.  Previously this
@@ -2495,14 +2543,24 @@ async def run_once(
             # timeline.md is operator context only and is not part of EvidenceManifest,
             # so it cannot be the sole record of which terminal-only slices were waived.
             assert isinstance(nonterminal_adjudication, dict)
-            nonterminal_adjudication["terminal_cleanup_slices_not_applicable"] = sorted(
-                _missing
-            )
+            if trusted_live_thrash_nonterminal:
+                nonterminal_adjudication["terminal_cleanup_slices_unavailable"] = sorted(_missing)
+            else:
+                nonterminal_adjudication["terminal_cleanup_slices_not_applicable"] = sorted(
+                    _missing
+                )
             run.product_evidence = ev
-            run.timeline.append(
-                "terminal cleanup evidence not required for decisive nonterminal product "
-                "failure; missing " + ", ".join(_missing)
-            )
+            if trusted_live_thrash_nonterminal:
+                run.timeline.append(
+                    "terminal cleanup evidence unavailable after strictly confirmed live-thrash "
+                    "stop; preserving the decisive retained monitor verdict without granting "
+                    "cleanup proof; missing " + ", ".join(_missing)
+                )
+            else:
+                run.timeline.append(
+                    "terminal cleanup evidence not required for decisive nonterminal product "
+                    "failure; missing " + ", ".join(_missing)
+                )
 
         provider_ledger = _provider_ledger_for_run(run)
         base = assemble_dossier(

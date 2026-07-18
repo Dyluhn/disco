@@ -41,6 +41,7 @@ from harness.build_soak.classify import (
 )
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
+from harness.build_soak.oracles.thrash import ThrashOracle
 from harness.build_soak.run import (
     _driver_catalog_contains,
     _is_terminal_sandbox_preflight_trace,
@@ -4840,9 +4841,7 @@ async def test_progressing_cutoff_rejected_kill_retains_retry_and_partial_dossie
 
 
 @pytest.mark.asyncio
-async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(
-    tmp_path, monkeypatch
-):
+async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_path, monkeypatch):
     # The flip side: a genuinely WEDGED build (no new events, frozen status) for the
     # inactivity window IS a real product finding — BUILD_DID_NOT_FINISH — NOT the
     # inconclusive INVALID_RUN reserved for an actively-progressing cutoff.
@@ -4901,12 +4900,7 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(
     message_posts = [path for path, _body in transport.posts if path.endswith("/messages")]
     assert len(message_posts) == 1  # initial prompt only; no after-terminal follow-up
     workspace_path = (
-        tmp_path
-        / "out"
-        / "run_wedge_001"
-        / "conversations"
-        / _CID
-        / "workspace-manifest.json"
+        tmp_path / "out" / "run_wedge_001" / "conversations" / _CID / "workspace-manifest.json"
     )
     workspace = json.loads(workspace_path.read_text(encoding="utf-8"))
     assert workspace == {
@@ -4930,9 +4924,7 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(
         "reason": "strict browser bytes require the unavailable terminal snapshot",
         "schema_version": 1,
     }
-    product_evidence = json.loads(
-        (conv / "product-evidence.json").read_text(encoding="utf-8")
-    )
+    product_evidence = json.loads((conv / "product-evidence.json").read_text(encoding="utf-8"))
     assert product_evidence["nonterminal_adjudication"] == {
         "drive_status": "INACTIVE_TIMEOUT",
         "frozen_max_seq": 11,
@@ -4947,9 +4939,7 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(
 
 
 @pytest.mark.asyncio
-async def test_inactive_poll_late_terminal_race_uses_strict_snapshot_path(
-    tmp_path, monkeypatch
-):
+async def test_inactive_poll_late_terminal_race_uses_strict_snapshot_path(tmp_path, monkeypatch):
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log())  # terminal appears in the frozen event read
     transport = FakeTransport(
@@ -6089,6 +6079,186 @@ async def test_confirmed_live_thrash_killed_idle_is_fail_not_cleanup_invalid(tmp
 
 
 @pytest.mark.asyncio
+async def test_confirmed_live_thrash_missing_parallel_cleanup_reaches_retained_fail(
+    tmp_path, monkeypatch
+):
+    """H524: missing cleanup cannot mask a strictly confirmed monitor verdict."""
+
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events[-1] = status(10, "IDLE", "killed")
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    trace = _fake_inspect_trace()
+    trace["spans"].extend(
+        [
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+        ]
+    )
+    marker = {
+        "schema_version": 1,
+        "drive_status": LIVE_THRASH_STOP,
+        "terminal_baseline_seq": None,
+        "frozen_max_seq": 10,
+        "terminal_snapshot_available": False,
+        "terminal_only_evidence_unavailable": ["workspace", "browser"],
+        "preserved_for": "strictly_confirmed_live_thrash_stop",
+        "strict_monitor_confirmed": True,
+    }
+    monitor = _strict_live_thrash_monitor()
+    current_thrash = ThrashOracle().check(events, scenario=_smoke_scenario(), inspect_trace=trace)[
+        0
+    ]
+    assert current_thrash.failed
+    monitor["findings"][0]["oracle_results"] = [current_thrash.to_dict()]
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={
+            "files": {},
+            "_capture": {
+                "status": "not_collected_nonterminal",
+                "drive_status": LIVE_THRASH_STOP,
+                "reason": "strict atomic workspace evidence requires a durable terminal",
+            },
+        },
+        preview={
+            "health": {"status": 200},
+            "content": "<html><h1>Build Smoke OK</h1></html>",
+            "available": True,
+            "runtime_available": False,
+            "runtime_availability_status": 200,
+            "source": "isolated_path_capability",
+        },
+        inspect_trace=trace,
+        thrash_monitor=monitor,
+        timeline=["confirmed live thrash threshold stopped the conversation"],
+        product_evidence={"nonterminal_adjudication": marker},
+    )
+
+    async def fake_drive(active_client, *_args, **_kwargs):
+        active_client.last_conversation_id = None
+        return run
+
+    async def missing_cleanup(*_args, **_kwargs):
+        evidence = {
+            **run.product_evidence,
+            "lifecycle": {"terminal": "IDLE", "statuses": list(run.timeline)},
+            "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        }
+        run.product_evidence = evidence
+        return evidence
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", fake_drive)
+    monkeypatch.setattr(_run_mod, "_collect_terminal_cleanup_evidence", missing_cleanup)
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(tmp_path / "relay.jsonl"))
+
+    client = _client(FakeTransport(tmp_path / "parallel.db", states=["IDLE"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_live_thrash_missing_parallel_cleanup_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=True,
+        commit="abc",
+        timeout_s=5,
+        parallel_workers=4,
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "MODEL_REPAIR_THRASH"
+    assert record["required_evidence_present"] is True
+    assert run.product_evidence["nonterminal_adjudication"][
+        "terminal_cleanup_slices_unavailable"
+    ] == ["cleanup"]
+    assert "without granting cleanup proof" in run.timeline[-1]
+
+
+@pytest.mark.asyncio
+async def test_retained_live_thrash_contradicting_current_oracle_keeps_cleanup_invalid(
+    tmp_path, monkeypatch
+):
+    """A retained monitor claim cannot waive cleanup when frozen evidence disagrees."""
+
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events[-1] = status(10, "IDLE", "killed")
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    contradictory_monitor = _strict_live_thrash_monitor()
+    contradictory_monitor["findings"][0]["oracle_results"] = [
+        {
+            "oracle": "ThrashOracle",
+            "status": "FAIL",
+            "code": "MODEL_REPAIR_THRASH",
+            "first_broken_link": "model_request -> repeated_hidden_repair",
+            "facts": {
+                "repair_kind": "unknown_tool",
+                "count": 2,
+                "allowed": 1,
+                "repairs": [{"claimed": "not present in frozen inspect trace"}],
+            },
+        }
+    ]
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=events,
+        state_initial={"execution_status": "RUNNING"},
+        state_final={"execution_status": "IDLE"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=_fake_inspect_trace(),
+        thrash_monitor=contradictory_monitor,
+        product_evidence={
+            "nonterminal_adjudication": {
+                "schema_version": 1,
+                "drive_status": LIVE_THRASH_STOP,
+                "frozen_max_seq": 10,
+                "terminal_snapshot_available": False,
+                "preserved_for": "strictly_confirmed_live_thrash_stop",
+                "strict_monitor_confirmed": True,
+            }
+        },
+    )
+
+    async def fake_drive(active_client, *_args, **_kwargs):
+        active_client.last_conversation_id = None
+        return run
+
+    async def missing_cleanup(*_args, **_kwargs):
+        return {
+            **run.product_evidence,
+            "lifecycle": {"terminal": "IDLE", "statuses": []},
+            "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        }
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", fake_drive)
+    monkeypatch.setattr(_run_mod, "_collect_terminal_cleanup_evidence", missing_cleanup)
+    monkeypatch.setattr(_run_mod, "_relay_log_path", lambda: str(tmp_path / "relay.jsonl"))
+
+    client = _client(FakeTransport(tmp_path / "unconfirmed.db", states=["IDLE"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_unconfirmed_live_thrash_missing_cleanup_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=True,
+        commit="abc",
+        timeout_s=5,
+        parallel_workers=4,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "RUN_INTERRUPTED"
+    assert record["facts"]["missing_slices"] == ["cleanup"]
+
+
+@pytest.mark.asyncio
 async def test_confirmed_live_thrash_skips_impossible_terminal_snapshot_and_classifies_fail(
     tmp_path, monkeypatch
 ):
@@ -6893,9 +7063,7 @@ async def test_cleanup_progress_timeout_uses_preserved_kill_id_in_parallel(monke
     monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
     _fake_podman(
         monkeypatch,
-        ps_stdout="\n".join(
-            ["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]
-        ),
+        ps_stdout="\n".join(["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]),
         volume_stdout="",
         dangling_stdout="",
     )
@@ -6939,9 +7107,7 @@ async def test_cleanup_parallel_without_id_refuses_global_attribution(monkeypatc
     monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
     _fake_podman(
         monkeypatch,
-        ps_stdout="\n".join(
-            ["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]
-        ),
+        ps_stdout="\n".join(["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]),
         volume_stdout="",
         dangling_stdout="",
     )
@@ -6968,9 +7134,7 @@ async def test_cleanup_parallel_without_id_refuses_global_attribution(monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("parallel", [False, True])
-async def test_cleanup_scoped_volume_probe_failure_omits_adjudication(
-    monkeypatch, parallel
-):
+async def test_cleanup_scoped_volume_probe_failure_omits_adjudication(monkeypatch, parallel):
     async def _no_sleep(_seconds: float) -> None:
         return None
 
@@ -7438,9 +7602,7 @@ async def test_h347_row_payload_identity_mismatch_grants_no_extension(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_h347_unreadable_snapshot_cannot_restart_same_action_deadline(
-    tmp_path, monkeypatch
-):
+async def test_h347_unreadable_snapshot_cannot_restart_same_action_deadline(tmp_path, monkeypatch):
     db = tmp_path / "disco.db"
     _h347_seed(db)
     with sqlite3.connect(str(db)) as conn:
@@ -7486,9 +7648,7 @@ async def test_h347_unrelated_progress_does_not_restart_action_deadline(tmp_path
     def append_heartbeat(reads):
         _insert_event(db, _CID, status(3 + reads, "RUNNING", f"heartbeat_{reads}"))
 
-    transport = _H347StateTransport(
-        db, states=["RUNNING"], on_state_read=append_heartbeat
-    )
+    transport = _H347StateTransport(db, states=["RUNNING"], on_state_read=append_heartbeat)
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=1.0)
     monkeypatch.setattr(_disco_mod, "_DEFAULT_TOOL_TIMEOUT_S", 2.0)
     monkeypatch.setattr(_disco_mod, "_ACTION_RESULT_PERSISTENCE_GRACE_S", 0.0)
