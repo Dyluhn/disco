@@ -29,7 +29,7 @@ from disco.agent_server import ConversationRuntime, create_app
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
 from disco.core.release.local_compose import COMPOSE_PATH, DOCKERFILE_PATH
-from disco.core.release.spec import ReleaseIntent
+from disco.core.release.spec import EnvScope, EnvVarDecl, ReleaseIntent
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
 
@@ -215,3 +215,80 @@ def test_prebuilt_static_intent_without_build_is_untouched(
     assert body["assessment"] == "candidate" and body["self_host"] is True, body
     texts = _overlay_texts(client, cid)
     assert "ARG " not in texts[DOCKERFILE_PATH], texts[DOCKERFILE_PATH]
+
+
+# ---- C9-05: build/runtime scope conflict must not silently drop a build value ----
+
+
+def _blocker_codes(body: dict[str, object]) -> set[str]:
+    blockers = body["blockers"]
+    assert isinstance(blockers, list)
+    return {str(b["code"]) for b in blockers}
+
+
+def _assert_scope_conflict(client: TestClient, cid: str) -> None:
+    body = _release(client, cid)
+    assert body["assessment"] == "needs_review", body
+    assert body["self_host"] is False and body["spec_digest"] is None, body
+    assert "build_env_scope_conflict" in _blocker_codes(body), sorted(_blocker_codes(body))
+    # No self-host overlay is offered for a bundle whose built asset would lack the value.
+    dl = client.get(f"/api/projects/{cid}/download")
+    assert dl.status_code == 200, dl.text
+    with zipfile.ZipFile(io.BytesIO(dl.content)) as zf:
+        assert DOCKERFILE_PATH not in set(zf.namelist()), zf.namelist()
+
+
+def test_required_env_runtime_shorthand_conflict_needs_review(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-05: source reads VITE_SITE_BANNER at build time, but the intent declares the
+    SAME name via the runtime-scoped ``required_env`` shorthand — trusting that would
+    ship a built asset silently lacking the value. Fail closed."""
+    cid = _uid("conv_r7d5req")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    intent = ReleaseIntent(
+        build_cmd=("npm", "run", "build"),
+        output_dir="dist",
+        health_path="/",
+        required_env=("VITE_SITE_BANNER",),
+    )
+    _seed(ps, _store, cid, _PUBLIC_ONLY, intent=intent)
+    _assert_scope_conflict(client, cid)
+
+
+def test_explicit_runtime_scope_conflict_needs_review(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-05: an EXPLICIT runtime-scope declaration of a build-read var is the same
+    conflict — an incompatible runtime declaration is never silently trusted."""
+    cid = _uid("conv_r7d5rt")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    intent = ReleaseIntent(
+        build_cmd=("npm", "run", "build"),
+        output_dir="dist",
+        health_path="/",
+        env=(EnvVarDecl(name="VITE_SITE_BANNER", scope=EnvScope.runtime, required=True),),
+    )
+    _seed(ps, _store, cid, _PUBLIC_ONLY, intent=intent)
+    _assert_scope_conflict(client, cid)
+
+
+def test_explicit_build_scope_declaration_is_candidate_and_lowered(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-05 positive: an EXPLICIT build-scope declaration of the build-read var is a
+    candidate whose value lowers to a Dockerfile ARG + compose build arg."""
+    cid = _uid("conv_r7d5build")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    intent = ReleaseIntent(
+        build_cmd=("npm", "run", "build"),
+        output_dir="dist",
+        health_path="/",
+        env=(EnvVarDecl(name="VITE_SITE_BANNER", scope=EnvScope.build, required=True),),
+    )
+    _seed(ps, _store, cid, _PUBLIC_ONLY, intent=intent)
+    body = _release(client, cid)
+    assert body["assessment"] == "candidate" and body["self_host"] is True, body
+    texts = _overlay_texts(client, cid)
+    assert "ARG VITE_SITE_BANNER" in texts[DOCKERFILE_PATH], texts[DOCKERFILE_PATH]
+    assert "VITE_SITE_BANNER" in texts[COMPOSE_PATH], texts[COMPOSE_PATH]

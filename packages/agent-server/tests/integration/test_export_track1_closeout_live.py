@@ -77,6 +77,7 @@ from ._closeout_live_support import (
     imported_node_fixture,
     ingress_service_id,
     public_build_env_vite_fixture,
+    public_only_build_env_vite_fixture,
     release_body,
     release_client,
     require_live_runtime,
@@ -589,6 +590,44 @@ def test_live_public_build_env_vite_bundle_lifecycle(
             ("built assets", b"".join(http_status_body(port, p)[1] for p in asset_paths)),
             ("application logs", bundle.logs().encode("utf-8")),
         ],
+    )
+
+
+def test_live_public_only_build_env_vite_serves_the_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+    live_project: _MakeProject,
+) -> None:
+    """WO-C8 §12.10 ACCEPTED branch, positive Docker proof (C9-05): a Vite bundle whose
+    source reads ONLY a PUBLIC build var is a candidate that builds, boots, and SERVES
+    the public marker in its built (hashed) asset. This proves the accepted branch
+    directly — it can never pass by returning early through the secret-rejection path
+    (there is no secret-shaped var here)."""
+    require_live_runtime()
+    store = SqliteEventStore(":memory:")
+    client, ps = release_client(store, tmp_path / "root", monkeypatch)
+    cid = _cid(closeout_name, "conv_c8pubonly")
+    fx = public_only_build_env_vite_fixture()
+    seed_and_cut(ps, store, cid, _cid(closeout_name, "proj"), fx.files, intent=fx.intent)
+
+    body = release_body(client, cid)
+    assert body["assessment"] == "candidate" and body["self_host"] is True, body
+
+    extract = bound_download_to_dir(client, cid, body, tmp_path / "bundle")
+    bundle = live_project("c8pubonly", extract)
+    port = assign_loopback_port()
+    _run_stateless_core(bundle, fx, port, extra_env={"VITE_PUBLIC_BANNER": PUBLIC_BUILD_MARKER})
+
+    # The PUBLIC build marker reached the built (hashed) Vite asset — the whole point.
+    index = await_http_ok(port, fx.health_path).decode("utf-8", "ignore")
+    asset_paths = [p for p in _iter_module_srcs(index) if p.endswith(".js")]
+    assert asset_paths, f"no built module asset referenced from index.html: {index!r}"
+    marker = PUBLIC_BUILD_MARKER.encode("utf-8")
+    found = any(marker in http_status_body(port, path)[1] for path in asset_paths)
+    assert found, (
+        "the public build marker VITE_PUBLIC_BANNER did not reach the built Vite asset; "
+        "the public-only build-env contract was not lowered to a build arg"
     )
 
 

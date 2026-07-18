@@ -1915,24 +1915,59 @@ def _intent_build_env(
     intent: ReleaseIntent,
     files: Mapping[str, str | bytes],
 ) -> tuple[EnvVarDecl, ...] | _DetectBlocker:
-    """Source build-env parity for the typed-intent paths (R7 live-pubvite defect).
+    """Source build-env parity for the typed-intent paths (R7 live-pubvite defect;
+    C9-05 scope-conflict correction).
 
     The source-detection path conserves SOURCE-DISCOVERED public client build vars
     (`import.meta.env.VITE_*`) into the spec for a build-requiring service — they must
     lower to a Compose build arg + Dockerfile ARG or the built asset ships without
     them — and fails closed on a secret-SHAPED discovered build var
-    (`secret_build_env_unsupported`, §8.4). The intent paths lowered only DECLARED
-    env, so an undeclared public build var silently never reached the build and an
-    undeclared secret-shaped one silently never rejected. Apply the same two source
-    rules when the intent declares a `build_cmd`; a declared name keeps explicit-wins
-    precedence (it is never duplicated or reclassified here)."""
+    (`secret_build_env_unsupported`, §8.4).
+
+    When source PROVES a public var is read at BUILD time, a same-name declaration
+    must not silently suppress that build lowering:
+
+    * name NOT declared -> conserve the discovered BUILD-scope decl (it lowers to an
+      ARG);
+    * name declared with BUILD scope -> the explicit build-scope decl already lowers;
+      keep it, don't duplicate;
+    * name declared with RUNTIME scope (an explicit runtime decl, or the
+      `required_env` shorthand which is runtime-scoped) -> SCOPE CONFLICT: the current
+      schema has no dual-scope decl, and Compose lowers only build-scope decls to build
+      args, so trusting the runtime declaration would ship a candidate whose built
+      asset silently lacks the value. Fail closed with `build_env_scope_conflict`."""
     if not intent.build_cmd:
         return env
     secret = _secret_build_env_blocker(files)
     if secret is not None:
         return secret
-    existing = {var.name for var in env}
-    return env + tuple(decl for decl in _build_env_decls(files) if decl.name not in existing)
+    by_name = {var.name: var for var in env}
+    additions: list[EnvVarDecl] = []
+    for decl in _build_env_decls(files):
+        existing = by_name.get(decl.name)
+        if existing is None:
+            additions.append(decl)
+        elif existing.scope is EnvScope.build:
+            continue  # explicit build-scope declaration already lowers; no duplicate
+        else:
+            return _DetectBlocker(
+                code="build_env_scope_conflict",
+                message=(
+                    f"the build variable {decl.name!r} is read at BUILD time in the "
+                    "source (a Vite `import.meta.env` client build var), but it is "
+                    "declared as a RUNTIME env var. A runtime declaration lowers to a "
+                    "container ENV, never a build arg, so the built asset would silently "
+                    "lack the value. Declare it with build scope (or, if it is genuinely "
+                    "needed at both build and runtime, split it into a build-scoped and "
+                    "a runtime-scoped declaration)."
+                ),
+                field="env",
+                evidence=(
+                    f"build-env scope evidence: {decl.name!r} read at build time but "
+                    f"declared scope={existing.scope.value}",
+                ),
+            )
+    return env + tuple(additions)
 
 
 # The DELIBERATELY SMALL supported uvicorn typed-intent contract (C9-04, 2026-07-17).

@@ -430,6 +430,37 @@ def public_build_env_vite_fixture() -> FixtureWorkspace:
     )
 
 
+def public_only_build_env_vite_fixture() -> FixtureWorkspace:
+    """public-ONLY-build-env Vite (C9-05): the source reads ONLY a PUBLIC build var
+    (``import.meta.env.VITE_PUBLIC_BANNER``) — NO secret-shaped var — so §12.10's
+    ACCEPTED branch is exercised directly: the bundle must be a candidate that builds,
+    boots, and serves the public marker in the built asset. This is the positive Docker
+    proof the frozen public-build test must NOT reach only through the secret-rejection
+    branch."""
+    main_js = (
+        b"const banner = import.meta.env.VITE_PUBLIC_BANNER;\n"
+        b"document.getElementById('app').textContent = 'disco-c8-pubonly-alive ' + banner;\n"
+    )
+    files = {
+        "index.html": (
+            b"<!doctype html><html><head><title>c8-pubonly</title></head><body>"
+            b"<div id='app'>disco-c8-pubonly-alive</div>"
+            b"<script type='module' src='/src/main.js'></script>"
+            b"</body></html>\n"
+        ),
+        "package.json": (
+            b'{"name":"c8-pubonly","private":true,"version":"1.0.0",'
+            b'"scripts":{"build":"vite build"},"devDependencies":{"vite":"^5.4.0"}}'
+        ),
+        "vite.config.js": b"export default { build: { outDir: 'dist' } };\n",
+        "src/main.js": main_js,
+    }
+    intent = ReleaseIntent(build_cmd=("npm", "run", "build"), output_dir="dist", health_path="/")
+    return FixtureWorkspace(
+        files=files, health_path="/", body_marker=b"disco-c8-pubonly-alive", intent=intent
+    )
+
+
 def appkit_fixture() -> tuple[FixtureWorkspace, AppSpec, str]:
     """AppKit: a records app GENERATED in-test (never a committed tree) with the
     ``.disco/appspec.json`` contract file so the detector keys off the full AppKit
