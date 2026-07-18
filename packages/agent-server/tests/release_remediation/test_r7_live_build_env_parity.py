@@ -292,3 +292,24 @@ def test_explicit_build_scope_declaration_is_candidate_and_lowered(
     texts = _overlay_texts(client, cid)
     assert "ARG VITE_SITE_BANNER" in texts[DOCKERFILE_PATH], texts[DOCKERFILE_PATH]
     assert "VITE_SITE_BANNER" in texts[COMPOSE_PATH], texts[COMPOSE_PATH]
+
+
+def test_unrepresentable_build_var_name_fails_closed_not_500(
+    _store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C9-05 P3-1: a mixed-case ``import.meta.env.VITE_*`` name matches the scanner but
+    cannot form an env-var decl. The route must return 200 needs_review with the typed
+    ``build_env_unsupported_name`` blocker — NEVER an uncaught 500."""
+    cid = _uid("conv_r7d5mixed")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    files = _vite_files(
+        b"const banner = import.meta.env.VITE_Site_Banner;\n"
+        b"document.getElementById('root').textContent = 'x ' + banner;\n"
+    )
+    _seed(ps, _store, cid, files, intent=_STATIC_INTENT)
+
+    res = client.get(f"/api/projects/{cid}/release")
+    assert res.status_code == 200, res.text  # not a 500
+    body = res.json()
+    assert body["assessment"] == "needs_review" and body["self_host"] is False, body
+    assert "build_env_unsupported_name" in _blocker_codes(body), sorted(_blocker_codes(body))
