@@ -58,20 +58,28 @@ async def test_no_secret_in_the_box():
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
     # env (clean — never os.environ), process list, and workspace: all secret-free.
     env = await inst.exec_shell("env", timeout_s=10)
-    # Scan the FULL process list, not the bounded stdout projection: bounded exec
-    # returns only a 64 KiB head + tail and spills at most 1 MiB, so a sentinel in
-    # the dropped middle of an oversized `ps` would be invisible to a stdout scan
-    # (independent verification demonstrated exactly that gap). Writing the listing
-    # into the box and reading the file back whole closes it — read_file's 32 MiB
-    # cap is far above any real process list.
-    ps_write = await inst.exec_shell(
-        "{ ps -e -o args 2>/dev/null || ps; } > .ps-scan.txt", timeout_s=10
+    # Scan the FULL process list at FULL FIDELITY, not the bounded stdout projection:
+    # bounded exec returns only a 64 KiB head + tail and spills at most 1 MiB, so a
+    # sentinel in the dropped middle of an oversized `ps` would be invisible to a
+    # stdout scan (independent verification demonstrated exactly that gap). The scan
+    # runs INSIDE the box — `grep` over the captured listing — so only a tiny bounded
+    # match count crosses the API. (Reading the whole listing back via read_file is
+    # not viable: on a busy host `ps -e -o args` can exceed read_file's 32 MiB
+    # transfer cap; grep-in-box has no such limit and closes the same projection gap.)
+    ps_capture = await inst.exec_shell(
+        "{ ps -e -o args 2>/dev/null || ps; } > .ps-scan.txt; wc -c < .ps-scan.txt",
+        timeout_s=10,
     )
-    assert ps_write.exit_code == 0
-    ps_bytes = await inst.read_file(".ps-scan.txt")
-    assert len(ps_bytes) > 0
+    assert ps_capture.exit_code == 0
+    assert int(ps_capture.stdout.strip()) > 0  # the listing was actually captured
+    # grep exits 0 (found), 1 (clean), or 2 (error). Only 1 is acceptable here.
+    ps_scan = await inst.exec_shell(f"grep -F -c -- {SENTINEL!r} .ps-scan.txt", timeout_s=10)
+    assert ps_scan.exit_code == 1, (
+        f"process-list sentinel scan did not run clean (exit {ps_scan.exit_code}): "
+        f"{ps_scan.stdout.strip()} {ps_scan.stderr.strip()}"
+    )
+    assert ps_scan.stdout.strip() == "0"
     assert SENTINEL not in env.stdout
-    assert SENTINEL.encode("utf-8") not in ps_bytes
     await _assert_box_secret_free(inst, allowed=(".ps-scan.txt",))
     await inst.destroy()
 
