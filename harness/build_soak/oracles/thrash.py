@@ -184,6 +184,42 @@ def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str,
     return outcomes
 
 
+def _approved_plan_predicate_scope(event: dict[str, Any]) -> tuple[str, ...] | None:
+    """Return one trusted approved plan-verifier authority scope.
+
+    H368 makes model-authored verification conditions revision-scoped.  Only the
+    server-authored approval transition can replace that scope.  Plan prose, a
+    malformed transition, or reapproval with the same predicate fingerprints does
+    not create a new identity.
+    """
+
+    if (
+        kind_of(event) != KIND_STATUS
+        or event.get("source") != "system"
+        or event.get("detail") != "plan_approved"
+    ):
+        return None
+    transition = event.get("plan_verification_transition")
+    if not isinstance(transition, dict):
+        return None
+    revision = transition.get("new_plan_revision")
+    plan_event_id = transition.get("new_plan_event_id")
+    fingerprints = transition.get("new_predicate_fingerprints")
+    if (
+        transition.get("new_authority") != "plan"
+        or transition.get("reason") not in {"approved_initial_plan", "approved_plan_revision"}
+        or not isinstance(revision, int)
+        or isinstance(revision, bool)
+        or revision < 1
+        or not isinstance(plan_event_id, str)
+        or not plan_event_id
+        or not isinstance(fingerprints, list)
+        or any(not isinstance(item, str) or not item for item in fingerprints)
+    ):
+        return None
+    return tuple(sorted(fingerprints))
+
+
 def _longest_identical_streak(actions: list[dict[str, Any]]) -> tuple[int, str, list[int]]:
     best_count, best_fp, best_seqs = 0, "", []
     current_fp, current_seqs = "", []
@@ -415,21 +451,31 @@ def _explicit_mutation_path(action: dict[str, Any]) -> str | None:
 
 
 def _largest_semantic_shell_repeat_group(
-    actions: list[dict[str, Any]], outcomes: dict[str, tuple[bool, str, str]]
+    events: list[dict[str, Any]],
+    outcomes: dict[str, tuple[bool, str, str]],
 ) -> tuple[int, str, list[int]]:
-    """Find repeated successful direct-script executions between source edits.
+    """Find repeated successful direct-script executions in one verifier scope.
 
     Counts are non-contiguous because adding ``echo $?`` or surrounding a command
     with ``ls`` must not erase the repeated core execution.  Product-generated
     completion probes carry ``meta.verify_probe`` and are excluded: they are
     independent verification, not a model retry.  A successful structured source
-    edit for the runner family starts a new generation; this covers dependencies,
-    not merely the directly executed script.
+    edit for the runner family starts a new generation.  An approved replacement
+    plan predicate set also starts a new authority scope because the prior H368
+    plan-owned conditions are no longer enforced.  Same-predicate reapproval does
+    not reset the bound.
     """
 
     generations: Counter[str] = Counter()
-    groups: dict[tuple[str, int], list[int]] = {}
-    for action in actions:
+    plan_scope = ("<no-approved-plan>",)
+    groups: dict[tuple[str, int, tuple[str, ...]], list[int]] = {}
+    for action in events:
+        approved_scope = _approved_plan_predicate_scope(action)
+        if approved_scope is not None:
+            plan_scope = approved_scope
+            continue
+        if kind_of(action) != KIND_ACTION:
+            continue
         mutation_path = _explicit_mutation_path(action)
         mutation_succeeded, _, _ = outcomes.get(
             str(action_id_of(action)), (False, "missing outcome", "")
@@ -454,10 +500,14 @@ def _largest_semantic_shell_repeat_group(
         for fingerprint, family, background in sorted(set(_direct_script_invocations(command))):
             if background:
                 continue
-            groups.setdefault((fingerprint, generations[family]), []).append(seq_of(action))
+            groups.setdefault((fingerprint, generations[family], plan_scope), []).append(
+                seq_of(action)
+            )
     if not groups:
         return 0, "", []
-    (fingerprint, _generation), seqs = max(groups.items(), key=lambda item: (len(item[1]), item[1]))
+    (fingerprint, _generation, _plan_scope), seqs = max(
+        groups.items(), key=lambda item: (len(item[1]), item[1])
+    )
     return len(seqs), fingerprint, seqs
 
 
@@ -676,7 +726,7 @@ class ThrashOracle:
             ]
 
         semantic_count, semantic_fingerprint, semantic_seqs = _largest_semantic_shell_repeat_group(
-            actions, outcomes
+            events, outcomes
         )
         if semantic_count > limits["max_identical_action_repeats"]:
             return [

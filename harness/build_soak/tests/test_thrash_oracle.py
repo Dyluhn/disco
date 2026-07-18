@@ -19,6 +19,18 @@ def _scenario(**overrides: int) -> dict:
     return {"id": "thrash", "assertions": {"thrash": limits}}
 
 
+def _approved_plan_scope(seq: int, revision: int, fingerprints: list[str]) -> dict:
+    event = status(seq, "RUNNING", "plan_approved")
+    event["plan_verification_transition"] = {
+        "new_authority": "plan",
+        "new_plan_event_id": f"plan-{revision}",
+        "new_plan_revision": revision,
+        "new_predicate_fingerprints": fingerprints,
+        "reason": "approved_initial_plan" if revision == 1 else "approved_plan_revision",
+    }
+    return event
+
+
 def test_identical_tool_call_streak_fails() -> None:
     events = []
     for seq in (1, 3, 5):
@@ -70,6 +82,109 @@ def test_h469_output_materialization_is_not_a_third_pure_script_verification() -
 
     assert result.passed
     assert result.facts["largest_semantic_shell_repeat_group"] == 2
+
+
+def test_h523_approved_replacement_predicates_scope_revised_verification() -> None:
+    commands_and_outputs = (
+        (
+            "cd /workspace && python primes.py",
+            "2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n31\n37\n41\n43\n47\n53\n59\n61\n67\n71\n",
+        ),
+        ("cd /workspace && python primes.py | wc -l", "20\n"),
+        ("cd /workspace && python primes.py | tail -1", "71\n"),
+    )
+    events = [_approved_plan_scope(6, 1, ["sha256:old-malformed-predicate"])]
+    for seq, (command, output) in zip((9, 39, 41), commands_and_outputs, strict=True):
+        if seq == 39:
+            events.append(_approved_plan_scope(37, 3, []))
+        action_id = f"run{seq}"
+        result = observation(seq + 1, action_id, tool="shell", success=True)
+        result["tool_result"]["content"] = output
+        result["tool_result"]["structured"] = {
+            "exit_code": 0,
+            "stdout": output,
+            "stderr": "",
+            "timed_out": False,
+            "output_truncated": False,
+        }
+        events += [
+            action(seq, "shell", action_id=action_id, args={"command": command}),
+            result,
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["largest_semantic_shell_repeat_group"] == 2
+
+
+def test_same_predicate_reapproval_cannot_reset_cosmetic_wrapper_thrash() -> None:
+    commands_and_outputs = (
+        ("python inventory.py; echo nonce1", "inventory\nnonce1\n"),
+        ("cd /workspace && python inventory.py; echo nonce2", "inventory\nnonce2\n"),
+        ("echo before; python inventory.py; echo nonce3", "before\ninventory\nnonce3\n"),
+    )
+    events = []
+    for revision, seq, (command, output) in zip(
+        (1, 2, 3), (1, 5, 9), commands_and_outputs, strict=True
+    ):
+        events.append(_approved_plan_scope(seq, revision, ["sha256:same-predicate"]))
+        action_id = f"run{seq + 2}"
+        result = observation(seq + 3, action_id, tool="shell", success=True)
+        result["tool_result"]["content"] = output
+        result["tool_result"]["structured"] = {
+            "exit_code": 0,
+            "stdout": output,
+            "stderr": "",
+            "timed_out": False,
+            "output_truncated": False,
+        }
+        events += [
+            action(seq + 2, "shell", action_id=action_id, args={"command": command}),
+            result,
+        ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+    assert result.facts["action_seqs"] == [3, 7, 11]
+
+
+def test_exact_command_retries_remain_bounded_when_successful_output_changes() -> None:
+    events = []
+    for seq, output in zip((1, 5, 9), ("first\n", "second\n", "third\n"), strict=True):
+        action_id = f"run{seq}"
+        result = observation(seq + 1, action_id, tool="shell", success=True)
+        result["tool_result"]["content"] = output
+        result["tool_result"]["structured"] = {
+            "exit_code": 0,
+            "stdout": output,
+            "stderr": "",
+            "timed_out": False,
+            "output_truncated": False,
+        }
+        events += [
+            action(
+                seq,
+                "shell",
+                action_id=action_id,
+                args={"command": "cd /workspace && python inventory.py"},
+            ),
+            result,
+        ]
+        if seq < 9:
+            list_id = f"list{seq}"
+            events += [
+                action(seq + 2, "file_list", action_id=list_id, args={"path": "/workspace"}),
+                observation(seq + 3, list_id, tool="file_list", success=True),
+            ]
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
+    assert result.facts["action_seqs"] == [1, 5, 9]
 
 
 def test_repeated_same_static_tee_sink_remains_bounded_across_append_and_cwd_forms() -> None:
