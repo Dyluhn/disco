@@ -228,7 +228,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
-    "run_project_script",  # CD-TOOLS-7 — buffered transactional batch of file transforms
+    "run_project_script",  # CD-TOOLS-7 — buffered, prevalidated batch of file transforms
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame
     "search",
     "server_status",

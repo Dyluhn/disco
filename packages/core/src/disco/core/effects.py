@@ -225,7 +225,14 @@ class ObservationReceipt(BaseModel):
 
 
 class MutationReceipt(BaseModel):
-    """Exact before/after identity for one host-observed resource mutation."""
+    """Exact byte identities observed around one host-owned resource mutation.
+
+    ``before`` is the revision the host checked immediately before dispatching the
+    backend commit, and ``after`` is the revision acknowledged by that commit. This
+    is deliberately not a claim that a portable filesystem supplied compare-and-swap
+    against uncooperative writers. Final delivered state is proven separately by a
+    :class:`FinalWorkspaceSeal`.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

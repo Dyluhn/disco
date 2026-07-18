@@ -1,12 +1,13 @@
-"""CD-TOOLS-7 — run_project_script: a host-owned BUFFERED, TRANSACTIONAL batch of deterministic
-project-file transformations (Claude Design `run_script`).
+"""CD-TOOLS-7 — a host-owned buffered batch of deterministic project-file transforms.
 
 The model supplies a list of declarative operations (read / ls / replace_text / save). They run
 against an in-memory BUFFER lazily loaded from the workspace; EVERY guard (governed-artifact,
 path-escape, elision, literal no-match, shrink, save-grounding, syntax) is checked BEFORE a single
-byte is written. If ANY op fails, NOTHING is written (true all-or-nothing rollback). On full
-success every mutated file is committed atomically. This lets a build do many deterministic edits
-in ONE auditable call instead of dozens of chatty mutations — without an arbitrary-code sandbox.
+byte is written. After prevalidation, each changed file is sent to the sandbox's single-file commit
+primitive in canonical path order. Filesystems do not provide a portable multi-file transaction,
+so a handled backend failure may stop after a proven prefix; the returned outcome identifies that
+prefix and any ambiguous failed-path state explicitly. This lets a build do many deterministic
+edits in one auditable call without hiding partial state or requiring arbitrary code execution.
 """
 
 from __future__ import annotations
@@ -14,7 +15,12 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Literal
 
-from disco.core.effects import ActionProfile, EffectCapability
+from disco.core.effects import (
+    ActionProfile,
+    EffectCapability,
+    MutationReceipt,
+    OpaqueEffectReceipt,
+)
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
@@ -22,9 +28,10 @@ from ..behavior import declares, narrows
 from ..sandbox.base import SandboxFileNotFoundError, SandboxPermissionError
 from .files import (
     _BINARY_DELIVERABLE_EXTS,
-    _atomic_write,
     _canonical,
     _clear_grounding,
+    _commit_file_mutation,
+    _file_mutation_receipt,
     _governed_route_text,
     _has_elision_marker,
     _is_governed_artifact,
@@ -62,9 +69,7 @@ class RunScriptOp(BaseModel):
 
 class RunScriptArgs(BaseModel):
     operations: list[RunScriptOp] = Field(
-        description=(
-            "Ordered operations applied as ONE transaction: all commit together, or none do."
-        )
+        description="Ordered operations prevalidated as one batch, then committed per file."
     )
 
 
@@ -80,7 +85,11 @@ def _fail(op_index: int, error: str, message: str, **extra: Any) -> ToolOutcome:
 
 
 def _success(
-    content: str, applied: list[str], operations_run: int, reads: dict[str, Any]
+    content: str,
+    applied: list[str],
+    operations_run: int,
+    reads: dict[str, Any],
+    receipts: tuple[MutationReceipt, ...] = (),
 ) -> ToolOutcome:
     return ToolOutcome(
         success=True,
@@ -92,23 +101,92 @@ def _success(
             "operations_run": operations_run,
             "reads": reads,
         },
+        effect_receipts=receipts,
     )
 
 
+def _commit_failure(
+    *,
+    applied: list[str],
+    receipts: list[MutationReceipt | OpaqueEffectReceipt],
+    failed_path: str,
+    failed_path_state: Literal["unchanged", "committed", "unknown"],
+    reason: str,
+    operations_run: int,
+    reads: dict[str, Any],
+    underlying: dict[str, Any] | None = None,
+) -> ToolOutcome:
+    if failed_path_state == "unchanged":
+        partial = bool(applied)
+        error = "SCRIPT_PARTIAL_COMMIT" if partial else "SCRIPT_COMMIT_FAILED"
+        kind = "run_script_partial_commit" if partial else "run_script_commit_failed"
+        summary = (
+            f"run_project_script stopped before committing {failed_path}; "
+            f"{len(applied)} earlier file(s) remain committed"
+            if partial
+            else f"run_project_script could not commit {failed_path}; no file was committed"
+        )
+    elif failed_path_state == "committed":
+        partial = True
+        error = "SCRIPT_COMMIT_INTERRUPTED"
+        kind = "run_script_commit_interrupted"
+        summary = (
+            f"the backend reported a failure for {failed_path}, but its exact intended bytes "
+            f"were observed afterward; {len(applied)} file(s) are proven committed"
+        )
+    else:
+        partial = True
+        error = "SCRIPT_COMMIT_UNCERTAIN"
+        kind = "run_script_commit_uncertain"
+        summary = (
+            f"the backend reported a failure for {failed_path} and its final state could not "
+            f"be attributed; {len(applied)} other file(s) are proven committed"
+        )
+    structured: dict[str, Any] = {
+        "kind": kind,
+        "applied": applied,
+        "failed_path": failed_path,
+        "failed_path_state": failed_path_state,
+        "operations_run": operations_run,
+        "reads": reads,
+    }
+    if underlying is not None:
+        structured["underlying"] = underlying
+    return ToolOutcome(
+        success=False,
+        error=error,
+        content=(
+            f"{summary}. The result lists exact proven commits; do not assume any unlisted "
+            f"path applied. Reason: {reason}"
+        ),
+        artifacts=applied,
+        structured=structured,
+        effect_receipts=tuple(receipts),
+    )
+
+
+def _exception_detail(exc: Exception) -> dict[str, str]:
+    """Keep a bounded, single-line backend cause without repr/debug payloads."""
+    message = " ".join(str(exc).split())[:500]
+    return {"type": type(exc).__name__, "message": message or "no detail supplied"}
+
+
 class RunProjectScriptTool:
-    """Apply a buffered, transactional batch of file transformations. Reuses the CD-TOOLS-2/3/4
-    guards (governed-artifact routing, elision rejection, shrink guard, atomic commit) so the batch
-    is exactly as safe as the individual tools — but all-or-nothing."""
+    """Prevalidate a buffered batch, then commit each changed file in stable order."""
 
     definition = ToolDef(
         name="run_project_script",
         description=(
-            "Apply MANY deterministic file edits as ONE transaction. Pass `operations`: a list of "
+            "Apply MANY deterministic file edits as one prevalidated batch. Pass `operations`: "
+            "a list of "
             "{op, path, ...} where op is 'read'/'ls' (inspect), 'replace_text' "
             "(literal find/replace "
             "— pass exact `old` + `new`, optional replace_all), or 'save' (write full `content`). "
-            "All edits commit together; if ANY op fails (no match, shrink, an unread file, a "
-            ".disco/ artifact, a syntax error) NOTHING is written. To save over an existing file, "
+            "All guards run before commit, so a validation failure (no match, shrink, unreadable "
+            "file, .disco/ artifact, syntax error) writes NOTHING. Changed files then commit "
+            "one at a time through the sandbox; a handled backend failure reports exact proven "
+            "commits and flags any ambiguous file state. "
+            "To save over an existing file, "
             "read it first (a 'read' op on it, or a prior replace_text, or pass expected_sha256). "
             "Each element of `operations` is an OBJECT, never a bare string. Example call:\n"
             "  run_project_script(operations=[\n"
@@ -159,6 +237,7 @@ class RunProjectScriptTool:
         original: dict[
             str, str | None
         ] = {}  # REAL relpath -> disk content at first load (None=absent)
+        original_bytes: dict[str, bytes | None] = {}
         mutated: set[str] = set()  # REAL relpaths the buffer changed
         seen: set[str] = set()  # GROUNDED real relpaths (explicitly read or transformed this batch)
         reads_out: dict[str, Any] = {}
@@ -183,8 +262,9 @@ class RunProjectScriptTool:
         async def _load(canon: str, path: str) -> str | None:
             if canon in buffer:
                 return buffer[canon]
-            text, _raw = await _disk_read(path)
+            text, raw = await _disk_read(path)
             original[canon] = text
+            original_bytes[canon] = raw if text is not None else None
             if text is not None:
                 buffer[canon] = text
             return text
@@ -250,6 +330,7 @@ class RunProjectScriptTool:
                     existed_text, raw = await _disk_read(op.path)
                     if canon not in original:
                         original[canon] = existed_text
+                        original_bytes[canon] = raw if existed_text is not None else None
                     if existed_text is not None:
                         # EXISTING file → require grounding (no blind clobber of an unread file).
                         grounded = (canon in seen) or (canon in rsw)
@@ -304,10 +385,9 @@ class RunProjectScriptTool:
         # A requested mutation is not an effective mutation merely because it
         # matched and entered the buffer. Keep only byte-changing paths (a new
         # empty file still changes filesystem state because its original is None).
+        after_bytes = {canon: buffer[canon].encode("utf-8") for canon in mutated}
         effective_mutated = {
-            canon
-            for canon in mutated
-            if original.get(canon) is None or buffer[canon] != original[canon]
+            canon for canon in mutated if after_bytes[canon] != original_bytes.get(canon)
         }
         if not effective_mutated:
             return _fail(
@@ -318,7 +398,7 @@ class RunProjectScriptTool:
         mutated = effective_mutated
 
         # (2) caps + syntax pre-check IN MEMORY — a syntax-introducing batch writes nothing.
-        total = sum(len(buffer[c].encode("utf-8")) for c in mutated)
+        total = sum(len(after_bytes[c]) for c in mutated)
         if total > _MAX_TOTAL_WRITE_BYTES:
             return _fail(
                 len(ops) - 1,
@@ -336,11 +416,81 @@ class RunProjectScriptTool:
                     f"{'; '.join(introduced)}.",
                 )
 
-        # (3) COMMIT — every logic fault is already caught, so this only does the writes. The commit
-        # path is the SAME real key the guards validated, so no alias can redirect the write.
+        # (3) COMMIT — guards are complete, but the portable sandbox contract has no multi-file
+        # transaction. Preserve exact proven commits and identify an ambiguous failed path on every
+        # handled backend error instead of claiming a rollback the backend cannot guarantee.
         applied: list[str] = []
+        receipts: list[MutationReceipt | OpaqueEffectReceipt] = []
         for canon in sorted(mutated):
-            await _atomic_write(sbx, canon, buffer[canon].encode("utf-8"))
+            intended = after_bytes[canon]
+            before = original_bytes.get(canon)
+            try:
+                committed = await _commit_file_mutation(
+                    ctx,
+                    canon,
+                    intended,
+                    expected_before=before,
+                )
+            except Exception as exc:  # noqa: BLE001 — preserve any committed prefix honestly
+                # A transport can report failure before or after applying its write primitive.
+                # Re-read once: intended bytes prove commit, unchanged bytes prove no commit,
+                # and any third or unreadable state remains explicitly opaque.
+                observed_known = True
+                try:
+                    observed: bytes | None = await sbx.read_file(canon)
+                except FileNotFoundError:
+                    observed = None
+                except Exception:  # noqa: BLE001 — genuinely unattributable final state
+                    observed = None
+                    observed_known = False
+                if observed_known and observed == intended:
+                    receipts.append(_file_mutation_receipt(canon, before=before, after=intended))
+                    applied.append(canon)
+                    _clear_grounding(ctx.conversation_id, canon)
+                    failed_path_state: Literal["unchanged", "committed", "unknown"] = "committed"
+                elif observed_known and observed == before:
+                    failed_path_state = "unchanged"
+                else:
+                    receipts.append(
+                        OpaqueEffectReceipt(
+                            capability=EffectCapability.WORKSPACE_MUTATE,
+                            reason=(
+                                f"run_project_script commit state for {canon} changed but could "
+                                "not be attributed exactly after a backend failure"
+                            ),
+                        )
+                    )
+                    _clear_grounding(ctx.conversation_id, canon)
+                    failed_path_state = "unknown"
+                detail = _exception_detail(exc)
+                return _commit_failure(
+                    applied=applied,
+                    receipts=receipts,
+                    failed_path=canon,
+                    failed_path_state=failed_path_state,
+                    reason=f"{detail['type']}: {detail['message']}",
+                    operations_run=len(ops),
+                    reads=reads_out,
+                    underlying=detail,
+                )
+            if isinstance(committed, ToolOutcome):
+                if not applied:
+                    return committed
+                return _commit_failure(
+                    applied=applied,
+                    receipts=receipts,
+                    failed_path=canon,
+                    failed_path_state="unchanged",
+                    reason=(f"{committed.error or 'stale file context'}: {committed.content}"),
+                    operations_run=len(ops),
+                    reads=reads_out,
+                    underlying={
+                        "error": committed.error,
+                        "content": committed.content,
+                        "structured": committed.structured,
+                    },
+                )
+            receipts.append(committed)
             # [REL-RC-D] a script commit is an EXTERNAL (non-anchored) mutation → fully un-ground
             # both bits so the next edit/write requires a genuine fresh read.
             _clear_grounding(ctx.conversation_id, canon)
@@ -350,4 +500,5 @@ class RunProjectScriptTool:
             applied,
             len(ops),
             reads_out,
+            tuple(receipt for receipt in receipts if isinstance(receipt, MutationReceipt)),
         )

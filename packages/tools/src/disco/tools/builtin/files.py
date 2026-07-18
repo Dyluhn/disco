@@ -951,13 +951,15 @@ async def _commit_file_mutation(
     *,
     expected_before: bytes | None,
 ) -> MutationReceipt | ToolOutcome:
-    """Optimistically compare current bytes, then atomically commit one file.
+    """Optimistically compare current bytes, then invoke the backend commit primitive.
 
-    The second read is intentionally adjacent to the backend's atomic replacement:
+    The second read is intentionally adjacent to the backend replacement:
     a change since the mutator computed ``new_bytes`` fails as stale context instead
     of being silently clobbered or attributed to the older revision. The resolved
     path is used for both the commit and receipt, so an in-workspace alias cannot
-    split one resource into two identities.
+    split one resource into two identities. This is not a portable filesystem CAS;
+    the receipt captures the host-observed expectation and backend-acknowledged bytes,
+    while the final workspace seal proves the delivered state.
     """
     assert ctx.sandbox is not None
     resolved = await _resolved_workspace_file(ctx.sandbox, path)
@@ -988,7 +990,8 @@ async def _commit_file_mutation(
             },
         )
     # Build and validate the receipt before entering the mutation boundary. A
-    # successful backend atomic_write commits exactly new_bytes or raises.
+    # successful backend call acknowledges new_bytes; the final seal independently
+    # proves which bytes were ultimately delivered.
     receipt = _file_mutation_receipt(
         resolved,
         before=current,
@@ -2361,8 +2364,10 @@ def _all_occurrences(text: str, sub: str) -> list[int]:
 
 async def _atomic_write(sandbox: Any, path: str, data: bytes) -> None:
     """CD-TOOLS-3: commit `data` to `path` atomically where the backend supports it (a sibling
-    tmp + os.replace — ProcessSandbox.atomic_write), else fall back to a single write_file (still
-    logical all-or-nothing — the caller has already validated everything in memory)."""
+    tmp + os.replace — ProcessSandbox.atomic_write), else use one best-effort ``write_file``.
+    In-memory prevalidation prevents logic failures before dispatch; it does not manufacture
+    filesystem atomicity in a compatibility backend that lacks an atomic primitive.
+    """
     aw = getattr(sandbox, "atomic_write", None)
     if aw is None:
         await sandbox.write_file(path, data)

@@ -96,7 +96,7 @@ AGENT_TOOLS = frozenset(
         # CD-TOOLS-2 — atomic exact-match batch replace; anchored-edit tier (withheld from the
         # weak advertised set via ModelExecutionPolicy.withheld_tools, callable by all).
         "exact_replace",
-        # CD-TOOLS-7 — buffered transactional batch of deterministic file transforms.
+        # CD-TOOLS-7 — buffered prevalidation plus stable per-file commits.
         "run_project_script",
         "file_list",
         # F07 — structured PCI ID lookup; never infer a marketing name from numbers.
@@ -178,7 +178,7 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
     {
         "file_read",
         "file_write",
-        "run_project_script",  # CD-TOOLS-7 — transactional batch of file transforms
+        "run_project_script",  # CD-TOOLS-7 — prevalidated batch of file transforms
         "file_append",
         "file_edit",
         # line-number-targeted edits — present so artifacts are editable without shell

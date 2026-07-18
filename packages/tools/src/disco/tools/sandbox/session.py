@@ -438,11 +438,13 @@ class SandboxSession:
         await self._resilient(lambda i: i.write_file(path, data))
 
     async def atomic_write(self, path: str, data: bytes) -> None:
-        """CD-TOOLS-3 — delegate the atomic (tmp+rename) commit to the backend instance so the
-        runtime's safe_write_file / exact_replace actually get FS atomicity. ProcessSandbox and the
-        container backends implement atomic_write; any backend that does NOT falls back to a plain
-        write_file (still logical all-or-nothing — the tool validated in memory first), so this is
-        never a hard failure on an unequipped backend (Codex CD-TOOLS-4 round-3)."""
+        """Use the backend's atomic primitive when available, otherwise its ordinary write.
+
+        ProcessSandbox and the production container backends implement ``atomic_write``.
+        Compatibility backends without it retain a best-effort single write and make no
+        filesystem atomicity claim; in-memory prevalidation prevents logic failures before
+        dispatch but cannot make a backend write transactional.
+        """
 
         async def _aw(i: SandboxInstance) -> None:
             fn = getattr(i, "atomic_write", None)

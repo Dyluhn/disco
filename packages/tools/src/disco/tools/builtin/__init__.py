@@ -134,7 +134,7 @@ def build_default_registry() -> ToolRegistry:
         ExactReplaceTool(),  # CD-TOOLS-2: atomic exact-match batch replace; anchored-edit tier
         FindAndEditTool(),  # H3: regex fan-out edit tool mediated by the driver LLM
         SafeWriteFileTool(),  # CD-TOOLS-3: guarded whole-file writer (shrink/governed/atomic)
-        RunProjectScriptTool(),  # CD-TOOLS-7: buffered transactional batch of file transforms
+        RunProjectScriptTool(),  # CD-TOOLS-7: prevalidated batch with per-file evidence
         FileListTool(),
         HardwareIdentityTool(),  # F07: sourced PCI identity; unknown stays numeric
         ShellTool(),

@@ -50,6 +50,8 @@ def test_non_anchored_prompt_never_names_withheld_anchored_edit_tools(mode, assi
 def test_capable_execution_prompt_has_universal_discipline():
     p = _prompt(assist=False, capabilities=frozenset())
     assert "run_project_script" in p
+    assert "prevalidates a batch" in p
+    assert "ONE atomic transaction" not in p
     assert "allow_shrink=true" in p
     assert "FRESH_READ_REQUIRED" in p  # the recovery rule
     assert "elided" in p  # the never-echo-elision-marker rule
@@ -61,6 +63,8 @@ def test_capable_execution_prompt_has_universal_discipline():
 def test_weak_execution_prompt_has_universal_discipline_minus_anchored():
     p = _prompt(assist=True, capabilities=frozenset())
     assert "run_project_script" in p
+    assert "prevalidates a batch" in p
+    assert "ONE transaction" not in p
     assert "allow_shrink=true" in p
     assert "elided" in p
     assert "exact_replace" not in p  # still no withheld tool
