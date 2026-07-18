@@ -2128,6 +2128,16 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
             ),
             missing=_missing_fields(("start_cmd",)),
         )
+    # C9-04: a RECOGNIZABLY-uvicorn start is adjudicated by its own supported-shape/arity
+    # contract FIRST, so an unsupported uvicorn option gets the typed
+    # `uvicorn_start_incoherent` blocker rather than the older generic grammar's
+    # `toolchain_unsupported` (independent verification demonstrated the ordering defect:
+    # e.g. `uvicorn main:app --uds app.sock`). This runs before the generic toolchain /
+    # command-grammar blockers, which then only see NON-uvicorn or already-accepted
+    # uvicorn commands. The accepted argv is re-derived (and normalized) below.
+    start_contract = _uvicorn_start_contract(intent.start_cmd, intent.port_env)
+    if isinstance(start_contract, _DetectBlocker):
+        return _fail_closed(start_contract)
     # The declared start command must run on the neutral base image (a supported
     # runner + any pip-package start executable declared as a dependency), and must not
     # name an unprovisioned package manager (pnpm/yarn/bun/…) in start/build/install.
@@ -2185,12 +2195,9 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
     env = _intent_build_env(env, intent, files)
     if isinstance(env, _DetectBlocker):
         return _fail_closed(env)
-    # C9-04: a recognizably-uvicorn start must satisfy the supported shape/arity
-    # contract (normalized or complete binding) or fail closed; every other command
-    # is left verbatim.
-    start_outcome = _uvicorn_start_contract(intent.start_cmd, intent.port_env)
-    if isinstance(start_outcome, _DetectBlocker):
-        return _fail_closed(start_outcome)
+    # The uvicorn contract was already adjudicated above (a blocker returned early); here
+    # ``start_contract`` is the accepted+normalized argv (uvicorn) or ``None`` (non-uvicorn,
+    # left verbatim).
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -2199,7 +2206,7 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
         lockfile=lockfile,
         install_cmd=install_cmd,
         build_cmd=intent.build_cmd,
-        start_cmd=start_outcome if start_outcome is not None else intent.start_cmd,
+        start_cmd=start_contract if start_contract is not None else intent.start_cmd,
         port_env=intent.port_env,
         health_path=intent.health_path,
     )

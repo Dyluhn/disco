@@ -260,6 +260,11 @@ _INCOHERENT_UVICORN_INTENTS: list[tuple[str, tuple[str, ...]]] = [
     ("extra-positional", ("uvicorn", "main:app", "other:app")),
     ("malformed-app", ("uvicorn", "notanapp")),
     ("duplicate-host", ("uvicorn", "main:app", "--host", "a", "--host", "b", "--port", "1")),
+    # C9-04 verifier ordering fix: an option unknown to the older generic grammar must
+    # still get uvicorn_start_incoherent (not toolchain_unsupported).
+    ("unix-socket-opt", ("uvicorn", "main:app", "--uds", "app.sock")),
+    ("reload-opt", ("uvicorn", "main:app", "--reload")),
+    ("log-level-opt", ("uvicorn", "main:app", "--log-level", "debug")),
 ]
 
 
