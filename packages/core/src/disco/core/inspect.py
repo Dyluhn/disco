@@ -94,6 +94,7 @@ class ConversationTrace:
             "routing_decisions": [e.data for e in evs if e.kind == "routing"],
             "spans": [e.data for e in evs if e.kind == "span"],
             "tool_scopes": [e.data for e in evs if e.kind == "tool_scope"],
+            "progress_shadows": [e.data for e in evs if e.kind == "progress_shadow"],
             "events": [{"seq": e.seq, "kind": e.kind, **e.data} for e in evs],
         }
 
@@ -246,6 +247,78 @@ def record_tool_scope(
             # complete=false make selected classification INVALID.
             "offered_tools": offered,
             "allowed_tools": allowed,
+        },
+    )
+
+
+def record_progress_shadow(
+    conversation_id: str,
+    *,
+    latest_event_seq: int,
+    last_progress_seq: int | None,
+    evidence_fingerprint: str,
+    progress_kinds: list[str],
+    current_resource_count: int,
+    observation_count: int,
+    mutation_count: int,
+    verification_count: int,
+    executed_invocations: int,
+    zero_progress_invocations: int,
+    unattributed_invocations: int,
+    invalid_event_pairs: int,
+    invalid_receipt_groups: int,
+    stale_receipts: int,
+    recovery_lease_phase: str | None,
+    recovery_candidate_capability: str | None,
+    recovery_candidate_streak: int,
+    recovery_comparable: bool,
+    invalid_log_order: bool,
+    legacy_escape_active: bool,
+) -> None:
+    """Record the bounded K4 reducer result without affecting loop policy.
+
+    Only counts, enums, sequence numbers, and a content fingerprint are exposed;
+    no tool names, arguments, resource paths, or model content enter the inspect
+    trace. The active legacy gates remain authoritative while this shadow builds
+    parity evidence.
+    """
+
+    if not inspect_enabled():
+        return
+    candidate_active = recovery_candidate_capability is not None
+    agreement = candidate_active == legacy_escape_active if recovery_comparable else None
+    disagreement = None
+    if agreement is False:
+        disagreement = "candidate_only" if candidate_active else "legacy_only"
+    elif agreement is None:
+        disagreement = "incomparable"
+    registry().add(
+        conversation_id,
+        "progress_shadow",
+        {
+            "latest_event_seq": latest_event_seq,
+            "last_progress_seq": last_progress_seq,
+            "evidence_fingerprint": evidence_fingerprint,
+            "progress_kinds": progress_kinds,
+            "current_resource_count": current_resource_count,
+            "observation_count": observation_count,
+            "mutation_count": mutation_count,
+            "verification_count": verification_count,
+            "executed_invocations": executed_invocations,
+            "zero_progress_invocations": zero_progress_invocations,
+            "unattributed_invocations": unattributed_invocations,
+            "invalid_event_pairs": invalid_event_pairs,
+            "invalid_receipt_groups": invalid_receipt_groups,
+            "stale_receipts": stale_receipts,
+            "recovery_lease_phase": recovery_lease_phase,
+            "recovery_candidate_capability": recovery_candidate_capability,
+            "recovery_candidate_streak": recovery_candidate_streak,
+            "recovery_comparable": recovery_comparable,
+            "invalid_log_order": invalid_log_order,
+            "legacy_escape_active": legacy_escape_active,
+            "agreement": agreement,
+            "disagreement": disagreement,
+            "authoritative": False,
         },
     )
 

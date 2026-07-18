@@ -26,7 +26,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
 )
-from ..inspect import inspect_enabled, record_tool_scope
+from ..inspect import inspect_enabled, record_progress_shadow, record_tool_scope
 from ..llm import (
     BudgetExceeded,
     LLMAuthError,
@@ -44,6 +44,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .fc_kit import _nearest_tool_name
 from .messages import _PLAN_EXPLORE_READ_CAP, _describe_llm_error
+from .progress import reduce_progress
 from .stream_extract import extract_partial_string_field
 from .stuck import successful_mutation_with_receipt
 from .tool_specs import (
@@ -711,6 +712,50 @@ class Driver:
         in_escape = escape_seq is not None and not recovered_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
         escape_blocked_tools = self.stuck_escape_blocked_tools_for_step(events)
+
+        # K4 shadow: reduce the same durable event log the legacy recovery gates
+        # consume, but publish bounded inspect telemetry only. It cannot alter
+        # tool visibility, temperature, retries, status, or any persisted event.
+        if inspect_enabled():
+            try:
+                progress = reduce_progress(events)
+                record_progress_shadow(
+                    self._loop.conversation_id,
+                    latest_event_seq=progress.latest_event_seq,
+                    last_progress_seq=progress.last_progress_seq,
+                    evidence_fingerprint=progress.evidence_fingerprint,
+                    progress_kinds=sorted(kind.value for kind in progress.progress_kinds),
+                    current_resource_count=len(progress.current_resources),
+                    observation_count=len(progress.observations),
+                    mutation_count=len(progress.mutations),
+                    verification_count=len(progress.verifications),
+                    executed_invocations=progress.executed_invocations,
+                    zero_progress_invocations=progress.zero_progress_invocations,
+                    unattributed_invocations=progress.unattributed_invocations,
+                    invalid_event_pairs=progress.invalid_event_pairs,
+                    invalid_receipt_groups=progress.invalid_receipt_groups,
+                    stale_receipts=progress.stale_receipts,
+                    recovery_lease_phase=(
+                        progress.recovery_lease.phase.value
+                        if progress.recovery_lease is not None
+                        else None
+                    ),
+                    recovery_candidate_capability=(
+                        progress.recovery_candidate.blocked_capability.value
+                        if progress.recovery_candidate is not None
+                        else None
+                    ),
+                    recovery_candidate_streak=(
+                        progress.recovery_candidate.zero_progress_streak
+                        if progress.recovery_candidate is not None
+                        else 0
+                    ),
+                    recovery_comparable=progress.recovery_comparable,
+                    invalid_log_order=progress.invalid_log_order,
+                    legacy_escape_active=in_escape,
+                )
+            except Exception:  # noqa: BLE001 — shadow telemetry never changes execution
+                _LOG.exception("progress reducer shadow failed for %s", self._loop.conversation_id)
 
         cached_mode = self._loop.mode
         mode = self._loop._reconcile_mode_from_events(events)

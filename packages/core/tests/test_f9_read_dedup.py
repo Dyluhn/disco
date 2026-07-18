@@ -57,6 +57,8 @@ from __future__ import annotations
 
 from disco.core import (
     ActionEvent,
+    ActionProfile,
+    EffectCapability,
     Event,
     ObservationEvent,
     SqliteEventStore,
@@ -73,6 +75,7 @@ from disco.core.loop.dedup import (
     _f9_has_successful_observation,
     _f9_path_was_mutated_after,
 )
+from disco.core.loop.progress import reduce_progress
 from event_fakes import user_msg, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
@@ -120,6 +123,16 @@ class _ReadonlyExecutor(FakeExecutor):
 
     def readonly_tool_names(self):
         return self._readonly
+
+    async def execute(self, call):
+        result = await super().execute(call)
+        return result.model_copy(update={"call_id": call.call_id, "tool_name": call.tool_name})
+
+    def action_profile_for_call(self, tool_name, arguments):
+        del arguments
+        if tool_name in self._readonly:
+            return ActionProfile(capabilities=frozenset({EffectCapability.WORKSPACE_CONTENT_READ}))
+        return None
 
 
 def _make_loop(
@@ -314,6 +327,15 @@ async def test_assist_on_repeat_read_short_circuits_with_pointer():
     # observation — the prior read succeeded; the pointer is the load-
     # bearing piece).
     assert second_obs.tool_result.success is True
+    assert second_obs.tool_result.action_profile == ActionProfile(
+        capabilities=frozenset({EffectCapability.WORKSPACE_CONTENT_READ})
+    )
+    # The synthetic pointer delivered no new bytes. The pure reducer therefore
+    # sees exact known-zero evidence instead of mistaking it for a legacy gap.
+    progress = reduce_progress(events)
+    assert progress.executed_invocations == 1
+    assert progress.zero_progress_invocations == 1
+    assert progress.unattributed_invocations == 1
     # The observation is correlated to the second action (KV-cache pairing).
     assert second_obs.action_id == second.id
     assert second_obs.tool_result.call_id == second.tool_call.call_id

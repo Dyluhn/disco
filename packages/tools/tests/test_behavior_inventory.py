@@ -15,6 +15,8 @@ from disco.tools.builtin.design_lint import DesignLintTool
 from disco.tools.builtin.preview import PreviewStartArgs, PreviewStartTool
 from disco.tools.builtin.request_custom_build import RequestCustomBuildTool
 from disco.tools.builtin.run_script import RunProjectScriptTool, RunScriptArgs
+from disco.tools.builtin.shell_sessions import ShellExecTool, ShellWriteTool
+from disco.tools.builtin.system import CodeExecTool, ShellTool
 from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppTool
 from disco.tools.builtin.workflow_tools import (
     DraftWorkflowTool,
@@ -145,9 +147,18 @@ def test_preview_start_classifier_keeps_unknown_future_frameworks_flexible() -> 
         EffectCapability.PROCESS_CONTROL,
         EffectCapability.PROCESS_OUTPUT_READ,
         EffectCapability.OPAQUE_EXECUTE,
+        EffectCapability.WORKSPACE_MUTATE,
     )
     assert tool.action_profile(PreviewStartArgs(command="npm start")) == expected_opaque
     assert tool.action_profile(PreviewStartArgs(framework="future-kit")) == expected_opaque
+
+
+def test_opaque_workspace_executors_can_carry_exact_host_mutation_receipts() -> None:
+    for tool_class in (ShellTool, CodeExecTool, ShellExecTool, ShellWriteTool):
+        behavior = tool_class.definition.behavior
+        assert behavior is not None
+        assert EffectCapability.OPAQUE_EXECUTE in behavior.possible_capabilities
+        assert EffectCapability.WORKSPACE_MUTATE in behavior.possible_capabilities
 
 
 def test_every_production_tool_constructor_declares_behavior() -> None:

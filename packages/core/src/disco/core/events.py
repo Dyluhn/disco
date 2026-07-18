@@ -21,7 +21,12 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .dod import DoDPredicate
-from .effects import ActionProfile, EffectReceipt, FinalWorkspaceSeal
+from .effects import (
+    ActionProfile,
+    EffectReceipt,
+    FinalWorkspaceSeal,
+    RecoveryLeaseTransition,
+)
 
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
@@ -682,6 +687,9 @@ class StatusEvent(BaseEvent):
     detail: str | None = None
     plan_verification_transition: PlanVerificationTransition | None = None
     plan_verifier_failure: PlanVerifierFailure | None = None
+    # K4 typed recovery state. Historical status events remain valid; ``detail``
+    # stays as the legacy UI/debug surface until shadow parity permits removal.
+    recovery_lease_transition: RecoveryLeaseTransition | None = None
 
 
 class WorkspaceVersionEvent(BaseEvent):

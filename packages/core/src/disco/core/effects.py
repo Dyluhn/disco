@@ -291,6 +291,56 @@ class ControlReceipt(BaseModel):
     new_state: str = Field(min_length=1)
 
 
+class RecoveryLeaseTransitionKind(str, Enum):
+    """Durable transitions for one bounded recovery capability lease."""
+
+    ISSUE = "issue"
+    CONSUME = "consume"
+
+
+class RecoveryLeaseTransition(BaseModel):
+    """Host-owned append-only recovery lease transition.
+
+    A lease is intentionally one-use. It suppresses the capability that caused
+    a repeated no-progress episode while permitting one explicitly declared
+    alternative capability. The baseline fingerprint binds the lease to the
+    exact evidence state that justified it; a changed evidence state or a new
+    user instruction clears it in the pure progress reducer.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    transition: RecoveryLeaseTransitionKind
+    lease_id: str = Field(pattern=r"^lease_[0-9a-f]{32}$")
+    issued_after_seq: int = Field(ge=1)
+    baseline_evidence_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    blocked_capabilities: tuple[EffectCapability, ...]
+    granted_capabilities: tuple[EffectCapability, ...]
+    max_uses: Literal[1] = 1
+    call_id: str | None = None
+
+    @model_validator(mode="after")
+    def _canonical_transition(self) -> RecoveryLeaseTransition:
+        for label, capabilities in (
+            ("blocked", self.blocked_capabilities),
+            ("granted", self.granted_capabilities),
+        ):
+            if not capabilities:
+                raise ValueError(f"{label} capabilities must not be empty")
+            values = tuple(capability.value for capability in capabilities)
+            if values != tuple(sorted(set(values))):
+                raise ValueError(f"{label} capabilities must be sorted and unique")
+        if set(self.blocked_capabilities) & set(self.granted_capabilities):
+            raise ValueError("blocked and granted capabilities must be disjoint")
+        if self.transition is RecoveryLeaseTransitionKind.ISSUE:
+            if self.call_id is not None:
+                raise ValueError("lease issue cannot carry a call id")
+        elif not self.call_id:
+            raise ValueError("lease consumption requires a call id")
+        return self
+
+
 class OpaqueEffectReceipt(BaseModel):
     """Honest evidence that a capability ran without exact resource attribution.
 

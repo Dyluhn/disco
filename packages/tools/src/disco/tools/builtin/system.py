@@ -142,6 +142,7 @@ class ShellTool:
             EffectCapability.OPAQUE_EXECUTE,
             EffectCapability.PROCESS_CONTROL,
             EffectCapability.PROCESS_OUTPUT_READ,
+            EffectCapability.WORKSPACE_MUTATE,
             planner_safe=False,
         ),
     )
@@ -175,6 +176,7 @@ class CodeExecTool:
             EffectCapability.OPAQUE_EXECUTE,
             EffectCapability.PROCESS_CONTROL,
             EffectCapability.PROCESS_OUTPUT_READ,
+            EffectCapability.WORKSPACE_MUTATE,
             planner_safe=False,
         ),
     )

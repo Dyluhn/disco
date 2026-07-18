@@ -147,6 +147,7 @@ class PreviewStartTool:
             EffectCapability.OPAQUE_EXECUTE,
             EffectCapability.PROCESS_CONTROL,
             EffectCapability.PROCESS_OUTPUT_READ,
+            EffectCapability.WORKSPACE_MUTATE,
             planner_safe=False,
         ),
     )
@@ -163,6 +164,7 @@ class PreviewStartTool:
         framework = (args.framework or "").strip().lower()
         if args.command or framework not in {"", "static", "http"}:
             capabilities.add(EffectCapability.OPAQUE_EXECUTE)
+            capabilities.add(EffectCapability.WORKSPACE_MUTATE)
         return narrows(*capabilities)
 
     async def run(self, args: PreviewStartArgs, ctx: ToolContext) -> ToolOutcome:

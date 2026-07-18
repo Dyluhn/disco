@@ -33,6 +33,14 @@ from .policies import (
     NullSecurityAnalyzer,
     SelfAssessedAnalyzer,
 )
+from .progress import (
+    ProgressKind,
+    ProgressState,
+    RecoveryLeasePhase,
+    RecoveryLeaseState,
+    recovery_lease_id,
+    reduce_progress,
+)
 from .stuck import StuckDetector, StuckThresholds
 
 __all__ = [
@@ -48,9 +56,13 @@ __all__ = [
     "host_verify_authoritative_enabled",
     "NeverConfirm",
     "NullSecurityAnalyzer",
+    "ProgressKind",
+    "ProgressState",
     "BuildAgent",
     "ResearchAgent",
     "RouterAgent",
+    "RecoveryLeasePhase",
+    "RecoveryLeaseState",
     "SecurityAnalyzer",
     "SelfAssessedAnalyzer",
     "StopHook",
@@ -61,4 +73,6 @@ __all__ = [
     "VerifierContextSeed",
     "VerifierJudge",
     "VerifierScreenshot",
+    "recovery_lease_id",
+    "reduce_progress",
 ]

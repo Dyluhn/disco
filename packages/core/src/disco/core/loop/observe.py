@@ -84,6 +84,29 @@ def _ground_read(loop: AgentLoop, path: str) -> None:
             _LOG.debug("note_grounding_read failed for %s", path, exc_info=True)
 
 
+def _action_profile_for_call(loop: AgentLoop, action: ActionEvent) -> ActionProfile | None:
+    """Ask the executor for the same validated profile execution would persist.
+
+    Synthetic host outcomes such as F9 never enter ``execute()``, so they must
+    explicitly carry the classifier result or remain honestly unattributed.
+    This capability query is optional for legacy/test executors and deliberately
+    does not infer behavior from a tool name.
+    """
+
+    classify = getattr(loop.executor, "action_profile_for_call", None)
+    if not callable(classify):
+        return None
+    try:
+        profile = classify(
+            action.tool_call.tool_name,
+            action.tool_call.arguments,
+        )
+    except Exception:  # noqa: BLE001 — telemetry failure cannot break execution
+        _LOG.debug("action_profile_for_call failed", exc_info=True)
+        return None
+    return profile if isinstance(profile, ActionProfile) else None
+
+
 def _recover_elided_file_write_content(
     events: list[Event], path: str, *, before_id: str | None
 ) -> str | None:
@@ -367,6 +390,10 @@ class Observer:
                             tool_name=action.tool_call.tool_name,
                             success=True,
                             content=_f9_pointer,
+                            # F9 deliberately does not execute or deliver new
+                            # resource bytes. The validated profile plus an empty
+                            # receipt set is therefore exact known-zero evidence.
+                            action_profile=_action_profile_for_call(self._loop, action),
                         ),
                         action_id=action.id,
                     )

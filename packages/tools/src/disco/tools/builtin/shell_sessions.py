@@ -59,6 +59,7 @@ class ShellExecTool:
             EffectCapability.OPAQUE_EXECUTE,
             EffectCapability.PROCESS_CONTROL,
             EffectCapability.PROCESS_OUTPUT_READ,
+            EffectCapability.WORKSPACE_MUTATE,
             planner_safe=False,
         ),
         base_risk=SecurityRisk.MEDIUM,
@@ -208,6 +209,7 @@ class ShellWriteTool:
         behavior=declares(
             EffectCapability.OPAQUE_EXECUTE,
             EffectCapability.PROCESS_CONTROL,
+            EffectCapability.WORKSPACE_MUTATE,
             planner_safe=False,
         ),
         base_risk=SecurityRisk.MEDIUM,
