@@ -5,6 +5,7 @@ import hashlib
 import pytest
 from disco.core import (
     ActionProfile,
+    AgentErrorEvent,
     ControlReceipt,
     EffectCapability,
     MutationReceipt,
@@ -67,6 +68,13 @@ def test_old_tool_result_without_receipts_is_backward_compatible() -> None:
 
     assert result.effect_receipts == ()
     assert result.action_profile is None
+
+
+def test_old_agent_error_without_profile_or_receipts_is_backward_compatible() -> None:
+    error = AgentErrorEvent.model_validate({"error": "legacy failure"})
+
+    assert error.action_profile is None
+    assert error.effect_receipts == ()
 
 
 def test_effect_receipts_round_trip_through_observation_event() -> None:

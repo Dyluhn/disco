@@ -573,6 +573,8 @@ class Observer:
                     ),
                     action_id=action.id,
                     tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                    action_profile=result.action_profile,
+                    effect_receipts=result.effect_receipts,
                 )
             )
         await self.maybe_emit_sandbox_restart(sbx, gen_before)

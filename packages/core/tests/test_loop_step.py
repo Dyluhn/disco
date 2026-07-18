@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from disco.core import (
     ActionEvent,
+    ActionProfile,
     AgentErrorEvent,
+    EffectCapability,
     ObservationEvent,
+    OpaqueEffectReceipt,
     ToolResult,
 )
 from disco.core.loop import signals
@@ -75,7 +78,20 @@ async def test_executor_exception_yields_exactly_one_agent_error():
 
 
 async def test_tool_failure_result_yields_agent_error():
-    failing = ToolResult(call_id="c", tool_name="shell", success=False, content="", error="exit 1")
+    profile = ActionProfile(capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}))
+    receipt = OpaqueEffectReceipt(
+        capability=EffectCapability.OPAQUE_EXECUTE,
+        reason="command effect could not be attributed exactly",
+    )
+    failing = ToolResult(
+        call_id="c",
+        tool_name="shell",
+        success=False,
+        content="",
+        error="exit 1",
+        action_profile=profile,
+        effect_receipts=(receipt,),
+    )
     agent = ScriptedAgent([action_step(), finish_step()])
     loop, store = build_loop(agent, executor=FakeExecutor(result=failing))
     await loop.send_message("go")
@@ -83,6 +99,8 @@ async def test_tool_failure_result_yields_agent_error():
     events = await store.get_events(CID)
     errs = [e for e in events if isinstance(e, AgentErrorEvent)]
     assert len(errs) == 1 and "exit 1" in errs[0].error
+    assert errs[0].action_profile == profile
+    assert errs[0].effect_receipts == (receipt,)
 
 
 async def test_dangling_action_is_detectable_after_crash():

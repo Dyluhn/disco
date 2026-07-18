@@ -590,6 +590,12 @@ class AgentErrorEvent(BaseEvent, LLMConvertible):
     detail: str | None = None
     action_id: str | None = None  # the action that failed, if any
     tool_call_id: str | None = None  # for pairing with the assistant tool_call
+    # A validated invocation may fail after exercising capabilities or even
+    # after a partial host-observed effect. Preserve the executor's typed
+    # evidence here rather than discarding it when a failed ToolResult is
+    # projected into the event log. Pre-execution refusals keep both defaults.
+    action_profile: ActionProfile | None = None
+    effect_receipts: tuple[EffectReceipt, ...] = ()
 
     def to_llm_message(self) -> LLMMessage:
         # Pre-formatted content (e.g. wrapped in <system-reminder>...</…>) is
