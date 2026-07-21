@@ -203,7 +203,6 @@ async def test_terminal_summary_emitted(
         mock.patch.object(rt, "_preflight_sandbox", return_value=None),
         mock.patch.object(rt, "_maybe_rehydrate", return_value=None),
         mock.patch.object(rt, "_rematerialize_uploads", return_value=None),
-        mock.patch.object(rt, "_maybe_shadow_fold_finished_manifest", return_value=None),
         mock.patch.object(rt, "_maybe_snapshot", return_value=None),
         caplog.at_level("INFO", logger="disco.agent_server.runtime"),
     ):
@@ -214,6 +213,63 @@ async def test_terminal_summary_emitted(
     assert summaries[0].conversation == cid
     assert summaries[0].total_tools == 2
     assert summaries[0].would_denies_by_phase == {"edit": 1}
+
+
+@pytest.mark.asyncio
+async def test_terminal_summary_emitted_once_across_repeated_terminal_emits(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # IDEMPOTENCY. Production emits the terminal summary from MORE THAN ONE site for
+    # the SAME run: `_run_with_persistence` fires it when the loop ends FINISHED
+    # (runtime.py), and the run-task done-callback `_finalize_clean_return` fires it
+    # again for the same concluded status. The per-conversation recorder's one-shot
+    # guard (`_ToolScopeAuditRecorder.emit_summary`) collapses those into EXACTLY ONE
+    # audit line — otherwise real audit logs would double-count every build. Guard
+    # that invariant directly: a second terminal emit for the same run is a no-op.
+    monkeypatch.setenv("DISCO_TOOLSCOPE_AUDIT", "1")
+    rt = _runtime()
+    cid = "audit_summary_idempotent"
+    rt.set_surface(cid, "build")
+    guard, on_success = rt._build_scope_audit_guard(cid)
+    executor = DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=_MemSandbox(cid),
+        conversation_id=cid,
+        scope_guard=guard,
+        on_tool_success=on_success,
+    )
+    await executor.execute(_call("file_write", path="index.html", content="one"))
+    await executor.execute(_call("doc_set_section", section="intro", title="Two", body="two"))
+
+    with caplog.at_level("INFO", logger="disco.agent_server.runtime"):
+        rt._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+        # Second emit = the done-callback path landing after `_run_with_persistence`.
+        rt._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+
+    summaries = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"]
+    assert len(summaries) == 1
+    assert summaries[0].conversation == cid
+    assert summaries[0].total_tools == 2
+    assert summaries[0].would_denies_by_phase == {"edit": 1}
+
+
+def test_terminal_summary_noop_when_audit_never_composed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # GATING (verification-only). `_emit_toolscope_audit_summary` must NOT fabricate
+    # an audit line for a conversation that never composed a recorder — the case for
+    # every default run with DISCO_TOOLSCOPE_AUDIT off, or any non-build surface. The
+    # terminal path is reached for those runs too (runtime.py), so the no-recorder
+    # short-circuit is what keeps unaudited runs out of the audit log.
+    rt = _runtime()
+    cid = "audit_never_composed"
+    assert cid not in rt._toolscope_audits  # no guard was ever built for this cid
+    with caplog.at_level("INFO", logger="disco.agent_server.runtime"):
+        rt._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+    summaries = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"]
+    assert summaries == []
 
 
 def _call(tool_name: str, **arguments):
