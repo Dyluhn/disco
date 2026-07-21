@@ -66,6 +66,55 @@ from disco.core.release.spec import ReleaseIntent
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
 
+_DOCKER_DF_TYPES = frozenset({"Images", "Containers", "Local Volumes", "Build Cache"})
+_DOCKER_DF_KEYS = frozenset({"Type", "TotalCount", "Active", "Size", "Reclaimable"})
+_CANONICAL_COUNT_RE = re.compile(r"(?:0|[1-9][0-9]*)\Z")
+_DOCKER_SIZE_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:B|kB|MB|GB|TB|PB)\Z")
+_DOCKER_RECLAIMABLE_RE = re.compile(
+    r"(?P<size>(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:B|kB|MB|GB|TB|PB))"
+    r"(?: \((?P<percent>0|[1-9][0-9]?|100)%\))?\Z"
+)
+
+
+def valid_docker_disk_usage(value: object) -> bool:
+    """Validate the exact semantic shape emitted by ``docker system df --format json``."""
+    if not isinstance(value, dict) or set(value) != {"rows"}:
+        return False
+    rows = value.get("rows")
+    if not isinstance(rows, list) or len(rows) != len(_DOCKER_DF_TYPES):
+        return False
+    observed_types: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != _DOCKER_DF_KEYS:
+            return False
+        row_type = row.get("Type")
+        total = row.get("TotalCount")
+        active = row.get("Active")
+        size = row.get("Size")
+        reclaimable = row.get("Reclaimable")
+        if not isinstance(row_type, str) or row_type not in _DOCKER_DF_TYPES:
+            return False
+        if row_type in observed_types:
+            return False
+        observed_types.add(row_type)
+        if (
+            not isinstance(total, str)
+            or _CANONICAL_COUNT_RE.fullmatch(total) is None
+            or not isinstance(active, str)
+            or _CANONICAL_COUNT_RE.fullmatch(active) is None
+            or int(active) > int(total)
+        ):
+            return False
+        if not isinstance(size, str) or _DOCKER_SIZE_RE.fullmatch(size) is None:
+            return False
+        if (
+            not isinstance(reclaimable, str)
+            or _DOCKER_RECLAIMABLE_RE.fullmatch(reclaimable) is None
+        ):
+            return False
+    return observed_types == _DOCKER_DF_TYPES
+
+
 # The compose host-port variable every emitted overlay interpolates on the host
 # side (`127.0.0.1:${HOST_PORT:-...}:<container>`) — kept in sync with
 # `local_compose._HOST_PORT_VAR`. The test assigns it a loopback-bound ephemeral
@@ -629,8 +678,21 @@ def record_bundle_digest(
         return
     res = client.get(f"/api/projects/{cid}/release")
     response_bytes = res.content
-    seq = body.get("version_seq")
-    digest = body.get("spec_digest")
+    response_body: dict[str, object] = {}
+    if res.status_code == 200:
+        try:
+            parsed_response = res.json()
+        except (TypeError, ValueError):
+            parsed_response = None
+        if isinstance(parsed_response, dict) and all(
+            isinstance(key, str) for key in parsed_response
+        ):
+            response_body = parsed_response
+    supplied_body = dict(body)
+    response_matches_supplied = response_body == supplied_body
+    seq = response_body.get("version_seq")
+    digest = response_body.get("spec_digest")
+    tree_digest = response_body.get("tree_digest")
     # The bound download is the SERVER-ENFORCED binding (plan §12.1): the operator-supplied
     # ``?version_seq=&spec_digest=`` is validated against the committed version's real spec
     # digest, so a 200 non-empty zip PROVES the artifact is the one the release response
@@ -645,14 +707,27 @@ def record_bundle_digest(
                 release_json = json.loads(zf.read(RELEASE_JSON_PATH))
     provenance = release_json.get("provenance")
     bundle_assessment = provenance.get("assessment") if isinstance(provenance, dict) else None
+    canonical_release = json.dumps(
+        release_json, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    recomputed_spec_digest = f"sha256:{hashlib.sha256(canonical_release).hexdigest()}"
     binding_matches = (
-        seq is not None
+        isinstance(seq, int)
+        and not isinstance(seq, bool)
+        and seq >= 1
         and isinstance(digest, str)
         and digest != ""
+        and isinstance(tree_digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", tree_digest) is not None
         and zip_status == 200
+        and res.status_code == 200
+        and response_matches_supplied
         and len(zip_bytes) > 0
         and bool(release_json)
-        and bundle_assessment == body.get("assessment")
+        and bundle_assessment == response_body.get("assessment")
+        and release_json.get("version_seq") == seq
+        and release_json.get("tree_digest") == tree_digest
+        and digest == recomputed_spec_digest
     )
     _write_family_evidence(
         family,
@@ -663,10 +738,11 @@ def record_bundle_digest(
             "response_sha256": hashlib.sha256(response_bytes).hexdigest(),
             "zip_sha256": hashlib.sha256(zip_bytes).hexdigest(),
             "release_response": {
-                "assessment": body.get("assessment"),
-                "self_host": body.get("self_host"),
+                "assessment": response_body.get("assessment"),
+                "self_host": response_body.get("self_host"),
                 "version_seq": seq,
                 "spec_digest": digest,
+                "tree_digest": tree_digest,
             },
             "release_json": release_json,
             "source_binding": {
@@ -674,6 +750,8 @@ def record_bundle_digest(
                 "bound_spec_digest": digest,
                 "download_status": zip_status,
                 "bundle_assessment": bundle_assessment,
+                "release_status": res.status_code,
+                "response_matches_supplied": response_matches_supplied,
             },
             "binding_matches_response": bool(binding_matches),
         },
@@ -729,6 +807,10 @@ class ComposeBundle:
         )
         self.captured_output.append(proc.stdout)
         self.captured_output.append(proc.stderr)
+        assert proc.returncode == 0, (
+            f"`docker {' '.join(args)}` failed (exit {proc.returncode}):\n"
+            f"{self._sanitize(proc.stderr)}"
+        )
         return proc
 
     def docker_binary(self, *args: str, timeout: int = _DEFAULT_COMPOSE_TIMEOUT) -> bytes:
@@ -739,6 +821,12 @@ class ComposeBundle:
             timeout=timeout,
             check=False,
         )
+        stderr = proc.stderr.decode("utf-8", errors="replace")
+        self.captured_output.append(stderr)
+        assert proc.returncode == 0, (
+            f"`docker {' '.join(args)}` failed (exit {proc.returncode}):\n{self._sanitize(stderr)}"
+        )
+        assert proc.stdout, f"`docker {' '.join(args)}` produced an empty binary artifact"
         return proc.stdout
 
     def image_name(self, service: str) -> str:
@@ -790,6 +878,10 @@ class ComposeBundle:
         if self.family is None or evidence_dir() is None:
             return
         proc = self.compose("ps", "--format", "json")
+        assert proc.returncode == 0, (
+            f"`docker compose ps --format json` failed (exit {proc.returncode}):\n"
+            f"{self._sanitize(proc.stderr)}"
+        )
         rows: list[dict[str, object]] = []
         for line in proc.stdout.splitlines():
             line = line.strip()
@@ -797,12 +889,13 @@ class ComposeBundle:
                 continue
             try:
                 parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise AssertionError("`docker compose ps` returned malformed JSON") from exc
             if isinstance(parsed, list):
                 rows.extend(r for r in parsed if isinstance(r, dict))
             elif isinstance(parsed, dict):
                 rows.append(parsed)
+        assert rows, "`docker compose ps` returned no resource rows for the running project"
         keep = ("Project", "Service", "Name", "State", "Health", "Publishers")
         sanitized = [{k: row.get(k) for k in keep if k in row} for row in rows]
         _write_family_evidence(
@@ -813,22 +906,52 @@ class ComposeBundle:
 
     def _disk_usage(self) -> dict[str, object]:
         proc = self.docker("system", "df", "--format", "json")
+        output = proc.stdout.strip()
+        assert output, "`docker system df --format json` returned no evidence"
+        parsed_values: list[object] = []
         try:
-            return {"raw": json.loads(proc.stdout)} if proc.stdout.strip() else {}
+            parsed_values.append(json.loads(output))
         except json.JSONDecodeError:
-            return {"text": proc.stdout.strip()[:2000]}
+            # Docker emits one JSON object per line on some supported versions.
+            try:
+                for line in output.splitlines():
+                    parsed_values.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise AssertionError("`docker system df` returned malformed JSON") from exc
+        rows: list[dict[str, object]] = []
+        for value in parsed_values:
+            if isinstance(value, list):
+                assert all(isinstance(row, dict) for row in value), (
+                    "`docker system df` JSON list contains a non-object row"
+                )
+                rows.extend(value)
+            elif isinstance(value, dict):
+                rows.append(value)
+            else:
+                raise AssertionError("`docker system df` returned scalar JSON")
+        result: dict[str, object] = {"rows": rows}
+        assert valid_docker_disk_usage(result), (
+            "`docker system df` rows do not match the exact four-family semantic schema"
+        )
+        return result
 
     def _record_inspect(self) -> None:
         if self.family is None or evidence_dir() is None:
             return
         image_ids = self._ids("images", "-q", "--filter", f"reference={self.project}-*")
+        assert image_ids, f"no built image found for evidence project {self.project}"
         images: list[dict[str, object]] = []
         for image_id in image_ids:
             proc = self.docker("image", "inspect", image_id)
             try:
                 data = json.loads(self._sanitize(proc.stdout))
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise AssertionError(
+                    f"`docker image inspect {image_id}` returned malformed JSON"
+                ) from exc
+            assert isinstance(data, list), (
+                f"`docker image inspect {image_id}` did not return a JSON list"
+            )
             for entry in data if isinstance(data, list) else []:
                 if isinstance(entry, dict):
                     images.append(
@@ -841,6 +964,7 @@ class ComposeBundle:
                         }
                     )
         container_ids = self._ids("ps", "-aq", "--filter", self._label_filter())
+        assert container_ids, f"no container found for evidence project {self.project}"
         containers: list[dict[str, object]] = []
         for cid_ in container_ids:
             proc = self.docker(
@@ -850,10 +974,12 @@ class ComposeBundle:
                 cid_,
             )
             parts = self._sanitize(proc.stdout).strip().split("||")
-            if len(parts) == 4:
-                containers.append(
-                    {"Id": parts[0], "Name": parts[1], "Status": parts[2], "Image": parts[3]}
-                )
+            assert len(parts) == 4 and all(parts), (
+                f"`docker inspect` returned an incomplete container record for {cid_}"
+            )
+            containers.append(
+                {"Id": parts[0], "Name": parts[1], "Status": parts[2], "Image": parts[3]}
+            )
         _write_family_evidence(
             self.family,
             "inspect",
@@ -869,7 +995,11 @@ class ComposeBundle:
         assert proc.returncode == 0, f"`docker compose down` failed:\n{proc.stderr}"
 
     def logs(self) -> str:
-        return self.compose("logs", "--no-color", "--no-log-prefix").stdout
+        proc = self.compose("logs", "--no-color", "--no-log-prefix")
+        assert proc.returncode == 0, (
+            f"`docker compose logs` failed (exit {proc.returncode}):\n{self._sanitize(proc.stderr)}"
+        )
+        return proc.stdout
 
     def exec_env(self, service: str, name: str) -> str:
         """The value of ``$name`` inside a running service container (used to PROVE
@@ -893,6 +1023,9 @@ class ComposeBundle:
             "--format",
             "{{.CreatedBy}} || {{.Comment}}",
             self.image_name(service),
+        )
+        assert proc.stdout.strip(), (
+            f"`docker image history` returned no evidence for {self.image_name(service)}"
         )
         return proc.stdout
 
@@ -918,13 +1051,36 @@ class ComposeBundle:
         if shutil.which("docker") is None:
             return
         collecting = self.family is not None and evidence_dir() is not None
-        disk_before = self._disk_usage() if collecting else {}
+        cleanup_errors: list[str] = []
+        disk_before: dict[str, object] = {}
+        disk_after: dict[str, object] = {}
         if collecting:
-            self._record_inspect()  # image IDs + sanitized inspect, BEFORE purge
+            try:
+                disk_before = self._disk_usage()
+            except AssertionError as exc:
+                cleanup_errors.append(str(exc))
+            try:
+                self._record_inspect()  # image IDs + sanitized inspect, BEFORE purge
+            except AssertionError as exc:
+                cleanup_errors.append(str(exc))
         if (self.bundle_dir / COMPOSE_PATH).is_file():
-            self.compose("down", "-v", "--rmi", "local", "--remove-orphans")
-        self._force_purge_labelled()
-        remaining = self._remaining_labelled_resources()
+            down = self.compose("down", "-v", "--rmi", "local", "--remove-orphans")
+            if down.returncode != 0:
+                cleanup_errors.append(
+                    f"`docker compose down` failed (exit {down.returncode}): "
+                    f"{self._sanitize(down.stderr)}"
+                )
+        cleanup_errors.extend(self._force_purge_labelled())
+        remaining: dict[str, list[str]] = {}
+        try:
+            remaining = self._remaining_labelled_resources()
+        except AssertionError as exc:
+            cleanup_errors.append(str(exc))
+        if collecting:
+            try:
+                disk_after = self._disk_usage()
+            except AssertionError as exc:
+                cleanup_errors.append(str(exc))
         if collecting:
             assert self.family is not None
             _write_family_evidence(
@@ -940,12 +1096,18 @@ class ComposeBundle:
                         "networks": ["network", "ls", "-q", "--filter", self._label_filter()],
                     },
                     "remaining": remaining,
-                    "zero_remaining": all(not v for v in remaining.values()),
+                    "zero_remaining": bool(remaining)
+                    and not cleanup_errors
+                    and all(not v for v in remaining.values()),
+                    "errors": cleanup_errors,
                     "disk_before": disk_before,
-                    "disk_after": self._disk_usage(),
+                    "disk_after": disk_after,
                 },
             )
-        self._assert_no_remaining(remaining)
+        for kind, ids in remaining.items():
+            if ids:
+                cleanup_errors.append(f"leaked {kind} for {self.project}: {ids}")
+        assert not cleanup_errors, "cleanup proof failed:\n" + "\n".join(cleanup_errors)
 
     def _ids(self, *args: str) -> list[str]:
         proc = self.docker(*args)
@@ -954,19 +1116,42 @@ class ComposeBundle:
     def _label_filter(self) -> str:
         return f"label={_COMPOSE_PROJECT_LABEL}={self.project}"
 
-    def _force_purge_labelled(self) -> None:
-        containers = self._ids("ps", "-aq", "--filter", self._label_filter())
+    def _force_purge_labelled(self) -> list[str]:
+        """Attempt every labelled-resource purge and return every command failure.
+
+        Teardown records and raises these failures only after all resource families have
+        been attempted. A failed list query is therefore never interpreted as an empty
+        resource set, while a failure in one family does not prevent best-effort cleanup
+        of the others.
+        """
+        errors: list[str] = []
+
+        def ids(*args: str) -> list[str]:
+            try:
+                return self._ids(*args)
+            except AssertionError as exc:
+                errors.append(str(exc))
+                return []
+
+        def remove(*args: str) -> None:
+            try:
+                self.docker(*args)
+            except AssertionError as exc:
+                errors.append(str(exc))
+
+        containers = ids("ps", "-aq", "--filter", self._label_filter())
         if containers:
-            self.docker("rm", "-f", *containers)
-        images = self._ids("images", "-q", "--filter", f"reference={self.project}-*")
+            remove("rm", "-f", *containers)
+        images = ids("images", "-q", "--filter", f"reference={self.project}-*")
         if images:
-            self.docker("rmi", "-f", *images)
-        volumes = self._ids("volume", "ls", "-q", "--filter", self._label_filter())
+            remove("rmi", "-f", *images)
+        volumes = ids("volume", "ls", "-q", "--filter", self._label_filter())
         if volumes:
-            self.docker("volume", "rm", "-f", *volumes)
-        networks = self._ids("network", "ls", "-q", "--filter", self._label_filter())
+            remove("volume", "rm", "-f", *volumes)
+        networks = ids("network", "ls", "-q", "--filter", self._label_filter())
         for net in networks:
-            self.docker("network", "rm", net)
+            remove("network", "rm", net)
+        return errors
 
     def _remaining_labelled_resources(self) -> dict[str, list[str]]:
         return {

@@ -272,7 +272,10 @@ def test_live_express_node_bundle_lifecycle(
         SECRET_ENV_SENTINEL,
         [("compose output (missing-env)", "".join(bundle.captured_output).encode("utf-8"))],
     )
-    bundle.compose("down")
+    # Restore the required interpolation value before cleanup; Compose must be able to
+    # parse the model for `down`, and that cleanup command is now checked fail-closed.
+    write_env_file(extract, {HOST_PORT_VAR: str(port), "APP_SECRET": SECRET_ENV_SENTINEL})
+    bundle.down_keep_volume()
 
     # §12.8: supplying it succeeds; §12.2–§12.5 healthy lifecycle with the secret set.
     doc = _run_stateless_core(bundle, fx, port, extra_env={"APP_SECRET": SECRET_ENV_SENTINEL})
@@ -450,7 +453,9 @@ def test_live_appkit_persistence_and_migration_idempotence(
     assert missing.returncode != 0 or not becomes_healthy(port, fx.health_path, timeout_s=45), (
         "a missing required ADMIN_TOKEN must prevent AppKit from becoming healthy (§12.8)"
     )
-    bundle.compose("down")
+    # Restore the required interpolation value before the now-checked cleanup command.
+    write_env_file(extract, {HOST_PORT_VAR: str(port), "ADMIN_TOKEN": SECRET_ENV_SENTINEL})
+    bundle.down_keep_volume()
 
     # §12.3/§12.4: restore the secret; up to healthy with a meaningful body.
     write_env_file(extract, {HOST_PORT_VAR: str(port), "ADMIN_TOKEN": SECRET_ENV_SENTINEL})
