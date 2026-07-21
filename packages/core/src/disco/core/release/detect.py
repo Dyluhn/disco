@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import bisect_right
 from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
@@ -286,7 +287,21 @@ _VITE_CONFIG_NAMES = frozenset(
 # exactly the host-supplied BUILD-scope vars. They are compile-time constants
 # embedded in the PUBLIC bundle, so a `VITE_`-prefixed name is public BY CONVENTION;
 # a secret-shaped one is a leak and fails closed like any secret build var.
-_VITE_BUILD_ENV_RE = re.compile(r"import\.meta\.env\.(VITE_[A-Za-z0-9_]+)")
+_VITE_ENV_NAME_RE = re.compile(r"VITE_[A-Za-z0-9_]+\Z")
+_VITE_SOURCE_SUFFIXES = (
+    ".astro",
+    ".cjs",
+    ".cts",
+    ".html",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".mts",
+    ".svelte",
+    ".ts",
+    ".tsx",
+    ".vue",
+)
 
 # The node lockfiles, each naming exactly one package manager. TWO or more present
 # is a package-manager DISAGREEMENT (`package_manager_conflict`, §8.9): the tree
@@ -690,12 +705,1000 @@ def _node_source(files: Mapping[str, str | bytes]) -> str:
     return "\n".join(_scan_text(files[path]) for path in sorted(files))
 
 
+def _js_executable_view(source: str) -> str:
+    """Return a same-length view containing JS/TS executable tokens only.
+
+    Comments, quoted strings, regular-expression literals, and the text portions of
+    template literals are replaced with spaces.  Expressions inside ``${...}`` remain
+    visible.  Keeping offsets and newlines stable makes this useful for bounded signal
+    scans without mistaking documentation such as
+    ``"import.meta.env.VITE_example"`` for a runtime read.
+
+    This is deliberately a lexer, not a JavaScript grammar.  Its only job is to answer
+    whether a concrete property-access token occurs in executable source; malformed or
+    ambiguous source remains the responsibility of the real build/boot gates.
+
+    Declared conservative ceiling: regex literals immediately after a labeled
+    ``break``/``continue`` or labeled block are not fully disambiguated. If such a regex
+    literally spells an import-meta Vite read, it can add a false required build input
+    and send that unusual project to review. It cannot hide a real input or create a
+    runnable false candidate. Full label/ASI disambiguation belongs in a real JS parser,
+    not this bounded pre-filter.
+    """
+    out = ["\n" if ch == "\n" else " " for ch in source]
+    size = len(source)
+    # Iterative frames avoid a recursion limit on valid, deeply nested template
+    # expressions.  A code-frame depth of zero is ordinary source; a positive depth is
+    # a `${...}` expression whose matching brace returns to its template frame.
+    modes = ["code"]
+    brace_depths = [0]
+    regex_allowed = [True]
+    object_allowed = [False]
+    paren_controls: list[list[bool]] = [[]]
+    brace_objects: list[list[bool]] = [[]]
+    pending_control = [False]
+    pending_block = [False]
+    pending_value_body = [False]
+    previous_token: list[str | None] = [None]
+    expression_prefixes = {
+        "await",
+        "break",
+        "case",
+        "continue",
+        "debugger",
+        "delete",
+        "do",
+        "else",
+        "in",
+        "instanceof",
+        "new",
+        "of",
+        "return",
+        "throw",
+        "typeof",
+        "void",
+        "yield",
+    }
+    control_parens = {"catch", "for", "if", "switch", "while", "with"}
+    block_prefixes = {"do", "else", "finally", "try"}
+    object_prefixes = {
+        "await",
+        "case",
+        "delete",
+        "new",
+        "return",
+        "throw",
+        "typeof",
+        "void",
+        "yield",
+    }
+
+    def _copy(start: int, end: int) -> None:
+        out[start:end] = source[start:end]
+
+    def _line_end(start: int) -> int:
+        cr = source.find("\r", start)
+        lf = source.find("\n", start)
+        ends = [value for value in (cr, lf) if value != -1]
+        return min(ends) if ends else size
+
+    def _skip_quoted(index: int, quote: str) -> int:
+        index += 1
+        while index < size:
+            if source[index] == "\\":
+                index = min(size, index + 2)
+                continue
+            index += 1
+            if source[index - 1] == quote:
+                break
+        return index
+
+    def _skip_regex(index: int) -> int:
+        index += 1
+        in_class = False
+        while index < size:
+            char = source[index]
+            if char == "\\":
+                index = min(size, index + 2)
+                continue
+            if char == "[":
+                in_class = True
+            elif char == "]":
+                in_class = False
+            elif char == "/" and not in_class:
+                index += 1
+                while index < size and source[index].isalpha():
+                    index += 1
+                return index
+            elif char in "\r\n":
+                return index
+            index += 1
+        return index
+
+    index = 0
+    while index < size and modes:
+        if modes[-1] == "template":
+            if source[index] == "\\":
+                index = min(size, index + 2)
+            elif source[index] == "`":
+                modes.pop()
+                brace_depths.pop()
+                regex_allowed.pop()
+                object_allowed.pop()
+                paren_controls.pop()
+                brace_objects.pop()
+                pending_control.pop()
+                pending_block.pop()
+                pending_value_body.pop()
+                previous_token.pop()
+                index += 1
+                if modes and modes[-1] == "code":
+                    regex_allowed[-1] = False
+                    object_allowed[-1] = False
+                    previous_token[-1] = "literal"
+            elif source.startswith("${", index):
+                modes.append("code")
+                brace_depths.append(1)
+                regex_allowed.append(True)
+                object_allowed.append(False)
+                paren_controls.append([])
+                brace_objects.append([])
+                pending_control.append(False)
+                pending_block.append(False)
+                pending_value_body.append(False)
+                previous_token.append(None)
+                index += 2
+            else:
+                index += 1
+            continue
+
+        char = source[index]
+        if char.isspace():
+            out[index] = char
+            index += 1
+            continue
+        if source.startswith("//", index):
+            index = _line_end(index + 2)
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            index = size if end == -1 else end + 2
+            continue
+        if source.startswith("<!--", index):
+            end = source.find("-->", index + 4)
+            index = size if end == -1 else end + 3
+            continue
+        if char in "'\"":
+            index = _skip_quoted(index, char)
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+            pending_control[-1] = False
+            pending_block[-1] = False
+            previous_token[-1] = "literal"
+            continue
+        if char == "`":
+            regex_allowed[-1] = False
+            pending_control[-1] = False
+            modes.append("template")
+            brace_depths.append(0)
+            regex_allowed.append(True)
+            object_allowed.append(False)
+            paren_controls.append([])
+            pending_control.append(False)
+            brace_objects.append([])
+            pending_block.append(False)
+            pending_value_body.append(False)
+            previous_token.append(None)
+            index += 1
+            continue
+        if char == "/" and regex_allowed[-1]:
+            index = _skip_regex(index)
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+            pending_control[-1] = False
+            pending_block[-1] = False
+            previous_token[-1] = "literal"
+            continue
+        if char.isalpha() or char in "_$":
+            end = index + 1
+            while end < size and (source[end].isalnum() or source[end] in "_$"):
+                end += 1
+            token = source[index:end]
+            _copy(index, end)
+            property_name = previous_token[-1] in {".", "?."}
+            was_object_allowed = object_allowed[-1]
+            if not property_name:
+                pending_control[-1] = token in control_parens
+                pending_block[-1] = token in block_prefixes
+                regex_allowed[-1] = token in expression_prefixes
+                object_allowed[-1] = token in object_prefixes
+                if token in {"class", "function"}:
+                    lookahead = end
+                    while lookahead < size and source[lookahead].isspace():
+                        lookahead += 1
+                    anonymous_expression = lookahead < size and source[lookahead] in "({"
+                    pending_value_body[-1] = (
+                        was_object_allowed
+                        or anonymous_expression
+                        or previous_token[-1] == "default"
+                    )
+            else:
+                pending_control[-1] = False
+                pending_block[-1] = False
+                regex_allowed[-1] = False
+                object_allowed[-1] = False
+            previous_token[-1] = token
+            index = end
+            continue
+        if char.isdigit():
+            end = index + 1
+            while end < size and (source[end].isalnum() or source[end] in "._"):
+                end += 1
+            _copy(index, end)
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+            pending_control[-1] = False
+            pending_block[-1] = False
+            previous_token[-1] = "literal"
+            index = end
+            continue
+        if char == "(":
+            out[index] = char
+            paren_controls[-1].append(pending_control[-1])
+            pending_control[-1] = False
+            pending_block[-1] = False
+            regex_allowed[-1] = True
+            object_allowed[-1] = True
+            previous_token[-1] = "("
+            index += 1
+            continue
+        if char == ")":
+            out[index] = char
+            was_control = paren_controls[-1].pop() if paren_controls[-1] else False
+            pending_control[-1] = False
+            pending_block[-1] = was_control
+            regex_allowed[-1] = was_control
+            object_allowed[-1] = False
+            previous_token[-1] = ")"
+            index += 1
+            continue
+        if char == "{" and brace_depths[-1] > 0:
+            brace_depths[-1] += 1
+            brace_objects[-1].append(
+                (object_allowed[-1] or pending_value_body[-1]) and not pending_block[-1]
+            )
+            pending_value_body[-1] = False
+        elif char == "}" and brace_depths[-1] > 0:
+            brace_depths[-1] -= 1
+            if brace_depths[-1] == 0:
+                modes.pop()
+                brace_depths.pop()
+                regex_allowed.pop()
+                object_allowed.pop()
+                paren_controls.pop()
+                brace_objects.pop()
+                pending_control.pop()
+                pending_block.pop()
+                pending_value_body.pop()
+                previous_token.pop()
+                index += 1
+                continue
+        elif char == "{":
+            brace_objects[-1].append(
+                (object_allowed[-1] or pending_value_body[-1]) and not pending_block[-1]
+            )
+            pending_value_body[-1] = False
+        if source.startswith("=>", index):
+            _copy(index, index + 2)
+            pending_control[-1] = False
+            pending_block[-1] = True
+            regex_allowed[-1] = True
+            object_allowed[-1] = False
+            previous_token[-1] = "=>"
+            index += 2
+            continue
+        if source.startswith("++", index) or source.startswith("--", index):
+            _copy(index, index + 2)
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+            pending_control[-1] = False
+            pending_block[-1] = False
+            previous_token[-1] = "postfix"
+            index += 2
+            continue
+        if source.startswith("?.", index):
+            _copy(index, index + 2)
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+            pending_control[-1] = False
+            pending_block[-1] = False
+            previous_token[-1] = "?."
+            index += 2
+            continue
+        out[index] = char
+        pending_control[-1] = False
+        was_pending_block = pending_block[-1]
+        pending_block[-1] = False
+        if char in "]":
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+        elif char == ".":
+            regex_allowed[-1] = False
+            object_allowed[-1] = False
+        elif char == "}":
+            # Object literals are values (so a following slash is division); statement
+            # blocks end a statement and may be followed by a regexp expression.
+            was_object = brace_objects[-1].pop() if brace_objects[-1] else False
+            regex_allowed[-1] = not was_object
+            object_allowed[-1] = False
+        elif char == "{":
+            regex_allowed[-1] = True
+            object_allowed[-1] = False
+        elif was_pending_block:
+            regex_allowed[-1] = True
+            object_allowed[-1] = False
+        elif char in "=,:?[!~+-*%&|^<>":
+            regex_allowed[-1] = True
+            object_allowed[-1] = True
+        elif char == ";":
+            regex_allowed[-1] = True
+            object_allowed[-1] = False
+            pending_value_body[-1] = False
+        else:
+            regex_allowed[-1] = True
+            object_allowed[-1] = True
+        previous_token[-1] = char
+        index += 1
+    return "".join(out)
+
+
+_HTML_SCRIPT_TYPE_RE = re.compile(
+    r"\stype\s*=\s*(?:(['\"])(.*?)\1|([^\s>]+))", re.IGNORECASE | re.DOTALL
+)
+_HTML_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
+def _span_is_excluded(start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+    index = bisect_right(spans, (start, 10**30)) - 1
+    return index >= 0 and start >= spans[index][0] and end <= spans[index][1]
+
+
+def _merged_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _balanced_markup_expressions(
+    source: str, excluded: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return outer brace-expression interiors with a single bounded scan."""
+    regions: list[tuple[int, int]] = []
+    lexical = _js_executable_view(source)
+    excluded = sorted(excluded)
+    excluded_index = 0
+    depth = 0
+    start = 0
+    index = 0
+    while index < len(source):
+        while excluded_index < len(excluded) and index >= excluded[excluded_index][1]:
+            excluded_index += 1
+        if (
+            depth == 0
+            and excluded_index < len(excluded)
+            and excluded[excluded_index][0] <= index < excluded[excluded_index][1]
+        ):
+            index = excluded[excluded_index][1]
+            continue
+        char = lexical[index]
+        if char == "{":
+            if depth == 0:
+                start = index + 1
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                regions.append((start, index))
+        index += 1
+    return regions
+
+
+def _markup_regions(
+    source: str, *, html_modules_only: bool, astro_processed_only: bool
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Return excluded comment/style spans and executable script-body spans.
+
+    The scan advances monotonically.  In particular, malformed repeated ``<script``
+    prefixes are inspected once rather than triggering a regex restart at every ``<``.
+    """
+    lowered = source.lower()
+    excluded: list[tuple[int, int]] = []
+    scripts: list[tuple[int, int]] = []
+    index = 0
+    size = len(source)
+
+    def tag_end(start: int) -> int:
+        quote: str | None = None
+        cursor = start
+        while cursor < size:
+            char = source[cursor]
+            if quote is not None:
+                if char == quote:
+                    quote = None
+            elif char in "'\"":
+                quote = char
+            elif char == ">":
+                return cursor + 1
+            cursor += 1
+        return size
+
+    while index < size:
+        start = source.find("<", index)
+        if start == -1:
+            break
+        if source.startswith("<!--", start):
+            end_marker = source.find("-->", start + 4)
+            end = size if end_marker == -1 else end_marker + 3
+            excluded.append((start, end))
+            index = end
+            continue
+        kind: str | None = None
+        for candidate in ("script", "style"):
+            prefix = f"<{candidate}"
+            if lowered.startswith(prefix, start):
+                boundary = start + len(prefix)
+                if boundary >= size or source[boundary].isspace() or source[boundary] in ">/":
+                    kind = candidate
+                    break
+        if kind is None:
+            index = start + 1
+            continue
+        body_start = tag_end(start + len(kind) + 1)
+        if body_start >= size and (not source or source[-1] != ">"):
+            break
+        closing = f"</{kind}"
+        close_start = lowered.find(closing, body_start)
+        while close_start != -1:
+            boundary = close_start + len(closing)
+            if boundary >= size or source[boundary].isspace() or source[boundary] in ">/":
+                break
+            close_start = lowered.find(closing, boundary)
+        if close_start == -1:
+            break
+        close_end = tag_end(close_start + len(closing))
+        if kind == "script":
+            opening_tag = source[start:body_start]
+            type_match = _HTML_SCRIPT_TYPE_RE.search(opening_tag)
+            script_type = (
+                (type_match.group(2) or type_match.group(3) or "").strip().lower()
+                if type_match is not None
+                else ""
+            )
+            astro_attributes = opening_tag[len("<script") :].rstrip().removesuffix(">").strip()
+            astro_processed = not astro_attributes or (
+                re.fullmatch(
+                    r"src\s*=\s*(?:(['\"])[^'\"]*\1|[^\s>]+)",
+                    astro_attributes,
+                    re.IGNORECASE,
+                )
+                is not None
+            )
+            if (not html_modules_only or script_type == "module") and (
+                not astro_processed_only or astro_processed
+            ):
+                scripts.append((body_start, close_start))
+        else:
+            excluded.append((start, close_end))
+        index = close_end
+    return excluded, scripts
+
+
+def _jsx_expression_end(source: str, start: int, limit: int) -> int | None:
+    """Return the closing brace for one JSX expression without parsing JSX as JS.
+
+    The executable lexer already knows how to hide braces in JS strings, comments,
+    regexp literals, and template prose while retaining nested/template expressions.
+    Grow the inspected window geometrically so many small JSX expressions stay
+    linear, while a single large expression is rescanned only a constant number of
+    times.  ``None`` means the expression is malformed within the caller's bound.
+    """
+    if start >= limit or source[start] != "{":
+        return None
+    width = 256
+    while True:
+        window_end = min(limit, start + 1 + width)
+        fragment = source[start + 1 : window_end]
+        # A closing JSX tag begins with ``</``.  Fed directly to a JavaScript lexer,
+        # that slash can look like the start of a regexp and hide the outer JSX
+        # expression's closing brace.  Closing tags contain no expressions of their
+        # own, so mask just their bounded syntax before lexing the surrounding code.
+        tag_neutral = list(fragment)
+        tag_index = 0
+        while tag_index < len(fragment):
+            tag_start = fragment.find("</", tag_index)
+            if tag_start == -1:
+                break
+            cursor = tag_start + 2
+            if cursor < len(fragment) and fragment[cursor] == ">":
+                tag_end = cursor + 1
+            elif cursor < len(fragment) and (
+                fragment[cursor].isalpha() or fragment[cursor] in "_$"
+            ):
+                cursor += 1
+                while cursor < len(fragment) and (
+                    fragment[cursor].isalnum() or fragment[cursor] in "_$:.-"
+                ):
+                    cursor += 1
+                while cursor < len(fragment) and fragment[cursor].isspace():
+                    cursor += 1
+                tag_end = cursor + 1 if cursor < len(fragment) and fragment[cursor] == ">" else -1
+            else:
+                tag_end = -1
+            if tag_end == -1:
+                tag_index = tag_start + 2
+                continue
+            for index in range(tag_start, tag_end):
+                if fragment[index] != "\n":
+                    tag_neutral[index] = " "
+            tag_index = tag_end
+        lexical = _js_executable_view("".join(tag_neutral))
+        depth = 1
+        for offset, char in enumerate(lexical, start=start + 1):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return offset
+        if window_end >= limit:
+            return None
+        width *= 2
+
+
+def _jsx_tag_spans(source: str) -> list[tuple[int, int, bool, bool]]:
+    """Locate JSX tags in linear time, including fragments and quoted attributes."""
+    tags: list[tuple[int, int, bool, bool]] = []
+    size = len(source)
+    index = 0
+    while index < size:
+        start = source.find("<", index)
+        if start == -1:
+            break
+        cursor = start + 1
+        closing = cursor < size and source[cursor] == "/"
+        if closing:
+            cursor += 1
+        if cursor < size and source[cursor] == ">":
+            tags.append((start, cursor + 1, closing, False))
+            index = cursor + 1
+            continue
+        if cursor >= size or not (source[cursor].isalpha() or source[cursor] in "_$"):
+            index = start + 1
+            continue
+        quote: str | None = None
+        escaped = False
+        while cursor < size:
+            char = source[cursor]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif char in "'\"`":
+                quote = char
+            elif char == "{":
+                expression_end = _jsx_expression_end(source, cursor, size)
+                if expression_end is None:
+                    # A malformed candidate must make monotonic progress.  Returning
+                    # the tags already found avoids rediscovering this same '<'
+                    # forever and lets the real compiler reject the malformed file.
+                    return tags
+                cursor = expression_end + 1
+                continue
+            elif char == ">":
+                token = source[start : cursor + 1]
+                tags.append((start, cursor + 1, closing, token.rstrip().endswith("/>")))
+                index = cursor + 1
+                break
+            cursor += 1
+        else:
+            # A malformed tag candidate consumes the remainder once.  Retrying at every
+            # subsequent '<' makes a long malformed JSX file quadratic.
+            break
+    return tags
+
+
+def _opening_tag_attribute_names(source: str, start: int, end: int) -> set[str]:
+    names: set[str] = set()
+    index = start + 1
+    while index < end and not source[index].isspace() and source[index] not in ">/":
+        index += 1
+    while index < end:
+        while index < end and (source[index].isspace() or source[index] == "/"):
+            index += 1
+        if index >= end or source[index] == ">":
+            break
+        name_start = index
+        while index < end and not source[index].isspace() and source[index] not in "=>":
+            index += 1
+        if index > name_start:
+            names.add(source[name_start:index].lower())
+        while index < end and source[index].isspace():
+            index += 1
+        if index >= end or source[index] != "=":
+            continue
+        index += 1
+        while index < end and source[index].isspace():
+            index += 1
+        if index < end and source[index] in "'\"":
+            quote = source[index]
+            index += 1
+            while index < end and source[index] != quote:
+                index += 1
+            if index < end:
+                index += 1
+        else:
+            while index < end and not source[index].isspace() and source[index] != ">":
+                index += 1
+    return names
+
+
+def _vue_v_pre_spans(source: str) -> list[tuple[int, int]]:
+    """Return complete element subtrees Vue leaves uncompiled via ``v-pre``."""
+    spans: list[tuple[int, int]] = []
+    stack: list[tuple[str, int | None, bool]] = []
+    for start, end, closing, self_closing in _jsx_tag_spans(source):
+        cursor = start + 1 + int(closing)
+        name_start = cursor
+        while cursor < end and not source[cursor].isspace() and source[cursor] not in ">/":
+            cursor += 1
+        name = source[name_start:cursor].lower()
+        if not name:
+            continue
+        if closing:
+            match_index = next(
+                (index for index in range(len(stack) - 1, -1, -1) if stack[index][0] == name),
+                None,
+            )
+            if match_index is None:
+                continue
+            closing_entries = stack[match_index:]
+            del stack[match_index:]
+            for _tag, root_start, starts_here in closing_entries:
+                if starts_here and root_start is not None:
+                    spans.append((root_start, end))
+            continue
+        parent_root = stack[-1][1] if stack else None
+        starts_here = parent_root is None and "v-pre" in _opening_tag_attribute_names(
+            source, start, end
+        )
+        root_start = start if starts_here else parent_root
+        if self_closing or name in _HTML_VOID_TAGS:
+            if starts_here:
+                spans.append((start, end))
+        else:
+            stack.append((name, root_start, starts_here))
+    return sorted(spans)
+
+
+def _vue_directive_expression_spans(
+    source: str, excluded: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return Vue directive expressions from actual opening-tag attributes only."""
+    expressions: list[tuple[int, int]] = []
+    for tag_start, tag_end, closing, _self_closing in _jsx_tag_spans(source):
+        if closing or _span_is_excluded(tag_start, tag_end, excluded):
+            continue
+        index = tag_start + 1
+        while index < tag_end and not source[index].isspace() and source[index] not in ">/":
+            index += 1
+        while index < tag_end:
+            while index < tag_end and (source[index].isspace() or source[index] == "/"):
+                index += 1
+            if index >= tag_end or source[index] == ">":
+                break
+            name_start = index
+            while index < tag_end and not source[index].isspace() and source[index] not in "=>":
+                index += 1
+            name = source[name_start:index]
+            directive = name.lower().startswith(("v-", ":", "@", "#"))
+            bracket = name.find("[")
+            if directive and bracket != -1:
+                close = name.find("]", bracket + 1)
+                if close > bracket + 1:
+                    expressions.append((name_start + bracket + 1, name_start + close))
+            while index < tag_end and source[index].isspace():
+                index += 1
+            if index >= tag_end or source[index] != "=":
+                continue
+            index += 1
+            while index < tag_end and source[index].isspace():
+                index += 1
+            if index >= tag_end:
+                break
+            if source[index] in "'\"":
+                quote = source[index]
+                value_start = index + 1
+                index = value_start
+                while index < tag_end and source[index] != quote:
+                    index += 1
+                value_end = index
+                if index < tag_end:
+                    index += 1
+            else:
+                value_start = index
+                while index < tag_end and not source[index].isspace() and source[index] != ">":
+                    index += 1
+                value_end = index
+            if directive and value_end > value_start:
+                expressions.append((value_start, value_end))
+    return expressions
+
+
+def _embedded_markup_code(path: str, source: str) -> str:
+    """Expose executable regions of HTML/Vue/Svelte/Astro source at stable offsets."""
+    visible = ["\n" if char == "\n" else " " for char in source]
+
+    def reveal(start: int, end: int) -> None:
+        visible[start:end] = source[start:end]
+
+    suffix = path.lower()
+    excluded, scripts = _markup_regions(
+        source,
+        html_modules_only=suffix.endswith(".html"),
+        astro_processed_only=suffix.endswith(".astro"),
+    )
+    if suffix.endswith(".vue"):
+        excluded.extend(_vue_v_pre_spans(source))
+    excluded = _merged_spans(excluded)
+    for start, end in scripts:
+        if not _span_is_excluded(start, end, excluded):
+            reveal(start, end)
+
+    if suffix.endswith((".vue", ".svelte", ".astro")):
+        # Framework templates evaluate brace-delimited JS expressions.  A balanced,
+        # iterative scan conserves nested expressions without recursive parsing.
+        for start, end in _balanced_markup_expressions(source, excluded):
+            reveal(start, end)
+        if suffix.endswith(".vue"):
+            for start, end in _vue_directive_expression_spans(source, [*excluded, *scripts]):
+                reveal(start, end)
+    if suffix.endswith(".astro") and source.startswith("---"):
+        end = source.find("\n---", 3)
+        if end != -1:
+            reveal(3, end)
+    return "".join(visible)
+
+
+def _mask_jsx_text(source: str) -> str:
+    """Mask JSX child prose while retaining tags, attributes, and ``{...}`` code."""
+    out = list(source)
+    tags = _jsx_tag_spans(source)
+    depth = 0
+    previous_end = 0
+    for start, end, closing, self_closing in tags:
+        if depth > 0 and previous_end < start:
+            index = previous_end
+            while index < start:
+                if source[index] == "{":
+                    expression_end = _jsx_expression_end(source, index, start)
+                    if expression_end is not None:
+                        index = expression_end + 1
+                        continue
+                if source[index] != "\n":
+                    out[index] = " "
+                index += 1
+        # Tag syntax is not JavaScript. Leaving ``</A><B>`` in the lexical view lets
+        # the slash look like a regexp opener and can hide the next sibling's real
+        # expression. Mask the tag itself while retaining only brace-delimited JSX
+        # attribute expressions; quoted attribute text remains inert.
+        for index in range(start, end):
+            if source[index] != "\n":
+                out[index] = " "
+        index = start
+        quote: str | None = None
+        escaped = False
+        while index < end:
+            char = source[index]
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+            elif char in "'\"":
+                quote = char
+            elif char == "{":
+                expression_end = _jsx_expression_end(source, index, end)
+                if expression_end is None:
+                    break
+                out[index : expression_end + 1] = source[index : expression_end + 1]
+                index = expression_end + 1
+                continue
+            index += 1
+        if closing:
+            depth = max(0, depth - 1)
+        elif not self_closing:
+            depth += 1
+        previous_end = end
+    return "".join(out)
+
+
+def _vite_scannable_source(path: str, source: str) -> str:
+    lowered = _norm(path).lower()
+    if lowered.endswith((".d.ts", ".d.mts", ".d.cts")):
+        return ""
+    if lowered.endswith((".html", ".vue", ".svelte", ".astro")):
+        return _embedded_markup_code(lowered, source)
+    if lowered.endswith((".jsx", ".tsx")):
+        return _mask_jsx_text(source)
+    return source
+
+
+def _js_identifier_start(char: str) -> bool:
+    return char in "_$" or char.isalpha() or (ord(char) > 127 and char.isidentifier())
+
+
+def _js_identifier_continue(char: str) -> bool:
+    return (
+        char in "_$"
+        or char.isalnum()
+        or (ord(char) > 127 and (char.isidentifier() or ("a" + char).isidentifier()))
+    )
+
+
+def _js_identifier_escape(source: str, index: int) -> tuple[str, int] | None:
+    if not source.startswith("\\u", index):
+        return None
+    cursor = index + 2
+    if cursor < len(source) and source[cursor] == "{":
+        end = source.find("}", cursor + 1)
+        if end == -1 or not 1 <= end - cursor - 1 <= 6:
+            return None
+        digits = source[cursor + 1 : end]
+        next_index = end + 1
+    else:
+        digits = source[cursor : cursor + 4]
+        if len(digits) != 4:
+            return None
+        next_index = cursor + 4
+    if any(char not in "0123456789abcdefABCDEF" for char in digits):
+        return None
+    try:
+        return chr(int(digits, 16)), next_index
+    except ValueError:
+        return None
+
+
+def _consume_js_identifier(source: str, index: int) -> tuple[str, int]:
+    value = [source[index]]
+    cursor = index + 1
+    while cursor < len(source):
+        char = source[cursor]
+        if _js_identifier_continue(char):
+            value.append(char)
+            cursor += 1
+            continue
+        escaped = _js_identifier_escape(source, cursor)
+        if escaped is None or not _js_identifier_continue(escaped[0]):
+            break
+        value.append(escaped[0])
+        cursor = escaped[1]
+    return "".join(value), cursor
+
+
+def _vite_env_reads_from_view(source: str) -> set[str]:
+    """Recognize exact property chains in an already-masked executable JS view.
+
+    Token identity avoids substring/boundary mistakes (including Unicode identifier
+    continuations), and a tiny interval recognizer permits redundant grouping and
+    optional property access without treating a call such as ``f(import.meta).env`` as
+    the Vite meta object.  Runtime/build gates remain the authority for full JS syntax.
+    """
+    tokens: list[str] = []
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if _js_identifier_start(char):
+            token, end = _consume_js_identifier(source, index)
+            tokens.append(token)
+            index = end
+            continue
+        if source.startswith("?.", index):
+            tokens.append("?.")
+            index += 2
+            continue
+        if not char.isspace():
+            tokens.append(char)
+        index += 1
+
+    # An entry at end index N describes an exact recognized chain ending just before N.
+    # Stages: import=1, import.meta=2, import.meta.env=3.
+    recognized: dict[int, tuple[int, int]] = {}
+    paren_stack: list[int] = []
+    matching_open: dict[int, int] = {}
+    for token_index, token in enumerate(tokens):
+        if token == "(":
+            paren_stack.append(token_index)
+        elif token == ")" and paren_stack:
+            matching_open[token_index] = paren_stack.pop()
+
+    def grouping_open(open_index: int) -> bool:
+        if open_index == 0:
+            return True
+        previous = tokens[open_index - 1]
+        if previous in {"return", "throw", "yield", "await", "case", "delete", "void"}:
+            return True
+        if _js_identifier_start(previous[0]) or previous in {")", "]", "}"}:
+            return False
+        return previous not in {".", "?."}
+
+    names: set[str] = set()
+    for token_index, token in enumerate(tokens):
+        if token == "import":
+            # Property/call-qualified `root.import` is not the import-meta primitive.
+            if token_index and tokens[token_index - 1] in {".", "?."}:
+                continue
+            recognized[token_index + 1] = (token_index, 1)
+            continue
+        if token == ")" and token_index in matching_open:
+            open_index = matching_open[token_index]
+            inside = recognized.get(token_index)
+            if inside is not None and inside[0] == open_index + 1 and grouping_open(open_index):
+                recognized[token_index + 1] = (open_index, inside[1])
+            continue
+        if token_index < 2 or tokens[token_index - 1] not in {".", "?."}:
+            continue
+        base = recognized.get(token_index - 1)
+        if base is None:
+            continue
+        start, stage = base
+        if stage == 1 and token == "meta":
+            recognized[token_index + 1] = (start, 2)
+        elif stage == 2 and token == "env":
+            recognized[token_index + 1] = (start, 3)
+        elif stage == 3 and _VITE_ENV_NAME_RE.fullmatch(token):
+            names.add(token)
+    return names
+
+
 def _discovered_build_env_names(files: Mapping[str, str | bytes]) -> set[str]:
-    """The raw ``import.meta.env.VITE_<NAME>`` names discovered in source (the scanner
-    regex permits mixed case, since a shell env var name is case-SENSITIVE)."""
+    """Executable ``import.meta.env.VITE_<NAME>`` reads discovered in source.
+
+    The scanner regex permits mixed case because environment names are
+    case-sensitive, while the lexical view prevents comments, docs, and inert string
+    contents from inventing required build inputs.
+    """
     names: set[str] = set()
     for path in sorted(files):
-        names.update(_VITE_BUILD_ENV_RE.findall(_scan_text(files[path])))
+        if not _norm(path).lower().endswith(_VITE_SOURCE_SUFFIXES):
+            continue
+        source = _vite_scannable_source(path, _scan_text(files[path]))
+        names.update(_vite_env_reads_from_view(_js_executable_view(source)))
     return names
 
 
