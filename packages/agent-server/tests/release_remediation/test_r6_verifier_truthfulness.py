@@ -3,10 +3,14 @@ truthfulness gates (plan §9, strict acceptance criteria 1-6).
 
 These are the committed COUNTERPART to the two frozen G13 reds
 (``test_g13_verifier_truthfulness.py``, which land the reds; R6 flips them green through
-production alone). They live OUTSIDE the frozen dirs (unmarked, so they run in the normal
-unit suite) and import the REAL verifier module exactly as the frozen test does — a call
-to ``importlib.import_module``, no ``unittest.mock`` — driving its real functions on a
-real temporary filesystem. Nothing here edits a frozen file.
+production alone). They live OUTSIDE the frozen dirs and run in the normal unit suite,
+EXCEPT the tests that certify the real closeout checkout state (the campaign-diff scan
+over the real repo history, the committed frozen-manifest binding, and the real npm
+toolchain positive) — those are ``integration``-marked because they require a repository
+state/toolchain the fast required lane does not provide. They import the REAL verifier
+module exactly as the frozen test does — a call to ``importlib.import_module``, no
+``unittest.mock`` — driving its real functions on a real temporary filesystem. Nothing
+here edits a frozen file.
 
 Coverage against plan §9 strict acceptance criteria:
 
@@ -361,6 +365,12 @@ def test_scanner_lane_git_diff_invocation_forces_ab_prefixes() -> None:
     assert "--src-prefix=a/" in src and "--dst-prefix=b/" in src
 
 
+# Certification-only: this scans the REAL git history window BASELINE_SHA..HEAD, so it
+# only holds on a checkout whose history matches the closeout campaign framing (the C9
+# certification lane). ``integration``-marked per the repo convention: excluded from the
+# default `-m "not integration"` unit selection, runnable explicitly / in the advisory
+# lane. The assertion itself is unchanged.
+@pytest.mark.integration
 def test_real_campaign_diff_has_no_unbaselined_suppression() -> None:
     """End-to-end over the REAL campaign diff (BASELINE_SHA..HEAD) with the REAL committed
     baseline: zero un-approved new suppressions. Proves the baseline is complete and the
@@ -439,6 +449,12 @@ def test_final_verdict_is_false_when_any_gate_fails(override: dict[str, object])
     assert verify._final_verdict(**base) is False
 
 
+# Certification-only: the positive precondition requires the COMMITTED closeout manifest
+# to verify clean against the real tree — a binding that is regenerated only on the C9
+# certification lane. ``integration``-marked per the repo convention: excluded from the
+# default `-m "not integration"` unit selection, runnable explicitly / in the advisory
+# lane. The assertion itself is unchanged.
+@pytest.mark.integration
 def test_frozen_manifest_check_fails_on_deleted_or_replaced_frozen_file() -> None:
     """Criterion 2: a frozen file missing from reality, or a frozen file whose hash was
     changed (e.g. replaced with placeholder text), makes ``_verify_frozen_manifest`` fail —
