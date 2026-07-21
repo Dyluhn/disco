@@ -28,6 +28,9 @@ from ..events import (
     KIND_AGENT_ERROR,
     KIND_OBSERVATION,
     KIND_PLAN,
+    KIND_STATUS,
+    PLAN_APPROVED_DETAIL,
+    PLAN_VERIFICATION_PASSED_DETAIL,
     awaiting_approval_seqs,
     has_action,
     has_plan,
@@ -58,6 +61,86 @@ def _wants_observation_pairs(scenario: dict[str, Any] | None) -> bool:
         return True
     ec = (scenario.get("assertions") or {}).get("event_chain") or {}
     return ec.get("require_action_observation_pairs", True) is not False
+
+
+def _has_exact_verifier_repair_pass(events: list[dict[str, Any]], *, approval_seq: int) -> bool:
+    """Whether host truth supplies the post-approval edge for a verifier-only repair.
+
+    This is deliberately narrower than a generic status check. The latest approval
+    must itself declare the typed verifier-repair reason, and a later RUNNING receipt
+    must bind the exact approved plan id/revision/predicate fingerprints before the
+    first terminal. Normal plans and malformed/mismatched receipts remain actionless.
+    """
+    approval = next(
+        (
+            event
+            for event in events
+            if kind_of(event) == KIND_STATUS
+            and seq_of(event) == approval_seq
+            and event.get("detail") == PLAN_APPROVED_DETAIL
+        ),
+        None,
+    )
+    if approval is None:
+        return False
+    transition = approval.get("plan_verification_transition")
+    if not isinstance(transition, dict) or transition.get("reason") != (
+        "approved_plan_verifier_repair"
+    ):
+        return False
+    plan_id = transition.get("new_plan_event_id")
+    revision = transition.get("new_plan_revision")
+    fingerprints = transition.get("new_predicate_fingerprints")
+    if (
+        not isinstance(plan_id, str)
+        or not plan_id
+        or not isinstance(revision, int)
+        or isinstance(revision, bool)
+        or revision < 1
+        or not isinstance(fingerprints, list)
+        or not fingerprints
+        or not all(isinstance(value, str) and value for value in fingerprints)
+    ):
+        return False
+
+    terminal_seq = min(
+        (
+            seq_of(event)
+            for event in events
+            if kind_of(event) == KIND_STATUS
+            and seq_of(event) > approval_seq
+            and str(event.get("status")) in EXECUTION_EXPECTED_TERMINALS
+        ),
+        default=None,
+    )
+    if terminal_seq is None:
+        return False
+
+    for event in events:
+        seq = seq_of(event)
+        if not approval_seq < seq < terminal_seq:
+            continue
+        if (
+            kind_of(event) != KIND_STATUS
+            or event.get("status") != "RUNNING"
+            or event.get("detail") != PLAN_VERIFICATION_PASSED_DETAIL
+        ):
+            continue
+        receipt = event.get("plan_verifier_pass")
+        if not isinstance(receipt, dict):
+            continue
+        spec_fingerprint = receipt.get("spec_fingerprint")
+        if (
+            receipt.get("authority") == "plan"
+            and receipt.get("plan_event_id") == plan_id
+            and receipt.get("plan_revision") == revision
+            and receipt.get("predicate_fingerprints") == fingerprints
+            and isinstance(spec_fingerprint, str)
+            and spec_fingerprint.startswith("sha256:")
+            and len(spec_fingerprint) > len("sha256:")
+        ):
+            return True
+    return False
 
 
 class EventChainOracle:
@@ -167,7 +250,9 @@ class EventChainOracle:
 
             # Link C->D: RUNNING/plan_approved -> execution action.
             last_approval = approvals[-1]
-            if not has_action(events, after_seq=last_approval):
+            if not has_action(events, after_seq=last_approval) and not (
+                _has_exact_verifier_repair_pass(events, approval_seq=last_approval)
+            ):
                 return [
                     failing(
                         _ORACLE,

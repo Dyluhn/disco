@@ -26,8 +26,9 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    WorkspaceMutationEvent,
 )
-from disco.core.events import PlanEvent
+from disco.core.events import PlanEvent, PlanStep
 from disco.core.llm import (
     CompletionResponse,
     DefaultLLMRouter,
@@ -130,6 +131,60 @@ async def test_resume_from_paused_is_legal():
 
     assert result["ok"] is True
     assert result["status"] == "RUNNING"
+
+
+async def test_resume_running_flip_waits_for_workspace_mutation_fence(monkeypatch):
+    """A host mutation owns the head until it has resealed it.
+
+    Resume may reconstruct context while that work is in flight, but it must not
+    publish RUNNING (or start the loop) before the permanent workspace fence is
+    released.
+    """
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    monkeypatch.setattr(rt, "start", MagicMock())
+
+    underlying = rt.workspace_lock(CID)
+    entered = asyncio.Event()
+
+    class _ObservedFence:
+        async def __aenter__(self):
+            entered.set()
+            await underlying.acquire()
+            return underlying
+
+        async def __aexit__(self, *_exc) -> None:
+            underlying.release()
+
+    monkeypatch.setattr(rt, "workspace_lock", lambda _cid: _ObservedFence())
+    await underlying.acquire()
+    resume = asyncio.create_task(rt.resume_conversation(CID))
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    while_held = await store.get_events(CID)
+    assert not any(
+        isinstance(event, StatusEvent)
+        and event.status is ConversationStatus.RUNNING
+        and event.detail == "resumed"
+        for event in while_held
+    )
+    assert not resume.done()
+    rt.start.assert_not_called()
+
+    underlying.release()
+    assert await resume == {"ok": True, "status": "RUNNING"}
+    after_release = await store.get_events(CID)
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status is ConversationStatus.RUNNING
+        and event.detail == "resumed"
+        for event in after_release
+    )
+    rt.start.assert_called_once_with(CID)
 
 
 async def test_resume_pins_the_kernel_via_start(monkeypatch):
@@ -375,6 +430,10 @@ async def test_resume_from_error_is_legal_and_preserves_history():
     ids_before = {e.id for e in await store.get_events(CID)}
 
     result = await rt.resume_conversation(CID)
+    # kick() registers synchronously, then resolves the frozen driver context and
+    # composes inside that task. Yield once so this test observes the composed loop
+    # before cancelling the otherwise-live run.
+    await asyncio.sleep(0)
     await _cancel_task(rt)
 
     assert result["ok"] is True
@@ -531,10 +590,10 @@ async def test_resume_drains_lingering_task_then_rekicks(monkeypatch):
     in-flight model step. kick() is idempotent over a non-done task, so without a
     drain the re-kick silently NO-OPs ('Resume does nothing'). resume must drain
     the lingering task FIRST, then spawn a fresh run."""
-    import disco.agent_server.runtime as rt_mod
+    import disco.agent_server.resume_service as resume_mod
 
     # Keep the hard-cancel fallback fast for the test's wedged-step simulation.
-    monkeypatch.setattr(rt_mod, "_RESUME_DRAIN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(resume_mod, "_RESUME_DRAIN_TIMEOUT_S", 0.05)
 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
@@ -563,6 +622,166 @@ async def test_resume_drains_lingering_task_then_rekicks(monkeypatch):
     assert new_task is not None and new_task is not lingering
 
     await _cancel_task(rt)
+
+
+async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
+    """A stale resume may time out and hard-cancel only the task it observed.
+
+    This is the destructive counterexample for the old conversation-id drain:
+    while resume awaits task A, task B takes over the registry.  The timeout must
+    cancel A by object identity, reject the stale resume, and leave B registered
+    and live.
+    """
+    import disco.agent_server.resume_service as resume_mod
+
+    monkeypatch.setattr(resume_mod, "_RESUME_DRAIN_TIMEOUT_S", 0.05)
+
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    monkeypatch.setattr(rt, "start", MagicMock())
+
+    old_release = asyncio.Event()
+
+    async def _old_tail() -> None:
+        await old_release.wait()
+
+    old_task = asyncio.create_task(_old_tail())
+    rt._run_generation[CID] = 1
+    rt._tasks[CID] = old_task
+
+    resuming = asyncio.create_task(rt.resume_conversation(CID))
+
+    async def _wait_until_detached() -> None:
+        while rt._tasks.get(CID) is old_task:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_wait_until_detached(), timeout=1)
+
+    newer_release = asyncio.Event()
+
+    async def _newer_run() -> None:
+        await newer_release.wait()
+
+    newer_task = asyncio.create_task(_newer_run())
+    async with rt.workspace_lock(CID):
+        async with rt._workspace.interprocess_mutation_fence(CID):
+            rt._run_generation[CID] = 2
+            rt._tasks[CID] = newer_task
+
+    result = await asyncio.wait_for(resuming, timeout=1)
+    assert result == {"ok": False, "reason": "resume_superseded"}
+    assert old_task.done() and old_task.cancelled()
+    assert not newer_task.done()
+    assert rt._tasks.get(CID) is newer_task
+    rt.start.assert_not_called()
+    events = await store.get_events(CID)
+    assert not any(
+        isinstance(event, StatusEvent)
+        and event.status is ConversationStatus.RUNNING
+        and event.detail == "resumed"
+        for event in events
+    )
+
+    newer_release.set()
+    await newer_task
+    rt._tasks.pop(CID, None)
+
+
+async def test_resume_reconstructs_from_fresh_post_drain_history(monkeypatch):
+    """Events landing between the two fenced phases must inform reconstruction.
+
+    The old implementation reconstructed from the pre-drain list.  Here a fresh
+    approved plan lands while the drain yields; the resume environment message
+    must name its first undone step.
+    """
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    monkeypatch.setattr(rt, "start", MagicMock())
+
+    drain_entered = asyncio.Event()
+    release_drain = asyncio.Event()
+    original_drain = rt._resume._drain_finishing_task
+
+    async def _yielding_drain(task) -> bool:
+        drain_entered.set()
+        await release_drain.wait()
+        return await original_drain(task)
+
+    monkeypatch.setattr(rt._resume, "_drain_finishing_task", _yielding_drain)
+    resuming = asyncio.create_task(rt.resume_conversation(CID))
+    await asyncio.wait_for(drain_entered.wait(), timeout=1)
+
+    async with rt.workspace_lock(CID):
+        async with rt._workspace.interprocess_mutation_fence(CID):
+            await store.append(
+                CID,
+                PlanEvent(
+                    summary="fresh plan",
+                    steps=[PlanStep(title="Use the fresh post-drain step")],
+                    revision=2,
+                ),
+            )
+    release_drain.set()
+
+    assert await asyncio.wait_for(resuming, timeout=1) == {
+        "ok": True,
+        "status": "RUNNING",
+    }
+    events = await store.get_events(CID)
+    resume_messages = [
+        event
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.source is EventSource.ENVIRONMENT
+        and "Resumed by user." in event.message.content
+    ]
+    assert len(resume_messages) == 1
+    assert "Use the fresh post-drain step" in resume_messages[0].message.content
+    rt.start.assert_called_once_with(CID)
+
+
+async def test_resume_does_not_start_beside_cancellation_resistant_old_task(monkeypatch):
+    import disco.agent_server.resume_service as resume_mod
+
+    monkeypatch.setattr(resume_mod, "_RESUME_DRAIN_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(resume_mod, "_RESUME_CANCEL_GRACE_S", 0.01)
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    monkeypatch.setattr(rt, "start", MagicMock())
+
+    release = asyncio.Event()
+
+    async def _resists_one_cancel() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    old_task = asyncio.create_task(_resists_one_cancel())
+    rt._run_generation[CID] = 1
+    rt._tasks[CID] = old_task
+
+    result = await asyncio.wait_for(rt.resume_conversation(CID), timeout=1)
+    assert result == {"ok": False, "reason": "resume_drain_timeout"}
+    assert rt._tasks.get(CID) is old_task
+    assert not old_task.done()
+    rt.start.assert_not_called()
+
+    release.set()
+    await old_task
+    rt._tasks.pop(CID, None)
 
 
 # ---- HTTP route (via TestClient) ---------------------------------------------
@@ -694,3 +913,69 @@ async def test_auto_resume_fires_again_after_productive_work_between_pauses(monk
     await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
     await rt._finalize_clean_return(cid)  # capped — no 4th
     assert resume.await_count == 3
+
+
+# --- [9] resume of legacy Build mints v1 run intent atomically -----------------
+
+
+async def test_resume_legacy_build_mints_v1_run_intent():
+    """Resuming a legacy Build conversation (pre-v1, using agent.run-admitted)
+    must mint a v1 run-intent atomically with the RUNNING flip, so the resumed
+    loop runs under strict v1 protocol."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    # Legacy Build events — no run_protocol_version
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+
+    result = await rt.resume_conversation(CID)
+    await _cancel_task(rt)
+
+    assert result["ok"] is True
+    events = await store.get_events(CID)
+    intents = [
+        e
+        for e in events
+        if isinstance(e, WorkspaceMutationEvent) and e.operation == "agent.run-intent.resume"
+    ]
+    assert len(intents) == 1
+    assert intents[0].run_protocol_version == 1
+    # The RUNNING flip follows the intent
+    resume_idx = next(i for i, e in enumerate(events) if e is intents[0])
+    running_events = [
+        e
+        for e in events[resume_idx + 1 :]
+        if isinstance(e, StatusEvent) and e.status == ConversationStatus.RUNNING
+    ]
+    assert len(running_events) >= 1
+
+
+async def test_resume_sealed_workflow_mints_v1_run_intent():
+    """Resuming a sealed FINISHED workspace (via IDLE+unfinished plan) must
+    also mint a v1 run-intent atomically."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    # Sealed but with an approved unfinished PlanEvent
+    await store.append(CID, _user("build it"))
+    await store.append(CID, PlanEvent(summary="plan", steps=[PlanStep(title="step 1")], revision=1))
+    from disco.core.events import StatusEvent as SE
+
+    await store.append(CID, SE(status=ConversationStatus.RUNNING, detail="plan_approved"))
+    await store.append(CID, SE(status=ConversationStatus.IDLE))
+
+    result = await rt.resume_conversation(CID)
+    await _cancel_task(rt)
+
+    assert result["ok"] is True
+    events = await store.get_events(CID)
+    intents = [
+        e
+        for e in events
+        if isinstance(e, WorkspaceMutationEvent) and e.operation == "agent.run-intent.resume"
+    ]
+    assert len(intents) >= 1
+    assert intents[0].run_protocol_version == 1

@@ -10,6 +10,7 @@ from disco.core import (
     ObservationEvent,
     ToolCall,
     ToolResult,
+    WorkspaceMutationEvent,
 )
 from disco.core.effects import (
     CoverageSpan,
@@ -29,6 +30,7 @@ from disco.core.loop.dedup import (
     collapse_superseded_reads,
 )
 from disco.core.loop.file_state import FileStateTracker
+from disco.core.loop.messages import _workspace_paths_from_events
 from disco.core.loop.resource_context import (
     canonical_workspace_identifier,
     coverage_is_subset,
@@ -360,6 +362,136 @@ def test_same_revision_snapshot_compacts_historical_read():
     assert out[0].content == _SUPERSEDED_READ_NOTICE.format(path="app.js")
 
 
+def test_current_run_explicit_read_stays_verbatim_beside_snapshot():
+    """A requested read is answered in the recent tail, not only by a prefix pointer."""
+
+    digest = hashlib.sha256(b"current bytes").hexdigest()
+    receipt = _receipt("app.js", digest=digest, spans=((0, 2),), total=2, complete=True)
+    events = with_seqs(
+        [
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+            *_pair("read", receipt, content="current bytes"),
+        ]
+    )
+    prompt_receipt = snapshot_receipt(
+        path="app.js",
+        sha256=digest,
+        total_lines=2,
+        raw_size_bytes=13,
+        rendered_content="current bytes",
+    )
+
+    out = collapse_superseded_reads(
+        _tool_messages(events),
+        events,
+        prompt_receipts=(prompt_receipt,),
+    )
+
+    assert out[0].content == "current bytes"
+
+
+def test_new_run_intent_allows_prior_run_read_to_compact_to_snapshot():
+    """The high-attention copy expires at the next durable instruction boundary."""
+
+    digest = hashlib.sha256(b"current bytes").hexdigest()
+    receipt = _receipt("app.js", digest=digest, spans=((0, 2),), total=2, complete=True)
+    events = with_seqs(
+        [
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+            *_pair("read", receipt, content="current bytes"),
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+        ]
+    )
+    prompt_receipt = snapshot_receipt(
+        path="app.js",
+        sha256=digest,
+        total_lines=2,
+        raw_size_bytes=13,
+        rendered_content="current bytes",
+    )
+
+    out = collapse_superseded_reads(
+        _tool_messages(events),
+        events,
+        prompt_receipts=(prompt_receipt,),
+    )
+
+    assert out[0].content == _SUPERSEDED_READ_NOTICE.format(path="app.js")
+
+
+def test_current_run_read_never_overrides_a_newer_snapshot_revision():
+    """External mutation wins over high-attention placement of an old read."""
+
+    old = _receipt("app.js", digest="1" * 64, spans=((0, 2),), total=2, complete=True)
+    events = with_seqs(
+        [
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+            *_pair("read", old, content="old bytes"),
+        ]
+    )
+    changed_snapshot = snapshot_receipt(
+        path="app.js",
+        sha256="2" * 64,
+        total_lines=2,
+        raw_size_bytes=9,
+        rendered_content="new bytes",
+    )
+
+    out = collapse_superseded_reads(
+        _tool_messages(events),
+        events,
+        prompt_receipts=(changed_snapshot,),
+    )
+
+    assert out[0].content == _STALE_READ_NOTICE.format(path="app.js", digest=("1" * 64)[:12])
+
+
+def test_latest_current_run_partial_read_is_visible_even_beside_an_older_full_read():
+    """A just-requested range is answered even when a full read is already essential."""
+
+    digest = "3" * 64
+    full = _receipt("app.js", digest=digest, spans=((0, 20),), total=20, complete=True)
+    partial = _receipt("app.js", digest=digest, spans=((10, 15),), total=20)
+    events = with_seqs(
+        [
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+            *_pair("full", full, content="full body"),
+            *_pair("partial", partial, content="targeted lines"),
+        ]
+    )
+    current = snapshot_receipt(
+        path="app.js",
+        sha256=digest,
+        total_lines=20,
+        raw_size_bytes=9,
+        rendered_content="full body",
+    )
+
+    out = collapse_superseded_reads(
+        _tool_messages(events),
+        events,
+        prompt_receipts=(current,),
+    )
+
+    assert out[0].content == "full body"
+    assert out[1].content == "targeted lines"
+
+
 def test_changed_revision_snapshot_labels_historical_read_stale():
     receipt = _receipt("app.js", digest="1" * 64, spans=((0, 2),), total=2, complete=True)
     events = with_seqs(_pair("read", receipt))
@@ -554,6 +686,60 @@ def _write(path: str) -> ActionEvent:
             arguments={"path": path, "content": ""},
         ),
     )
+
+
+def _read(path: str) -> ActionEvent:
+    return ActionEvent(
+        thought="read",
+        tool_call=ToolCall(
+            tool_name="file_read",
+            arguments={"path": path},
+        ),
+    )
+
+
+def test_rereads_do_not_reorder_the_workspace_state_working_set():
+    events = [_write("a.py"), _write("b.py")]
+    assert _workspace_paths_from_events(events) == (["b.py", "a.py"], [])
+
+    events.append(_read("a.py"))
+    assert _workspace_paths_from_events(events) == (["b.py", "a.py"], [])
+
+    read_only = [_read("r1.py"), _read("r2.py"), _read("r1.py")]
+    assert _workspace_paths_from_events(read_only) == ([], ["r2.py", "r1.py"])
+
+
+def test_reread_keeps_cacheable_workspace_snapshot_byte_stable():
+    sandbox = _Sandbox({"a.py": b"a = 1\n", "b.py": b"b = 2\n"})
+    before_events = [_write("a.py"), _write("b.py")]
+    after_events = [*before_events, _read("a.py")]
+
+    before = asyncio.run(workspace_snapshot_message(sandbox, before_events))
+    after = asyncio.run(workspace_snapshot_message(sandbox, after_events))
+
+    assert before is not None and after is not None
+    assert before.content == after.content
+
+
+def test_reread_does_not_change_the_single_file_snapshot_slot():
+    sandbox = _Sandbox({"a.py": b"a = 1\n", "b.py": b"b = 2\n"})
+    caps = ContextCaps(
+        max_files=1,
+        per_file_chars=100,
+        total_chars=2_000,
+        read_char_budget=100,
+        obs_snip_chars=100,
+    )
+    before_events = [_write("a.py"), _write("b.py")]
+    after_events = [*before_events, _read("a.py")]
+
+    before = asyncio.run(workspace_snapshot_message(sandbox, before_events, caps=caps))
+    after = asyncio.run(workspace_snapshot_message(sandbox, after_events, caps=caps))
+
+    assert before is not None and after is not None
+    assert "BEGIN FILE b.py" in before.content
+    assert "BEGIN FILE a.py" not in before.content
+    assert before.content == after.content
 
 
 def test_snapshot_emits_exact_receipt_and_never_uses_prior_turn_pointer():

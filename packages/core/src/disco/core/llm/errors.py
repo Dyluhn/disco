@@ -33,9 +33,16 @@ class LLMTransientError(LLMError):
         provider: str = "",
         model: str = "",
         retry_after_s: float | None = None,
+        http_status: int | None = None,
     ) -> None:
         super().__init__(message, provider=provider, model=model)
         self.retry_after_s = retry_after_s
+        # Inert diagnostic attribute (like retry_after_s): the HTTP status the
+        # provider answered with (429 usage/rate limit, 5xx outage), or None for
+        # timeouts/network failures that never got a response. Nothing in the
+        # retry/classification path reads it — it exists so a landing can label
+        # the outage honestly in non-semantic event meta (UI display only).
+        self.http_status = http_status
 
 
 class LLMProviderUnavailable(LLMTransientError):

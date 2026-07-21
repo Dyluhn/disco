@@ -20,6 +20,7 @@ import copy
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
+from uuid import uuid4
 
 from disco.core import SecurityRisk
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
@@ -86,6 +87,18 @@ class ToolContext(BaseModel):
     # recovery text, never for authorization; None preserves standalone tool tests
     # that call Tool.run directly without an executor.
     scope_allowed_tools: frozenset[str] | None = None
+    # BF1: host-owned browser/workspace coherence metadata.  These fields are
+    # deliberately absent from every model-facing Args schema.  The executor
+    # advances the epoch from trusted capability metadata after successful
+    # workspace mutations; the fixed lane separates the agent's stateful page
+    # from host-verifier probes.  Standalone contexts get an isolated generation
+    # and no pending mutation, preserving their existing behavior.
+    browser_workspace_epoch: int | None = Field(default=None, strict=True, gt=0)
+    browser_generation: str = Field(
+        default_factory=lambda: uuid4().hex,
+        pattern=r"^[0-9a-f]{32}$",
+    )
+    browser_lane: Literal["agent", "host_verifier"] = "agent"
 
 
 class ToolOutcome(BaseModel):
@@ -246,6 +259,7 @@ class ToolExecutionError(BaseModel):
         "denied",
         "timeout",
         "sandbox_error",
+        "execution_superseded",
     ]
     message: str
     validation_errors: list[dict[str, Any]] | None = None

@@ -3,6 +3,9 @@ security-critical tests. The headline is `test_no_secret_in_the_box`."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from disco.tools import (
     CapabilityBroker,
     DefaultToolExecutor,
@@ -18,25 +21,49 @@ from tool_fakes import call
 SENTINEL = "SUPER-SECRET-SENTINEL-9F3A2"
 
 
+def _assert_secret_absent_from_workspace(workspace: Path, secret: str) -> None:
+    """Inspect every persisted byte, including host-owned bounded-output spills."""
+    needle = secret.encode()
+    for path in workspace.rglob("*"):
+        if path.is_file():
+            relative = path.relative_to(workspace)
+            assert needle not in path.read_bytes(), f"secret present in workspace file {relative}"
+
+
 # ---- §11.4 the headline: no secret is ever in the box -----------------------
 
 
-async def test_no_secret_in_the_box():
+async def test_no_secret_in_the_box(tmp_path: Path):
     """A secret injected into the orchestrator's store is absent from the
     sandbox's env, filesystem, and process list."""
     secrets = InMemorySecretsStore({"PROVIDER_KEY": SENTINEL})
     assert secrets.get("PROVIDER_KEY") == SENTINEL  # the orchestrator can read it
 
-    svc = ProcessSandboxService()
+    svc = ProcessSandboxService(root=str(tmp_path / "sandbox-root"))
     inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
-    # env (clean — never os.environ), process list, and workspace: all secret-free.
-    env = await inst.exec_shell("env", timeout_s=10)
-    procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
-    files = await inst.list_dir(".")
-    assert SENTINEL not in env.stdout
-    assert SENTINEL not in procs.stdout
-    assert files == []  # nothing was written into the box
-    await inst.destroy()
+    try:
+        # env (clean — never os.environ), process list, and every persisted byte:
+        # all secret-free. Large process listings may legitimately create a bounded
+        # host-owned .disco/spills file, so inspect it rather than assuming no files.
+        env = await inst.exec_shell("env", timeout_s=10)
+        procs = await inst.exec_shell("ps -e -o args 2>/dev/null || ps", timeout_s=10)
+        files = await inst.list_dir(".")
+        assert SENTINEL not in env.stdout
+        assert SENTINEL not in procs.stdout
+        _assert_secret_absent_from_workspace(inst._workspace, SENTINEL)
+        assert [name for name in files if name != ".disco"] == []
+    finally:
+        await inst.destroy()
+
+
+def test_secret_absence_oracle_scans_platform_spills(tmp_path: Path) -> None:
+    """A platform-managed path is allowed structurally but never exempt from scanning."""
+    spill = tmp_path / ".disco" / "spills" / "captured.stdout.log"
+    spill.parent.mkdir(parents=True)
+    spill.write_text(f"ordinary output\n{SENTINEL}\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="secret present in workspace file"):
+        _assert_secret_absent_from_workspace(tmp_path, SENTINEL)
 
 
 async def test_capability_mediates_without_exposing_the_credential():

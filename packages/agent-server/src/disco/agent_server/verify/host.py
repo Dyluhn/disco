@@ -8,11 +8,13 @@ results without depending on agent-server internals.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from disco.core.loop import HostVerificationDeliverable
+from disco.tools.builtin.browser import BrowserTool
 from disco.tools.builtin.verify_app import (
     VerifyWebAppArgs,
     VerifyWebAppTool,
@@ -40,30 +42,49 @@ class HostWebAppVerifier:
     def __init__(self, executor: Any | None = None, *, client: Any | None = None) -> None:
         self._executor = executor
         self._client = client
+        # BF1: one fixed host-verifier lane per verifier. Serializing it keeps
+        # concurrent finish probes from sharing state while the daemon's agent
+        # lane remains entirely independent.
+        self._browser_lane_lock = asyncio.Lock()
 
     async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
         ctx_builder: Any = getattr(self._executor, "_build_context", None)
         if ctx_builder is not None:
-            try:
-                ctx = await ctx_builder(VerifyWebAppTool.definition)
-                outcome = await VerifyWebAppTool().run(
-                    VerifyWebAppArgs(url=deliverable.deployment_url or ""),
-                    ctx,
-                )
-                if outcome.success and outcome.structured:
-                    return dict(outcome.structured)
-                return self._unavailable_verdict(
-                    deliverable,
-                    outcome.error or outcome.content or "host verifier produced no verdict",
-                )
-            except Exception as exc:  # noqa: BLE001 — shadow verifier degrades to telemetry
-                _LOG.warning(
-                    "host web verifier failed for %s:%s",
-                    deliverable.conversation_id,
-                    deliverable.artifact_path,
-                    exc_info=True,
-                )
-                return self._unavailable_verdict(deliverable, str(exc))
+            async with self._browser_lane_lock:
+                ctx = None
+                try:
+                    agent_ctx = await ctx_builder(VerifyWebAppTool.definition)
+                    # The lane is host-selected and fixed; it is not present in
+                    # VerifyWebAppArgs or any model-facing tool schema.
+                    ctx = agent_ctx.model_copy(update={"browser_lane": "host_verifier"})
+                    outcome = await VerifyWebAppTool().run(
+                        VerifyWebAppArgs(url=deliverable.deployment_url or ""),
+                        ctx,
+                    )
+                    if outcome.success and outcome.structured:
+                        return dict(outcome.structured)
+                    return self._unavailable_verdict(
+                        deliverable,
+                        outcome.error or outcome.content or "host verifier produced no verdict",
+                    )
+                except Exception as exc:  # noqa: BLE001 — shadow verifier degrades to telemetry
+                    _LOG.warning(
+                        "host web verifier failed for %s:%s",
+                        deliverable.conversation_id,
+                        deliverable.artifact_path,
+                        exc_info=True,
+                    )
+                    return self._unavailable_verdict(deliverable, str(exc))
+                finally:
+                    if ctx is not None:
+                        try:
+                            await BrowserTool().close_host_verifier_lane(ctx)
+                        except Exception:  # noqa: BLE001 — cleanup is best-effort telemetry
+                            _LOG.warning(
+                                "host verifier lane cleanup failed for %s",
+                                deliverable.conversation_id,
+                                exc_info=True,
+                            )
 
         if self._client is not None:
             return await self._verify_via_client(deliverable)

@@ -14,6 +14,7 @@ from disco.core import SecurityRisk, ToolCall
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
 from disco.tools.anatomy import ToolDef
+from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
 from pydantic import BaseModel
 
 # ---- fakes ------------------------------------------------------------------
@@ -41,6 +42,7 @@ def _fake_mcp_tools(n: int, server: str = "srv") -> list[ToolDef]:
             args_model=_FakeMCPArgs,
             runs_in="sandbox",
             base_risk=SecurityRisk.LOW,
+            behavior=OPAQUE_MCP_BEHAVIOR,
         )
         for i in range(n)
     ]

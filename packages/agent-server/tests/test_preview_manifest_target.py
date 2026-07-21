@@ -16,6 +16,8 @@ from disco.agent_server.routes.preview import make_preview_router
 from disco.core import (
     ConversationStatus,
     DeliverableEvent,
+    FinalWorkspaceSeal,
+    ResourceKey,
     SqliteEventStore,
     StatusEvent,
     WorkspaceVersionEvent,
@@ -74,8 +76,9 @@ async def _commit(
         cid,
         DeliverableEvent(title="Verified app", path=entry, artifact_kind="app"),
     )
-    await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
-    version = ps.cut_version(cid, trigger="finish")
+    terminal = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+    assert terminal.seq is not None
+    version = ps.cut_verified_version(cid, trigger="finish", pin=True)
     assert version is not None
     await store.append(
         cid,
@@ -83,6 +86,15 @@ async def _commit(
             version_seq=version.seq,
             tree_digest=version.tree_digest,
             trigger="finish",
+            final_seal=FinalWorkspaceSeal(
+                scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                terminal_seq=terminal.seq,
+                latest_effect_seq=None,
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                file_count=version.file_count,
+                total_bytes=version.total_bytes,
+            ),
         ),
     )
     return version.seq
@@ -123,6 +135,9 @@ async def test_completed_preview_uses_selected_entry_and_all_relative_assets(
         },
     )
     await _commit(store, ps, cid, entry="release/index.html")
+    # A post-commit change to the mutable mirror must never alter the completed
+    # preview. The immutable version is the only authority for FINISHED.
+    (ps.path_for(cid) / "release" / "index.html").write_bytes(b"MUTATED LIVE MIRROR")
 
     # Constructing a fresh runtime is the application-restart boundary.
     runtime = _RestartedRuntime(ProjectStore(str(tmp_path / surface)))
@@ -138,6 +153,7 @@ async def test_completed_preview_uses_selected_entry_and_all_relative_assets(
         nested = await client.get(f"/conversations/{cid}/preview-app/docs/")
 
     assert root.status_code == 200
+    assert b"MUTATED LIVE MIRROR" not in root.content
     assert b"LATEST SELECTED APP" in root.content
     assert b"STALE ROOT SCAFFOLD" not in root.content
     assert css.status_code == 200 and css.content.startswith(b"@font-face")
@@ -187,6 +203,65 @@ async def test_later_revision_and_historical_version_keep_their_own_entries(
     store.close()
 
 
+async def test_unchanged_finish_reuses_version_but_commits_latest_app_entry(
+    tmp_path: Path,
+) -> None:
+    cid = "conv_manifest_reused_version"
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(cid, owner_id="local", surface="build")
+    ps = ProjectStore(str(tmp_path))
+    _replace_workspace(
+        ps,
+        cid,
+        {
+            "old/index.html": b"OLD APP ENTRY",
+            "new/index.html": b"CURRENT APP ENTRY",
+        },
+    )
+    first = await _commit(store, ps, cid, entry="old/index.html")
+
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+    second = await _commit(store, ps, cid, entry="new/index.html")
+    assert second == first
+
+    runtime = _RestartedRuntime(ProjectStore(str(tmp_path)))
+    transport = httpx.ASGITransport(app=_app(store, runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        current = await client.get(f"/conversations/{cid}/preview-app/")
+        selected = await client.get(f"/conversations/{cid}/preview-app/?version={second}")
+
+    assert current.status_code == 200 and b"CURRENT APP ENTRY" in current.content
+    assert selected.status_code == 200 and b"CURRENT APP ENTRY" in selected.content
+    assert b"OLD APP ENTRY" not in current.content
+    assert b"OLD APP ENTRY" not in selected.content
+
+    # An interrupted later finalization may publish an internal checkpoint for
+    # the reused version after selecting a different entry. Historical preview
+    # remains bound to the latest public version marker, never that checkpoint.
+    await store.append(
+        cid,
+        DeliverableEvent(title="Interrupted", path="old/index.html", artifact_kind="app"),
+    )
+    await store.append(
+        cid,
+        WorkspaceVersionEvent(
+            version_seq=second,
+            tree_digest=ps.verify_version(cid, second).tree_digest,
+            trigger="finalizing:999",
+        ),
+    )
+    interrupted_transport = httpx.ASGITransport(app=_app(store, runtime))
+    async with httpx.AsyncClient(
+        transport=interrupted_transport,
+        base_url="http://test",
+    ) as client:
+        interrupted = await client.get(f"/conversations/{cid}/preview-app/?version={second}")
+    assert interrupted.status_code == 200
+    assert b"CURRENT APP ENTRY" in interrupted.content
+    assert b"OLD APP ENTRY" not in interrupted.content
+    store.close()
+
+
 async def test_missing_selected_entry_never_falls_back_and_traversal_stays_closed(
     tmp_path: Path,
 ) -> None:
@@ -211,4 +286,36 @@ async def test_missing_selected_entry_never_falls_back_and_traversal_stays_close
     assert traversal.status_code == 404
     assert encoded_once.status_code == 404
     assert b"root:" not in traversal.content
+    store.close()
+
+
+async def test_finished_legacy_marker_never_serves_mutable_bytes(tmp_path: Path) -> None:
+    cid = "conv_manifest_unsealed"
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(cid, owner_id="local", surface="build")
+    ps = ProjectStore(str(tmp_path))
+    _replace_workspace(ps, cid, {"index.html": b"UNSEALED MUTABLE"})
+    await store.append(
+        cid,
+        DeliverableEvent(title="Unsealed", path="index.html", artifact_kind="app"),
+    )
+    await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+    version = ps.cut_version(cid, trigger="finish")
+    assert version is not None
+    await store.append(
+        cid,
+        WorkspaceVersionEvent(
+            version_seq=version.seq,
+            tree_digest=version.tree_digest,
+            trigger="finish",
+        ),
+    )
+
+    runtime = _RestartedRuntime(ProjectStore(str(tmp_path)))
+    transport = httpx.ASGITransport(app=_app(store, runtime))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/conversations/{cid}/preview-app/")
+
+    assert response.status_code == 503
+    assert b"UNSEALED MUTABLE" not in response.content
     store.close()

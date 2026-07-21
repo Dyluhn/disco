@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
+from ..context.compaction import CompactionPolicy, context_compact_if_needed
+from ..effects import CoverageSpan, EffectCapability, MutationReceipt, ObservationReceipt
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
+    CondensationEvent,
     ConversationStatus,
     ErrorEvent,
     Event,
@@ -25,6 +28,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
+    ToolCall,
 )
 from ..inspect import inspect_enabled, record_progress_shadow, record_tool_scope
 from ..llm import (
@@ -36,15 +40,18 @@ from ..llm import (
     LLMTransientError,
     OperatingMode,
 )
+from ..llm.request_budget import RequestBudgetEstimate
 from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from ..obs import log_event
 from ..view import View, repair_tool_call_adjacency
 from . import signals, view_render
 from .boundaries import AgentStep
+from .context_live import context_pack_enabled, protected_context_compaction_seqs
 from .control import Disp
 from .fc_kit import _nearest_tool_name
 from .messages import _PLAN_EXPLORE_READ_CAP, _describe_llm_error
 from .progress import reduce_progress
+from .resource_context import merge_spans
 from .stream_extract import extract_partial_string_field
 from .stuck import successful_mutation_with_receipt
 from .tool_specs import (
@@ -289,15 +296,34 @@ class Driver:
                     "index": chunk.tool_index,
                     "delta": new,
                     "field": field,
+                    "agent_view_id": self._loop._current_agent_view_id(),
                 }
             )
 
         return _hook
 
-    async def _pause_driver_unavailable(self) -> tuple[None, Disp]:
+    async def _pause_driver_unavailable(self, cause: LLMError | None = None) -> tuple[None, Disp]:
         """Explain a driver outage and HALT at the user-question gate.
         Called from both the LLMProviderUnavailable and LLMTransientError
-        exhaustion paths to keep drive_step within its LOC budget."""
+        exhaustion paths to keep drive_step within its LOC budget.
+
+        `cause` (when supplied) is labeled into the landing events' non-semantic
+        `meta` channel so the UI can say WHY the driver stayed unavailable (e.g.
+        a provider 429 usage limit) instead of a generic pause. The reason,
+        guidance, statuses, and model-visible text are byte-identical either
+        way — meta never enters the model view or any loop/oracle signal."""
+        extra_meta: dict[str, str | int] | None = None
+        if cause is not None:
+            # str(cause) is the provider adapter's SAFE summary (never the raw
+            # body) — e.g. "provider opencode-go returned HTTP 429 type=…".
+            extra_meta = {
+                "driver_error": str(cause),
+                "driver_error_kind": type(cause).__name__,
+            }
+            if cause.provider:
+                extra_meta["driver_error_provider"] = cause.provider
+            if isinstance(cause, LLMTransientError) and cause.http_status is not None:
+                extra_meta["driver_error_http_status"] = cause.http_status
         await self._loop._land_blocked(
             reason="driver-unavailable",
             guidance=(
@@ -306,6 +332,7 @@ class Driver:
             ),
             legacy_status=ConversationStatus.PAUSED,
             legacy_detail="driver-unavailable",
+            extra_meta=extra_meta,
         )
         return None, Disp.HALT
 
@@ -694,21 +721,14 @@ class Driver:
         model requests are unchanged outside the typed escape turn.
         """
         escape_seq = signals.stuck_escape_seq(events)
-        action_by_id = {
-            e.id: e for e in events if isinstance(e, ActionEvent) and e.tool_call is not None
-        }
-        recovered_since_escape = escape_seq is not None and any(
-            isinstance(e, ObservationEvent)
-            and e.seq is not None
-            and e.seq > escape_seq
-            and successful_mutation_with_receipt(e, action_by_id.get(e.action_id or ""))
-            for e in events
+        recovered_since_escape = escape_seq is not None and self._trusted_receipt_since(
+            events, escape_seq
         )
         # H533: a read-only bridge (notably an unchanged file_list) is not a
         # recovery from the read loop that created this quarantine. Keep the
-        # loop-causing tool withheld until the environment confirms a
+        # bypass aliases withheld until the environment confirms a
         # receipt-backed mutation; failed mutations and inspection-only actions
-        # may not launder the escape state and silently re-enable it.
+        # may not launder the escape state and silently re-enable them.
         in_escape = escape_seq is not None and not recovered_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
         escape_blocked_tools = self.stuck_escape_blocked_tools_for_step(events)
@@ -792,71 +812,45 @@ class Driver:
             escape_blocked_tools,
         )
 
-    def active_stuck_escape_blocked_tools(self, events: list[Event]) -> frozenset[str]:
-        """Return the current receipt-gated quarantine reconstructed from events.
-
-        A trusted mutation earns one successful verification use of each tool
-        withheld by the current escape.  It does not permanently reopen the
-        loop-causing tool: after that verification succeeds, the tool is
-        quarantined again until a newer trusted mutation receipt lands.  The
-        budget is derived entirely from append-only event pairs so restart and
-        replay reconstruct the same offered-tool surface.
-        """
-        blocked_tools, latest_receipt_seq, consumed = self._stuck_escape_verification_state(events)
-        if not blocked_tools:
-            return frozenset()
-        if latest_receipt_seq is None:
-            return blocked_tools
-        return frozenset(consumed)
-
-    def stuck_escape_verification_consumptions(self, events: list[Event]) -> dict[str, int]:
-        """Latest successful one-shot verifications for the current receipt.
-
-        Values are durable ObservationEvent sequence numbers.  The engine binds
-        one model-facing progression reminder to each value, so a restart neither
-        loses the decision-point guidance nor emits it on every subsequent turn.
-        """
-        _blocked_tools, _latest_receipt_seq, consumed = self._stuck_escape_verification_state(
-            events
-        )
-        return consumed
-
     def stuck_escape_blocked_tools_for_step(self, events: list[Event]) -> frozenset[str]:
-        """Complete temporary tool boundary for the current read-loop escape.
+        """Schema-level tool boundary for the current read-loop recovery episode.
 
-        ``file_read`` keeps H553's receipt-gated one-shot verification budget.
-        General execution stays withheld for the full authenticated escape
-        episode because it can bypass that capability boundary without yielding
-        a typed read receipt.  A new user turn clears the underlying escape marker
-        and restores the ordinary surface.
+        Only the read-BYPASS aliases (general shell/code execution and delegated
+        exploration) are schema-withheld, and only while the episode has seen
+        ZERO trusted changed-state receipts: in that no-progress window they
+        could reread the same bytes under another name without yielding a typed
+        read receipt (H583).  ``file_read`` itself is NEVER schema-withheld —
+        the k6g 128k canary proved tool-level quarantine convicts legitimate
+        different-resource reads (finding F1).  Redundant reads are refused
+        per-call by :meth:`stuck_escape_redundant_read_refusal` using canonical
+        resource identity, requested range, and content digests instead of the
+        tool name.  A user turn, recovery boundary, or typed blocking obligation
+        ends the episode and restores the ordinary surface.
         """
-        active = set(self.active_stuck_escape_blocked_tools(events))
-        if "file_read" in signals.stuck_escape_blocked_tools(events):
-            active.update(_STUCK_ESCAPE_EQUIVALENT_READ_BYPASS_TOOLS)
-        return frozenset(active)
-
-    def _stuck_escape_verification_state(
-        self, events: list[Event]
-    ) -> tuple[frozenset[str], int | None, dict[str, int]]:
-        """Reconstruct authenticated receipt and verification-consumption state."""
         escape_seq = signals.stuck_escape_seq(events)
         if escape_seq is None:
-            return frozenset(), None, {}
-        blocked_tools = signals.stuck_escape_blocked_tools(events)
-        if not blocked_tools:
-            return frozenset(), None, {}
+            return frozenset()
+        if "file_read" not in signals.stuck_escape_blocked_tools(events):
+            return frozenset()
+        if self._trusted_receipt_since(events, escape_seq):
+            return frozenset()
+        return _STUCK_ESCAPE_EQUIVALENT_READ_BYPASS_TOOLS
+
+    @staticmethod
+    def _trusted_receipt_since(events: list[Event], boundary_seq: int) -> bool:
+        """Whether any paired trusted changed-state receipt landed after *boundary_seq*."""
+
         actions = {
             event.id: event
             for event in events
             if isinstance(event, ActionEvent) and event.tool_call is not None
         }
-        receipt_seqs: list[int] = []
         for event in events:
             if (
                 not isinstance(event, ObservationEvent)
                 or event.source != EventSource.ENVIRONMENT
                 or event.seq is None
-                or event.seq <= escape_seq
+                or event.seq <= boundary_seq
             ):
                 continue
             action = actions.get(event.action_id or "")
@@ -864,41 +858,181 @@ class Driver:
                 action is None
                 or action.source != EventSource.AGENT
                 or action.seq is None
-                or not escape_seq < action.seq < event.seq
+                or not boundary_seq < action.seq < event.seq
                 or action.tool_call is None
                 or event.tool_result.call_id != action.tool_call.call_id
-                or not successful_mutation_with_receipt(event, action)
             ):
                 continue
-            receipt_seqs.append(event.seq)
-        if not receipt_seqs:
-            return blocked_tools, None, {}
-        latest_receipt_seq = max(receipt_seqs)
+            if successful_mutation_with_receipt(event, action):
+                return True
+        return False
 
-        consumed: dict[str, int] = {}
+    def stuck_escape_redundant_read_refusal(
+        self, events: list[Event], tool_call: ToolCall
+    ) -> dict[str, object] | None:
+        """Refusal facts when a read is PROVABLY redundant in the active episode.
+
+        The decision uses the host's own typed evidence — canonical resource
+        identity, content digest, and exact line-span coverage from
+        ``file_read``'s ObservationReceipts — never the tool name:
+
+        - no active recovery episode → never refused;
+        - a different resource, an unknown resource, or a resource with no
+          receipt-proven coverage → allowed;
+        - a resource whose digest changed (trusted MutationReceipt) since its
+          coverage was recorded → allowed (mutation-then-reread is progress);
+        - any trusted changed-state receipt WITHOUT exact resource attribution
+          (an opaque broad mutator) after the coverage → allowed, fail-open:
+          possibly-changed bytes are never "already known";
+        - coverage delivered by an observation that condensation has since
+          FORGOTTEN is not knowledge the model still holds → allowed;
+        - a requested range containing any line outside the receipt-proven
+          coverage of the CURRENT digest → allowed (pagination stays possible);
+        - only a request whose every returned line is provably already in the
+          model's visible context, byte-identical, is refused.
+        """
+
+        escape_seq = signals.stuck_escape_seq(events)
+        if escape_seq is None or tool_call.tool_name != "file_read":
+            return None
+        if "file_read" not in signals.stuck_escape_blocked_tools(events):
+            return None
+        path = signals.normalized_workspace_read_path(tool_call.arguments.get("path"))
+        if path is None:
+            return None
+
+        forgotten: list[tuple[int, int]] = [
+            (event.forgotten_start_seq, event.forgotten_end_seq)
+            for event in events
+            if isinstance(event, CondensationEvent)
+        ]
+
+        def _visible(seq: int | None) -> bool:
+            if seq is None:
+                return False
+            return all(not (start <= seq <= end) for start, end in forgotten)
+
+        actions = {
+            event.id: event
+            for event in events
+            if isinstance(event, ActionEvent) and event.tool_call is not None
+        }
+        # Latest authoritative digest per this resource + visible coverage per digest.
+        latest_digest: str | None = None
+        latest_digest_seq = -1
+        last_path_mutation_seq = -1
+        covered_by_digest: dict[str, set[tuple[int, int]]] = {}
+        total_by_digest: dict[str, int | None] = {}
+        coverage_seq_by_digest: dict[str, int] = {}
+        opaque_mutation_seq = -1
         for event in events:
             if (
                 not isinstance(event, ObservationEvent)
                 or event.source != EventSource.ENVIRONMENT
                 or event.seq is None
-                or event.seq <= latest_receipt_seq
                 or not event.tool_result.success
             ):
                 continue
             action = actions.get(event.action_id or "")
-            if (
-                action is None
-                or action.source != EventSource.AGENT
-                or action.seq is None
-                or not latest_receipt_seq < action.seq < event.seq
-                or action.tool_call is None
-                or action.tool_call.tool_name not in blocked_tools
-                or event.tool_result.tool_name != action.tool_call.tool_name
-                or event.tool_result.call_id != action.tool_call.call_id
-            ):
+            paired = (
+                action is not None
+                and action.source == EventSource.AGENT
+                and action.tool_call is not None
+                and event.tool_result.call_id == action.tool_call.call_id
+            )
+            if not paired:
                 continue
-            consumed[action.tool_call.tool_name] = event.seq
-        return blocked_tools, latest_receipt_seq, consumed
+            receipts = event.tool_result.effect_receipts
+            named_mutation = False
+            for receipt in receipts:
+                if isinstance(receipt, MutationReceipt):
+                    named_mutation = True
+                    # Verifier V1/V5: a DELETION receipt (after=None) advances
+                    # the revision too — coverage of a deleted revision proves
+                    # nothing about a future read. Mutations win same-event
+                    # ordering ties (>=) so an ObservationReceipt listed before
+                    # the MutationReceipt in one observation cannot shadow the
+                    # new digest.
+                    if (
+                        receipt.resource.namespace == "workspace.file"
+                        and receipt.resource.identifier == path
+                        and event.seq >= latest_digest_seq
+                    ):
+                        latest_digest = receipt.after.digest if receipt.after is not None else None
+                        latest_digest_seq = event.seq
+                        last_path_mutation_seq = event.seq
+                elif (
+                    isinstance(receipt, ObservationReceipt)
+                    and receipt.capability is EffectCapability.WORKSPACE_CONTENT_READ
+                    and receipt.revision.resource.namespace == "workspace.file"
+                    and receipt.revision.resource.identifier == path
+                ):
+                    digest = receipt.revision.digest
+                    if event.seq > latest_digest_seq:
+                        latest_digest = digest
+                        latest_digest_seq = event.seq
+                    if not _visible(event.seq):
+                        continue
+                    spans = covered_by_digest.setdefault(digest, set())
+                    if receipt.complete and receipt.coverage.total is not None:
+                        spans.add((0, receipt.coverage.total))
+                    for span in receipt.coverage.spans:
+                        spans.add((span.start, span.end))
+                    if receipt.coverage.total is not None:
+                        total_by_digest[digest] = receipt.coverage.total
+                    coverage_seq_by_digest[digest] = max(
+                        coverage_seq_by_digest.get(digest, -1), event.seq
+                    )
+            if (
+                not named_mutation
+                and successful_mutation_with_receipt(event, action)
+                and event.seq > opaque_mutation_seq
+            ):
+                opaque_mutation_seq = event.seq
+
+        if latest_digest is None:
+            return None
+        covered = covered_by_digest.get(latest_digest)
+        total = total_by_digest.get(latest_digest)
+        if not covered or total is None:
+            return None
+        if opaque_mutation_seq > coverage_seq_by_digest.get(latest_digest, -1):
+            # An unattributed broad mutator ran after this coverage was recorded;
+            # the bytes may have changed, so the read is not provably redundant.
+            return None
+
+        raw_offset = tool_call.arguments.get("offset")
+        raw_limit = tool_call.arguments.get("limit")
+        offset = raw_offset if type(raw_offset) is int and raw_offset >= 1 else 1
+        limit = raw_limit if type(raw_limit) is int and raw_limit >= 1 else None
+        req_start = offset - 1
+        req_end = total if limit is None else min(total, req_start + limit)
+        if req_start < total:
+            merged = sorted(covered)
+            cursor = req_start
+            for start, end in merged:
+                if start > cursor:
+                    break
+                cursor = max(cursor, end)
+                if cursor >= req_end:
+                    break
+            if cursor < req_end:
+                return None
+        held = merge_spans(tuple(CoverageSpan(start=s, end=e) for s, e in sorted(covered)))
+        return {
+            "path": path,
+            "requested_start_line": min(offset, total + 1),
+            # Verifier N1: a past-EOF probe must not render an inverted range.
+            "requested_end_line": max(req_end, min(offset, total + 1)),
+            "total_lines": total,
+            "held_spans": [(span.start + 1, span.end) for span in held],
+            "digest_prefix": latest_digest[:12],
+            # Verifier V2: the halt bound counts refusals only after the latest
+            # trusted progress on THIS resource (the invariant's fourth
+            # episode-advancing clause) — a refusal before a mutation of the
+            # loop resource and one after it are two independent recoveries.
+            "refusal_floor_seq": max(escape_seq, last_path_mutation_seq, opaque_mutation_seq),
+        }
 
     async def _repair_degenerate_step(
         self,
@@ -951,6 +1085,139 @@ class Driver:
 
         return False, transient_messages, empty_reasoning_repair_count, prose_noop_repair_count
 
+    async def _try_request_budget_preview(
+        self,
+        view: View,
+        events: list[Event],
+        mode,
+        escape_temp,
+        initial_offered_tools: list,
+    ) -> Disp | None:
+        agent = self._loop.agent
+        preview_fn = getattr(agent, "request_budget_preview", None)
+        if not callable(preview_fn):
+            self._log_budget_event(outcome="unavailable")
+            return None
+
+        try:
+            overflow = view_render.overflow_signal(events)
+            preview = cast(
+                RequestBudgetEstimate | None,
+                preview_fn(
+                    view,
+                    initial_offered_tools,
+                    mode=mode,
+                    overflow_signal=overflow,
+                    temperature=escape_temp,
+                    assist=self._loop._assist,
+                ),
+            )
+        except Exception:
+            self._log_budget_event(outcome="unavailable")
+            return None
+        if preview is None:
+            self._log_budget_event(outcome="unavailable")
+            return None
+
+        p = preview  # narrowed to non-None
+
+        # --- should_condense (fail-open: unavailable → normal provider call) ---
+        try:
+            req = self._loop.condenser.should_condense(view, token_count=p.pressure_tokens)
+        except Exception:
+            self._log_budget_event(outcome="unavailable", estimate=p)
+            return None
+
+        if req is None:
+            self._log_budget_event(outcome="within_budget", estimate=p)
+            return None
+
+        pressure_kind: Literal["soft", "hard"] = "soft" if req.soft else "hard"
+
+        # --- context pack (fail-open: try condenser fallback) ---
+        try:
+            if context_pack_enabled():
+                policy = CompactionPolicy.default()
+                snips = context_compact_if_needed(
+                    events,
+                    policy,
+                    protected_seqs=protected_context_compaction_seqs(events),
+                    pressure_chars=p.canonical_payload_bytes,
+                )
+            else:
+                snips = None
+        except Exception:
+            snips = None
+        if snips:
+            for snip in snips:
+                await self._loop._assert_current_agent_view()
+                await self._loop._emit(snip)
+            self._log_budget_event(
+                outcome="compacted",
+                estimate=p,
+                method="context_pack",
+                kind=pressure_kind,
+            )
+            return Disp.CONTINUE
+
+        # --- condenser (fail-open: no_progress → normal provider call) ---
+        await self._loop._assert_current_agent_view()
+        try:
+            view_of_events = View.of(events)
+            tombstone = await self._loop.condenser.condense(
+                events, view_of_events, summarizer=self._loop.summarizer
+            )
+        except Exception:
+            self._log_budget_event(outcome="no_progress", estimate=p, kind=pressure_kind)
+            return None
+
+        if tombstone is not None:
+            await self._loop._assert_current_agent_view()
+            await self._loop._emit(tombstone)
+            self._log_budget_event(
+                outcome="compacted",
+                estimate=p,
+                method="condenser",
+                kind=pressure_kind,
+            )
+            return Disp.CONTINUE
+
+        self._log_budget_event(outcome="no_progress", estimate=p, kind=pressure_kind)
+        return None
+
+    def _log_budget_event(
+        self,
+        *,
+        outcome: Literal["unavailable", "within_budget", "compacted", "no_progress"],
+        estimate: RequestBudgetEstimate | None = None,
+        kind: Literal["soft", "hard"] | None = None,
+        method: Literal["context_pack", "condenser"] | None = None,
+    ) -> None:
+        try:
+            if not inspect_enabled():
+                return
+            fields: dict[str, object] = {
+                "cid": self._loop.conversation_id,
+                "outcome": outcome,
+            }
+            if estimate is not None:
+                fields["driver_context_window"] = estimate.driver_context_window
+                fields["max_output_tokens"] = estimate.max_output_tokens
+                fields["canonical_payload_bytes"] = estimate.canonical_payload_bytes
+                fields["messages_json_bytes"] = estimate.messages_json_bytes
+                fields["tools_json_bytes"] = estimate.tools_json_bytes
+                fields["estimated_input_tokens"] = estimate.estimated_input_tokens
+                fields["pressure_tokens"] = estimate.pressure_tokens
+                fields["message_count"] = estimate.message_count
+                fields["tool_count"] = estimate.tool_count
+            if kind is not None:
+                fields["kind"] = kind
+            if method is not None:
+                fields["method"] = method
+            log_event("request_budget.preview", **fields)
+        except Exception:
+            pass
+
     async def drive_step(self, view: View, events: list[Event]) -> tuple[AgentStep | None, Disp]:
         # (e) ask the agent for ONE action (principle 1). The visible tool
         # set is mode-scoped: while PLANNING the agent sees ONLY the plan
@@ -964,10 +1231,36 @@ class Driver:
             force_read_tools,
             escape_blocked_tools,
         ) = self._prepare_drive_context(view, events)
+
+        # Compute offered tools exactly ONCE after _prepare_drive_context.
+        # The preview and the first actual agent.step must share the same
+        # list object so equality is guaranteed (modulo the request id).
+        initial_available_tools = self._loop.executor.available_tools()
+        initial_offered_tools = self.tools_for_step(
+            suppress_meta_tools=fresh_session,
+            force_submit_only=force_submit_only,
+            force_read_tools=force_read_tools,
+            blocked_tools=escape_blocked_tools,
+            mode=mode,
+            available_tools=initial_available_tools,
+        )
+
+        # --- request budget preview (at most once per step, before the retry loop) ---
+        preview_disp = await self._try_request_budget_preview(
+            view,
+            events,
+            mode,
+            escape_temp,
+            initial_offered_tools,
+        )
+        if preview_disp is not None:
+            return None, preview_disp
+
         try:
             attempts = 0
+            first_agent_invocation = True
             requery_count = 0
-            provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
+            provider_retry_count = 0
             protocol_repair_count = 0
             empty_reasoning_repair_count = 0
             prose_noop_repair_count = 0
@@ -976,22 +1269,24 @@ class Driver:
             while True:
                 current_view = repaired_view or view
                 try:
-                    # Apply transient messages (requery-outside-log, Rung 6)
-                    # to the View if we're in a retry loop.
                     if transient_messages:
                         current_view = current_view.model_copy(
                             update={"messages": current_view.messages + transient_messages}
                         )
 
-                    available_tools = self._loop.executor.available_tools()
-                    offered_tools = self.tools_for_step(
-                        suppress_meta_tools=fresh_session,
-                        force_submit_only=force_submit_only,
-                        force_read_tools=force_read_tools,
-                        blocked_tools=escape_blocked_tools,
-                        mode=mode,
-                        available_tools=available_tools,
-                    )
+                    if first_agent_invocation:
+                        available_tools = initial_available_tools
+                        offered_tools = initial_offered_tools
+                    else:
+                        available_tools = self._loop.executor.available_tools()
+                        offered_tools = self.tools_for_step(
+                            suppress_meta_tools=fresh_session,
+                            force_submit_only=force_submit_only,
+                            force_read_tools=force_read_tools,
+                            blocked_tools=escape_blocked_tools,
+                            mode=mode,
+                            available_tools=available_tools,
+                        )
                     if inspect_enabled():
                         record_tool_scope(
                             self._loop.conversation_id,
@@ -1008,6 +1303,8 @@ class Driver:
                             ),
                             attempt=attempts + 1,
                         )
+                    await self._loop._assert_current_agent_view()
+                    first_agent_invocation = False
                     step = await self._loop.agent.step(
                         current_view,
                         offered_tools,
@@ -1033,6 +1330,7 @@ class Driver:
                             else None
                         ),
                     )
+                    await self._loop._assert_current_agent_view()
 
                     (
                         should_continue,
@@ -1095,8 +1393,8 @@ class Driver:
                         # No transient hint appended — the model did nothing wrong.
                         continue
                     # Cap exhausted → PAUSE (a provider outage is recoverable).
-                    return await self._pause_driver_unavailable()
-                except LLMTransientError:
+                    return await self._pause_driver_unavailable(cause=e)
+                except LLMTransientError as e:
                     if attempts < len(_DRIVER_RETRY_BACKOFFS_S):
                         self._record_model_repair("driver_transient_backoff", attempt=attempts + 1)
                         if not await self._wait_retry_backoff(_DRIVER_RETRY_BACKOFFS_S[attempts]):
@@ -1110,7 +1408,7 @@ class Driver:
                         self._record_model_repair(
                             "driver_transient_exhausted", attempt=attempts + 1
                         )
-                        return await self._pause_driver_unavailable()
+                        return await self._pause_driver_unavailable(cause=e)
                 except LLMError as e:
                     if _is_tool_result_adjacency_protocol_error(e):
                         if protocol_repair_count < 1:

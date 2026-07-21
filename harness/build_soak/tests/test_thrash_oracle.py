@@ -813,3 +813,152 @@ def test_one_hidden_repair_is_reported_but_allowed() -> None:
 def test_legacy_scenario_without_policy_skips() -> None:
     result = ThrashOracle().check([], scenario={"id": "legacy", "assertions": {}})[0]
     assert result.skipped
+
+
+# ---- k6g F2: error accounting is scoped to progress epochs ------------------
+#
+# The 128k canary's ThrashOracle finding grouped two identical
+# `stuck_escape_tool_quarantine:file_read` refusals at seqs 428 and 514 into
+# `count 2 > allowed 1` although a trusted mutation receipt, an approved plan
+# revision, verification, and a new finish-gate obligation lay between them.
+# These controls replay that exact shape hermetically (no scenario constants).
+
+
+def _refused_read(seq: int, path: str) -> list[dict]:
+    action_id = f"a{seq}"
+    return [
+        action(seq, "file_read", action_id=action_id, args={"path": path}),
+        agent_error(
+            seq + 1,
+            action_id,
+            error="stuck_escape_tool_quarantine:file_read",
+            detail="withheld during the current loop",
+        ),
+    ]
+
+
+def _receipt_write(seq: int, path: str) -> list[dict]:
+    action_id = f"a{seq}"
+    write = action(seq, "file_edit", action_id=action_id, args={"path": path})
+    result = observation(seq + 1, action_id, tool="file_edit", success=True)
+    result["tool_result"]["structured"] = {"path": path, "sha256": "a" * 64}
+    return [write, result]
+
+
+def test_identical_errors_across_trusted_progress_are_not_one_repeated_behavior() -> None:
+    """Positive no-false-thrash control: the exact seq-428/seq-514 history."""
+    events = (
+        _refused_read(1, "styles.css")
+        + _receipt_write(3, "styles.css")
+        + [_approved_plan_scope(5, 2, ["fp-1"])]
+        + _receipt_write(6, "app.js")
+        + _refused_read(8, "index.html")
+    )
+    results = ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))
+    assert [r.code for r in results if r.failed] == []
+    passing = results[0]
+    assert passing.facts["largest_same_tool_error_group"] == 1
+
+
+def test_adjacent_identical_errors_with_no_progress_still_fail() -> None:
+    """Negative control: a true consecutive repeat still stops spend."""
+    events = _refused_read(1, "index.html") + _refused_read(3, "index.html")
+    result = ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))[0]
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["count"] == 2
+    assert result.facts["action_seqs"] == [1, 3]
+
+
+def test_user_turn_and_blocking_obligation_split_progress_epochs() -> None:
+    user_turn = {
+        "id": "m5",
+        "seq": 5,
+        "kind": "message",
+        "source": "user",
+        "message": {"role": "user", "content": "proceed with sensible defaults"},
+    }
+    obligation = {
+        "id": "m6",
+        "seq": 6,
+        "kind": "message",
+        "source": "environment",
+        "meta": {"blocking": "user_literal_missing"},
+        "message": {"role": "user", "content": "a required literal is missing"},
+    }
+    for boundary in (user_turn, obligation):
+        events = _refused_read(1, "index.html") + [boundary] + _refused_read(7, "index.html")
+        results = ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))
+        assert [r.code for r in results if r.failed] == [], boundary["id"]
+
+
+def test_plain_environment_prose_is_not_a_progress_boundary() -> None:
+    reminder = {
+        "id": "m5",
+        "seq": 5,
+        "kind": "message",
+        "source": "environment",
+        "message": {"role": "user", "content": "<system-reminder>keep going</system-reminder>"},
+    }
+    events = _refused_read(1, "index.html") + [reminder] + _refused_read(7, "index.html")
+    result = ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))[0]
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["count"] == 2
+
+
+def test_receiptless_success_is_not_a_progress_boundary() -> None:
+    action_id = "a5"
+    hollow = [
+        action(5, "file_edit", action_id=action_id, args={"path": "styles.css"}),
+        observation(6, action_id, tool="file_edit", success=True),
+    ]
+    events = _refused_read(1, "index.html") + hollow + _refused_read(7, "index.html")
+    result = ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))[0]
+    assert result.code == fc.TOOL_ERROR_THRASH
+    assert result.facts["count"] == 2
+
+
+def test_v3_receipt_trust_matches_the_product_boundary() -> None:
+    """Verifier V3: degenerate/unpaired/foreign-shape receipts are not epochs."""
+
+    def check(events: list[dict]) -> object:
+        return ThrashOracle().check(events, scenario=_scenario(max_same_tool_error_repeats=1))[0]
+
+    def boundary_events(middle: list[dict]) -> list[dict]:
+        return _refused_read(1, "index.html") + middle + _refused_read(9, "index.html")
+
+    # applied=[""] is degenerate; applied on a non-run_project_script tool is a
+    # foreign shape; path+sha256 on a non-file tool is a foreign shape; a
+    # receipt on an UNPAIRED observation (no matching action event) is inert.
+    hollow_applied = [
+        action(5, "run_project_script", action_id="a5", args={"name": "build"}),
+        observation(6, "a5", tool="run_project_script", success=True),
+    ]
+    hollow_applied[1]["tool_result"]["structured"] = {"applied": [""]}
+    foreign_applied = [
+        action(5, "shell", action_id="a5", args={"command": "make"}),
+        observation(6, "a5", tool="shell", success=True),
+    ]
+    foreign_applied[1]["tool_result"]["structured"] = {"applied": ["step"]}
+    foreign_sha = [
+        action(5, "shell", action_id="a5", args={"command": "make"}),
+        observation(6, "a5", tool="shell", success=True),
+    ]
+    foreign_sha[1]["tool_result"]["structured"] = {"path": "x", "sha256": "a" * 64}
+    unpaired = [observation(6, "ghost-action", tool="file_edit", success=True)]
+    unpaired[0]["tool_result"]["structured"] = {"path": "x", "sha256": "a" * 64}
+
+    for middle in (hollow_applied, foreign_applied, foreign_sha, unpaired):
+        result = check(boundary_events(middle))
+        assert result.code == fc.TOOL_ERROR_THRASH, middle
+        assert result.facts["count"] == 2
+
+    # The genuine shapes still split epochs.
+    real_applied = [
+        action(5, "run_project_script", action_id="a5", args={"name": "build"}),
+        observation(6, "a5", tool="run_project_script", success=True),
+    ]
+    real_applied[1]["tool_result"]["structured"] = {"applied": ["postprocess"]}
+    results = ThrashOracle().check(
+        boundary_events(real_applied), scenario=_scenario(max_same_tool_error_repeats=1)
+    )
+    assert [r.code for r in results if r.failed] == []

@@ -15,6 +15,7 @@ exactly the moment a newer run would take over.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,6 +32,8 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    WorkspaceMutationEvent,
+    derive_final_workspace_fence,
 )
 from disco.tools import ProcessSandboxService
 
@@ -67,7 +70,12 @@ def _cancelled_errors(events: list[object], action_id: str) -> list[AgentErrorEv
     ]
 
 
-def _action(action_id: str = "act-inflight", call_id: str = "call-inflight") -> ActionEvent:
+def _action(
+    action_id: str = "act-inflight",
+    call_id: str = "call-inflight",
+    *,
+    agent_view_id: str | None = None,
+) -> ActionEvent:
     return ActionEvent(
         id=action_id,
         thought="running a long tool call",
@@ -76,6 +84,7 @@ def _action(action_id: str = "act-inflight", call_id: str = "call-inflight") -> 
             arguments={"command": "sleep 60"},
             call_id=call_id,
         ),
+        agent_view_id=agent_view_id,
     )
 
 
@@ -217,6 +226,46 @@ async def test_kill_with_no_generation_tracked_terminalizes_legacy() -> None:
     assert _killed_detail_present(await store.get_events(CID))
 
 
+async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    lock = rt.workspace_lock(CID)
+    await lock.acquire()
+
+    killing = asyncio.create_task(rt._control.kill(CID))
+    await asyncio.sleep(0)
+    assert not killing.done()
+    assert not _killed_detail_present(await store.get_events(CID))
+
+    lock.release()
+    await killing
+    assert _killed_detail_present(await store.get_events(CID))
+
+
+async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    rt._run_generation[CID] = 1
+    lock = rt.workspace_lock(CID)
+    await lock.acquire()
+
+    killing = asyncio.create_task(rt._control.kill(CID, generation=1))
+    await asyncio.sleep(0)
+    assert not killing.done()
+    # A newer ingress owns the fence and synchronously registers generation 2
+    # before releasing it. The queued kill must not land IDLE afterward.
+    rt._run_generation[CID] = 2
+    lock.release()
+
+    await killing
+    assert not _killed_detail_present(await store.get_events(CID))
+
+
 @pytest.mark.asyncio
 async def test_kill_closes_dangling_action_with_cancelled_agent_error() -> None:
     store = SqliteEventStore(":memory:")
@@ -230,7 +279,8 @@ async def test_kill_closes_dangling_action_with_cancelled_agent_error() -> None:
     events = await store.get_events(CID)
     cancelled = _cancelled_errors(events, action.id)
     assert len(cancelled) == 1
-    assert cancelled[0].detail == "action cancelled by kill switch before completing"
+    assert cancelled[0].detail is not None
+    assert "outcome is UNKNOWN" in cancelled[0].detail
     assert cancelled[0].tool_call_id == action.tool_call.call_id
     assert cancelled[0].seq is not None and action.seq is not None
     assert cancelled[0].seq > action.seq
@@ -249,6 +299,189 @@ async def test_second_kill_does_not_duplicate_cancelled_agent_error() -> None:
 
     events = await store.get_events(CID)
     assert len(_cancelled_errors(events, action.id)) == 1
+
+
+async def test_kill_closure_waits_for_real_outcome_under_shared_fence() -> None:
+    """The paired-result check and closure append share the effect fence.
+
+    A real result that owns the fence first must be observed by the queued kill;
+    kill must not append a second, contradictory terminal result.
+    """
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    action = await store.append(CID, _action(agent_view_id="view-a"))
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    rt._run_generation[CID] = 1
+
+    lock = rt.workspace_lock(CID)
+    await lock.acquire()
+    closing = asyncio.create_task(rt._close_dangling_actions_for_kill(CID, 1))
+    await asyncio.sleep(0)
+    assert not closing.done()
+
+    await store.append(
+        CID,
+        ObservationEvent(
+            action_id=action.id,
+            agent_view_id=action.agent_view_id,
+            tool_result=ToolResult(
+                call_id=action.tool_call.call_id,
+                tool_name=action.tool_call.tool_name,
+                success=True,
+                content="real outcome",
+            ),
+        ),
+    )
+    lock.release()
+
+    assert await asyncio.wait_for(closing, timeout=1) == []
+    events = await store.get_events(CID)
+    assert _cancelled_errors(events, action.id) == []
+
+
+async def test_kill_closure_preserves_strict_action_view_attribution() -> None:
+    """A kill result remains paired in the strict view that emitted its action."""
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    intent = await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=intent.id,
+            agent_view_id="view-strict",
+            run_protocol_version=1,
+        ),
+    )
+    action = await store.append(CID, _action(agent_view_id="view-strict"))
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    rt._run_generation[CID] = 1
+
+    closures = await rt._close_dangling_actions_for_kill(CID, 1)
+    assert len(closures) == 1
+    assert closures[0].action_id == action.id
+    assert closures[0].tool_call_id == action.tool_call.call_id
+    assert closures[0].agent_view_id == action.agent_view_id
+
+    terminal = await store.append(
+        CID,
+        StatusEvent(
+            status=ConversationStatus.FINISHED,
+            agent_view_id="view-strict",
+        ),
+    )
+    terminal_seq, _ = derive_final_workspace_fence(await store.get_events(CID))
+    assert terminal_seq == terminal.seq
+
+
+async def test_strict_kill_status_is_bound_to_captured_view() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    intent = await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=intent.id,
+            agent_view_id="view-killed",
+            run_protocol_version=1,
+        ),
+    )
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+
+    await rt._control.kill(CID)
+
+    killed = [
+        event
+        for event in await store.get_events(CID)
+        if isinstance(event, StatusEvent) and event.detail == "killed"
+    ]
+    assert len(killed) == 1
+    assert killed[0].agent_view_id == "view-killed"
+    assert killed[0].run_intent_id is None
+
+
+async def test_cross_process_new_intent_blocks_stale_kill_teardown_and_idle(
+    monkeypatch,
+) -> None:
+    """A peer's durable takeover is visible even when local generation is not."""
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    old_intent = await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=old_intent.id,
+            agent_view_id="view-old",
+            run_protocol_version=1,
+        ),
+    )
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+
+    capture_done = asyncio.Event()
+    release_kill = asyncio.Event()
+    original_capture = rt._control._capture_kill_authority
+
+    async def _capture_then_pause(conversation_id: str):
+        authority = await original_capture(conversation_id)
+        capture_done.set()
+        await release_kill.wait()
+        return authority
+
+    monkeypatch.setattr(rt._control, "_capture_kill_authority", _capture_then_pause)
+    killing = asyncio.create_task(rt._control.kill(CID))
+    await asyncio.wait_for(capture_done.wait(), timeout=1)
+
+    # Simulate another Agent server: durable protocol advances, but this
+    # process's _run_generation is unchanged.
+    new_intent = await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=new_intent.id,
+            agent_view_id="view-peer",
+            run_protocol_version=1,
+        ),
+    )
+    peer_executor = MagicMock()
+    peer_executor.kill = AsyncMock()
+    rt._executors[CID] = peer_executor
+    release_kill.set()
+
+    await asyncio.wait_for(killing, timeout=1)
+    peer_executor.kill.assert_not_awaited()
+    assert rt._executors.get(CID) is peer_executor
+    assert not _killed_detail_present(await store.get_events(CID))
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,15 @@ from __future__ import annotations
 from unittest import mock
 
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import ActionEvent, SecurityRisk, SqliteEventStore, ToolCall
+from disco.core import (
+    ActionEvent,
+    ObservationEvent,
+    SecurityRisk,
+    SqliteEventStore,
+    ToolCall,
+    ToolResult,
+    WorkspaceMutationEvent,
+)
 from disco.core.llm import DefaultLLMRouter, ModelRole, OperatingMode
 from disco.core.loop import BlastRadiusConfirm, RouterAgent
 from disco.core.loop.driver import Driver
@@ -199,13 +207,38 @@ async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> Non
 
     # Post-confirmation: executor scope and the active router profile widen
     # together. Strict semantic-only wording disappears as raw Build tools arrive.
-    widened = await loop.executor.execute(
-        ToolCall(
-            tool_name="request_custom_build",
-            arguments={"reason": "need raw files", "needed_capabilities": ["file_write"]},
-        )
+    custom_call = ToolCall(
+        tool_name="request_custom_build",
+        arguments={"reason": "need raw files", "needed_capabilities": ["file_write"]},
     )
+    widened = await loop.executor.execute(custom_call)
     assert widened.success
+    assert "file_write" not in loop.executor.callable_tool_names()
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-message", run_protocol_version=1
+    ).model_copy(update={"seq": 1})
+    admission = WorkspaceMutationEvent(
+        operation="agent.view-admitted",
+        run_protocol_version=1,
+        run_intent_id=intent.id,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 2})
+    action = ActionEvent(
+        thought="approved widening",
+        tool_call=custom_call,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 3})
+    observation = ObservationEvent(
+        action_id=action.id,
+        agent_view_id="view-1",
+        tool_result=ToolResult(
+            call_id=custom_call.call_id,
+            tool_name=custom_call.tool_name,
+            success=True,
+            content="approved",
+        ),
+    ).model_copy(update={"seq": 4})
+    await loop.executor.prepare_for_events([intent, admission, action, observation])
     widened_offered, widened_allowed, widened_prompt = snapshot()
     assert "file_write" in loop.executor.callable_tool_names()
     assert "file_write" in widened_offered <= widened_allowed

@@ -15,8 +15,11 @@ asserts the contract at the attach site:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
 import uuid
+from collections.abc import AsyncIterator
 
 from disco.agent_server import create_app
 from disco.core import (
@@ -61,6 +64,24 @@ class _FakeRuntime:
         self._executors: dict[str, _FakeExecutor] = {}
         self._pending_sessions: dict[str, _FakeSession] = {}
         self._sidecar: dict[str, dict[str, bytes]] = {}
+        self._workspace_locks: dict[str, asyncio.Lock] = {}
+
+    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
+        return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
+
+    @contextlib.asynccontextmanager
+    async def workspace_fence(self, conversation_id: str) -> AsyncIterator[None]:
+        async with self.workspace_lock(conversation_id):
+            yield
+
+    async def record_workspace_mutation_locked(
+        self,
+        conversation_id: str,
+        operation: str,
+        *,
+        paths=(),  # noqa: ANN001
+    ) -> None:
+        assert self.workspace_lock(conversation_id).locked()
 
     def kick(self, cid: str) -> None:  # noqa: D401
         pass

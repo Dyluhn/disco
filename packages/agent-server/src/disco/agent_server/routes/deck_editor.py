@@ -22,7 +22,7 @@ import json
 import posixpath
 from typing import Any
 
-from disco.core import ObservationEvent
+from disco.core import ConversationStatus, ObservationEvent
 from disco.core.brand.tokens import Theme
 from disco.core.design import direction_from_markdown, to_brand_tokens
 from disco.core.store.sqlite import SqliteEventStore
@@ -468,6 +468,9 @@ async def _patch_deck_response(
     base, authored_rel, live_runtime = await _editable_sidecar(
         store, runtime, conversation_id, path
     )
+    was_finished = (
+        await store.get_state(conversation_id)
+    ).execution_status is ConversationStatus.FINISHED
     html_rel = f"{base}.html"
     pptx_rel = f"{base}.pptx"
     authored_json = await _read_authored_json(live_runtime, conversation_id, authored_rel)
@@ -515,24 +518,42 @@ async def _patch_deck_response(
         (html_rel, html_str.encode()),
         (pptx_rel, pptx_bytes),
     ]
-    prior: dict[str, bytes | None] = {
-        rel: await _read_artifact_bytes(live_runtime, conversation_id, rel) for rel, _ in targets
-    }
-    try:
-        for rel, data in targets:
-            await session.write_file(rel, data)
-    except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
-        for rel, _ in targets:
-            restore = prior[rel]
-            if restore is not None:
-                try:
-                    await session.write_file(rel, restore)
-                except Exception:  # noqa: BLE001 — best-effort restore
-                    pass
-        raise HTTPException(
-            status_code=500,
-            detail={"reason": "write_failed", "message": str(exc)},
-        ) from exc
+    async with live_runtime.workspace_mutation(
+        conversation_id,
+        "deck.patch",
+        paths=tuple(sorted(rel for rel, _ in targets)),
+    ):
+        prior: dict[str, bytes | None] = {
+            rel: await _read_artifact_bytes(live_runtime, conversation_id, rel)
+            for rel, _ in targets
+        }
+        try:
+            for rel, data in targets:
+                await session.write_file(rel, data)
+        except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
+            for rel, _ in targets:
+                restore = prior[rel]
+                if restore is not None:
+                    try:
+                        await session.write_file(rel, restore)
+                    except Exception:  # noqa: BLE001 — best-effort restore
+                        pass
+            raise HTTPException(
+                status_code=500,
+                detail={"reason": "write_failed", "message": str(exc)},
+            ) from exc
+
+    if was_finished:
+        try:
+            await live_runtime.finalize_host_workspace_change(
+                conversation_id,
+                "deck.patch",
+            )
+        except Exception as exc:  # noqa: BLE001 — bytes changed; do not claim a sealed revision
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "workspace_commit_failed", "message": str(exc)},
+            ) from exc
 
     pdf_rel = f"{base}.pdf"
     pdf_stale = (await _read_artifact_bytes(live_runtime, conversation_id, pdf_rel)) is not None

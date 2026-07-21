@@ -1,6 +1,20 @@
-"""H415: a read-loop escape must enforce a genuinely different next action."""
+"""H415/F1: a read-loop escape must enforce a genuinely different next action.
+
+The k6g 128k canary (2026-07-19, finding F1) replaced the tool-name ration
+("one allowed `file_read` per changed-state receipt") with a semantic
+redundancy guard: during an active recovery episode, ``file_read`` STAYS
+OFFERED, and a call is refused only when every requested line is provably
+already held — same canonical resource, same content digest, receipt-proven
+line coverage, still visible (not condensed away). Reads of different
+resources, changed resources, unseen ranges, and post-mutation rereads
+execute normally. The read-BYPASS aliases (general shell/code execution and
+delegated exploration) stay schema-withheld only while the episode has zero
+trusted changed-state receipts.
+"""
 
 from __future__ import annotations
+
+import hashlib
 
 from disco.core import (
     ActionEvent,
@@ -14,16 +28,64 @@ from disco.core import (
     StatusEvent,
     ToolResult,
 )
+from disco.core.effects import (
+    CoverageSpan,
+    CoverageUnit,
+    MutationReceipt,
+    ObservationReceipt,
+    ResourceCoverage,
+    ResourceKey,
+    ResourceRevision,
+)
+from disco.core.effects import (
+    EffectCapability as _EC,
+)
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import StuckDetector, StuckThresholds, signals
-from disco.core.loop.control import Disp
-from disco.core.loop.messages import STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
 from event_fakes import action, observation
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
 
+_BYPASS_TOOLS = {"shell", "shell_exec", "code_exec", "delegate_explore"}
+
+
+def _digest(path: str, version: int) -> str:
+    return hashlib.sha256(f"{path}:{version}".encode()).hexdigest()
+
+
+def _read_receipt(path: str, version: int, *, total: int = 2) -> ObservationReceipt:
+    return ObservationReceipt(
+        capability=_EC.WORKSPACE_CONTENT_READ,
+        revision=ResourceRevision(
+            resource=ResourceKey(namespace="workspace.file", identifier=path),
+            digest=_digest(path, version),
+        ),
+        coverage=ResourceCoverage(
+            unit=CoverageUnit.LINES,
+            spans=(CoverageSpan(start=0, end=total),),
+            total=total,
+        ),
+        complete=True,
+    )
+
+
+def _mutation_receipt(path: str, version: int) -> MutationReceipt:
+    return MutationReceipt(
+        resource=ResourceKey(namespace="workspace.file", identifier=path),
+        after=ResourceRevision(
+            resource=ResourceKey(namespace="workspace.file", identifier=path),
+            digest=_digest(path, version),
+        ),
+        after_size_bytes=32,
+    )
+
 
 class _CoverageExecutor(FakeExecutor):
-    """Return stable numbered bytes so varied read arguments hit coverage."""
+    """Mirror the REAL file-tool receipt contract (verified against the k6g
+    durable events): reads emit ObservationReceipts with the current content
+    digest + exact line coverage; mutations emit MutationReceipts whose
+    ``after`` digest advances the resource revision. Content bytes stay stable
+    per version so varied read arguments hit redundancy exactly like a real
+    unchanged file."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -39,27 +101,37 @@ class _CoverageExecutor(FakeExecutor):
                 ToolSpec(name="think", description="think", parameters_schema={}),
             ]
         )
+        self.versions: dict[str, int] = {}
 
     async def execute(self, call):  # noqa: ANN001, ANN201 - fake protocol seam
         self.calls.append(call)
+        path = str(call.arguments.get("path") or "styles.css")
         if call.tool_name == "file_read":
+            version = self.versions.get(path, 1)
             content = "[lines 1-2 of 2]\n1\tstable-a\n2\tstable-b"
-            structured = None
-        elif call.tool_name in {"file_write", "file_append"}:
-            content = "wrote changed bytes"
-            structured = {
-                "path": str(call.arguments.get("path") or "styles.css"),
-                "sha256": "a" * 64,
-            }
-        else:
-            content = "wrote changed bytes"
-            structured = None
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content=content,
+                effect_receipts=(_read_receipt(path, version),),
+            )
+        if call.tool_name in {"file_write", "file_append"}:
+            version = self.versions.get(path, 1) + 1
+            self.versions[path] = version
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content="wrote changed bytes",
+                structured={"path": path, "sha256": "a" * 64},
+                effect_receipts=(_mutation_receipt(path, version),),
+            )
         return ToolResult(
             call_id=call.call_id,
             tool_name=call.tool_name,
             success=True,
-            content=content,
-            structured=structured,
+            content="ran",
         )
 
 
@@ -83,7 +155,7 @@ class _FailFirstWriteCoverageExecutor(_CoverageExecutor):
 
 
 class _FailFirstVerificationReadExecutor(_CoverageExecutor):
-    """Fail the first post-escape verification read, then allow the retry."""
+    """Fail the first post-escape read so the retry contract is provable."""
 
     async def execute(self, call):  # noqa: ANN001, ANN201 - fake protocol seam
         if (
@@ -212,12 +284,24 @@ def _block_details(events) -> list[str]:  # noqa: ANN001
     ]
 
 
-async def test_read_coverage_escape_quarantines_read_until_productive_action():
+def _read_refusals(events) -> list[AgentErrorEvent]:  # noqa: ANN001
+    return [
+        event
+        for event in events
+        if isinstance(event, AgentErrorEvent)
+        and event.error == "stuck_escape_tool_quarantine:file_read"
+    ]
+
+
+async def test_read_escape_keeps_read_offered_and_refuses_only_redundant_targets():
+    """F1 core: the escape arms, `file_read` STAYS OFFERED, a different-file
+    read executes, and only the provably redundant reread is refused."""
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("file_list", {"path": "/workspace"}),
+            action_step("file_read", {"path": "app.js"}),  # different resource → executes
+            action_step("file_read", {"path": "index.html", "limit": 105}),  # redundant
             action_step("file_write", {"path": "styles.css", "content": "body{}"}),
             finish_step(),
         ]
@@ -234,27 +318,45 @@ async def test_read_coverage_escape_quarantines_read_until_productive_action():
     assert details[block_index + 1] == "stuck_escape"
     assert signals.stuck_escape_blocked_tools(events) == frozenset({"file_read"})
 
+    # The escape-turn schema keeps the observation tool and withholds only the
+    # bypass aliases while the episode has zero trusted receipts.
     escape_tools = set(agent.seen_tools[5])
-    assert "file_read" not in escape_tools
+    assert "file_read" in escape_tools
+    assert _BYPASS_TOOLS.isdisjoint(escape_tools)
     assert {"file_write", "think", "finish"} <= escape_tools
-    allowed = loop._driver.allowed_tool_names_for_mode(  # noqa: SLF001 - scope contract
-        OperatingMode.LONG_HORIZON,
-        available_tools=executor.available_tools(),
-        blocked_tools=frozenset({"file_read"}),
+
+    # The different-resource read EXECUTED; the redundant one did not.
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 6
+    assert executor.calls[5].tool_name == "file_read"
+    assert executor.calls[5].arguments == {"path": "app.js"}
+    refusals = _read_refusals(events)
+    assert len(refusals) == 1
+    refused_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == refusals[0].action_id
     )
-    assert "file_read" not in allowed
-    assert {"file_write", "think", "finish"} <= allowed
-    assert "file_read" not in set(agent.seen_tools[6])
-    assert "file_read" in set(agent.seen_tools[7])
+    assert refused_action.tool_call.arguments.get("path") == "index.html"
+    assert refusals[0].tool_call_id == refused_action.tool_call.call_id
+    # The refusal names the scope, the reset condition, and real alternatives.
+    assert "index.html" in (refusals[0].detail or "")
+    assert "unchanged" in (refusals[0].detail or "")
+    # After the trusted receipt lands (the write executes during step 7), the
+    # bypass aliases return to the NEXT step's schema.
+    assert "shell" not in set(agent.seen_tools[7])
+    assert "shell" in set(agent.seen_tools[8])
 
 
-async def test_h553_recovery_receipt_allows_one_read_then_forces_deliverable_progress():
+async def test_mutation_then_reread_executes_and_identical_reread_is_refused():
+    """F1 acceptance: mutation-then-reread is progress (new digest); repeating
+    the identical, unchanged read afterwards is still detected and bounded."""
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
         + [
             action_step("file_append", {"path": "styles.css", "content": "main{}"}),
-            action_step("file_read", {"path": "styles.css"}),
+            action_step("file_read", {"path": "styles.css"}),  # digest advanced → executes
+            action_step("file_read", {"path": "styles.css", "limit": 105}),  # redundant now
             action_step(
                 "file_write",
                 {"path": "index.html", "content": "<main>bakery</main>"},
@@ -269,115 +371,29 @@ async def test_h553_recovery_receipt_allows_one_read_then_forces_deliverable_pro
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
-    assert [call.tool_name for call in executor.calls][-3:] == [
-        "file_append",
-        "file_read",
-        "file_write",
-    ]
-    assert executor.calls[-1].arguments == {
-        "path": "index.html",
-        "content": "<main>bakery</main>",
-    }
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 6
-    assert signals.stuck_escape_refusal_count(events, "file_read") == 0
-
-    index_write = next(
-        event
+    assert executor.calls[6].tool_name == "file_read"
+    assert executor.calls[6].arguments == {"path": "styles.css"}
+    refusals = _read_refusals(events)
+    assert len(refusals) == 1
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="styles.css") == 1
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="index.html") == 0
+    # The ration machinery is gone: no "one allowed read" reminders exist.
+    assert not any(
+        isinstance(event, MessageEvent) and "one allowed" in (event.message.content or "")
         for event in events
-        if isinstance(event, ActionEvent)
-        and event.tool_call is not None
-        and event.tool_call.tool_name == "file_write"
-        and event.tool_call.arguments.get("path") == "index.html"
     )
-    reconstructed = [
-        event.model_copy()
-        for event in events
-        if event.seq is not None and index_write.seq is not None and event.seq < index_write.seq
-    ]
-    assert loop._driver.active_stuck_escape_blocked_tools(reconstructed) == frozenset({"file_read"})
 
 
-async def test_h553_second_post_receipt_read_is_refused_not_executed():
-    executor = _CoverageExecutor()
-    agent = ScriptedAgent(
-        _coverage_reads()
-        + [
-            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
-            action_step("file_read", {"path": "styles.css"}),
-            action_step("file_read", {"path": "styles.css", "limit": 105}),
-            action_step(
-                "file_write",
-                {"path": "index.html", "content": "<main>bakery</main>"},
-            ),
-            finish_step(),
-        ]
-    )
-    loop, store = build_loop(agent, executor=executor)
-
-    await loop.send_message("build the bakery landing page")
-    state = await loop.run()
-    events = await store.get_events("conv")
-
-    assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert sum(call.tool_name == "file_read" for call in executor.calls) == 6
-    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
-    refusal = next(
-        event
-        for event in events
-        if isinstance(event, AgentErrorEvent)
-        and event.error == "stuck_escape_tool_quarantine:file_read"
-    )
-    refused_action = next(
-        event
-        for event in events
-        if isinstance(event, ActionEvent) and event.id == refusal.action_id
-    )
-    assert refusal.tool_call_id == refused_action.tool_call.call_id
-    assert [call.tool_name for call in executor.calls][-1] == "file_write"
-
-
-async def test_h553_failed_verification_read_does_not_consume_receipt_budget():
+async def test_failed_read_leaves_no_coverage_and_the_retry_executes():
+    """A FAILED read proves nothing was delivered; the retry must execute."""
     executor = _FailFirstVerificationReadExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
-            action_step("file_read", {"path": "styles.css"}),
-            action_step("file_read", {"path": "styles.css"}),
-            action_step(
-                "file_write",
-                {"path": "index.html", "content": "<main>bakery</main>"},
-            ),
-            finish_step(),
-        ]
-    )
-    loop, store = build_loop(agent, executor=executor)
-
-    await loop.send_message("build the bakery landing page")
-    state = await loop.run()
-
-    assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" in set(agent.seen_tools[6])
-    assert "file_read" in set(agent.seen_tools[7])
-    assert "file_read" not in set(agent.seen_tools[8])
-    assert sum(call.tool_name == "file_read" for call in executor.calls) == 7
-
-
-async def test_h553_newer_mutation_replenishes_exactly_one_verification_read():
-    executor = _CoverageExecutor()
-    agent = ScriptedAgent(
-        _coverage_reads()
-        + [
-            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
-            action_step("file_read", {"path": "styles.css"}),
             action_step("file_append", {"path": "styles.css", "content": "main{}"}),
-            action_step("file_read", {"path": "styles.css"}),
-            action_step("file_read", {"path": "styles.css", "limit": 105}),
+            action_step("file_read", {"path": "styles.css"}),  # fails (executor)
+            action_step("file_read", {"path": "styles.css"}),  # retry → executes
             action_step(
                 "file_write",
                 {"path": "index.html", "content": "<main>bakery</main>"},
@@ -392,29 +408,13 @@ async def test_h553_newer_mutation_replenishes_exactly_one_verification_read():
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
-    assert "file_read" not in set(agent.seen_tools[9])
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 7
-    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
-    assert [call.tool_name for call in executor.calls][-4:] == [
-        "file_read",
-        "file_append",
-        "file_read",
-        "file_write",
-    ]
-    reminders = [
-        event
-        for event in events
-        if isinstance(event, MessageEvent)
-        and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
-    ]
-    assert len(reminders) == 2
-    assert len({event.meta["verification_observation_seq"] for event in reminders}) == 2
+    assert _read_refusals(events) == []
 
 
 async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
+    """A read-only bridge (file_list) is not progress: the redundant reread is
+    still refused and the bypass aliases stay withheld."""
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
@@ -432,33 +432,17 @@ async def test_h533_nonproductive_bridge_cannot_restore_quarantined_read():
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
+    # file_list executed, but the identical index.html reread was refused.
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
-    assert [call.tool_name for call in executor.calls][-2:] == ["file_list", "file_write"]
-    assert (
-        sum(
-            isinstance(event, ActionEvent)
-            and event.tool_call is not None
-            and event.tool_call.tool_name == "file_read"
-            for event in events
-        )
-        == 6
-    )
-    refusal = next(
-        event
-        for event in events
-        if isinstance(event, AgentErrorEvent)
-        and event.error == "stuck_escape_tool_quarantine:file_read"
-    )
+    assert _BYPASS_TOOLS.isdisjoint(set(agent.seen_tools[6]))
+    refusals = _read_refusals(events)
+    assert len(refusals) == 1
     refused_action = next(
         event
         for event in events
-        if isinstance(event, ActionEvent) and event.id == refusal.action_id
+        if isinstance(event, ActionEvent) and event.id == refusals[0].action_id
     )
-    assert refusal.tool_call_id == refused_action.tool_call.call_id
+    assert refusals[0].tool_call_id == refused_action.tool_call.call_id
 
 
 async def test_h533_failed_mutation_does_not_release_quarantine():
@@ -466,8 +450,8 @@ async def test_h533_failed_mutation_does_not_release_quarantine():
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("file_write", {"path": "styles.css", "content": "broken"}),
-            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("file_write", {"path": "styles.css", "content": "broken"}),  # fails
+            action_step("file_read", {"path": "index.html", "limit": 105}),  # still redundant
             action_step("file_write", {"path": "styles.css", "content": "body{}"}),
             finish_step(),
         ]
@@ -479,21 +463,12 @@ async def test_h533_failed_mutation_does_not_release_quarantine():
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
     assert sum(call.tool_name == "file_write" for call in executor.calls) == 2
-    assert (
-        sum(
-            isinstance(event, ActionEvent)
-            and event.tool_call is not None
-            and event.tool_call.tool_name == "file_read"
-            for event in events
-        )
-        == 6
-    )
+    # The failed write is not a trusted receipt: bypass aliases stay withheld
+    # for the step after it, and the redundant reread was refused.
+    assert _BYPASS_TOOLS.isdisjoint(set(agent.seen_tools[6]))
+    assert len(_read_refusals(events)) == 1
 
 
 async def test_h536_receiptless_success_cannot_release_quarantine():
@@ -501,8 +476,8 @@ async def test_h536_receiptless_success_cannot_release_quarantine():
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("shell", {"command": "pwd"}),
-            action_step("file_read", {"path": "index.html", "limit": 105}),
+            action_step("shell", {"command": "pwd"}),  # bypass alias → refused
+            action_step("file_read", {"path": "index.html", "limit": 105}),  # redundant
             action_step("file_write", {"path": "styles.css", "content": "body{}"}),
             finish_step(),
         ]
@@ -514,53 +489,29 @@ async def test_h536_receiptless_success_cannot_release_quarantine():
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
-    assert all("shell" not in set(tools) for tools in agent.seen_tools[5:])
-    assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
-    assert [call.tool_name for call in executor.calls][-1] == "file_write"
     assert all(call.tool_name != "shell" for call in executor.calls)
-    assert (
-        sum(
-            isinstance(event, ActionEvent)
-            and event.tool_call is not None
-            and event.tool_call.tool_name == "file_read"
-            for event in events
-        )
-        == 6
-    )
     assert signals.stuck_escape_refusal_count(events, "shell") == 1
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
+    assert len(_read_refusals(events)) == 1
+    # After the trusted write receipt the ordinary surface returns.
+    assert "shell" in set(agent.seen_tools[8])
 
 
-async def test_h583_general_exec_bypass_is_refused_then_progress_reminder_drives_deliverable():
+async def test_h583_general_exec_bypass_is_refused_while_episode_has_no_progress():
     executor = _CoverageExecutor()
-
-    def write_missing_deliverable(view):  # noqa: ANN001, ANN202 - scripted agent seam
-        reminders = [
-            message
-            for message in view.messages
-            if "The one allowed `file_read` verification" in message.content
-        ]
-        assert len(reminders) == 1
-        assert "Advance the actual deliverable now" in reminders[0].content
-        return action_step(
-            "file_write",
-            {"path": "index.html", "content": "<main>bakery</main>"},
-        )
-
     agent = ScriptedAgent(
         _coverage_reads()
         + [
-            action_step("file_read", {"path": "index.html", "limit": 105}),
             action_step(
                 "shell",
                 {"command": "wc -l index.html && sed -n '1,200p' index.html"},
             ),
             action_step("file_write", {"path": "styles.css", "content": "body{}"}),
-            action_step("file_read", {"path": "styles.css"}),
-            write_missing_deliverable,
+            action_step("file_read", {"path": "styles.css"}),  # digest advanced → executes
+            action_step(
+                "file_write",
+                {"path": "index.html", "content": "<main>bakery</main>"},
+            ),
             finish_step(),
         ]
     )
@@ -576,56 +527,17 @@ async def test_h583_general_exec_bypass_is_refused_then_progress_reminder_drives
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    for tools in agent.seen_tools[5:]:
-        assert {"shell", "shell_exec", "code_exec", "delegate_explore"}.isdisjoint(tools)
-    assert {"file_write", "verify_web_app", "serve", "finish"} <= set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[6])
-    assert "file_read" not in set(agent.seen_tools[7])
-    assert "file_read" in set(agent.seen_tools[8])
-    assert "file_read" not in set(agent.seen_tools[9])
-    assert [call.tool_name for call in executor.calls][-3:] == [
-        "file_write",
-        "file_read",
-        "file_write",
-    ]
+    # Zero-progress window: bypass aliases are schema-withheld and the shell
+    # attempt is refused without execution.
+    assert _BYPASS_TOOLS.isdisjoint(set(agent.seen_tools[5]))
     assert all(call.tool_name != "shell" for call in executor.calls)
-    assert signals.stuck_escape_refusal_count(events, "file_read") == 1
     assert signals.stuck_escape_refusal_count(events, "shell") == 1
-    assert not any(
-        isinstance(event, AgentErrorEvent)
-        and event.error == "stuck_escape_tool_quarantine:file_read"
-        and event.seq is not None
-        and event.seq
-        > next(
-            reminder.seq
-            for reminder in events
-            if isinstance(reminder, MessageEvent)
-            and reminder.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
-        )
-        for event in events
-    )
-
-    reminders = [
-        event
-        for event in events
-        if isinstance(event, MessageEvent)
-        and event.source == EventSource.ENVIRONMENT
-        and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
-    ]
-    assert len(reminders) == 1
-    verification_seq = reminders[0].meta["verification_observation_seq"]
-    verification = next(event for event in events if event.seq == verification_seq)
-    assert isinstance(verification, ObservationEvent)
-    assert verification.tool_result.tool_name == "file_read"
-    assert verification.tool_result.success is True
-
-    restarted, _ = build_loop(ScriptedAgent([finish_step()]), store=store, executor=executor)
-    assert (  # noqa: SLF001 - direct restart reconstruction contract
-        await restarted._gate_stuck_escape_progression(events)
-    ) is Disp.FALLTHROUGH
-    after_restart_check = await store.get_events("conv")
-    assert len(after_restart_check) == len(events)
+    # After the styles.css receipt, general execution returns to the schema.
+    assert "shell" in set(agent.seen_tools[7])
+    # The post-mutation reread executed (no ration, digest changed).
+    assert executor.calls[-2].tool_name == "file_read"
+    assert executor.calls[-2].arguments == {"path": "styles.css"}
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 0
 
 
 def test_h583_general_exec_boundary_is_authenticated_and_resets_on_new_user_turn():
@@ -643,22 +555,16 @@ def test_h583_general_exec_boundary_is_authenticated_and_resets_on_new_user_turn
     blocked = loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
         [block, escape]
     )
-    assert blocked == frozenset(
-        {"file_read", "shell", "shell_exec", "code_exec", "delegate_explore"}
-    )
+    # F1: the observation tool itself is never schema-withheld; only the
+    # bypass aliases are, and only while the episode has zero receipts.
+    assert blocked == frozenset({"shell", "shell_exec", "code_exec", "delegate_explore"})
     allowed = loop._driver.allowed_tool_names_for_mode(  # noqa: SLF001
         OperatingMode.LONG_HORIZON,
         available_tools=executor.available_tools(),
         blocked_tools=blocked,
     )
-    assert {
-        "shell",
-        "shell_exec",
-        "code_exec",
-        "delegate_explore",
-        "file_read",
-    }.isdisjoint(allowed)
-    assert {"file_write", "verify_web_app", "serve", "finish"} <= allowed
+    assert _BYPASS_TOOLS.isdisjoint(allowed)
+    assert {"file_read", "file_write", "verify_web_app", "serve", "finish"} <= allowed
     spoofed_block = block.model_copy(update={"source": EventSource.AGENT})
     assert (
         loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
@@ -727,7 +633,7 @@ async def test_h587_delegate_explore_cannot_proxy_quarantined_file_read():
     assert refusal.tool_call_id == refused_action.tool_call.call_id
 
 
-async def test_hallucinated_quarantined_read_is_paired_not_executed():
+async def test_redundant_read_is_paired_not_executed():
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
@@ -744,8 +650,6 @@ async def test_hallucinated_quarantined_read_is_paired_not_executed():
     events = await store.get_events("conv")
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert "file_read" not in set(agent.seen_tools[5])
-    assert "file_read" not in set(agent.seen_tools[6])
     assert sum(call.tool_name == "file_read" for call in executor.calls) == 5
     assert (
         sum(
@@ -757,12 +661,7 @@ async def test_hallucinated_quarantined_read_is_paired_not_executed():
         == 6
     )
     assert [call.tool_name for call in executor.calls][-1] == "file_write"
-    refusals = [
-        event
-        for event in events
-        if isinstance(event, AgentErrorEvent)
-        and event.error == "stuck_escape_tool_quarantine:file_read"
-    ]
+    refusals = _read_refusals(events)
     assert len(refusals) == 1
     refused_action = next(
         event
@@ -773,7 +672,8 @@ async def test_hallucinated_quarantined_read_is_paired_not_executed():
     assert signals.stuck_escape_refusal_count(events, "file_read") == 1
 
 
-async def test_quarantined_read_requery_exhaustion_lands_explicitly():
+async def test_same_target_refusal_exhaustion_lands_explicitly():
+    """Two refusals of the SAME redundant resource still stop spend."""
     executor = _CoverageExecutor()
     agent = ScriptedAgent(
         _coverage_reads()
@@ -794,26 +694,39 @@ async def test_quarantined_read_requery_exhaustion_lands_explicitly():
     assert all(call.tool_name != "shell" for call in executor.calls)
     assert signals.stuck_escape_refusal_count(events, "shell") == 1
     assert signals.stuck_escape_refusal_count(events, "file_read") == 2
-    refused_actions = [
-        event
-        for event in events
-        if isinstance(event, ActionEvent)
-        and event.seq is not None
-        and signals.stuck_escape_seq(events) is not None
-        and event.seq > signals.stuck_escape_seq(events)
-        and event.tool_call.tool_name == "file_read"
-    ]
-    assert len(refused_actions) == 2
-    assert all(
-        any(
-            isinstance(error, AgentErrorEvent)
-            and error.action_id == action.id
-            and error.tool_call_id == action.tool_call.call_id
-            for error in events
-        )
-        for action in refused_actions
-    )
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="index.html") == 2
     assert any(
+        isinstance(event, StatusEvent)
+        and event.meta.get("blocked_reason") == "stuck_escape_tool_quarantine"
+        for event in events
+    )
+
+
+async def test_different_target_refusals_do_not_stack_to_stuck():
+    """F1: refusals of two DIFFERENT redundant resources are two recoverable
+    errors, never one repeated behavior — the run continues and finishes."""
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        [action_step("file_read", {"path": "styles.css"})]
+        + _coverage_reads()
+        + [
+            action_step("file_read", {"path": "styles.css", "limit": 105}),  # redundant #1
+            action_step("file_read", {"path": "index.html", "limit": 105}),  # redundant #2
+            action_step("file_write", {"path": "app.js", "content": "init()"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the site")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert signals.stuck_escape_refusal_count(events, "file_read") == 2
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="styles.css") == 1
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="index.html") == 1
+    assert not any(
         isinstance(event, StatusEvent)
         and event.meta.get("blocked_reason") == "stuck_escape_tool_quarantine"
         for event in events
@@ -867,6 +780,13 @@ def test_escape_refusal_count_requires_current_exact_paired_events():
 
     assert signals.stuck_escape_refusal_count(events, "file_read") == 1
     assert signals.stuck_escape_refusal_count(events, "file_list") == 0
+    # Path scoping: only the paired action's exact normalized resource counts.
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="current") == 1
+    assert signals.stuck_escape_refusal_count(events, "file_read", action_path="old") == 0
+    assert (
+        signals.stuck_escape_refusal_count(events, "file_read", action_path="workspace/current")
+        == 0
+    )
 
 
 def test_escape_block_marker_requires_exact_system_adjacency():
@@ -896,7 +816,8 @@ def test_escape_block_marker_requires_exact_system_adjacency():
     assert signals.stuck_escape_blocked_tools([block, non_system_escape]) == frozenset()
 
 
-def test_h553_delayed_pre_escape_mutation_result_cannot_open_verification_budget():
+def test_delayed_pre_escape_mutation_result_cannot_restore_bypass_tools():
+    """A pre-escape action's late result is not post-escape progress."""
     executor = _CoverageExecutor()
     loop, _store = build_loop(ScriptedAgent([]), executor=executor)
     stale_write = action(
@@ -923,9 +844,9 @@ def test_h553_delayed_pre_escape_mutation_result_cannot_open_verification_budget
         ),
     ).model_copy(update={"seq": 4})
 
-    assert loop._driver.active_stuck_escape_blocked_tools(  # noqa: SLF001
+    assert loop._driver.stuck_escape_blocked_tools_for_step(  # noqa: SLF001
         [stale_write, block, escape, delayed_result]
-    ) == frozenset({"file_read"})
+    ) == frozenset({"shell", "shell_exec", "code_exec", "delegate_explore"})
 
 
 async def test_non_read_stuck_reason_preserves_existing_escape_surface():

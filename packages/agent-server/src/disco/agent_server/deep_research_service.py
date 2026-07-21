@@ -122,7 +122,12 @@ class DeepResearchService:
         return frozenset(owned), tuple(forbidden)
 
     def _compose_deep_research_loop(
-        self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
+        self,
+        conversation_id: str,
+        router: DefaultLLMRouter,
+        agent: RouterAgent,
+        *,
+        driver_context_window: int | None = None,
     ) -> AgentLoop:
         """Compose the loop frame for Deep Research. The loop itself doesn't drive
         the research — `_run_with_persistence` short-circuits `loop.run()` for
@@ -154,6 +159,7 @@ class DeepResearchService:
             # loop never sees a submit_plan tool call.
             planning_tools=frozenset({"submit_plan"}),
             model_policy=ModelExecutionPolicy.standard(),
+            driver_context_window=driver_context_window,
         )
 
     def _depth_for(self, conversation_id: str) -> DepthTier:

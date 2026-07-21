@@ -87,7 +87,11 @@ async def test_context_pack_flag_off_is_viewbuilder_byte_identical(monkeypatch) 
     events = with_seqs([user_msg("build it"), _plan()])
 
     loop = _make_loop(cadence=1)
-    view = await loop._materialize_view(events)
+    # These are pure ViewBuilder projection tests.  The loop-level
+    # `_materialize_view` boundary now intentionally re-reads the authoritative
+    # event store under the workspace fence, so synthetic event lists belong at
+    # the projection seam instead of that admission seam.
+    view = await ViewBuilder(loop).build(events)
 
     expected_loop = _make_loop(cadence=1)
     expected = expected_loop._gate_recitation(View.of(events), events)
@@ -114,7 +118,7 @@ async def test_context_pack_flag_on_prefix_and_narrow_recitation(monkeypatch) ->
     events = with_seqs([user_msg("build it"), _plan()])
 
     loop = _make_loop(sandbox=fs, cadence=1)
-    view = await loop._materialize_view(events)
+    view = await ViewBuilder(loop).build(events)
     contents = [m.content for m in view.messages]
     blob = "\n".join(contents)
 
@@ -143,7 +147,7 @@ async def test_context_pack_inclusion_is_visible_to_inspect(monkeypatch) -> None
     events = with_seqs([user_msg("build it"), _plan()])
 
     loop = _make_loop(cadence=1)
-    await loop._materialize_view(events)
+    await ViewBuilder(loop).build(events)
 
     trace = reg.snapshot(CID)
     assert trace is not None

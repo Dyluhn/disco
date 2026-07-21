@@ -13,7 +13,16 @@ from pathlib import Path
 
 import pytest
 from disco.agent_server import create_app
-from disco.core import ObservationEvent, SqliteEventStore
+from disco.core import (
+    ConversationStatus,
+    FinalWorkspaceSeal,
+    ObservationEvent,
+    ResourceKey,
+    SqliteEventStore,
+    StatusEvent,
+    WorkspaceVersionEvent,
+    derive_final_workspace_fence,
+)
 from disco.core.events import ToolResult
 from disco.tools.projects import ProjectStore, StorageStatus
 from fastapi.testclient import TestClient
@@ -178,6 +187,34 @@ def _declare_audio(store: SqliteEventStore, cid: str, mp3_path: str, transcript_
     )
 
 
+def _seal_finished_workspace(store: SqliteEventStore, projects: ProjectStore, cid: str) -> int:
+    version = projects.cut_verified_version(cid, trigger="finish", pin=True)
+    assert version is not None
+    terminal = asyncio.run(store.append(cid, StatusEvent(status=ConversationStatus.FINISHED)))
+    assert terminal.seq is not None
+    fence = derive_final_workspace_fence(asyncio.run(store.get_events(cid)))
+    asyncio.run(
+        store.append(
+            cid,
+            WorkspaceVersionEvent(
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                trigger="finish",
+                final_seal=FinalWorkspaceSeal(
+                    scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                    terminal_seq=fence[0],
+                    latest_effect_seq=fence[1],
+                    version_seq=version.seq,
+                    tree_digest=version.tree_digest,
+                    file_count=version.file_count,
+                    total_bytes=version.total_bytes,
+                ),
+            ),
+        )
+    )
+    return version.seq
+
+
 @pytest.fixture
 def live_client() -> TestClient:
     store = SqliteEventStore(":memory:")
@@ -267,6 +304,61 @@ def test_finished_run_falls_back_to_snapshot(tmp_path: Path) -> None:
     r = client.get(f"/conversations/{cid}/artifacts/budget.xlsx")
     assert r.status_code == 200
     assert r.content == XLSX
+
+
+def test_finished_run_reads_sealed_version_not_changed_recovery_mirror(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    ps = ProjectStore(str(tmp_path))
+    client = TestClient(create_app(store, runtime=_SnapshotRuntime(ps)))  # type: ignore[arg-type]
+    cid = _create(client)
+    _declare_sheet(store, cid, "budget.xlsx")
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "budget.xlsx").write_bytes(XLSX)
+    _seal_finished_workspace(store, ps, cid)
+
+    replacement = b"PK\x03\x04changed-recovery-mirror"
+    staged = workspace / "replacement.tmp"
+    staged.write_bytes(replacement)
+    staged.replace(workspace / "budget.xlsx")
+
+    response = client.get(f"/conversations/{cid}/artifacts/budget.xlsx")
+    assert response.status_code == 200
+    assert response.content == XLSX
+
+
+def test_finished_run_never_falls_back_without_a_valid_seal(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    ps = ProjectStore(str(tmp_path))
+    client = TestClient(create_app(store, runtime=_SnapshotRuntime(ps)))  # type: ignore[arg-type]
+    cid = _create(client)
+    _declare_sheet(store, cid, "budget.xlsx")
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "budget.xlsx").write_bytes(XLSX)
+    asyncio.run(store.append(cid, StatusEvent(status=ConversationStatus.FINISHED)))
+
+    response = client.get(f"/conversations/{cid}/artifacts/budget.xlsx")
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "workspace_unsealed"
+
+
+def test_finished_run_rejects_tampered_immutable_version(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    ps = ProjectStore(str(tmp_path))
+    client = TestClient(create_app(store, runtime=_SnapshotRuntime(ps)))  # type: ignore[arg-type]
+    cid = _create(client)
+    _declare_sheet(store, cid, "budget.xlsx")
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "budget.xlsx").write_bytes(XLSX)
+    version_seq = _seal_finished_workspace(store, ps, cid)
+    immutable = ps.version_workspace_path(cid, version_seq) / "budget.xlsx"
+    immutable.write_bytes(b"PK\x03\x04tampered")
+
+    response = client.get(f"/conversations/{cid}/artifacts/budget.xlsx")
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "workspace_unsealed"
 
 
 def test_no_runtime_404(tmp_path: Path) -> None:

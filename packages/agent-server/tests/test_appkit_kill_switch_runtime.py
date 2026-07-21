@@ -49,6 +49,30 @@ def test_effective_appkit_mode_gated_by_flag(monkeypatch: pytest.MonkeyPatch) ->
     assert rt._effective_appkit_mode("c1") is True
 
 
+def test_effective_appkit_mode_recovers_from_store_not_runtime_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(APPKIT_ENABLED_ENV, raising=False)
+    store = SqliteEventStore(":memory:")
+    store.create_conversation("persisted", appkit_mode=True)
+    rt = ConversationRuntime(store)
+    rt._appkit_mode.clear()
+    assert rt._effective_appkit_mode("persisted") is True
+    with pytest.raises(ValueError, match="immutable"):
+        rt.set_appkit_mode("persisted", False)
+
+
+def test_runtime_rejects_artifact_appkit_identity_collision() -> None:
+    rt = _rt()
+    rt.set_appkit_mode("appkit", True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        rt.set_artifact_mode("appkit", True)
+
+    rt.set_artifact_mode("artifact", True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        rt.set_appkit_mode("artifact", True)
+
+
 def test_disabled_flag_composes_plain_executor_for_appkit_conversation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -91,3 +115,14 @@ async def test_create_route_untouched_without_appkit_mode(
     body = CreateConversationBody(surface="agent")
     result = await _create_conversation_response(store, None, body, None)
     assert result["conversation_id"].startswith("conv_")
+
+
+@pytest.mark.asyncio
+async def test_create_route_rejects_artifact_and_appkit_together() -> None:
+    store = SqliteEventStore(":memory:")
+    body = CreateConversationBody(surface="agent", artifact_mode=True, appkit_mode=True)
+    with pytest.raises(HTTPException) as exc_info:
+        await _create_conversation_response(store, None, body, None)
+    assert exc_info.value.status_code == 409
+    assert "mutually exclusive" in str(exc_info.value.detail)
+    assert await store.list_conversations(owner_id="local") == []

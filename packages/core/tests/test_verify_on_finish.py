@@ -20,6 +20,7 @@ from disco.core import (
     SecurityRisk,
     ToolCall,
     ToolResult,
+    WorkspaceMutationEvent,
 )
 from disco.core.llm import DefaultLLMRouter, ProposedToolCall
 from disco.core.loop import AgentStep, ConfirmRisky, NeverConfirm, RouterAgent
@@ -64,6 +65,63 @@ async def test_verify_passes_then_run_finishes_and_check_is_in_the_trace():
     assert len(verify_actions) == 1
     assert "Verifying completion" in verify_actions[0].thought
     assert any(isinstance(e, ObservationEvent) for e in events)
+
+
+async def test_finish_probe_executes_the_persisted_view_stamped_action():
+    """The host-owned verify probe must retain the strict run generation.
+
+    ``_emit`` returns the authoritative persisted copy. Executing the original
+    pre-persistence object loses ``agent_view_id`` and makes a valid probe look
+    superseded at the workspace effect boundary.
+    """
+
+    class AttributedExecutor(FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_view_ids: list[str | None] = []
+
+        async def execute_attributed(
+            self,
+            call,
+            agent_view_id,
+            on_result=None,
+            prepare=None,
+        ):
+            self.agent_view_ids.append(agent_view_id)
+            if prepare is not None:
+                await prepare()
+            result = await self.execute(call)
+            if on_result is not None:
+                await on_result(result)
+            return result
+
+    executor = AttributedExecutor()
+    loop, store = build_loop(
+        _agent([_finish(verify="pytest -q")]),
+        executor=executor,
+        policy=NeverConfirm(),
+    )
+    await loop.send_message("ship it")
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(executor.agent_view_ids) == 1
+    assert executor.agent_view_ids[0] is not None
+    events = await store.get_events(CID)
+    verify_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.meta.get("verify_probe")
+    )
+    assert verify_action.agent_view_id == executor.agent_view_ids[0]
 
 
 async def test_verify_fails_then_finish_is_refused_and_loop_continues():

@@ -6,7 +6,7 @@ import urllib.parse
 import pytest
 from disco.agent_server.routes import preview as preview_routes
 from disco.agent_server.routes.preview import make_preview_router
-from disco.core import SqliteEventStore
+from disco.core import ConversationStatus, SqliteEventStore, StatusEvent
 from fastapi import FastAPI
 
 
@@ -52,9 +52,9 @@ class _FakeUpstreamWebSocket:
         return message
 
 
-def _app(runtime: _FakeRuntime) -> FastAPI:
+def _app(runtime: _FakeRuntime, store: SqliteEventStore | None = None) -> FastAPI:
     app = FastAPI()
-    app.include_router(make_preview_router(SqliteEventStore(":memory:"), runtime))  # type: ignore[arg-type]
+    app.include_router(make_preview_router(store or SqliteEventStore(":memory:"), runtime))  # type: ignore[arg-type]
     return app
 
 
@@ -196,3 +196,31 @@ async def test_preview_app_websocket_wake_miss_does_not_use_static_snapshot() ->
 
     assert runtime.wake_calls == [("deadbeef", 8000)]
     assert runtime.project_store_called is False
+
+
+@pytest.mark.asyncio
+async def test_finished_preview_websocket_never_wakes_an_unsealed_runtime() -> None:
+    runtime = _FakeRuntime("http://replacement.local:8000")
+    store = SqliteEventStore(":memory:")
+    conversation_id = "conv_finished0000"
+    store.create_conversation(conversation_id)
+    await store.append(
+        conversation_id,
+        StatusEvent(status=ConversationStatus.FINISHED),
+    )
+    app = _app(runtime, store)
+
+    _receive_queue, send_queue, task = await _start_ws(
+        app,
+        f"/conversations/{conversation_id}/preview-app/hmr",
+        subprotocols=["vite-hmr"],
+    )
+
+    assert await _next_sent(send_queue) == {
+        "type": "websocket.close",
+        "code": 1008,
+        "reason": "preview not available",
+    }
+    await asyncio.wait_for(task, timeout=1.0)
+    assert runtime.wake_calls == []
+    assert runtime.project_store_called is True

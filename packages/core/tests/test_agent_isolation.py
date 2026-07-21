@@ -82,6 +82,55 @@ async def test_base_router_agent_back_compat_default():
     assert RouterAgent(_router())._prose_finishes is True
 
 
+async def test_resolved_driver_context_is_preserved_in_request_and_step_span(caplog):
+    provider = SequenceProvider([{"text": "working"}])
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(
+        router,
+        conversation_id="conv_context_evidence",
+        driver_context_window=32768,
+    )
+    caplog.set_level("INFO", logger="disco.span")
+
+    await _step(agent, OperatingMode.LONG_HORIZON)
+
+    assert len(provider.seen) == 1
+    request = provider.seen[0]
+    assert request.metadata == {
+        "driver_context_window": 32768,
+        "conversation_id": "conv_context_evidence",
+    }
+    ends = [
+        getattr(record, "_fields", {})
+        for record in caplog.records
+        if getattr(record, "_fields", {}).get("span") == "agent.step"
+        and getattr(record, "_fields", {}).get("event") == "end"
+    ]
+    assert len(ends) == 1
+    assert ends[0]["request_id"] == request.request_id
+    assert ends[0]["driver_context_window"] == 32768
+    assert ends[0]["model_repair_attempt"] == 1
+    assert ends[0]["provider"] == "ollama"
+    assert ends[0]["path"] == "pinned"
+    assert ends[0]["provider_attempt"] == 1
+
+
+@pytest.mark.parametrize("invalid", [True, False, 0, -1, 1.5, "32768"])
+async def test_driver_context_rejects_non_exact_positive_int(invalid):
+    provider = SequenceProvider([{"text": "working"}])
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(
+        router,
+        conversation_id="conv_invalid_context",
+        driver_context_window=invalid,
+    )
+
+    await _step(agent, OperatingMode.LONG_HORIZON)
+
+    assert agent._driver_context_window is None
+    assert provider.seen[0].metadata == {"conversation_id": "conv_invalid_context"}
+
+
 # ---- W-32 (secondary): a batched `finish` must not preempt real work --------
 
 

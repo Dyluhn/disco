@@ -49,7 +49,9 @@ import posixpath
 import re
 import shlex
 import sqlite3
+import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -65,11 +67,13 @@ from ..events import (
     KIND_AGENT_ERROR,
     KIND_OBSERVATION,
     NormalizationError,
+    action_id_of,
+    kind_of,
     normalize_events,
     seq_of,
     tool_name_of,
 )
-from ..oracles.thrash import ThrashOracle
+from ..oracles.thrash import ThrashOracle, progress_epoch_boundary
 
 # Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
 # with built-in OSError/ConnectionError/TimeoutError (fake transport, raw sockets) OR,
@@ -254,6 +258,21 @@ _FILE_READ_FULL_HEADER_RE = re.compile(r"^\[lines 1-(\d+) of (\d+)\]$")
 # file_write already carries full bytes, so this is belt-and-suspenders).
 _ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
 _RAW_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_STRICT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_FINAL_SEAL_EFFECT_KINDS = frozenset({"action", "observation", "agent_error", "workspace_mutation"})
+_FINAL_SEAL_KEYS = frozenset(
+    {
+        "schema_version",
+        "scope",
+        "terminal_seq",
+        "latest_effect_seq",
+        "version_seq",
+        "tree_digest",
+        "file_count",
+        "total_bytes",
+    }
+)
+_FINAL_SEAL_SCOPE_KEYS = frozenset({"namespace", "identifier"})
 # Tools that DON'T count as a "file write" for the mid-run steer trigger (the
 # planning-safe read/ask set; mirrors ToolScopeOracle.PLANNING_SAFE_TOOLS).
 _NON_MUTATING_TOOLS = frozenset(
@@ -308,6 +327,214 @@ class SnapshotNotReadyError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.facts = facts or {}
+
+
+@dataclass(frozen=True)
+class _FinalWorkspaceSealEvidence:
+    """Strictly validated event-log half of one final workspace seal.
+
+    Filesystem facts are deliberately checked separately, after this structure has
+    selected the exact immutable version.  Keeping the two halves independent
+    prevents a valid tree from laundering a stale/legacy marker, or a valid marker
+    from blessing mutable live-workspace bytes.
+    """
+
+    terminal_seq: int | None = None
+    latest_effect_seq: int | None = None
+    event_seq: int | None = None
+    version_seq: int | None = None
+    tree_digest: str | None = None
+    file_count: int | None = None
+    total_bytes: int | None = None
+    error: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error is None and self.event_seq is not None
+
+
+@dataclass(frozen=True)
+class _VerifiedWorkspaceVersion:
+    workspace: Path
+    file_count: int
+    total_bytes: int
+    tree_digest: str
+
+
+def _strict_final_workspace_seal(
+    events: list[dict[str, Any]], conversation_id: str
+) -> _FinalWorkspaceSealEvidence:
+    """Validate the frozen live lane's non-bypass final-seal contract.
+
+    Historical unsealed workspace-version events may remain in the log for schema
+    compatibility, but the *latest* marker must carry a complete schema-v1 seal
+    bound to the latest exact SYSTEM/FINISHED status and every effect fence.
+    """
+
+    def exact_seq(event: dict[str, Any]) -> int | None:
+        raw = event.get("seq")
+        return raw if type(raw) is int and raw > 0 else None
+
+    semantic = [
+        event
+        for event in events
+        if event.get("kind") in {"status", "workspace_version", *_FINAL_SEAL_EFFECT_KINDS}
+    ]
+    if any(exact_seq(event) is None for event in semantic):
+        return _FinalWorkspaceSealEvidence(error="semantic event has no canonical sequence")
+
+    statuses = [event for event in events if event.get("kind") == "status"]
+    if not statuses:
+        return _FinalWorkspaceSealEvidence(error="event log has no status event")
+    latest_status = max(statuses, key=lambda event: exact_seq(event) or -1)
+    terminal_seq = exact_seq(latest_status)
+    if (
+        terminal_seq is None
+        or latest_status.get("source") != "system"
+        or latest_status.get("status") != "FINISHED"
+    ):
+        return _FinalWorkspaceSealEvidence(
+            error="latest status is not exact SYSTEM FINISHED",
+        )
+
+    effects = [event for event in events if event.get("kind") in _FINAL_SEAL_EFFECT_KINDS]
+    latest_effect_seq = max((exact_seq(event) or -1 for event in effects), default=-1)
+    exact_latest_effect_seq = latest_effect_seq if latest_effect_seq > 0 else None
+    if exact_latest_effect_seq is not None and exact_latest_effect_seq >= terminal_seq:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            error="effect event exists at or after terminal FINISHED",
+        )
+
+    versions = [event for event in events if event.get("kind") == "workspace_version"]
+    if not versions:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            error="event log has no workspace version marker",
+        )
+    marker = max(versions, key=lambda event: exact_seq(event) or -1)
+    event_seq = exact_seq(marker)
+    if event_seq is None or marker.get("source") != "system":
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            error="latest workspace version is not a canonical system event",
+        )
+    if event_seq <= terminal_seq:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            error="workspace version does not follow terminal FINISHED",
+        )
+    if marker.get("trigger") != "finish":
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            error="workspace version is not finish-triggered",
+        )
+
+    version_seq = marker.get("version_seq")
+    tree_digest = marker.get("tree_digest")
+    if type(version_seq) is not int or version_seq < 1:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            error="workspace version has an invalid version sequence",
+        )
+    if not isinstance(tree_digest, str) or _STRICT_SHA256_RE.fullmatch(tree_digest) is None:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            version_seq=version_seq,
+            error="workspace version has an invalid tree digest",
+        )
+
+    seal = marker.get("final_seal")
+    if not isinstance(seal, dict):
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            version_seq=version_seq,
+            tree_digest=tree_digest,
+            error="latest workspace version has no final seal",
+        )
+    if set(seal) != _FINAL_SEAL_KEYS:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            version_seq=version_seq,
+            tree_digest=tree_digest,
+            error="final seal fields do not match schema v1",
+        )
+    scope = seal.get("scope")
+    if not isinstance(scope, dict) or set(scope) != _FINAL_SEAL_SCOPE_KEYS:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            version_seq=version_seq,
+            tree_digest=tree_digest,
+            error="final seal scope is malformed",
+        )
+    if scope.get("namespace") != "workspace.tree" or scope.get("identifier") != conversation_id:
+        return _FinalWorkspaceSealEvidence(
+            terminal_seq=terminal_seq,
+            latest_effect_seq=exact_latest_effect_seq,
+            event_seq=event_seq,
+            version_seq=version_seq,
+            tree_digest=tree_digest,
+            error="final seal scope does not match the conversation workspace",
+        )
+
+    seal_version_seq = seal.get("version_seq")
+    seal_digest = seal.get("tree_digest")
+    file_count = seal.get("file_count")
+    total_bytes = seal.get("total_bytes")
+    if type(seal.get("schema_version")) is not int or seal.get("schema_version") != 1:
+        error = "final seal schema version is not 1"
+    elif type(seal.get("terminal_seq")) is not int or seal.get("terminal_seq") != terminal_seq:
+        error = "final seal terminal sequence does not match the event log"
+    elif (
+        "latest_effect_seq" not in seal
+        or (exact_latest_effect_seq is None and seal.get("latest_effect_seq") is not None)
+        or (
+            exact_latest_effect_seq is not None
+            and (
+                type(seal.get("latest_effect_seq")) is not int
+                or seal.get("latest_effect_seq") != exact_latest_effect_seq
+            )
+        )
+    ):
+        error = "final seal latest effect sequence does not match the event log"
+    elif type(seal_version_seq) is not int or seal_version_seq != version_seq:
+        error = "final seal version sequence does not match its event"
+    elif not isinstance(seal_digest, str) or seal_digest != tree_digest:
+        error = "final seal tree digest does not match its event"
+    elif type(file_count) is not int or file_count < 0:
+        error = "final seal file count is invalid"
+    elif type(total_bytes) is not int or total_bytes < 0:
+        error = "final seal total bytes is invalid"
+    else:
+        error = None
+
+    return _FinalWorkspaceSealEvidence(
+        terminal_seq=terminal_seq,
+        latest_effect_seq=exact_latest_effect_seq,
+        event_seq=event_seq,
+        version_seq=version_seq,
+        tree_digest=tree_digest,
+        file_count=file_count if type(file_count) is int else None,
+        total_bytes=total_bytes if type(total_bytes) is int else None,
+        error=error,
+    )
 
 
 class BrowserEvidenceCollectionError(Exception):
@@ -417,6 +644,617 @@ class CollectedRun:
     browser_evidence_collection_error: dict[str, Any] | None = None
 
 
+_INSPECT_PROJECTIONS = {
+    "routing": "routing_decisions",
+    "span": "spans",
+    "tool_scope": "tool_scopes",
+    "progress_shadow": "progress_shadows",
+}
+_INSPECT_AGGREGATION_REASON_ORDER = (
+    "first_snapshot_already_dropped",
+    "event_content_conflict",
+    "eviction_gap_no_overlap",
+    "source_reset",
+    "dropped_count_regression",
+    "impossible_dropped_transition",
+    "snapshot_sequence_regression",
+    "conversation_mismatch",
+    "ambiguous_event_discriminator",
+    "malformed_snapshot",
+    "inspect_unavailable",
+    "active_stop_unconfirmed",
+    "poller_cancelled",
+    "no_valid_snapshot",
+)
+
+
+@dataclass
+class _InspectTraceAggregation:
+    """Canonical, overlap-proven aggregate of bounded inspect snapshots."""
+
+    conversation_id: str
+    canonical_events: dict[int, bytes] = field(default_factory=dict)
+    sample_count: int = 0
+    accepted_sample_count: int = 0
+    event_bearing_sample_count: int = 0
+    pretrace_unavailable_count: int = 0
+    unavailable_sample_count: int = 0
+    malformed_sample_count: int = 0
+    overlap_sample_count: int = 0
+    conflict_count: int = 0
+    source_max_dropped_count: int = 0
+    last_source_dropped_count: int | None = None
+    last_snapshot_seqs: tuple[int, ...] = ()
+    reasons: set[str] = field(default_factory=set)
+    finalized: bool = False
+
+    @staticmethod
+    def _canonical_event(event: dict[str, Any]) -> bytes:
+        return json.dumps(
+            event,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+
+    @staticmethod
+    def _projection_for_event(event: dict[str, Any]) -> tuple[str, bool]:
+        """Return (projection field, kind_is_outer_discriminator).
+
+        Inspect currently flattens ``{seq, kind=outer, **span_fields}``. A
+        request-budget span legitimately has a payload field named ``kind``
+        (for example ``soft``), which overwrites the outer ``span`` label. The
+        exact span signature remains closed: non-empty ``span`` plus one of the
+        three observability event phases. Any other discriminator collision is
+        ambiguous and therefore rejected rather than silently losing a
+        projection.
+        """
+
+        kind = event.get("kind")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("inspect event discriminator is not a non-empty string")
+        span_signature = (
+            isinstance(event.get("span"), str)
+            and bool(event["span"])
+            and event.get("event") in {"start", "end", "point"}
+        )
+        if kind == "span":
+            if not span_signature:
+                raise ValueError("inspect span event has no exact span signature")
+            return "spans", True
+        projection = _INSPECT_PROJECTIONS.get(kind)
+        if projection is not None:
+            if span_signature:
+                raise ValueError("inspect event discriminator collides with a span")
+            return projection, True
+        if span_signature:
+            return "spans", False
+        raise ValueError("inspect event discriminator is ambiguous")
+
+    def note_expected_pretrace_absence(self) -> None:
+        self.sample_count += 1
+        self.pretrace_unavailable_count += 1
+
+    def note_unavailable(self) -> None:
+        self.sample_count += 1
+        self.unavailable_sample_count += 1
+        self.reasons.add("inspect_unavailable")
+
+    def note_trace_disappeared(self) -> None:
+        self.note_unavailable()
+        self.reasons.add("source_reset")
+
+    def note_poller_cancelled(self) -> None:
+        self.reasons.add("poller_cancelled")
+
+    def _reject_malformed(self, *reasons: str) -> None:
+        self.malformed_sample_count += 1
+        self.reasons.add("malformed_snapshot")
+        self.reasons.update(reasons)
+
+    def add_snapshot(self, snapshot: object) -> None:
+        self.sample_count += 1
+        if not isinstance(snapshot, dict):
+            self._reject_malformed()
+            return
+        if snapshot.get("conversation_id") != self.conversation_id:
+            self._reject_malformed("conversation_mismatch")
+            return
+        events = snapshot.get("events")
+        dropped = snapshot.get("dropped_event_count")
+        event_count = snapshot.get("event_count")
+        if (
+            not isinstance(events, list)
+            or type(dropped) is not int
+            or dropped < 0
+            or type(event_count) is not int
+            or event_count != len(events)
+        ):
+            self._reject_malformed()
+            return
+
+        seqs: list[int] = []
+        encoded: dict[int, bytes] = {}
+        try:
+            for event in events:
+                if not isinstance(event, dict):
+                    raise ValueError("inspect event is not an object")
+                seq = event.get("seq")
+                if type(seq) is not int or seq <= 0:
+                    raise ValueError("inspect sequence is not an exact positive integer")
+                if seqs and seq <= seqs[-1]:
+                    self._reject_malformed("snapshot_sequence_regression")
+                    return
+                try:
+                    self._projection_for_event(event)
+                except ValueError:
+                    self._reject_malformed("ambiguous_event_discriminator")
+                    return
+                seqs.append(seq)
+                encoded[seq] = self._canonical_event(event)
+        except (TypeError, ValueError):
+            self._reject_malformed()
+            return
+
+        self.source_max_dropped_count = max(self.source_max_dropped_count, dropped)
+        if self.event_bearing_sample_count == 0 and dropped > 0:
+            self.reasons.add("first_snapshot_already_dropped")
+
+        if self.last_source_dropped_count is not None and dropped < self.last_source_dropped_count:
+            self.reasons.update({"dropped_count_regression", "source_reset"})
+            return
+
+        conflicts = [
+            seq
+            for seq, content in encoded.items()
+            if seq in self.canonical_events and self.canonical_events[seq] != content
+        ]
+        if conflicts:
+            self.conflict_count += len(conflicts)
+            self.reasons.add("event_content_conflict")
+            return
+
+        current = tuple(seqs)
+        previous = self.last_snapshot_seqs
+        if previous:
+            previous_set = set(previous)
+            current_set = set(current)
+            overlap = tuple(seq for seq in current if seq in previous_set)
+            if overlap:
+                self.overlap_sample_count += 1
+                first_overlap = overlap[0]
+                previous_suffix = previous[previous.index(first_overlap) :]
+                current_prefix = current[: len(overlap)]
+                if previous_suffix != overlap or current_prefix != overlap:
+                    self.reasons.add("snapshot_sequence_regression")
+                    return
+            elif current != previous:
+                if dropped > (self.last_source_dropped_count or 0):
+                    self.reasons.add("eviction_gap_no_overlap")
+                else:
+                    self.reasons.add("source_reset")
+                return
+
+            previous_max = previous[-1]
+            if any(seq <= previous_max and seq not in self.canonical_events for seq in current):
+                self.reasons.add("snapshot_sequence_regression")
+                return
+            if current and current[-1] < previous_max:
+                self.reasons.update({"snapshot_sequence_regression", "source_reset"})
+                return
+            if dropped > (self.last_source_dropped_count or 0) and not overlap:
+                self.reasons.add("eviction_gap_no_overlap")
+                return
+
+            # A fixed ring evicts oldest-first and only while appending. A risen
+            # drop count therefore requires exactly the leading `evicted` prior
+            # members to disappear AND a genuinely new suffix to have arrived. A
+            # byte-identical window (or any other surviving set) cannot raise
+            # the counter; that transition is a reset/corruption, never green.
+            # The rule holds whether or not the earlier sample was below ring
+            # capacity: it uses only the delta-versus-last-accepted facts.
+            if overlap and dropped > (self.last_source_dropped_count or 0):
+                evicted = dropped - (self.last_source_dropped_count or 0)
+                if (
+                    overlap != previous[min(evicted, len(previous)) :]
+                    or current[-1] <= previous[-1]
+                ):
+                    self.reasons.update({"impossible_dropped_transition", "source_reset"})
+                    return
+
+            # Without source eviction, a bounded ring cannot discard a prior
+            # member. Missing members therefore prove reset/regression even when
+            # the two windows happen to overlap at one sequence.
+            if dropped == self.last_source_dropped_count and not previous_set <= current_set:
+                self.reasons.add("snapshot_sequence_regression")
+                return
+
+        self.canonical_events.update(encoded)
+        self.accepted_sample_count += 1
+        if current:
+            self.event_bearing_sample_count += 1
+        self.last_source_dropped_count = dropped
+        self.last_snapshot_seqs = current
+
+    def finish(self) -> None:
+        if self.finalized:
+            return
+        if self.accepted_sample_count == 0:
+            self.reasons.add("no_valid_snapshot")
+        self.finalized = True
+
+    def render(self) -> dict[str, Any]:
+        events = [
+            json.loads(self.canonical_events[seq].decode("utf-8"))
+            for seq in sorted(self.canonical_events)
+        ]
+        projections: dict[str, list[dict[str, Any]]] = {
+            field_name: [] for field_name in _INSPECT_PROJECTIONS.values()
+        }
+        for event in events:
+            projection, kind_is_outer = self._projection_for_event(event)
+            projections[projection].append(
+                {
+                    key: value
+                    for key, value in event.items()
+                    if key != "seq" and (key != "kind" or not kind_is_outer)
+                }
+            )
+
+        reasons = [reason for reason in _INSPECT_AGGREGATION_REASON_ORDER if reason in self.reasons]
+        lossless = self.finalized and self.accepted_sample_count > 0 and not reasons
+        if lossless:
+            continuity_reason = (
+                "overlap_proven"
+                if self.source_max_dropped_count > 0
+                else "no_source_eviction_observed"
+            )
+        else:
+            continuity_reason = reasons[0] if reasons else "collection_not_finalized"
+        seqs = sorted(self.canonical_events)
+        result: dict[str, Any] = {
+            "conversation_id": self.conversation_id,
+            "event_count": len(events),
+            # This is the aggregate loss counter, not the source ring's.  It is
+            # exactly zero only after the continuity proof closes.
+            "dropped_event_count": 0 if lossless else None,
+            "source_dropped_event_count": self.source_max_dropped_count,
+            "events": events,
+            **projections,
+            "aggregation": {
+                "schema_version": 1,
+                "sample_count": self.sample_count,
+                "accepted_sample_count": self.accepted_sample_count,
+                "event_bearing_sample_count": self.event_bearing_sample_count,
+                "pretrace_unavailable_count": self.pretrace_unavailable_count,
+                "unavailable_sample_count": self.unavailable_sample_count,
+                "malformed_sample_count": self.malformed_sample_count,
+                "overlap_sample_count": self.overlap_sample_count,
+                "source_max_dropped_count": self.source_max_dropped_count,
+                "unique_event_count": len(events),
+                "first_retained_seq": seqs[0] if seqs else None,
+                "last_retained_seq": seqs[-1] if seqs else None,
+                "continuity": "complete" if lossless else "incomplete",
+                "continuity_reason": continuity_reason,
+                "conflict_count": self.conflict_count,
+                "failure_reasons": reasons,
+                "lossless": lossless,
+                "finalized": self.finalized,
+            },
+        }
+        return result
+
+
+_INSPECT_TRACE_TOP_LEVEL_KEYS = frozenset(
+    {
+        "conversation_id",
+        "event_count",
+        "dropped_event_count",
+        "source_dropped_event_count",
+        "events",
+        "routing_decisions",
+        "spans",
+        "tool_scopes",
+        "progress_shadows",
+        "aggregation",
+    }
+)
+_INSPECT_AGGREGATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "sample_count",
+        "accepted_sample_count",
+        "event_bearing_sample_count",
+        "pretrace_unavailable_count",
+        "unavailable_sample_count",
+        "malformed_sample_count",
+        "overlap_sample_count",
+        "source_max_dropped_count",
+        "unique_event_count",
+        "first_retained_seq",
+        "last_retained_seq",
+        "continuity",
+        "continuity_reason",
+        "conflict_count",
+        "failure_reasons",
+        "lossless",
+        "finalized",
+    }
+)
+_INSPECT_AGGREGATION_COUNTER_KEYS = (
+    "sample_count",
+    "accepted_sample_count",
+    "event_bearing_sample_count",
+    "pretrace_unavailable_count",
+    "unavailable_sample_count",
+    "malformed_sample_count",
+    "overlap_sample_count",
+    "source_max_dropped_count",
+    "unique_event_count",
+    "conflict_count",
+)
+
+
+def _exact_nonneg_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _inspect_events_and_projections(
+    trace: dict[str, Any], flag: Callable[[str], None]
+) -> tuple[list[dict[str, Any]] | None, dict[str, list[dict[str, Any]]]]:
+    """Validate the canonical event list and re-derive every projection.
+
+    Returns ``(events, derived_projections)``; ``events`` is ``None`` when the
+    list itself is unusable (further event-derived checks are meaningless)."""
+
+    derived: dict[str, list[dict[str, Any]]] = {
+        field_name: [] for field_name in _INSPECT_PROJECTIONS.values()
+    }
+    events = trace.get("events")
+    if not isinstance(events, list):
+        flag("events_not_a_list")
+        return None, derived
+    last_seq: int | None = None
+    for event in events:
+        if not isinstance(event, dict):
+            flag("event_shape")
+            return None, derived
+        seq = event.get("seq")
+        if type(seq) is not int or seq <= 0 or (last_seq is not None and seq <= last_seq):
+            flag("event_sequence")
+            return None, derived
+        last_seq = seq
+        try:
+            _canonical_json_bytes(event)
+            projection, kind_is_outer = _InspectTraceAggregation._projection_for_event(event)
+        except (TypeError, ValueError):
+            flag("event_not_canonical")
+            return None, derived
+        derived[projection].append(
+            {
+                key: value
+                for key, value in event.items()
+                if key != "seq" and (key != "kind" or not kind_is_outer)
+            }
+        )
+    return [dict(event) for event in events], derived
+
+
+def inspect_aggregate_violations(trace: object, *, conversation_id: str) -> list[str]:
+    """Bounded internal-consistency violations of a rendered inspect aggregate.
+
+    The required-inspect gate must not trust the caller-owned ``lossless`` /
+    ``finalized`` / ``dropped_event_count`` assertions: a forged or tampered
+    dict can wear those values around an internally inconsistent trace.  This
+    validator re-derives every projection and coherence fact from the canonical
+    events and returns a deduplicated, bounded list of short violation labels;
+    an empty list means the aggregate is exactly the shape ``render`` produces
+    for this conversation.  It shares the aggregation's own constants so the
+    producer and the gate cannot drift apart.
+    """
+
+    if not isinstance(trace, dict):
+        return ["trace_not_an_object"]
+    violations: list[str] = []
+
+    def flag(label: str) -> None:
+        if label not in violations:
+            violations.append(label)
+
+    if set(trace) != _INSPECT_TRACE_TOP_LEVEL_KEYS:
+        flag("top_level_keys")
+    cid = trace.get("conversation_id")
+    if not isinstance(cid, str) or cid != conversation_id:
+        flag("conversation_id")
+    aggregation = trace.get("aggregation")
+    if not isinstance(aggregation, dict):
+        flag("aggregation_missing")
+        return violations
+    if set(aggregation) != _INSPECT_AGGREGATION_KEYS:
+        flag("aggregation_keys")
+    schema_version = aggregation.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
+        flag("schema_version")
+    counters_valid = True
+    for key in _INSPECT_AGGREGATION_COUNTER_KEYS:
+        if not _exact_nonneg_int(aggregation.get(key)):
+            flag(f"counter:{key}")
+            counters_valid = False
+    lossless = aggregation.get("lossless")
+    finalized = aggregation.get("finalized")
+    if type(lossless) is not bool or type(finalized) is not bool:
+        flag("lossless_finalized_types")
+        return violations
+
+    reasons_raw = aggregation.get("failure_reasons")
+    reasons: list[str] | None = None
+    if isinstance(reasons_raw, list) and all(isinstance(item, str) for item in reasons_raw):
+        canonical = [
+            reason for reason in _INSPECT_AGGREGATION_REASON_ORDER if reason in set(reasons_raw)
+        ]
+        if list(reasons_raw) == canonical:
+            reasons = canonical
+    if reasons is None:
+        flag("failure_reasons")
+
+    events, derived = _inspect_events_and_projections(trace, flag)
+    if events is not None:
+        count = len(events)
+        event_count = trace.get("event_count")
+        if (
+            type(event_count) is not int
+            or event_count != count
+            or aggregation.get("unique_event_count") != count
+            or type(aggregation.get("unique_event_count")) is not int
+        ):
+            flag("event_count")
+        expected_first = events[0]["seq"] if events else None
+        expected_last = events[-1]["seq"] if events else None
+        for key, expected in (
+            ("first_retained_seq", expected_first),
+            ("last_retained_seq", expected_last),
+        ):
+            actual = aggregation.get(key)
+            if expected is None:
+                if actual is not None:
+                    flag(f"retained_seq:{key}")
+            elif type(actual) is not int or actual != expected:
+                flag(f"retained_seq:{key}")
+        for field_name in _INSPECT_PROJECTIONS.values():
+            try:
+                actual_bytes = _canonical_json_bytes(trace.get(field_name))
+            except (TypeError, ValueError):
+                flag(f"projection:{field_name}")
+                continue
+            if actual_bytes != _canonical_json_bytes(derived[field_name]):
+                flag(f"projection:{field_name}")
+
+    if reasons is None or not counters_valid:
+        return violations
+
+    def counter(key: str) -> int:
+        # counters_valid proved every counter is an exact non-negative int; the
+        # type re-check only narrows for the type checker.
+        value = aggregation.get(key)
+        return value if type(value) is int else 0
+
+    accepted = counter("accepted_sample_count")
+    expected_lossless = finalized and accepted > 0 and not reasons
+    if lossless != expected_lossless:
+        flag("lossless_incoherent")
+    dropped = trace.get("dropped_event_count")
+    if lossless:
+        if type(dropped) is not int or dropped != 0:
+            flag("dropped_event_count")
+    elif dropped is not None:
+        flag("dropped_event_count")
+    if aggregation.get("continuity") != ("complete" if lossless else "incomplete"):
+        flag("continuity")
+    source_max = counter("source_max_dropped_count")
+    if lossless:
+        expected_reason = "overlap_proven" if source_max > 0 else "no_source_eviction_observed"
+    else:
+        expected_reason = reasons[0] if reasons else "collection_not_finalized"
+    if aggregation.get("continuity_reason") != expected_reason:
+        flag("continuity_reason")
+    top_source = trace.get("source_dropped_event_count")
+    if type(top_source) is not int or top_source != source_max:
+        flag("source_dropped_event_count")
+    if finalized and accepted == 0 and "no_valid_snapshot" not in reasons:
+        flag("no_valid_snapshot_missing")
+
+    sample_count = counter("sample_count")
+    event_bearing = counter("event_bearing_sample_count")
+    if (
+        accepted
+        + counter("pretrace_unavailable_count")
+        + counter("unavailable_sample_count")
+        + counter("malformed_sample_count")
+        > sample_count
+        or event_bearing > accepted
+        or counter("overlap_sample_count") > sample_count
+    ):
+        flag("sample_accounting")
+    if events is not None:
+        if events and event_bearing == 0:
+            flag("sample_accounting")
+        if not events and event_bearing > 0:
+            flag("sample_accounting")
+
+    # Counter <-> reason coherence: render can never disclose a rejected,
+    # unavailable, or malformed sample — or source eviction under a lossless
+    # verdict — without the matching taint, so a forged aggregate cannot wear
+    # green around disclosed evidence loss.
+    if counter("conflict_count") > 0 and "event_content_conflict" not in reasons:
+        flag("conflict_reason_incoherent")
+    if counter("unavailable_sample_count") > 0 and "inspect_unavailable" not in reasons:
+        flag("unavailable_reason_incoherent")
+    if counter("malformed_sample_count") > 0 and "malformed_snapshot" not in reasons:
+        flag("malformed_reason_incoherent")
+    if lossless and source_max > 0 and counter("overlap_sample_count") == 0:
+        flag("overlap_continuity_incoherent")
+    return violations
+
+
+def _live_thrash_finding_is_current(
+    events: list[dict[str, Any]], failing_result: dict[str, Any]
+) -> bool:
+    """Whether a failing oracle result still describes the run's CURRENT state.
+
+    k6g F2.4: historical lifetime evidence alone must never kill a resumed
+    productive run. A finding is current only when NO trusted progress-epoch
+    boundary (receipt-backed mutation, approved plan transition, user turn,
+    typed blocking obligation) landed after the finding's latest contributing
+    event. A finding that references no event seqs (e.g. hidden-repair counts
+    from inspect spans) stays current — there is no progress evidence to
+    supersede it, and failing open would un-bound genuine spend.
+    """
+
+    facts = failing_result.get("facts")
+    if not isinstance(facts, dict):
+        return True
+    referenced: list[int] = []
+    for key in ("action_seqs", "seqs", "cleanup_seqs"):
+        values = facts.get(key)
+        if isinstance(values, list):
+            referenced.extend(value for value in values if type(value) is int)
+    markers = facts.get("terminal_markers")
+    if isinstance(markers, list):
+        referenced.extend(
+            marker["seq"]
+            for marker in markers
+            if isinstance(marker, dict) and type(marker.get("seq")) is int
+        )
+    if not referenced:
+        return True
+    latest_referenced = max(referenced)
+    known_action_ids = frozenset(
+        str(action_id_of(event))
+        for event in events
+        if kind_of(event) == KIND_ACTION and action_id_of(event)
+    )
+    for event in events:
+        seq = event.get("seq")
+        if (
+            type(seq) is int
+            and seq > latest_referenced
+            and progress_epoch_boundary(event, action_ids=known_action_ids)
+        ):
+            return False
+    return True
+
+
 # ---- the live client --------------------------------------------------------
 
 
@@ -450,6 +1288,7 @@ class DiscoApiClient:
         # that model file readiness without running the product persistence layer.
         self._require_workspace_commit = require_workspace_commit
         self._collected_workspace_dirs: dict[str, Path] = {}
+        self._verified_workspace_cache = tempfile.TemporaryDirectory(prefix="disco-soak-verified-")
         # The conversation_id this client most recently CREATED (set in
         # create_build_conversation). Lets the runner reach the cid for teardown even when
         # drive_scenario raised before returning a CollectedRun (so an abandoned RUNNING
@@ -465,6 +1304,11 @@ class DiscoApiClient:
         self._live_thrash_candidate_count = 0
         self._live_thrash_recorded: set[str] = set()
         self._live_thrash_last_sample = time.monotonic()
+        self._inspect_aggregations: dict[str, _InspectTraceAggregation] = {}
+        self._inspect_poll_tasks: dict[str, asyncio.Task[None]] = {}
+        self._inspect_stop_events: dict[str, asyncio.Event] = {}
+        self._inspect_sample_locks: dict[str, asyncio.Lock] = {}
+        self._inspect_finish_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
 
     def enable_live_thrash_monitor(self, scenario: dict[str, Any]) -> None:
         self._live_thrash_scenario = scenario
@@ -474,6 +1318,127 @@ class DiscoApiClient:
         self._live_thrash_candidate_count = 0
         self._live_thrash_recorded = set()
         self._live_thrash_last_sample = time.monotonic()
+
+    async def _fetch_inspect_snapshot(self, conversation_id: str) -> tuple[str, object | None]:
+        try:
+            status, data = await self._t.get_json(f"/api/debug/trace/{conversation_id}")
+        except Exception:  # noqa: BLE001 — the aggregate records unavailability
+            return "unavailable", None
+        if (
+            status == 404
+            and isinstance(data, dict)
+            and set(data) == {"error", "conversation_id"}
+            and data.get("error") == "no trace"
+            and data.get("conversation_id") == conversation_id
+        ):
+            return "pretrace", None
+        if status >= 400:
+            return "unavailable", None
+        return "snapshot", data
+
+    async def _sample_inspect_trace(self, conversation_id: str) -> None:
+        aggregation = self._inspect_aggregations.get(conversation_id)
+        lock = self._inspect_sample_locks.get(conversation_id)
+        if aggregation is None or lock is None or aggregation.finalized:
+            return
+        async with lock:
+            if aggregation.finalized:
+                return
+            disposition, snapshot = await self._fetch_inspect_snapshot(conversation_id)
+            if disposition == "pretrace":
+                if aggregation.accepted_sample_count == 0:
+                    aggregation.note_expected_pretrace_absence()
+                else:
+                    # The exact 404/no-trace response is provisional only before
+                    # the first source snapshot. Once a trace existed, its
+                    # disappearance is observable restart/loss, not pretrace.
+                    aggregation.note_trace_disappeared()
+            elif disposition == "unavailable":
+                aggregation.note_unavailable()
+            else:
+                aggregation.add_snapshot(snapshot)
+
+    async def _poll_inspect_trace(self, conversation_id: str) -> None:
+        aggregation = self._inspect_aggregations[conversation_id]
+        stop = self._inspect_stop_events[conversation_id]
+        interval = min(max(self._poll, 0.01), 0.25)
+        try:
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=interval)
+                except TimeoutError:
+                    await self._sample_inspect_trace(conversation_id)
+        except asyncio.CancelledError:
+            aggregation.note_poller_cancelled()
+            raise
+        except Exception:  # noqa: BLE001 — retain evidence and fail continuity closed
+            aggregation.note_unavailable()
+
+    async def start_inspect_collection(self, conversation_id: str) -> None:
+        """Idempotently begin polling before the user message kicks the model."""
+
+        if conversation_id in self._inspect_aggregations:
+            return
+        self._inspect_aggregations[conversation_id] = _InspectTraceAggregation(conversation_id)
+        self._inspect_stop_events[conversation_id] = asyncio.Event()
+        self._inspect_sample_locks[conversation_id] = asyncio.Lock()
+        # Take the earliest possible sample synchronously. A not-yet-created trace
+        # is provisional: the first real dropped=0 snapshot proves nothing was lost.
+        await self._sample_inspect_trace(conversation_id)
+        self._inspect_poll_tasks[conversation_id] = asyncio.create_task(
+            self._poll_inspect_trace(conversation_id),
+            name=f"inspect-aggregate:{conversation_id}",
+        )
+
+    async def _finish_inspect_collection(self, conversation_id: str) -> dict[str, Any]:
+        aggregation = self._inspect_aggregations[conversation_id]
+        if aggregation.finalized:
+            return aggregation.render()
+        self._inspect_stop_events[conversation_id].set()
+        poller = self._inspect_poll_tasks.get(conversation_id)
+        if poller is not None:
+            try:
+                await poller
+            except asyncio.CancelledError:
+                # An independently cancelled poller taints continuity but never
+                # deletes the canonical prefix already retained.
+                aggregation.note_poller_cancelled()
+        await self._sample_inspect_trace(conversation_id)
+        aggregation.finish()
+        return aggregation.render()
+
+    async def finish_inspect_collection(self, conversation_id: str) -> dict[str, Any] | None:
+        """Idempotently stop, take a final sample, and freeze the aggregate.
+
+        The owned finish task is shielded so caller cancellation cannot replace an
+        already-collected prefix with ``None``. A later cleanup caller awaits the
+        same task before releasing the conversation.
+        """
+
+        if conversation_id not in self._inspect_aggregations:
+            return None
+        task = self._inspect_finish_tasks.get(conversation_id)
+        if task is None:
+            task = asyncio.create_task(
+                self._finish_inspect_collection(conversation_id),
+                name=f"inspect-finalize:{conversation_id}",
+            )
+            self._inspect_finish_tasks[conversation_id] = task
+        return await asyncio.shield(task)
+
+    def note_inspect_stop_unconfirmed(self, conversation_id: str) -> None:
+        """Taint continuity when an ACTIVE conversation's stop was not confirmed.
+
+        A stop that cannot be proven quiescent may leave the model emitting
+        trace events after the final sample, so the aggregate must not claim
+        losslessness.  The retained canonical prefix is preserved.  This is a
+        no-op after finalization: a frozen aggregate was completed through the
+        stop-first path and its verdict already stands.
+        """
+
+        aggregation = self._inspect_aggregations.get(conversation_id)
+        if aggregation is not None and not aggregation.finalized:
+            aggregation.reasons.add("active_stop_unconfirmed")
 
     @property
     def live_thrash_monitor(self) -> dict[str, Any]:
@@ -519,6 +1484,17 @@ class DiscoApiClient:
                 inspect_trace=inspect_trace,
             )
             if result.failed
+        ]
+        # k6g F2: a live KILL needs persistent CURRENT no-progress evidence. A
+        # finding whose last contributing event precedes trusted progress (a
+        # receipt-backed mutation, an approved plan transition, an answered
+        # user turn, a typed blocking obligation) is historical: the terminal
+        # classifier still adjudicates it on the frozen events, but the monitor
+        # must not kill a resumed, progressing run over it.
+        failed = [
+            result
+            for result in failed
+            if _live_thrash_finding_is_current(normalized_events, result)
         ]
         if not failed:
             self._live_thrash_candidate = ""
@@ -639,6 +1615,9 @@ class DiscoApiClient:
         # down even if the subsequent message POST / drive raises — a created-but-abandoned
         # conversation must never leak as a RUNNING build on the shared server.
         self.last_conversation_id = cid
+        # BF2: inspect collection starts at the first instant the harness owns
+        # the conversation id, before POST /messages can kick a model request.
+        await self.start_inspect_collection(cid)
         # POST the user task — appends the USER message AND kicks the loop. AppKit
         # lanes mirror the production UI's initial frame: `build_brief` present makes
         # the route classify a Build Brief from the prompt (codex finding #11 — without
@@ -837,9 +1816,7 @@ class DiscoApiClient:
                 continue
             if seq_of(event) < 0:
                 return None
-            if kind == KIND_ACTION and (
-                event.get("id") is None or tool_name_of(event) is None
-            ):
+            if kind == KIND_ACTION and (event.get("id") is None or tool_name_of(event) is None):
                 return None
 
         latest_action = next(
@@ -1293,15 +2270,23 @@ class DiscoApiClient:
         fake-transport tests and non-campaign callers remain usable. The live CLI
         campaign enforces its presence before counting a run.
         """
-        try:
-            status, data = await self._t.get_json(f"/api/debug/trace/{conversation_id}")
-        except Exception:  # noqa: BLE001 — campaign policy adjudicates absence
+        aggregation = self._inspect_aggregations.get(conversation_id)
+        if aggregation is not None:
+            if not aggregation.finalized:
+                await self._sample_inspect_trace(conversation_id)
+            return aggregation.render()
+
+        # Compatibility for adapter-only callers that did not create the
+        # conversation through this client. Governed runs always use the
+        # aggregate path above and the repository gate requires its receipt.
+        disposition, data = await self._fetch_inspect_snapshot(conversation_id)
+        if disposition != "snapshot":
             return None
-        if status >= 400 or not isinstance(data, dict):
+        if not isinstance(data, dict):
             return None
-        if str(data.get("conversation_id") or "") != conversation_id:
-            return None
-        if not isinstance(data.get("events"), list):
+        if data.get("conversation_id") != conversation_id or not isinstance(
+            data.get("events"), list
+        ):
             return None
         return data
 
@@ -1511,10 +2496,14 @@ class DiscoApiClient:
         manifest: dict[str, Any] = {}
         snapshot_dir: Path | None = None
         terminal_seq: int | None = None
+        latest_effect_seq: int | None = None
         commit_seq: int | None = None
         commit_version_seq: int | None = None
         commit_digest: str | None = None
         observed_digest: str | None = None
+        observed_file_count: int | None = None
+        observed_total_bytes: int | None = None
+        final_seal_error: str | None = None
         event_evidence_valid = False
         while True:
             try:
@@ -1551,93 +2540,145 @@ class DiscoApiClient:
                     and isinstance(event.get("trigger"), str)
                 )
 
-            for event in current_events:
-                kind = event.get("kind")
-                if kind == "status" and not _valid_status(event):
-                    event_evidence_valid = False
-                elif kind == "workspace_version" and not _valid_workspace_version(event):
-                    event_evidence_valid = False
-                elif kind in {"action", "observation", "agent_error"} and _exact_seq(event) is None:
-                    event_evidence_valid = False
-
-            statuses = [
-                event
-                for event in current_events
-                if event.get("kind") == "status" and _valid_status(event)
-            ]
-            latest_status = max(statuses, key=_sort_seq, default=None)
-            terminal_seq = (
-                _exact_seq(latest_status)
-                if event_evidence_valid
-                and latest_status is not None
-                and (
-                    str(latest_status.get("status")) in TERMINAL_STATES
-                    or str(latest_status.get("status")) == PAUSED_STATE
-                )
-                else None
-            )
-            latest_effect_seq = max(
-                (
-                    seq
-                    for event in current_events
-                    if event.get("kind") in {"action", "observation", "agent_error"}
-                    and (seq := _exact_seq(event)) is not None
-                ),
-                default=-1,
-            )
-            commits = [
-                event
-                for event in current_events
-                if event.get("kind") == "workspace_version"
-                and _valid_workspace_version(event)
-                and event.get("trigger") == "finish"
-                and event_evidence_valid
-                and terminal_seq is not None
-                and _sort_seq(event) > terminal_seq
-                and _sort_seq(event) > latest_effect_seq
-            ]
-            commit = max(commits, key=_sort_seq, default=None)
-            commit_seq = _exact_seq(commit) if commit is not None else None
-            commit_version_seq = (
-                int(commit["version_seq"])
-                if commit is not None and type(commit.get("version_seq")) is int
-                else None
-            )
-            commit_digest = str(commit.get("tree_digest") or "") if commit is not None else None
-            observed_digest = None
-            # Strict live evidence never relaxes merely because its ordering proof
-            # is missing or corrupt.  Terminal + post-terminal finish marker +
-            # matching tree digest are all mandatory; absence is INVALID evidence.
             commit_required = self._require_workspace_commit
+            seal_file_count: int | None = None
+            seal_total_bytes: int | None = None
+            if commit_required:
+                seal_evidence = _strict_final_workspace_seal(current_events, conversation_id)
+                event_evidence_valid = seal_evidence.valid
+                terminal_seq = seal_evidence.terminal_seq
+                latest_effect_seq = seal_evidence.latest_effect_seq
+                commit_seq = seal_evidence.event_seq
+                commit_version_seq = seal_evidence.version_seq
+                commit_digest = seal_evidence.tree_digest
+                seal_file_count = seal_evidence.file_count
+                seal_total_bytes = seal_evidence.total_bytes
+                final_seal_error = seal_evidence.error
+            else:
+                for event in current_events:
+                    kind = event.get("kind")
+                    if kind == "status" and not _valid_status(event):
+                        event_evidence_valid = False
+                    elif kind == "workspace_version" and not _valid_workspace_version(event):
+                        event_evidence_valid = False
+                    elif (
+                        kind in {"action", "observation", "agent_error"}
+                        and _exact_seq(event) is None
+                    ):
+                        event_evidence_valid = False
+
+                statuses = [
+                    event
+                    for event in current_events
+                    if event.get("kind") == "status" and _valid_status(event)
+                ]
+                latest_status = max(statuses, key=_sort_seq, default=None)
+                terminal_seq = (
+                    _exact_seq(latest_status)
+                    if event_evidence_valid
+                    and latest_status is not None
+                    and (
+                        str(latest_status.get("status")) in TERMINAL_STATES
+                        or str(latest_status.get("status")) == PAUSED_STATE
+                    )
+                    else None
+                )
+                legacy_latest_effect_seq = max(
+                    (
+                        seq
+                        for event in current_events
+                        if event.get("kind") in {"action", "observation", "agent_error"}
+                        and (seq := _exact_seq(event)) is not None
+                    ),
+                    default=-1,
+                )
+                latest_effect_seq = (
+                    legacy_latest_effect_seq if legacy_latest_effect_seq > 0 else None
+                )
+                commits = [
+                    event
+                    for event in current_events
+                    if event.get("kind") == "workspace_version"
+                    and _valid_workspace_version(event)
+                    and event.get("trigger") == "finish"
+                    and event_evidence_valid
+                    and terminal_seq is not None
+                    and _sort_seq(event) > terminal_seq
+                    and _sort_seq(event) > legacy_latest_effect_seq
+                ]
+                commit = max(commits, key=_sort_seq, default=None)
+                commit_seq = _exact_seq(commit) if commit is not None else None
+                commit_version_seq = (
+                    int(commit["version_seq"])
+                    if commit is not None and type(commit.get("version_seq")) is int
+                    else None
+                )
+                commit_digest = str(commit.get("tree_digest") or "") if commit is not None else None
+                final_seal_error = None
+
+            observed_digest = None
+            observed_file_count = None
+            observed_total_bytes = None
+            # Strict live evidence never relaxes merely because its ordering proof
+            # is missing or corrupt.  The schema-v1 final seal, exact event fence,
+            # and freshly verified immutable tree are all mandatory.
             commit_ready = not commit_required
-            snapshot_dir = (
-                self._workspace_version_dir(conversation_id, commit_version_seq)
-                if commit_required and commit_version_seq is not None
-                else self._snapshot_workspace_dir(conversation_id)
-                if not commit_required
-                else None
-            )
-            if commit is not None and snapshot_dir is not None:
-                try:
-                    observed_digest = project_tree_digest(snapshot_dir)
-                except OSError:
-                    observed_digest = None
-                if commit_required:
-                    commit_ready = bool(commit_digest) and observed_digest == commit_digest
+            if commit_required and event_evidence_valid and commit_version_seq is not None:
+                verified_version = self._verified_workspace_version(
+                    conversation_id, commit_version_seq
+                )
+                if verified_version is not None:
+                    snapshot_dir = verified_version.workspace
+                    observed_digest = verified_version.tree_digest
+                    observed_file_count = verified_version.file_count
+                    observed_total_bytes = verified_version.total_bytes
+                    commit_ready = (
+                        observed_digest == commit_digest
+                        and observed_file_count == seal_file_count
+                        and observed_total_bytes == seal_total_bytes
+                    )
+                    if not commit_ready:
+                        final_seal_error = (
+                            "final seal tree facts do not match the immutable version"
+                        )
+                else:
+                    snapshot_dir = None
+                    final_seal_error = "immutable workspace version could not be freshly verified"
+            elif not commit_required:
+                snapshot_dir = self._snapshot_workspace_dir(conversation_id)
+                if commit_seq is not None and snapshot_dir is not None:
+                    try:
+                        observed_digest = project_tree_digest(snapshot_dir)
+                    except OSError:
+                        observed_digest = None
+            else:
+                snapshot_dir = None
             manifest = (
                 self._read_snapshot_manifest(conversation_id, declared, snapshot_dir)
                 if snapshot_dir is not None and commit_ready
                 else {}
             )
             if commit_required and commit_ready and snapshot_dir is not None:
-                try:
-                    post_read_digest = project_tree_digest(snapshot_dir)
-                except OSError:
-                    post_read_digest = None
-                if post_read_digest != commit_digest:
-                    observed_digest = post_read_digest
+                post_read_version = self._verified_workspace_version(
+                    conversation_id, commit_version_seq
+                )
+                if post_read_version is None:
                     commit_ready = False
                     manifest = {}
+                    final_seal_error = "immutable workspace version failed post-read verification"
+                else:
+                    if (
+                        post_read_version.workspace != snapshot_dir
+                        or post_read_version.tree_digest != commit_digest
+                        or post_read_version.file_count != seal_file_count
+                        or post_read_version.total_bytes != seal_total_bytes
+                    ):
+                        observed_digest = post_read_version.tree_digest
+                        observed_file_count = post_read_version.file_count
+                        observed_total_bytes = post_read_version.total_bytes
+                        commit_ready = False
+                        manifest = {}
+                        final_seal_error = "immutable workspace version changed during collection"
             # Content-stability bookkeeping: count consecutive identical (present+size+sha)
             # reads per declared file. A change resets the counter to this fresh observation.
             for p in declared:
@@ -1664,15 +2705,17 @@ class DiscoApiClient:
                 and commit_ready
                 and (commit_required or not unproven_ready or time.monotonic() >= deadline)
             ):
-                for p in unproven_ready:
-                    _LOG.warning(
-                        "snapshot %s: declared file %r accepted on EXTENDED content-stability "
-                        "(%s) — no sha/readback proof of the agent's final bytes (expected=%s)",
-                        conversation_id,
-                        p,
-                        expected.get(p, ("unknown",))[0],
-                        list(expected.get(p, ("unknown",))),
-                    )
+                if not commit_required:
+                    for p in unproven_ready:
+                        _LOG.warning(
+                            "snapshot %s: declared file %r accepted on EXTENDED "
+                            "content-stability (%s) — no sha/readback proof of the agent's "
+                            "final bytes (expected=%s)",
+                            conversation_id,
+                            p,
+                            expected.get(p, ("unknown",))[0],
+                            list(expected.get(p, ("unknown",))),
+                        )
                 break
             if time.monotonic() >= deadline:
                 if blocking or not commit_ready:
@@ -1688,6 +2731,12 @@ class DiscoApiClient:
                             "workspace_version_seq": commit_seq,
                             "workspace_version_version_seq": commit_version_seq,
                             "workspace_version_digest": commit_digest,
+                            "final_seal_file_count": seal_file_count,
+                            "final_seal_total_bytes": seal_total_bytes,
+                            "latest_effect_seq": latest_effect_seq,
+                            "final_seal_error": final_seal_error,
+                            "observed_file_count": observed_file_count,
+                            "observed_total_bytes": observed_total_bytes,
                             "observed_tree_digest": observed_digest,
                             "unsatisfied": [
                                 {
@@ -1705,16 +2754,26 @@ class DiscoApiClient:
                 # OMITTED → FALSE_FINISH preserved); never FAIL-FAST on an unknown file.
                 break
             await asyncio.sleep(_SNAPSHOT_POLL_S)
-        # Stamp each PRESENT declared file's acceptance PROOF LEVEL onto its manifest entry so
-        # the OutputTruthOracle can proof-gate a content mismatch (Part A): a mismatch on a
-        # non-authoritative capture (unproven_extended_stability / unknown) is unreliable and
-        # must not be a definitive product failure unless the bytes reached the same stability
-        # threshold the readiness gate uses; a proven one (raw_sha / rendered_readback) stays
-        # hard. Absent declared files carry no entry (existence is judged separately).
+        # Stamp each PRESENT declared file's acceptance PROOF LEVEL onto its manifest entry.
+        # Strict live collection has already verified the complete schema-v1 final seal, opened
+        # its exact immutable ProjectStore version, matched digest/count/bytes, read the manifest,
+        # and re-verified the same version afterward.  That is shape-agnostic authoritative byte
+        # proof for every file in the tree; do not discard it merely because the model's last
+        # action was a partial edit or a semantic generator unknown to the legacy action parser.
+        # Non-strict collection retains its per-action/readback/stability classification.
+        # Absent declared files carry no entry (existence is judged separately).
+        final_tree_proven = (
+            commit_required
+            and commit_ready
+            and snapshot_dir is not None
+            and final_seal_error is None
+        )
         for p in declared:
             entry = _manifest_lookup(manifest, p)
             if entry is not None:
-                entry["proof"] = _proof_level(expected.get(p))
+                entry["proof"] = (
+                    "final_tree_seal" if final_tree_proven else _proof_level(expected.get(p))
+                )
                 entry["content_stable"] = stable_n.get(p, 0) >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
         if snapshot_dir is not None:
             self._collected_workspace_dirs[conversation_id] = snapshot_dir
@@ -1782,8 +2841,16 @@ class DiscoApiClient:
             return None
         return ws if ws.is_dir() else None
 
-    def _workspace_version_dir(self, conversation_id: str, version_seq: int | None) -> Path | None:
-        """Resolve the immutable ProjectStore tree named by a commit marker."""
+    def _verified_workspace_version(
+        self, conversation_id: str, version_seq: int | None
+    ) -> _VerifiedWorkspaceVersion | None:
+        """Freshly verify and resolve one immutable ProjectStore version.
+
+        ``verify_version`` rescans every regular file without following symlinks,
+        then checks those facts against both the version index and sidecar.  The
+        strict soak consumer compares the returned, scan-proven facts to the seal
+        and reads only this immutable path — never the mutable live mirror.
+        """
 
         if self._projects_root is None or version_seq is None:
             return None
@@ -1793,16 +2860,38 @@ class DiscoApiClient:
             store = ProjectStore(self._projects_root)
             if store.status() != StorageStatus.OK:
                 return None
-            raw_ws = store.version_workspace_path(conversation_id, version_seq)
-            root = store.root.resolve() if store.root is not None else None
-            if raw_ws.is_symlink() or root is None:
-                return None
-            ws = raw_ws.resolve()
-            if not ws.is_relative_to(root):
-                return None
+            cache_key = hashlib.sha256(f"{conversation_id}:{version_seq}".encode()).hexdigest()
+            ws = Path(self._verified_workspace_cache.name) / cache_key
+            with store.open_verified_version(conversation_id, version_seq) as verified:
+                record = verified.record
+                if not ws.exists():
+                    ws.mkdir(parents=False)
+                    for entry, data in verified.iter_bytes():
+                        target = ws / entry.path
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                cached_paths = {
+                    path.relative_to(ws).as_posix()
+                    for path in ws.rglob("*")
+                    if path.is_file() and not path.is_symlink()
+                }
+                expected_paths = {entry.path for entry in verified.files}
+                if cached_paths != expected_paths:
+                    return None
+                for entry in verified.files:
+                    data = (ws / entry.path).read_bytes()
+                    if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
+                        return None
         except Exception:  # noqa: BLE001 — missing/corrupt version evidence is not ready
             return None
-        return ws if ws.is_dir() else None
+        if not ws.is_dir():
+            return None
+        return _VerifiedWorkspaceVersion(
+            workspace=ws,
+            file_count=record.file_count,
+            total_bytes=record.total_bytes,
+            tree_digest=record.tree_digest,
+        )
 
     async def collect_preview(self, conversation_id: str) -> dict[str, Any]:
         """Capture post-finish preview truth through the public isolated boundary.

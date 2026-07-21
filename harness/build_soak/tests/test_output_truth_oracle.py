@@ -43,6 +43,113 @@ def test_finished_with_missing_content_is_artifact_mismatch():
     assert results[0].facts["missing_substring"] == "Build Smoke OK"
 
 
+def test_exact_paths_rejects_unexpected_agent_created_product_file():
+    scenario = {
+        "id": "exact_three_file_shape",
+        "assertions": {
+            "workspace": {
+                "exact_paths": ["index.html", "styles.css", "app.js"],
+                "files": [
+                    {"path": "index.html", "must_contain": ["Build Smoke OK"]},
+                    {"path": "styles.css"},
+                    {"path": "app.js"},
+                ],
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        ".disco/context/current_goal.md": "host state",
+        ".pmx/screenshots/0001.png": {"content": "", "size": 3},
+        "index.html": "<h1>Build Smoke OK</h1>",
+        "styles.css": "body {}",
+        "app.js": "console.log('ok')",
+        "pricing.css": ".pricing {}",
+    }
+
+    result = _run(scenario=scenario, workspace=workspace)[0]
+
+    assert result.code == "ARTIFACT_TRUTH_MISMATCH"
+    assert result.first_broken_link == "finish -> exact_workspace_shape"
+    assert result.facts == {
+        "expected_paths": ["app.js", "index.html", "styles.css"],
+        "missing_paths": [],
+        "unexpected_paths": ["pricing.css"],
+    }
+
+
+def test_exact_paths_ignores_only_host_owned_namespaces_and_passes_exact_product_shape():
+    scenario = {
+        "id": "exact_arbitrary_shape",
+        "assertions": {
+            "workspace": {
+                "exact_paths": ["src/main.rs", ".env.example"],
+                "files": [{"path": "src/main.rs", "must_contain": ["fn main"]}],
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        ".disco/context/todo.md": "host state",
+        ".pmx/job.json": "{}",
+        ".env.example": "PORT=8080\n",
+        "src/main.rs": "fn main() {}\n",
+    }
+
+    result = _run(scenario=scenario, workspace=workspace)[0]
+
+    assert result.passed, result.to_dict()
+
+
+def test_exact_paths_treats_arbitrary_dotfile_as_product_output():
+    scenario = {
+        "id": "no_unlisted_dotfiles",
+        "assertions": {
+            "workspace": {"exact_paths": ["index.html"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace={"index.html": "ok", ".agent-created": "not host owned"},
+    )[0]
+
+    assert result.code == "ARTIFACT_TRUTH_MISMATCH"
+    assert result.facts["unexpected_paths"] == [".agent-created"]
+
+
+def test_exact_paths_missing_member_is_false_finish():
+    scenario = {
+        "id": "missing_exact_member",
+        "assertions": {
+            "workspace": {"exact_paths": ["index.html", "app.js"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+
+    result = _run(scenario=scenario, workspace={"index.html": "ok"})[0]
+
+    assert result.code == "FALSE_FINISH_NO_OUTPUT"
+    assert result.first_broken_link == "finish -> exact_workspace_shape"
+    assert result.facts == {
+        "expected_paths": ["app.js", "index.html"],
+        "missing_paths": ["app.js"],
+        "unexpected_paths": [],
+    }
+
+
+def test_without_exact_paths_preserves_open_file_set_semantics():
+    workspace = {
+        "index.html": "<h1>Build Smoke OK</h1>",
+        "legitimate-extra.css": "body {}",
+    }
+
+    result = _run(workspace=workspace)[0]
+
+    assert result.passed, result.to_dict()
+
+
 def test_no_output_assertion_skips():
     results = _run(scenario={"id": "x", "assertions": {}})
     assert results[0].skipped

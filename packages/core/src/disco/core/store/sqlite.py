@@ -23,7 +23,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..events import Event, EventAdapter, WorkspaceVersionEvent, event_to_json_dict
+from ..events import (
+    Event,
+    EventAdapter,
+    WorkspaceVersionEvent,
+    derive_final_workspace_fence,
+    event_to_json_dict,
+)
 from ..migration import migrate_event
 from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
@@ -96,7 +102,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     title           TEXT,
     created_at      TEXT NOT NULL,
     status          TEXT,
-    surface         TEXT  -- "research" | "build" | "deep_research" (set at create)
+    surface         TEXT, -- "research" | "build" | "deep_research" (set at create)
+    appkit_mode     INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_conversations_owner
     ON conversations (owner_id, created_at DESC);
@@ -238,6 +245,90 @@ def _row_to_event(payload: str) -> Event:
     return EventAdapter.validate_python(migrate_event(json.loads(payload)))
 
 
+def _persist_one(store: SqliteEventStore, conversation_id: str, event: Event) -> tuple[Event, bool]:
+    """Persist one event under the write lock. Returns (stored_event,
+    is_new). Idempotent on (conversation_id, id) — G4.
+
+    Module-level helper extracted from SqliteEventStore._store_one so the
+    persistence logic is testable without a store instance. Must be called
+    inside the store's write-lock + transaction context; does NOT commit or
+    acquire a new lock."""
+    existing = store._conn.execute(
+        "SELECT payload FROM events WHERE conversation_id = ? AND id = ?",
+        (conversation_id, event.id),
+    ).fetchone()
+    if existing is not None:
+        return _row_to_event(existing["payload"]), False
+
+    store._conn.execute(
+        "INSERT OR IGNORE INTO conversations (conversation_id, owner_id, created_at) "
+        "VALUES (?, ?, ?)",
+        (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
+    )
+
+    row = store._conn.execute(
+        "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM events WHERE conversation_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    next_seq = int(row["next"])
+
+    stored = EventAdapter.validate_python(event.model_dump(mode="python") | {"seq": next_seq})
+    if isinstance(stored, WorkspaceVersionEvent) and stored.final_seal is not None:
+        seal = stored.final_seal
+        scope = seal.scope
+        if scope.namespace != "workspace.tree" or scope.identifier != conversation_id:
+            raise ValueError("final workspace seal scope must match the persisted conversation")
+        terminal_seq, latest_effect_seq = derive_final_workspace_fence(
+            store._query(conversation_id, None)
+        )
+        if seal.terminal_seq != terminal_seq:
+            raise ValueError("final workspace seal terminal sequence does not match event log")
+        if seal.latest_effect_seq != latest_effect_seq:
+            raise ValueError("final workspace seal latest effect sequence does not match event log")
+    payload = event_to_json_dict(stored)
+    estimate = _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
+    if estimate > MAX_EVENT_PAYLOAD_BYTES:
+        raise EventPayloadTooLarge(
+            f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+        )
+    payload_json = json.dumps(payload, separators=(",", ":"))
+    if len(payload_json.encode("utf-8")) > MAX_EVENT_PAYLOAD_BYTES:
+        raise EventPayloadTooLarge(
+            f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+        )
+    store._conn.execute(
+        "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            conversation_id,
+            next_seq,
+            stored.id,
+            payload["kind"],
+            payload["source"],
+            payload["timestamp"],
+            payload_json,
+        ),
+    )
+
+    operation = str(payload.get("operation", ""))
+    semantic_status_changed = payload["kind"] in {"status", "error"} or (
+        payload["kind"] == "workspace_mutation"
+        and payload.get("run_protocol_version") == 1
+        and (operation.startswith("agent.run-intent.") or operation == "agent.view-admitted")
+    )
+    if semantic_status_changed:
+        reconstructed = ConversationState.reconstruct(
+            conversation_id,
+            store._query(conversation_id, None),
+        )
+        store._conn.execute(
+            "UPDATE conversations SET status = ? WHERE conversation_id = ?",
+            (reconstructed.execution_status.value, conversation_id),
+        )
+
+    return stored, True
+
+
 class _ClosableSqliteStore:
     """Idempotent connection ownership shared by the concrete event store."""
 
@@ -305,6 +396,14 @@ class SqliteEventStore(_ClosableSqliteStore):
         except sqlite3.OperationalError:
             pass  # column already exists
         try:
+            # AppKit identity is immutable conversation metadata, not a process-local
+            # runtime toggle. Existing conversations upgrade to ordinary mode.
+            self._conn.execute(
+                "ALTER TABLE conversations ADD COLUMN appkit_mode INTEGER NOT NULL DEFAULT 0"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
             # `origin` marks a conversation that was IMPORTED from a share bundle
             # (untrusted third-party data) — used to enforce read-only at the server
             # edge and badge it in the UI. NULL = a normal first-party conversation.
@@ -368,17 +467,20 @@ class SqliteEventStore(_ClosableSqliteStore):
         title: str | None = None,
         surface: str | None = None,
         origin: str | None = None,
+        appkit_mode: bool = False,
     ) -> None:
         """Register a conversation with explicit ownership (§6.1). Idempotent.
         Auto-creation on first append uses DEFAULT_OWNER_ID; call this to set a
         real owner/space/title/surface up front (the §7.5 POST /conversations path).
         `surface` ("research"|"build"|"agent"|"deep_research") is persisted so History
         can route an item to the right surface. `origin="imported"` marks a bundle
-        import (untrusted, read-only) — NULL for a normal first-party conversation."""
+        import (untrusted, read-only) — NULL for a normal first-party conversation.
+        ``appkit_mode`` is immutable: idempotent re-registration never changes the
+        value first captured for this conversation."""
         self._conn.execute(
             "INSERT OR IGNORE INTO conversations "
-            "(conversation_id, owner_id, space_id, title, created_at, surface, origin) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(conversation_id, owner_id, space_id, title, created_at, surface, origin, "
+            "appkit_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 conversation_id,
                 owner_id,
@@ -387,9 +489,19 @@ class SqliteEventStore(_ClosableSqliteStore):
                 datetime.now().isoformat(),
                 surface,
                 origin,
+                int(appkit_mode),
             ),
         )
         self._conn.commit()
+
+    def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None:
+        """Return immutable AppKit identity, or ``None`` for an unknown id."""
+
+        row = self._conn.execute(
+            "SELECT appkit_mode FROM conversations WHERE conversation_id = ? LIMIT 1",
+            (conversation_id,),
+        ).fetchone()
+        return bool(row["appkit_mode"]) if row is not None else None
 
     async def update_title(self, conversation_id: str, title: str) -> None:
         """Set a conversation's display title (the History/Projects label).
@@ -583,71 +695,8 @@ class SqliteEventStore(_ClosableSqliteStore):
     # ---- writes --------------------------------------------------------------
 
     def _store_one(self, conversation_id: str, event: Event) -> tuple[Event, bool]:
-        """Persist one event under the write lock. Returns (stored_event,
-        is_new). Idempotent on (conversation_id, id) — G4."""
-        # G4: existing id -> no-op, return what's already there.
-        existing = self._conn.execute(
-            "SELECT payload FROM events WHERE conversation_id = ? AND id = ?",
-            (conversation_id, event.id),
-        ).fetchone()
-        if existing is not None:
-            return _row_to_event(existing["payload"]), False
-
-        # Ensure the conversation exists (auto-create with default owner).
-        self._conn.execute(
-            "INSERT OR IGNORE INTO conversations (conversation_id, owner_id, created_at) "
-            "VALUES (?, ?, ?)",
-            (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
-        )
-
-        # G1: next seq = max+1 within this conversation.
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM events WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()
-        next_seq = int(row["next"])
-
-        if isinstance(event, WorkspaceVersionEvent) and event.final_seal is not None:
-            scope = event.final_seal.scope
-            if scope.namespace != "workspace.tree" or scope.identifier != conversation_id:
-                raise ValueError("final workspace seal scope must match the persisted conversation")
-        # Sequence-dependent model invariants must run after the store assigns
-        # the canonical sequence. model_copy(update=...) intentionally skips
-        # validation and would allow an invalid terminal/version fence onto disk.
-        stored = EventAdapter.validate_python(event.model_dump(mode="python") | {"seq": next_seq})
-        payload = event_to_json_dict(stored)
-        estimate = _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
-        if estimate > MAX_EVENT_PAYLOAD_BYTES:
-            raise EventPayloadTooLarge(
-                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
-            )
-        payload_json = json.dumps(payload, separators=(",", ":"))
-        if len(payload_json.encode("utf-8")) > MAX_EVENT_PAYLOAD_BYTES:
-            raise EventPayloadTooLarge(
-                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
-            )
-        self._conn.execute(
-            "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                conversation_id,
-                next_seq,
-                stored.id,
-                payload["kind"],
-                payload["source"],
-                payload["timestamp"],
-                payload_json,
-            ),
-        )
-
-        # RP-01: write-through status update.
-        if payload["kind"] == "status":
-            self._conn.execute(
-                "UPDATE conversations SET status = ? WHERE conversation_id = ?",
-                (payload["status"], conversation_id),
-            )
-
-        return stored, True
+        """Persist one event under the write lock — delegates to _persist_one."""
+        return _persist_one(self, conversation_id, event)
 
     def _publish(self, conversation_id: str, event: Event) -> None:
         subscribers = self._subscribers.get(conversation_id, set())

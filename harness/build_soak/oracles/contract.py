@@ -23,6 +23,7 @@ from typing import Any
 
 from .. import failure_codes as fc
 from .schema import OracleResult, failing, passing, skipping
+from .workspace_contract import validate_exact_paths
 
 _ORACLE = "ContractOracle"
 
@@ -45,10 +46,59 @@ class ContractOracle:
 
         missing: list[str] = []
 
-        # workspace truth requires a workspace manifest.
+        # workspace truth requires a workspace manifest. ``exact_paths`` is an
+        # opt-in closed product-file set; ordinary ``files`` assertions retain
+        # their open-set semantics.
         workspace = assertions.get("workspace") or {}
-        if workspace.get("files") and "workspace" not in present:
-            missing.append("workspace_manifest (scenario asserts workspace.files)")
+        exact_paths: list[str] | None = None
+        if "exact_paths" in workspace:
+            exact_paths, exact_error = validate_exact_paths(workspace.get("exact_paths"))
+            if exact_error is not None:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> workspace.exact_paths",
+                        facts={"reason": exact_error},
+                    )
+                ]
+            declared_specs = workspace.get("files") or []
+            if not isinstance(declared_specs, list) or not all(
+                isinstance(spec, dict) and isinstance(spec.get("path"), str) and bool(spec["path"])
+                for spec in declared_specs
+            ):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> workspace.files",
+                        facts={
+                            "reason": (
+                                "workspace.files must be a list of objects with a "
+                                "non-empty string path when exact_paths is declared"
+                            )
+                        },
+                    )
+                ]
+            declared_paths = [spec["path"] for spec in declared_specs]
+            exact_set = set(exact_paths or [])
+            outside = sorted(path for path in declared_paths if path not in exact_set)
+            if outside:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> workspace.file_set_coherence",
+                        facts={
+                            "reason": (
+                                "every workspace.files[].path must belong to workspace.exact_paths"
+                            ),
+                            "outside_exact_paths": outside,
+                        },
+                    )
+                ]
+        if (workspace.get("files") or exact_paths is not None) and "workspace" not in present:
+            missing.append("workspace_manifest (scenario asserts workspace truth)")
 
         # preview truth requires preview health/screenshot evidence.
         preview = assertions.get("preview") or {}

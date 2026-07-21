@@ -226,7 +226,7 @@ class _FinishVerifyMixin(_FinishGateProto):
             )
             return False, False
 
-        await self._loop._emit(action)
+        action = cast(ActionEvent, await self._loop._emit(action))
         await self._loop._execute_and_observe(action)
         # Find the observation correlated to THIS verify action (robust against a
         # trailing sandbox-restart notice that _execute_and_observe may append).
@@ -317,7 +317,7 @@ class _FinishVerifyMixin(_FinishGateProto):
         if signals.hard_deny_reason(action) is not None:
             return False
 
-        await self._loop._emit(action)
+        action = cast(ActionEvent, await self._loop._emit(action))
         await self._loop._execute_and_observe(action)
         events_after = await self._loop._events()
         obs = next(
@@ -1217,7 +1217,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         )
         if signals.hard_deny_reason(action) is not None:
             return False
-        await self._loop._emit(action)
+        action = cast(ActionEvent, await self._loop._emit(action))
         await self._loop._execute_and_observe(action)
         events_after = await self._loop._events()
         obs = next(

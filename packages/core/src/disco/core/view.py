@@ -41,6 +41,7 @@ from .events import (
     LLMMessage,
     ObservationEvent,
     PlanEvent,
+    agent_view_consistent_events,
 )
 
 # BP-06 observation masking (arXiv 2508.21433): old tool-output bodies elide to a
@@ -421,6 +422,7 @@ class View(BaseModel):
 
     @classmethod
     def of(cls, events: list[Event]) -> View:
+        events = agent_view_consistent_events(events)
         # 1. Collect forgotten seq ranges + a map of where each summary belongs.
         #    NOTE: we intentionally diverge from the contract's *illustrative*
         #    body, which emits the summary when it reaches the CondensationEvent

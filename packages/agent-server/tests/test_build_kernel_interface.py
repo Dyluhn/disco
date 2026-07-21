@@ -13,7 +13,10 @@ Proves the seam is a ZERO-behavior-change wrapper:
 
 from __future__ import annotations
 
+import asyncio
 import types
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,7 +29,7 @@ from disco.agent_server.build_kernel import (
 )
 from disco.agent_server.routes._common import _context_message, _user_message
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import EventSource, SqliteEventStore
+from disco.core import Event, EventSource, SqliteEventStore, WorkspaceMutationEvent
 
 CID = "conv-build-kernel-test"
 
@@ -52,6 +55,27 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake._fold_contract_from_history = AsyncMock()
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    workspace_lock = asyncio.Lock()
+    fake.workspace_lock = lambda _conversation_id: workspace_lock
+    fake._test_workspace_lock = workspace_lock
+    fake._workspace = MagicMock()
+
+    @asynccontextmanager
+    async def process_fence(_conversation_id: str) -> AsyncIterator[None]:
+        yield
+
+    async def append_run_ingress(
+        conversation_id: str,
+        events: list[Event],
+        source: str,
+    ) -> list[Event]:
+        return await store.append_many(
+            conversation_id,
+            [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
+        )
+
+    fake._workspace.interprocess_mutation_fence = process_fence
+    fake._workspace.append_run_ingress_locked = append_run_ingress
 
     control = MagicMock()
     control.confirm = AsyncMock()
@@ -188,6 +212,11 @@ async def test_disco_kernel_send_user_turn_event_sequence(store: SqliteEventStor
     assert user.source == EventSource.USER == expected_user.source
     assert user.message.content == "hello there"
     assert user.meta == expected_user.meta == {"steer": True}
+    assert any(
+        isinstance(event, WorkspaceMutationEvent)
+        and event.operation == "agent.run-intent.user-turn"
+        for event in events
+    )
     rt.kick.assert_called_once_with(CID, claimed_user_seq=user.seq)
 
 
@@ -198,7 +227,33 @@ async def test_disco_kernel_send_user_turn_no_context(store: SqliteEventStore) -
     assert len(msgs) == 1
     assert msgs[0].source == EventSource.USER
     assert msgs[0].meta == {}
+    assert any(
+        isinstance(event, WorkspaceMutationEvent)
+        and event.operation == "agent.run-intent.user-turn"
+        for event in await store.get_events(CID)
+    )
     rt.kick.assert_called_once_with(CID, claimed_user_seq=msgs[0].seq)
+
+
+async def test_disco_kernel_turn_waits_for_host_workspace_fence(store: SqliteEventStore) -> None:
+    rt = _fake_runtime(store)
+    await rt._test_workspace_lock.acquire()
+    sending = asyncio.create_task(
+        rt._disco_kernel.send_user_turn(CID, "change the header", steer=True)
+    )
+    await asyncio.sleep(0)
+
+    assert await store.get_events(CID) == []
+    assert not sending.done()
+    rt.kick.assert_not_called()
+
+    rt._test_workspace_lock.release()
+    stored = await sending
+    events = await store.get_events(CID)
+    assert stored in events
+    assert any(getattr(event, "detail", None) == "revision_steer_pending" for event in events)
+    rt.kick.assert_called_once_with(CID, claimed_user_seq=stored.seq)
+    rt._workspace.claim_registered_run_locked.assert_called_once_with(CID)
 
 
 # ---- runtime public ops route THROUGH the kernel ----------------------------

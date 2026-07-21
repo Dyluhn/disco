@@ -28,14 +28,17 @@ from ..events import (
     ActionEvent,
     AgentErrorEvent,
     Event,
+    EventSource,
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    PlanEvent,
+    StatusEvent,
     obs_snip_override,
     retarget_elided_arg_markers,
 )
 from ..inspect import inspect_enabled
-from ..llm import Difficulty, OverflowSignal
+from ..llm import Difficulty, OperatingMode, OverflowSignal
 from ..obs import log_event
 from ..view import View, microcompact
 from . import signals
@@ -62,6 +65,184 @@ if TYPE_CHECKING:
     from .engine import AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
+
+_PLAN_EXECUTION_RECEIPT_MARKER = "PLAN PHASE RECEIPT"
+_PLAN_PLANNING_RECEIPT_MARKER = "PLANNING PHASE RECEIPT"
+_INVALID_PLAN_FEEDBACK = "invalid_plan_done_conditions"
+_PLAN_VERIFIER_FAILED = "plan_verifier_failed"
+_PLAN_VERIFIER_REPLAN_REQUIRED = "plan_verifier_replan_required"
+_RETIRED_PLAN_FEEDBACK_PREFIX = "[[DISCO-RETIRED-PLAN-FEEDBACK:"
+
+
+def _plan_planning_receipt(events: list[Event], *, planning_active: bool) -> LLMMessage | None:
+    """Project current revision-planning truth after stale historical context."""
+
+    if not planning_active:
+        return None
+    repair = signals.verifier_repair_planning_active(events)
+    approved = signals.latest_approved_plan(events)
+    prior_revision = approved.revision if approved is not None else 0
+    next_revision = signals.next_plan_revision(events)
+    if repair:
+        purpose = (
+            "The current plan-owned verifier failed twice. The delivered workspace "
+            "may already be correct; external acceptance is unchanged. Submit a "
+            "corrected plan/verifier for approval and do not redo product edits while "
+            "this repair is still in PLANNING."
+        )
+    elif approved is None:
+        instruction = (signals.latest_user_text(events) or "the user's request").strip()
+        if len(instruction) > 320:
+            instruction = instruction[:317].rstrip() + "..."
+        purpose = (
+            f"No plan is approved yet. Revision {next_revision} is the initial plan for "
+            f"the request {instruction!r}. Read only what you need, then call "
+            "`submit_plan` for approval."
+        )
+    else:
+        instruction = (
+            signals.current_revision_instruction(events) or "the latest user change"
+        ).strip()
+        if len(instruction) > 320:
+            instruction = instruction[:317].rstrip() + "..."
+        purpose = (
+            f"A new user instruction is awaiting revision {next_revision}: {instruction!r}. "
+            "Read only what you need, then call `submit_plan` for that revision."
+        )
+    return LLMMessage(
+        role="user",
+        content=(
+            "<system-reminder>\n"
+            f"{_PLAN_PLANNING_RECEIPT_MARKER} (authoritative; derived from durable "
+            "phase events):\n"
+            f"CURRENT PHASE: PLANNING for revision {next_revision}. Revision "
+            f"{prior_revision} is only the previously approved baseline; it is NOT "
+            "approval for the pending revision. Workspace mutation and execution "
+            f"tools remain unavailable until the new plan is approved. {purpose}\n"
+            "</system-reminder>"
+        ),
+    )
+
+
+def _plan_execution_receipt(events: list[Event]) -> LLMMessage | None:
+    """Project the durable approval edge into the first execution view.
+
+    ``plan_approved`` is intentionally a non-LLM StatusEvent.  Without this
+    projection, the model's last visible instruction can remain "your plan was
+    NOT accepted" even after the user approved its corrected replacement.  The
+    mode/tool router knows execution started, while the model still believes it
+    is planning.  Deriving the receipt from the persisted approval transition
+    keeps those two views of phase truth identical across restart and
+    condensation without adding a second best-effort event.
+
+    The receipt remains present until the first execution ActionEvent.  After
+    that, the action/result pair itself proves that the phase handoff was
+    consumed.  An out-of-phase ``submit_plan`` gets the same guidance from the
+    dispatch guard, so that recovery does not depend on this projection
+    lingering forever.
+    """
+
+    plan = signals.latest_approved_plan(events)
+    if plan is None or signals.in_planning_for_revision(events):
+        return None
+    approval = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, StatusEvent) and event.detail == "plan_approved"
+        ),
+        None,
+    )
+    if approval is None:
+        return None
+    approval_seq = approval.seq or 0
+    # A newer proposal is awaiting its own decision; do not describe the older
+    # approval as the active handoff if a caller accidentally materializes a
+    # view while that gate is parked.
+    if any(isinstance(event, PlanEvent) and (event.seq or 0) > approval_seq for event in events):
+        return None
+    verifier_repair = signals.verifier_repair_execution_active(events)
+    if not verifier_repair and any(
+        isinstance(event, ActionEvent) and (event.seq or 0) > approval_seq for event in events
+    ):
+        return None
+
+    next_step = plan.steps[0].title.strip() if plan.steps else "the approved work"
+    if verifier_repair:
+        guidance = (
+            "This approval is a VERIFIER-ONLY correction after successful workspace "
+            "work. The prior delivered bytes remain valid; do not redo product edits "
+            "unless fresh evidence shows they are wrong. Call `finish` now so Disco "
+            "freshly re-runs external acceptance, the corrected plan predicates, and "
+            "the normal host/browser gates. Read-only inspection is allowed if needed."
+        )
+    else:
+        guidance = (
+            "Any earlier invalid-plan or correct-and-resubmit instruction for this "
+            "revision is superseded. Do not call `submit_plan` or submit this approved "
+            "plan again. Continue with execution tools now; the next step is: "
+            f"{next_step}. Use `propose_plan_update` only if new user input or "
+            "execution evidence shows that the approved plan itself must change."
+        )
+    return LLMMessage(
+        role="user",
+        content=(
+            "<system-reminder>\n"
+            f"{_PLAN_EXECUTION_RECEIPT_MARKER} (authoritative; derived from the "
+            "durable approval record):\n"
+            f"Plan revision {plan.revision} is APPROVED. You are now in EXECUTION "
+            f"mode. {guidance}\n</system-reminder>"
+        ),
+    )
+
+
+def _retire_superseded_invalid_plan_feedback(
+    events: list[Event],
+) -> tuple[list[Event], frozenset[str]]:
+    """Retire the exact tagged rejection events a later approval resolved.
+
+    This is render-only.  Audit history stays byte-for-byte intact, but obsolete
+    blocking instructions cannot compete with the approved plan in a restarted
+    or re-condensed model view.  Each exact tagged event is replaced by a unique
+    render sentinel before ``View.of``; an ordinary user message with identical
+    prose is therefore never removed by content coincidence.  The replacement
+    retains the original id/seq/meta so condensation placement and view-authority
+    projection remain unchanged.
+    """
+
+    if signals.latest_approved_plan(events) is None:
+        return events, frozenset()
+    retirable_blockers = {_INVALID_PLAN_FEEDBACK}
+    if signals.approved_plan_verifier_repair_event(events) is not None:
+        retirable_blockers.update({_PLAN_VERIFIER_FAILED, _PLAN_VERIFIER_REPLAN_REQUIRED})
+    approval_seq = max(
+        (
+            event.seq or 0
+            for event in events
+            if isinstance(event, StatusEvent) and event.detail == "plan_approved"
+        ),
+        default=0,
+    )
+    projected: list[Event] = []
+    sentinels: set[str] = set()
+    for event in events:
+        if (
+            isinstance(event, MessageEvent)
+            and event.source is EventSource.ENVIRONMENT
+            and event.meta.get("blocking") in retirable_blockers
+            and (event.seq or 0) < approval_seq
+        ):
+            sentinel = f"{_RETIRED_PLAN_FEEDBACK_PREFIX}{event.id}]]"
+            sentinels.add(sentinel)
+            projected.append(
+                event.model_copy(
+                    update={"message": event.message.model_copy(update={"content": sentinel})}
+                )
+            )
+            continue
+        projected.append(event)
+    return projected, frozenset(sentinels)
+
 
 # CW-2 — the assist-ON baseline snapshot caps (today's weak-model calibration).
 # These are the byte-identical fallback when no derived caps are threaded in (the
@@ -566,36 +747,59 @@ class ViewBuilder:
             todo_text=todo_text,
             design_direction=design_direction,
             failures=failures,
+            allowed_next_actions=self._context_allowed_next_actions(events),
         )
         return LLMMessage(role="user", content=render_context_pack(pack))
 
+    def _context_allowed_next_actions(self, events: list[Event]) -> tuple[str, ...]:
+        """Expose the phase router's real planning scope in the durable pack."""
+
+        if not self._planning_phase_active(events):
+            return ()
+        try:
+            names = self._loop._driver.planning_allowed_tool_names()
+        except Exception:  # noqa: BLE001 - view projection must remain available
+            names = getattr(self._loop, "_planning_tools", frozenset())
+        return tuple(sorted(str(name) for name in names if str(name)))
+
+    def _planning_phase_active(self, events: list[Event]) -> bool:
+        """Whether this plan-first loop is currently accepting planning actions."""
+
+        if not getattr(self._loop, "_planning_tools", frozenset()):
+            return False
+        if self._loop._effective_mode(events) is not OperatingMode.PLANNING:
+            return False
+        return not signals.plan_submitted_since_current_planning(events)
+
     async def _project_view(self, events: list[Event], *, include_context_pack: bool) -> View:
-        view = View.of(events)
-        if not include_context_pack:
-            return view
-        msg = await self._context_pack_message(events)
-        messages = _drop_context_pack_owned_history(view.messages)
-        insert_at = 1 if messages else 0
-        if inspect_enabled():
-            try:
-                log_event(
-                    "context_pack",
-                    cid=str(getattr(self._loop, "conversation_id", "") or ""),
-                    included=True,
-                    message_index=insert_at,
-                    chars=len(msg.content),
-                )
-            except Exception:  # noqa: BLE001 - inspect must never affect prompts
-                pass
-        return view.model_copy(
-            update={
-                "messages": [
-                    *messages[:insert_at],
-                    msg,
-                    *messages[insert_at:],
-                ]
-            }
+        projected_events, retired = _retire_superseded_invalid_plan_feedback(events)
+        view = View.of(projected_events)
+        messages = [message for message in view.messages if message.content not in retired]
+        if include_context_pack:
+            msg = await self._context_pack_message(events)
+            messages = _drop_context_pack_owned_history(messages)
+            insert_at = 1 if messages else 0
+            if inspect_enabled():
+                try:
+                    log_event(
+                        "context_pack",
+                        cid=str(getattr(self._loop, "conversation_id", "") or ""),
+                        included=True,
+                        message_index=insert_at,
+                        chars=len(msg.content),
+                    )
+                except Exception:  # noqa: BLE001 - inspect must never affect prompts
+                    pass
+            messages = [*messages[:insert_at], msg, *messages[insert_at:]]
+        planning_receipt = _plan_planning_receipt(
+            events, planning_active=self._planning_phase_active(events)
         )
+        execution_receipt = _plan_execution_receipt(events)
+        if planning_receipt is not None:
+            messages.append(planning_receipt)
+        if execution_receipt is not None:
+            messages.append(execution_receipt)
+        return view.model_copy(update={"messages": messages})
 
     async def build(self, events: list[Event]) -> View:
         # CW-2/CW-6 — derive the per-turn caps once and thread them into the

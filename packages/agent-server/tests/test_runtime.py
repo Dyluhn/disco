@@ -7,6 +7,8 @@ streams back as an agent message + FINISHED.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import SqliteEventStore
 from disco.core.llm import (
@@ -93,6 +95,42 @@ def test_no_runtime_means_the_wire_layer_still_just_appends():
     assert resp.status_code == 200
     events = client.get(f"/conversations/{cid}/events").json()["events"]
     assert [e["kind"] for e in events] == ["message"]  # just the user message; no loop
+
+
+def test_build_route_atomically_persists_user_and_intent_after_runtime_restart():
+    store = SqliteEventStore(":memory:")
+    first_runtime = _runtime(store, "unused")
+    first_runtime.kick = MagicMock()
+    first_client = TestClient(create_app(store, runtime=first_runtime))
+    cid = first_client.post(
+        "/conversations",
+        json={"owner_id": "local", "surface": "build"},
+    ).json()["conversation_id"]
+
+    first = first_client.post(f"/conversations/{cid}/messages", json={"content": "build it"})
+    assert first.status_code == 200
+    first_events = first_client.get(f"/conversations/{cid}/events").json()["events"]
+    assert [(event["kind"], event.get("operation")) for event in first_events] == [
+        ("message", None),
+        ("workspace_mutation", "agent.run-intent.user-turn"),
+    ]
+    assert first.json()["seq"] == first_events[0]["seq"]
+
+    restarted_runtime = _runtime(store, "unused")
+    restarted_runtime.kick = MagicMock()
+    restarted_client = TestClient(create_app(store, runtime=restarted_runtime))
+    second = restarted_client.post(
+        f"/conversations/{cid}/messages",
+        json={"content": "and make it responsive"},
+    )
+    assert second.status_code == 200
+    restarted_events = restarted_client.get(f"/conversations/{cid}/events").json()["events"]
+    assert [
+        event.get("operation")
+        for event in restarted_events
+        if event["kind"] == "workspace_mutation"
+    ] == ["agent.run-intent.user-turn", "agent.run-intent.user-turn"]
+    assert second.json()["seq"] == restarted_events[-2]["seq"]
 
 
 def test_create_conversation_applies_depth_tier():

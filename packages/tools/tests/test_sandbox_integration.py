@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -202,17 +203,20 @@ def test_guest_symlink_escape_refused_live(tmp_path):
     # the guest pointing at /etc, then prove the file API refuses to read through it.
     import asyncio
 
-    from disco.tools.sandbox import LocalSandboxService, SandboxError, SandboxSpec
+    from disco.tools.sandbox import SandboxError, SandboxSpec, service_from_config
     from disco.tools.sandbox.config import default_local_config
 
     async def _drive() -> None:
         cfg = default_local_config()
-        # point docker-py at the local podman socket if that's the runtime
+        # Drive the same canonical backend router as the product. A local config
+        # carrying a Podman socket intentionally selects the native Podman service;
+        # directly constructing LocalSandboxService here would bypass that boundary
+        # and exercise Podman's unsupported Docker-compat exec path instead.
         if _RUNTIME and _RUNTIME.endswith("podman"):
-            cfg.docker_socket = "unix:///run/user/1000/podman/podman.sock"
+            cfg.docker_socket = f"unix:///run/user/{os.getuid()}/podman/podman.sock"
             cfg.runtime = "crun"
         cfg.image = _IMAGE
-        svc = LocalSandboxService(cfg)
+        svc = service_from_config(cfg)
         inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c-itest")
         try:
             # Create the malicious symlink inside the guest workspace.

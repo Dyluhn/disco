@@ -30,7 +30,6 @@ import asyncio
 import contextlib
 import logging
 import math
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,7 +37,6 @@ from typing import Any
 from disco.core import (
     DEFAULT_OWNER_ID,
     ConversationStatus,
-    DeliverableEvent,
     EventFilter,
     EventSource,
     LLMMessage,
@@ -54,9 +52,13 @@ from disco.tools.projects import (
     snapshot_workspace,
 )
 
+from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
+from .workspace_persistence import WorkspacePersistence
+
 _LOG = logging.getLogger(__name__)
 _DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
 _MIN_IDLE_SWEEP_INTERVAL_S = 5.0
+
 
 # P-C: the gate states a conversation parks at while waiting on the human. The
 # idle sweep frees their sandbox but never resolves the gate, so they accumulate
@@ -76,6 +78,38 @@ class LifecycleManager:
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+        self._persistence = WorkspacePersistence(rt)
+
+    async def commit_finished_workspace(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+        *,
+        require_inactive_finished_head: bool = False,
+    ) -> StatusEvent:
+        """Persist FINISHED and its immutable workspace commit as one barrier."""
+        return await self._persistence._do_commit_finished_workspace(
+            conversation_id,
+            terminal_event,
+            require_inactive_finished_head=require_inactive_finished_head,
+            snapshot_fn=snapshot_workspace,
+        )
+
+    async def commit_finished_host_mirror_locked(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+    ) -> StatusEvent:
+        """Seal server-owned mirror bytes while the caller holds the workspace lock."""
+
+        return await self._persistence._do_commit_finished_host_mirror_locked(
+            conversation_id,
+            terminal_event,
+        )
+
+    async def _recover_finalization_journals(self) -> int:
+        """Recover only a version bound to the terminal by SQLite evidence."""
+        return await self._persistence._do_recover_finalization_journals()
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
         """Destroy a conversation's sandbox session (frees the container/port/memory +
@@ -140,6 +174,10 @@ class LifecycleManager:
 
         Single-owner ('local') today; extend across owners when auth lands.
         """
+        recovered_seals = await self._recover_finalization_journals()
+        if recovered_seals:
+            _LOG.info("recovered %d interrupted final workspace seal(s)", recovered_seals)
+
         reconciled = 0
         cursor: str | None = None
         page = 200
@@ -154,29 +192,30 @@ class LifecycleManager:
                 with contextlib.suppress(Exception):
                     state = await self._rt._store.get_state(cid)
                     if state.execution_status is ConversationStatus.RUNNING:
-                        await self._rt._store.append(
+                        transitioned = await self._rt._workspace.append_current_run_transition(
                             cid,
-                            MessageEvent(
-                                source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user",
-                                    content=(
-                                        "⚠️ This run was interrupted when the server restarted, "
-                                        "so its sandbox was reclaimed. It's paused — send a "
-                                        "message to pick it up (your saved files restore on the "
-                                        "next step)."
+                            [
+                                MessageEvent(
+                                    source=EventSource.ENVIRONMENT,
+                                    message=LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "⚠️ This run was interrupted when the server restarted, "
+                                            "so its sandbox was reclaimed. It's paused — send a "
+                                            "message to pick it up (your saved files restore on the "
+                                            "next step)."
+                                        ),
                                     ),
-                                ),
-                            ),
-                        )
-                        await self._rt._store.append(
-                            cid,
+                                )
+                            ],
                             StatusEvent(
                                 status=ConversationStatus.PAUSED,
                                 detail="reconciled: orphaned RUNNING after server restart",
                             ),
+                            expected_statuses=frozenset({ConversationStatus.RUNNING}),
                         )
-                        reconciled += 1
+                        if transitioned is not None:
+                            reconciled += 1
             if len(ids) < page:
                 break
             cursor = str((int(cursor) if cursor else 0) + len(ids))
@@ -325,20 +364,31 @@ class LifecycleManager:
         if self._has_active_work(conversation_id):
             return
         with contextlib.suppress(Exception):
-            await self._rt._maybe_snapshot(conversation_id)
-            # [REL-RC-C] RE-VALIDATE after the snapshot await — it yields, and a POST /resume (or a
-            # new message) during it can re-kick the still-cached loop. Tearing down now would kill
-            # the executor out from under the resumed run → "executor killed; instance revoked" →
-            # STUCK. Re-check the SAME guards right before teardown; if the conversation resumed,
-            # abort the suspend (the snapshot is harmless — the live sandbox keeps serving).
-            if conversation_id not in self._rt._executors:
-                return
-            state = await self._rt._store.get_state(conversation_id)
-            if state.execution_status is ConversationStatus.RUNNING or self._has_active_work(
-                conversation_id
-            ):
-                return
-            await self._rt._teardown_sandbox(conversation_id)
+            async with self._rt.workspace_lock(conversation_id):
+                events = await self._rt._store.get_events(conversation_id)
+                committed = False
+                if state.execution_status is ConversationStatus.FINISHED:
+                    try:
+                        resolve_committed_workspace(
+                            events,
+                            self._rt._project_store_now(),
+                            conversation_id,
+                        )
+                        committed = True
+                    except WorkspaceCommitUnavailable:
+                        pass
+                if not committed:
+                    await self._rt._maybe_snapshot(conversation_id, trigger="suspend")
+                # [REL-RC-C] RE-VALIDATE after the snapshot await — it yields, and a
+                # POST /resume (or a new message) can re-kick the cached loop.
+                if conversation_id not in self._rt._executors:
+                    return
+                state = await self._rt._store.get_state(conversation_id)
+                if state.execution_status is ConversationStatus.RUNNING or self._has_active_work(
+                    conversation_id
+                ):
+                    return
+                await self._rt._teardown_sandbox(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     def sandbox_state(self, conversation_id: str) -> str | None:
@@ -503,27 +553,29 @@ class LifecycleManager:
                         or self._rt._run_generation.get(cid) != captured_generation
                     ):
                         continue  # a newer run/generation now owns it — stale, skip
-                    await self._rt._store.append(
+                    transitioned = await self._rt._workspace.append_current_run_transition(
                         cid,
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "⚠️ This run was waiting on your input and was left "
-                                    "idle, so it's been closed out. Start a new message "
-                                    "to pick the work back up."
+                        [
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "⚠️ This run was waiting on your input and was left "
+                                        "idle, so it's been closed out. Start a new message "
+                                        "to pick the work back up."
+                                    ),
                                 ),
-                            ),
-                        ),
-                    )
-                    await self._rt._store.append(
-                        cid,
+                            )
+                        ],
                         StatusEvent(
                             status=ConversationStatus.STUCK,
                             detail="reaped: abandoned at gate past TTL",
                         ),
+                        expected_statuses=frozenset(_GATE_STATES),
                     )
+                    if transitioned is None:
+                        continue
                     # A gate-parked run stays PINNED (its resume must keep the same
                     # kernel); reaping it to terminal STUCK must therefore release the
                     # pin too (finding #3, same class), else an abandoned gated run
@@ -692,174 +744,36 @@ class LifecycleManager:
             )
 
     async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
-        """Mirror the live workspace out to disk + update the manifest."""
-        store = self._rt._project_store_now()
-        if store is None:
-            _LOG.warning("snapshot %s: no project store — workspace NOT persisted", conversation_id)
-            return
-        status = store.status()
-        if status != StorageStatus.OK:
-            _LOG.warning("snapshot %s: store status=%s — NOT saved", conversation_id, status.value)
-            await self._rt._emit_persistence_reminder(
-                conversation_id,
-                f"project storage is {status.value}; this build was NOT saved.",
-            )
-            return
-        executor = self._rt._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            # OBSERVABILITY (bake-off #5): a silent skip here means the build's
-            # workspace is NEVER persisted (lost on sandbox reap). Surfaced loudly so a
-            # kernel that doesn't wire its sandbox to the registered executor is caught.
-            _LOG.warning(
-                "snapshot SKIPPED for %s: no sandbox (executor=%s) — workspace NOT persisted",
-                conversation_id,
-                type(executor).__name__ if executor is not None else None,
-            )
-            return
-        # Title pulled from the conversations table; created_at is the row's
-        # creation timestamp. Both are cheap reads we surface in the list view.
-        title: str | None = None
-        created_at: str | None = None
-        owner_id: str | None = None
-        try:
-            summaries = await self._rt._store.list_conversation_summaries(
-                owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
-            )
-            row = next((s for s in summaries if s.conversation_id == conversation_id), None)
-            if row is not None:
-                title = row.title
-                created_at = row.created_at
-                owner_id = row.owner_id
-        except Exception:  # noqa: BLE001 — metadata is best-effort
-            pass
-        started = time.monotonic()
-        _LOG.info("snapshot started for %s (trigger=%s)", conversation_id, trigger)
-        try:
-            result = await snapshot_workspace(session, store.path_for(conversation_id))
-            # OBSERVABILITY (bake-off #5a): log the file_count so an empty snapshot of a
-            # build that DID write files (a flush/timing race vs the sandbox) is visible,
-            # not silent. file_count=0 here + a successful file_write in the events = race.
-            _LOG.info(
-                "snapshot completed for %s: %d files, %d bytes in %.3fs (sandbox=%s)",
-                conversation_id,
-                result.file_count,
-                result.total_bytes,
-                time.monotonic() - started,
-                type(session).__name__,
-            )
-            store.write_manifest(
-                conversation_id,
-                title=title,
-                owner_id=owner_id,
-                created_at=created_at,
-                file_count=result.file_count,
-                total_bytes=result.total_bytes,
-            )
-            # A shell-served/npm-built site can finish without an explicit
-            # `serve` event.  Select its entry before cutting the version so the
-            # WorkspaceVersionEvent commits both the bytes and their Open target
-            # as one ordered record.  Appending this after the marker made a
-            # restarted historical preview forget a nested entry and fall back
-            # to workspace/index.html.
-            await self._maybe_synthesize_app_deliverable(
-                conversation_id, store.path_for(conversation_id)
-            )
-            try:
-                version = store.cut_version(conversation_id, trigger=trigger)
-                if version is None:
-                    # An unchanged follow-up legitimately reuses the prior version,
-                    # but its newer terminal still needs an ordered persistence
-                    # acknowledgement.  Re-emit the latest identical version as a
-                    # fresh commit marker instead of making strict consumers treat
-                    # the completed snapshot as uncommitted.
-                    versions = store.list_versions(conversation_id)
-                    version = versions[0] if versions else None
-                if version is not None:
-                    # A terminal StatusEvent is visible before this copy finishes.
-                    # Publish an explicit commit marker so the UI and reliability
-                    # harness never mistake an early history read for durable state.
-                    await self._rt._store.append(
-                        conversation_id,
-                        WorkspaceVersionEvent(
-                            version_seq=version.seq,
-                            tree_digest=version.tree_digest,
-                            trigger=trigger,
-                        ),
-                    )
-            except Exception:  # noqa: BLE001 — versions are additive; mirror stays authoritative
-                _LOG.warning(
-                    "version cut failed for %s after snapshot", conversation_id, exc_info=True
-                )
-        except asyncio.CancelledError:
-            _LOG.warning(
-                "snapshot canceled for %s after %.3fs (trigger=%s)",
-                conversation_id,
-                time.monotonic() - started,
-                trigger,
-            )
-            raise
-        except Exception as exc:  # noqa: BLE001 — surface, don't crash
-            _LOG.warning(
-                "snapshot failed for %s after %.3fs (trigger=%s): %s",
-                conversation_id,
-                time.monotonic() - started,
-                trigger,
-                exc,
-            )
-            await self._rt._emit_persistence_reminder(
-                conversation_id,
-                f"snapshot failed: {exc}",
-            )
-            return
+        """Best-effort recovery snapshot for a non-FINISHED boundary."""
+
+        await self._capture_workspace(conversation_id, trigger=trigger)
+
+    async def _capture_workspace(
+        self,
+        conversation_id: str,
+        *,
+        trigger: str,
+        seal_fence: tuple[int, int | None] | None = None,
+        journal: dict[str, Any] | None = None,
+    ) -> WorkspaceVersionEvent | None:
+        """Mirror live bytes and optionally publish a strict immutable seal."""
+        return await self._persistence._do_capture_workspace(
+            conversation_id,
+            trigger=trigger,
+            seal_fence=seal_fence,
+            journal=journal,
+            snapshot_fn=snapshot_workspace,
+        )
 
     async def _maybe_synthesize_app_deliverable(
         self, conversation_id: str, snapshot_dir: Path
     ) -> None:
-        """Fix 2 (B-H.1): append a synthetic app DeliverableEvent for a shell-served
-        build (index.html on disk, no serve tool-call). Idempotent + best-effort —
-        a missing index.html, an existing app-deliverable, or any read/append failure
-        is a silent no-op (the snapshot itself already succeeded)."""
-        try:
-            index = self._find_snapshot_index(snapshot_dir)
-            if index is None:
-                return
-            existing = await self._rt._store.get_events(conversation_id)
-            if any(isinstance(e, DeliverableEvent) for e in existing):
-                # This fallback exists only for builds that never called serve.
-                # Any explicit handoff wins, including a downloadable HTML file;
-                # silently inventing a conflicting app can select a stale root.
-                return  # codex P1b: idempotency read goes through the store
-            rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
-            path = rel_dir if rel_dir and rel_dir != "." else "."
-            await self._rt._store.append(
-                conversation_id,
-                DeliverableEvent(
-                    source=EventSource.AGENT,
-                    title="Web app",
-                    path=path,
-                    artifact_kind="app",
-                    deployment_url="",
-                ),
-            )
-        except Exception:  # noqa: BLE001 — synthetic card is a convenience, never crash snapshot
-            _LOG.debug("synthetic app-deliverable skipped for %s", conversation_id, exc_info=True)
+        """Synthesize an app deliverable for an index.html without a serve event."""
+        return await self._persistence._do_maybe_synthesize_app_deliverable(
+            conversation_id, snapshot_dir
+        )
 
     @staticmethod
     def _find_snapshot_index(snapshot_dir: Path) -> Path | None:
-        """First index.html in the snapshot (root preferred, else shallowest subdir),
-        skipping internal dirs — mirrors SandboxSession._detect_serve_dir's skip set."""
-        root = snapshot_dir / "index.html"
-        if root.is_file():
-            return root
-        candidates = [
-            p
-            for p in snapshot_dir.rglob("index.html")
-            if p.is_file()
-            and ".pmx" not in p.parts
-            and ".disco" not in p.parts
-            and "node_modules" not in p.parts
-        ]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda p: len(p.parts))
+        """First index.html in the snapshot (root preferred, else shallowest subdir)."""
+        return WorkspacePersistence._find_snapshot_index(snapshot_dir)

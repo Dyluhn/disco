@@ -207,3 +207,97 @@ async def test_models_probe_does_not_block_running_loop(monkeypatch):
     assert rt._probe_live_model(base, "k", "deepseek/deepseek-v4")["n_ctx"] == 1048576
     # The base_url props cache was never pinned to a model-specific window.
     assert base not in rt._LIVE_MODEL_PROBE_CACHE
+
+
+# ---------------------------------------------------------------------------
+# Regression: /props with n_ctx=None must NOT block /models from being
+# fetched.  When the /props cache is fresh but has n_ctx=None and the
+# model-specific _MODELS_CTX_CACHE is cold, _probe_live_model must schedule
+# the /models probe instead of returning early.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_props_n_ctx_none_schedules_models_probe(monkeypatch):
+    base = "https://openrouter.ai/api/v1"
+    # Fresh /props cache with n_ctx=None (e.g. a server that returns /props
+    # but doesn't expose an n_ctx field there).
+    rt._LIVE_MODEL_PROBE_CACHE[base] = (
+        {"model_id": None, "n_ctx": None},
+        time.monotonic(),
+    )
+    # _MODELS_CTX_CACHE is cold (cleared by autouse fixture).
+
+    # Deterministic synchronization: worker signals started, blocks on
+    # release, then invokes the real probe against the httpx fake.
+    started = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    real_probe = rt._do_live_model_probe
+
+    def controlled_probe(u, k, mid=None):
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        assert release.wait(timeout=5), "worker thread blocked on release"
+        return real_probe(u, k, mid)
+
+    monkeypatch.setattr(httpx, "get", _route({"/models": _OR_MODELS}))
+    monkeypatch.setattr(rt, "_do_live_model_probe", controlled_probe)
+
+    try:
+        out = rt._probe_live_model(base, "k", "deepseek/deepseek-v4")
+        # Must return the non-blocking fallback — NOT early-return the bogus
+        # n_ctx=None from the props cache.
+        assert out == {"model_id": None, "n_ctx": None}
+
+        # Worker was scheduled; inflight marker observable.
+        assert started.wait(timeout=5), "worker never started"
+        assert base in rt._LIVE_MODEL_PROBE_INFLIGHT
+
+        # Second call while worker is blocked → dedup (no new worker).
+        out2 = rt._probe_live_model(base, "k", "deepseek/deepseek-v4")
+        assert out2 == {"model_id": None, "n_ctx": None}
+        assert call_count == 1
+    finally:
+        release.set()
+
+    # Wait boundedly for worker completion / cache population.
+    deadline = time.monotonic() + 5
+    while base in rt._LIVE_MODEL_PROBE_INFLIGHT:
+        await asyncio.sleep(0)
+        assert time.monotonic() < deadline, "worker did not complete in time"
+
+    # After the probe filled _MODELS_CTX_CACHE, the model-specific window
+    # is served from cache.
+    cached = rt._probe_live_model(base, "k", "deepseek/deepseek-v4")
+    assert cached["n_ctx"] == 1048576
+
+
+# ---------------------------------------------------------------------------
+# Positive control: a fresh (empty) /models negative-cache entry is
+# authoritative and suppresses re-probing within the TTL, even when props
+# cache is cold and a running loop would otherwise offload a probe.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_fresh_empty_models_map_suppresses_reprobe(monkeypatch):
+    base = "https://openrouter.ai/api/v1"
+    # Fresh empty negative cache (e.g. MiniMax: /models returns 200 but
+    # no context_length field on any entry).
+    rt._MODELS_CTX_CACHE[base] = ({}, time.monotonic())
+
+    probe_called = False
+
+    def never_probe(u, k, mid=None):
+        nonlocal probe_called
+        probe_called = True
+        return {"model_id": None, "n_ctx": None}
+
+    monkeypatch.setattr(rt, "_do_live_model_probe", never_probe)
+
+    out = rt._probe_live_model(base, "k", "some-model")
+
+    # Returns None from the negative cache, not from a scheduled probe.
+    assert out == {"model_id": None, "n_ctx": None}
+
+    # No probe was scheduled — the fresh negative cache short-circuits.
+    assert not probe_called
+    assert base not in rt._LIVE_MODEL_PROBE_INFLIGHT

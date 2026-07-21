@@ -35,7 +35,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -56,6 +56,7 @@ from .prompts import (
     derive_family,
 )
 from .provider import ModelProvider
+from .request_budget import RequestBudgetEstimate
 from .types import (
     DRIVER_ROLES,
     FALLBACK_ELIGIBLE_ROLES,
@@ -333,6 +334,51 @@ class DefaultLLMRouter:
             return req
         metadata = {**(req.metadata or {}), "conversation_id": ctx.conversation_id}
         return req.model_copy(update={"metadata": metadata})
+
+    # -- request budget preview -------------------------------------------------
+
+    def request_budget_preview(
+        self, req: CompletionRequest, *, context: CallContext
+    ) -> RequestBudgetEstimate | None:
+        """Best-effort synchronous budget preview. No routing decision, cost,
+        ledger, span, or provider call. Does NOT call _resolve (which writes the
+        routing sink on invalid lookups).
+
+        Returns None for: missing model entry, missing provider, image-bearing
+        requests (vision escalation may change window), provider lacking the
+        preview method, or any preview failure.
+        """
+        profile = req.profile
+
+        override = (
+            context.model_override if profile.role == ModelRole.AGENT_DRIVER else None
+        )
+        key = self._config.model_for(profile.role, override=override)
+        if key is None:
+            return None
+
+        entry = self._config.models.get(key)
+        if entry is None:
+            return None
+
+        if any(getattr(m, "images", None) for m in req.messages):
+            return None
+
+        provider = self._providers.get(entry.provider)
+        if provider is None:
+            return None
+
+        preview_fn = getattr(provider, "request_budget_preview", None)
+        if not callable(preview_fn):
+            return None
+
+        try:
+            exec_req = self._inject_prompt(
+                self._attach_context_metadata(req, context), entry
+            )
+            return cast(RequestBudgetEstimate | None, preview_fn(exec_req, model=entry.model_id))
+        except Exception:
+            return None
 
     # -- passive cost backstop (§5.2) -----------------------------------------
 

@@ -7,10 +7,20 @@ called by its QUALIFIED NAME is REFUSED (unknown_tool), never silently executed.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
-from disco.core import ActionEvent, SecurityRisk, ToolCall
+from disco.core import (
+    ActionEvent,
+    Event,
+    ObservationEvent,
+    SecurityRisk,
+    ToolCall,
+    ToolResult,
+    WorkspaceMutationEvent,
+)
+from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop import BlastRadiusConfirm
 from disco.core.security import RuleBasedAnalyzer
@@ -32,6 +42,7 @@ from disco.tools.appkit_scope import (
     AppKitPhase,
     AppKitPhaseState,
     appkit_effective_scope,
+    fold_appkit_phase_evidence,
 )
 from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
 from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
@@ -109,6 +120,45 @@ async def _scaffold(ex: AppKitToolExecutor, *, primitive_id: str = "lead_gen"):
             brief="Acme",
         )
     )
+
+
+def _custom_build_events(
+    *,
+    action_call_id: str = "custom-call",
+    result_call_id: str | None = None,
+    result_tool_name: str = "request_custom_build",
+    observation_view_id: str = "view-1",
+) -> list[Event]:
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-message",
+        run_protocol_version=1,
+    ).model_copy(update={"seq": 1})
+    admission = WorkspaceMutationEvent(
+        operation="agent.view-admitted",
+        run_protocol_version=1,
+        run_intent_id=intent.id,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 2})
+    action = ActionEvent(
+        agent_view_id="view-1",
+        thought="human approved custom build",
+        tool_call=ToolCall(
+            call_id=action_call_id,
+            tool_name="request_custom_build",
+            arguments={"reason": "needs raw tools", "needed_capabilities": ["shell"]},
+        ),
+    ).model_copy(update={"seq": 3})
+    observation = ObservationEvent(
+        agent_view_id=observation_view_id,
+        action_id=action.id,
+        tool_result=ToolResult(
+            call_id=result_call_id or action_call_id,
+            tool_name=result_tool_name,
+            success=True,
+            content="custom build approved",
+        ),
+    ).model_copy(update={"seq": 4})
+    return [intent, admission, action, observation]
 
 
 # ---- (c) planning phase (loop PLANNING) narrows the allowlist ----------------
@@ -315,6 +365,10 @@ async def test_confirmed_request_custom_build_widens_to_agent_scope():
         call("request_custom_build", reason="need raw shell", needed_capabilities=["shell"])
     )
     assert res.success is True
+    # Execution success alone is not durable authority (a crash can happen before
+    # its observation is persisted). The exact stored action/result pair widens.
+    assert state.phase == AppKitPhase.BUILD
+    await ex.prepare_for_events(_custom_build_events())
     assert state.phase == AppKitPhase.CUSTOM_BUILD
     # widened to the normal agent_scope: raw tools now callable.
     assert ex.callable_tool_names() == _REGISTERED_AGENT_TOOLS
@@ -364,10 +418,216 @@ async def test_mcp_delta_not_applied_in_strict_mode_until_widen():
     # widen via the gated escape hatch.
     res = await ex.execute(call("request_custom_build", reason="mcp", needed_capabilities=[]))
     assert res.success is True
+    assert applied == []
+    await ex.prepare_for_events(_custom_build_events())
     assert applied == ["widened"]
     assert state.phase == AppKitPhase.CUSTOM_BUILD
     # after widening, the MCP name is callable.
     assert "mcp_remote_tool" in ex.callable_tool_names()
+    await ex.prepare_for_events(_custom_build_events())
+    assert applied == ["widened"]
+    assert "mcp_remote_tool" in ex.callable_tool_names()
+
+
+def test_custom_build_fold_rejects_mispairs_and_stale_view_results():
+    assert fold_appkit_phase_evidence(_custom_build_events(result_call_id="wrong")) is None
+    assert fold_appkit_phase_evidence(_custom_build_events(result_tool_name="app_create")) is None
+    assert (
+        fold_appkit_phase_evidence(_custom_build_events(observation_view_id="other-view")) is None
+    )
+
+    stale = _custom_build_events()[:-1]
+    newer_intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-message",
+        run_protocol_version=1,
+    ).model_copy(update={"seq": 4})
+    stale_observation = _custom_build_events()[-1].model_copy(update={"seq": 5})
+    assert fold_appkit_phase_evidence([*stale, newer_intent, stale_observation]) is None
+
+    # Matching non-null strings are not authority without a typed admission.
+    orphan_pair = _custom_build_events()[2:]
+    orphan_pair = [
+        event.model_copy(update={"seq": index + 1}) for index, event in enumerate(orphan_pair)
+    ]
+    assert fold_appkit_phase_evidence(orphan_pair) is None
+
+    # Even accidental/replayed reuse of a view id cannot bridge a newer intent.
+    reused_admission = WorkspaceMutationEvent(
+        operation="agent.view-admitted",
+        run_protocol_version=1,
+        run_intent_id=newer_intent.id,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 5})
+    reused_stale_observation = _custom_build_events()[-1].model_copy(update={"seq": 6})
+    assert (
+        fold_appkit_phase_evidence(
+            [*stale, newer_intent, reused_admission, reused_stale_observation]
+        )
+        is None
+    )
+
+
+def test_custom_build_fold_requires_persisted_success_and_is_sticky_afterward():
+    crash_window = _custom_build_events()[:-1]
+    assert fold_appkit_phase_evidence(crash_window) is None
+
+    widened = _custom_build_events()
+    newer_intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-message",
+        run_protocol_version=1,
+    ).model_copy(update={"seq": 5})
+    assert fold_appkit_phase_evidence([*widened, newer_intent]) is AppKitPhase.CUSTOM_BUILD
+
+
+async def test_current_specs_recover_build_after_eviction_and_rollback_downgrades():
+    first, first_state = _appkit_exec(phase=AppKitPhase.PLANNING)
+    scaffold = await _scaffold(first, primitive_id="local_list")
+    assert scaffold.success and first_state.phase is AppKitPhase.BUILD
+    sandbox = first.sandbox
+    assert sandbox is not None
+
+    # A fresh executor (loop eviction/restart) has no trusted in-memory phase.
+    restarted_state = AppKitPhaseState()
+    base = agent_scope(model_policy=_STANDARD)
+    restarted = AppKitToolExecutor(
+        _appkit_registry(),
+        base,
+        appkit_phase=restarted_state,
+        base_scope=base,
+        autonomous=False,
+        mode_getter=lambda: OperatingMode.LONG_HORIZON,
+        sandbox=sandbox,
+    )
+    await restarted.prepare_for_events([])
+    assert restarted_state.phase is AppKitPhase.BUILD
+    assert restarted._appkit_base_primitive == "local_list"
+    assert "app_add_primitive" not in restarted._strict_scope_recovery(
+        sorted(restarted.callable_tool_names())
+    )
+
+    await sandbox.delete_file(DESIGNSPEC_RELPATH)
+    rollback = WorkspaceMutationEvent(operation="workspace.restore").model_copy(update={"seq": 1})
+    await restarted.prepare_for_events([rollback])
+    assert restarted_state.phase is AppKitPhase.PLANNING
+    assert "app_create" in restarted.callable_tool_names()
+    assert "app_update_content" not in restarted.callable_tool_names()
+
+
+async def test_spec_validation_cache_retries_infra_without_downgrading_proven_build():
+    first, _ = _appkit_exec()
+    scaffold = await _scaffold(first)
+    assert scaffold.success
+    sandbox = first.sandbox
+    assert sandbox is not None
+
+    state = AppKitPhaseState()
+    base = agent_scope(model_policy=_STANDARD)
+    restarted = AppKitToolExecutor(
+        _appkit_registry(),
+        base,
+        appkit_phase=state,
+        base_scope=base,
+        autonomous=False,
+        mode_getter=lambda: OperatingMode.LONG_HORIZON,
+        sandbox=sandbox,
+    )
+    reads = 0
+    original_read = sandbox.read_file
+
+    async def counted_read(path: str) -> bytes:
+        nonlocal reads
+        reads += 1
+        return await original_read(path)
+
+    sandbox.read_file = counted_read  # type: ignore[method-assign]
+    await restarted.prepare_for_events([])
+    await restarted.prepare_for_events([])
+    assert state.phase is AppKitPhase.BUILD
+    assert reads == 2
+
+    mutation = WorkspaceMutationEvent(operation="workspace.editor-write").model_copy(
+        update={"seq": 1}
+    )
+
+    async def infrastructure_error(path: str) -> bytes:
+        raise RuntimeError(f"temporary read failure for {path}")
+
+    sandbox.read_file = infrastructure_error  # type: ignore[method-assign]
+    await restarted.prepare_for_events([mutation])
+    assert state.phase is AppKitPhase.BUILD
+
+    # The failed generation was not cached: the same event generation is retried.
+    sandbox.read_file = counted_read  # type: ignore[method-assign]
+    await restarted.prepare_for_events([mutation])
+    assert state.phase is AppKitPhase.BUILD
+    assert reads == 4
+
+
+async def test_fresh_executor_fails_closed_on_spec_read_infrastructure_error():
+    sandbox = FakeSandboxInstance()
+
+    async def infrastructure_error(path: str) -> bytes:
+        raise RuntimeError(f"temporary read failure for {path}")
+
+    sandbox.read_file = infrastructure_error  # type: ignore[method-assign]
+    state = AppKitPhaseState()
+    base = agent_scope(model_policy=_STANDARD)
+    ex = AppKitToolExecutor(
+        _appkit_registry(),
+        base,
+        appkit_phase=state,
+        base_scope=base,
+        autonomous=False,
+        mode_getter=lambda: OperatingMode.LONG_HORIZON,
+        sandbox=sandbox,
+    )
+    await ex.prepare_for_events([])
+    assert state.phase is AppKitPhase.PLANNING
+    assert "app_update_content" not in ex.callable_tool_names()
+
+
+async def test_effect_fence_reprepares_after_wait_and_blocks_stale_custom_scope():
+    lock = asyncio.Lock()
+    state = AppKitPhaseState()
+    base = agent_scope(model_policy=_STANDARD)
+    sandbox = FakeSandboxInstance()
+    ex = AppKitToolExecutor(
+        _appkit_registry(),
+        base,
+        appkit_phase=state,
+        base_scope=base,
+        autonomous=False,
+        mode_getter=lambda: OperatingMode.LONG_HORIZON,
+        sandbox=sandbox,
+        workspace_lock=lock,
+    )
+    scaffold = await _scaffold(ex)
+    assert scaffold.success and state.phase is AppKitPhase.BUILD
+
+    # Simulate stale process-local widening with no durable custom-build pair.
+    state.phase = AppKitPhase.CUSTOM_BUILD
+    assert "file_write" in ex.callable_tool_names()
+    current_events: list[Event] = []
+    await lock.acquire()
+    pending = asyncio.create_task(
+        ex.execute_attributed(
+            call("file_write", path="stale.txt", content="must not land"),
+            None,
+            prepare=lambda: ex.prepare_for_events(current_events),
+        )
+    )
+    await asyncio.sleep(0)
+    await sandbox.delete_file(APPSPEC_RELPATH)
+    current_events.append(
+        WorkspaceMutationEvent(operation="workspace.restore").model_copy(update={"seq": 1})
+    )
+    lock.release()
+
+    result = await pending
+    assert not result.success
+    assert result.structured is not None and result.structured["kind"] == "unknown_tool"
+    assert state.phase is AppKitPhase.PLANNING
+    assert "stale.txt" not in sandbox._fs
 
 
 # ---- (h) REGRESSION: normal Build + Research scopes unchanged ----------------

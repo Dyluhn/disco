@@ -6,7 +6,8 @@ import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Any, cast
+from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
 import disco.agent_server.runtime as runtime_mod
@@ -21,6 +22,8 @@ from disco.core import (
     MessageEvent,
     SqliteEventStore,
     StatusEvent,
+    WorkspaceMutationEvent,
+    latest_workspace_run_intent,
 )
 from disco.core.llm import (
     CompletionResponse,
@@ -424,6 +427,9 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         assert record.verify_verdict == "pass"
         assert manager.list_runs(schedule_id=row.schedule_id)[0].run_cid == record.run_cid
         assert runtime.project_store().get(record.run_cid) is not None
+        resolved = runtime._resolved_driver_contexts[record.run_cid]
+        assert resolved.context_window > 0
+        assert record.run_cid not in runtime._resolved_context_for_compose
 
         executor = runtime._executors[record.run_cid]
         callable_names = executor.callable_tool_names()
@@ -523,6 +529,350 @@ async def test_sealed_workflow_schedule_kick_message_has_honest_outcome_rules() 
         assert "NEVER fabricate results" in kick_message
         assert "NEVER finish with a failure narrative as if the task succeeded" in kick_message
     finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store = _runtime(
+        [
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    append_started = asyncio.Event()
+    release_append = asyncio.Event()
+    run_started = asyncio.Event()
+    conversation: list[str] = []
+    original_append = runtime._workspace.append_run_ingress_locked
+    original_run = runtime._run_with_persistence
+
+    async def blocked_append(
+        conversation_id: str,
+        events: list[Any],
+        source: str,
+        *,
+        intent: WorkspaceMutationEvent | None = None,
+    ) -> list[Any]:
+        conversation.append(conversation_id)
+        append_started.set()
+        await release_append.wait()
+        return await original_append(
+            conversation_id,
+            events,
+            source,
+            intent=intent,
+        )
+
+    async def traced_run(conversation_id: str, loop: Any) -> Any:
+        run_started.set()
+        events = await runtime._store.get_events(conversation_id)
+        user = next(
+            event
+            for event in events
+            if isinstance(event, MessageEvent) and event.source is EventSource.USER
+        )
+        assert runtime._run_claimed_user_seq[conversation_id] == user.seq
+        return await original_run(conversation_id, loop)
+
+    monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", blocked_append)
+    monkeypatch.setattr(runtime, "_run_with_persistence", traced_run)
+    fire: asyncio.Task[Any] | None = None
+    try:
+        instance = _save_instance(runtime, instance_id="wf_atomic_ingress", tools=("file_write",))
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_atomic_ingress", instance))
+
+        fire = asyncio.create_task(manager.fire_now(row.schedule_id))
+        await asyncio.wait_for(append_started.wait(), timeout=10)
+        cid = conversation[0]
+        exact_task = runtime._tasks[cid]
+        assert runtime._workspace.has_run_claim(cid)
+        assert not run_started.is_set()
+
+        # An ordinary kick during the blocked atomic append must observe the
+        # registered claim/task and leave the sealed task intact.
+        runtime.kick(cid)
+        assert runtime._tasks[cid] is exact_task
+        assert not run_started.is_set()
+
+        release_append.set()
+        record = await asyncio.wait_for(fire, timeout=10)
+        assert record is not None
+        assert record.terminal_state == ConversationStatus.FINISHED.value
+        assert run_started.is_set()
+    finally:
+        release_append.set()
+        if fire is not None and not fire.done():
+            fire.cancel()
+            await asyncio.gather(fire, return_exceptions=True)
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> None:
+    runtime, _store = _runtime([])
+    release_incumbent = asyncio.Event()
+    incumbent: asyncio.Task[Any] | None = None
+    try:
+        instance = _save_instance(runtime, instance_id="wf_incumbent", tools=())
+        spec = _spec("wf_incumbent", instance)
+        (
+            cid,
+            fired_at,
+            workflow_run,
+            output_path,
+            message,
+            setup_record,
+        ) = await runtime._sealed_run_conversation_setup(
+            schedule_id="sched_incumbent",
+            spec=spec,
+            coalesced=False,
+            owner_id="local",
+        )
+        assert workflow_run is not None and message is not None and setup_record is None
+
+        incumbent = asyncio.create_task(release_incumbent.wait())
+        runtime._tasks[cid] = incumbent
+        prior_loop = cast(Any, object())
+        runtime._loops[cid] = prior_loop
+
+        with pytest.raises(RuntimeError, match="already has a live run task"):
+            runtime._create_run_task(cid, cast(Any, object()))
+        assert runtime._tasks[cid] is incumbent
+
+        result = await runtime._sealed_run_execute(
+            schedule_id="sched_incumbent",
+            spec=spec,
+            conversation_id=cid,
+            fired_at=fired_at,
+            workflow_run=workflow_run,
+            fallback_output_path=output_path,
+            schedule_message=message,
+            coalesced=False,
+        )
+        assert isinstance(result, runtime_mod.WorkflowScheduleRunRecord)
+        assert result.terminal_state == ConversationStatus.ERROR.value
+        assert runtime._tasks[cid] is incumbent
+        assert runtime._loops[cid] is prior_loop
+        assert await runtime._store.get_events(cid) == []
+    finally:
+        release_incumbent.set()
+        if incumbent is not None:
+            await asyncio.gather(incumbent, return_exceptions=True)
+        runtime._tasks.clear()
+        await runtime.aclose()
+
+
+@pytest.mark.parametrize("ahead_kind", ["host-mutation", "run-intent"])
+@pytest.mark.asyncio
+async def test_sealed_schedule_refuses_a_newer_durable_head(
+    ahead_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store = _runtime([])
+    try:
+        instance = _save_instance(runtime, instance_id=f"wf_ahead_{ahead_kind}", tools=())
+        spec = _spec(f"wf_ahead_{ahead_kind}", instance)
+        (
+            cid,
+            fired_at,
+            workflow_run,
+            output_path,
+            message,
+            setup_record,
+        ) = await runtime._sealed_run_conversation_setup(
+            schedule_id="sched_ahead",
+            spec=spec,
+            coalesced=False,
+            owner_id="local",
+        )
+        assert workflow_run is not None and message is not None and setup_record is None
+        ahead = WorkspaceMutationEvent(
+            operation=(
+                "agent.run-intent.host-mutation"
+                if ahead_kind == "run-intent"
+                else "host.editor-write"
+            ),
+            run_protocol_version=1 if ahead_kind == "run-intent" else None,
+        )
+        await runtime._store.append(cid, ahead)
+        run = AsyncMock()
+        handoff = AsyncMock()
+        monkeypatch.setattr(runtime, "_run_with_persistence", run)
+        monkeypatch.setattr(runtime, "_rekick_unadmitted_superseding_intent", handoff)
+
+        result = await runtime._sealed_run_execute(
+            schedule_id="sched_ahead",
+            spec=spec,
+            conversation_id=cid,
+            fired_at=fired_at,
+            workflow_run=workflow_run,
+            fallback_output_path=output_path,
+            schedule_message=message,
+            coalesced=False,
+        )
+
+        assert isinstance(result, runtime_mod.WorkflowScheduleRunRecord)
+        assert "lost pristine ingress authority" in (result.error or "")
+        run.assert_not_awaited()
+        assert cid not in runtime._tasks
+        assert cid not in runtime._loops
+        events = await runtime._store.get_events(cid)
+        assert events == [ahead.model_copy(update={"seq": 1})]
+        # The recovery helper itself decides whether the durable head contains
+        # an unadmitted intent; invoking it is harmless for a bare host mutation.
+        handoff.assert_awaited_once_with(cid)
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_schedule_append_failure_cleans_exact_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store = _runtime([])
+    claim_was_visible = False
+
+    async def fail_append(conversation_id: str, *_args: Any, **_kwargs: Any) -> list[Any]:
+        nonlocal claim_was_visible
+        claim_was_visible = runtime._workspace.has_run_claim(conversation_id)
+        raise RuntimeError("injected schedule append failure")
+
+    monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", fail_append)
+    try:
+        instance = _save_instance(runtime, instance_id="wf_append_failure", tools=())
+        record = await runtime.run_sealed_workflow_schedule(
+            schedule_id="sched_append_failure",
+            spec=_spec("wf_append_failure", instance),
+        )
+
+        assert record.terminal_state == ConversationStatus.ERROR.value
+        assert record.error == "injected schedule append failure"
+        assert claim_was_visible
+        assert record.run_cid not in runtime._tasks
+        assert record.run_cid not in runtime._loops
+        assert record.run_cid not in runtime._executors
+        assert not runtime._workspace.has_run_claim(record.run_cid)
+        state = await runtime._store.get_state(record.run_cid)
+        assert state.execution_status == ConversationStatus.ERROR
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.parametrize("authority", ["intent", "view"])
+@pytest.mark.asyncio
+async def test_post_ingress_schedule_failure_is_owned_by_exact_authority(
+    authority: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store = _runtime([])
+    admitted_view: list[str] = []
+
+    async def fail_run(conversation_id: str, _loop: Any) -> Any:
+        if authority == "view":
+            events = await runtime._store.get_events(conversation_id)
+            intent = latest_workspace_run_intent(events)
+            assert intent is not None
+            view_id = f"aview_{uuid.uuid4().hex}"
+            await runtime._store.append(
+                conversation_id,
+                WorkspaceMutationEvent(
+                    operation="agent.view-admitted",
+                    agent_view_id=view_id,
+                    run_intent_id=intent.id,
+                    run_protocol_version=1,
+                ),
+            )
+            task = asyncio.current_task()
+            assert task is not None
+            runtime._run_task_authorities[task] = (view_id, intent.id)
+            admitted_view.append(view_id)
+        raise RuntimeError("injected post-ingress failure")
+
+    monkeypatch.setattr(runtime, "_run_with_persistence", fail_run)
+    try:
+        instance = _save_instance(runtime, instance_id="wf_typed_failure", tools=())
+        record = await runtime.run_sealed_workflow_schedule(
+            schedule_id="sched_typed_failure",
+            spec=_spec("wf_typed_failure", instance),
+        )
+
+        events = await runtime._store.get_events(record.run_cid)
+        intent = latest_workspace_run_intent(events)
+        status = next(
+            event
+            for event in reversed(events)
+            if isinstance(event, StatusEvent) and event.detail == "workflow_schedule_run_failed"
+        )
+        assert intent is not None
+        if authority == "view":
+            assert status.agent_view_id == admitted_view[0]
+            assert status.run_intent_id is None
+        else:
+            assert status.run_intent_id == intent.id
+            assert status.agent_view_id is None
+        assert (await runtime._store.get_state(record.run_cid)).execution_status == (
+            ConversationStatus.ERROR
+        )
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stale_post_ingress_failure_cannot_poison_newer_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _store = _runtime([])
+    run_started = asyncio.Event()
+    release_run = asyncio.Event()
+    conversation: list[str] = []
+
+    async def fail_late(conversation_id: str, _loop: Any) -> Any:
+        conversation.append(conversation_id)
+        run_started.set()
+        await release_run.wait()
+        raise RuntimeError("stale schedule task failed")
+
+    handoff = AsyncMock()
+    monkeypatch.setattr(runtime, "_run_with_persistence", fail_late)
+    monkeypatch.setattr(runtime, "_rekick_unadmitted_superseding_intent", handoff)
+    fire: asyncio.Task[Any] | None = None
+    try:
+        instance = _save_instance(runtime, instance_id="wf_stale_failure", tools=())
+        fire = asyncio.create_task(
+            runtime.run_sealed_workflow_schedule(
+                schedule_id="sched_stale_failure",
+                spec=_spec("wf_stale_failure", instance),
+            )
+        )
+        await asyncio.wait_for(run_started.wait(), timeout=10)
+        cid = conversation[0]
+        newer = WorkspaceMutationEvent(
+            operation="agent.run-intent.host-mutation",
+            run_protocol_version=1,
+        )
+        await runtime._store.append(cid, newer)
+        release_run.set()
+        record = await asyncio.wait_for(fire, timeout=10)
+
+        assert record.error == "stale schedule task failed"
+        events = await runtime._store.get_events(cid)
+        latest_intent = latest_workspace_run_intent(events)
+        assert latest_intent is not None
+        assert latest_intent.id == newer.id
+        assert all(
+            not isinstance(event, StatusEvent) or event.detail != "workflow_schedule_run_failed"
+            for event in events
+        )
+        handoff.assert_awaited_once_with(cid)
+    finally:
+        release_run.set()
+        if fire is not None and not fire.done():
+            fire.cancel()
+            await asyncio.gather(fire, return_exceptions=True)
         await runtime.aclose()
 
 

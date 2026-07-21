@@ -24,6 +24,8 @@ def _write_run(folder, events_text="{}\n"):
         scenario_id="static_html_minimal",
         seed=12345,
         repo_commit="deadbeef",
+        repo_revision="deadbeef+dirty.0123456789abcdef",
+        repo_dirty=True,
         evidence_files=files,
         evidence_hashes=hashes,
     )
@@ -39,7 +41,21 @@ def test_manifest_round_trips(tmp_path):
     raw = json.loads((tmp_path / "manifest.json").read_text())
     assert raw["run_id"] == "build_soak_2026_06_23_001"
     assert raw["seed"] == 12345
+    assert raw["repo_commit"] == "deadbeef"
+    assert raw["repo_revision"] == "deadbeef+dirty.0123456789abcdef"
+    assert raw["repo_dirty"] is True
     assert set(raw["evidence_hashes"]) == {"events.jsonl", "state.final.json"}
+
+
+def test_manifest_rejects_non_boolean_repo_dirty():
+    try:
+        EvidenceManifest.from_dict(
+            {"run_id": "run", "scenario_id": "scenario", "repo_dirty": "false"}
+        )
+    except ValueError as exc:
+        assert "repo_dirty" in str(exc)
+    else:
+        raise AssertionError("truthy strings must not become a false clean-tree claim")
 
 
 def test_evidence_hashes_are_sha256_of_content():

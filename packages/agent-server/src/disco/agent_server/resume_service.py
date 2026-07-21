@@ -18,6 +18,7 @@ because the resume test-suite calls each directly on the runtime
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Any
 
@@ -34,10 +35,14 @@ from disco.core import (
     PlanEvent,
     StatusEvent,
     ToolResult,
+    agent_view_consistent_events,
 )
 from disco.core.loop.engine import _BOOKKEEPING_TOOLS
 from disco.core.view import effective_plan_progress
 from disco.tools.projects import StorageStatus
+
+_RESUME_DRAIN_TIMEOUT_S = 10.0
+_RESUME_CANCEL_GRACE_S = 0.25
 
 
 class ResumeService:
@@ -45,6 +50,71 @@ class ResumeService:
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+
+    def _detach_finishing_task_locked(
+        self,
+        conversation_id: str,
+        observed_task: asyncio.Task[Any] | None,
+        observed_generation: int | None,
+    ) -> tuple[bool, asyncio.Task[Any] | None]:
+        """Detach only the exact stopped run observed by a fenced resume.
+
+        The boolean distinguishes an already-finished observed task from an
+        identity race. No await occurs between the identity checks and the
+        registry pop, so this method can never pop a newer run task.
+        """
+
+        if not self._rt._workspace.lock(conversation_id).locked():
+            raise RuntimeError("resume task detach requires the workspace fence")
+        if self._rt._run_generation.get(conversation_id) != observed_generation:
+            return False, None
+        current = self._rt._tasks.get(conversation_id)
+        if current is not observed_task:
+            # The done callback may have removed the exact observed task while
+            # the caller awaited durable state. That is completion, not takeover.
+            if observed_task is not None and observed_task.done() and current is None:
+                self._rt._workspace.clear_run_claim(conversation_id)
+                return True, None
+            return False, None
+        if current is None:
+            return True, None
+        self._rt._tasks.pop(conversation_id, None)
+        self._rt._workspace.clear_run_claim(conversation_id)
+        return True, None if current.done() else current
+
+    async def _drain_finishing_task(self, task: asyncio.Task[Any] | None) -> bool:
+        """Boundedly drain one already-detached cooperative-stop task.
+
+        The task object—not a conversation id—is the authority. If another
+        ingress registers a newer task while this await yields, ``wait_for`` can
+        only complete or cancel this exact old task and cannot inspect, pop, or
+        cancel the replacement.
+        """
+
+        if task is None or task.done():
+            return True
+        try:
+            # Shield makes the timeout itself bounded: ``wait_for(task)`` waits
+            # indefinitely for a cancellation-resistant task to acknowledge
+            # cancellation. On timeout, explicitly cancel only this old task and
+            # give cleanup one separately-bounded grace window.
+            await asyncio.wait_for(asyncio.shield(task), _RESUME_DRAIN_TIMEOUT_S)
+        except TimeoutError:
+            task.cancel()
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=_RESUME_CANCEL_GRACE_S,
+            )
+            return task in done
+        except asyncio.CancelledError:
+            # Cancellation of the resume request is not success. Propagate it,
+            # while ensuring the task we detached cannot continue unregistered.
+            task.cancel()
+            raise
+        except Exception:
+            # The runtime task's own done callback owns crash terminalization.
+            return True
+        return True
 
     def _condense_trailing_degeneracy(self, events: list) -> CondensationEvent | None:
         """Pure-on-the-event-list detector for trailing degenerate segments.
@@ -183,6 +253,12 @@ class ResumeService:
                     ObservationEvent(
                         source=EventSource.ENVIRONMENT,
                         action_id=e.id,
+                        # Preserve the action's generation so strict histories
+                        # retain the synthetic result beside its tool call.  An
+                        # untagged result would be correctly quarantined as late
+                        # legacy output and leave an invalid orphaned tool call in
+                        # the model view after resume.
+                        agent_view_id=e.agent_view_id,
                         tool_result=ToolResult(
                             call_id=e.tool_call.call_id,
                             tool_name=e.tool_call.tool_name,
@@ -308,79 +384,130 @@ class ResumeService:
         # reach it late-bound to avoid a module-load circular import.
         from .runtime import _has_unfinished_plan
 
-        state = await self._rt._store.get_state(conversation_id)
-        status = state.execution_status
-
-        # A genuinely in-flight run must not be double-kicked; a finished one has
-        # nothing to resume. Everything else (PAUSED, ERROR, STUCK, IDLE) is a
-        # candidate — the legality check below decides IDLE on the plan predicate.
-        if status == ConversationStatus.RUNNING:
-            return {"ok": False, "reason": "already_running"}
-        if status == ConversationStatus.FINISHED:
-            return {"ok": False, "reason": "conversation_finished"}
-
-        events = await self._rt._store.get_events(conversation_id)
-
-        # DC-05c: condense trailing degeneracy before reconstruction
-        tombstone = self._condense_trailing_degeneracy(events)
-        if tombstone is not None:
-            await self._rt._store.append(conversation_id, tombstone)
-            events = await self._rt._store.get_events(conversation_id)
-
-        # ERROR / STUCK are terminal-but-recoverable: re-kick from history (no lost
-        # progress). PAUSED is the cooperative-stop resume. IDLE only when an approved
-        # plan was never finished (an interrupted run, not a fresh idle conversation).
-        #
-        # ERROR/STUCK recovery is scoped to the BUILD/RESEARCH loop surfaces: the
-        # else-branch below flips them back to RUNNING and re-kicks loop.run() from
-        # history. Deep Research has no such re-entry from a terminal error — its
-        # driver (`_maybe_run_deep_research`) only re-runs from a PAUSED checkpoint —
-        # so a DR error is NOT resumable here (the DR surface retries via a fresh run);
-        # allowing it would falsely report RUNNING while the driver no-ops.
         surface = self._rt._surface_of(conversation_id)
-        legal = status == ConversationStatus.PAUSED
-        if not legal and status in (ConversationStatus.ERROR, ConversationStatus.STUCK):
-            legal = surface != "deep_research"
-        if not legal and status == ConversationStatus.IDLE:
-            legal = _has_unfinished_plan(events)
 
-        if not legal:
-            return {"ok": False, "reason": f"illegal_state_{status.value}"}
+        def rejection(status: ConversationStatus, events: list) -> str | None:
+            """Return the stable public reason for a non-resumable fresh head."""
 
-        # WALK-18 — drain any lingering loop task from a cooperative Stop BEFORE
-        # we reconstruct context or flip to RUNNING. Otherwise kick() no-ops over
-        # the still-finishing task (resume silently does nothing), and a flip to
-        # RUNNING before the old task checkpoints would make it keep running.
-        await self._rt._drain_finishing_task(conversation_id)
+            if status == ConversationStatus.RUNNING:
+                return "already_running"
+            if status == ConversationStatus.FINISHED:
+                return "conversation_finished"
+            if status == ConversationStatus.PAUSED:
+                return None
+            if status in (ConversationStatus.ERROR, ConversationStatus.STUCK):
+                return None if surface != "deep_research" else f"illegal_state_{status.value}"
+            if status == ConversationStatus.IDLE and _has_unfinished_plan(events):
+                return None
+            return f"illegal_state_{status.value}"
 
-        # Reconstruct resume context: synthesized observations + reality block.
-        # All new events are appended BEFORE the RUNNING status flip so View.of
-        # sees resolved action→observation pairs and the model re-orients correctly.
-        new_events = await self._reconstruct_resume_context(conversation_id, events)
-        for event in new_events:
-            await self._rt._store.append(conversation_id, event)
+        # Phase 1: bind the resume to the exact task/generation visible at a
+        # fenced, resumable head.  Detaching happens synchronously under the
+        # fence, so a later ingress can register a new task without this resume
+        # ever popping or cancelling it.  The detached task is only the old
+        # cooperative-stop tail we observed here.
+        async with self._rt.workspace_lock(conversation_id):
+            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+                observed_task = self._rt._tasks.get(conversation_id)
+                observed_generation = self._rt._run_generation.get(conversation_id)
+                state = await self._rt._store.get_state(conversation_id)
+                events = agent_view_consistent_events(
+                    await self._rt._store.get_events(conversation_id)
+                )
+                reason = rejection(state.execution_status, events)
+                if reason is not None:
+                    return {"ok": False, "reason": reason}
+                detached, finishing_task = self._detach_finishing_task_locked(
+                    conversation_id,
+                    observed_task,
+                    observed_generation,
+                )
+                if not detached:
+                    return {"ok": False, "reason": "resume_superseded"}
 
-        # Clear any lingering cancel flag from a prior Stop.
-        self._rt._cancel_flags.pop(conversation_id, None)
-        # WALK-18 — cancel a pending cooperative pause on a cached loop so the
-        # re-kick isn't immediately re-paused at its first checkpoint (the
-        # already-consumed-pause case cleared it at the checkpoint; this covers a
-        # pause that was requested but never reached a checkpoint to land).
-        _loop = self._rt._loops.get(conversation_id)
-        if _loop is not None and hasattr(_loop, "_pause_requested"):
-            _loop._pause_requested.clear()
+        # WALK-18: wait outside the workspace fence because the old task may need
+        # that fence for cancellation cleanup.  The helper receives the exact
+        # detached task—not a conversation id—and therefore cannot touch a newer
+        # task that may be registered while this await yields.
+        drained = await self._drain_finishing_task(finishing_task)
+        if not drained:
+            # Keep a cancellation-resistant old task visible to kick/suspend
+            # guards. Never start a second run while it remains alive.
+            async with self._rt.workspace_lock(conversation_id):
+                async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+                    superseded = (
+                        self._rt._run_generation.get(conversation_id) != observed_generation
+                        or self._rt._tasks.get(conversation_id) is not None
+                    )
+                    if not superseded and finishing_task is not None:
+                        self._rt._tasks[conversation_id] = finishing_task
+            return {
+                "ok": False,
+                "reason": "resume_superseded" if superseded else "resume_drain_timeout",
+            }
 
-        if surface == "deep_research":
-            # DR: _maybe_run_deep_research detects PAUSED and re-runs from the partial
-            # ReportEvent checkpoint — dispatch unchanged, do not touch DR internals.
-            pass
-        else:
-            # Build/Research: flip to RUNNING so loop.run() doesn't early-return on PAUSED.
-            # The loop emits another RUNNING at the top of run() — idempotent.
-            await self._rt._store.append(
-                conversation_id,
-                StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"),
-            )
+        # Phase 2: re-enter both fences and derive everything from the fresh
+        # durable head.  A task/generation that appeared while the old task was
+        # draining owns the conversation; this stale resume must not clear its
+        # flags or append reconstruction over it.
+        async with self._rt.workspace_lock(conversation_id):
+            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+                current_task = self._rt._tasks.get(conversation_id)
+                if self._rt._run_generation.get(conversation_id) != observed_generation:
+                    return {"ok": False, "reason": "resume_superseded"}
+                if current_task is not None and not current_task.done():
+                    return {"ok": False, "reason": "already_running"}
+
+                state = await self._rt._store.get_state(conversation_id)
+                events = agent_view_consistent_events(
+                    await self._rt._store.get_events(conversation_id)
+                )
+                reason = rejection(state.execution_status, events)
+                if reason is not None:
+                    return {"ok": False, "reason": reason}
+
+                # DC-05c and reconstruction use this fenced, post-drain history.
+                # Keep the tombstone in the same atomic append as the synthetic
+                # results, run intent, and RUNNING flip—no half-resumed log.
+                tombstone = self._condense_trailing_degeneracy(events)
+                reconstruction_history = [*events]
+                if tombstone is not None:
+                    reconstruction_history.append(tombstone)
+                new_events = await self._reconstruct_resume_context(
+                    conversation_id,
+                    reconstruction_history,
+                )
+
+                # A direct/nonstandard task starter does not necessarily honor
+                # the workspace lock. Recheck the exact runtime identity after
+                # reconstruction's awaited environment probes and immediately
+                # before mutating volatile flags or the append-only log.
+                current_task = self._rt._tasks.get(conversation_id)
+                if self._rt._run_generation.get(conversation_id) != observed_generation:
+                    return {"ok": False, "reason": "resume_superseded"}
+                if current_task is not None and not current_task.done():
+                    return {"ok": False, "reason": "already_running"}
+
+                # Clear only the old run's cooperative-stop state after the final
+                # authority check. A losing resume never mutates a newer loop.
+                self._rt._cancel_flags.pop(conversation_id, None)
+                loop = self._rt._loops.get(conversation_id)
+                if loop is not None and hasattr(loop, "_pause_requested"):
+                    loop._pause_requested.clear()
+
+                pending = [*([tombstone] if tombstone is not None else []), *new_events]
+                if surface != "deep_research":
+                    if surface in self._rt._BUILD_LIKE_SURFACES:
+                        from disco.core import WorkspaceMutationEvent
+
+                        pending.append(
+                            WorkspaceMutationEvent(
+                                operation="agent.run-intent.resume",
+                                run_protocol_version=1,
+                            )
+                        )
+                    pending.append(StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+                await self._rt._store.append_many(conversation_id, pending)
 
         # Route the resume through the PINNED start path (finding #2), NOT a raw
         # `kick`. A bare kick starts a NEW run UNPINNED. `runtime.start` resolves +

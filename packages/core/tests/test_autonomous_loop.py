@@ -19,6 +19,7 @@ from disco.core import (
     ConversationStatus,
     EventSource,
     MessageEvent,
+    PlanEvent,
     SqliteEventStore,
     StatusEvent,
 )
@@ -83,6 +84,40 @@ async def test_autonomous_auto_approves_mid_run_plan_update():
     assert not _awaiting_plan(events), "autonomous run halted at AWAITING_PLAN_APPROVAL"
     # BOTH the initial submit_plan AND the mid-run propose_plan_update auto-approved.
     assert len(_plan_approvals(events)) >= 2
+
+
+@pytest.mark.asyncio
+async def test_autonomous_empty_plan_update_is_never_approved_then_recovers():
+    script = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "build"}]}),
+            action_step("shell", {"command": "echo built"}),
+            action_step("propose_plan_update", {"summary": "add contact", "steps": []}),
+            action_step(
+                "propose_plan_update",
+                {"summary": "add contact", "steps": [{"title": "add contact"}]},
+            ),
+            action_step("shell", {"command": "echo contact"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(script)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True
+
+    await loop.send_message("build and then add contact")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert len(plans) == 2
+    assert all(plan.steps for plan in plans)
+    assert len(_plan_approvals(events)) == 2
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "invalid_plan_no_steps"
+        for event in events
+    )
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,8 @@ from disco.agent_server.routes.preview import (
 from disco.core import (
     ConversationStatus,
     DeliverableEvent,
+    FinalWorkspaceSeal,
+    ResourceKey,
     SqliteEventStore,
     StatusEvent,
     WorkspaceVersionEvent,
@@ -287,8 +289,9 @@ async def _finished_site(store: SqliteEventStore, projects: ProjectStore, cid: s
             artifact_kind="app",
         ),
     )
-    await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
-    version = projects.cut_version(cid, trigger="finish")
+    terminal = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+    assert terminal.seq is not None
+    version = projects.cut_verified_version(cid, trigger="finish", pin=True)
     assert version is not None
     await store.append(
         cid,
@@ -296,6 +299,15 @@ async def _finished_site(store: SqliteEventStore, projects: ProjectStore, cid: s
             version_seq=version.seq,
             tree_digest=version.tree_digest,
             trigger="finish",
+            final_seal=FinalWorkspaceSeal(
+                scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                terminal_seq=terminal.seq,
+                latest_effect_seq=None,
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                file_count=version.file_count,
+                total_bytes=version.total_bytes,
+            ),
         ),
     )
 

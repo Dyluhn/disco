@@ -17,6 +17,7 @@ from disco.agent_server.preview_manager import (
     PreviewManager,
     PreviewStatus,
 )
+from disco.agent_server.preview_projection import ActiveLivePreviewProjection
 
 _PORT_RE = re.compile(r"(?:http\.server\s+|--port[= ]|-p[= ]|PORT=)(\d+)")
 
@@ -83,6 +84,8 @@ class _FakeSandbox:
 
     def __init__(self, *, backend_name: str = "gvisor", can_expose: bool = True) -> None:
         self.backend_name = backend_name
+        self.id = "sbx_preview_manager_test"
+        self.generation = 1
         self.workspace_path = "/workspace"
         self._serving: set[int] = set()
         self.sessions = _FakeSessions(self._serving)
@@ -183,6 +186,69 @@ async def test_start_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_projection_matches_only_the_original_live_generation() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(command="python3 server.py", supervise=False)
+    data = session.to_dict()
+    projection = ActiveLivePreviewProjection(
+        projection_id=data["projection_id"],
+        session_name=data["name"],
+        port=data["port"],
+        launch_kind=data["launch_kind"],
+        intent_digest=data["intent_digest"],
+        sandbox_instance_id=data["sandbox_instance_id"],
+        sandbox_generation=data["sandbox_generation"],
+        source_action_id="evt_action",
+        source_action_seq=1,
+        source_observation_id="evt_observation",
+        source_observation_seq=2,
+    )
+
+    assert await mgr.resolve_active_projection(projection) is session
+    assert len(sandbox.sessions.exec_calls) == 1
+
+    # A sandbox recreation can run the same name/command/port, but it is not the
+    # generation the terminal proof authorized.  The cached PreviewSession still
+    # carries the old identity here, which must not bless the replacement box.
+    sandbox.id = "sbx_preview_manager_recreated"
+    sandbox.generation = 2
+    assert await mgr.resolve_active_projection(projection) is None
+    assert len(sandbox.sessions.exec_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_active_projection_is_revoked_by_automatic_process_restart() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(command="python3 server.py", supervise=True)
+    data = session.to_dict()
+    projection = ActiveLivePreviewProjection(
+        projection_id=data["projection_id"],
+        session_name=data["name"],
+        port=data["port"],
+        launch_kind=data["launch_kind"],
+        intent_digest=data["intent_digest"],
+        sandbox_instance_id=data["sandbox_instance_id"],
+        sandbox_generation=data["sandbox_generation"],
+        source_action_id="evt_action",
+        source_action_seq=1,
+        source_observation_id="evt_observation",
+        source_observation_seq=2,
+    )
+    assert await mgr.resolve_active_projection(projection) is session
+
+    sandbox.sessions.crash(session.name)
+    await mgr._supervise_once()
+
+    assert session.status is PreviewStatus.RUNNING
+    assert len(sandbox.sessions.exec_calls) == 2
+    assert session.projection_id != projection.projection_id
+    assert await mgr.resolve_active_projection(projection) is None
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
 async def test_canonical_selection_tracks_explicit_success_and_falls_back() -> None:
     """H333: canonical routing follows the newest successful explicit selection."""
     sandbox = _FakeSandbox()
@@ -255,6 +321,7 @@ async def test_restart_on_crash() -> None:
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app")  # supervised
+    original_projection_id = session.projection_id
     assert session.status is PreviewStatus.RUNNING
     assert session.restart_count == 0
 
@@ -267,6 +334,7 @@ async def test_restart_on_crash() -> None:
     assert session.restart_count == 1
     assert session.status is PreviewStatus.RUNNING  # back up on the same platform port
     assert session.port == 3000
+    assert session.projection_id != original_projection_id
     assert len(sandbox.sessions.exec_calls) == 2  # launched, then restarted
     await mgr.aclose()
 

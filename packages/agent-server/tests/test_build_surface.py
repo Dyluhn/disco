@@ -41,6 +41,7 @@ from disco.core.llm import (
     TokenUsage,
 )
 from disco.tools import ProcessSandboxService, ToolDef
+from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
 from pydantic import BaseModel
 
 CID = "c1"
@@ -165,6 +166,7 @@ def _runtime(store: SqliteEventStore, steps) -> ConversationRuntime:
             base_risk=SecurityRisk.HIGH,
             runs_in="in_process",
             read_only=False,
+            behavior=OPAQUE_MCP_BEHAVIOR,
         )
         runtime._mcp_http_clients["publish_srv"] = _PublishMcpClient()
     return runtime

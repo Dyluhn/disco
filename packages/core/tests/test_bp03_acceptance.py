@@ -93,7 +93,10 @@ def test_scanfix_prompt_surgery_contract():
     assert "do not re-read after your own successful edit" in _EXECUTION_DRIVER_PROMPT
     assert "Read a file immediately BEFORE editing it" not in _EXECUTION_DRIVER_PROMPT
 
-    assert _EXECUTION_DRIVER_PROMPT.lower().count("monolith") == 1
+    assert "user or target requires a particular layout" in _EXECUTION_DRIVER_PROMPT
+    assert "large files are supported" in _EXECUTION_DRIVER_PROMPT.lower()
+    assert "800 lines" not in _EXECUTION_DRIVER_PROMPT
+    assert "48KB" not in _EXECUTION_DRIVER_PROMPT
     assert "single monolithic file" not in _EXECUTION_DRIVER_PROMPT_SMALL
 
     assert "verify_web_app" in _EXECUTION_DRIVER_PROMPT

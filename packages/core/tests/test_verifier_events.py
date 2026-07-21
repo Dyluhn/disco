@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from disco.core import EventAdapter, event_from_json_dict, event_to_json_dict
+import pytest
+from disco.core import (
+    ConversationStatus,
+    EventAdapter,
+    PlanVerifierPass,
+    StatusEvent,
+    event_from_json_dict,
+    event_to_json_dict,
+)
 from disco.core.events import (
     LLMConvertible,
     VerifierShadowEvent,
@@ -10,6 +18,7 @@ from disco.core.events import (
     VerifierVerdictEvent,
 )
 from disco.core.view import View
+from pydantic import ValidationError
 
 
 def test_verifier_events_roundtrip_and_are_not_llm_convertible() -> None:
@@ -44,3 +53,38 @@ def test_verifier_events_roundtrip_and_are_not_llm_convertible() -> None:
         assert not isinstance(event, LLMConvertible)
 
     assert View.of(list(events)).messages == []
+
+
+def test_plan_verifier_pass_roundtrips_as_typed_audit_only_status() -> None:
+    event = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="plan_verification_passed",
+        plan_verifier_pass=PlanVerifierPass(
+            plan_revision=2,
+            plan_event_id="evt_plan_2",
+            predicate_fingerprints=["sha256:predicate"],
+            spec_fingerprint="sha256:spec",
+        ),
+    )
+
+    raw = event_to_json_dict(event)
+    assert EventAdapter.validate_python(raw) == event
+    assert event_from_json_dict(raw) == event
+    assert not isinstance(event, LLMConvertible)
+    assert View.of([event]).messages == []
+
+
+def test_plan_verifier_pass_requires_exact_running_status_pair() -> None:
+    receipt = PlanVerifierPass(
+        plan_revision=2,
+        plan_event_id="evt_plan_2",
+        predicate_fingerprints=["sha256:predicate"],
+        spec_fingerprint="sha256:spec",
+    )
+    with pytest.raises(ValidationError):
+        StatusEvent(status=ConversationStatus.FINISHED, plan_verifier_pass=receipt)
+    with pytest.raises(ValidationError):
+        StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail="plan_verification_passed",
+        )

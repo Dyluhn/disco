@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Iterable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from .dod import DoDPredicate
 from .effects import (
@@ -53,6 +54,7 @@ class EventKind(str, Enum):
     STATUS = "status"
     WORKSPACE_VERSION = "workspace_version"
     WORKSPACE_RESTORED = "workspace_restored"
+    WORKSPACE_MUTATION = "workspace_mutation"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
@@ -104,6 +106,14 @@ class BaseEvent(BaseModel):
     # Assigned by the EventStore at append time. None before persistence.
     # [CONTRACT] Monotonic, gap-free, per-conversation. Do NOT set manually.
     seq: int | None = Field(default=None)
+
+    # Durable execution-generation attribution.  A fresh model-view admission
+    # creates this id; every event caused by that view carries it.  Unlike
+    # ``meta`` this is semantic: consumers use it to quarantine output from an
+    # older worker that arrives after a newer user intent has been admitted.
+    # None keeps historical event logs backward compatible and is valid for
+    # user/host-owned events that do not originate in an agent run.
+    agent_view_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     # Free-form, non-semantic metadata (tracing ids, UI hints). VOLATILE.
     # Never load-bearing for reconstruction or equality.
@@ -539,6 +549,43 @@ def value_is_only_elision_marker(value: object) -> bool:
     return value != stripped and stripped.strip() == ""
 
 
+# Execution-receipt trailer: bound on the trusted exit_code magnitude. Real OS
+# exit statuses fit in a byte and signal-death encodings in ~3 digits; anything
+# outside this window is not a plausible exit status, so the trailer is omitted
+# rather than rendering an unbounded (or hostile) payload value to the model.
+_EXIT_RECEIPT_MAX_ABS = 999_999
+
+
+def _execution_receipt_trailer(structured: dict[str, Any] | None) -> str | None:
+    """Render the compact execution receipt (e.g. ``[exit 0]``) for an exec-family
+    observation, or None when the structured payload carries no exit status.
+
+    Success-path exec observations render only stdout to the model, while the
+    exit status the host already proved lives solely in ``structured`` — so the
+    model would re-run a command purely to learn whether it succeeded (the
+    TOOL_CALL_THRASH failure). Surfacing the receipt at RENDER time keeps the
+    durable event bytes (and everything downstream of them: frontend transcript,
+    exact-read receipt matching, spill caps, output-truth stdout comparisons)
+    byte-identical, and applies retroactively to already-stored events.
+
+    Strictly sourced from the tool's own structured payload — never synthesized:
+    a payload without a plausible integer ``exit_code`` yields no trailer.
+    Tool-agnostic by construction (any tool whose structured result reports an
+    exit_code benefits); pure + deterministic so View.of purity is preserved.
+    """
+    if not structured:
+        return None
+    exit_code = structured.get("exit_code")
+    # bool is an int subclass — a True/False "exit_code" is not a real status.
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        return None
+    if abs(exit_code) > _EXIT_RECEIPT_MAX_ABS:
+        return None
+    if structured.get("timed_out") is True:
+        return f"[exit {exit_code}, timed out]"
+    return f"[exit {exit_code}]"
+
+
 class ObservationEvent(BaseEvent, LLMConvertible):
     """The result of an ActionEvent's tool call (success path)."""
 
@@ -563,14 +610,22 @@ class ObservationEvent(BaseEvent, LLMConvertible):
             # genuinely-oversize output (beyond the raised cap) still degrades
             # gracefully; the cap itself is what spares an in-budget read.
             max_chars, head, tail = override, override * 5 // 8, override * 2 // 8
+        content = snip_content(
+            self.tool_result.content,
+            max_chars=max_chars,
+            head=head,
+            tail=tail,
+        )
+        # Execution receipt: appended AFTER the snip so the cap can never destroy
+        # it, and only at this render seam so durable event bytes stay unchanged.
+        # (The failure path is a different event class — AgentErrorEvent already
+        # carries "exited N" in its error text — so there is no double report.)
+        trailer = _execution_receipt_trailer(self.tool_result.structured)
+        if trailer is not None:
+            content = f"{content}\n{trailer}" if content else trailer
         return LLMMessage(
             role="tool",
-            content=snip_content(
-                self.tool_result.content,
-                max_chars=max_chars,
-                head=head,
-                tail=tail,
-            ),
+            content=content,
             tool_call_id=self.tool_result.call_id,
         )
 
@@ -677,6 +732,24 @@ class PlanVerifierFailure(BaseModel):
     replan_allowed: bool = True
 
 
+class PlanVerifierPass(BaseModel):
+    """Typed successful evaluation of the current approved plan-owned verifier set.
+
+    A verifier-only repair may correctly leave already-valid product bytes untouched.
+    This receipt is the durable host-truth edge proving the replacement predicates were
+    actually evaluated; it is not model context and carries no authority over external
+    acceptance requirements.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan_revision: int = Field(ge=1)
+    plan_event_id: str = Field(min_length=1)
+    predicate_fingerprints: list[str] = Field(min_length=1)
+    spec_fingerprint: str = Field(min_length=1)
+    authority: Literal["plan"] = "plan"
+
+
 class StatusEvent(BaseEvent):
     """A lifecycle/status transition. NOT LLMConvertible. Drives the UI and the
     loop's state machine reconstruction (§3)."""
@@ -685,11 +758,40 @@ class StatusEvent(BaseEvent):
     source: EventSource = EventSource.SYSTEM
     status: ConversationStatus
     detail: str | None = None
+    # A run may fail before it has materialized a model view (driver/sandbox
+    # preflight).  Bind that status to the exact durable ingress instead of
+    # emitting an unowned ERROR that an older worker could append over a newer
+    # run.  Once a view exists, ``agent_view_id`` is the authority instead.
+    run_intent_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # Host-owned reseals use a separate, explicit authority edge instead of an
+    # untagged FINISHED that could be confused with late agent output.
+    host_mutation_id: str | None = Field(default=None, min_length=1, max_length=128)
     plan_verification_transition: PlanVerificationTransition | None = None
     plan_verifier_failure: PlanVerifierFailure | None = None
+    plan_verifier_pass: PlanVerifierPass | None = None
     # K4 typed recovery state. Historical status events remain valid; ``detail``
     # stays as the legacy UI/debug surface until shadow parity permits removal.
     recovery_lease_transition: RecoveryLeaseTransition | None = None
+
+    @model_validator(mode="after")
+    def _one_terminal_authority(self) -> StatusEvent:
+        authorities = (
+            self.agent_view_id,
+            self.host_mutation_id,
+            self.run_intent_id,
+        )
+        if sum(authority is not None for authority in authorities) > 1:
+            raise ValueError(
+                "status cannot carry more than one of agent-view, host-mutation, "
+                "or run-intent authority"
+            )
+        if self.plan_verifier_pass is not None and (
+            self.status != ConversationStatus.RUNNING or self.detail != "plan_verification_passed"
+        ):
+            raise ValueError("plan_verifier_pass requires RUNNING/plan_verification_passed")
+        if self.detail == "plan_verification_passed" and self.plan_verifier_pass is None:
+            raise ValueError("RUNNING/plan_verification_passed requires a typed plan_verifier_pass")
+        return self
 
 
 class WorkspaceVersionEvent(BaseEvent):
@@ -715,6 +817,8 @@ class WorkspaceVersionEvent(BaseEvent):
         seal = self.final_seal
         if seal is None:
             return self
+        if self.trigger != "finish":
+            raise ValueError("a final workspace seal requires a finish-triggered version event")
         if seal.version_seq != self.version_seq:
             raise ValueError("final seal version sequence does not match event")
         if seal.tree_digest != self.tree_digest:
@@ -737,6 +841,56 @@ class WorkspaceRestoredEvent(BaseEvent):
     version_seq: int
     tree_digest: str
     label: str = ""
+
+
+class WorkspaceMutationEvent(BaseEvent):
+    """Conservative fence for a host-owned workspace edit.
+
+    Runtime uploads, editor writes, restores, and imports do not travel through
+    the agent Action/Observation envelope. Writers persist this event before
+    their first mutation while holding the shared workspace lock. It makes an
+    earlier final seal historical without pretending to identify exact bytes;
+    those belong to a later immutable final seal.
+    """
+
+    kind: Literal[EventKind.WORKSPACE_MUTATION] = EventKind.WORKSPACE_MUTATION
+    source: EventSource = EventSource.SYSTEM
+    operation: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9_.-]*$")
+    paths: tuple[str, ...] = ()
+    # Set only on typed ``agent.view-admitted`` records. Sequence order alone
+    # cannot prove which user intent a view consumed when workers overlap.
+    run_intent_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # Strict attribution starts at v1. None preserves the old sequence-only
+    # reducer for historical logs until their first typed view admission.
+    run_protocol_version: Literal[1] | None = None
+
+    @model_validator(mode="after")
+    def _valid_run_protocol_shape(self) -> WorkspaceMutationEvent:
+        if self.operation == "agent.view-admitted":
+            if (
+                self.run_protocol_version != 1
+                or self.run_intent_id is None
+                or self.agent_view_id is None
+            ):
+                raise ValueError("typed view admission requires intent, view, and protocol v1")
+        elif self.operation.startswith("agent.run-intent."):
+            if self.run_intent_id is not None or self.agent_view_id is not None:
+                raise ValueError("run intent cannot carry admission authority")
+        elif self.run_intent_id is not None or self.run_protocol_version is not None:
+            raise ValueError("run protocol fields are valid only on intent/admission events")
+        return self
+
+    @field_validator("paths")
+    @classmethod
+    def _bounded_diagnostic_paths(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) > 64:
+            raise ValueError("workspace mutation diagnostic paths exceed 64")
+        normalized = tuple(path.strip() for path in value)
+        if any(not path or len(path) > 512 for path in normalized):
+            raise ValueError("workspace mutation paths must be non-empty and bounded")
+        if normalized != tuple(sorted(set(normalized))):
+            raise ValueError("workspace mutation paths must be sorted and unique")
+        return normalized
 
 
 class PlanEvent(BaseEvent, LLMConvertible):
@@ -1148,6 +1302,7 @@ Event = Annotated[
     | StatusEvent
     | WorkspaceVersionEvent
     | WorkspaceRestoredEvent
+    | WorkspaceMutationEvent
     | PlanEvent
     | ReportEvent
     | AlternativesEvent
@@ -1166,6 +1321,371 @@ Event = Annotated[
     | ContextSummaryEvent,
     Field(discriminator="kind"),
 ]
+
+
+def _workspace_run_intent_state(
+    events: Iterable[Event],
+) -> tuple[WorkspaceMutationEvent | None, str | None, int, int, bool]:
+    """Newest intent, latest view, progress, and whether strict v1 is active."""
+
+    latest_intent: WorkspaceMutationEvent | None = None
+    latest_view_id: str | None = None
+    latest_admission_seq = -1
+    latest_progress_seq = -1
+    strict = False
+    protocol_v1_seen = False
+    view_action_ids: set[str] = set()
+    for event in events:
+        seq = event.seq
+        if type(seq) is not int or seq < 1:
+            continue
+        if isinstance(event, WorkspaceMutationEvent):
+            if event.operation.startswith("agent.run-intent."):
+                protocol_v1_seen = protocol_v1_seen or event.run_protocol_version == 1
+                if latest_intent is None or seq > (latest_intent.seq or -1):
+                    latest_intent = event
+                    latest_view_id = None
+                    latest_admission_seq = -1
+                    latest_progress_seq = -1
+                    strict = protocol_v1_seen
+                    view_action_ids.clear()
+            elif (
+                latest_intent is not None
+                and event.operation == "agent.view-admitted"
+                and event.run_intent_id == latest_intent.id
+                and event.agent_view_id is not None
+                and event.run_protocol_version == 1
+            ):
+                protocol_v1_seen = True
+                latest_view_id = event.agent_view_id
+                latest_admission_seq = seq
+                latest_progress_seq = -1
+                strict = True
+                view_action_ids.clear()
+            elif (
+                latest_intent is not None and not strict and event.operation == "agent.run-admitted"
+            ):
+                latest_admission_seq = seq
+        elif isinstance(event, ActionEvent):
+            if strict and latest_view_id is not None and event.agent_view_id == latest_view_id:
+                view_action_ids.add(event.id)
+                latest_progress_seq = max(latest_progress_seq, seq)
+            elif not strict and latest_admission_seq >= 0:
+                latest_progress_seq = max(latest_progress_seq, seq)
+        elif isinstance(event, ObservationEvent):
+            if (
+                strict
+                and latest_view_id is not None
+                and event.agent_view_id == latest_view_id
+                and event.action_id in view_action_ids
+            ):
+                latest_progress_seq = max(latest_progress_seq, seq)
+            elif not strict and latest_admission_seq >= 0:
+                latest_progress_seq = max(latest_progress_seq, seq)
+        elif isinstance(event, PlanEvent) or (
+            isinstance(event, MessageEvent) and event.source is EventSource.AGENT
+        ):
+            if strict and latest_view_id is not None and event.agent_view_id == latest_view_id:
+                latest_progress_seq = max(latest_progress_seq, seq)
+            elif not strict and latest_admission_seq >= 0:
+                latest_progress_seq = max(latest_progress_seq, seq)
+        elif (
+            isinstance(event, StatusEvent)
+            and event.status is ConversationStatus.FINISHED
+            and strict
+            and latest_view_id is not None
+            and event.agent_view_id == latest_view_id
+        ):
+            latest_progress_seq = max(latest_progress_seq, seq)
+    return latest_intent, latest_view_id, latest_admission_seq, latest_progress_seq, strict
+
+
+def latest_workspace_run_intent(events: Iterable[Event]) -> WorkspaceMutationEvent | None:
+    """Return the newest durable workspace execution intent, if any."""
+
+    latest, _view_id, _admission_seq, _progress_seq, _strict = _workspace_run_intent_state(events)
+    return latest
+
+
+def current_workspace_agent_view_id(events: Iterable[Event]) -> str | None:
+    """Return the latest model-view generation bound to the newest intent."""
+
+    _latest, view_id, _admission_seq, _progress_seq, _strict = _workspace_run_intent_state(events)
+    return view_id
+
+
+def current_workspace_agent_view_seq(events: Iterable[Event]) -> int | None:
+    """Return the canonical sequence of the current strict view admission."""
+
+    _latest, view_id, admission_seq, _progress_seq, _strict = _workspace_run_intent_state(events)
+    return admission_seq if view_id is not None and admission_seq >= 1 else None
+
+
+def event_matches_current_workspace_view(events: Iterable[Event], event: Event) -> bool:
+    """Whether a persisted control target belongs to the latest strict view."""
+
+    materialized = list(events)
+    latest, view_id, _admission_seq, _progress_seq, strict = _workspace_run_intent_state(
+        materialized
+    )
+    if latest is None or not strict:
+        return True
+    return view_id is not None and event.agent_view_id == view_id
+
+
+def workspace_run_intent_admission_required(events: Iterable[Event]) -> bool:
+    """Whether a fresh model-view boundary must acknowledge the newest intent."""
+
+    latest, view_id, admission_seq, _progress_seq, strict = _workspace_run_intent_state(events)
+    if latest is None:
+        return False
+    return view_id is None if strict else admission_seq <= (latest.seq or -1)
+
+
+def pending_workspace_run_intent(events: Iterable[Event]) -> WorkspaceMutationEvent | None:
+    """Return an intent not yet followed by an admitted view and real progress.
+
+    Output from an older in-flight model request may land after a new user turn.
+    It cannot consume that turn: admission must occur after the intent, at a
+    model-view boundary that includes it, and progress must occur after admission.
+    """
+
+    latest, view_id, admission_seq, progress_seq, strict = _workspace_run_intent_state(events)
+    if latest is None or (strict and view_id is None):
+        return latest
+    if not strict and admission_seq <= (latest.seq or -1):
+        return latest
+    return latest if progress_seq <= admission_seq else None
+
+
+def workspace_terminal_matches_current_run(
+    events_before_terminal: Iterable[Event],
+    terminal: StatusEvent,
+) -> bool:
+    """Whether *terminal* can complete the newest admitted workspace run.
+
+    In strict v1 histories, the terminal must come from the exact latest view
+    generation and that generation must have made real progress. Historical
+    pre-v1 histories retain their sequence-only behavior.
+    """
+
+    events = list(events_before_terminal)
+    if terminal.host_mutation_id is not None:
+        completed_seq = max(
+            (
+                event.seq
+                for event in events
+                if isinstance(event, StatusEvent)
+                and event.status is ConversationStatus.FINISHED
+                and type(event.seq) is int
+            ),
+            default=-1,
+        )
+        if completed_seq < 1:
+            return False
+        later_mutations = [
+            event
+            for event in events
+            if isinstance(event, WorkspaceMutationEvent)
+            and type(event.seq) is int
+            and event.seq > completed_seq
+            and not event.operation.startswith("agent.")
+        ]
+        if not later_mutations:
+            return False
+        latest_mutation = max(later_mutations, key=lambda event: event.seq or -1)
+        return terminal.agent_view_id is None and terminal.host_mutation_id == latest_mutation.id
+
+    latest, view_id, admission_seq, progress_seq, strict = _workspace_run_intent_state(events)
+    if latest is None:
+        return terminal.agent_view_id is None
+    if not strict:
+        return progress_seq > admission_seq > (latest.seq or -1)
+    if view_id is None:
+        return False
+    return terminal.agent_view_id == view_id and progress_seq > admission_seq > (latest.seq or -1)
+
+
+class AgentViewProjection:
+    """Incremental semantic projection for strict run/view histories.
+
+    Stores and evidence retain every raw event. Model, state, and transport
+    consumers share this reducer so reconnect replay cannot invent a different
+    winner from the server's authoritative projection.
+    """
+
+    def __init__(self) -> None:
+        self._latest_intent_id: str | None = None
+        self._current_view_id: str | None = None
+        self._strict = False
+        self._protocol_v1_seen = False
+
+    def accept(self, event: Event) -> bool:
+        """Advance through *event* and return whether it is semantically visible."""
+
+        if isinstance(event, WorkspaceMutationEvent):
+            if event.operation.startswith("agent.run-intent."):
+                self._protocol_v1_seen = self._protocol_v1_seen or event.run_protocol_version == 1
+                self._latest_intent_id = event.id
+                self._current_view_id = None
+                self._strict = self._protocol_v1_seen
+            elif (
+                self._latest_intent_id is not None
+                and event.operation == "agent.view-admitted"
+                and event.run_intent_id == self._latest_intent_id
+                and event.run_protocol_version == 1
+                and event.agent_view_id is not None
+            ):
+                self._protocol_v1_seen = True
+                self._current_view_id = event.agent_view_id
+                self._strict = True
+        status_run_intent_id = event.run_intent_id if isinstance(event, StatusEvent) else None
+        run_owned_status = status_run_intent_id is not None
+        stale = self._strict and (
+            (event.agent_view_id is not None and event.agent_view_id != self._current_view_id)
+            or (
+                run_owned_status
+                and (
+                    status_run_intent_id != self._latest_intent_id
+                    or self._current_view_id is not None
+                )
+            )
+            or (
+                event.agent_view_id is None
+                and not run_owned_status
+                and (
+                    event.source is EventSource.AGENT
+                    or isinstance(event, (ObservationEvent, AgentErrorEvent, ErrorEvent))
+                    or (
+                        isinstance(event, StatusEvent)
+                        and event.host_mutation_id is None
+                        and event.status
+                        not in {
+                            # These are explicit host/control transitions. Run
+                            # conclusions and parked gates must carry a view or
+                            # pre-admission intent authority under strict v1.
+                            ConversationStatus.RUNNING,
+                            ConversationStatus.IDLE,
+                        }
+                    )
+                )
+            )
+        )
+        return not stale
+
+
+def agent_view_consistent_events(events: Iterable[Event]) -> list[Event]:
+    """Keep audit history while quarantining output that lost a later view race."""
+
+    projection = AgentViewProjection()
+    return [event for event in events if projection.accept(event)]
+
+
+def _strict_workspace_actions_are_closed(events: Iterable[Event]) -> bool:
+    """Prove every post-admission action has a generation-matched outcome."""
+
+    materialized = sorted(
+        events,
+        key=lambda event: event.seq if type(event.seq) is int else -1,
+    )
+    _intent, view_id, admission_seq, _progress_seq, strict = _workspace_run_intent_state(
+        materialized
+    )
+    if not strict or view_id is None:
+        return True
+    actions = {
+        event.id: event
+        for event in materialized
+        if isinstance(event, ActionEvent) and type(event.seq) is int
+    }
+    open_actions: set[str] = set()
+    for event in materialized:
+        if type(event.seq) is not int or event.seq <= admission_seq:
+            continue
+        if isinstance(event, ActionEvent):
+            open_actions.add(event.id)
+            continue
+        if not isinstance(event, (ObservationEvent, AgentErrorEvent)) or event.action_id is None:
+            continue
+        action = actions.get(event.action_id)
+        if (
+            action is not None
+            and isinstance(event, AgentErrorEvent)
+            and event.error == "execution_superseded"
+            and event.agent_view_id == action.agent_view_id
+        ):
+            open_actions.discard(action.id)
+            continue
+        if action is None or action.id not in open_actions:
+            return False
+        if action.agent_view_id == view_id and event.agent_view_id == view_id:
+            open_actions.discard(action.id)
+            continue
+        return False
+    return not open_actions
+
+
+def derive_final_workspace_fence(events: Iterable[Event]) -> tuple[int, int | None]:
+    """Derive the only event-log fence a final workspace seal may claim.
+
+    The terminal is the latest persisted status event, not merely the latest
+    ``FINISHED`` found while scanning backwards.  This distinction prevents an
+    older completion from blessing bytes after a later RUNNING/IDLE transition.
+    Action requests and their observation/error outcomes form the effect
+    envelope: any such event at or after the terminal means the workspace cut
+    cannot be attributed to that completion.
+
+    The helper deliberately accepts the generic :class:`Event` iterable used by
+    both lifecycle code and stores.  It fails closed on unsequenced semantic
+    events so callers can never substitute list position for the durable store's
+    canonical sequence.
+    """
+
+    materialized = list(events)
+    latest_status: StatusEvent | None = None
+    latest_status_seq: int | None = None
+    latest_effect_seq: int | None = None
+
+    for event in materialized:
+        if not isinstance(
+            event,
+            (
+                StatusEvent,
+                ActionEvent,
+                ObservationEvent,
+                AgentErrorEvent,
+                WorkspaceMutationEvent,
+            ),
+        ):
+            continue
+        seq = event.seq
+        if type(seq) is not int or seq < 1:
+            raise ValueError("final workspace fence requires canonical persisted event sequences")
+        if isinstance(event, StatusEvent):
+            if latest_status_seq is None or seq > latest_status_seq:
+                latest_status = event
+                latest_status_seq = seq
+        elif latest_effect_seq is None or seq > latest_effect_seq:
+            latest_effect_seq = seq
+
+    if latest_status is None or latest_status_seq is None:
+        raise ValueError("final workspace fence requires a persisted status event")
+    if (
+        latest_status.source is not EventSource.SYSTEM
+        or latest_status.status is not ConversationStatus.FINISHED
+    ):
+        raise ValueError("latest status event must be a system FINISHED status")
+    before_terminal = [
+        event for event in materialized if type(event.seq) is int and event.seq < latest_status_seq
+    ]
+    if not workspace_terminal_matches_current_run(before_terminal, latest_status):
+        raise ValueError("latest FINISHED status is not attributable to the current agent run")
+    if not _strict_workspace_actions_are_closed(before_terminal):
+        raise ValueError("strict workspace actions are not generation-matched and closed")
+    if latest_effect_seq is not None and latest_effect_seq >= latest_status_seq:
+        raise ValueError("latest effect event must precede the terminal FINISHED status")
+    return latest_status_seq, latest_effect_seq
+
 
 # Single shared validator/serializer for the union. Consumers parse arbitrary
 # event dicts (post-migration) through this; the `kind` field selects the

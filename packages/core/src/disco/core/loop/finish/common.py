@@ -52,6 +52,7 @@ from ...events import (
     ObservationEvent,
     PlanEvent,
     PlanVerifierFailure,
+    PlanVerifierPass,
     StatusEvent,
     ToolCall,
     VerifierShadowEvent,

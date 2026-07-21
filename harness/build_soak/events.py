@@ -76,6 +76,7 @@ AWAITING_PLAN_APPROVAL_STATUS = "AWAITING_PLAN_APPROVAL"
 # the autonomous inline approve). The presence of this detail is the durable
 # "approval happened" signal.
 PLAN_APPROVED_DETAIL = "plan_approved"
+PLAN_VERIFICATION_PASSED_DETAIL = "plan_verification_passed"
 # The status detail enter_planning stamps when (re-)entering planning for a
 # request/revision flow. Absent on the very first build turn (which is a plain
 # RUNNING with no detail) — see RevisionOracle.

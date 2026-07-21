@@ -14,27 +14,62 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
-from disco.core import DeliverableEvent, EventSource, LLMMessage, MessageEvent
+from disco.core import (
+    ConversationStatus,
+    DeliverableEvent,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    StatusEvent,
+)
 from disco.core.auth import AuthSession
 from disco.core.store.sqlite import SqliteEventStore, install_owner_id
 from disco.tools.projects import (
+    ProjectStore,
+    StorageError,
     StorageStatus,
+    VersionRecord,
     aiter_zip_workspace,
     is_runtime_secret_path,
 )
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from ..auth import current_owner_id, current_session, require_admin_session
 from ..runtime import ConversationRuntime
 from ..title_service import fallback_title
+from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from ._common import require_owned_conversation
 
 _MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024
 _MAX_IMPORT_TREE_BYTES = 200 * 1024 * 1024
 _MAX_IMPORT_FILES = 2000
 _GIT_CLONE_TIMEOUT_S = 120
+
+
+async def _consumer_workspace(
+    event_store: SqliteEventStore,
+    project_store: ProjectStore,
+    conversation_id: str,
+) -> tuple[Path | None, VersionRecord | None, int | None, list]:
+    """Resolve immutable bytes for FINISHED, mutable recovery bytes otherwise."""
+
+    events = await event_store.get_events(conversation_id)
+    latest_status = next(
+        (event for event in reversed(events) if isinstance(event, StatusEvent)),
+        None,
+    )
+    if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+        try:
+            committed = resolve_committed_workspace(events, project_store, conversation_id)
+        except WorkspaceCommitUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "workspace_unsealed"},
+            ) from exc
+        return None, committed.record, committed.event.seq, events
+    return project_store.path_for(conversation_id), None, None, events
 
 
 @dataclass(frozen=True)
@@ -479,6 +514,209 @@ async def _handle_import_project(
     }
 
 
+async def _handle_backfill_titles(
+    request: Request,
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    retitle_fallbacks: bool,
+) -> dict:
+    """Maintenance: title any conversations still showing ``(untitled)``."""
+    owner_id = current_owner_id(request)
+    if runtime is None:
+        return {"titled": {}, "scanned": 0, "status": "no-runtime"}
+    summaries = await store.list_conversation_summaries(owner_id=owner_id, limit=500, cursor=None)
+    candidates = [s.conversation_id for s in summaries if not s.title or retitle_fallbacks]
+    titled = await runtime.title_service().backfill(candidates, retitle_fallbacks=retitle_fallbacks)
+    return {"titled": titled, "count": len(titled), "scanned": len(candidates)}
+
+
+async def _handle_download_project(
+    conversation_id: str,
+    request: Request,
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> Response:
+    """Stream a zip of the project's workspace."""
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None or ps.status() != StorageStatus.OK:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "storage_unavailable"},
+        )
+    record = ps.get(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+    if (
+        _project_owner_for_session(
+            record.owner_id,
+            current_session(request),
+            legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+        )
+        is None
+    ):
+        raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
+    workspace, committed_record, _seal_seq, _events = await _consumer_workspace(
+        store,
+        ps,
+        conversation_id,
+    )
+    # A FINISHED project is served from its immutable version. Loss of the
+    # mutable recovery mirror must not hide still-verified committed bytes.
+    if committed_record is None and record.files_missing:
+        raise HTTPException(status_code=404, detail={"reason": "files_missing"})
+    headers = {
+        "Content-Disposition": (f'attachment; filename="{conversation_id}.zip"'),
+    }
+    if committed_record is not None:
+        try:
+            with ps.open_verified_version(
+                conversation_id,
+                committed_record.seq,
+            ) as verified:
+                payload = verified.zip_bytes()
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "workspace_unsealed"},
+            ) from exc
+        return Response(content=payload, media_type="application/zip", headers=headers)
+    assert workspace is not None
+    return StreamingResponse(
+        aiter_zip_workspace(workspace),
+        media_type="application/zip",
+        headers=headers,
+    )
+
+
+async def _handle_project_manifest(
+    conversation_id: str,
+    request: Request,
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> dict:
+    """Export a JSON manifest of the project: metadata, file tree, and deliverable."""
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None or ps.status() != StorageStatus.OK:
+        raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
+    record = ps.get(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+    if (
+        _project_owner_for_session(
+            record.owner_id,
+            current_session(request),
+            legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+        )
+        is None
+    ):
+        raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
+    # file tree (workspace-relative path + size), skipping the codeact scratch files
+    files: list[dict] = []
+    workspace, committed_record, seal_seq, events = await _consumer_workspace(
+        store,
+        ps,
+        conversation_id,
+    )
+    if committed_record is not None:
+        try:
+            with ps.open_verified_version(
+                conversation_id,
+                committed_record.seq,
+            ) as verified:
+                files = [
+                    {"path": entry.path, "bytes": entry.size}
+                    for entry in verified.files
+                    if not PurePosixPath(entry.path).name.startswith("_codeact")
+                ]
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "workspace_unsealed"},
+            ) from exc
+    elif workspace and workspace.is_dir():
+        for p in sorted(workspace.rglob("*")):
+            rel = p.relative_to(workspace).as_posix()
+            if (
+                p.is_file()
+                and not p.is_symlink()
+                and not p.name.startswith("_codeact")
+                and not is_runtime_secret_path(rel)
+            ):
+                files.append({"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size})
+    # the agent's last deliverable handoff, if any
+    deliverable = None
+    with contextlib.suppress(Exception):
+        eligible_events = [
+            event
+            for event in events
+            if seal_seq is None or event.seq is None or event.seq <= seal_seq
+        ]
+        for e in reversed(eligible_events):
+            if isinstance(e, DeliverableEvent):
+                deliverable = {
+                    "title": e.title,
+                    "path": e.path,
+                    "kind": e.artifact_kind,
+                    "deployment_url": e.deployment_url,
+                }
+                break
+    return {
+        "conversation_id": conversation_id,
+        "title": record.title or "(untitled)",
+        "created_at": record.created_at,
+        "last_snapshot_at": record.last_snapshot_at,
+        "file_count": (
+            committed_record.file_count if committed_record is not None else record.file_count
+        ),
+        "total_bytes": (
+            committed_record.total_bytes if committed_record is not None else record.total_bytes
+        ),
+        "files": files,
+        "deliverable": deliverable,
+    }
+
+
+async def _handle_delete_project(
+    conversation_id: str,
+    request: Request,
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> dict:
+    """Remove a project's manifest + workspace from disk."""
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None or ps.status() != StorageStatus.OK:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "storage_unavailable"},
+        )
+    record = ps.get(conversation_id)
+    if record is None:
+        return {"id": conversation_id, "deleted": False}
+    if (
+        _project_owner_for_session(
+            record.owner_id,
+            current_session(request),
+            legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+        )
+        is None
+    ):
+        raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
+    if runtime is None:
+        deleted = ps.delete(conversation_id)
+    else:
+        async with runtime.workspace_mutation(
+            conversation_id,
+            "project.delete",
+            paths=(".",),
+        ):
+            deleted = ps.delete(conversation_id)
+    return {"id": conversation_id, "deleted": deleted}
+
+
 def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
@@ -506,17 +744,12 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
         ``retitle_fallbacks=true`` additionally upgrades stored fallback-clamp
         titles (a question cut off mid-sentence) to real summarized titles — the
         repair pass for PDF covers minted before the summarizer retry existed."""
-        owner_id = current_owner_id(request)
-        if runtime is None:
-            return {"titled": {}, "scanned": 0, "status": "no-runtime"}
-        summaries = await store.list_conversation_summaries(
-            owner_id=owner_id, limit=500, cursor=None
+        return await _handle_backfill_titles(
+            request,
+            store=store,
+            runtime=runtime,
+            retitle_fallbacks=retitle_fallbacks,
         )
-        candidates = [s.conversation_id for s in summaries if not s.title or retitle_fallbacks]
-        titled = await runtime.title_service().backfill(
-            candidates, retitle_fallbacks=retitle_fallbacks
-        )
-        return {"titled": titled, "count": len(titled), "scanned": len(candidates)}
 
     @router.post("/api/projects/import")
     async def import_project(
@@ -530,39 +763,16 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
         )
 
     @router.get("/api/projects/{conversation_id}/download")
-    async def download_project(conversation_id: str, request: Request) -> StreamingResponse:
+    async def download_project(conversation_id: str, request: Request) -> Response:
         """Stream a zip of the project's workspace. 404 with a specific reason
         when the storage is unconfigured / the project is unknown / the files
         have been deleted under the manifest."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None or ps.status() != StorageStatus.OK:
-            raise HTTPException(
-                status_code=404,
-                detail={"reason": "storage_unavailable"},
-            )
-        record = ps.get(conversation_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
-        if (
-            _project_owner_for_session(
-                record.owner_id,
-                current_session(request),
-                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
-            )
-            is None
-        ):
-            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
-        if record.files_missing:
-            raise HTTPException(status_code=404, detail={"reason": "files_missing"})
-        workspace = ps.path_for(conversation_id)
-        headers = {
-            "Content-Disposition": (f'attachment; filename="{conversation_id}.zip"'),
-        }
-        return StreamingResponse(
-            aiter_zip_workspace(workspace),
-            media_type="application/zip",
-            headers=headers,
+        return await _handle_download_project(
+            conversation_id,
+            request,
+            store=store,
+            runtime=runtime,
         )
 
     @router.get("/api/projects/{conversation_id}/manifest")
@@ -572,56 +782,12 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
         deployment_url). The honest, portable description of what the run produced —
         the companion to the workspace zip download."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None or ps.status() != StorageStatus.OK:
-            raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
-        record = ps.get(conversation_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
-        if (
-            _project_owner_for_session(
-                record.owner_id,
-                current_session(request),
-                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
-            )
-            is None
-        ):
-            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
-        # file tree (workspace-relative path + size), skipping the codeact scratch files
-        files: list[dict] = []
-        workspace = ps.path_for(conversation_id)
-        if workspace and workspace.is_dir():
-            for p in sorted(workspace.rglob("*")):
-                rel = p.relative_to(workspace).as_posix()
-                if (
-                    p.is_file()
-                    and not p.is_symlink()
-                    and not p.name.startswith("_codeact")
-                    and not is_runtime_secret_path(rel)
-                ):
-                    files.append({"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size})
-        # the agent's last deliverable handoff, if any
-        deliverable = None
-        with contextlib.suppress(Exception):
-            for e in reversed(await store.get_events(conversation_id)):
-                if isinstance(e, DeliverableEvent):
-                    deliverable = {
-                        "title": e.title,
-                        "path": e.path,
-                        "kind": e.artifact_kind,
-                        "deployment_url": e.deployment_url,
-                    }
-                    break
-        return {
-            "conversation_id": conversation_id,
-            "title": record.title or "(untitled)",
-            "created_at": record.created_at,
-            "last_snapshot_at": record.last_snapshot_at,
-            "file_count": record.file_count,
-            "total_bytes": record.total_bytes,
-            "files": files,
-            "deliverable": deliverable,
-        }
+        return await _handle_project_manifest(
+            conversation_id,
+            request,
+            store=store,
+            runtime=runtime,
+        )
 
     @router.delete("/api/projects/{conversation_id}")
     async def delete_project(conversation_id: str, request: Request) -> dict:
@@ -629,25 +795,11 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
         events in SQLite are left alone (deleting those is a separate concern,
         and matches the History surface's existing delete semantics)."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None or ps.status() != StorageStatus.OK:
-            raise HTTPException(
-                status_code=404,
-                detail={"reason": "storage_unavailable"},
-            )
-        record = ps.get(conversation_id)
-        if record is None:
-            return {"id": conversation_id, "deleted": False}
-        if (
-            _project_owner_for_session(
-                record.owner_id,
-                current_session(request),
-                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
-            )
-            is None
-        ):
-            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
-        deleted = ps.delete(conversation_id)
-        return {"id": conversation_id, "deleted": deleted}
+        return await _handle_delete_project(
+            conversation_id,
+            request,
+            store=store,
+            runtime=runtime,
+        )
 
     return router

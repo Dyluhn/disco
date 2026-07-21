@@ -35,6 +35,7 @@ import re
 import shlex
 import sys
 import uuid
+from collections import OrderedDict
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal
@@ -56,6 +57,22 @@ _STARTUP_SECRET_RE = re.compile(
     r"(?:\s*[:=]\s*|\s+)(?:bearer\s+)?[^\s;]+"
 )
 _OBSERVATION_ONLY_ACTIONS = frozenset({"navigate", "screenshot", "back", "console_view"})
+_BROWSER_LANES = frozenset({"agent", "host_verifier"})
+_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+_IDENTITY_PIN_LIMIT = 256
+_FRESHNESS_KEYS = frozenset(
+    {
+        "schema_version",
+        "daemon_instance_id",
+        "executor_generation",
+        "lane",
+        "request_nonce",
+        "requested_epoch",
+        "synchronized_epoch",
+        "sync_performed",
+        "page_kind",
+    }
+)
 
 # ROOT-3 (slides spiral): the terminal, NON-retryable signal for "this sandbox
 # backend has no usable browser" (for example, a missing Playwright/Chromium
@@ -335,6 +352,11 @@ class BrowserTool:
             planner_safe=False,
         ),
     )
+    # Bounded process-local continuity for direct callers of the response
+    # validator. Normal product calls refresh this pin only after the daemon's
+    # live /identity endpoint proves the exact current instance, so a legitimate
+    # daemon restart can rotate cleanly while a replayed response cannot.
+    _daemon_identity_pins: OrderedDict[str, str] = OrderedDict()
 
     def action_profile(self, args: BrowserArgs) -> ActionProfile:
         if args.action in _OBSERVATION_ONLY_ACTIONS:
@@ -351,6 +373,23 @@ class BrowserTool:
         assert ctx.sandbox is not None
         try:
             daemon_url = await self._ensure_daemon(ctx) or _DAEMON_URL
+            expected_daemon_id, identity_failure = await self._current_daemon_identity(
+                ctx, daemon_url
+            )
+            identity_required = (
+                ctx.browser_workspace_epoch is not None or ctx.browser_lane == "host_verifier"
+            )
+            if expected_daemon_id is None and identity_required:
+                return identity_failure or self._freshness_protocol_failure(
+                    "daemon identity was unavailable"
+                )
+            if expected_daemon_id is not None:
+                self._pin_daemon_identity(
+                    ctx.browser_generation,
+                    expected_daemon_id,
+                    allow_rotation=True,
+                )
+            request_nonce = uuid.uuid4().hex
 
             job = {
                 "action": args.action,
@@ -367,25 +406,55 @@ class BrowserTool:
                 # W6 V5: include b64 screenshot when vision is enabled (local
                 # driver OR escalation model configured), not just DRIVER_VISION.
                 "include_screenshot_b64": _vision_mode(),
+                # BF1: host-authored coherence metadata. None denotes the
+                # executor's initial epoch zero and is never an acknowledgement.
+                "workspace_epoch": ctx.browser_workspace_epoch,
+                "executor_generation": ctx.browser_generation,
+                "browser_lane": ctx.browser_lane,
+                "request_nonce": request_nonce,
             }
-            await ctx.sandbox.write_file(
-                "/workspace/.pmx/job.json", json.dumps(job).encode("utf-8")
-            )
+            if expected_daemon_id is not None:
+                job["expected_daemon_instance_id"] = expected_daemon_id
+            # The two fixed lane-specific request paths prevent a host-verifier
+            # request from replacing an agent request between write and curl,
+            # without leaking one file per action. Keep the legacy job.json
+            # mirror for diagnostics and compatibility; it is never dispatched.
+            job_path = f"/workspace/.pmx/job-{ctx.browser_lane}.json"
+            encoded_job = json.dumps(job).encode("utf-8")
+            await ctx.sandbox.write_file(job_path, encoded_job)
+            await ctx.sandbox.write_file("/workspace/.pmx/job.json", encoded_job)
 
             res = await ctx.sandbox.exec_shell(
-                f"curl -s -X POST {daemon_url} -d @/workspace/.pmx/job.json",
+                f"curl -s -X POST {daemon_url} -d @{job_path}",
                 timeout_s=ctx.timeout_s,
             )
             if res.exit_code != 0:
-                return fail_outcome(
+                return self._classified_failure(
+                    "browser_daemon_unavailable",
+                    "transport_failed",
                     f"browser daemon request failed (exit {res.exit_code}):"
-                    f" {res.stderr.strip()[:160]}\n{_BROWSER_FAILURE_RECIPE}"
+                    f" {str(res.stderr).strip()[:160]}",
                 )
 
-            data = json.loads(res.stdout)
-            if not data.get("ok"):
+            try:
+                data = json.loads(res.stdout)
+            except (TypeError, ValueError):
+                return self._freshness_protocol_failure("daemon response was not valid JSON")
+            if not isinstance(data, dict):
+                return self._freshness_protocol_failure("daemon response was not an object")
+            freshness_error = self._freshness_response_error(
+                data,
+                ctx=ctx,
+                request_nonce=request_nonce,
+                expected_daemon_id=expected_daemon_id,
+            )
+            if freshness_error is not None:
+                return self._freshness_protocol_failure(freshness_error)
+            if data["ok"] is False:
                 return fail_outcome(
-                    f"browser error: {data.get('error')}\n{_BROWSER_FAILURE_RECIPE}"
+                    f"browser error: {str(data.get('error') or 'unknown error')[:512]}"
+                    f"\n{_BROWSER_FAILURE_RECIPE}",
+                    structured=data,
                 )
 
             content = self._render_observation(data)
@@ -432,7 +501,188 @@ class BrowserTool:
                 unavailable["startup_diagnostic"] = e.startup_diagnostic
             return fail_outcome(str(e), structured=unavailable)
         except Exception as e:
-            return fail_outcome(f"browser tool error: {e}\n{_BROWSER_FAILURE_RECIPE}")
+            return self._classified_failure(
+                "browser_daemon_unavailable",
+                "unexpected_client_error",
+                f"browser tool error: {type(e).__name__}",
+            )
+
+    @staticmethod
+    def _classified_failure(error_class: str, error_reason: str, detail: str) -> ToolOutcome:
+        bounded = str(detail or error_reason)[:512]
+        return fail_outcome(
+            f"{bounded}\n{_BROWSER_FAILURE_RECIPE}",
+            structured={
+                "ok": False,
+                "error_class": error_class,
+                "error_reason": error_reason,
+            },
+        )
+
+    @staticmethod
+    def _freshness_protocol_failure(detail: str) -> ToolOutcome:
+        bounded = str(detail or "invalid browser freshness response")[:240]
+        return fail_outcome(
+            f"browser freshness protocol error: {bounded}\n{_BROWSER_FAILURE_RECIPE}",
+            structured={
+                "ok": False,
+                "error_class": "freshness_protocol_invalid",
+                "error_reason": "invalid_acknowledgement",
+            },
+        )
+
+    @classmethod
+    def _freshness_response_error(
+        cls,
+        data: dict[str, Any],
+        *,
+        ctx: ToolContext,
+        request_nonce: str,
+        expected_daemon_id: str | None = None,
+    ) -> str | None:
+        if type(data.get("ok")) is not bool:
+            return "daemon success flag was not boolean"
+        raw = data.get("freshness")
+        # Compatibility for old, epoch-zero test doubles and third-party
+        # sandbox shims. A pending mutation or host-verifier lane never accepts
+        # an unversioned response; the shipped daemon always emits the protocol.
+        if raw is None and ctx.browser_workspace_epoch is None and ctx.browser_lane == "agent":
+            return None
+        if not isinstance(raw, dict) or set(raw) != _FRESHNESS_KEYS:
+            return "freshness acknowledgement schema mismatch"
+        if raw.get("schema_version") != 1:
+            return "freshness acknowledgement version mismatch"
+        daemon_id = raw.get("daemon_instance_id")
+        if not isinstance(daemon_id, str) or _TOKEN_RE.fullmatch(daemon_id) is None:
+            return "invalid daemon instance identity"
+        if expected_daemon_id is not None:
+            if daemon_id != expected_daemon_id:
+                return "daemon instance identity mismatch"
+        elif (
+            pinned_daemon_id := cls._daemon_identity_pins.get(ctx.browser_generation)
+        ) is not None and pinned_daemon_id != daemon_id:
+            return "daemon instance identity changed without a live preflight"
+        if raw.get("executor_generation") != ctx.browser_generation:
+            return "executor generation mismatch"
+        if raw.get("lane") != ctx.browser_lane or raw.get("lane") not in _BROWSER_LANES:
+            return "browser lane mismatch"
+        if raw.get("request_nonce") != request_nonce:
+            return "request nonce mismatch"
+        requested = raw.get("requested_epoch")
+        expected = ctx.browser_workspace_epoch
+        if requested != expected or type(requested) is not type(expected):
+            return "requested workspace epoch mismatch"
+        synchronized = raw.get("synchronized_epoch")
+        if synchronized is not None and (
+            type(synchronized) is not int
+            or synchronized <= 0
+            or expected is None
+            or synchronized > expected
+        ):
+            return "invalid synchronized workspace epoch"
+        performed = raw.get("sync_performed")
+        if type(performed) is not bool:
+            return "invalid synchronization flag"
+        if performed and synchronized != expected:
+            return "performed synchronization did not acknowledge the requested epoch"
+        if data["ok"] is True and expected is not None and synchronized != expected:
+            return "successful browser action did not acknowledge the requested epoch"
+        if (
+            data["ok"] is False
+            and data.get("error_class") == "browser_action_failed"
+            and expected is not None
+            and synchronized != expected
+        ):
+            return "browser action failure did not acknowledge the requested epoch"
+        if raw.get("page_kind") not in {"local_preview", "external", "uninitialized"}:
+            return "invalid browser page kind"
+        # Direct validators without a live preflight establish continuity only
+        # after every acknowledgement invariant is proven; malformed responses
+        # cannot poison the bounded generation pin.
+        if expected_daemon_id is None:
+            cls._pin_daemon_identity(ctx.browser_generation, daemon_id)
+        return None
+
+    @classmethod
+    def _pin_daemon_identity(
+        cls,
+        generation: str,
+        daemon_id: str,
+        *,
+        allow_rotation: bool = False,
+    ) -> bool:
+        current = cls._daemon_identity_pins.get(generation)
+        if current is not None and current != daemon_id and not allow_rotation:
+            return False
+        cls._daemon_identity_pins[generation] = daemon_id
+        cls._daemon_identity_pins.move_to_end(generation)
+        while len(cls._daemon_identity_pins) > _IDENTITY_PIN_LIMIT:
+            cls._daemon_identity_pins.popitem(last=False)
+        return True
+
+    async def _current_daemon_identity(
+        self,
+        ctx: ToolContext,
+        daemon_url: str,
+    ) -> tuple[str | None, ToolOutcome | None]:
+        assert ctx.sandbox is not None
+        response = await ctx.sandbox.exec_shell(
+            f"curl -sf {daemon_url}/identity",
+            timeout_s=min(ctx.timeout_s, 5),
+        )
+        if response.exit_code != 0:
+            return None, self._classified_failure(
+                "browser_daemon_unavailable",
+                "identity_transport_failed",
+                f"browser daemon identity request failed (exit {response.exit_code})",
+            )
+        daemon_id = str(response.stdout).strip()
+        if _TOKEN_RE.fullmatch(daemon_id) is None:
+            return None, self._freshness_protocol_failure("invalid daemon identity response")
+        return daemon_id, None
+
+    async def close_host_verifier_lane(self, ctx: ToolContext) -> bool:
+        """Best-effort close of the one fixed host-verifier page.
+
+        This never starts a daemon merely to close it and can never target the
+        agent lane. HostWebAppVerifier serializes callers around this operation.
+        """
+
+        if ctx.browser_lane != "host_verifier" or ctx.sandbox is None:
+            return False
+        daemon_url = await self._process_daemon_url(ctx) or _DAEMON_URL
+        if not await self._daemon_healthy(ctx, daemon_url):
+            return False
+        expected_daemon_id, identity_failure = await self._current_daemon_identity(ctx, daemon_url)
+        if expected_daemon_id is None or identity_failure is not None:
+            return False
+        self._pin_daemon_identity(
+            ctx.browser_generation,
+            expected_daemon_id,
+            allow_rotation=True,
+        )
+        request_nonce = uuid.uuid4().hex
+        job = {
+            "action": "_close_lane",
+            "workspace_epoch": ctx.browser_workspace_epoch,
+            "executor_generation": ctx.browser_generation,
+            "browser_lane": "host_verifier",
+            "request_nonce": request_nonce,
+            "expected_daemon_instance_id": expected_daemon_id,
+        }
+        job_path = f"/workspace/.pmx/job-{ctx.browser_lane}.json"
+        await ctx.sandbox.write_file(job_path, json.dumps(job).encode("utf-8"))
+        response = await ctx.sandbox.exec_shell(
+            f"curl -s -X POST {daemon_url} -d @{job_path}",
+            timeout_s=min(ctx.timeout_s, 10),
+        )
+        if response.exit_code != 0:
+            return False
+        try:
+            data = json.loads(response.stdout)
+        except (TypeError, ValueError):
+            return False
+        return isinstance(data, dict) and data.get("ok") is True
 
     async def _process_daemon_url(self, ctx: ToolContext) -> str | None:
         assert ctx.sandbox is not None

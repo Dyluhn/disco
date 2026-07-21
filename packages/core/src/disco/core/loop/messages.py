@@ -157,11 +157,12 @@ def _workspace_paths_from_events(events: list[Event]) -> tuple[list[str], list[s
             mutated.pop(p, None)
             mutated[p] = None  # most-recent-wins
         elif name in _WORKSPACE_READ_TOOLS:
-            if p in mutated:
-                mutated.pop(p, None)  # bump recency but keep it classified mutated
-                mutated[p] = None
-            else:
-                read_only.pop(p, None)
+            # Reads change knowledge, not workspace state. Once a path is in
+            # either bucket, re-reading it must not reorder the cacheable
+            # CURRENT WORKSPACE prefix (or change which files fit its cap).
+            # The just-completed read remains high-attention in the causal tool
+            # result; snapshot order advances only on a real mutation action.
+            if p not in mutated and p not in read_only:
                 read_only[p] = None
     return list(reversed(mutated.keys())), list(reversed(read_only.keys()))
 
@@ -347,23 +348,6 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "<!-- disco:escape-attempt=4 -->\n"
     "</system-reminder>",
 )
-
-STUCK_ESCAPE_PROGRESS_DIAGNOSTIC = "stuck_escape_progress_required"
-
-
-def stuck_escape_progress_reminder(tool_name: str) -> str:
-    """Decision-point guidance after the one allowed verification is consumed."""
-    return (
-        "<system-reminder>\n"
-        f"The one allowed `{tool_name}` verification for the latest changed-state receipt "
-        "has completed. That read allowance is consumed and the tool is quarantined again. "
-        "Do not reread the same content through file tools, shell/code execution, "
-        "or delegated exploration. "
-        "Advance the actual deliverable now: create or edit a missing required artifact, "
-        "use a structured verifier, or call `serve`/`finish` if the work is complete.\n"
-        "</system-reminder>"
-    )
-
 
 def _stuck_escape_reminder(attempt_count: int) -> str:
     """Return the escape reminder for the given attempt count.

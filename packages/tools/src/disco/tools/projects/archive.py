@@ -59,6 +59,10 @@ _SNAPSHOT_EXCLUDED_DIRS = frozenset(
 # through thousands of doomed round-trips.
 _SNAPSHOT_MAX_CONSECUTIVE_FAILURES = 10
 _SAFE_TEMPLATE_SUFFIXES = frozenset({"example", "sample", "dist", "template"})
+# Server-owned durable audit state is not part of the sandbox's authored tree.
+# A later sandbox snapshot must preserve it from the host mirror rather than
+# letting an older/absent in-box copy erase deployment ownership evidence.
+_DEFAULT_HOST_OWNED_PATHS = (".disco/cloudflare/deployments",)
 
 
 def is_runtime_secret_path(relative_path: str) -> bool:
@@ -104,23 +108,80 @@ class SnapshotResult:
     skipped: list[str] = field(default_factory=list)  # unreadable entries we tolerated
 
 
+def _prepare_authoritative_snapshot_paths(
+    staging: Path,
+    authoritative_paths: set[str],
+    *,
+    max_depth: int,
+) -> None:
+    """Remove fresh file-shaped conflicts above server-owned snapshot roots."""
+
+    def remove_entry(path: Path) -> None:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        if stat.S_ISDIR(info.st_mode):
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+    for raw in authoritative_paths:
+        rel = _archive_relpath(raw, max_depth=max_depth)
+        parts = PurePosixPath(rel).parts
+        current = staging
+        for part in parts[:-1]:
+            current /= part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                current.mkdir()
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            remove_entry(current)
+            current.mkdir()
+        remove_entry(staging.joinpath(*parts))
+
+
+def _same_fs_object(before: os.stat_result, after: os.stat_result) -> bool:
+    return (
+        before.st_dev,
+        before.st_ino,
+        stat.S_IFMT(before.st_mode),
+    ) == (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
+
+
 def _copy_preserved_snapshot_paths(
     dest: Path,
     staging: Path,
     preserve_paths: set[str],
     *,
+    authoritative_paths: set[str],
     max_depth: int,
     max_file_bytes: int,
 ) -> None:
     """Copy unreadable prior paths through no-follow directory descriptors.
 
-    The fresh snapshot wins at every conflict.  Anchoring traversal at an open
-    destination directory prevents a host-side link swap from redirecting a
-    preservation read outside the last authoritative workspace.
+    The fresh snapshot wins ordinary unreadable-path conflicts. Server-owned
+    ``authoritative_paths`` instead win at their exact root and at every
+    file-shaped ancestor, while compatible fresh siblings remain. Anchoring
+    traversal at an open destination directory prevents a host-side link swap
+    from redirecting a preservation read outside the last authoritative tree.
     """
 
     if not preserve_paths:
         return
+
+    # Reserve server-owned namespaces even on the first snapshot, when no
+    # prior destination exists to copy. Sandbox bytes must never occupy an
+    # ancestor that would make the host-owned subtree unreachable.
+    _prepare_authoritative_snapshot_paths(
+        staging,
+        authoritative_paths,
+        max_depth=max_depth,
+    )
+
     directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
     file_flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
@@ -136,15 +197,8 @@ def _copy_preserved_snapshot_paths(
     except OSError as exc:
         raise WorkspaceArchiveError(f"cannot open prior snapshot safely: {exc}") from exc
 
-    def _same_object(before: os.stat_result, after: os.stat_result) -> bool:
-        return (
-            before.st_dev,
-            before.st_ino,
-            stat.S_IFMT(before.st_mode),
-        ) == (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
-
     root_opened = os.fstat(root_fd)
-    if not stat.S_ISDIR(root_opened.st_mode) or not _same_object(root_listed, root_opened):
+    if not stat.S_ISDIR(root_opened.st_mode) or not _same_fs_object(root_listed, root_opened):
         os.close(root_fd)
         raise WorkspaceArchiveError("prior snapshot changed before it could be preserved")
 
@@ -178,7 +232,7 @@ def _copy_preserved_snapshot_paths(
                     f"cannot open preserved directory {rel!r} safely: {exc}"
                 ) from exc
             opened = os.fstat(child_fd)
-            if not stat.S_ISDIR(opened.st_mode) or not _same_object(info, opened):
+            if not stat.S_ISDIR(opened.st_mode) or not _same_fs_object(info, opened):
                 os.close(child_fd)
                 raise WorkspaceArchiveError(
                     f"preserved directory {rel!r} changed before it could be copied"
@@ -206,7 +260,7 @@ def _copy_preserved_snapshot_paths(
             ) from exc
         try:
             opened = os.fstat(source_fd)
-            if not stat.S_ISREG(opened.st_mode) or not _same_object(info, opened):
+            if not stat.S_ISREG(opened.st_mode) or not _same_fs_object(info, opened):
                 raise WorkspaceArchiveError(
                     f"preserved file {rel!r} changed before it could be copied"
                 )
@@ -250,7 +304,8 @@ def _copy_preserved_snapshot_paths(
                 continue
             parts = PurePosixPath(rel).parts
             # A successfully captured file at an ancestor wins over an older
-            # preserved subtree.
+            # ordinary preserved subtree. Server-owned roots were prepared
+            # above and therefore win this conflict instead.
             current_target = staging
             blocked_by_fresh_file = False
             for part in parts[:-1]:
@@ -277,7 +332,7 @@ def _copy_preserved_snapshot_paths(
                         ) from exc
                     opened_dirs.append(parent_fd)
                     opened = os.fstat(parent_fd)
-                    if not stat.S_ISDIR(opened.st_mode) or not _same_object(listed, opened):
+                    if not stat.S_ISDIR(opened.st_mode) or not _same_fs_object(listed, opened):
                         raise WorkspaceArchiveError(
                             f"preserved path {rel!r} changed during traversal"
                         )
@@ -424,6 +479,7 @@ async def snapshot_workspace(
     *,
     max_depth: int = _DEFAULT_MAX_DEPTH,
     max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
+    host_owned_paths: tuple[str, ...] = _DEFAULT_HOST_OWNED_PATHS,
 ) -> SnapshotResult:
     """Mirror the sandbox /workspace tree to `dest/` on disk, preserving structure.
 
@@ -455,6 +511,9 @@ async def snapshot_workspace(
         raise
     archive_path = transaction / "workspace.tar"
 
+    normalized_host_owned = {
+        _archive_relpath(path, max_depth=max_depth) for path in host_owned_paths
+    }
     paths: list[str] = []
     skipped: list[str] = []
     preserve_paths: set[str] = set()
@@ -470,6 +529,16 @@ async def snapshot_workspace(
                 f"{consecutive_failures} consecutive failures (last: {child!r}: "
                 f"{reason}) — transport presumed dead, aborting snapshot"
             )
+
+    def _host_owned(child: str) -> str | None:
+        return next(
+            (
+                root
+                for root in normalized_host_owned
+                if child == root or child.startswith(f"{root}/")
+            ),
+            None,
+        )
 
     async def _walk(rel: str, depth: int) -> None:
         nonlocal total_bytes, consecutive_failures
@@ -489,6 +558,9 @@ async def snapshot_workspace(
             if name in _SNAPSHOT_EXCLUDED_DIRS:
                 continue  # reproducible dependency/cache tree — never snapshot
             child = f"{rel}/{name}" if rel else name
+            if owner_root := _host_owned(child):
+                preserve_paths.add(owner_root)
+                continue
             if is_runtime_secret_path(child):
                 skipped.append(f"{child}: runtime secret path excluded")
                 continue
@@ -549,13 +621,32 @@ async def snapshot_workspace(
                 preserve_paths.add(_archive_relpath(str(raw), max_depth=max_depth))
             archive_path.unlink()
 
+        # Bulk exporters cannot omit host-owned subtrees on demand. Remove any
+        # sandbox copy from the private staging tree before the no-follow host
+        # preservation step restores the authoritative host bytes.
+        for rel in normalized_host_owned:
+            target = staging.joinpath(*PurePosixPath(rel).parts)
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
+            preserve_paths.add(rel)
+
         _copy_preserved_snapshot_paths(
             dest,
             staging,
             preserve_paths,
+            authoritative_paths=normalized_host_owned,
             max_depth=max_depth,
             max_file_bytes=max_file_bytes,
         )
+        # Report the tree that will actually be published, including preserved
+        # host-owned files and excluding any discarded sandbox copies.
+        published_files = sorted(
+            path for path in staging.rglob("*") if path.is_file() and not path.is_symlink()
+        )
+        paths = [path.relative_to(staging).as_posix() for path in published_files]
+        total_bytes = sum(path.stat().st_size for path in published_files)
         for directory in sorted((p for p in staging.rglob("*") if p.is_dir()), reverse=True):
             with contextlib.suppress(OSError):
                 directory.rmdir()

@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 
-from disco.core import ActionEvent, LLMMessage, ToolCall
+from disco.core import ActionEvent, LLMMessage, SqliteEventStore, ToolCall
 from disco.core.events import ObservationEvent, ToolResult, obs_snip_override
+from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop.context_budget import (
     ASSIST_MAX_FILES,
     ASSIST_OBS_SNIP_CHARS,
@@ -26,7 +27,10 @@ from disco.core.loop.context_budget import (
     ContextCaps,
     derive_context_caps,
 )
-from disco.core.loop.view_render import _BASELINE_CAPS, workspace_snapshot_message
+from disco.core.loop.engine import AgentLoop
+from disco.core.loop.view_render import _BASELINE_CAPS, ViewBuilder, workspace_snapshot_message
+from disco.core.view import NoOpCondenser
+from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer, NeverConfirm, ScriptedAgent
 
 # A representative capable-model window (Claude/GPT large context).
 WINDOW_192K = 192_000
@@ -100,6 +104,49 @@ def test_huge_window_is_capped_not_unbounded():
 
     assert caps.obs_snip_chars == _rendered_obs_floor(caps.read_char_budget)
     assert caps.obs_snip_chars >= caps.read_char_budget
+
+
+def _real_loop(*, window: int | None, sandbox: _FakeSandbox | None = None) -> AgentLoop:
+    executor = FakeExecutor()
+    if sandbox is not None:
+        executor.sandbox = sandbox
+    return AgentLoop(
+        "context-caps",
+        SqliteEventStore(":memory:"),
+        ScriptedAgent([]),
+        executor,
+        None,
+        FakeAnalyzer(),
+        NeverConfirm(),
+        NoOpCondenser(),
+        FakeSummarizer(),
+        mode=OperatingMode.LONG_HORIZON,
+        model_policy=ModelExecutionPolicy.standard(),
+        driver_context_window=window,
+    )
+
+
+def test_real_agent_loop_threads_driver_window_into_view_caps():
+    loop = _real_loop(window=128_000)
+
+    assert loop._driver_context_window() == 128_000
+    assert ViewBuilder(loop)._resolve_caps() == derive_context_caps(
+        assist=False,
+        context_window=128_000,
+    )
+
+
+def test_real_agent_loop_128k_view_pins_an_11k_file_in_full():
+    body = b"// board.js\n" + b"b" * 11_000
+    loop = _real_loop(window=128_000, sandbox=_FakeSandbox({"board.js": body}))
+
+    view = asyncio.run(ViewBuilder(loop).build(_writes(["board.js"])))
+    snapshot = next(
+        message for message in view.messages if "BEGIN FILE board.js" in message.content
+    )
+
+    assert "more chars" not in snapshot.content
+    assert "b" * 500 in snapshot.content
 
 
 # ---- snapshot pin: full vs truncated ----------------------------------------

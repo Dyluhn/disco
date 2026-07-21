@@ -51,10 +51,15 @@ interface EventBase {
   id: string;
   seq?: number | null;
   source?: EventSource;
+  agent_view_id?: string | null;
   /** ISO-8601 instant the event was produced (contract §2.1 BaseEvent.timestamp,
    *  VOLATILE). Sent on every event; the UI doesn't rely on it for ordering
    *  (seq is authoritative) so it's optional here. */
   timestamp?: string;
+  /** Free-form, non-semantic metadata (contract §2.1 BaseEvent.meta, VOLATILE —
+   *  tracing ids, UI hints such as blocked-landing / driver-outage labels).
+   *  Every wire event carries it; never load-bearing for reconstruction. */
+  meta?: Record<string, unknown>;
 }
 
 export interface MessageEvent extends EventBase {
@@ -89,18 +94,37 @@ export interface StatusEvent extends EventBase {
   kind: "status";
   status: ConversationStatus;
   detail?: string | null;
+  host_mutation_id?: string | null;
+  run_intent_id?: string | null;
 }
 export interface WorkspaceVersionEvent extends EventBase {
   kind: "workspace_version";
   version_seq: number;
   tree_digest: string;
   trigger: string;
+  final_seal?: {
+    schema_version: 1;
+    scope: { namespace: string; identifier: string };
+    terminal_seq: number;
+    latest_effect_seq: number | null;
+    version_seq: number;
+    tree_digest: string;
+    file_count: number;
+    total_bytes: number;
+  } | null;
 }
 export interface WorkspaceRestoredEvent extends EventBase {
   kind: "workspace_restored";
   version_seq: number;
   tree_digest: string;
   label: string;
+}
+export interface WorkspaceMutationEvent extends EventBase {
+  kind: "workspace_mutation";
+  operation: string;
+  paths: string[];
+  run_intent_id?: string | null;
+  run_protocol_version?: 1 | null;
 }
 export interface PlanStep {
   title: string;
@@ -308,6 +332,7 @@ export type AgentEvent =
   | StatusEvent
   | WorkspaceVersionEvent
   | WorkspaceRestoredEvent
+  | WorkspaceMutationEvent
   | PlanEvent
   | ReportEvent
   | AlternativesEvent
@@ -329,6 +354,9 @@ export interface ConversationState {
   iteration: number;
   max_iterations: number;
   last_seq: number;
+  active_agent_view_id?: string | null;
+  active_agent_view_seq?: number | null;
+  agent_view_pending?: boolean;
   pending_action_id: string | null;
   pending_plan_id: string | null;
   pending_alternatives_id?: string | null;
@@ -378,6 +406,7 @@ export interface FileStreamFrame {
   index: number;
   delta: string;
   field?: "content" | "new";
+  agent_view_id?: string | null;
 }
 
 // R3: optional `context` carries large hidden context (e.g. a full DR report)

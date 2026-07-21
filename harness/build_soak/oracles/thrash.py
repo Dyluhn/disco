@@ -157,6 +157,93 @@ def _failed_action_signature(action: dict[str, Any], error_signature: str) -> st
     return "sha256:" + hashlib.sha256(command.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+# Verifier V3: mirror the product's receipt-tool gating exactly
+# (`successful_mutation_with_receipt`): the exact path+sha256 shape is trusted
+# only from the file-mutating tools, `applied` only from run_project_script,
+# `state_changed` from any tool. Kept inline over the dict encoding — a new
+# receipt-bearing tool added in stuck.py must be added here too.
+_RECEIPT_FILE_TOOLS = _FILE_MUTATION_TOOLS
+_RECEIPT_APPLIED_TOOLS = frozenset({"run_project_script"})
+
+
+def _trusted_mutation_receipt_outcome(
+    event: dict[str, Any], *, action_ids: frozenset[str] | None = None
+) -> bool:
+    """Whether one observation event carries a trusted changed-state receipt.
+
+    Mirrors the product's `successful_mutation_with_receipt` trust boundary
+    over the durable dict encoding: a PAIRED successful outcome whose
+    structured payload proves a concrete state change through the shape the
+    emitting tool class actually produces (exact path+sha256 from a
+    file-mutating tool, a non-empty all-string `applied` list from
+    run_project_script, or an explicit `state_changed: true`). Unpaired
+    observations, foreign tool/shape combinations, and degenerate values are
+    inert (verifier finding V3).
+    """
+
+    if kind_of(event) != KIND_OBSERVATION:
+        return False
+    action_id = event.get("action_id")
+    if not isinstance(action_id, str) or not action_id:
+        return False
+    if action_ids is not None and action_id not in action_ids:
+        return False
+    result = event.get("tool_result") or {}
+    if result.get("success") is not True:
+        return False
+    tool_name = result.get("tool_name")
+    structured = result.get("structured")
+    if not isinstance(structured, dict):
+        return False
+    if structured.get("state_changed") is True:
+        return True
+    if tool_name in _RECEIPT_APPLIED_TOOLS:
+        applied = structured.get("applied")
+        return (
+            isinstance(applied, list)
+            and bool(applied)
+            and all(isinstance(item, str) and item for item in applied)
+        )
+    if tool_name in _RECEIPT_FILE_TOOLS:
+        path = structured.get("path")
+        sha256 = structured.get("sha256")
+        return (
+            isinstance(path, str)
+            and bool(path.strip())
+            and isinstance(sha256, str)
+            and re.fullmatch(r"[0-9a-f]{64}", sha256) is not None
+        )
+    return False
+
+
+def progress_epoch_boundary(
+    event: dict[str, Any], *, action_ids: frozenset[str] | None = None
+) -> bool:
+    """Whether *event* closes the current progress epoch for error accounting.
+
+    k6g finding F2: two identical error signatures separated by trusted
+    progress are two independent recoverable errors, not one repeated failed
+    behavior. Boundaries are host-authored and typed — a real user turn (an
+    answered question lands as one), a server-authored approved plan
+    transition, a typed blocking proof obligation, or a trusted changed-state
+    receipt. Plain environment prose is NOT a boundary. Pass ``action_ids``
+    (the log's real ActionEvent ids) so receipt-based boundaries require exact
+    pairing; without it the observation still needs a non-empty action_id.
+    """
+
+    if _approved_plan_predicate_scope(event) is not None:
+        return True
+    if _trusted_mutation_receipt_outcome(event, action_ids=action_ids):
+        return True
+    if kind_of(event) != "message":
+        return False
+    if event.get("source") == "user":
+        return True
+    meta = event.get("meta")
+    blocking = meta.get("blocking") if isinstance(meta, dict) else None
+    return event.get("source") == "environment" and isinstance(blocking, str) and bool(blocking)
+
+
 def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str, str]]:
     outcomes: dict[str, tuple[bool, str, str]] = {}
     for event in events:
@@ -668,8 +755,30 @@ class ThrashOracle:
                 )
             ]
 
-        failed_signatures: Counter[tuple[str, str, str, str]] = Counter()
-        failure_seqs: dict[tuple[str, str, str, str], list[int]] = {}
+        # k6g F2: identical error signatures accumulate only WITHIN one progress
+        # epoch. Trusted progress between two occurrences (a receipt-backed
+        # mutation, an approved plan transition, a user turn, a typed blocking
+        # obligation) makes them independent recoverable errors — the seq-428/
+        # seq-514 pair must never again be grouped as one repeated behavior.
+        # A true adjacent no-progress repeat still crosses the threshold.
+        epoch = 0
+        epoch_by_index: dict[int, int] = {}
+        known_action_ids = frozenset(
+            str(action_id_of(event))
+            for event in events
+            if kind_of(event) == KIND_ACTION and action_id_of(event)
+        )
+        for index, event in enumerate(events):
+            if progress_epoch_boundary(event, action_ids=known_action_ids):
+                epoch += 1
+            epoch_by_index[index] = epoch
+        action_epochs = {
+            str(action_id_of(event)): epoch_by_index[index]
+            for index, event in enumerate(events)
+            if kind_of(event) == KIND_ACTION
+        }
+        failed_signatures: Counter[tuple[str, str, str, str, int]] = Counter()
+        failure_seqs: dict[tuple[str, str, str, str, int], list[int]] = {}
         for action in actions:
             action_id = action_id_of(action)
             success, signature, detail_signature = outcomes.get(
@@ -682,11 +791,12 @@ class ThrashOracle:
                 signature,
                 detail_signature,
                 _failed_action_signature(action, signature),
+                action_epochs.get(str(action_id), 0),
             )
             failed_signatures[key] += 1
             failure_seqs.setdefault(key, []).append(seq_of(action))
         if failed_signatures:
-            (tool, signature, detail_signature, action_signature), count = (
+            (tool, signature, detail_signature, action_signature, failure_epoch), count = (
                 failed_signatures.most_common(1)[0]
             )
             if count > limits["max_same_tool_error_repeats"]:
@@ -702,8 +812,15 @@ class ThrashOracle:
                             "action_signature": action_signature or None,
                             "count": count,
                             "allowed": limits["max_same_tool_error_repeats"],
+                            "progress_epoch": failure_epoch,
                             "action_seqs": failure_seqs[
-                                (tool, signature, detail_signature, action_signature)
+                                (
+                                    tool,
+                                    signature,
+                                    detail_signature,
+                                    action_signature,
+                                    failure_epoch,
+                                )
                             ],
                         },
                     )

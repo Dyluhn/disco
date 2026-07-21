@@ -20,7 +20,12 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..env import disco_env
-from ..events import DeliverableEvent, Event, ObservationEvent
+from ..events import (
+    DeliverableEvent,
+    Event,
+    ObservationEvent,
+    agent_view_consistent_events,
+)
 
 # [REL-2a step2b] Shadow flag — when ON, the artifact-manifest fold dual-writes AND a core site
 # compares the maintained manifest against this projection, logging divergence (RETURNS legacy; no
@@ -79,9 +84,17 @@ def manifest_path_divergence(
 
 
 def artifact_paths_from_events(events: list[Event]) -> set[str]:
-    """The set of workspace-relative paths this conversation EMITTED as results (normalized)."""
+    """Return semantically winning emitted artifact paths, normalized.
+
+    Raw audit history deliberately retains output from workers that lose a
+    later run/view race.  Those events must never widen the download jail or
+    poison the maintained artifact manifest.  Apply the same authoritative
+    projection used by model/state consumers here, at the one shared artifact
+    path boundary, so every caller receives identical run ownership semantics.
+    Legacy histories without the v1 run protocol remain unchanged.
+    """
     out: set[str] = set()
-    for e in events:
+    for e in agent_view_consistent_events(events):
         if isinstance(e, ObservationEvent) and e.tool_result.success and e.tool_result.structured:
             tn = e.tool_result.tool_name
             s = e.tool_result.structured

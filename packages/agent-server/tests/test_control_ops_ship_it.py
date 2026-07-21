@@ -33,6 +33,7 @@ def _make_rt(store: SqliteEventStore) -> MagicMock:
     """Minimal mock runtime: real store, trackable _loop_for + kick."""
     rt = MagicMock()
     rt._store = store
+    rt._workspace.record_run_intent_locked = AsyncMock()
     rt._loop_for.return_value.enter_planning = AsyncMock()
     rt.kick = MagicMock()
     return rt
@@ -140,6 +141,7 @@ async def test_ship_it_post_finish_appends_message_no_planning_status() -> None:
 
     # enter_planning and kick must NOT have been called.
     rt._loop_for.return_value.enter_planning.assert_not_awaited()
+    rt._workspace.record_run_intent_locked.assert_not_awaited()
     rt.kick.assert_not_called()
 
 
@@ -209,6 +211,7 @@ async def test_real_change_intent_post_finish_still_replans() -> None:
 
     rt._loop_for.assert_called_once_with(CID)
     rt._loop_for.return_value.enter_planning.assert_awaited_once_with("add a dark mode toggle")
+    rt._workspace.record_run_intent_locked.assert_awaited_once_with(CID, "request-plan")
     rt.kick.assert_called_once_with(CID, claimed_user_seq=1)
 
 

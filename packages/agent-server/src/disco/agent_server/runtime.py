@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import os
-import shutil
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -48,14 +48,17 @@ from disco.core import (
     ToolCall,
     ToolResult,
     VerifierVerdictEvent,
-    WorkspaceRestoredEvent,
+    WorkspaceMutationEvent,
+    agent_view_consistent_events,
+    current_workspace_agent_view_id,
+    latest_workspace_run_intent,
     render_skills_for_prompt,
+    workspace_run_intent_admission_required,
 )
 from disco.core.appkit import BuildBrief
 from disco.core.context.artifact_projection import (
     artifact_paths_from_events,
     manifest_path_divergence,
-    manifest_shadow_enabled,
 )
 from disco.core.context.ledger import ArtifactRecord
 from disco.core.context.store import ArtifactMemoryStore
@@ -97,6 +100,7 @@ from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allow
 from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
 from disco.core.loop import (
     AgentLoop,
+    AgentViewSuperseded,
     BlastRadiusConfirm,
     BuildAgent,
     NeverConfirm,
@@ -142,21 +146,23 @@ from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore, workflow_ro
 from disco.tools.mcp import McpPool
 from disco.tools.projects import (
     ProjectStore,
-    StorageError,
     StorageStatus,
-    rehydrate_workspace,
-    snapshot_workspace,
+    VersionRecord,
 )
 from disco.tools.sandbox import (
     SandboxInstance,
     SandboxUnavailableError,
 )
-from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
+from .driver_context import (
+    DriverContextResolutionError,
+    DriverContextResolver,
+    ResolvedDriverContext,
+)
 from .lifecycle import _GATE_STATES, LifecycleManager
 from .mcp_manager import McpManager
 from .preview_service import PreviewService
@@ -174,24 +180,29 @@ from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
 from .workflow_events import handle_workflow_tool_event
 from .workflow_schedule import WorkflowScheduleRunRecord
+from .workspace_commit import (
+    CommittedWorkspaceView,
+    WorkspaceRunSuperseded,
+    pending_workspace_run_intent,
+)
+from .workspace_service import (
+    WorkspaceCoordinator,
+)
+from .workspace_service import (
+    WorkspaceRestoreConflict as WorkspaceRestoreConflict,
+)
+from .workspace_service import (
+    WorkspaceRestoreStorageError as WorkspaceRestoreStorageError,
+)
+from .workspace_service import (
+    WorkspaceVersionNotFound as WorkspaceVersionNotFound,
+)
 
 logger = logging.getLogger(__name__)
 
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
 _WORKFLOW_ROUTER_FLAG = "WORKFLOW_ROUTER"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
-
-
-class WorkspaceRestoreConflict(ValueError):
-    """The workspace cannot be restored while the conversation is actively running."""
-
-
-class WorkspaceVersionNotFound(LookupError):
-    """The requested workspace version does not exist or its files are gone."""
-
-
-class WorkspaceRestoreStorageError(RuntimeError):
-    """Workspace restore could not complete because storage or sandbox I/O failed."""
 
 
 def toolscope_audit_enabled() -> bool:
@@ -240,12 +251,6 @@ from .build_contract_service import (  # noqa: E402
     host_verify_canary_enabled,
 )
 from .sandbox_runtime_service import SandboxRuntimeService  # noqa: E402
-
-# WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
-# wind down before hard-cancelling it (a cooperative Stop already persisted the
-# terminal status, so the task returns at its next step boundary; the cap only
-# guards against a wedged model step).
-_RESUME_DRAIN_TIMEOUT_S = 10.0
 
 _ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
 _ACTIONLESS_AUTO_RESUME_NUDGE = (
@@ -539,7 +544,7 @@ def _probe_live_model(
     if model_id:
         # The window can come from EITHER source; if either cache is fresh we can
         # answer (props n_ctx wins; else the model's /models context_length).
-        if props is not None or models_map is not None:
+        if (props is not None and props.get("n_ctx") is not None) or models_map is not None:
             n_ctx = props["n_ctx"] if props is not None else None
             if n_ctx is None and models_map is not None:
                 n_ctx = models_map.get(model_id)
@@ -784,6 +789,14 @@ class ConversationRuntime:
         # Settings assignments are actually honored.
         self._injected_router = router
         self._enable_thinking = enable_thinking
+        # Per-run driver context-window resolver (singleflight-bounded live probing).
+        self._driver_context = DriverContextResolver(timeout_s=5.0)
+        # Per-conversation immutable context snapshots. The transient map is populated
+        # only for the synchronous composition call, preserving the one-argument
+        # _loop_for seam while preventing one conversation/model from contaminating
+        # another. The durable-in-process map identifies the binding of a cached loop.
+        self._resolved_context_for_compose: dict[str, ResolvedDriverContext] = {}
+        self._resolved_driver_contexts: dict[str, ResolvedDriverContext] = {}
         # W-35: short-TTL success cache for the driver pre-flight, keyed by the
         # RESOLVED driver model key → monotonic timestamp of the last OK probe. A
         # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
@@ -832,6 +845,12 @@ class ConversationRuntime:
             install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # Durable authority captured by each registered Build task.  The
+        # in-memory generation remains useful for local lifecycle cleanup, but
+        # it cannot arbitrate another Agent-server process.  These ids are
+        # copied from the append-only intent/view protocol and threaded into
+        # supervisor statuses after the task completes.
+        self._run_task_authorities: dict[asyncio.Task[Any], tuple[str | None, str | None]] = {}
         # W11 (silent RUNNING-stall recovery): bounded re-kick budget per cid. When
         # loop.run() RETURNS while the conversation is still RUNNING — a dropped /
         # unparseable model response ended the turn with no terminal StatusEvent, so
@@ -915,10 +934,8 @@ class ConversationRuntime:
         # reconstruction + the resume_conversation orchestrator. Reaches live
         # runtime state via a back-reference. See resume_service.py.
         self._resume = ResumeService(self)
-        # Sandbox lifecycle (auto-suspend / idle sweep / orphan reconcile /
-        # snapshot+rehydrate). _connections/_suspend_tasks stay on the runtime
-        # (tests read them); the manager reaches state via a back-ref. See
-        # lifecycle.py.
+        # Permanent workspace locks shared by lifecycle delegates.
+        self._workspace = WorkspaceCoordinator(self)
         self._lifecycle = LifecycleManager(self)
         # Deep Research surface (plan→iterate→report) + live research stream.
         # _depth / _research_* cache / _cancel_flags stay on the runtime
@@ -985,10 +1002,6 @@ class ConversationRuntime:
         # RUNNING-stall budget) — this guards the terminal-conclusion path only.
         self._post_terminal_rekick_seq: dict[str, int] = {}
         self._run_claimed_user_seq: dict[str, int] = {}
-        # REL-2a: shadow artifact-manifest fold guard. Keyed by the latest FINISHED
-        # StatusEvent seq so duplicate terminal observers fold once, while a later
-        # resumed segment that emits a new FINISHED folds once for that finish too.
-        self._shadow_folded_finished_seq: dict[str, int] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1222,13 +1235,21 @@ class ConversationRuntime:
     async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]:
         return await self._sandbox.probe_sandbox_config(settings)
 
-    def _driver_context_window(self) -> int | None:
-        """The context window of the model currently assigned to AGENT_DRIVER, for
-        A-S1's model-aware condensation threshold. Best-effort: None on any lookup
-        miss so the condenser falls back to its safe defaults."""
+    def _driver_context_window(self, conversation_id: str | None = None) -> int | None:
+        """Resolve the effective AGENT_DRIVER window for one conversation.
+
+        The per-conversation model pick must govern context budgeting just as it
+        governs routing. A stale persisted pick falls back to the configured
+        driver instead of disconnecting the view/executor/condenser budgets.
+        """
         try:
-            cfg = self._config_store.load()
-            key = cfg.model_for(ModelRole.AGENT_DRIVER)
+            cfg = self._routing_config_now()
+            override = (
+                self._model_override.get(conversation_id) if conversation_id is not None else None
+            )
+            key = cfg.model_for(ModelRole.AGENT_DRIVER, override=override)
+            if key not in cfg.models and override is not None:
+                key = cfg.model_for(ModelRole.AGENT_DRIVER)
             entry = cfg.entry_for(key)
             # Prefer the model server's ACTUAL n_ctx over the static config — the
             # condenser must budget against the window the backend really serves,
@@ -1246,6 +1267,80 @@ class ConversationRuntime:
             return live["n_ctx"] or entry.context_window
         except Exception:  # noqa: BLE001 — never block loop construction on this
             return None
+
+    async def _resolve_driver_context(self, conversation_id: str) -> ResolvedDriverContext:
+        """Return a frozen snapshot of the effective driver model and its resolved
+        context window for this run.
+
+        The override-aware ModelEntry identity is frozen BEFORE any await so the
+        resolver works with a stable entry. Origin/secret policy is re-checked;
+        keyless local endpoints (no base_url) are probeable; an unavailable or
+        invalid configured fallback raises before any provider or tool spend.
+        """
+        override = self._model_override.get(conversation_id)
+        unresolved_key = override or "<configured-default>"
+        try:
+            cfg = self._routing_config_now()
+            key = cfg.model_for(ModelRole.AGENT_DRIVER, override=override)
+            if key not in cfg.models and override is not None:
+                key = cfg.model_for(ModelRole.AGENT_DRIVER)
+            entry = cfg.entry_for(key)
+        except Exception as exc:
+            raise DriverContextResolutionError(
+                model_key=unresolved_key,
+                provider="<unresolved>",
+                reason=f"invalid driver configuration ({type(exc).__name__})",
+            ) from exc
+
+        base_url: str | None = getattr(entry, "base_url", None) or None
+
+        try:
+            origin_approved = base_url is not None and self._origin_approved(
+                base_url, f"model:{entry.provider}", entry.api_key_env
+            )
+            secret_ref_allowed = base_url is None or secret_ref_allowed_for_origin(
+                entry.api_key_env, base_url
+            )
+            api_key = self._resolve_secret(entry.api_key_env) if base_url is not None else None
+        except Exception as exc:
+            raise DriverContextResolutionError(
+                model_key=key,
+                provider=entry.provider,
+                reason=f"driver credential policy could not be resolved ({type(exc).__name__})",
+            ) from exc
+
+        if base_url is None or not origin_approved:
+            unavailable: str | None = "unapproved_origin" if base_url else None
+            return await self._driver_context.resolve(
+                model_key=key,
+                entry=entry,
+                probe=None,
+                unavailable_source=unavailable,
+            )
+        if not secret_ref_allowed:
+            return await self._driver_context.resolve(
+                model_key=key,
+                entry=entry,
+                probe=None,
+                unavailable_source="disallowed_secret_ref",
+            )
+        if entry.api_key_env and not api_key:
+            return await self._driver_context.resolve(
+                model_key=key,
+                entry=entry,
+                probe=None,
+                unavailable_source="missing_secret",
+            )
+
+        async def probe() -> dict[str, Any]:
+            return await asyncio.to_thread(_probe_live_model, base_url, api_key, entry.model_id)
+
+        return await self._driver_context.resolve(
+            model_key=key,
+            entry=entry,
+            probe=probe,
+            unavailable_source=None,
+        )
 
     async def prewarm_model_probe(self) -> None:
         """Warm the live-model /props cache OFF the event loop at startup, so the
@@ -1578,71 +1673,165 @@ class ConversationRuntime:
         broker.register("extract", _extract)
         return broker
 
-    def _loop_for(self, conversation_id: str) -> AgentLoop:
-        loop = self._loops.get(conversation_id)
-        if loop is None:
-            # The per-conversation model PICK drives the WHOLE generative pipeline:
-            # build the router with it so the brain AND the summarizer (context
-            # condensation) AND any other generative role all run on the picked
-            # model — not just the driver while local models summarize underneath.
-            override = self._model_override.get(conversation_id)
-            # Surface FIRST: it scopes which skills the router injects (a build-only
-            # skill shouldn't reach an agent conversation's prompt, and vice versa).
-            surface = self._surface_of(conversation_id)
-            # Single source of truth (gated by surface) shared with the loop compose
-            # below and the UI badge — they can't desync.
-            autonomous = self._effective_autonomous(conversation_id)
-            strict_appkit = (
-                surface in self._BUILD_LIKE_SURFACES
-                and self._effective_appkit_mode(conversation_id)
-                and not self._effective_artifact_mode(conversation_id)
-            )
-            router = self._router_now(
-                pick=override,
-                surface=surface,
-                autonomous=autonomous,
+    def _loop_for(
+        self,
+        conversation_id: str,
+        *,
+        driver_context_window: int | None = None,
+    ) -> AgentLoop:
+        compose_snapshot = self._resolved_context_for_compose.get(conversation_id)
+        if driver_context_window is None and compose_snapshot is not None:
+            driver_context_window = compose_snapshot.context_window
+        if driver_context_window is None:
+            loop = self._loops.get(conversation_id)
+            if loop is not None:
+                return loop
+        # The per-conversation model PICK drives the WHOLE generative pipeline:
+        # build the router with it so the brain AND the summarizer (context
+        # condensation) AND any other generative role all run on the picked
+        # model — not just the driver while local models summarize underneath.
+        override = (
+            compose_snapshot.model_key
+            if compose_snapshot is not None
+            else self._model_override.get(conversation_id)
+        )
+        # Surface FIRST: it scopes which skills the router injects (a build-only
+        # skill shouldn't reach an agent conversation's prompt, and vice versa).
+        surface = self._surface_of(conversation_id)
+        # Single source of truth (gated by surface) shared with the loop compose
+        # below and the UI badge — they can't desync.
+        autonomous = self._effective_autonomous(conversation_id)
+        strict_appkit = (
+            surface in self._BUILD_LIKE_SURFACES
+            and self._effective_appkit_mode(conversation_id)
+            and not self._effective_artifact_mode(conversation_id)
+        )
+        router = self._router_now(
+            pick=override,
+            surface=surface,
+            autonomous=autonomous,
+            conversation_id=conversation_id,
+            appkit_mode=strict_appkit,
+        )
+        # Research↔Build isolation: the SURFACE picks the agent class, so
+        # completion semantics (prose=answer for Research vs affirmative
+        # `finish` for Build) are owned by type, not a shared mode flag.
+        # "agent" is a build-like surface — same BuildAgent + build loop.
+        if surface in self._BUILD_LIKE_SURFACES:
+            agent: RouterAgent = BuildAgent(
+                router,
                 conversation_id=conversation_id,
-                appkit_mode=strict_appkit,
+                model_override=override,
+                driver_context_window=driver_context_window,
             )
-            # Research↔Build isolation: the SURFACE picks the agent class, so
-            # completion semantics (prose=answer for Research vs affirmative
-            # `finish` for Build) are owned by type, not a shared mode flag.
-            # "agent" is a build-like surface — same BuildAgent + build loop.
-            if surface in self._BUILD_LIKE_SURFACES:
-                agent: RouterAgent = BuildAgent(
-                    router, conversation_id=conversation_id, model_override=override
-                )
-            else:
-                agent = ResearchAgent(
-                    router, conversation_id=conversation_id, model_override=override
-                )
-            if surface in self._BUILD_LIKE_SURFACES:
-                loop = self._compose_build_loop(conversation_id, router, agent)
-            elif surface == "deep_research":
-                loop = self._compose_deep_research_loop(conversation_id, router, agent)
-            else:
-                loop = AgentLoop(
-                    conversation_id,
-                    self._store,
-                    agent,
-                    _NoToolExecutor(),
-                    router,
-                    RuleBasedAnalyzer(),
-                    NeverConfirm(),  # Research surface: no human gate
-                    NoOpCondenser(),
-                    RouterSummarizer(router),
-                    mode=self._mode,
-                    # Research surface: always standard (no assist compensations);
-                    # explicit default so the positive PRODUCTION gate fires.
-                    model_policy=ModelExecutionPolicy.standard(),
-                )
-            # Watch-it-write: wire the loop's stream sink to the store's ephemeral
-            # broadcast so streamed file-content frames reach the conversation's WS
-            # subscribers live (never persisted). Bound to this cid.
-            loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
-                _cid, frame
+        else:
+            agent = ResearchAgent(
+                router,
+                conversation_id=conversation_id,
+                model_override=override,
+                driver_context_window=driver_context_window,
             )
-            self._loops[conversation_id] = loop
+        if surface in self._BUILD_LIKE_SURFACES:
+            loop = self._compose_build_loop(
+                conversation_id,
+                router,
+                agent,
+                driver_context_window=driver_context_window,
+            )
+        elif surface == "deep_research":
+            loop = self._compose_deep_research_loop(
+                conversation_id,
+                router,
+                agent,
+                driver_context_window=driver_context_window,
+            )
+        else:
+            loop = AgentLoop(
+                conversation_id,
+                self._store,
+                agent,
+                _NoToolExecutor(),
+                router,
+                RuleBasedAnalyzer(),
+                NeverConfirm(),  # Research surface: no human gate
+                NoOpCondenser(),
+                RouterSummarizer(router),
+                mode=self._mode,
+                # Research surface: always standard (no assist compensations);
+                # explicit default so the positive PRODUCTION gate fires.
+                model_policy=ModelExecutionPolicy.standard(),
+                driver_context_window=driver_context_window,
+            )
+        # Watch-it-write: wire the loop's stream sink to the store's ephemeral
+        # broadcast so streamed file-content frames reach the conversation's WS
+        # subscribers live (never persisted). Bound to this cid.
+        loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
+            _cid, frame
+        )
+        self._loops[conversation_id] = loop
+        return loop
+
+    def _loop_for_resolved(
+        self, conversation_id: str, snapshot: ResolvedDriverContext
+    ) -> AgentLoop:
+        """Compose (or return) the loop for *snapshot*'s resolved driver context.
+
+        If a run is already admitted the existing loop is returned unchanged —
+        never recompose an active run.  Otherwise the provisional loop is
+        replaced with one composed against *snapshot.context_window*, preserving
+        the sandbox/session by exact identity (parked as a pending session so
+        ``_compose_build_loop`` adopts it).
+        """
+        existing_loop = self._loops.get(conversation_id)
+        if self._workspace.has_admitted_run(conversation_id):
+            if existing_loop is None:
+                raise RuntimeError("admitted conversation has no composed loop")
+            return existing_loop
+
+        previous_snapshot = self._resolved_driver_contexts.get(conversation_id)
+        if existing_loop is not None and previous_snapshot is not None:
+            previous_binding = (
+                previous_snapshot.model_key,
+                previous_snapshot.provider,
+                previous_snapshot.model_id,
+                previous_snapshot.context_window,
+            )
+            next_binding = (
+                snapshot.model_key,
+                snapshot.provider,
+                snapshot.model_id,
+                snapshot.context_window,
+            )
+            if previous_binding == next_binding:
+                return existing_loop
+
+        old_loop = self._loops.pop(conversation_id, None)
+        old_executor = self._executors.pop(conversation_id, None)
+        old_sandbox = getattr(old_executor, "_sandbox", None) if old_executor is not None else None
+        had_pending = conversation_id in self._pending_sessions
+        old_pending = self._pending_sessions.get(conversation_id)
+        if old_sandbox is not None:
+            self._pending_sessions[conversation_id] = old_sandbox
+
+        self._resolved_context_for_compose[conversation_id] = snapshot
+        try:
+            loop = self._loop_for(conversation_id)
+        except BaseException:
+            self._loops.pop(conversation_id, None)
+            self._executors.pop(conversation_id, None)
+            if old_loop is not None:
+                self._loops[conversation_id] = old_loop
+            if old_executor is not None:
+                self._executors[conversation_id] = old_executor
+            if had_pending and old_pending is not None:
+                self._pending_sessions[conversation_id] = old_pending
+            else:
+                self._pending_sessions.pop(conversation_id, None)
+            raise
+        finally:
+            if self._resolved_context_for_compose.get(conversation_id) is snapshot:
+                self._resolved_context_for_compose.pop(conversation_id, None)
+        self._resolved_driver_contexts[conversation_id] = snapshot
         return loop
 
     def _executor_for(self, conversation_id: str) -> DefaultToolExecutor:
@@ -1719,6 +1908,66 @@ class ConversationRuntime:
     def upload_session(self, conversation_id: str) -> SandboxSession:
         return self._sessions.upload_session(conversation_id)
 
+    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
+        return self._workspace.lock(conversation_id)
+
+    def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]:
+        return self._workspace.fence(conversation_id)
+
+    @contextlib.asynccontextmanager
+    async def workspace_mutation(
+        self,
+        conversation_id: str,
+        operation: str,
+        *,
+        paths: tuple[str, ...] = (),
+    ) -> AsyncIterator[None]:
+        async with self._workspace.mutation(
+            conversation_id,
+            operation,
+            paths=paths,
+        ):
+            yield
+
+    async def record_workspace_mutation_locked(
+        self,
+        conversation_id: str,
+        operation: str,
+        *,
+        paths: tuple[str, ...] = (),
+    ) -> WorkspaceMutationEvent:
+        return await self._workspace.record_mutation_locked(
+            conversation_id,
+            operation,
+            paths=paths,
+        )
+
+    async def finalize_host_workspace_change(
+        self,
+        conversation_id: str,
+        operation: str,
+    ) -> VersionRecord:
+        return await self._workspace.finalize_sandbox_change(
+            conversation_id,
+            operation,
+        )
+
+    async def finalize_host_mirror_change_locked(
+        self,
+        conversation_id: str,
+        operation: str,
+    ) -> VersionRecord:
+        return await self._workspace.finalize_host_mirror_change_locked(
+            conversation_id,
+            operation,
+        )
+
+    async def require_committed_host_mirror_locked(
+        self,
+        conversation_id: str,
+    ) -> CommittedWorkspaceView:
+        return await self._workspace.require_committed_host_mirror_locked(conversation_id)
+
     def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
         """[DC-07] Store an uploaded file in the server-side sidecar directory."""
         if not self._uploads_base:
@@ -1770,6 +2019,20 @@ class ConversationRuntime:
         workflow_router_mode: bool,
         workflow_events: Any,
     ) -> dict[str, Any]:
+        async def execution_admission(agent_view_id: str | None) -> str | None:
+            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
+            if latest_workspace_run_intent(events) is None:
+                return None
+            if (
+                agent_view_id is not None
+                and current_workspace_agent_view_id(events) == agent_view_id
+            ):
+                return None
+            return (
+                "A newer user instruction or model view superseded this action before "
+                "execution. The action was not run; continue from the latest instruction."
+            )
+
         return dict(
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
@@ -1794,6 +2057,9 @@ class ConversationRuntime:
             starter_kit=self._starter_kit_for(conversation_id),
             workflow_events=workflow_events if workflow_router_mode else None,
             primitive_live_verifier=make_security_live_verifier(),
+            workspace_lock=self.workspace_lock(conversation_id),
+            workspace_fence=lambda: self._workspace.interprocess_mutation_fence(conversation_id),
+            execution_admission=execution_admission,
         )
 
     def _compose_build_loop(
@@ -1802,6 +2068,7 @@ class ConversationRuntime:
         router: DefaultLLMRouter,
         agent: RouterAgent,
         *,
+        driver_context_window: int | None = None,
         sealed_workflow_run: WorkflowRun | None = None,
         sealed_workflow_instance_id: str | None = None,
     ) -> AgentLoop:
@@ -1856,9 +2123,14 @@ class ConversationRuntime:
         # (assist, live-context-window) inputs the snapshot caps use, so a file that
         # fits the assist-OFF snapshot pin also reads in ONE shot. assist-ON resolves
         # to the static 7k default → byte-identical to today.
+        _driver_context_window = (
+            driver_context_window
+            if isinstance(driver_context_window, int) and driver_context_window > 0
+            else self._driver_context_window(conversation_id)
+        )
         _read_char_budget = derive_context_caps(
             assist=model_policy.assist,
-            context_window=self._driver_context_window(),
+            context_window=_driver_context_window,
         ).read_char_budget
         # CONTRACT-ACTIVATE: in artifact mode, govern tools by the conversation's build
         # contract + live phase (no raw rewrite during the edit phase, etc.).
@@ -2091,12 +2363,13 @@ class ConversationRuntime:
                 # the human gate. NeverConfirm here would nullify W4's honest
                 # execution-scope label for sealed workflows.
                 BlastRadiusConfirm(),
-                LLMSummarizingCondenser(context_window=self._driver_context_window()),
+                LLMSummarizingCondenser(context_window=_driver_context_window),
                 RouterSummarizer(router),
                 mode=OperatingMode.PLANNING if _sealed_plan_gated else OperatingMode.INTERACTIVE,
                 planning_tools=_sealed_planning_tools if _sealed_plan_gated else frozenset(),
                 autonomous=True,
                 model_policy=model_policy,
+                driver_context_window=_driver_context_window,
                 quiet=self._effective_quiet(conversation_id),
                 workflow_run=sealed_workflow_run,
                 finish_alias=_finish_alias,
@@ -2104,6 +2377,8 @@ class ConversationRuntime:
                 verifier_judge=verifier_judge,
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
+                terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+                control_fence=lambda: self._workspace.fence(conversation_id),
             )
         if _art_mode:
             # C6: artifact mode — low-friction authoring path:
@@ -2125,19 +2400,22 @@ class ConversationRuntime:
                 # treating them as ordinary confined artifact ops would be a
                 # false security boundary.
                 BlastRadiusConfirm(),
-                LLMSummarizingCondenser(context_window=self._driver_context_window()),
+                LLMSummarizingCondenser(context_window=_driver_context_window),
                 RouterSummarizer(router),
                 # INTERACTIVE: no plan-gate; artifact authoring starts immediately.
                 mode=OperatingMode.INTERACTIVE,
                 # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
                 autonomous=self._effective_autonomous(conversation_id),
                 model_policy=model_policy,
+                driver_context_window=_driver_context_window,
                 quiet=self._effective_quiet(conversation_id),
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
                 host_verifier=host_verifier,
                 verifier_judge=verifier_judge,
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
+                terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+                control_fence=lambda: self._workspace.fence(conversation_id),
             )
         if _appkit_mode:
             _mcp_risks["request_custom_build"] = SecurityRisk.HIGH
@@ -2165,7 +2443,7 @@ class ConversationRuntime:
             BlastRadiusConfirm(),
             # A-S1: derive condensation thresholds from the AGENT_DRIVER model's
             # context window (soft 65% / hard 80%) instead of the old bare 24k/32k.
-            LLMSummarizingCondenser(context_window=self._driver_context_window()),
+            LLMSummarizingCondenser(context_window=_driver_context_window),
             RouterSummarizer(router),
             # Build starts in PLANNING. The planner has a context-rich surface — it
             # can READ to explore (file_list/file_read in the workspace, search/extract
@@ -2181,12 +2459,15 @@ class ConversationRuntime:
             # from the prompt prefix.
             autonomous=self._effective_autonomous(conversation_id),
             model_policy=model_policy,
+            driver_context_window=_driver_context_window,
             quiet=self._effective_quiet(conversation_id),
             finish_alias=_finish_alias,  # P6 contract finalizer alias
             host_verifier=host_verifier,
             verifier_judge=verifier_judge,
             host_verifier_verdict_hook=host_verify_canary_hook,
             host_verify_authoritative=host_verify_authoritative_enabled(),
+            terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+            control_fence=lambda: self._workspace.fence(conversation_id),
             strict_appkit_active=(
                 (lambda phase=_appkit_phase: phase.phase != AppKitPhase.CUSTOM_BUILD)
                 if _appkit_phase is not None
@@ -2197,9 +2478,19 @@ class ConversationRuntime:
     # ---- deep research surface ---------------------------------------------
 
     def _compose_deep_research_loop(
-        self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
+        self,
+        conversation_id: str,
+        router: DefaultLLMRouter,
+        agent: RouterAgent,
+        *,
+        driver_context_window: int | None = None,
     ) -> AgentLoop:
-        return self._dr._compose_deep_research_loop(conversation_id, router, agent)
+        return self._dr._compose_deep_research_loop(
+            conversation_id,
+            router,
+            agent,
+            driver_context_window=driver_context_window,
+        )
 
     def _depth_for(self, conversation_id: str) -> DepthTier:
         return self._dr._depth_for(conversation_id)
@@ -2250,32 +2541,30 @@ class ConversationRuntime:
         """Schedule the loop to run (idempotent: a no-op if already running). The
         loop itself decides if there's unprocessed work and streams events.
 
-        Wraps `loop.run()` in a task that — for Build conversations with a valid
-        ProjectStore configured — first REHYDRATES the persisted workspace on
-        the very first kick, and SNAPSHOTS it after every run that ends in
-        FINISHED. Failures are reported as ambient system-reminder events on
-        the conversation log (the user + model both see them), never as
-        exceptions that crash the task."""
-        # Auto-title from the first user message (idempotent, detached, no-op once
-        # titled). Placed here because kick() is the single chokepoint every user
-        # message flows through — covers WS + REST send_message + first-kick alike.
+        Before composing the loop the effective driver's context window is resolved
+        once per run (singleflight-bounded live probing).  The task is registered
+        synchronously in ``_tasks``; resolution, composition, and workspace
+        admission happen inside it."""
         self._title_service.schedule(conversation_id)
         existing = self._tasks.get(conversation_id)
         if existing is not None and not existing.done():
             return  # already running; the new message is picked up at the next step
-        # W-48(c): if Settings switched the sandbox backend since this conversation
-        # last composed, evict its stale-backend session here so _loop_for composes a
-        # fresh sandbox on the new backend (best-effort destroy of the old box).
+
+        # Reconcile an idle cached sandbox before registering the new run. This is
+        # synchronous and contains no model/tool spend; once the task is registered,
+        # the stale-backend guard correctly treats it as an active run and will not
+        # evict underneath it.
         self._evict_stale_backend(conversation_id)
-        loop = self._loop_for(conversation_id)
+
+        async def _resolve_loop() -> AgentLoop:
+            snapshot = await self._resolve_driver_context(conversation_id)
+            return self._loop_for_resolved(conversation_id, snapshot)
+
         task, generation = self._create_run_task(
             conversation_id,
-            loop,
+            loop_factory=_resolve_loop,
             claimed_user_seq=claimed_user_seq,
         )
-        # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
-        # callback an exception escaping loop.run() killed the task silently and left the
-        # conversation at RUNNING forever (the silent hang Dylan hit).
         task.add_done_callback(
             lambda t, _cid=conversation_id, _gen=generation: self._on_run_task_done(_cid, t, _gen)
         )
@@ -2283,9 +2572,12 @@ class ConversationRuntime:
     def _create_run_task(
         self,
         conversation_id: str,
-        loop: AgentLoop,
+        loop: AgentLoop | None = None,
         *,
+        loop_factory: Callable[[], Awaitable[AgentLoop]] | None = None,
         claimed_user_seq: int | None = None,
+        expected_run_intent_id: str | None = None,
+        task_context: contextvars.Context | None = None,
     ) -> tuple[asyncio.Task[Any], int]:
         """Create and synchronously register a loop run task.
 
@@ -2293,6 +2585,12 @@ class ConversationRuntime:
         ``_tasks`` before the loop can reach tool/file operations, so suspend/idle
         sweepers see active work and cannot tear down the sandbox mid-run.
         """
+        existing = self._tasks.get(conversation_id)
+        if existing is not None and not existing.done():
+            raise RuntimeError("conversation already has a live run task")
+        if (loop is None) == (loop_factory is None):
+            raise ValueError("provide exactly one of loop or loop_factory")
+
         # Atomically bind the NEW run task to the user turn that launched it. Callers
         # pass the seq returned by the durable USER append. This happens at the shared
         # task-creation chokepoint with no await before registration. A user turn that
@@ -2308,7 +2606,19 @@ class ConversationRuntime:
         # can tell whether a newer run has since reused the pin.
         generation = self._run_generation.get(conversation_id, 0) + 1
         self._run_generation[conversation_id] = generation
-        task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
+
+        async def run() -> Any:
+            selected_loop = await loop_factory() if loop_factory is not None else loop
+            assert selected_loop is not None
+            if expected_run_intent_id is None:
+                return await self._workspace.run_after_admission(conversation_id, selected_loop)
+            return await self._workspace.run_after_admission(
+                conversation_id,
+                selected_loop,
+                expected_run_intent_id=expected_run_intent_id,
+            )
+
+        task = asyncio.create_task(run(), context=task_context)
         self._tasks[conversation_id] = task
         return task, generation
 
@@ -2363,8 +2673,10 @@ class ConversationRuntime:
         at RUNNING forever. `generation` (the run-generation this task was spawned under,
         finding #3) is threaded to the clean-return finalizer so a stale finalizer can't
         clear a pin a newer run has since reused."""
+        agent_view_id, run_intent_id = self._run_task_authorities.pop(task, (None, None))
         if self._tasks.get(conversation_id) is task:
             self._tasks.pop(conversation_id, None)
+            self._workspace.clear_run_claim(conversation_id)
         if task.cancelled():
             return  # cancellation is not an error
         try:
@@ -2379,7 +2691,23 @@ class ConversationRuntime:
             # W2 only handled the exception case, so this sat at RUNNING forever
             # (the silent MiniMax-build hang). Reconcile it (re-kick once, else STUCK).
             with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-                asyncio.create_task(self._finalize_clean_return(conversation_id, generation))
+                asyncio.create_task(
+                    self._finalize_clean_return(
+                        conversation_id,
+                        generation,
+                        agent_view_id=agent_view_id,
+                        run_intent_id=run_intent_id,
+                    )
+                )
+            return
+        if isinstance(exc, (AgentViewSuperseded, WorkspaceRunSuperseded)):
+            # Another process/view owns this intent. The losing worker must not
+            # turn honest arbitration into ERROR/STUCK.  A newer ingress can,
+            # however, have called kick() while this task was still registered;
+            # that kick is intentionally a no-op. Hand off only when the newest
+            # intent still has no admitted view. A real winner is never stolen.
+            with contextlib.suppress(RuntimeError):
+                asyncio.create_task(self._rekick_unadmitted_superseding_intent(conversation_id))
             return
         # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
         # Thread the run-generation (finding #3) so the crash terminalizer — like the
@@ -2387,7 +2715,27 @@ class ConversationRuntime:
         # since reused the pin (it pops `_tasks` before scheduling this async cleanup, so
         # a fresh user turn can start generation N+1 in the window).
         with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-            asyncio.create_task(self._terminalize_crashed(conversation_id, exc, generation))
+            asyncio.create_task(
+                self._terminalize_crashed(
+                    conversation_id,
+                    exc,
+                    generation,
+                    agent_view_id=agent_view_id,
+                    run_intent_id=run_intent_id,
+                )
+            )
+
+    async def _rekick_unadmitted_superseding_intent(self, conversation_id: str) -> None:
+        """Recover an ingress whose eager kick lost to the retiring stale task."""
+
+        try:
+            events = await self._store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — supervision is best-effort
+            logger.exception("superseded-run handoff could not read %s", conversation_id)
+            return
+        if not workspace_run_intent_admission_required(events):
+            return
+        self.kick(conversation_id)
 
     async def _maybe_rekick_for_stranded_followup(self, conversation_id: str) -> None:
         """Engine-rekick fix. A follow-up appended while a run is FINALIZING is
@@ -2409,11 +2757,14 @@ class ConversationRuntime:
         no-follow-up finish never re-kicks. This is ADDITIONAL to the existing
         generation / stale-run guards (unchanged) — it does not replace them."""
         try:
-            events = await self._store.get_events(conversation_id)
+            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("post-terminal re-kick could not read events for %s", conversation_id)
             return
-        if not signals.has_unprocessed_user_message(events):
+        if (
+            not signals.has_unprocessed_user_message(events)
+            and pending_workspace_run_intent(events) is None
+        ):
             return  # clean finish, no stranded follow-up → nothing to recover
         latest_user_seq = max(
             (
@@ -2444,7 +2795,7 @@ class ConversationRuntime:
             conversation_id,
             latest_user_seq,
         )
-        self.kick(conversation_id, claimed_user_seq=latest_user_seq)
+        await self._workspace.rekick_stranded_followup(conversation_id, latest_user_seq)
 
     @staticmethod
     def _latest_status_event(events: list[Event]) -> StatusEvent | None:
@@ -2515,7 +2866,7 @@ class ConversationRuntime:
         if not self._effective_autonomous(conversation_id):
             return False
         try:
-            events = await self._store.get_events(conversation_id)
+            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
         except Exception:  # noqa: BLE001 — supervisor hook is best-effort
             logger.exception(
                 "actionless auto-resume could not read events for %s",
@@ -2560,8 +2911,41 @@ class ConversationRuntime:
         )
         return False
 
+    async def _append_task_status_if_current(
+        self,
+        conversation_id: str,
+        event: StatusEvent,
+        *,
+        agent_view_id: str | None,
+        run_intent_id: str | None,
+    ) -> bool:
+        """Append a supervisor/preflight status only for its durable run.
+
+        Historical and non-Build callers do not have strict run authority and
+        retain the legacy behavior. Registered Build tasks always capture at
+        least the ingress intent; after materialization they prefer the exact
+        view id. The coordinator performs the last-moment recheck and append
+        under the local plus process workspace fence.
+        """
+
+        if agent_view_id is None and run_intent_id is None:
+            await self._workspace.append_status(conversation_id, event)
+            return True
+        stored = await self._workspace.append_run_status_if_current(
+            conversation_id,
+            event,
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
+        )
+        return stored is not None
+
     async def _finalize_clean_return(
-        self, conversation_id: str, generation: int | None = None
+        self,
+        conversation_id: str,
+        generation: int | None = None,
+        *,
+        agent_view_id: str | None = None,
+        run_intent_id: str | None = None,
     ) -> None:
         """W11 supervision. The run task returned WITHOUT raising. If the conversation
         already concluded, or legitimately parked (awaiting the user / a control op),
@@ -2571,6 +2955,13 @@ class ConversationRuntime:
         to STUCK so the wedge is visible to the operator/UI, never RUNNING forever.
         Best-effort: never re-raises (a supervisor failure must not crash the loop)."""
         try:
+            has_authority = agent_view_id is not None or run_intent_id is not None
+            if has_authority and not await self._workspace.run_authority_is_current(
+                conversation_id,
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            ):
+                return
             state = await self._store.get_state(conversation_id)
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("clean-return finalize could not read state for %s", conversation_id)
@@ -2597,12 +2988,6 @@ class ConversationRuntime:
             # it out from under that newer run.
             if status in self._KERNEL_UNPIN_STATUSES:
                 self._unpin_if_current_generation(conversation_id, generation)
-                # REL-2a: the main fold now happens in `_run_with_persistence`, before
-                # snapshot/teardown-sensitive work can race the sandbox away. Keep this
-                # terminal observer as a guarded backstop for any FINISHED path that
-                # reaches the finalizer without passing through that wrapper.
-                if status is ConversationStatus.FINISHED:
-                    await self._maybe_shadow_fold_finished_manifest(conversation_id)
                 # Engine-rekick fix: only a genuinely TERMINAL conclusion
                 # (FINISHED/ERROR/STUCK/IDLE — the unpin set) can strand a follow-up
                 # that landed during finalization. A deliberate PARK (PAUSED /
@@ -2621,7 +3006,7 @@ class ConversationRuntime:
         # `_MAX_NONTERMINAL_REKICKS` returns is genuinely wedged. Reads/browser
         # probes are NOT productive (see signals), so a read-only spin still STUCKs.
         try:
-            events = await self._store.get_events(conversation_id)
+            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
             successful = signals.successful_action_ids(events)
             last_prod_seq = max(
                 (
@@ -2662,13 +3047,17 @@ class ConversationRuntime:
                 "run task for %s wedged at RUNNING after re-kick; marking STUCK",
                 conversation_id,
             )
-            await self._store.append(
+            stored = await self._append_task_status_if_current(
                 conversation_id,
                 StatusEvent(
                     status=ConversationStatus.STUCK,
                     detail="loop ended without reaching a terminal state",
                 ),
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
             )
+            if not stored:
+                return
             self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.STUCK)
             # STUCK is terminal → release the kernel pin so the NEXT run re-resolves
             # the current selection (finding #3). Unlike the healthy-return branch
@@ -2690,62 +3079,18 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("stall terminalization failed for %s", conversation_id)
 
-    async def _maybe_shadow_fold_finished_manifest(
-        self, conversation_id: str, *, events: list[Any] | None = None
-    ) -> None:
-        """Run the REL-2a shadow fold once for the latest FINISHED StatusEvent.
-
-        Multiple observers can see the same terminal finish (`_run_with_persistence`,
-        the clean-return finalizer, Pi's direct conclusion path). The event seq is the
-        durable finish identity: fold exactly once for that seq, but allow a later
-        resumed segment with a new FINISHED marker to fold again.
-        """
-        if not manifest_shadow_enabled():
-            return
-        try:
-            if events is None:
-                events = await self._store.get_events(conversation_id)
-            finished_seq = max(
-                (
-                    e.seq or 0
-                    for e in events
-                    if isinstance(e, StatusEvent) and e.status is ConversationStatus.FINISHED
-                ),
-                default=0,
-            )
-            if finished_seq <= 0:
-                logger.info(
-                    "shadow fold skipped for %s: no FINISHED status event",
-                    conversation_id,
-                )
-                return
-            if self._shadow_folded_finished_seq.get(conversation_id) == finished_seq:
-                logger.debug(
-                    "shadow fold skipped for %s: FINISHED seq %d already folded",
-                    conversation_id,
-                    finished_seq,
-                )
-                return
-            self._shadow_folded_finished_seq[conversation_id] = finished_seq
-            await self._shadow_fold_manifest(conversation_id, events=events)
-        except Exception:  # noqa: BLE001 — shadow is telemetry; never perturb a finish
-            logger.exception(
-                "artifact-manifest shadow fold scheduling failed for %s",
-                conversation_id,
-            )
-
     async def _shadow_fold_manifest(
         self, conversation_id: str, *, events: list[Any] | None = None
     ) -> None:
         """[REL-2a step2b-2b] SHADOW dual-write of the artifact manifest at finish-success.
 
-        Gated by the caller on ``manifest_shadow_enabled()`` (default OFF). Projects the emitted
-        artifact paths from the event log (the single-source truth the download jail uses), reads
-        the maintained manifest, LOGS any divergence, then upserts the projected paths so the
-        manifest tracks reality. No reader is switched — this is dual-write + telemetry only, so
-        the campaign can prove the manifest faithfully mirrors the projection over many live runs
-        before any consumer is migrated onto it. Best-effort: a fold failure never affects the run
-        (finish already succeeded); the executor may be evicted by now → the sandbox guard no-ops.
+        The terminal pipeline is the sole production caller: it owns the local
+        and process workspace fences and records ``agent.artifact-manifest-fold``
+        before invoking this low-level writer. Direct callers must provide the
+        same effect boundary. Projects the emitted artifact paths from the event
+        log, logs divergence, then upserts missing paths. No reader is switched.
+        Best-effort failures leave the preceding mutation marker as honest
+        evidence that final bytes may have changed.
         """
         try:
             sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
@@ -2812,7 +3157,13 @@ class ConversationRuntime:
         return acted
 
     async def _terminalize_crashed(
-        self, conversation_id: str, exc: BaseException, generation: int | None = None
+        self,
+        conversation_id: str,
+        exc: BaseException,
+        generation: int | None = None,
+        *,
+        agent_view_id: str | None = None,
+        run_intent_id: str | None = None,
     ) -> None:
         """Append a terminal ERROR status + a user-visible reminder for a crashed run.
         Idempotent: never overwrites an already-concluded status.
@@ -2826,6 +3177,13 @@ class ConversationRuntime:
         `generation` is None for legacy/stranded callers with no competing newer run
         (terminalize as before)."""
         try:
+            has_authority = agent_view_id is not None or run_intent_id is not None
+            if has_authority and not await self._workspace.run_authority_is_current(
+                conversation_id,
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            ):
+                return
             state = await self._store.get_state(conversation_id)
             # Re-check the live run-generation AFTER the await: a newer run may have been
             # kicked while this stale crash cleanup was scheduled. The check + the ERROR
@@ -2837,10 +3195,14 @@ class ConversationRuntime:
                 return  # already concluded — don't clobber
             detail = f"uncaught {type(exc).__name__}: {exc}"[:200]
             logger.error("run task for %s crashed: %s", conversation_id, detail, exc_info=exc)
-            await self._store.append(
+            stored = await self._append_task_status_if_current(
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=detail),
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
             )
+            if not stored:
+                return
             self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
             # Terminal ending → release the kernel pin (next run re-resolves). #1.
             # Generation-guarded (finding #3): if a newer run reused the pin during the
@@ -3271,6 +3633,7 @@ class ConversationRuntime:
         if task is not None and not task.done():
             return  # defensive: never evict under a live run (the gate already blocks it)
         self._loops.pop(conversation_id, None)
+        self._resolved_driver_contexts.pop(conversation_id, None)
         executor = self._executors.pop(conversation_id, None)
         # Preserve the live sandbox so the rebuilt loop adopts the SAME box (workspace +
         # shell sessions intact). Don't clobber an existing pending session (a pre-kick
@@ -3375,6 +3738,15 @@ class ConversationRuntime:
           StatusEvent(FINISHED) directly.
         - Research → unchanged (the loop runs, no persistence)."""
         surface = self._surface_of(conversation_id)
+        run_intent_id: str | None = None
+        current_task = asyncio.current_task()
+        registered_task = (
+            current_task is not None and self._tasks.get(conversation_id) is current_task
+        )
+        if registered_task and current_task is not None and surface in self._BUILD_LIKE_SURFACES:
+            intent = latest_workspace_run_intent(await self._store.get_events(conversation_id))
+            run_intent_id = intent.id if intent is not None else None
+            self._run_task_authorities[current_task] = (None, run_intent_id)
 
         if surface == "deep_research":
             # Short-circuit the loop for Deep Research. The plan-mode intercept
@@ -3394,10 +3766,14 @@ class ConversationRuntime:
         # ambient reminder and DO NOT start the loop (return the ERROR state).
         reason = await self._preflight_driver(conversation_id)
         if reason is not None:
-            await self._store.append(
+            stored = await self._append_task_status_if_current(
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=reason[:200]),
+                agent_view_id=None,
+                run_intent_id=run_intent_id,
             )
+            if not stored:
+                return await self._store.get_state(conversation_id)
             self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
             await self._emit_persistence_reminder(
                 conversation_id,
@@ -3415,10 +3791,14 @@ class ConversationRuntime:
         if surface in self._BUILD_LIKE_SURFACES:
             sandbox_reason = await self._preflight_sandbox(conversation_id)
             if sandbox_reason is not None:
-                await self._store.append(
+                stored = await self._append_task_status_if_current(
                     conversation_id,
                     StatusEvent(status=ConversationStatus.ERROR, detail=sandbox_reason[:200]),
+                    agent_view_id=None,
+                    run_intent_id=run_intent_id,
                 )
+                if not stored:
+                    return await self._store.get_state(conversation_id)
                 self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
                 await self._emit_persistence_reminder(
                     conversation_id,
@@ -3433,23 +3813,30 @@ class ConversationRuntime:
         # write its files into the (lazy) sandbox so the agent sees them. Reads
         # are cheap; the rehydrate only writes if there are files on disk.
         if surface in self._BUILD_LIKE_SURFACES:
-            await self._maybe_rehydrate(conversation_id)
-            # DC-07: re-materialize server-side uploads into the fresh sandbox.
-            # This is the SINGLE chokepoint that covers ALL paths:
-            #   - post-restart resume → fresh sandbox via lazy compose
-            #   - first build after upload (pending session adoption or fresh)
-            #   - mid-run recreation (also handled by _rehydrate_after_recreate)
-            await self._rematerialize_uploads(conversation_id)
+            async with self.workspace_lock(conversation_id):
+                await self._maybe_rehydrate(conversation_id)
+                # DC-07: re-materialize server-side uploads into the fresh sandbox.
+                # This is the SINGLE chokepoint that covers ALL paths:
+                #   - post-restart resume → fresh sandbox via lazy compose
+                #   - first build after upload (pending session adoption or fresh)
+                #   - mid-run recreation (also handled by _rehydrate_after_recreate)
+                await self._rematerialize_uploads(conversation_id)
 
-        state = await loop.run()
+        try:
+            state = await loop.run()
+        finally:
+            if registered_task and current_task is not None:
+                self._run_task_authorities[current_task] = (
+                    AgentLoop._current_agent_view_id(),
+                    run_intent_id,
+                )
 
         # Snapshot hook: capture the workspace whenever a build run ENDS — not only
         # on FINISHED. A run that ends STUCK/ERROR/PAUSED still wrote real files (the
         # model may have built most of the deliverable before getting stuck); snapshot
         # so that work is NOT lost (it was — a stuck iteration silently discarded a
         # whole feature it had written). Snapshot is idempotent + cheap.
-        _ENDED = {
-            ConversationStatus.FINISHED,
+        _ENDED_UNSEALED = {
             ConversationStatus.STUCK,
             ConversationStatus.ERROR,
             ConversationStatus.PAUSED,
@@ -3458,15 +3845,19 @@ class ConversationRuntime:
         # Re-read the AUTHORITATIVE state from the store (computed from the event log)
         # for the end-gate.
         ended_state = await self._store.get_state(conversation_id)
-        if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in _ENDED:
+        if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in (
+            _ENDED_UNSEALED | {ConversationStatus.FINISHED}
+        ):
             self._emit_toolscope_audit_summary(conversation_id, ended_state.execution_status)
-            # REL-2a shadow fold must run while the build sandbox is still live. Do
-            # this at the authoritative end-state boundary, before snapshot/suspend/
-            # finalizer work can race executor release. The helper is seq-guarded so
-            # the later clean-return finalizer backstop cannot double-fold.
-            if ended_state.execution_status is ConversationStatus.FINISHED:
-                await self._maybe_shadow_fold_finished_manifest(conversation_id)
-            await self._maybe_snapshot(conversation_id, trigger="finish")
+            if ended_state.execution_status is not ConversationStatus.FINISHED:
+                # FINISHED was captured and sealed synchronously by the loop's
+                # terminal hook. Recovery snapshots remain available for other
+                # ended states, under an honest trigger label.
+                async with self.workspace_lock(conversation_id):
+                    await self._maybe_snapshot(
+                        conversation_id,
+                        trigger=ended_state.execution_status.value,
+                    )
             # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
             # suspend = sweep_idle_once -> _suspend
         return state
@@ -3586,116 +3977,10 @@ class ConversationRuntime:
         return self._space_ids.get(conversation_id, frozenset())
 
     async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict:
-        """Restore a prior ProjectStore workspace version into the live build workspace.
+        return await self._workspace.restore_version(conversation_id, seq)
 
-        The event log remains append-only: restore is represented by a new
-        WorkspaceRestoredEvent plus a new head version cut from the restored tree.
-        """
-        state = await self._store.get_state(conversation_id)
-        if state.execution_status is ConversationStatus.RUNNING:
-            raise WorkspaceRestoreConflict("conversation is running")
-
-        store = self._project_store_now()
-        status = store.status()
-        if status != StorageStatus.OK:
-            raise WorkspaceRestoreStorageError(f"project storage is {status.value}")
-
-        try:
-            versions = store.list_versions(conversation_id)
-        except StorageError as exc:
-            raise WorkspaceRestoreStorageError(str(exc)) from exc
-        record = next((r for r in versions if r.seq == seq), None)
-        if record is None:
-            raise WorkspaceVersionNotFound(f"unknown version seq: {seq!r}")
-        try:
-            version_dir = store.version_workspace_path(conversation_id, seq)
-        except StorageError as exc:
-            raise WorkspaceVersionNotFound(str(exc)) from exc
-        try:
-            record = store.set_version_pinned(conversation_id, seq, True)
-        except StorageError as exc:
-            raise WorkspaceRestoreStorageError(str(exc)) from exc
-
-        session = self.live_session(conversation_id)
-        if session is None:
-            cid8 = conversation_id.removeprefix("conv_")[:8]
-            with contextlib.suppress(Exception):
-                await self.wake_for_preview(cid8, PREVIEW_PORT)
-            session = self.live_session(conversation_id)
-        if session is None:
-            try:
-                self._loop_for(conversation_id)
-            except Exception as exc:  # noqa: BLE001 — route maps to a named storage error
-                raise WorkspaceRestoreStorageError(
-                    f"could not create sandbox for restore: {exc}"
-                ) from exc
-            session = self.live_session(conversation_id)
-        if session is None:
-            raise WorkspaceRestoreStorageError("sandbox unavailable for restore")
-
-        try:
-            clear = await session.exec_shell(
-                "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
-                timeout_s=30,
-            )
-            if clear.exit_code != 0:
-                detail = (clear.stderr or clear.stdout or "workspace clear failed").strip()
-                raise WorkspaceRestoreStorageError(detail[:300])
-            await rehydrate_workspace(session, version_dir)
-
-            live_workspace = store.path_for(conversation_id)
-            if live_workspace.exists():
-                shutil.rmtree(live_workspace)
-            result = await snapshot_workspace(session, live_workspace)
-
-            project_record = store.get(conversation_id)
-            store.write_manifest(
-                conversation_id,
-                title=project_record.title if project_record is not None else None,
-                owner_id=project_record.owner_id if project_record is not None else None,
-                created_at=project_record.created_at if project_record is not None else None,
-                file_count=result.file_count,
-                total_bytes=result.total_bytes,
-            )
-        except WorkspaceRestoreStorageError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise WorkspaceRestoreStorageError(str(exc)) from exc
-
-        await self._store.append(
-            conversation_id,
-            WorkspaceRestoredEvent(
-                version_seq=seq,
-                tree_digest=record.tree_digest,
-                label=record.label,
-            ),
-        )
-        await self._store.append(
-            conversation_id,
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "<system-reminder>\n"
-                        f"The user rolled the workspace back to version {seq} "
-                        f"(digest {record.tree_digest}). Files on disk now reflect "
-                        "that version — any writes you made after it NO LONGER EXIST "
-                        "on disk. Re-read files before editing; do not rewrite from memory.\n"
-                        "</system-reminder>"
-                    ),
-                ),
-            ),
-        )
-        try:
-            new_record = store.cut_version(conversation_id, trigger="restore")
-        except StorageError as exc:
-            raise WorkspaceRestoreStorageError(str(exc)) from exc
-        return {
-            "restored": seq,
-            "new_version": new_record.seq if new_record is not None else None,
-            "tree_digest": record.tree_digest,
-        }
+    async def _restore_workspace_version_locked(self, conversation_id: str, seq: int) -> dict:
+        return await self._workspace.restore_version_locked(conversation_id, seq)
 
     # ---- share export (RP-06) ----------------------------------------------
 
@@ -3812,6 +4097,13 @@ class ConversationRuntime:
     def preview_target_port(self, conversation_id: str) -> int | None:
         """The live port behind the canonical, capability-isolated preview route."""
         return self._preview.preview_target_port(conversation_id)
+
+    async def resolve_active_preview_projection(
+        self,
+        conversation_id: str,
+        projection: Any,
+    ) -> bool:
+        return await self._preview.resolve_active_preview_projection(conversation_id, projection)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         return self._preview.port_upstream(conversation_id, port)
@@ -4074,44 +4366,63 @@ class ConversationRuntime:
         results, so kill terminalization repairs the append-only log by pairing each
         still-dangling action exactly once.
         """
+        # Public/direct compatibility wrapper. ControlOps.kill owns one larger
+        # fence across closure + executor teardown + terminal status and calls
+        # the locked primitive below instead.
+        async with self.workspace_lock(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
+                if (
+                    generation is not None
+                    and self._run_generation.get(conversation_id) != generation
+                ):
+                    return []
+                return await self._close_dangling_actions_for_kill_locked(conversation_id)
+
+    async def _close_dangling_actions_for_kill_locked(
+        self,
+        conversation_id: str,
+        authority: tuple[str | None, str | None, bool] | None = None,
+    ) -> list[AgentErrorEvent]:
+        """Atomically pair open actions while the caller owns both fences.
+
+        ``authority`` is the exact (view, intent, strict) tuple captured when a
+        hard kill began. Under strict v1, only that view's actions may be
+        closed; a stale worker must never close a newer process's action.
+        """
+
+        if not self._workspace.lock(conversation_id).locked():
+            raise RuntimeError("kill action closure requires the workspace fence")
+        self._workspace._require_process_fence_locked(conversation_id)
         events = await self._store.get_events(conversation_id)
-        if generation is not None and self._run_generation.get(conversation_id) != generation:
-            return []
         paired = signals._paired_action_ids(events)
+        captured_view_id = authority[0] if authority is not None else None
+        strict = authority[2] if authority is not None else False
         errors: list[Event] = []
         for event in events:
             if not isinstance(event, ActionEvent) or event.id in paired:
+                continue
+            if strict and (captured_view_id is None or event.agent_view_id != captured_view_id):
                 continue
             errors.append(
                 AgentErrorEvent(
                     id=f"evt_kill_cancelled_{event.id}",
                     error="cancelled",
-                    detail="action cancelled by kill switch before completing",
+                    detail=(
+                        "Kill interrupted this admitted action before its result was "
+                        "recorded. Its outcome is UNKNOWN; re-verify the workspace or "
+                        "external system before retrying."
+                    ),
                     action_id=event.id,
-                    tool_call_id=event.tool_call.call_id if event.tool_call else None,
+                    tool_call_id=event.tool_call.call_id,
+                    # Keep the closure in the exact admitted view that emitted
+                    # the action so strict histories retain the pair.
+                    agent_view_id=event.agent_view_id,
                 )
             )
-        if errors:
-            if generation is not None and self._run_generation.get(conversation_id) != generation:
-                return []
-            stored = await self._store.append_many(conversation_id, errors)
-            return [e for e in stored if isinstance(e, AgentErrorEvent)]
-        return []
-
-    async def _drain_finishing_task(self, conversation_id: str) -> None:
-        """WALK-18 resume fix. A cooperative Stop (cancel) persists a terminal
-        status, but its loop task may still be finishing its in-flight model
-        step. `kick()` is idempotent over a non-done task, so re-kicking before
-        that task clears silently NO-OPs (the "resume does nothing" bug). Pop the
-        lingering task and await it to completion so the subsequent kick spawns a
-        FRESH run; bound the wait and hard-cancel a wedged step (resume then
-        reconstructs context for the dangling action). Already-done / absent →
-        nothing to drain."""
-        task = self._tasks.pop(conversation_id, None)
-        if task is None or task.done():
-            return
-        with contextlib.suppress(asyncio.CancelledError, TimeoutError, Exception):
-            await asyncio.wait_for(task, _RESUME_DRAIN_TIMEOUT_S)
+        if not errors:
+            return []
+        stored = await self._store.append_many(conversation_id, errors)
+        return [e for e in stored if isinstance(e, AgentErrorEvent)]
 
     async def resume(self, conversation_id: str) -> None:
         """Continue a stopped (PAUSED) Deep Research run. Clears the cancel flag and
@@ -4150,71 +4461,10 @@ class ConversationRuntime:
         return await self._control.kill(conversation_id, generation)
 
     async def forget_conversation(self, conversation_id: str) -> None:
-        """Drop ALL in-memory runtime state for a conversation that is being DELETED
-        (finding #5 — the `_pinned_kernels` leak). The library/delete route removes the
-        DB rows, but the agent-server process keeps per-conversation caches (the kernel
-        pin, the run-generation, the cached loop + live task, sandbox executor/session,
-        and the lightweight per-cid settings/DR caches) until process exit. A deleted
-        conversation can never be reached again, so every such entry is pure leak — and a
-        leaked pin/loop bound to a freed cid is a latent correctness hazard if the id is
-        ever reused. Best-effort + idempotent: cancels the live task, tears down the
-        sandbox executor/session, and pops every per-cid map. Never raises (a delete must
-        not fail because cleanup hit a wedged sandbox)."""
-        # Stop any in-flight run first so its done-callback can't re-pin/re-kick.
-        self._clear_pinned_kernel(conversation_id)
-        task = self._tasks.pop(conversation_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-        executor = self._executors.pop(conversation_id, None)
-        if executor is not None:
-            with contextlib.suppress(Exception):
-                await executor.kill()
-        session = self._pending_sessions.pop(conversation_id, None)
-        if session is not None:
-            with contextlib.suppress(Exception):
-                await session.destroy()
-        # A restarted Agent has no cached executor/session for an already-finished
-        # conversation, but backend resources can still exist.  Reconcile by cid even
-        # when both maps were empty.  This is deliberately backend-polymorphic: process
-        # removes exact tmux namespaces; container services remove labeled resources.
-        with contextlib.suppress(Exception):
-            await self._sandbox_service_now().destroy_by_conversation(conversation_id)
-        # Pop every remaining per-conversation cache (no-op if absent).
-        for cache in (
-            self._run_generation,
-            self._loops,
-            self._nonterminal_rekicks,
-            self._last_rekick_progress_seq,
-            self._post_terminal_rekick_seq,
-            self._run_claimed_user_seq,
-            self._last_status,
-            self._cancel_flags,
-            self._model_override,
-            self._surface,
-            self._autonomous,
-            self._assist,
-            self._quiet,
-            self._artifact_mode,
-            self._appkit_mode,
-            self._depth,
-            self._dr_steer,
-            self._dr_injected_sources,
-            self._upload_passages,
-            self._last_sessions,
-            self._mcp_approval_pending,
-            # CONTRACT-ACTIVATE: the per-conversation build contract kind + phase tracker.
-            self._build_kind,
-            self._build_trackers,
-            self._build_audit_trackers,
-            self._toolscope_audits,
-            self._shadow_folded_finished_seq,
-        ):
-            cache.pop(conversation_id, None)
-        # CONTRACT-DURABILITY: sets, not dicts — same per-cid leak rule applies.
-        self._contract_fold_attempted.discard(conversation_id)
-        self._driver_proven = {
-            proven for proven in self._driver_proven if proven[0] != conversation_id
-        }
+        return await self._workspace.forget(conversation_id)
+
+    async def _forget_conversation_locked(self, conversation_id: str) -> None:
+        return await self._workspace.forget_locked(conversation_id)
 
     async def aclose(self) -> None:
         for task in self._tasks.values():
@@ -4238,25 +4488,44 @@ class ConversationRuntime:
         *,
         detail: str,
         explanation: str,
-    ) -> None:
-        await self._store.append(
-            conversation_id,
+        agent_view_id: str | None = None,
+        run_intent_id: str | None = None,
+    ) -> bool:
+        events: list[Event] = [
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
                 message=LLMMessage(role="user", content=explanation),
             ),
-        )
-        await self._store.append(
-            conversation_id,
             MessageEvent(
                 source=EventSource.AGENT,
                 message=LLMMessage(role="assistant", content=explanation),
             ),
-        )
-        await self._store.append(
-            conversation_id,
             StatusEvent(status=ConversationStatus.ERROR, detail=detail),
-        )
+        ]
+        has_authority = agent_view_id is not None or run_intent_id is not None
+        if not has_authority:
+            await self._store.append_many(conversation_id, events)
+            return True
+
+        # Strict v1 projection quarantines an untyped terminal status.  Publish
+        # the explanation and terminal marker atomically only while this exact
+        # task still owns the durable intent/view head.
+        async with self.workspace_lock(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
+                if not await self._workspace._run_authority_is_current_locked(
+                    conversation_id,
+                    agent_view_id=agent_view_id,
+                    run_intent_id=run_intent_id,
+                ):
+                    return False
+                status = cast(StatusEvent, events[-1]).model_copy(
+                    update={
+                        "agent_view_id": agent_view_id,
+                        "run_intent_id": (None if agent_view_id is not None else run_intent_id),
+                    }
+                )
+                await self._store.append_many(conversation_id, [*events[:-1], status])
+                return True
 
     async def _sealed_run_conversation_setup(
         self,
@@ -4270,6 +4539,7 @@ class ConversationRuntime:
         datetime,
         WorkflowRun | None,
         str,
+        MessageEvent | None,
         WorkflowScheduleRunRecord | None,
     ]:
         conversation_id = f"conv_{uuid.uuid4().hex}"
@@ -4300,6 +4570,7 @@ class ConversationRuntime:
                 fired_at,
                 None,
                 fallback_output_path,
+                None,
                 WorkflowScheduleRunRecord(
                     schedule_id=schedule_id,
                     run_cid=conversation_id,
@@ -4327,6 +4598,7 @@ class ConversationRuntime:
                 fired_at,
                 None,
                 fallback_output_path,
+                None,
                 WorkflowScheduleRunRecord(
                     schedule_id=schedule_id,
                     run_cid=conversation_id,
@@ -4355,6 +4627,7 @@ class ConversationRuntime:
                 fired_at,
                 None,
                 fallback_output_path,
+                None,
                 WorkflowScheduleRunRecord(
                     schedule_id=schedule_id,
                     run_cid=conversation_id,
@@ -4387,6 +4660,7 @@ class ConversationRuntime:
                 fired_at,
                 None,
                 fallback_output_path,
+                None,
                 WorkflowScheduleRunRecord(
                     schedule_id=schedule_id,
                     run_cid=conversation_id,
@@ -4409,31 +4683,38 @@ class ConversationRuntime:
             instance.params,
         )
 
-        await self._store.append(
-            conversation_id,
-            MessageEvent(
-                source=EventSource.USER,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "Run this sealed workflow schedule.\n"
-                        f"Schedule id: {schedule_id}\n"
-                        f"Workflow instance: {spec.instance_id}\n"
-                        f"Definition digest: {spec.instance_digest}\n"
-                        f"Output path: {fallback_output_path}\n"
-                        "Parameters:\n"
-                        f"{json.dumps(instance.params, sort_keys=True)}\n\n"
-                        "Outcome rules:\n"
-                        "If the task cannot be completed with the provided tools/params "
-                        "(missing information, unreachable target, impossible request): "
-                        "call needs_input with the question, or skip with the reason. "
-                        "NEVER fabricate results and NEVER finish with a failure narrative "
-                        "as if the task succeeded."
-                    ),
+        schedule_message = MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(
+                role="user",
+                content=(
+                    "Run this sealed workflow schedule.\n"
+                    f"Schedule id: {schedule_id}\n"
+                    f"Workflow instance: {spec.instance_id}\n"
+                    f"Definition digest: {spec.instance_digest}\n"
+                    f"Output path: {fallback_output_path}\n"
+                    "Parameters:\n"
+                    f"{json.dumps(instance.params, sort_keys=True)}\n\n"
+                    "Outcome rules:\n"
+                    "If the task cannot be completed with the provided tools/params "
+                    "(missing information, unreachable target, impossible request): "
+                    "call needs_input with the question, or skip with the reason. "
+                    "NEVER fabricate results and NEVER finish with a failure narrative "
+                    "as if the task succeeded."
                 ),
             ),
         )
-        return conversation_id, fired_at, workflow_run, fallback_output_path, None
+        # The schedule USER turn is deliberately not runnable yet.  The exact
+        # sealed loop/task and this ingress are published together in
+        # ``_sealed_run_execute`` under the workspace authority fence.
+        return (
+            conversation_id,
+            fired_at,
+            workflow_run,
+            fallback_output_path,
+            schedule_message,
+            None,
+        )
 
     async def _sealed_run_execute(
         self,
@@ -4444,33 +4725,10 @@ class ConversationRuntime:
         fired_at: datetime,
         workflow_run: WorkflowRun,
         fallback_output_path: str,
+        schedule_message: MessageEvent,
         coalesced: bool,
     ) -> ConversationState | WorkflowScheduleRunRecord:
-        override = self._model_override.get(conversation_id)
-        router = self._router_now(
-            pick=override,
-            surface="agent",
-            autonomous=True,
-            conversation_id=conversation_id,
-        )
-        agent = BuildAgent(router, conversation_id=conversation_id, model_override=override)
-        try:
-            loop = self._compose_build_loop(
-                conversation_id,
-                router,
-                agent,
-                sealed_workflow_run=workflow_run,
-                sealed_workflow_instance_id=spec.instance_id,
-            )
-        except ValueError as exc:
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_scope_compile_failed",
-                explanation=(
-                    f"Workflow schedule {schedule_id} could not run because its "
-                    f"sealed tool scope failed to compile: {exc}"
-                ),
-            )
+        def failed(error: str) -> WorkflowScheduleRunRecord:
             return WorkflowScheduleRunRecord(
                 schedule_id=schedule_id,
                 run_cid=conversation_id,
@@ -4479,49 +4737,207 @@ class ConversationRuntime:
                 output_path=fallback_output_path,
                 verify_verdict="error",
                 coalesced=coalesced,
-                error=str(exc),
+                error=error,
             )
+
+        # Avoid composing an executor over an incumbent; the fenced check handles races.
+        incumbent = self._tasks.get(conversation_id)
+        if incumbent is not None and not incumbent.done():
+            return failed("sealed workflow schedule found an existing live run task")
+
+        try:
+            snapshot = await self._resolve_driver_context(conversation_id)
+        except DriverContextResolutionError as exc:
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_driver_context_resolution_failed",
+                explanation=(
+                    f"Workflow schedule {schedule_id} could not resolve its driver "
+                    f"context before execution: {exc}"
+                ),
+            )
+            return failed(str(exc))
+        self._resolved_context_for_compose[conversation_id] = snapshot
+        try:
+            override = snapshot.model_key
+            router = self._router_now(
+                pick=override,
+                surface="agent",
+                autonomous=True,
+                conversation_id=conversation_id,
+            )
+            agent = BuildAgent(
+                router,
+                conversation_id=conversation_id,
+                model_override=override,
+                driver_context_window=snapshot.context_window,
+            )
+            previous_executor = self._executors.get(conversation_id)
+            try:
+                loop = self._compose_build_loop(
+                    conversation_id,
+                    router,
+                    agent,
+                    driver_context_window=snapshot.context_window,
+                    sealed_workflow_run=workflow_run,
+                    sealed_workflow_instance_id=spec.instance_id,
+                )
+            except ValueError as exc:
+                await self._record_workflow_schedule_error(
+                    conversation_id,
+                    detail="workflow_scope_compile_failed",
+                    explanation=(
+                        f"Workflow schedule {schedule_id} could not run because its "
+                        f"sealed tool scope failed to compile: {exc}"
+                    ),
+                )
+                return failed(str(exc))
+        finally:
+            if self._resolved_context_for_compose.get(conversation_id) is snapshot:
+                self._resolved_context_for_compose.pop(conversation_id, None)
+        self._resolved_driver_contexts[conversation_id] = snapshot
+        sealed_executor = self._executors.get(conversation_id)
         loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
             _cid, frame
         )
-        self._loops[conversation_id] = loop
+        intent = WorkspaceMutationEvent(
+            operation="agent.run-intent.workflow-schedule",
+            run_protocol_version=1,
+        )
+        # Creating a task while the process-fence ContextVar says "owned" would
+        # copy that transient ownership into the child after the parent releases
+        # the lock.  Capture the caller's real context before entering either
+        # fence, then use it for the suspended run task registered inside them.
+        sealed_task_context = contextvars.copy_context()
 
-        events_at_start = await self._store.get_events(conversation_id)
-        claimed_user_seq = max(
-            (
-                event.seq or 0
-                for event in events_at_start
-                if isinstance(event, MessageEvent) and event.source is EventSource.USER
-            ),
-            default=None,
-        )
-        task, generation = self._create_run_task(
-            conversation_id,
-            loop,
-            claimed_user_seq=claimed_user_seq,
-        )
+        task: asyncio.Task[Any] | None = None
+        generation: int | None = None
+        previous_loop: AgentLoop | None = None
         try:
-            state = cast(ConversationState, await task)
-        except Exception as exc:
+            async with self.workspace_lock(conversation_id):
+                async with self._workspace.interprocess_mutation_fence(conversation_id):
+                    incumbent = self._tasks.get(conversation_id)
+                    if incumbent is not None and not incumbent.done():
+                        raise WorkspaceRunSuperseded(
+                            "sealed workflow schedule lost task registration authority"
+                        )
+                    # A sealed schedule conversation is fresh and private.  Any
+                    # durable event here was written after setup and therefore owns
+                    # the head; never append a stale schedule turn behind it.
+                    if await self._store.get_events(conversation_id):
+                        raise WorkspaceRunSuperseded(
+                            "sealed workflow schedule lost pristine ingress authority"
+                        )
+
+                    previous_loop = self._loops.get(conversation_id)
+                    self._loops[conversation_id] = loop
+                    try:
+                        task, generation = self._create_run_task(
+                            conversation_id,
+                            loop,
+                            expected_run_intent_id=intent.id,
+                            task_context=sealed_task_context,
+                        )
+                        # Publish the in-memory claim before the first await after
+                        # registration.  The task is gated on this same local lock,
+                        # so it cannot inspect history before the exact ingress lands.
+                        self._workspace.claim_registered_run_locked(conversation_id)
+                        stored = await self._workspace.append_run_ingress_locked(
+                            conversation_id,
+                            [schedule_message],
+                            "workflow-schedule",
+                            intent=intent,
+                        )
+                        stored_user = next(
+                            (
+                                event
+                                for event in stored
+                                if isinstance(event, MessageEvent)
+                                and event.id == schedule_message.id
+                            ),
+                            None,
+                        )
+                        if stored_user is None or stored_user.seq is None:
+                            raise RuntimeError("schedule ingress did not return its USER identity")
+                        self._run_claimed_user_seq[conversation_id] = max(
+                            stored_user.seq,
+                            self._run_claimed_user_seq.get(conversation_id, -1),
+                        )
+                    except BaseException:
+                        if task is not None and self._tasks.get(conversation_id) is task:
+                            self._tasks.pop(conversation_id, None)
+                            self._workspace.clear_run_claim(conversation_id)
+                            task.cancel()
+                        if self._loops.get(conversation_id) is loop:
+                            if previous_loop is None:
+                                self._loops.pop(conversation_id, None)
+                            else:
+                                self._loops[conversation_id] = previous_loop
+                        raise
+        except BaseException as exc:
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                self._run_task_authorities.pop(task, None)
+            if self._executors.get(conversation_id) is sealed_executor:
+                if previous_executor is None:
+                    self._executors.pop(conversation_id, None)
+                else:
+                    self._executors[conversation_id] = previous_executor
+            if sealed_executor is not None and sealed_executor is not previous_executor:
+                with contextlib.suppress(Exception):
+                    await sealed_executor.kill()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            if isinstance(exc, WorkspaceRunSuperseded):
+                await self._rekick_unadmitted_superseding_intent(conversation_id)
+                return failed(str(exc))
             await self._record_workflow_schedule_error(
                 conversation_id,
-                detail="workflow_schedule_run_failed",
-                explanation=(f"Workflow schedule {schedule_id} failed while running: {exc}"),
+                detail="workflow_schedule_ingress_failed",
+                explanation=(f"Workflow schedule {schedule_id} could not start: {exc}"),
             )
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path=fallback_output_path,
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=str(exc),
-            )
+            return failed(str(exc))
+
+        assert task is not None
+        assert generation is not None
+        run_error: Exception | None = None
+        state: ConversationState | None = None
+        try:
+            state = cast(ConversationState, await task)
+        except Exception as exc:  # task cancellation still propagates to the caller
+            run_error = exc
         finally:
             if self._tasks.get(conversation_id) is task:
                 self._tasks.pop(conversation_id, None)
-        await self._finalize_clean_return(conversation_id, generation)
+                self._workspace.clear_run_claim(conversation_id)
+            agent_view_id, run_intent_id = self._run_task_authorities.pop(
+                task,
+                (None, intent.id),
+            )
+
+        if run_error is not None:
+            if isinstance(run_error, WorkspaceRunSuperseded):
+                await self._rekick_unadmitted_superseding_intent(conversation_id)
+                return failed(str(run_error))
+            recorded = await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_schedule_run_failed",
+                explanation=(f"Workflow schedule {schedule_id} failed while running: {run_error}"),
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            )
+            if not recorded:
+                await self._rekick_unadmitted_superseding_intent(conversation_id)
+            return failed(str(run_error))
+
+        assert state is not None
+        await self._finalize_clean_return(
+            conversation_id,
+            generation,
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
+        )
         return state
 
     async def _sealed_run_record_history(
@@ -4571,6 +4987,7 @@ class ConversationRuntime:
             fired_at,
             workflow_run,
             fallback_output_path,
+            schedule_message,
             setup_record,
         ) = await self._sealed_run_conversation_setup(
             schedule_id=schedule_id,
@@ -4588,6 +5005,7 @@ class ConversationRuntime:
             fired_at=fired_at,
             workflow_run=cast(WorkflowRun, workflow_run),
             fallback_output_path=fallback_output_path,
+            schedule_message=cast(MessageEvent, schedule_message),
             coalesced=coalesced,
         )
         if isinstance(execute_result, WorkflowScheduleRunRecord):

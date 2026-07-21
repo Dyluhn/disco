@@ -48,13 +48,13 @@ preview-serving processes onto independent database files while they share a
 `DISCO_SECRET_KEY`: preview launch intents are one-time credentials, and their
 atomic redemption fence is the transaction in that shared database.
 
-Multiple workers or processes are safe only when every one of them uses the
-same SQLite database on a filesystem with correct SQLite locking semantics.
-Copying or replicating outstanding redemption rows into independently committing
-databases can create more than one redemption winner. A multi-node deployment
-therefore needs a shared transactional redemption store; independent-database
-replicas are unsupported and may also reject valid launches when a request lands
-on a replica that did not register the intent.
+The preview credential's redemption transaction is cross-process-safe when every
+redeemer uses that same SQLite database on a filesystem with correct SQLite
+locking semantics. This narrow guarantee does **not** make the complete Agent
+runtime multi-worker-safe: loop ownership, schedules, and several runtime caches
+are process-local. Run exactly one `agent-server` worker per database. A future
+multi-worker Agent runtime would additionally need durable conversation-run and
+schedule leases; copying or replicating the database is unsupported.
 
 ### Remote preview cookie boundary
 

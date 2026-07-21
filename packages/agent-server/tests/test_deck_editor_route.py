@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 from disco.agent_server import create_app
-from disco.core import ObservationEvent, SqliteEventStore
+from disco.core import ConversationStatus, ObservationEvent, SqliteEventStore, StatusEvent
 from disco.core.events import ToolResult
 from disco.tools.builtin._deck_schema import AuthoredDeck
 from fastapi.testclient import TestClient
@@ -136,6 +137,7 @@ class _LiveRuntime:
         self._backend = backend
         self._svc = sandbox_service
         self._sandbox_spec = object()
+        self.finalized_host_changes: list[tuple[str, str]] = []
 
     def set_surface(self, cid: str, surface: object) -> None: ...
     def set_model_override(self, cid: str, model: object) -> None: ...
@@ -156,6 +158,13 @@ class _LiveRuntime:
     def project_store(self) -> object:
         # No host snapshot by default — the live session is the only source.
         return self._ps
+
+    @asynccontextmanager
+    async def workspace_mutation(self, cid: str, operation: str, *, paths=()):  # noqa: ANN001
+        yield
+
+    async def finalize_host_workspace_change(self, cid: str, operation: str):
+        self.finalized_host_changes.append((cid, operation))
 
 
 def _declare_editable_slides(store: SqliteEventStore, cid: str) -> None:
@@ -704,3 +713,21 @@ def test_put_no_pdf_means_not_stale() -> None:
     )
     assert r.status_code == 200, r.text
     assert r.json()["pdf_stale"] is False
+
+
+def test_put_on_finished_deck_requests_a_fresh_host_revision_seal() -> None:
+    session = _Session(_AUTHORED)
+    store = SqliteEventStore(":memory:")
+    runtime = _LiveRuntime(session)
+    client = TestClient(create_app(store, runtime=runtime))  # type: ignore[arg-type]
+    cid = _create(client)
+    _declare_editable_slides(store, cid)
+    asyncio.run(store.append(cid, StatusEvent(status=ConversationStatus.FINISHED)))
+
+    response = client.put(
+        f"/conversations/{cid}/deck/editor?path=deck",
+        json={"patch": [{"op": "replace", "path": "/slides/0/title", "value": "Sealed"}]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert runtime.finalized_host_changes == [(cid, "deck.patch")]

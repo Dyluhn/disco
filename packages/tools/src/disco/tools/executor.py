@@ -14,8 +14,10 @@ import asyncio
 import json
 import logging
 import types
-from collections.abc import Awaitable, Callable
-from typing import Any, Literal, Union, get_args, get_origin
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import ContextVar
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
@@ -44,6 +46,15 @@ _LOG = logging.getLogger("disco.tools.executor")
 # Module-level singleton used as the default for model_policy in DefaultToolExecutor
 # (ruff B008 forbids function calls in default args; frozen dataclass is safe as a singleton).
 _STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
+_EXECUTION_AGENT_VIEW_ID: ContextVar[str | None] = ContextVar(
+    "disco_execution_agent_view_id", default=None
+)
+_EXECUTION_FENCE_HELD: ContextVar[bool] = ContextVar("disco_execution_fence_held", default=False)
+
+
+class _ExecutionSuperseded(RuntimeError):
+    """A newer durable model view won before a tool crossed its effect boundary."""
+
 
 # Friendly names for the common annotations so the model sees "string"/"integer"
 # rather than "<class 'str'>". Falls back to the annotation's own __name__.
@@ -191,27 +202,133 @@ def _model_shape(model: type[BaseModel]) -> str:
     return "{" + ", ".join(parts) + "}"
 
 
-def _model_example_item(model: type[BaseModel], i: int) -> dict[str, Any]:
-    """One concrete, schema-VALID example object for `model`. `i` varies values
-    across items so a list example reads as a list of distinct objects: int fields
-    count 1,2,…; a Literal cycles through its allowed values."""
+_NO_EXAMPLE = object()
+
+
+def _example_value(annotation: Any, i: int) -> Any:
+    """Return a deterministic candidate value for an annotation.
+
+    This is only an example builder; validation by the containing Pydantic model
+    remains authoritative. Complex annotations are followed recursively so a
+    nested model/discriminated union is never represented by an invalid string
+    placeholder.
+    """
+    ann = _unwrap_optional(annotation)
+    while get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
+
+    origin = get_origin(ann)
+    if origin is Literal:
+        allowed = list(get_args(ann))
+        return allowed[i % len(allowed)] if allowed else _NO_EXAMPLE
+    if origin is Union or origin is types.UnionType:
+        for member in get_args(ann):
+            if member is type(None):
+                continue
+            value = _example_value(member, i)
+            if value is not _NO_EXAMPLE:
+                return value
+        return _NO_EXAMPLE
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        item = _model_example_item(ann, i)
+        return item if item is not None else _NO_EXAMPLE
+    base = _base_type(ann)
+    if base is bool:
+        return True
+    if base is int:
+        return i + 1
+    if base is float:
+        return 0.0
+    if base is str:
+        return "..."
+    return _NO_EXAMPLE
+
+
+def _model_example_item(model: type[BaseModel], i: int) -> dict[str, Any] | None:
+    """Build one example and return it only when the model accepts it.
+
+    Optional fields are omitted: an example should teach the smallest valid
+    shape, not invent placeholder values for complex optional fields. Literal
+    defaults are retained because they commonly carry a discriminator tag.
+    """
     obj: dict[str, Any] = {}
     for fname, finfo in model.model_fields.items():
         ann = finfo.annotation
-        if get_origin(ann) is Literal:
-            allowed = list(get_args(ann))
-            obj[fname] = allowed[i % len(allowed)]
+        if not finfo.is_required() and get_origin(ann) is not Literal:
+            continue
+        value = _example_value(ann, i)
+        if value is _NO_EXAMPLE:
+            return None
+        obj[fname] = value
+    try:
+        validated = model.model_validate(obj)
+    except ValidationError:
+        return None
+    # Preserve the minimal fields the example intentionally supplied while
+    # normalizing nested BaseModels into JSON-safe dictionaries.
+    return validated.model_dump(mode="json", exclude_unset=True)
+
+
+def _allows_none(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    return (origin is Union or origin is types.UnionType) and type(None) in get_args(annotation)
+
+
+def _nested_field_hint(
+    container_name: str,
+    model: type[BaseModel],
+    errors: list[dict[str, Any]],
+) -> str | None:
+    """Explain a malformed field inside a nested model with a valid value.
+
+    Pydantic paths such as `steps.0.done_condition` identify both the list
+    container and the nested field. Build a candidate for that field, then
+    validate it as part of the complete nested model before showing it. This
+    keeps recovery guidance copyable without coercing the rejected call.
+    """
+    nested_name: str | None = None
+    for err in errors:
+        loc = err.get("loc", ())
+        if not loc or loc[0] != container_name:
+            continue
+        for part in loc[1:]:
+            if isinstance(part, str) and part in model.model_fields:
+                nested_name = part
+                break
+        if nested_name is not None:
+            break
+    if nested_name is None:
+        return None
+
+    finfo = model.model_fields[nested_name]
+    value = _example_value(finfo.annotation, 0)
+    base_item = _model_example_item(model, 0)
+    example: Any = _NO_EXAMPLE
+    if value is not _NO_EXAMPLE and base_item is not None:
+        candidate = dict(base_item)
+        candidate[nested_name] = value
+        try:
+            validated = model.model_validate(candidate)
+        except ValidationError:
+            pass
         else:
-            base = _base_type(ann)
-            if base is bool:
-                obj[fname] = True
-            elif base is int:
-                obj[fname] = i + 1
-            elif base is float:
-                obj[fname] = 0.0
-            else:
-                obj[fname] = "..."
-    return obj
+            example = validated.model_dump(mode="json", exclude_unset=True).get(nested_name)
+
+    path = f"{container_name}[*].{nested_name}"
+    clauses: list[str] = []
+    if example is not _NO_EXAMPLE:
+        noun = "object" if isinstance(example, dict) else "value"
+        clauses.append(f"send a {noun} such as {json.dumps(example)}")
+    if _allows_none(finfo.annotation):
+        clauses.append("set it to null, or omit it")
+    elif not finfo.is_required():
+        clauses.append("omit it")
+    if not clauses:
+        return None
+    guidance = f"For {path!r}, " + "; alternatively ".join(clauses) + "."
+    if isinstance(example, (dict, list)):
+        guidance += " Do not send a string."
+    return guidance
 
 
 def _nested_shape_hint(field_name: str, model: type[BaseModel], is_list: bool) -> str:
@@ -220,16 +337,14 @@ def _nested_shape_hint(field_name: str, model: type[BaseModel], is_list: bool) -
     can see exactly what to send instead. Never the full JSON schema (kept small)."""
     shape = _model_shape(model)
     if is_list:
-        example = json.dumps([_model_example_item(model, 0), _model_example_item(model, 1)])
-        return (
-            f"The {field_name!r} argument must be a list of objects, each shaped "
-            f"{shape}. Example: {field_name}={example}."
-        )
-    example = json.dumps(_model_example_item(model, 0))
-    return (
-        f"The {field_name!r} argument must be an object shaped {shape}. "
-        f"Example: {field_name}={example}."
-    )
+        items = [_model_example_item(model, 0), _model_example_item(model, 1)]
+        prefix = f"The {field_name!r} argument must be a list of objects, each shaped {shape}."
+        if all(item is not None for item in items):
+            return f"{prefix} Example: {field_name}={json.dumps(items)}."
+        return prefix
+    item = _model_example_item(model, 0)
+    prefix = f"The {field_name!r} argument must be an object shaped {shape}."
+    return f"{prefix} Example: {field_name}={json.dumps(item)}." if item is not None else prefix
 
 
 def describe_validation_failure(
@@ -310,6 +425,9 @@ def describe_validation_failure(
         seen_fields.add(top)
         model, is_list = nested
         msg += " " + _nested_shape_hint(top, model, is_list)
+        field_hint = _nested_field_hint(top, model, errors)
+        if field_hint is not None:
+            msg += " " + field_hint
     if tool_name == "submit_plan":
         msg += ' steps must be a JSON array: {"steps": [{"title": "..."}]}.'
     if arguments:
@@ -343,6 +461,9 @@ class DefaultToolExecutor:
         starter_kit: str | None = None,
         workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
         primitive_live_verifier: PrimitiveLiveVerifier | None = None,
+        workspace_lock: asyncio.Lock | None = None,
+        workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+        execution_admission: Callable[[str | None], Awaitable[str | None]] | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -361,6 +482,16 @@ class DefaultToolExecutor:
         self._starter_kit = starter_kit
         self._workflow_events = workflow_events
         self._primitive_live_verifier = primitive_live_verifier
+        # K6d — one runtime-owned lock serializes every operation that can touch
+        # a conversation workspace with host-side final capture.  We guard the
+        # actual tool invocation (including context construction) rather than
+        # trusting ``read_only`` or a capability classifier: shell, MCP, and
+        # future opaque tools can have workspace effects that metadata cannot
+        # prove exhaustively.  Waiting for the lock is deliberately outside the
+        # tool timeout; contention is not a tool failure.
+        self._workspace_lock = workspace_lock
+        self._workspace_fence = workspace_fence
+        self._execution_admission = execution_admission
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -379,6 +510,12 @@ class DefaultToolExecutor:
         self._default_timeout_s = default_timeout_s
         self._model_policy = model_policy  # replaces bare assist: bool; standard = no-op
         self._killed = False
+        # BF1: one target-agnostic coherence clock per executor/conversation.
+        # Zero is kept host-side and omitted from the browser wire; wire epochs
+        # are exact positive integers.  The random generation prevents a newly
+        # created executor from inheriting a prior executor's daemon state.
+        self._workspace_mutation_epoch = 0
+        self._browser_generation = uuid4().hex
 
     @property
     def sandbox(self) -> SandboxInstance | None:
@@ -392,6 +529,48 @@ class DefaultToolExecutor:
         return self._sandbox
 
     # ---- the ToolExecutor protocol ------------------------------------------
+
+    @asynccontextmanager
+    async def _workspace_execution_fence(self) -> AsyncIterator[None]:
+        if self._workspace_lock is None:
+            if self._workspace_fence is None:
+                yield
+            else:
+                async with self._workspace_fence():
+                    yield
+            return
+        async with self._workspace_lock:
+            if self._workspace_fence is None:
+                yield
+            else:
+                async with self._workspace_fence():
+                    yield
+
+    async def execute_attributed(
+        self,
+        call: ToolCall,
+        agent_view_id: str | None,
+        on_result: Callable[[ToolResult], Awaitable[None]] | None = None,
+        prepare: Callable[[], Awaitable[None]] | None = None,
+    ) -> ToolResult:
+        """Execute and persist its paired result inside one generation fence."""
+
+        async with self._workspace_execution_fence():
+            view_token = _EXECUTION_AGENT_VIEW_ID.set(agent_view_id)
+            fence_token = _EXECUTION_FENCE_HELD.set(True)
+            try:
+                # Dynamic phase/workspace authority must be refreshed only AFTER
+                # acquiring this fence. Otherwise a rollback can land while the
+                # call waits and a tool selected under stale scope can execute.
+                if prepare is not None:
+                    await prepare()
+                result = await self.execute(call)
+                if on_result is not None:
+                    await on_result(result)
+                return result
+            finally:
+                _EXECUTION_FENCE_HELD.reset(fence_token)
+                _EXECUTION_AGENT_VIEW_ID.reset(view_token)
 
     def tool_scope(self, tool_name: str) -> str:
         """'sandbox' | 'in_process' | 'unknown' — where this tool executes.
@@ -631,14 +810,32 @@ class DefaultToolExecutor:
         # 3–4. Build context and execute within one failure boundary. Context
         # construction is part of a validated invocation and must not escape the
         # executor or disappear from restart/replay evidence.
-        try:
+        async def _invoke() -> Any:
+            if self._execution_admission is not None:
+                refusal = await self._execution_admission(_EXECUTION_AGENT_VIEW_ID.get())
+                if refusal is not None:
+                    raise _ExecutionSuperseded(refusal)
             ctx = await self._build_context(tool.definition)
-            raw_outcome = await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
+            return await asyncio.wait_for(tool.run(args, ctx), timeout=ctx.timeout_s)
+
+        try:
+            if _EXECUTION_FENCE_HELD.get():
+                raw_outcome = await _invoke()
+            else:
+                async with self._workspace_execution_fence():
+                    raw_outcome = await _invoke()
             # The Tool protocol is a runtime trust boundary, not merely a type
             # hint. Revalidate even ToolOutcome instances so model_copy cannot
             # smuggle an invalid result past the mapped failure path.
             outcome = ToolOutcome.model_validate(
                 raw_outcome.model_dump() if isinstance(raw_outcome, ToolOutcome) else raw_outcome
+            )
+        except _ExecutionSuperseded as e:
+            return self._fail(
+                call,
+                "execution_superseded",
+                str(e),
+                action_profile=persisted_profile,
             )
         except TimeoutError:
             timeout_s = tool.definition.timeout_s or self._default_timeout_s
@@ -677,6 +874,18 @@ class DefaultToolExecutor:
                 self._on_tool_success(call.tool_name)
             except Exception:  # noqa: BLE001 — tracking is advisory, never fatal
                 pass
+
+        # BF1: advance exactly once after a successful invocation whose trusted
+        # persisted capability profile says it may have mutated the workspace.
+        # This intentionally does not inspect tool names, arguments, command
+        # strings, receipts, frameworks, or paths.  A failed invocation retains
+        # its profile as evidence but cannot dirty the browser epoch.
+        if (
+            outcome.success
+            and persisted_profile is not None
+            and EffectCapability.WORKSPACE_MUTATE in persisted_profile.capabilities
+        ):
+            self._workspace_mutation_epoch += 1
 
         return ToolResult(
             call_id=call.call_id,
@@ -801,6 +1010,11 @@ class DefaultToolExecutor:
             workflow_events=self._workflow_events,
             primitive_live_verifier=self._primitive_live_verifier,
             scope_allowed_tools=self._scope.allowed_tools,
+            browser_workspace_epoch=(
+                self._workspace_mutation_epoch if self._workspace_mutation_epoch > 0 else None
+            ),
+            browser_generation=self._browser_generation,
+            browser_lane="agent",
         )
 
     def _fail(

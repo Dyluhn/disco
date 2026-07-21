@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any, cast
+from typing import Any
 
 from disco.core import (
+    AgentViewProjection,
     FileStreamFrame,
     WSClientFrame,
     WSServerFrame,
@@ -51,6 +52,7 @@ def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
         index=index,
         delta=str(payload.get("delta") or ""),
         field=field if field in ("content", "new") else "content",
+        agent_view_id=(str(payload["agent_view_id"]) if payload.get("agent_view_id") else None),
     )
 
 
@@ -81,13 +83,10 @@ async def _handle_frame(
     ) and (store.conversation_origin(conversation_id) == "imported"):
         # Imported (untrusted, read-only) conversations refuse every revive path —
         # the WS is one of them (the easy-to-miss kick site). Refuse, don't kick.
-        # `WSServerFrame.error` is typed `dict[str, Any] | None` but the wire
-        # contract here is a free-form reason string — cast to keep the
-        # runtime value byte-identical while satisfying the type checker.
         await _send_json_redacted(
             websocket,
             WSServerFrame(
-                type="error", error=cast("dict[str, Any]", "imported_read_only")
+                type="error", error={"detail": "imported_read_only"}
             ).model_dump(mode="json"),
         )
     elif frame.type == "send_message" and frame.content is not None:
@@ -272,9 +271,16 @@ async def _send_conversation_state_frame(
     await _send_json_redacted(websocket, {"type": "state", "state": state_dict})
 
 
-async def _pump_conversation_events(websocket: WebSocket, stream: Any) -> None:
+async def _pump_conversation_events(
+    websocket: WebSocket,
+    stream: Any,
+    projection: AgentViewProjection | None = None,
+) -> None:
+    projection = projection or AgentViewProjection()
     try:
         async for event in stream:
+            if not projection.accept(event):
+                continue
             await _send_json_redacted(
                 websocket, WSServerFrame(type="event", event=event).model_dump(mode="json")
             )
@@ -329,10 +335,17 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             runtime.on_connect(conversation_id)
 
         await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
+        projection = AgentViewProjection()
+        if last_seq > 0:
+            for event in await store.get_events(conversation_id):
+                if type(event.seq) is int and event.seq <= last_seq:
+                    projection.accept(event)
         stream = await store.subscribe(conversation_id, after_seq=last_seq)
         eph_stream = await store.subscribe_ephemeral(conversation_id)
 
-        sender = asyncio.create_task(_pump_conversation_events(websocket, stream))
+        sender = asyncio.create_task(
+            _pump_conversation_events(websocket, stream, projection)
+        )
         eph_sender = asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream))
         try:
             while True:

@@ -94,6 +94,7 @@ def main() -> None:
         app,
         host=host,
         port=int(port),
+        workers=1,
         # Uvicorn's legacy websockets adapter imports APIs deprecated by
         # websockets 14+. The sans-I/O adapter is the maintained path and
         # preserves the ASGI WebSocket contract used by the agent surface.

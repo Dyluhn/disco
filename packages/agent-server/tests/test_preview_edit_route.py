@@ -15,10 +15,18 @@ tests seed a real workspace dir on disk under ProjectStore.path_for(cid).
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from disco.agent_server import create_app
-from disco.core import SqliteEventStore
+from disco.core import (
+    ConversationStatus,
+    FinalWorkspaceSeal,
+    ResourceKey,
+    SqliteEventStore,
+    StatusEvent,
+    WorkspaceVersionEvent,
+)
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
 
@@ -71,6 +79,56 @@ def _client(tmp_path, files: dict[str, bytes]) -> tuple[TestClient, str]:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
     return client, cid
+
+
+def _finished_client(
+    tmp_path,
+    *,
+    sealed: bool = True,
+) -> tuple[TestClient, str, ProjectStore, int | None]:
+    store = SqliteEventStore(":memory:")
+    ps = ProjectStore(str(tmp_path))
+    client = TestClient(create_app(store, runtime=_Runtime(ps)))  # type: ignore[arg-type]
+    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
+    ws = ps.path_for(cid)
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "index.html").write_text(_HTML)
+    ps.write_manifest(
+        cid,
+        title="Finished edit preview",
+        owner_id="local",
+        created_at="2026-07-18T00:00:00+00:00",
+        file_count=1,
+        total_bytes=len(_HTML.encode()),
+    )
+
+    async def finish() -> int | None:
+        terminal = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+        assert terminal.seq is not None
+        if not sealed:
+            return None
+        version = ps.cut_verified_version(cid, trigger="finish", pin=True)
+        assert version is not None
+        await store.append(
+            cid,
+            WorkspaceVersionEvent(
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                trigger="finish",
+                final_seal=FinalWorkspaceSeal(
+                    scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                    terminal_seq=terminal.seq,
+                    latest_effect_seq=None,
+                    version_seq=version.seq,
+                    tree_digest=version.tree_digest,
+                    file_count=version.file_count,
+                    total_bytes=version.total_bytes,
+                ),
+            ),
+        )
+        return version.seq
+
+    return client, cid, ps, asyncio.run(finish())
 
 
 def test_serves_stamped_html_with_injected_nonce_script_and_csp(tmp_path) -> None:
@@ -136,6 +194,35 @@ def test_sibling_css_served_as_is_no_stamp_no_script(tmp_path) -> None:
     assert r.text == _CSS
     assert "data-oid" not in r.text
     assert "disco-select" not in r.text
+
+
+def test_finished_edit_preview_reads_immutable_version_not_mutable_mirror(tmp_path) -> None:
+    client, cid, ps, _version = _finished_client(tmp_path)
+    (ps.path_for(cid) / "index.html").write_text("MUTATED MIRROR")
+
+    response = client.get(f"/conversations/{cid}/preview-edit/index.html")
+
+    assert response.status_code == 200
+    assert "A built static page." in response.text
+    assert "MUTATED MIRROR" not in response.text
+
+
+def test_finished_unsealed_edit_preview_fails_closed(tmp_path) -> None:
+    client, cid, _ps, _version = _finished_client(tmp_path, sealed=False)
+
+    response = client.get(f"/conversations/{cid}/preview-edit/index.html")
+
+    assert response.status_code == 503
+
+
+def test_finished_corrupt_version_edit_preview_fails_closed(tmp_path) -> None:
+    client, cid, ps, version = _finished_client(tmp_path)
+    assert version is not None
+    (ps.version_workspace_path(cid, version) / "index.html").write_text("CORRUPTED")
+
+    response = client.get(f"/conversations/{cid}/preview-edit/index.html")
+
+    assert response.status_code == 503
 
 
 def test_no_runtime_404(tmp_path) -> None:

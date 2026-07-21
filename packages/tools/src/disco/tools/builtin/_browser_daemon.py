@@ -1,10 +1,16 @@
 import base64
 import hashlib
+import ipaddress
 import json
 import os
+import re
+import secrets
 import signal
 import sys
+from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
+from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -53,6 +59,12 @@ CAPTURE_RETRY_INTERVAL_MS = 250
 # W6: click timeout cut from Playwright's 30s default to a few seconds so a
 # div-based dock/button that is briefly un-clickable doesn't stall a full turn.
 CLICK_TIMEOUT_MS = 3000
+DAEMON_INSTANCE_ID = secrets.token_hex(16)
+_LANES = frozenset({"agent", "host_verifier"})
+_SYNC_ACTIONS = frozenset({"screenshot", "click", "fill", "press", "submit", "console_view"})
+_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+_LEGACY_GENERATION = "0" * 32
+_RECENT_NONCE_LIMIT = 256
 
 # W-46: rich sites behind a WAF (Akamai/CF) fingerprint the headless browser and
 # serve the lite/challenge variant — egress is fine, the *fingerprint* is the tell.
@@ -103,18 +115,193 @@ def _text_renderer_ready(page) -> bool:
     return result is True
 
 
+def _is_token(value) -> bool:
+    return isinstance(value, str) and _TOKEN_RE.fullmatch(value) is not None
+
+
+def _positive_epoch(value) -> bool:
+    return type(value) is int and value > 0
+
+
+def _page_kind(url) -> str:
+    value = str(url or "")
+    if not value or value == "about:blank":
+        return "uninitialized"
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+    except ValueError:
+        return "external"
+    # Reload authority is intentionally narrower than URL reachability: only a
+    # literal HTTP(S) loopback origin can represent the local preview. A
+    # loopback-looking file/custom/javascript URL is still external.
+    if parsed.scheme.lower() not in {"http", "https"} or host is None:
+        return "external"
+    if host.lower() == "localhost":
+        return "local_preview"
+    try:
+        return "local_preview" if ipaddress.ip_address(host).is_loopback else "external"
+    except ValueError:
+        # Literal host parsing only. Never use DNS to enlarge the local trust class.
+        return "external"
+
+
+class BrowserPageState:
+    """State owned by one of the daemon's two fixed browser lanes."""
+
+    def __init__(self):
+        self.page = None
+        self.console_logs = []
+        self.network_fails = []
+        self.executor_generation = None
+        self.synchronized_epoch = None
+
+    def reset_freshness(self):
+        self.executor_generation = None
+        self.synchronized_epoch = None
+
+
 class BrowserState:
     def __init__(self):
         self.playwright = None
         self.browser = None
+        # The agent and host verifier never share a BrowserContext. Contexts are
+        # the Playwright ownership boundary for cookies, local/session storage,
+        # cache, and service workers; separate pages alone are insufficient.
         self.context = None
-        self.page = None
-        self.console_logs = []
-        # B7: failed/4xx-5xx network requests are otherwise invisible to the agent.
-        self.network_fails = []
+        self.host_context = None
+        self._lanes = {name: BrowserPageState() for name in _LANES}
+        self._recent_nonce_order = deque()
+        self._recent_nonces = set()
         self.screenshot_seq = 0
         self.render_ready = False
         self.render_error = ""
+
+    # Compatibility properties for existing callers/tests: the historical
+    # single page is exactly the fixed agent lane.
+    @property
+    def page(self):
+        return self._lanes["agent"].page
+
+    @page.setter
+    def page(self, value):
+        self._lanes["agent"].page = value
+
+    @property
+    def console_logs(self):
+        return self._lanes["agent"].console_logs
+
+    @console_logs.setter
+    def console_logs(self, value):
+        self._lanes["agent"].console_logs = value
+
+    @property
+    def network_fails(self):
+        return self._lanes["agent"].network_fails
+
+    @network_fails.setter
+    def network_fails(self, value):
+        self._lanes["agent"].network_fails = value
+
+    def lane(self, name):
+        if name not in _LANES:
+            raise ValueError("unknown browser lane")
+        return self._lanes[name]
+
+    def _bind_page(self, lane_name, page):
+        lane = self.lane(lane_name)
+        lane.page = page
+        page.on("console", lambda msg, name=lane_name: self._add_console_for(name, msg))
+        page.on("pageerror", lambda err, name=lane_name: self._add_pageerror_for(name, err))
+        page.on(
+            "requestfailed",
+            lambda request, name=lane_name: self._add_request_failed_for(name, request),
+        )
+        page.on("response", lambda response, name=lane_name: self._add_response_for(name, response))
+        return lane
+
+    def ensure_lane_page(self, lane_name):
+        lane = self.lane(lane_name)
+        if lane.page is None:
+            if lane_name == "host_verifier":
+                if self.host_context is None:
+                    self.host_context = self._new_context()
+                context = self.host_context
+            else:
+                context = self.context
+            if context is None:
+                raise RuntimeError("Browser context not initialized")
+            self._bind_page(lane_name, context.new_page())
+        return lane
+
+    def close_lane(self, lane_name):
+        if lane_name != "host_verifier":
+            raise ValueError("only the host verifier lane may be closed independently")
+        lane = self.lane(lane_name)
+        page, lane.page = lane.page, None
+        context, self.host_context = self.host_context, None
+        errors = []
+        if page is not None:
+            try:
+                page.close()
+            except Exception as exc:
+                errors.append(exc)
+        if context is not None:
+            try:
+                context.close()
+            except Exception as exc:
+                errors.append(exc)
+        lane.console_logs = []
+        lane.network_fails = []
+        lane.reset_freshness()
+        if errors:
+            raise errors[0]
+
+    def reset_lane_for_generation(self, lane_name, generation):
+        lane = self.ensure_lane_page(lane_name)
+        if lane.executor_generation in {None, generation}:
+            lane.executor_generation = generation
+            return lane
+        # A new executor generation cannot inherit page/history/freshness from
+        # its predecessor. Recreate only this fixed lane; the other lane remains
+        # untouched. The host lane rotates its entire isolated context so no
+        # origin state survives between verifier generations.
+        if lane_name == "host_verifier":
+            self.close_lane("host_verifier")
+            lane = self.ensure_lane_page("host_verifier")
+            lane.executor_generation = generation
+            return lane
+        old_page, lane.page = lane.page, None
+        if old_page is not None:
+            old_page.close()
+        lane.console_logs = []
+        lane.network_fails = []
+        lane.reset_freshness()
+        lane.executor_generation = generation
+        return self.ensure_lane_page(lane_name)
+
+    def _new_context(self):
+        if self.browser is None:
+            raise RuntimeError("Browser not initialized")
+        context = self.browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=_REALISTIC_UA,
+            locale="en-US",
+            timezone_id="America/New_York",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        context.add_init_script(_STEALTH_INIT_SCRIPT)
+        return context
+
+    def accept_nonce(self, nonce):
+        if nonce in self._recent_nonces:
+            return False
+        self._recent_nonces.add(nonce)
+        self._recent_nonce_order.append(nonce)
+        while len(self._recent_nonce_order) > _RECENT_NONCE_LIMIT:
+            expired = self._recent_nonce_order.popleft()
+            self._recent_nonces.discard(expired)
+        return True
 
     def start(self, display: str | None = None):
         self.playwright = sync_playwright().start()
@@ -151,15 +338,8 @@ class BrowserState:
         # locale/timezone, and an Accept-Language header — so a server fingerprinting
         # the request sees a normal browser. Same sandbox egress; only the fingerprint
         # changes (lite.cnn worked already; full CNN's WAF keyed on these tells).
-        self.context = self.browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            user_agent=_REALISTIC_UA,
-            locale="en-US",
-            timezone_id="America/New_York",
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-        )
-        # W-46: erase the JS-visible headless tells before any page script runs.
-        self.context.add_init_script(_STEALTH_INIT_SCRIPT)
+        self.context = self._new_context()
+        self.host_context = None
         calibration_page = self.context.new_page()
         try:
             if not _text_renderer_ready(calibration_page):
@@ -170,27 +350,43 @@ class BrowserState:
                 raise BrowserRendererUnavailable(self.render_error)
         finally:
             calibration_page.close()
-        self.page = self.context.new_page()
-        self.page.on("console", self._add_console)
-        self.page.on("pageerror", self._add_pageerror)
-        # B7: capture failed requests (DNS/connection/abort) and 4xx/5xx responses
-        # so the agent can see *why* a page it is debugging is broken.
-        self.page.on("requestfailed", self._add_request_failed)
-        self.page.on("response", self._add_response)
+        # A restart creates two empty bounded lanes, with the host-verifier page
+        # lazy so ordinary browsing pays for one page only.
+        self._lanes = {name: BrowserPageState() for name in _LANES}
+        self._recent_nonce_order.clear()
+        self._recent_nonces.clear()
+        self._bind_page("agent", self.context.new_page())
         self.render_ready = True
         self.render_error = ""
 
     def stop(self):
         """Close Playwright in ownership order; safe after partial startup."""
         errors = []
-        for resource_name in ("page", "context", "browser"):
-            resource = getattr(self, resource_name, None)
+        resources: list[tuple[str, Any | None]] = [("page", self.page)]
+        host_page = self._lanes["host_verifier"].page
+        if host_page is not None:
+            resources.append(("host_verifier_page", host_page))
+        resources.extend(
+            (
+                ("host_verifier_context", self.host_context),
+                ("context", self.context),
+                ("browser", self.browser),
+            )
+        )
+        for resource_name, resource in resources:
             if resource is not None:
                 try:
                     resource.close()
                 except Exception as exc:
                     errors.append(f"{resource_name}:{type(exc).__name__}")
-                setattr(self, resource_name, None)
+        for lane in self._lanes.values():
+            lane.page = None
+            lane.console_logs = []
+            lane.network_fails = []
+            lane.reset_freshness()
+        self.context = None
+        self.host_context = None
+        self.browser = None
         playwright, self.playwright = self.playwright, None
         if playwright is not None:
             try:
@@ -203,60 +399,84 @@ class BrowserState:
             print("Browser daemon cleanup errors: " + ", ".join(errors), file=sys.stderr)
 
     def _add_console(self, msg):
+        self._add_console_for("agent", msg)
+
+    def _add_console_for(self, lane_name, msg):
         # B7: keep msg.location ({url, lineNumber, columnNumber}) so the agent gets a
         # source:line, not just bare text. location is a property; guard defensively.
         entry = {"level": msg.type, "text": msg.text}
         location = getattr(msg, "location", None)
         if location:
             entry["location"] = location
-        self.console_logs.append(entry)
-        if len(self.console_logs) > MAX_CONSOLE:
-            self.console_logs.pop(0)
+        logs = self.lane(lane_name).console_logs
+        logs.append(entry)
+        if len(logs) > MAX_CONSOLE:
+            logs.pop(0)
 
     def _add_pageerror(self, err):
+        self._add_pageerror_for("agent", err)
+
+    def _add_pageerror_for(self, lane_name, err):
         # B7: keep err.stack (the most useful field for tracing a crash) alongside
         # the message instead of dropping it.
         entry = {"level": "error", "text": err.message}
         stack = getattr(err, "stack", None)
         if stack:
             entry["stack"] = stack
-        self.console_logs.append(entry)
-        if len(self.console_logs) > MAX_CONSOLE:
-            self.console_logs.pop(0)
+        logs = self.lane(lane_name).console_logs
+        logs.append(entry)
+        if len(logs) > MAX_CONSOLE:
+            logs.pop(0)
 
     def _add_request_failed(self, request):
+        self._add_request_failed_for("agent", request)
+
+    def _add_request_failed_for(self, lane_name, request):
         # B7: a request that never got a response (DNS, refused, aborted, timeout).
         # request.failure is the error text (or None on some engines).
         failure = getattr(request, "failure", None)
-        self._record_network(
+        self._record_network_for(
+            lane_name,
             {
                 "method": request.method,
                 "url": request.url,
                 "failure": failure or "failed",
-            }
+            },
         )
 
     def _add_response(self, response):
+        self._add_response_for("agent", response)
+
+    def _add_response_for(self, lane_name, response):
         # B7: a response that *did* arrive but with an error status (4xx/5xx).
         status = response.status
         if status >= 400:
-            self._record_network(
+            self._record_network_for(
+                lane_name,
                 {
                     "method": response.request.method,
                     "url": response.url,
                     "status": status,
-                }
+                },
             )
 
     def _record_network(self, entry):
-        self.network_fails.append(entry)
-        if len(self.network_fails) > MAX_NETWORK:
-            self.network_fails.pop(0)
+        self._record_network_for("agent", entry)
+
+    def _record_network_for(self, lane_name, entry):
+        failures = self.lane(lane_name).network_fails
+        failures.append(entry)
+        if len(failures) > MAX_NETWORK:
+            failures.pop(0)
 
     def clear_console(self):
-        self.console_logs = []
+        self.clear_lane_diagnostics("agent")
+
+    def clear_lane_diagnostics(self, lane_name):
+        lane = self.lane(lane_name)
+        lane.console_logs = []
         # B7: a fresh navigation starts a fresh network-failure ledger.
-        self.network_fails = []
+        lane.network_fails = []
 
 
 state = BrowserState()
@@ -274,6 +494,14 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 detail = state.render_error or "browser renderer not ready"
                 self.wfile.write(detail.encode("utf-8", errors="replace")[:512])
+        elif self.path == "/identity":
+            if state.page and state.render_ready:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(DAEMON_INSTANCE_ID.encode("ascii"))
+            else:
+                self.send_response(503)
+                self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()
@@ -284,7 +512,27 @@ class BrowserHandler(BaseHTTPRequestHandler):
         try:
             params = json.loads(body)
         except json.JSONDecodeError:
-            self._send_json({"ok": False, "error": "Invalid JSON"}, 400)
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "Invalid JSON",
+                    "error_class": "freshness_protocol_invalid",
+                    "error_reason": "invalid_json",
+                },
+                400,
+            )
+            return
+
+        if not isinstance(params, dict):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "browser request must be a JSON object",
+                    "error_class": "freshness_protocol_invalid",
+                    "error_reason": "invalid_request",
+                },
+                400,
+            )
             return
 
         action = params.get("action")
@@ -292,7 +540,15 @@ class BrowserHandler(BaseHTTPRequestHandler):
             result = self._handle_action(action, params)
             self._send_json(result)
         except Exception as e:
-            self._send_json({"ok": False, "error": str(e)}, 500)
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": f"browser daemon internal error: {type(e).__name__}",
+                    "error_class": "browser_daemon_unavailable",
+                    "error_reason": "internal_error",
+                },
+                500,
+            )
 
     def _send_json(self, data, status=200):
         self.send_response(status)
@@ -300,90 +556,370 @@ class BrowserHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
 
+    @staticmethod
+    def _error(error_class, error_reason, message, freshness=None):
+        result = {
+            "ok": False,
+            "error": str(message or error_reason)[:512],
+            "error_class": error_class,
+            "error_reason": error_reason,
+        }
+        if freshness is not None:
+            result["freshness"] = freshness
+        return result
+
+    @staticmethod
+    def _protocol(params):
+        protocol_keys = {
+            "workspace_epoch",
+            "executor_generation",
+            "browser_lane",
+            "request_nonce",
+        }
+        present = protocol_keys & set(params)
+        if not present:
+            # Compatibility for direct epoch-zero daemon clients. The shipped
+            # BrowserTool always sends v1 metadata and refuses an unversioned
+            # response once freshness is security/reliability relevant.
+            return "agent", _LEGACY_GENERATION, secrets.token_hex(16), None, None
+        if present != protocol_keys:
+            return None, None, None, None, "incomplete freshness request"
+        lane_name = params.get("browser_lane")
+        generation = params.get("executor_generation")
+        nonce = params.get("request_nonce")
+        epoch = params.get("workspace_epoch")
+        expected_daemon_id = params.get("expected_daemon_instance_id")
+        if not isinstance(lane_name, str) or lane_name not in _LANES:
+            return None, None, None, None, "invalid browser lane"
+        if not _is_token(generation):
+            return None, None, None, None, "invalid executor generation"
+        if not _is_token(nonce):
+            return None, None, None, None, "invalid request nonce"
+        if epoch is not None and not _positive_epoch(epoch):
+            return None, None, None, None, "invalid workspace epoch"
+        if expected_daemon_id is not None and not _is_token(expected_daemon_id):
+            return None, None, None, None, "invalid expected daemon identity"
+        if expected_daemon_id is not None and expected_daemon_id != DAEMON_INSTANCE_ID:
+            return None, None, None, None, "daemon instance identity mismatch"
+        if not state.accept_nonce(nonce):
+            return None, None, None, None, "replayed request nonce"
+        return lane_name, generation, nonce, epoch, None
+
+    @staticmethod
+    def _freshness(lane_name, generation, nonce, requested_epoch, sync_performed):
+        lane = state.lane(lane_name)
+        return {
+            "schema_version": 1,
+            "daemon_instance_id": DAEMON_INSTANCE_ID,
+            "executor_generation": generation,
+            "lane": lane_name,
+            "request_nonce": nonce,
+            "requested_epoch": requested_epoch,
+            "synchronized_epoch": lane.synchronized_epoch,
+            "sync_performed": sync_performed,
+            "page_kind": _page_kind(getattr(lane.page, "url", "")),
+        }
+
+    @staticmethod
+    def _selector_for(params):
+        index = params.get("index")
+        css_selector = params.get("selector", "")
+        click_text = params.get("click_text", "")
+        if index is not None:
+            return f"[data-pmx-index='{index}']"
+        if css_selector:
+            return css_selector
+        if click_text:
+            return f"text={click_text}"
+        return None
+
+    def _action_locator(self, page, selector, freshness):
+        if not selector:
+            return None, self._error(
+                "browser_action_failed",
+                "selector_not_found",
+                "browser action requires an element target",
+                freshness,
+            )
+        try:
+            locator = page.locator(selector).first
+            if locator.count() == 0:
+                return None, self._error(
+                    "browser_action_failed",
+                    "selector_not_found",
+                    "browser action target was not found",
+                    freshness,
+                )
+            if not locator.is_visible():
+                return None, self._error(
+                    "browser_action_failed",
+                    "not_visible",
+                    "browser action target is not visible",
+                    freshness,
+                )
+            if not locator.is_enabled():
+                return None, self._error(
+                    "browser_action_failed",
+                    "disabled",
+                    "browser action target is disabled",
+                    freshness,
+                )
+            # Playwright's actionability trial detects overlays, hit-target
+            # interception, instability, and other blocked interactions without
+            # changing page state. Classification does not parse exception prose.
+            locator.click(trial=True, timeout=CLICK_TIMEOUT_MS)
+            return locator, None
+        except Exception:
+            return None, self._error(
+                "browser_action_failed",
+                "interaction_blocked",
+                "browser action target is blocked or not actionable",
+                freshness,
+            )
+
     def _handle_action(self, action, params):
-        page = state.page
-        if not page or not state.render_ready:
+        if not isinstance(params, dict):
+            return self._error(
+                "freshness_protocol_invalid",
+                "invalid_request",
+                "browser request must be an object",
+            )
+        lane_name, generation, nonce, requested_epoch, protocol_error = self._protocol(params)
+        if protocol_error is not None:
+            return self._error(
+                "freshness_protocol_invalid",
+                "invalid_request",
+                protocol_error,
+            )
+        if not state.render_ready:
+            return self._error(
+                "browser_daemon_unavailable",
+                "renderer_unavailable",
+                state.render_error or "Browser renderer not initialized",
+            )
+        if action == "_close_lane":
+            if lane_name != "host_verifier":
+                return self._error(
+                    "freshness_protocol_invalid",
+                    "invalid_lane_close",
+                    "the agent browser lane cannot be closed by this operation",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
+                )
+            state.close_lane("host_verifier")
             return {
-                "ok": False,
-                "error": state.render_error or "Browser renderer not initialized",
+                "ok": True,
+                "freshness": self._freshness(lane_name, generation, nonce, requested_epoch, False),
             }
+
+        lane = state.reset_lane_for_generation(lane_name, generation)
+        page = lane.page
+        if page is None:
+            return self._error(
+                "browser_daemon_unavailable",
+                "renderer_unavailable",
+                "Browser renderer not initialized",
+            )
+        if lane.synchronized_epoch is not None and (
+            requested_epoch is None or requested_epoch < lane.synchronized_epoch
+        ):
+            return self._error(
+                "freshness_protocol_invalid",
+                "epoch_regression",
+                "workspace epoch regressed",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
+            )
 
         vw = params.get("viewport_width")
         vh = params.get("viewport_height")
-        if isinstance(vw, int) and isinstance(vh, int):
+        if type(vw) is int and type(vh) is int:
             page.set_viewport_size({"width": vw, "height": vh})
 
         screenshot_path = None
+        sync_performed = False
+
+        pending_epoch = requested_epoch is not None and requested_epoch != lane.synchronized_epoch
+        if action in _SYNC_ACTIONS:
+            kind = _page_kind(getattr(page, "url", ""))
+            if kind == "uninitialized":
+                return self._error(
+                    "browser_session_uninitialized",
+                    "missing_loaded_page",
+                    "browser page has no loaded document; navigate before this action",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
+                )
+        if action in _SYNC_ACTIONS and pending_epoch:
+            kind = _page_kind(getattr(page, "url", ""))
+            if kind == "local_preview":
+                try:
+                    state.clear_lane_diagnostics(lane_name)
+                    page.reload(wait_until="load")
+                    page.wait_for_timeout(500)
+                except Exception:
+                    return self._error(
+                        "freshness_sync_failed",
+                        "reload_failed",
+                        "local preview could not be synchronized",
+                        self._freshness(lane_name, generation, nonce, requested_epoch, False),
+                    )
+                # Acknowledge immediately after reload. A later action failure
+                # must not cause the next recovery action to reload again.
+                lane.synchronized_epoch = requested_epoch
+                sync_performed = True
+            else:
+                # Workspace bytes cannot affect a literal non-loopback page.
+                # Acknowledge without reloading it so external browsing state is
+                # never destroyed by local mutations.
+                lane.synchronized_epoch = requested_epoch
 
         if action == "navigate":
             url = params.get("url")
             if not url:
-                return {"ok": False, "error": "URL required for navigate"}
-            state.clear_console()
-            page.goto(url, wait_until="load")
-            page.wait_for_timeout(500)  # Settle time
+                return self._error(
+                    "browser_action_failed",
+                    "navigation_failed",
+                    "URL required for navigate",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
+                )
+            try:
+                state.clear_lane_diagnostics(lane_name)
+                page.goto(url, wait_until="load")
+                page.wait_for_timeout(500)  # Settle time
+                lane.synchronized_epoch = requested_epoch
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "navigation_failed",
+                    "browser navigation failed",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
+                )
         elif action == "screenshot":
             pass  # Just take a screenshot at the end
         elif action == "click":
-            # W6: click supports index (data-pmx-index attr), CSS selector, or
-            # visible text — whichever the agent provides. Timeout cut to a few
-            # seconds so a momentarily-unclickable element doesn't stall a turn.
-            index = params.get("index")
-            css_selector = params.get("selector", "")
-            click_text = params.get("click_text", "")
-            if index is not None:
-                page.click(
-                    f"[data-pmx-index='{index}']",
-                    timeout=CLICK_TIMEOUT_MS,
+            freshness = self._freshness(
+                lane_name, generation, nonce, requested_epoch, sync_performed
+            )
+            locator, error = self._action_locator(page, self._selector_for(params), freshness)
+            if error is not None:
+                return error
+            assert locator is not None
+            try:
+                locator.click(timeout=CLICK_TIMEOUT_MS)
+                page.wait_for_timeout(500)
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "interaction_blocked",
+                    "browser click could not be completed",
+                    freshness,
                 )
-            elif css_selector:
-                page.click(css_selector, timeout=CLICK_TIMEOUT_MS)
-            elif click_text:
-                # Playwright text= selector: finds element whose visible text
-                # contains click_text (case-insensitive prefix match by default).
-                page.click(f"text={click_text}", timeout=CLICK_TIMEOUT_MS)
-            else:
-                return {"ok": False, "error": "index, selector, or click_text required for click"}
-            page.wait_for_timeout(500)
         elif action == "press":
             key = params.get("key", "")
             if not key:
-                return {"ok": False, "error": "key required for press"}
-            page.keyboard.press(key)
-            page.wait_for_timeout(500)
+                return self._error(
+                    "browser_action_failed",
+                    "interaction_blocked",
+                    "key required for press",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+                )
+            try:
+                page.keyboard.press(key)
+                page.wait_for_timeout(500)
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "interaction_blocked",
+                    "browser key press could not be completed",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+                )
         elif action == "fill":
             index = params.get("index")
-            text = params.get("text", "")
             if index is None:
-                return {"ok": False, "error": "Index required for fill"}
-            page.fill(f"[data-pmx-index='{index}']", text)
+                return self._error(
+                    "browser_action_failed",
+                    "selector_not_found",
+                    "Index required for fill",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+                )
+            freshness = self._freshness(
+                lane_name, generation, nonce, requested_epoch, sync_performed
+            )
+            locator, error = self._action_locator(page, self._selector_for(params), freshness)
+            if error is not None:
+                return error
+            assert locator is not None
+            try:
+                locator.fill(params.get("text", ""))
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "interaction_blocked",
+                    "browser fill could not be completed",
+                    freshness,
+                )
         elif action == "submit":
             index = params.get("index")
             if index is None:
-                return {"ok": False, "error": "Index required for submit"}
-            selector = f"[data-pmx-index='{index}']"
-            element = page.query_selector(selector)
-            if element:
-                tag_name = element.evaluate("el => el.tagName.toLowerCase()")
+                return self._error(
+                    "browser_action_failed",
+                    "selector_not_found",
+                    "Index required for submit",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+                )
+            freshness = self._freshness(
+                lane_name, generation, nonce, requested_epoch, sync_performed
+            )
+            locator, error = self._action_locator(page, self._selector_for(params), freshness)
+            if error is not None:
+                return error
+            assert locator is not None
+            try:
+                tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
                 if tag_name == "input" or tag_name == "textarea":
-                    page.focus(selector)
+                    locator.focus()
                     page.keyboard.press("Enter")
                 else:
-                    page.click(selector)
-            page.wait_for_timeout(500)
+                    locator.click(timeout=CLICK_TIMEOUT_MS)
+                page.wait_for_timeout(500)
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "interaction_blocked",
+                    "browser submit could not be completed",
+                    freshness,
+                )
         elif action == "back":
-            page.go_back()
-            page.wait_for_timeout(500)
+            try:
+                page.go_back()
+                page.wait_for_timeout(500)
+                # History may restore an old cached local document. Reload that
+                # destination once so a successful back cannot fabricate same-
+                # epoch freshness.
+                if pending_epoch and _page_kind(page.url) == "local_preview":
+                    state.clear_lane_diagnostics(lane_name)
+                    page.reload(wait_until="load")
+                    page.wait_for_timeout(500)
+                    sync_performed = True
+                lane.synchronized_epoch = requested_epoch
+            except Exception:
+                return self._error(
+                    "browser_action_failed",
+                    "navigation_failed",
+                    "browser history navigation failed",
+                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+                )
         elif action == "console_view":
             return {
                 "ok": True,
                 "url": page.url,
                 "title": page.title(),
-                "console": state.console_logs,
-                "network": state.network_fails,
+                "console": lane.console_logs,
+                "network": lane.network_fails,
                 "elements": [],
                 "text": "",
                 "screenshot_path": None,
+                "freshness": self._freshness(
+                    lane_name, generation, nonce, requested_epoch, sync_performed
+                ),
             }
         elif action == "live_start":
             global _live_headed
@@ -406,20 +942,45 @@ class BrowserHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 state.start(display=":1")
+                lane = state.reset_lane_for_generation(lane_name, generation)
+                page = lane.page
                 _live_headed = True
-            return {"ok": True, "novnc_port": 6080, "display": ":1"}
+            return {
+                "ok": True,
+                "novnc_port": 6080,
+                "display": ":1",
+                "freshness": self._freshness(
+                    lane_name, generation, nonce, requested_epoch, sync_performed
+                ),
+            }
         elif action == "live_touch":
             # Heartbeat from the frontend while the live view is open — refresh the idle
             # watchdog so an actively-watched session is not reaped after 600s.
             if _live_view is not None:
                 _live_view.touch()
-            return {"ok": True, "live": _live_view.is_live() if _live_view is not None else False}
+            return {
+                "ok": True,
+                "live": _live_view.is_live() if _live_view is not None else False,
+                "freshness": self._freshness(
+                    lane_name, generation, nonce, requested_epoch, sync_performed
+                ),
+            }
         elif action == "live_stop":
             if _live_view is not None:
                 _live_view.teardown()
-            return {"ok": True}
+            return {
+                "ok": True,
+                "freshness": self._freshness(
+                    lane_name, generation, nonce, requested_epoch, sync_performed
+                ),
+            }
         else:
-            return {"ok": False, "error": f"Unknown action: {action}"}
+            return self._error(
+                "browser_action_failed",
+                "unknown_action",
+                "Unknown browser action",
+                self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
+            )
 
         # Common data for most actions
         if action not in ("console_view", "live_start", "live_stop", "live_touch"):
@@ -470,14 +1031,17 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "url": page.url,
                 "title": page.title(),
-                "console": state.console_logs,
-                "network": state.network_fails,
+                "console": lane.console_logs,
+                "network": lane.network_fails,
                 "elements": elements,
                 "text": text,
                 "appkit_sections": appkit_sections,
                 "canvas_count": canvas_count,
                 "visible_semantic_elements": visible_semantic_elements,
                 "screenshot_path": screenshot_path,
+                "freshness": self._freshness(
+                    lane_name, generation, nonce, requested_epoch, sync_performed
+                ),
             }
 
             if params.get("include_screenshot_b64"):

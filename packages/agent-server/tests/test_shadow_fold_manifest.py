@@ -1,18 +1,15 @@
 """[REL-2a step2b-2b] Tests for the finish-success artifact-manifest SHADOW fold.
 
-`ConversationRuntime._shadow_fold_manifest` is a best-effort, default-OFF dual-write: on genuine
-finish-success it projects the emitted artifact paths from the event log (the single-source truth
-the download jail uses), logs any divergence vs the maintained manifest, and upserts the projected
-paths so the manifest tracks reality. No reader is switched — this is telemetry + dual-write only,
-so the campaign can prove the manifest faithfully mirrors the projection over many live runs before
-any consumer migrates onto it. These tests pin: the fold folds, it's idempotent, it fails soft when
-the sandbox is already evicted, and the finalize wire only calls it on FINISHED when the flag is ON.
+`ConversationRuntime._shadow_fold_manifest` is the low-level, best-effort dual-write. The terminal
+workspace pipeline owns its production fence and mutation record; those ordering guarantees live
+in `test_final_workspace_commit.py`. These tests pin only the writer's projection, idempotence,
+logging, and soft failure behavior.
 """
 
 from __future__ import annotations
 
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from disco.agent_server import ConversationRuntime
@@ -65,36 +62,6 @@ def _inject_executor(rt: ConversationRuntime, cid: str, fs: MemFS) -> None:
     fake_executor = MagicMock()
     fake_executor.sandbox = fs
     rt._executors[cid] = fake_executor
-
-
-class _FinishLoop:
-    def __init__(self, store: SqliteEventStore, cid: str, *, detail: str | None) -> None:
-        self._store = store
-        self._cid = cid
-        self._detail = detail
-
-    async def run(self):
-        await self._store.append(
-            self._cid,
-            DeliverableEvent(title="Landing page", path="out/index.html", artifact_kind="files"),
-        )
-        await self._store.append(
-            self._cid,
-            StatusEvent(status=ConversationStatus.FINISHED, detail=self._detail),
-        )
-        return await self._store.get_state(self._cid)
-
-
-async def _run_finish_boundary(
-    rt: ConversationRuntime, store: SqliteEventStore, cid: str, *, detail: str | None
-) -> None:
-    rt.set_surface(cid, "build")
-    rt._preflight_driver = AsyncMock(return_value=None)
-    rt._preflight_sandbox = AsyncMock(return_value=None)
-    rt._maybe_rehydrate = AsyncMock()
-    rt._rematerialize_uploads = AsyncMock()
-    rt._maybe_snapshot = AsyncMock()
-    await rt._run_with_persistence(cid, _FinishLoop(store, cid, detail=detail))
 
 
 @pytest.mark.asyncio
@@ -167,56 +134,3 @@ async def test_shadow_fold_success_logs_counts(caplog):
     await rt._shadow_fold_manifest(cid)
 
     assert f"shadow fold ran for {cid}: projected=1 manifest=0 missing=1" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_finalize_wire_folds_only_when_flag_on(monkeypatch):
-    """The finalize hook calls the fold on FINISHED iff the shadow flag is ON (default OFF)."""
-    store = SqliteEventStore(":memory:")
-    rt = _runtime(store)
-    cid = await _finished_conv_with_deliverable(store, "out/index.html")
-    _inject_executor(rt, cid, MemFS())
-    rt._shadow_fold_manifest = AsyncMock()  # observe whether the wire calls it
-
-    # Flag OFF (both env prefixes cleared) → no fold.
-    monkeypatch.delenv("DISCO_ARTIFACT_MANIFEST_SHADOW", raising=False)
-    monkeypatch.delenv("PMX_ARTIFACT_MANIFEST_SHADOW", raising=False)
-    await rt._finalize_clean_return(cid)
-    assert rt._shadow_fold_manifest.call_count == 0
-
-    # Flag ON → folds exactly once for this FINISHED conversation.
-    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
-    await rt._finalize_clean_return(cid)
-    assert rt._shadow_fold_manifest.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_notify_completion_finish_triggers_exactly_one_shadow_fold(monkeypatch):
-    """completed_via_notify folds at the end boundary; the finalizer does not double-run."""
-    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
-    store = SqliteEventStore(":memory:")
-    rt = _runtime(store)
-    cid = "conv_shadow_notify_finish"
-    _inject_executor(rt, cid, MemFS())
-    rt._shadow_fold_manifest = AsyncMock()
-
-    await _run_finish_boundary(rt, store, cid, detail="completed_via_notify")
-    await rt._finalize_clean_return(cid)
-
-    assert rt._shadow_fold_manifest.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_normal_finish_triggers_exactly_one_shadow_fold(monkeypatch):
-    """A normal FINISHED run folds once even when both end-boundary and finalizer observe it."""
-    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
-    store = SqliteEventStore(":memory:")
-    rt = _runtime(store)
-    cid = "conv_shadow_normal_finish"
-    _inject_executor(rt, cid, MemFS())
-    rt._shadow_fold_manifest = AsyncMock()
-
-    await _run_finish_boundary(rt, store, cid, detail=None)
-    await rt._finalize_clean_return(cid)
-
-    assert rt._shadow_fold_manifest.call_count == 1

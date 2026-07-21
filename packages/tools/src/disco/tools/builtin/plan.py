@@ -69,7 +69,7 @@ class PlanStepInput(BaseModel):
 class SubmitPlanArgs(BaseModel):
     summary: str = Field(description="One or two sentences: what this plan delivers.")
     steps: list[PlanStepInput] = Field(
-        description="Ordered capstones to carry out once the plan is approved."
+        min_length=1, description="Ordered capstones to carry out once the plan is approved."
     )
     context: str = Field(
         default="",

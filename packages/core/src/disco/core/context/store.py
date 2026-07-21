@@ -207,6 +207,15 @@ class ArtifactMemoryStore:
         await self._fs.write_file(path, body.encode("utf-8"))
         return self._ref(ArtifactMemoryKind.DESIGN_DIRECTION, path)
 
+    async def read_design_direction_tokens(self) -> str | None:
+        """Return the committed direction's mechanical CSS companion, if present."""
+
+        data = await self._read_opt(f"{self._base}/direction_tokens.css")
+        if data is None:
+            return None
+        text = data.decode("utf-8", errors="replace")
+        return text if text else None
+
     async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
         """Write a per-range durable summary under ``.disco/context/summary``."""
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", range_id).strip("._")

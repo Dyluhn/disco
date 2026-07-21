@@ -88,6 +88,11 @@ class _SpyExecutor:
         )
 
 
+class _PreparationFailExecutor(_SpyExecutor):
+    async def prepare_for_events(self, events: list[Event]) -> None:
+        raise RuntimeError("workspace authority could not be prepared")
+
+
 class _NoOpCondenser:
     def should_condense(self, view, *, token_count):
         return None
@@ -141,6 +146,17 @@ async def _drive(loop: AgentLoop, action: ActionEvent) -> list[Event]:
     persisted = await loop.store.append(CID, action)
     await loop._execute_and_observe(persisted)
     return await loop.store.get_events(CID)
+
+
+async def test_prepare_failure_is_observable_and_prevents_effect() -> None:
+    ex = _PreparationFailExecutor()
+    loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())
+    events = await _drive(loop, _write("prepare-fail", "must not land"))
+    assert ex.calls == []
+    errors = [event for event in events if isinstance(event, AgentErrorEvent)]
+    assert len(errors) == 1
+    assert errors[0].tool_call_id == "prepare-fail"
+    assert "workspace authority could not be prepared" in errors[0].error
 
 
 def _read(call_id: str, path: str = "app.js") -> ActionEvent:

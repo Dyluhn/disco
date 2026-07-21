@@ -47,6 +47,7 @@ class EvidenceManifest:
     scenario_sha256: str = ""
     seed: int | None = None
     repo_commit: str = ""
+    repo_revision: str = ""
     repo_dirty: bool = False
     model: str = ""
     provider: str = ""
@@ -67,6 +68,7 @@ class EvidenceManifest:
             "scenario_sha256": self.scenario_sha256,
             "seed": self.seed,
             "repo_commit": self.repo_commit,
+            "repo_revision": self.repo_revision,
             "repo_dirty": self.repo_dirty,
             "model": self.model,
             "provider": self.provider,
@@ -86,13 +88,17 @@ class EvidenceManifest:
         missing = {"run_id", "scenario_id"} - set(raw)
         if missing:
             raise ValueError(f"manifest missing required keys: {sorted(missing)}")
+        repo_dirty = raw.get("repo_dirty", False)
+        if type(repo_dirty) is not bool:
+            raise ValueError("manifest repo_dirty must be a boolean")
         return cls(
             run_id=str(raw["run_id"]),
             scenario_id=str(raw["scenario_id"]),
             scenario_sha256=str(raw.get("scenario_sha256", "")),
             seed=raw.get("seed"),
             repo_commit=str(raw.get("repo_commit", "")),
-            repo_dirty=bool(raw.get("repo_dirty", False)),
+            repo_revision=str(raw.get("repo_revision", "")),
+            repo_dirty=repo_dirty,
             model=str(raw.get("model", "")),
             provider=str(raw.get("provider", "")),
             assist=bool(raw.get("assist", False)),

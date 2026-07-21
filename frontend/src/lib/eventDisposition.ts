@@ -36,6 +36,7 @@ export const KNOWN_EVENT_KINDS = [
   "status",
   "workspace_version",
   "workspace_restored",
+  "workspace_mutation",
   "error",
   "plan",
   "report",
@@ -78,6 +79,10 @@ export const EVENT_DISPOSITION: Record<
   workspace_restored: {
     disposition: "suppressed",
     where: "Workspace rollback audit marker. Version history UI will surface it from the versions API, not as a chat turn.",
+  },
+  workspace_mutation: {
+    disposition: "suppressed",
+    where: "Host-side workspace invalidation fence consumed by final-seal authority; not a chat turn.",
   },
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
   plan: { disposition: "rendered", where: "PlanPanel (Build + Deep Research plan gate)." },

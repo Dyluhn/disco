@@ -23,7 +23,7 @@ from .boundaries import (
     VerifierJudge,
     VerifierScreenshot,
 )
-from .engine import AgentLoop
+from .engine import AgentLoop, AgentViewSuperseded
 from .finish import host_verify_authoritative_enabled
 from .policies import (
     AlwaysConfirm,
@@ -46,6 +46,7 @@ from .stuck import StuckDetector, StuckThresholds
 __all__ = [
     "Agent",
     "AgentLoop",
+    "AgentViewSuperseded",
     "AgentStep",
     "AlwaysConfirm",
     "BlastRadiusConfirm",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from _eventlog import (
     action,
     agent_error,
@@ -108,6 +110,85 @@ def test_approved_plan_finished_with_no_action_fails():
     fail = next(r for r in results if r.failed)
     assert fail.code == "APPROVE_PLAN_NO_EXECUTION"
     assert fail.first_broken_link == "approval_status -> execution_action"
+
+
+def _verifier_repair_events():
+    repaired_fingerprints = ["sha256:corrected-predicate"]
+    repair_approval = status(9, "RUNNING", "plan_approved")
+    repair_approval["plan_verification_transition"] = {
+        "old_plan_revision": 1,
+        "old_plan_event_id": "evt_2",
+        "old_predicate_fingerprints": ["sha256:broken-predicate"],
+        "new_plan_revision": 2,
+        "new_plan_event_id": "evt_7",
+        "new_predicate_fingerprints": repaired_fingerprints,
+        "old_authority": "plan",
+        "new_authority": "plan",
+        "external_authority": "external",
+        "external_predicate_fingerprints": [],
+        "reason": "approved_plan_verifier_repair",
+    }
+    verifier_pass = status(10, "RUNNING", "plan_verification_passed")
+    verifier_pass["plan_verifier_pass"] = {
+        "plan_revision": 2,
+        "plan_event_id": "evt_7",
+        "predicate_fingerprints": repaired_fingerprints,
+        "spec_fingerprint": "sha256:corrected-plan-spec",
+        "authority": "plan",
+    }
+    return [
+        msg(1, "user", "build"),
+        plan(2),
+        awaiting(3, 2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "shell", action_id="act5"),
+        observation(6, "act5"),
+        plan(7, revision=2),
+        awaiting(8, 7),
+        repair_approval,
+        verifier_pass,
+        status(11, "FINISHED"),
+    ]
+
+
+def test_verifier_only_repair_with_exact_host_pass_receipt_satisfies_execution_edge():
+    """Correct product bytes need no no-op mutation after a verifier-only replan.
+
+    The alternative C->D edge is nevertheless strict: a host pass receipt must bind
+    the latest approved repair plan and its exact predicate set.
+    """
+    events = _verifier_repair_events()
+    results = _run(events, _SCN_PLAN)
+    assert all(result.passed for result in results), [result.to_dict() for result in results]
+
+
+def test_verifier_repair_receipt_cannot_bypass_execution_edge_when_mutated():
+    mutations = {
+        "absent receipt": lambda events: events.pop(9),
+        "wrong plan id": lambda events: events[9]["plan_verifier_pass"].update(
+            plan_event_id="evt_wrong"
+        ),
+        "wrong revision": lambda events: events[9]["plan_verifier_pass"].update(plan_revision=3),
+        "wrong predicates": lambda events: events[9]["plan_verifier_pass"].update(
+            predicate_fingerprints=["sha256:wrong"]
+        ),
+        "receipt before approval": lambda events: events[9].update(seq=8),
+        "ordinary replan": lambda events: events[8]["plan_verification_transition"].update(
+            reason="approved_plan_revision"
+        ),
+        "receipt after terminal": lambda events: (
+            events[9].update(seq=11),
+            events[10].update(seq=10),
+            events.append(status(12, "FINISHED")),
+        ),
+    }
+    for label, mutate in mutations.items():
+        events = deepcopy(_verifier_repair_events())
+        mutate(events)
+        results = _run(events, _SCN_PLAN)
+        failure = next((result for result in results if result.failed), None)
+        assert failure is not None, label
+        assert failure.code == "APPROVE_PLAN_NO_EXECUTION", label
 
 
 def test_plan_approved_without_preceding_awaiting_fails():

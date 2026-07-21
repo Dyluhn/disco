@@ -70,24 +70,34 @@ _COMPILED: list[re.Pattern[str]] = [re.compile(p, re.IGNORECASE) for p in REDACT
 _REDACTED = "***REDACTED***"
 
 # Numeric token-COUNT telemetry fields. These key names contain "token" and so
-# match a REDACTION_KEY_PATTERN, but they carry an integer *count* (in/out/cached
-# tokens per model call) — not a secret. Allowlist them so the debug trace can
-# MEASURE cache-hit ratio + token cost. The pass-through is intentionally narrow:
-# it applies ONLY when the value is a plain number (int/float, not bool). A list
-# or string under one of these keys could still hold real auth tokens, so those
-# stay redacted.
+# match a REDACTION_KEY_PATTERN, but they carry an integer *count* (request
+# budget or per-call usage) — not a secret. Allowlist them so the debug trace can
+# independently verify budgeting, cache-hit ratio, and token cost. The
+# pass-through is intentionally narrow: it applies ONLY when the value is a
+# plain number (int/float, not bool). A list or string under one of these keys
+# could still hold real auth tokens, so those stay redacted.
 _TOKEN_COUNT_KEYS: frozenset[str] = frozenset(
-    {"in_tokens", "out_tokens", "cached_tokens", "tokens"}
+    {
+        "cached_tokens",
+        "estimated_input_tokens",
+        "in_tokens",
+        "max_output_tokens",
+        "out_tokens",
+        "pressure_tokens",
+        "tokens",
+    }
 )
+_OPTIONAL_TOKEN_COUNT_KEYS: frozenset[str] = frozenset({"max_output_tokens"})
 
 
 def _is_token_count(key: str, value: Any) -> bool:
-    """True when *key* is an allowlisted token-count field holding a plain number."""
-    return (
-        key.lower() in _TOKEN_COUNT_KEYS
-        and isinstance(value, (int, float))
-        and not isinstance(value, bool)
-    )
+    """True for exact token-count fields carrying their typed telemetry value."""
+    normalized = key.lower()
+    if normalized not in _TOKEN_COUNT_KEYS:
+        return False
+    if value is None:
+        return normalized in _OPTIONAL_TOKEN_COUNT_KEYS
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 # ---------------------------------------------------------------------------

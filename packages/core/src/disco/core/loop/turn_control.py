@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlsplit
 
 from ..effects import ActionProfile, EffectCapability
@@ -38,6 +38,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
+    PlanStep,
     StatusEvent,
     ToolCall,
     ToolResult,
@@ -592,8 +593,10 @@ class Valve:
         reason: str,
         legacy_status: ConversationStatus,
         legacy_detail: str | None,
-    ) -> dict[str, str | bool]:
-        meta: dict[str, str | bool] = {
+    ) -> dict[str, str | bool | int]:
+        # int in the value union: landing callers may merge diagnostic labels
+        # (e.g. driver_error_http_status) via land_blocked's extra_meta.
+        meta: dict[str, str | bool | int] = {
             _BLOCKED_LANDING_META_KEY: True,
             "blocked_reason": reason,
             "legacy_status": legacy_status.value,
@@ -630,7 +633,7 @@ class Valve:
         fallback = self._fallback_blocked_message(reason=reason, guidance=guidance)
         try:
             events = await self._loop._events()
-            view = await self._loop._materialize_view(events)
+            view, _current_events = await self._loop._materialize_current_view()
             step = await self._loop.agent.step(
                 view,
                 [_ask_user_tool_singleton()],
@@ -663,12 +666,18 @@ class Valve:
         legacy_detail: str | None = None,
         required_explanation: str = "",
         deterministic: bool = False,
+        extra_meta: dict[str, str | int] | None = None,
     ) -> None:
         """Explain a breaker halt and park at the free-form user-question gate.
 
         The old PAUSED/STUCK detail is retained in event metadata for analytics,
         while StatusEvent.detail stays the pending question id required by the
         existing AskPanel reconstruction path.
+
+        `extra_meta` (mirroring land_terminal_with_explanation's optional
+        `meta`) is merged into every landing event's non-semantic meta — a
+        labeling channel only; it never alters the emitted statuses, details,
+        or message content.
         """
         clean_reason = (reason or legacy_detail or legacy_status.value).strip()
         meta = self._blocked_meta(
@@ -676,6 +685,8 @@ class Valve:
             legacy_status=legacy_status,
             legacy_detail=legacy_detail,
         )
+        if extra_meta:
+            meta.update(extra_meta)
         autonomous = getattr(self._loop, "_autonomous", False)
         # COUNTER MARKER: the ladder/valve signals (actionless pause counts,
         # stuck-escape scans, REL-RC-P) key on the legacy status events. Emit the
@@ -1348,7 +1359,7 @@ class Valve:
             ),
             tool_call=ToolCall(tool_name="file_read", arguments={"path": target}),
         )
-        await self._loop._emit(action)
+        action = cast(ActionEvent, await self._loop._emit(action))
         await self._loop._execute_and_observe(action)
         return Disp.CONTINUE
 
@@ -2084,6 +2095,85 @@ class MetaToolHandlers:
     async def handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         new_plan = self._loop._plan_from_args(step.tool_call.arguments, events)
+        if not new_plan.steps:
+            # propose_plan_update is also intercepted before ordinary Pydantic tool
+            # execution, so its provider-schema minItems constraint is advisory here.
+            # Never persist/approve an empty revision. One precise repair turn is
+            # cheaper and safer than letting a summary-only plan erase executable
+            # context; a second miss is recovered from the model's own non-default
+            # summary (or the exact user revision instruction) without inventing scope.
+            self._loop._planner.discard_plan_predicates(new_plan.revision)
+            latest_approval_seq = max(
+                (
+                    event.seq or 0
+                    for event in events
+                    if isinstance(event, StatusEvent) and event.detail == "plan_approved"
+                ),
+                default=0,
+            )
+            prior = sum(
+                1
+                for event in events
+                if isinstance(event, StatusEvent)
+                and event.detail == "invalid_plan_no_steps"
+                and (event.seq or 0) > latest_approval_seq
+            )
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="invalid_plan_no_steps",
+                )
+            )
+            if prior == 0:
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                "The proposed plan update was NOT accepted because "
+                                "`steps` was empty. Submit it again with at least one "
+                                "concrete step object. A single broad step is valid; "
+                                "preserve the current product and do not invent extra scope.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                        meta={"blocking": "invalid_plan_no_steps"},
+                    )
+                )
+                return Disp.CONTINUE
+            fallback = (
+                new_plan.summary
+                if new_plan.summary != "Proposed plan"
+                else signals.current_revision_instruction(events)
+                or signals.latest_user_text(events)
+                or ""
+            ).strip()
+            if not fallback:
+                await self._loop._land_blocked(
+                    reason="revision_plan_no_concrete_steps",
+                    guidance=(
+                        "The planner repeatedly submitted an empty plan update and no "
+                        "bounded user/model instruction was available for recovery. The "
+                        "empty revision was not approved."
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail="revision_plan_no_concrete_steps",
+                )
+                return Disp.HALT
+            new_plan = PlanEvent(
+                summary=new_plan.summary,
+                steps=[PlanStep(title=fallback[:200])],
+                revision=new_plan.revision,
+                context=new_plan.context,
+            )
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="plan_steps_recovered_from_instruction",
+                )
+            )
         emitted_plan = await self._loop._emit(new_plan)
         if isinstance(emitted_plan, PlanEvent):
             new_plan = emitted_plan

@@ -18,6 +18,7 @@ as PASS. Each is pinned here so it can never silently regress:
 
 from __future__ import annotations
 
+import pytest
 from _eventlog import action, awaiting, clean_smoke_log, msg, observation, plan, status, to_db_rows
 
 from harness.build_soak.classify import classify
@@ -279,6 +280,50 @@ def test_scenario_requires_tool_scope_missing_is_invalid_run():
     c = classify(clean_smoke_log(), scenario=scenario)
     assert c["status"] == "INVALID_RUN"
     assert c["required_evidence_present"] is False
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+@pytest.mark.parametrize(
+    ("exact_paths", "declared_files"),
+    [
+        ([], []),
+        ("index.html", []),
+        (["index.html", "index.html"], []),
+        (["/index.html"], []),
+        (["site/../index.html"], []),
+        ([".disco/context/todo.md"], []),
+        ([".pmx/job.json"], []),
+        (["index.html"], [{"path": "styles.css"}]),
+        (["index.html"], ["index.html"]),
+    ],
+)
+def test_malformed_exact_workspace_contract_fails_closed(exact_paths, declared_files):
+    scenario = {
+        "id": "malformed_exact_shape",
+        "assertions": {
+            "workspace": {"exact_paths": exact_paths, "files": declared_files},
+        },
+    }
+
+    c = classify(
+        clean_smoke_log(),
+        scenario=scenario,
+        workspace_manifest={"index.html": "ok"},
+    )
+
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
+def test_exact_workspace_contract_requires_authoritative_workspace_evidence():
+    scenario = {
+        "id": "missing_exact_shape_evidence",
+        "assertions": {"workspace": {"exact_paths": ["index.html"]}},
+    }
+
+    c = classify(clean_smoke_log(), scenario=scenario)
+
+    assert c["status"] == "INVALID_RUN", c
     assert c["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
 
 

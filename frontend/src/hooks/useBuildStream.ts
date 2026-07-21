@@ -79,6 +79,9 @@ export interface BuildStreamState {
   connectionState: "connected" | "degraded";
   events: AgentEvent[];
   streamingFile: StreamingFile | null;
+  activeAgentViewId: string | null;
+  activeAgentViewSeq: number | null;
+  agentViewPending: boolean;
   pendingActionId: string | null;
   pendingPlanId: string | null;
   pendingAlternativesId: string | null;
@@ -113,6 +116,9 @@ const initial: BuildStreamState = {
   connectionState: "connected",
   events: [],
   streamingFile: null,
+  activeAgentViewId: null,
+  activeAgentViewSeq: null,
+  agentViewPending: false,
   pendingActionId: null,
   pendingPlanId: null,
   pendingAlternativesId: null,
@@ -168,6 +174,8 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
     return f.state === "degraded" ? { ...state, connectionState: "degraded" } : state;
   }
   if (f.type === "state") {
+    const activeAgentViewId = f.state.active_agent_view_id ?? null;
+    const activeAgentViewSeq = f.state.active_agent_view_seq ?? null;
     return {
       ...state,
       status: f.state.execution_status,
@@ -181,6 +189,12 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
       autonomous: f.state.extras?.autonomous ?? state.autonomous,
       assist: f.state.extras?.assist ?? state.assist,
       frameSeq: f.state.last_seq ?? 0,
+      activeAgentViewId,
+      activeAgentViewSeq,
+      agentViewPending: f.state.agent_view_pending ?? false,
+      // Ephemeral deltas are not replayable. A state snapshot always starts a
+      // fresh live buffer even when the durable view generation is unchanged.
+      streamingFile: null,
     };
   }
   if (f.type === "file_stream") {
@@ -188,6 +202,7 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
     // the first frame) starts a fresh buffer. These are transient — the matching
     // ActionEvent will supersede this with the authoritative content below.
     const fs = f.file_stream;
+    if (fs.agent_view_id !== state.activeAgentViewId) return state;
     const prior =
       state.streamingFile &&
       state.streamingFile.path === fs.path &&
@@ -229,6 +244,71 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
       }
     }
     const events = upsert(working, f.event);
+    // The state frame is the authoritative semantic projection at frameSeq.
+    // Replayed history populates the activity trace but must never roll status,
+    // gates, or view ownership back from that snapshot.
+    if (f.event.seq != null && f.event.seq <= state.frameSeq) {
+      return { ...state, events };
+    }
+    if (
+      f.event.kind === "workspace_mutation" &&
+      f.event.operation.startsWith("agent.run-intent.") &&
+      f.event.run_protocol_version === 1
+    ) {
+      if (
+        state.activeAgentViewSeq != null &&
+        f.event.seq != null &&
+        f.event.seq <= state.activeAgentViewSeq
+      ) {
+        return { ...state, events };
+      }
+      return {
+        ...state,
+        events,
+        activeAgentViewId: null,
+        activeAgentViewSeq: null,
+        agentViewPending: true,
+        streamingFile: null,
+        status: "RUNNING",
+        pendingActionId: null,
+        pendingPlanId: null,
+        pendingAlternativesId: null,
+        pendingQuestionId: null,
+        pendingClarifyId: null,
+        pendingQuestionsV2Id: null,
+        error: null,
+      };
+    }
+    if (
+      f.event.kind === "workspace_mutation" &&
+      f.event.operation === "agent.view-admitted" &&
+      f.event.agent_view_id
+    ) {
+      if (
+        state.activeAgentViewSeq != null &&
+        f.event.seq != null &&
+        f.event.seq < state.activeAgentViewSeq
+      ) {
+        return { ...state, events };
+      }
+      return {
+        ...state,
+        events,
+        activeAgentViewId: f.event.agent_view_id,
+        activeAgentViewSeq: f.event.seq ?? null,
+        agentViewPending: false,
+        streamingFile: null,
+      };
+    }
+    const staleViewEvent =
+      f.event.agent_view_id != null &&
+      (state.agentViewPending ||
+        (state.activeAgentViewId != null &&
+          f.event.agent_view_id !== state.activeAgentViewId &&
+          (f.event.seq == null ||
+            state.activeAgentViewSeq == null ||
+            f.event.seq > state.activeAgentViewSeq)));
+    if (staleViewEvent) return state;
     if (f.event.kind === "status") {
       const status = f.event.status;
       // Hoist out of the closures below: TS only preserves the `f.event` status
@@ -272,6 +352,7 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
           status === "AWAITING_USER_QUESTION"
             ? (events.find((e) => e.id === statusDetail && e.kind === "questions_v2")?.id ?? null)
             : null,
+        streamingFile: status === "RUNNING" ? state.streamingFile : null,
       };
     }
     if (f.event.kind === "error") {
@@ -286,9 +367,63 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
     return { ...state, events };
   }
   if (f.type === "error") {
-    return { ...state, status: "ERROR", error: f.error.detail ?? "stream error" };
+    // A transport/protocol failure is not a durable conversation transition.
+    // Preserve the server-derived status and surface the connection error only.
+    return { ...state, error: f.error.detail ?? "stream error" };
   }
   return state;
+}
+
+/** An honest provider-outage label, derived from the latest blocked-landing
+ *  StatusEvent's non-semantic meta (the backend's driver_error_* keys). Present
+ *  ONLY when the run parked because the model provider stayed unavailable AND
+ *  the provider answered with an HTTP status (429 usage limit, 5xx outage) —
+ *  timeouts/network failures carry no status and keep the generic copy. */
+export interface DriverOutage {
+  /** The HTTP status the provider returned (e.g. 429). */
+  httpStatus: number;
+  /** The adapter's sanitized provider line, verbatim (never the raw body). */
+  message: string | null;
+  provider: string | null;
+  kind: string | null;
+}
+
+/** Selector over the event log (NOT reducer state) so it is replay/reconnect
+ *  proof: a fresh WS subscribe replays history, and the landing meta rides on
+ *  the replayed StatusEvents. Reads the LATEST status event only — a newer
+ *  RUNNING (resume/answer) naturally supersedes the outage. */
+export function deriveDriverOutage(events: AgentEvent[]): DriverOutage | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== "status") continue;
+    const meta = e.meta;
+    if (!meta || meta.blocked_landing !== true) return null;
+    const httpStatus = meta.driver_error_http_status;
+    if (typeof httpStatus !== "number") return null;
+    return {
+      httpStatus,
+      message: typeof meta.driver_error === "string" ? meta.driver_error : null,
+      provider:
+        typeof meta.driver_error_provider === "string" ? meta.driver_error_provider : null,
+      kind: typeof meta.driver_error_kind === "string" ? meta.driver_error_kind : null,
+    };
+  }
+  return null;
+}
+
+/** The latest StatusEvent(ERROR)'s detail — the run-level failure the backend
+ *  actually reported (e.g. a run-start provider 429 preflight). Selector over
+ *  events (replay-proof): the reducer's `error` only captures live error
+ *  frames, so on reload of an errored conversation it stayed null and the UI
+ *  fell back to a generic "the run failed". Null unless the latest status IS
+ *  an ERROR (a later RUNNING supersedes stale error details). */
+export function deriveRunErrorDetail(events: AgentEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== "status") continue;
+    return e.status === "ERROR" ? (e.detail ?? null) : null;
+  }
+  return null;
 }
 
 export interface BuildStream extends BuildStreamState {
@@ -303,6 +438,8 @@ export interface BuildStream extends BuildStreamState {
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
   buildProgress: Map<number, StepState>;
+  /** Honest provider-outage label for the current parked run, or null. */
+  driverOutage: DriverOutage | null;
   awaitingPlan: boolean;
   awaitingDecision: boolean;
   awaitingQuestion: boolean;
@@ -466,12 +603,20 @@ export function useBuildStream(
     () => deriveBuildProgress(state.events, state.status),
     [state.events, state.status],
   );
+  const driverOutage = useMemo(() => deriveDriverOutage(state.events), [state.events]);
+  // ERROR-detail honesty: surface the backend's real StatusEvent(ERROR) detail
+  // when no live error frame set state.error (replay/reconnect path included).
+  const runErrorDetail = useMemo(() => deriveRunErrorDetail(state.events), [state.events]);
   const awaitingPlan = state.status === "AWAITING_PLAN_APPROVAL";
   const awaitingDecision = state.status === "AWAITING_USER_DECISION";
   const awaitingQuestion = state.status === "AWAITING_USER_QUESTION";
 
   return {
     ...state,
+    // Transport/event error frames win; otherwise the latest StatusEvent(ERROR)
+    // detail (verbatim from the backend) replaces the silent null that made the
+    // UI show a generic "the run failed" fallback.
+    error: state.error ?? runErrorDetail,
     pendingAction,
     pendingAlternatives,
     pendingQuestion,
@@ -480,6 +625,7 @@ export function useBuildStream(
     plan,
     planProgress,
     buildProgress,
+    driverOutage,
     awaitingPlan,
     awaitingDecision,
     awaitingQuestion,

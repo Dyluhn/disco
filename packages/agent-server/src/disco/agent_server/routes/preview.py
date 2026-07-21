@@ -17,7 +17,13 @@ from typing import Literal
 import httpx
 import idna
 import websockets
-from disco.core import ConversationStatus, DeliverableEvent, StatusEvent, WorkspaceVersionEvent
+from disco.core import (
+    ConversationStatus,
+    DeliverableEvent,
+    StatusEvent,
+    WorkspaceVersionEvent,
+    derive_final_workspace_fence,
+)
 from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     MAX_PREVIEW_TARGET_PATH_CHARS,
@@ -50,7 +56,12 @@ from ..preview_bootstrap import (
     preview_redemption_content_type,
 )
 from ..preview_inject import inject_element_mention_picker, inject_selection_agent
+from ..preview_projection import (
+    ActiveLivePreviewProjection,
+    derive_active_live_preview_projection,
+)
 from ..runtime import ConversationRuntime
+from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from ._common import (
     require_owned_conversation,
     require_owned_conversation_for_owner,
@@ -153,27 +164,115 @@ def _snapshot_request_path(ws, requested_path: str, entry_path: str | None):  # 
     return (ws / rel).resolve()
 
 
-def _selected_app_entry(events: list, *, version: int | None) -> str | None:  # noqa: ANN001
+def _verified_snapshot_request_path(
+    files: set[str],
+    requested_path: str,
+    entry_path: str | None,
+) -> str | None:
+    """Resolve a preview request using only the verified file manifest."""
+
+    requested = _safe_preview_path(requested_path, allow_leading_slash=True)
+    if requested is None:
+        return None
+    directories = {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in files
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
+
+    if entry_path is None:
+        selected = requested or "index.html"
+        if selected in directories:
+            selected = f"{selected}/index.html"
+        return selected if selected in files else None
+
+    normalized_entry = strip_redundant_workspace_prefix(entry_path.strip())
+    entry = _safe_preview_path(normalized_entry, allow_leading_slash=False)
+    if entry is None:
+        return None
+    entry = "index.html" if entry in {"", "."} else entry
+    if entry in directories:
+        selected = f"{entry}/index.html"
+        base = PurePosixPath(entry)
+    else:
+        selected = entry
+        base = PurePosixPath(entry).parent
+    if selected not in files:
+        return None
+    if not requested:
+        return selected
+
+    base_text = "" if str(base) == "." else base.as_posix()
+    if base_text and (requested == base_text or requested.startswith(f"{base_text}/")):
+        candidate = requested
+    else:
+        candidate = f"{base_text}/{requested}" if base_text else requested
+    if candidate in directories:
+        candidate = f"{candidate}/index.html"
+    return candidate if candidate in files else None
+
+
+def _selected_app_entry(  # noqa: ANN001
+    events: list,
+    *,
+    version: int | None,
+    marker_seq: int | None = None,
+) -> str | None:
+    """Return the last app handoff committed by one version marker.
+
+    An unchanged finished workspace may legitimately reuse an immutable version
+    number. Version identity alone therefore cannot select the first matching
+    marker: doing so revives an older app handoff. Current-preview callers bind
+    the lookup to the exact final-seal sequence; historical callers use the most
+    recent marker for that immutable version.
+    """
+
+    public_markers = [
+        event
+        for event in events
+        if isinstance(event, WorkspaceVersionEvent)
+        and event.version_seq == version
+        and event.seq is not None
+        and not (event.final_seal is None and event.trigger.startswith("finalizing:"))
+    ]
+    if version is not None and marker_seq is None:
+        marker_seq = max(
+            (event.seq for event in public_markers if event.seq is not None),
+            default=None,
+        )
+    if version is not None and marker_seq is None:
+        return None
+    if version is not None and not any(event.seq == marker_seq for event in public_markers):
+        return None
+
     selected: str | None = None
     for event in events:
+        if marker_seq is not None and event.seq is not None and event.seq > marker_seq:
+            break
         if isinstance(event, DeliverableEvent) and event.artifact_kind == "app":
             selected = event.path
-        if (
-            version is not None
-            and isinstance(event, WorkspaceVersionEvent)
-            and event.version_seq == version
-        ):
-            return selected
-    return selected if version is None else None
+    return selected
 
 
 def _finished_snapshot_is_committed(events: list) -> bool:  # noqa: ANN001
-    latest_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
-    if latest_status is None or latest_status.status != ConversationStatus.FINISHED:
+    try:
+        terminal_seq, latest_effect_seq = derive_final_workspace_fence(events)
+    except ValueError:
         return False
-    status_seq = latest_status.seq or -1
-    return any(
-        isinstance(event, WorkspaceVersionEvent) and (event.seq or -1) > status_seq
+    candidates = [
+        event
+        for event in events
+        if isinstance(event, WorkspaceVersionEvent)
+        and event.final_seal is not None
+        and event.final_seal.terminal_seq == terminal_seq
+        and event.final_seal.latest_effect_seq == latest_effect_seq
+        and (event.seq or -1) > terminal_seq
+    ]
+    if not candidates:
+        return False
+    latest = max(candidates, key=lambda event: event.seq or -1)
+    return not any(
+        isinstance(event, WorkspaceVersionEvent) and (event.seq or -1) > (latest.seq or -1)
         for event in events
     )
 
@@ -255,6 +354,7 @@ def _serve_static_from_snapshot(
     version: int | None = None,
     entry_path: str | None = None,
     inject_selection: bool = False,
+    committed: bool = False,
 ) -> Response | None:
     """runthru-v2: serve a FINISHED build's static site DIRECTLY from the host
     ProjectStore snapshot when the sandbox can't be woken (build finished + reaped,
@@ -268,13 +368,35 @@ def _serve_static_from_snapshot(
         ps = runtime.project_store()
         if ps is None or ps.status() != StorageStatus.OK:
             return None
-        if version is None:
-            ws = ps.path_for(conversation_id).resolve()
-        else:
-            ws = ps.version_workspace_path(conversation_id, version).resolve()
+        if version is not None:
+            with ps.open_verified_version(conversation_id, version) as verified:
+                target_rel = _verified_snapshot_request_path(
+                    {entry.path for entry in verified.files},
+                    rel_path,
+                    entry_path,
+                )
+                if target_rel is None:
+                    if entry_path is not None:
+                        return Response(
+                            "preview asset not found",
+                            status_code=404,
+                            media_type="text/plain",
+                        )
+                    return None
+                body = verified.read_bytes(target_rel)
+                ctype = mimetypes.guess_type(target_rel)[0] or "application/octet-stream"
+            if inject_selection:
+                body = inject_selection_agent(body, ctype)
+            body = inject_element_mention_picker(body, ctype)
+            return Response(content=body, media_type=ctype)
+        ws = ps.path_for(conversation_id).resolve()
     except StorageError:
         if version is not None:
-            return Response("version not found", status_code=404, media_type="text/plain")
+            return Response(
+                "committed workspace unavailable" if committed else "version not found",
+                status_code=503 if committed else 404,
+                media_type="text/plain",
+            )
         return None
     except Exception:  # noqa: BLE001 — no snapshot → caller falls back to 503
         return None
@@ -331,6 +453,49 @@ async def _fetch_inside_response(
     return Response(
         content=inject_element_mention_picker(body, media_type),
         status_code=status,
+        media_type=media_type,
+    )
+
+
+async def _serve_active_finished_projection(
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    rel_path: str,
+    projection: ActiveLivePreviewProjection,
+    *,
+    capability_port: int | None,
+) -> Response | None:
+    """Proxy only the exact already-running generation proven before FINISHED."""
+
+    if capability_port is not None and capability_port != projection.port:
+        return None
+    resolver = getattr(runtime, "resolve_active_preview_projection", None)
+    if resolver is None or not await resolver(conversation_id, projection):
+        return None
+    # Deliberately do not call wake_for_preview: teardown/recreate/restart revokes
+    # this bounded active-live projection instead of re-executing persisted code.
+    upstream = runtime.port_upstream(conversation_id, projection.port)
+    if upstream is None:
+        return await _fetch_inside_response(
+            runtime,
+            conversation_id,
+            projection.port,
+            rel_path,
+        )
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
+            response = await client.get(f"{upstream}/{rel_path}")
+    except Exception:  # noqa: BLE001 — a lost original generation is unavailable
+        return await _fetch_inside_response(
+            runtime,
+            conversation_id,
+            projection.port,
+            rel_path,
+        )
+    media_type = response.headers.get("content-type", "text/html")
+    return Response(
+        content=inject_element_mention_picker(response.content, media_type),
+        status_code=response.status_code,
         media_type=media_type,
     )
 
@@ -553,9 +718,19 @@ async def _committed_static_capability_available(
         events = await store.get_events(conversation_id)
     except Exception:  # noqa: BLE001 — missing evidence cannot authorize fallback
         return False
-    if version is None and not _finished_snapshot_is_committed(events):
-        return False
-    entry_path = _selected_app_entry(events, version=version)
+    if version is None:
+        project_store = runtime.project_store()
+        if project_store is None or project_store.status() != StorageStatus.OK:
+            return False
+        try:
+            committed = resolve_committed_workspace(events, project_store, conversation_id)
+        except WorkspaceCommitUnavailable:
+            return False
+        version = committed.event.version_seq
+        marker_seq = committed.event.seq
+    else:
+        marker_seq = None
+    entry_path = _selected_app_entry(events, version=version, marker_seq=marker_seq)
     if entry_path is None:
         return False
     served = _serve_static_from_snapshot(
@@ -1102,12 +1277,10 @@ def _register_port_preview_routes(
         await _proxy_websocket_to_upstream(websocket, upstream, path)
 
 
-def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
-    router = APIRouter()
-    _register_preview_capability_route(router, store, runtime)
-    _register_live_browser_start_route(router, store, runtime)
-    _register_live_browser_status_routes(router, store, runtime)
-    _register_port_preview_routes(router, store, runtime)
+def _register_preview_meta_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    """Register preview availability and restart routes."""
 
     @router.get("/conversations/{conversation_id}/preview")
     async def get_preview(conversation_id: str, request: Request) -> dict:
@@ -1125,6 +1298,12 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
         if runtime is None:
             return {"ok": False}
         return {"ok": await runtime.ensure_preview(conversation_id)}
+
+
+def _register_preview_app_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    """Register the preview-app GET proxy routes and their historical-version variants."""
 
     @router.get("/conversations/{conversation_id}/preview-app/{path:path}")
     @router.get("/conversations/{conversation_id}/preview-app/")
@@ -1171,12 +1350,12 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             return Response(
                 "preview metadata unavailable", status_code=503, media_type="text/plain"
             )
-        entry_path = _selected_app_entry(events, version=version)
         # Historical preview is static-only AND must NEVER fall through to the live
         # proxy: a ?version request answered by the live sandbox would show current
         # bytes under a "viewing vN" banner — a false affordance. Version requests
         # serve from the version snapshot or 404, full stop.
         if version is not None:
+            entry_path = _selected_app_entry(events, version=version)
             served = _serve_static_from_snapshot(
                 runtime,
                 conversation_id,
@@ -1192,16 +1371,49 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                     "committed preview unavailable", status_code=503, media_type="text/plain"
                 )
             return Response("version not found", status_code=404, media_type="text/plain")
-        # Once the FINISHED workspace has a durable commit marker, its selected
-        # deliverable is authoritative.  Serving it before waking/proxying avoids
-        # a still-running stale scaffold at `/` winning over the completed app.
-        if _finished_snapshot_is_committed(events):
+
+        latest_status = next(
+            (event for event in reversed(events) if isinstance(event, StatusEvent)),
+            None,
+        )
+        # FINISHED is not itself a byte commit. A completed conversation either
+        # serves its freshly verified immutable seal or fails closed while final
+        # capture/recovery is pending. It never wakes a live server or reads the
+        # mutable mirror under a completed-build affordance.
+        if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+            project_store = runtime.project_store()
+            if project_store is None or project_store.status() != StorageStatus.OK:
+                return Response(
+                    "finished workspace is not sealed",
+                    status_code=503,
+                    media_type="text/plain",
+                )
+            try:
+                committed = resolve_committed_workspace(
+                    events,
+                    project_store,
+                    conversation_id,
+                )
+            except WorkspaceCommitUnavailable:
+                return Response(
+                    "finished workspace is finalizing or unsealed",
+                    status_code=503,
+                    media_type="text/plain",
+                )
+            committed_version = committed.event.version_seq
+            entry_path = _selected_app_entry(
+                events,
+                version=committed_version,
+                marker_seq=committed.event.seq,
+            )
             served = _serve_static_from_snapshot(
                 runtime,
                 conversation_id,
                 safe_path,
+                version=committed_version,
                 entry_path=entry_path,
                 inject_selection=preview_cap is not None,
+                committed=True,
             )
             if served is not None:
                 return served
@@ -1209,6 +1421,34 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                 return Response(
                     "committed preview unavailable", status_code=503, media_type="text/plain"
                 )
+            seal = committed.event.final_seal
+            projection = (
+                derive_active_live_preview_projection(
+                    events,
+                    terminal_seq=seal.terminal_seq,
+                )
+                if seal is not None
+                else None
+            )
+            if projection is not None:
+                query = _forwarded_preview_query(request)
+                active_path = f"{safe_path}?{query}" if query else safe_path
+                active = await _serve_active_finished_projection(
+                    runtime,
+                    conversation_id,
+                    active_path,
+                    projection,
+                    capability_port=(preview_cap.port if preview_cap is not None else None),
+                )
+                if active is not None:
+                    return active
+            return Response(
+                "committed preview target unavailable",
+                status_code=503,
+                media_type="text/plain",
+            )
+
+        entry_path = _selected_app_entry(events, version=None)
         target_port = (
             preview_cap.port
             if preview_cap is not None
@@ -1222,11 +1462,6 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
         query = _forwarded_preview_query(request)
         upstream_path = f"{safe_path}?{query}" if query else safe_path
         if upstream is None:
-            # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
-            # `wake_for_preview` resolves None even with a live dev server. Before
-            # falling back to the (stale mid-run) snapshot, try a liveness proxy that
-            # curls the server from INSIDE the sandbox — genuinely liveness-gated and
-            # backend-agnostic. Only succeeds when something IS listening on the port.
             served = (
                 await _fetch_inside_response(runtime, conversation_id, target_port, upstream_path)
                 if target_port is not None
@@ -1258,9 +1493,6 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
                     target_url = f"{target_url}?{query}"
                 r = await client.get(target_url)
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
-            # Fix 2 safety net: a RESOLVED-but-unreachable upstream (host port mapped but
-            # nothing answers) bypassed the None-fallback above; try the in-sandbox
-            # liveness proxy before giving up so a live server is still served.
             served = await _fetch_inside_response(
                 runtime, conversation_id, target_port, upstream_path
             )
@@ -1275,6 +1507,12 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             status_code=r.status_code,
             media_type=media_type,
         )
+
+
+def _register_preview_app_websocket_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    """Register the preview-app WebSocket proxy routes."""
 
     @router.websocket("/conversations/{conversation_id}/preview-app/{path:path}")
     @router.websocket("/conversations/{conversation_id}/preview-app/")
@@ -1315,6 +1553,57 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
         if websocket.query_params.get("version") is not None:
             await _close_ws(websocket, 1008, "historical previews are static")
             return
+        try:
+            events = await store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — status uncertainty cannot authorize a wake
+            await _close_ws(websocket, 1008, "preview metadata unavailable")
+            return
+        latest_status = next(
+            (event for event in reversed(events) if isinstance(event, StatusEvent)),
+            None,
+        )
+        if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+            # FINISHED WebSockets obey the same no-wake boundary as HTTP.  They
+            # may use only the exact active-live generation bound to the current
+            # final seal; filtered backends without a passive host upstream close
+            # honestly because fetch_inside cannot proxy a WebSocket.
+            project_store = runtime.project_store()
+            if project_store is None or project_store.status() != StorageStatus.OK:
+                await _close_ws(websocket, 1008, "preview not available")
+                return
+            try:
+                committed = resolve_committed_workspace(
+                    events,
+                    project_store,
+                    conversation_id,
+                )
+            except WorkspaceCommitUnavailable:
+                await _close_ws(websocket, 1008, "preview not available")
+                return
+            seal = committed.event.final_seal
+            projection = (
+                derive_active_live_preview_projection(
+                    events,
+                    terminal_seq=seal.terminal_seq,
+                )
+                if seal is not None
+                else None
+            )
+            resolver = getattr(runtime, "resolve_active_preview_projection", None)
+            if (
+                projection is None
+                or target_port != projection.port
+                or resolver is None
+                or not await resolver(conversation_id, projection)
+            ):
+                await _close_ws(websocket, 1008, "preview not available")
+                return
+            upstream = runtime.port_upstream(conversation_id, projection.port)
+            if upstream is None:
+                await _close_ws(websocket, 1008, "preview not available")
+                return
+            await _proxy_websocket_to_upstream(websocket, upstream, path)
+            return
         cid8 = conversation_id.removeprefix("conv_")[:8]
         if target_port is None:
             await _close_ws(websocket, 1008, "preview not available")
@@ -1325,4 +1614,14 @@ def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             return
         await _proxy_websocket_to_upstream(websocket, upstream, path)
 
+
+def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
+    router = APIRouter()
+    _register_preview_capability_route(router, store, runtime)
+    _register_live_browser_start_route(router, store, runtime)
+    _register_live_browser_status_routes(router, store, runtime)
+    _register_port_preview_routes(router, store, runtime)
+    _register_preview_meta_routes(router, store, runtime)
+    _register_preview_app_routes(router, store, runtime)
+    _register_preview_app_websocket_routes(router, store, runtime)
     return router

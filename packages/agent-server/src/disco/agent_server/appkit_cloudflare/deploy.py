@@ -42,10 +42,10 @@ import shutil
 import stat
 import tempfile
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal, overload
+from typing import Literal, NoReturn, overload
 
 from disco.core.appkit.local_verify import (
     CF_EXPORT_FILES,
@@ -63,6 +63,12 @@ from disco.core.appkit.webhook_primitive import webhook_verify
 from disco.core.llm.secrets import SecretStore, WeakSecretError
 
 from ..redaction import redact_text
+from ..workspace_process_fence import (
+    WorkspaceProcessBusy,
+    try_workspace_process_fence,
+    workspace_process_lock_dir,
+    workspace_process_lock_path,
+)
 from .models import (
     ConnectionStatus,
     DeployExecutionResult,
@@ -91,6 +97,8 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     _fcntl = None  # type: ignore[assignment]
 
 _log = logging.getLogger(__name__)
+
+DeployMutationHook = Callable[[], Awaitable[None]]
 
 _HOST_TOKEN_LIFECYCLE_MUTATIONS = frozenset(
     {
@@ -311,20 +319,7 @@ def _deploy_lock_dir() -> Path:
     ``DISCO_DEPLOY_LOCK_DIR`` override, else ``$XDG_STATE_HOME/disco/deploy-locks``
     (or ``$XDG_CONFIG_HOME/disco/deploy-locks``), else a fixed subdir of the system temp
     dir. Created (parents, 0o700) on first use."""
-    override = os.environ.get(_DEPLOY_LOCK_DIR_ENV, "").strip()
-    if override:
-        base = Path(override)
-    else:
-        xdg_state = os.environ.get("XDG_STATE_HOME", "").strip()
-        xdg_cfg = os.environ.get("XDG_CONFIG_HOME", "").strip()
-        if xdg_state:
-            base = Path(xdg_state) / "disco" / "deploy-locks"
-        elif xdg_cfg:
-            base = Path(xdg_cfg) / "disco" / "deploy-locks"
-        else:
-            base = Path(tempfile.gettempdir()) / "disco-deploy-locks"
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return base
+    return workspace_process_lock_dir()
 
 
 def _deploy_lock_path(workspace: Path) -> Path:
@@ -332,12 +327,7 @@ def _deploy_lock_path(workspace: Path) -> Path:
     Keyed by a hash of the RESOLVED workspace path so two processes targeting the same
     workspace pick the same lockfile (and distinct workspaces never collide), and the
     filename never leaks a host path."""
-    try:
-        key = str(workspace.resolve())
-    except OSError:
-        key = str(workspace)
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    return _deploy_lock_dir() / f"{digest}.lock"
+    return workspace_process_lock_path(workspace)
 
 
 @contextlib.contextmanager
@@ -370,26 +360,15 @@ def _cross_process_deploy_lock(workspace: Path) -> Iterator[None]:
         )
         yield
         return
-    path = _deploy_lock_path(workspace)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    acquired = False
     try:
-        try:
-            _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-            acquired = True
-        except OSError as exc:
-            raise DeployRefused(
-                RefusalReason.DEPLOY_IN_PROGRESS,
-                "Another deploy is already in progress for this workspace (the "
-                "cross-process deploy lock is held by a different server process). "
-                "Wait for it to finish, then retry.",
-            ) from exc
-        yield
-    finally:
-        if acquired:
-            with contextlib.suppress(OSError):
-                _fcntl.flock(fd, _fcntl.LOCK_UN)
-        os.close(fd)
+        with try_workspace_process_fence(workspace):
+            yield
+    except WorkspaceProcessBusy as exc:
+        raise DeployRefused(
+            RefusalReason.DEPLOY_IN_PROGRESS,
+            "Another workspace operation is already in progress. Wait for it "
+            "to finish, then retry the deploy.",
+        ) from exc
 
 
 # ---- server-controlled staging root (out-of-tree wrangler-config bypass) -----
@@ -696,21 +675,118 @@ def ensure_workspace_dir(rel: Path | str, workspace_root: Path) -> Path:
     return target
 
 
+@contextlib.contextmanager
+def _open_workspace_write_parent(
+    rel: Path | str,
+    workspace_root: Path,
+) -> Iterator[tuple[Path, int, str, Callable[[], None]]]:
+    """Open a write parent by descriptor, never by a re-resolved host path.
+
+    Every ancestor stays open through publication and can be revalidated against
+    its parent entry. A concurrent rename/symlink swap therefore either fails the
+    identity check or leaves the write bound to the already-open safe directory;
+    it can never redirect publication outside the lexical workspace root.
+    """
+
+    relative = Path(rel)
+    if relative.is_absolute() or not relative.parts or any(part == ".." for part in relative.parts):
+        raise DeployRefused(
+            RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
+            f"A workspace WRITE path is absolute or escapes via '..': {relative}. "
+            "Refusing to write it — the deploy fails closed.",
+        )
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise DeployRefused(
+            RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
+            "This host cannot provide no-follow descriptor traversal for workspace writes.",
+        )
+
+    root = Path(os.path.abspath(os.fspath(workspace_root)))
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+
+    def _identity(info: os.stat_result) -> tuple[int, int, int]:
+        return (info.st_dev, info.st_ino, stat.S_IFMT(info.st_mode))
+
+    def _refuse(message: str, exc: BaseException | None = None) -> NoReturn:
+        error = DeployRefused(RefusalReason.WORKSPACE_SYMLINK_ESCAPE, message)
+        if exc is None:
+            raise error
+        raise error from exc
+
+    try:
+        root_listed = os.lstat(root)
+        root_fd = os.open(root, directory_flags)
+    except OSError as exc:
+        _refuse("The workspace root is missing, replaced, or symlinked; refusing to write.", exc)
+    root_opened = os.fstat(root_fd)
+    if not stat.S_ISDIR(root_listed.st_mode) or _identity(root_listed) != _identity(root_opened):
+        os.close(root_fd)
+        _refuse("The workspace root changed before it could be opened safely.")
+
+    opened: list[tuple[int, str, int]] = []
+    current_fd = root_fd
+    try:
+        for part in relative.parts[:-1]:
+            try:
+                listed = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current_fd)
+                    os.fsync(current_fd)
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    _refuse(f"Workspace directory {part!r} could not be created safely.", exc)
+                try:
+                    listed = os.stat(part, dir_fd=current_fd, follow_symlinks=False)
+                except OSError as exc:
+                    _refuse(f"Workspace directory {part!r} changed while being created.", exc)
+            except OSError as exc:
+                _refuse(f"Workspace directory {part!r} could not be inspected safely.", exc)
+            try:
+                child_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            except OSError as exc:
+                _refuse(f"Workspace directory {part!r} is not a stable real directory.", exc)
+            opened_info = os.fstat(child_fd)
+            if not stat.S_ISDIR(listed.st_mode) or _identity(listed) != _identity(opened_info):
+                os.close(child_fd)
+                _refuse(f"Workspace directory {part!r} changed during traversal.")
+            opened.append((current_fd, part, child_fd))
+            current_fd = child_fd
+
+        def revalidate() -> None:
+            try:
+                current_root = os.lstat(root)
+            except OSError as exc:
+                _refuse("The workspace root changed during record publication.", exc)
+            if _identity(current_root) != _identity(root_opened):
+                _refuse("The workspace root changed during record publication.")
+            for parent_fd, name, child_fd in opened:
+                try:
+                    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except OSError as exc:
+                    _refuse(f"Workspace directory {name!r} changed during publication.", exc)
+                if _identity(current) != _identity(os.fstat(child_fd)):
+                    _refuse(f"Workspace directory {name!r} changed during publication.")
+
+        yield root.joinpath(*relative.parts), current_fd, relative.parts[-1], revalidate
+    finally:
+        for _parent_fd, _name, child_fd in reversed(opened):
+            os.close(child_fd)
+        os.close(root_fd)
+
+
 def write_workspace_file(
     rel: Path | str, data: str | bytes, workspace_root: Path, *, exclusive: bool = False
 ) -> Path:
     """The ONE choke-point WRITER for EVERY workspace/state file (the WRITE-class
-    twin of :func:`read_workspace_file`). It validates the target via
-    :func:`_guarded_write_target` (rejecting absolute/``..`` paths and ANY symlinked
-    path component — lstat per component, NEVER ``resolve`` which would mask an
-    in-workspace symlink), ensures the parent chain exists as REAL directories
-    (:func:`ensure_workspace_dir`), then writes. An escaping/symlinked component →
-    :class:`DeployRefused` (``WORKSPACE_SYMLINK_ESCAPE``) BEFORE any write, so a
-    planted symlink — the ``.disco`` deployment-record dir (digest-SKIPPED, hence the
-    round-8 escape), a ``dist`` root, a ``wrangler.toml`` parent — can NEVER redirect
+    twin of :func:`read_workspace_file`). It opens the lexical workspace root and
+    every parent with descriptor-relative ``O_NOFOLLOW`` traversal, retaining and
+    revalidating the entire descriptor chain through atomic publication. A planted
+    or concurrently swapped symlink therefore fails closed and can never redirect
     the write outside the workspace. Every workspace/state write in this package
-    routes through here, so the per-site guards can never drift back in. Returns the
-    absolute path written.
+    routes through here. Returns the lexical absolute target after publication.
 
     SEC-16 (hardlink defence): the per-component symlink check catches a symlinked LEAF,
     but not a HARDLINK aliasing a host file. With ``exclusive`` the leaf is created via
@@ -718,51 +794,77 @@ def write_workspace_file(
     the target), and a non-exclusive overwrite first LSTATs the existing leaf and REFUSES a
     multi-link (``st_nlink > 1``) regular file, so a truncating write can never clobber a
     host file aliased into the record path."""
-    target = _guarded_write_target(rel, workspace_root)
-    parent_rel = Path(rel).parent
-    if parent_rel.parts:  # skip when the parent is '.' (a top-level file)
-        ensure_workspace_dir(parent_rel, workspace_root)
-    # Re-validate after the parent mkdir — re-run the per-component symlink check at
-    # write time (TOCTOU: defend against a symlink planted between check and write).
-    target = _guarded_write_target(rel, workspace_root)
     raw = data.encode("utf-8") if isinstance(data, str) else data
-    if exclusive:
-        # Exclusive CREATE: O_EXCL fails if the path already exists (a pre-planted
-        # file/symlink/hardlink), 0o600 perms. fstat the fresh fd to assert a regular
-        # file (belt-and-suspenders — an O_EXCL create is always nlink==1).
-        try:
-            fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError as exc:
-            raise DeployRefused(
-                RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
-                f"The deploy record path already exists ({Path(rel).name}); refusing to "
-                "overwrite a pre-existing (possibly hardlinked) file (fail closed).",
-            ) from exc
-        try:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+    with _open_workspace_write_parent(rel, workspace_root) as opened:
+        target, directory_fd, target_name, revalidate = opened
+        if not exclusive:
+            try:
+                existing = os.stat(target_name, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and (
+                not stat.S_ISREG(existing.st_mode) or existing.st_nlink > 1
+            ):
                 raise DeployRefused(
                     RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
-                    "The deploy record target is not a fresh regular file (multi-link / "
-                    "special); refusing to write through it (fail closed).",
+                    f"A workspace WRITE target is not a private regular file: {target_name}. "
+                    "It could alias a host path — refusing to write (fail closed).",
                 )
-            os.write(fd, raw)
+        temporary_name = f".{target_name}.{_secrets.token_hex(16)}.tmp"
+        temporary_fd: int | None = None
+        temporary_exists = False
+        try:
+            temporary_fd = os.open(
+                temporary_name,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            temporary_exists = True
+            view = memoryview(raw)
+            while view:
+                written = os.write(temporary_fd, view)
+                if written <= 0:
+                    raise OSError("workspace record write made no progress")
+                view = view[written:]
+            os.fsync(temporary_fd)
+            os.close(temporary_fd)
+            temporary_fd = None
+            revalidate()
+            if exclusive:
+                try:
+                    os.link(
+                        temporary_name,
+                        target_name,
+                        src_dir_fd=directory_fd,
+                        dst_dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError as exc:
+                    raise DeployRefused(
+                        RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
+                        f"The deploy record path already exists ({target_name}); refusing to "
+                        "overwrite a pre-existing file (fail closed).",
+                    ) from exc
+                os.unlink(temporary_name, dir_fd=directory_fd)
+                temporary_exists = False
+            else:
+                os.replace(
+                    temporary_name,
+                    target_name,
+                    src_dir_fd=directory_fd,
+                    dst_dir_fd=directory_fd,
+                )
+                temporary_exists = False
+            os.fsync(directory_fd)
+            revalidate()
+            return target
         finally:
-            os.close(fd)
-        return target
-    # Overwrite path: reject a hardlinked (st_nlink > 1) existing leaf before truncating.
-    try:
-        lst = target.lstat()
-    except FileNotFoundError:
-        lst = None
-    if lst is not None and stat.S_ISREG(lst.st_mode) and lst.st_nlink > 1:
-        raise DeployRefused(
-            RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
-            f"A workspace WRITE target is a hardlink (st_nlink={lst.st_nlink}): "
-            f"{Path(rel).name}. It could alias a host file — refusing to write (fail closed).",
-        )
-    target.write_bytes(raw)
-    return target
+            if temporary_fd is not None:
+                os.close(temporary_fd)
+            if temporary_exists:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(temporary_name, dir_fd=directory_fd)
 
 
 def _tree_digest(workspace: Path) -> str:
@@ -2191,6 +2293,8 @@ async def execute_deploy(
     admin_token: str | None = None,
     stripe_context: StripeDeployContext | None = None,
     webhook_context: WebhookDeployContext | None = None,
+    on_mutation_start: DeployMutationHook | None = None,
+    on_mutation_finish: DeployMutationHook | None = None,
 ) -> DeployExecutionResult:
     """The single entry point for a (possibly real) deploy. Enforces the four
     hard gates IN ORDER, then either returns the dry-run plan (default, no side
@@ -2199,6 +2303,9 @@ async def execute_deploy(
 
     Raises :class:`DeployRefused` (mapped to a 4xx at the route) on any gate.
     """
+    if (on_mutation_start is None) != (on_mutation_finish is None):
+        raise ValueError("deploy mutation hooks must be supplied as a start/finish pair")
+
     # GATE 4: autonomous deploy decisions can never be mistaken for owner approval.
     # Like request_custom_build, a real deploy needs a human.
     if autonomous:
@@ -2313,72 +2420,121 @@ async def execute_deploy(
             "the plan and re-confirm.",
         )
 
-    # SEC-25/CORR-11: serialize deploys of the SAME workspace so two can't interleave
-    # the staged dist / D1 / wrangler.toml / record. DEFENCE IN DEPTH, nested in this
-    # order on purpose: the in-process asyncio mutex (the OUTER guard) is the fast path —
-    # concurrent coroutines in THIS process QUEUE on it (one runs, the next waits), so a
-    # legitimate same-process retry serialises rather than being refused; INSIDE it, the
-    # cross-process file ``flock`` (the INNER guard) backstops a multi-worker server — a
-    # second SERVER PROCESS deploying this same workspace is REFUSED fail-fast
-    # (DEPLOY_IN_PROGRESS), never interleaved. Because only one coroutine holds the
-    # asyncio lock at a time, the flock never self-conflicts within the process; it
-    # only ever conflicts with a genuinely DIFFERENT process. SEC-6/SEC-7/CORR-2: run the
-    # build + wrangler from an IMMUTABLE, symlink-free STAGED COPY, never the live tree.
+    return await _execute_under_deploy_locks(
+        workspace,
+        store,
+        plan,
+        runner,
+        build_backend,
+        admin_token,
+        snap_token=snap_token,
+        snap_account=snap_account,
+        stripe_context=stripe_context,
+        webhook_context=webhook_context,
+        on_mutation_start=on_mutation_start,
+        on_mutation_finish=on_mutation_finish,
+    )
+
+
+async def _execute_under_deploy_locks(
+    workspace: Path,
+    store: SecretStore,
+    plan: DeployPlan,
+    runner: CommandRunner,
+    build_backend: BuildBackend,
+    admin_token: str | None,
+    *,
+    snap_token: str,
+    snap_account: str | None,
+    stripe_context: StripeDeployContext | None,
+    webhook_context: WebhookDeployContext | None,
+    on_mutation_start: DeployMutationHook | None,
+    on_mutation_finish: DeployMutationHook | None,
+) -> DeployExecutionResult:
+    """Serialize, stage, validate, execute, and durably close one real deploy."""
+
+    # The asyncio lock queues local peers; the inner flock refuses a different
+    # process. Wrangler only sees the immutable, symlink-free staged copy.
     async with _deploy_lock_for(workspace):
         with _cross_process_deploy_lock(workspace):
             staged = _stage_deploy_tree(workspace)
-            # A throwaway HOME for the token-bearing wrangler steps (SEC-32) so a planted
-            # ~/.npmrc / ~/.wrangler can never redirect to host creds.
             deploy_home = Path(tempfile.mkdtemp(prefix="disco-deploy-home-"))
             try:
-                # SEC-17/SEC-18: refuse a plaintext secret anywhere in the (now-immutable)
-                # deploy tree — .env files + wrangler.toml [vars], beyond the .dev.vars check.
                 _assert_no_plaintext_secrets(staged)
-                # SEC-17/SEC-18 (whole-tree): a credential-bearing FILE (denylist) or any
-                # high-confidence secret-SHAPED VALUE in a deployed text file → refuse.
                 _assert_no_secret_shaped_files(staged)
-                # SEC-4: REQUIRE a positive worker-auth verdict for the staged tree — the
-                # admin-token gate must be enforced on /admin + GET /api/leads, fail closed,
-                # and never echo env.ADMIN_TOKEN. No verdict → refuse (WORKER_AUTH_UNVERIFIED).
                 _assert_worker_auth_verified(staged)
-                # SEC-5: enforce the wrangler.toml top-level-key allowlist (no routes/custom
-                # domains/build hooks/cron triggers/extra bindings/account_id broadening the
-                # blast radius or redirecting the account).
                 _assert_wrangler_allowlisted(staged)
-                # SEC (config-source bypass): wrangler.toml is the SOLE config source. Refuse
-                # a planted wrangler.json/.jsonc (read BEFORE wrangler.toml by precedence) or a
-                # .wrangler/deploy/config.json redirect — scan the IMMUTABLE staged tree AND the
-                # LIVE workspace (the latter catches a .wrangler redirect that staging excludes).
                 _assert_sole_wrangler_config(staged, workspace)
-                # SEC (OUT-OF-TREE config-source bypass): the two scans above cover the staged +
-                # live trees, but `wrangler deploy` ALSO honors a `.wrangler/deploy/config.json`
-                # redirect discovered by walking UP from its cwd (=`staged`, a mkdtemp dir). Refuse
-                # if ANY ancestor of the staged cwd, up to the filesystem root, holds a `.wrangler`
-                # (e.g. a planted /tmp/.wrangler) — outside both scanned trees yet honored by the
-                # upward walk. The deploy env is already minimized (no WRANGLER_*/CLOUDFLARE_*
-                # config-redirect var is forwarded — see _WRANGLER_ENV_ALLOWLIST), so the only
-                # remaining redirect vector is this on-disk ancestor walk.
                 _assert_no_ancestor_wrangler_config(staged)
                 stripe_lifecycle, webhook_lifecycle = _security_lifecycles_for_deploy(
                     staged, store, stripe_context, webhook_context
                 )
-                return await _run_real_deploy(
-                    workspace,
-                    staged,
-                    store,
-                    plan,
-                    runner,
-                    build_backend,
-                    admin_token,
-                    snap_token=snap_token,
-                    snap_account=snap_account,
-                    deploy_home=str(deploy_home),
-                    stripe_lifecycle=stripe_lifecycle,
-                    webhook_lifecycle=webhook_lifecycle,
-                )
+                mutation_scope_entered = False
+
+                async def begin_mutation() -> None:
+                    nonlocal mutation_scope_entered
+                    if on_mutation_start is not None:
+                        await on_mutation_start()
+                    # The successful start callback is the mutation-scope commit
+                    # point. A rejected guard must never trigger finalization.
+                    mutation_scope_entered = True
+
+                original_escape: BaseException | None = None
+                try:
+                    return await _run_real_deploy(
+                        workspace,
+                        staged,
+                        store,
+                        plan,
+                        runner,
+                        build_backend,
+                        admin_token,
+                        snap_token=snap_token,
+                        snap_account=snap_account,
+                        deploy_home=str(deploy_home),
+                        stripe_lifecycle=stripe_lifecycle,
+                        webhook_lifecycle=webhook_lifecycle,
+                        on_mutation_start=begin_mutation,
+                    )
+                except BaseException as exc:
+                    original_escape = exc
+                    raise
+                finally:
+                    if mutation_scope_entered and on_mutation_finish is not None:
+                        try:
+                            await _drain_deploy_mutation_finish(on_mutation_finish)
+                        except BaseException as finalizer_error:
+                            if original_escape is None:
+                                raise
+                            original_escape.add_note(
+                                "A later cancellation or mutation-finalizer failure was "
+                                "drained without replacing this original deploy failure."
+                            )
+                            raise original_escape from finalizer_error
             finally:
                 shutil.rmtree(staged, ignore_errors=True)
                 shutil.rmtree(deploy_home, ignore_errors=True)
+
+
+async def _drain_deploy_mutation_finish(callback: DeployMutationHook) -> None:
+    """Drain a host-mirror reseal through any number of caller cancellations."""
+
+    task = asyncio.ensure_future(callback())
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            if task.cancelled():
+                raise
+            cancellation = cancellation or exc
+    try:
+        task.result()
+    except Exception:
+        _log.exception("deploy mutation finalizer failed while draining cancellation")
+        raise
+    if cancellation is not None:
+        raise cancellation
 
 
 def _deploy_asset_dir_rel(workspace: Path) -> str:
@@ -2887,6 +3043,107 @@ async def _quiesce_security_workers(
     return None
 
 
+async def _begin_deploy_record_scope(
+    callback: DeployMutationHook | None,
+    workspace: Path,
+    plan: DeployPlan,
+    store: SecretStore,
+) -> tuple[Path, list[str], str]:
+    """Cross the host-mutation fence immediately before the attempt record."""
+
+    if callback is not None:
+        await callback()
+    record_rel = _new_record_rel()
+    mutations: list[str] = []
+    attempt_record_path = _persist_record(
+        workspace,
+        record_rel,
+        plan,
+        status="in_progress",
+        mutations=mutations,
+        exclusive=True,
+        store=store,
+    )
+    return record_rel, mutations, attempt_record_path
+
+
+@contextlib.contextmanager
+def _close_deploy_record_on_escape(
+    workspace: Path,
+    record_rel: Path,
+    plan: DeployPlan,
+    mutations: list[str],
+    store: SecretStore,
+    *,
+    effective_digest: Callable[[], str | None],
+    deployed_url: Callable[[], str | None],
+) -> Iterator[None]:
+    """Close the exact attempt record before an escaping failure reaches reseal."""
+
+    try:
+        yield
+    except BaseException as original:
+        detail = (
+            "Deploy execution was cancelled after the mutation fence."
+            if isinstance(original, asyncio.CancelledError)
+            else "Deploy execution exited unexpectedly after the mutation fence."
+        )
+        try:
+            _persist_record(
+                workspace,
+                record_rel,
+                plan,
+                status="partial_failure" if mutations else "failed",
+                mutations=mutations,
+                deployed_url=deployed_url(),
+                effective_digest=effective_digest(),
+                attempted_step="deploy interrupted",
+                error_detail=detail,
+                store=store,
+            )
+        except BaseException as close_error:
+            original.add_note("The deployment attempt record could not be closed.")
+            raise original from close_error
+        raise
+
+
+def _failed_deploy_result(
+    workspace: Path,
+    record_rel: Path,
+    plan: DeployPlan,
+    mutations: list[str],
+    transcript: list[str],
+    effective_digest: str | None,
+    store: SecretStore,
+    step: str,
+    detail: str,
+) -> DeployExecutionResult:
+    """Durably close an ordinary failed step and return its structured result."""
+
+    record_path = _persist_record(
+        workspace,
+        record_rel,
+        plan,
+        status="partial_failure" if mutations else "failed",
+        mutations=mutations,
+        attempted_step=step,
+        error_detail=detail,
+        effective_digest=effective_digest,
+        store=store,
+    )
+    return DeployExecutionResult(
+        executed=False,
+        dry_run=False,
+        plan=plan,
+        transcript=transcript,
+        succeeded=False,
+        failed_step=step,
+        error_detail=detail,
+        mutations=list(mutations),
+        attempt_record_path=record_path,
+    )
+
+
 async def _run_real_deploy(
     live_workspace: Path,
     staged: Path,
@@ -2901,6 +3158,7 @@ async def _run_real_deploy(
     deploy_home: str,
     stripe_lifecycle: StripeDeploymentLifecycle | None = None,
     webhook_lifecycle: WebhookDeploymentLifecycle | None = None,
+    on_mutation_start: DeployMutationHook | None = None,
 ) -> DeployExecutionResult:
     """Drive the deploy sequence (idempotent) against the IMMUTABLE *staged* copy —
     NEVER the live mutable workspace (SEC-6/SEC-7/CORR-2). The UNTRUSTED build runs in
@@ -3091,78 +3349,107 @@ async def _run_real_deploy(
     # the first Cloudflare mutation, then UPDATE it after each mutating leg, so a failure
     # part-way through is persisted (the partial side effects are never lost). Collision-
     # proof filename (SEC-16): timestamp + random suffix.
-    record_rel = _new_record_rel()
-    mutations: list[str] = []
+    record_rel, mutations, attempt_record_path = await _begin_deploy_record_scope(
+        on_mutation_start,
+        live_workspace,
+        plan,
+        store,
+    )
     # CORR-7: the EFFECTIVE deployed-artifact digest (post-build, post-D1-substitution),
     # computed just before `wrangler deploy` and persisted FROM the worker_deploy step on —
     # so even a partial failure AFTER the deploy durably records what was published. None
     # until then.
     effective_digest: str | None = None
-    # SEC-16: the FIRST record write CREATES the file exclusively (O_CREAT|O_EXCL) so a
-    # pre-planted file/hardlink at the (random) record path cannot be clobbered; later
-    # updates rewrite the SAME file.
-    attempt_record_path = _persist_record(
-        live_workspace,
-        record_rel,
-        plan,
-        status="in_progress",
-        mutations=mutations,
-        exclusive=True,
-        store=store,
-    )
+    deployed_url: str | None = None
 
     def _fail(step: str, detail: str) -> DeployExecutionResult:
-        # Persist the PARTIAL state durably (the mutations that DID complete + the
-        # effective digest once the deploy ran) before returning the aborted result.
-        status = "partial_failure" if mutations else "failed"
-        rp = _persist_record(
+        return _failed_deploy_result(
             live_workspace,
             record_rel,
             plan,
-            status=status,
-            mutations=mutations,
-            attempted_step=step,
-            error_detail=detail,
-            effective_digest=effective_digest,
+            mutations,
+            transcript,
+            effective_digest,
             store=store,
-        )
-        return DeployExecutionResult(
-            executed=False,
-            dry_run=False,
-            plan=plan,
-            transcript=transcript,
-            succeeded=False,
-            failed_step=step,
-            error_detail=detail,
-            mutations=list(mutations),
-            attempt_record_path=rp,
+            step=step,
+            detail=detail,
         )
 
-    secret_writer = _DeploySecretWriter(
-        runner,
-        wrangler_bin,
-        staged,
-        deploy_env,
-        transcript,
+    with _close_deploy_record_on_escape(
         live_workspace,
         record_rel,
         plan,
         mutations,
         store,
-    )
-    quiesce_error = await _quiesce_security_workers(
-        stripe_lifecycle, webhook_lifecycle, worker_exists, secret_writer
-    )
-    if quiesce_error is not None:
-        return _fail(quiesce_error.step, quiesce_error.detail)
+        effective_digest=lambda: effective_digest,
+        deployed_url=lambda: deployed_url,
+    ):
+        secret_writer = _DeploySecretWriter(
+            runner,
+            wrangler_bin,
+            staged,
+            deploy_env,
+            transcript,
+            live_workspace,
+            record_rel,
+            plan,
+            mutations,
+            store,
+        )
+        quiesce_error = await _quiesce_security_workers(
+            stripe_lifecycle, webhook_lifecycle, worker_exists, secret_writer
+        )
+        if quiesce_error is not None:
+            return _fail(quiesce_error.step, quiesce_error.detail)
 
-    database_id: str | None
-    if creating:
-        created = await runner.run(_wr("d1", "create", plan.db_name), cwd=staged, env=deploy_env)
-        record(f"wrangler d1 create {plan.db_name}", created)
-        if not created.ok:
-            return _fail("wrangler d1 create", f"d1 create failed (exit {created.returncode})")
-        mutations.append(f"d1_create:{plan.db_name}")
+        database_id: str | None
+        if creating:
+            created = await runner.run(
+                _wr("d1", "create", plan.db_name), cwd=staged, env=deploy_env
+            )
+            record(f"wrangler d1 create {plan.db_name}", created)
+            if not created.ok:
+                return _fail("wrangler d1 create", f"d1 create failed (exit {created.returncode})")
+            mutations.append(f"d1_create:{plan.db_name}")
+            _persist_record(
+                live_workspace,
+                record_rel,
+                plan,
+                status="in_progress",
+                mutations=mutations,
+                store=store,
+            )
+            database_id = _extract_database_id(created.stdout)
+        else:
+            database_id = _database_id_from_list(listing.stdout, plan.db_name)
+
+        # P1-3: substitute the REAL database_id into the STAGED wrangler.toml BEFORE deploy,
+        # so the D1 binding is actually wired (a fresh deploy ships the placeholder
+        # otherwise). FAIL CLOSED if we cannot resolve it — never deploy a Worker with a
+        # non-functional D1 binding.
+        if database_id:
+            _substitute_database_id(staged, database_id)
+        if _D1_ID_PLACEHOLDER in (
+            read_workspace_file(staged / "wrangler.toml", staged.resolve()) or ""
+        ):
+            return _fail(
+                "resolve d1 database_id",
+                "could not resolve a valid (UUID) D1 database_id from wrangler output; "
+                "refusing to deploy a Worker with an unbound (placeholder) D1 database.",
+            )
+
+        # 3. Apply schema to the remote D1. ABORT before deploy if the migration fails.
+        migrate = await runner.run(
+            _wr("d1", "execute", plan.db_name, "--remote", "--file=./schema.sql"),
+            cwd=staged,
+            env=deploy_env,
+        )
+        record(f"wrangler d1 execute {plan.db_name} --remote", migrate)
+        if not migrate.ok:
+            return _fail(
+                "wrangler d1 execute (migrate)", f"migration failed (exit {migrate.returncode})"
+            )
+        mutations.append("d1_migrate")
         _persist_record(
             live_workspace,
             record_rel,
@@ -3171,122 +3458,83 @@ async def _run_real_deploy(
             mutations=mutations,
             store=store,
         )
-        database_id = _extract_database_id(created.stdout)
-    else:
-        database_id = _database_id_from_list(listing.stdout, plan.db_name)
 
-    # P1-3: substitute the REAL database_id into the STAGED wrangler.toml BEFORE deploy,
-    # so the D1 binding is actually wired (a fresh deploy ships the placeholder
-    # otherwise). FAIL CLOSED if we cannot resolve it — never deploy a Worker with a
-    # non-functional D1 binding.
-    if database_id:
-        _substitute_database_id(staged, database_id)
-    if _D1_ID_PLACEHOLDER in (
-        read_workspace_file(staged / "wrangler.toml", staged.resolve()) or ""
-    ):
-        return _fail(
-            "resolve d1 database_id",
-            "could not resolve a valid (UUID) D1 database_id from wrangler output; "
-            "refusing to deploy a Worker with an unbound (placeholder) D1 database.",
+        # P0 (round 9): IMMEDIATELY before `wrangler deploy` — which FOLLOWS symlinks
+        # when it uploads ./dist — scan the EXACT asset tree wrangler will publish and
+        # REFUSE if ANY entry (dir or file, any depth) is a symlink. The build regenerates
+        # dist AFTER staging, so a symlink the build emits is caught only here. Fail closed
+        # BEFORE the deploy command runs (no upload on refusal).
+        assert_deploy_tree_symlink_free(staged, asset_dir_rel)
+
+        # CORR-7: bind the audit record to the EFFECTIVE deployed artifact — the digest of
+        # the staged tree POST-build and POST-D1-substitution (what wrangler actually
+        # uploads), not just the plan-time pre-build digest.
+        effective_digest = _tree_digest(staged)
+        secret_writer.effective_digest = effective_digest
+
+        # 4. Deploy the Worker + assets. ABORT before the secret-put on failure.
+        # SEC (config-source bypass): PIN the config explicitly to the staged wrangler.toml so
+        # wrangler can NEVER pick an alt source by precedence (wrangler.json/.jsonc) at exec
+        # time. Belt-and-suspenders alongside the alt-config REFUSAL (the primary guard — a
+        # .wrangler/deploy/config.json redirect may not be overridden by --config) + the staging
+        # exclusion of .wrangler; together they guarantee wrangler.toml is the sole config source.
+        deployed = await runner.run(
+            _wr("deploy", "--config", str(staged / "wrangler.toml")),
+            cwd=staged,
+            env=deploy_env,
+        )
+        record("wrangler deploy", deployed)
+        if not deployed.ok:
+            return _fail("wrangler deploy", f"worker deploy failed (exit {deployed.returncode})")
+        mutations.append("worker_deploy")
+        # CORR-7: persist the effective digest WITH the worker_deploy step, so a partial
+        # failure AFTER the deploy (e.g. secret put) still records what was published.
+        _persist_record(
+            live_workspace,
+            record_rel,
+            plan,
+            status="in_progress",
+            mutations=mutations,
+            deployed_url=_extract_url(deployed.stdout),
+            effective_digest=effective_digest,
+            store=store,
         )
 
-    # 3. Apply schema to the remote D1. ABORT before deploy if the migration fails.
-    migrate = await runner.run(
-        _wr("d1", "execute", plan.db_name, "--remote", "--file=./schema.sql"),
-        cwd=staged,
-        env=deploy_env,
-    )
-    record(f"wrangler d1 execute {plan.db_name} --remote", migrate)
-    if not migrate.ok:
-        return _fail(
-            "wrangler d1 execute (migrate)", f"migration failed (exit {migrate.returncode})"
+        deployed_url = _extract_url(deployed.stdout)
+        binding_error = await _install_worker_bindings(
+            stripe_lifecycle,
+            webhook_lifecycle,
+            deployed_url,
+            admin_token,
+            not worker_exists,
+            secret_writer,
         )
-    mutations.append("d1_migrate")
-    _persist_record(
-        live_workspace,
-        record_rel,
-        plan,
-        status="in_progress",
-        mutations=mutations,
-        store=store,
-    )
+        if binding_error is not None:
+            return _fail(binding_error.step, binding_error.detail)
 
-    # P0 (round 9): IMMEDIATELY before `wrangler deploy` — which FOLLOWS symlinks
-    # when it uploads ./dist — scan the EXACT asset tree wrangler will publish and
-    # REFUSE if ANY entry (dir or file, any depth) is a symlink. The build regenerates
-    # dist AFTER staging, so a symlink the build emits is caught only here. Fail closed
-    # BEFORE the deploy command runs (no upload on refusal).
-    assert_deploy_tree_symlink_free(staged, asset_dir_rel)
-
-    # CORR-7: bind the audit record to the EFFECTIVE deployed artifact — the digest of
-    # the staged tree POST-build and POST-D1-substitution (what wrangler actually
-    # uploads), not just the plan-time pre-build digest.
-    effective_digest = _tree_digest(staged)
-    secret_writer.effective_digest = effective_digest
-
-    # 4. Deploy the Worker + assets. ABORT before the secret-put on failure.
-    # SEC (config-source bypass): PIN the config explicitly to the staged wrangler.toml so
-    # wrangler can NEVER pick an alt source by precedence (wrangler.json/.jsonc) at exec
-    # time. Belt-and-suspenders alongside the alt-config REFUSAL (the primary guard — a
-    # .wrangler/deploy/config.json redirect may not be overridden by --config) + the staging
-    # exclusion of .wrangler; together they guarantee wrangler.toml is the sole config source.
-    deployed = await runner.run(
-        _wr("deploy", "--config", str(staged / "wrangler.toml")),
-        cwd=staged,
-        env=deploy_env,
-    )
-    record("wrangler deploy", deployed)
-    if not deployed.ok:
-        return _fail("wrangler deploy", f"worker deploy failed (exit {deployed.returncode})")
-    mutations.append("worker_deploy")
-    # CORR-7: persist the effective digest WITH the worker_deploy step, so a partial
-    # failure AFTER the deploy (e.g. secret put) still records what was published.
-    _persist_record(
-        live_workspace,
-        record_rel,
-        plan,
-        status="in_progress",
-        mutations=mutations,
-        deployed_url=_extract_url(deployed.stdout),
-        effective_digest=effective_digest,
-        store=store,
-    )
-
-    deployed_url = _extract_url(deployed.stdout)
-    binding_error = await _install_worker_bindings(
-        stripe_lifecycle,
-        webhook_lifecycle,
-        deployed_url,
-        admin_token,
-        not worker_exists,
-        secret_writer,
-    )
-    if binding_error is not None:
-        return _fail(binding_error.step, binding_error.detail)
-
-    # Finalize the SAME durable record (persists for idempotency/audit); the staged copy
-    # is torn down by the caller.
-    record_path = _persist_record(
-        live_workspace,
-        record_rel,
-        plan,
-        status="succeeded",
-        mutations=mutations,
-        deployed_url=deployed_url,
-        effective_digest=effective_digest,
-        store=store,
-    )
-    return DeployExecutionResult(
-        executed=True,
-        dry_run=False,
-        plan=plan,
-        deployed_url=deployed_url,
-        record_path=record_path,
-        transcript=transcript,
-        succeeded=True,
-        mutations=list(mutations),
-        attempt_record_path=attempt_record_path,
-    )
+        # Finalize the SAME durable record (persists for idempotency/audit); the staged copy
+        # is torn down by the caller.
+        record_path = _persist_record(
+            live_workspace,
+            record_rel,
+            plan,
+            status="succeeded",
+            mutations=mutations,
+            deployed_url=deployed_url,
+            effective_digest=effective_digest,
+            store=store,
+        )
+        return DeployExecutionResult(
+            executed=True,
+            dry_run=False,
+            plan=plan,
+            deployed_url=deployed_url,
+            record_path=record_path,
+            transcript=transcript,
+            succeeded=True,
+            mutations=list(mutations),
+            attempt_record_path=attempt_record_path,
+        )
 
 
 def _aborted(
@@ -3446,7 +3694,7 @@ def _substitute_database_id(workspace: Path, database_id: str) -> None:
     # REFUSED here too — the write-back can never redirect through an in-workspace
     # symlink that resolve() would have masked.
     write_workspace_file(
-        "wrangler.toml", current.replace(_D1_ID_PLACEHOLDER, database_id), workspace_root
+        "wrangler.toml", current.replace(_D1_ID_PLACEHOLDER, database_id), workspace
     )
 
 
@@ -3491,9 +3739,10 @@ def _persist_record(
     lost (SEC-12/SEC-13/CORR-10/CORR-28). Rewrites the SAME ``rec_rel`` each time.
 
     SECURITY (P0, round 8): the record lives under ``.disco/cloudflare/deployments``
-    (digest-SKIPPED), so the dir-creation AND the write go through the single guarded
-    writer (:func:`write_workspace_file`), which LSTATs every component and REFUSES a
-    symlinked one — the record can never land outside the workspace.
+    (digest-SKIPPED), so directory creation and publication go through the single
+    descriptor-rooted writer (:func:`write_workspace_file`). It opens every component
+    with ``O_NOFOLLOW`` and revalidates identities through publication, so neither a
+    static symlink nor an ancestor-swap race can redirect the record.
 
     SEC-10-B: when a ``store`` is supplied, the record is SIGNED — an HMAC over the
     ownership-bearing fields (account_id, worker_name, db_name, mutations) keyed by the
@@ -3501,7 +3750,6 @@ def _persist_record(
     overwrite) ONLY if that signature verifies, so a record planted in the workspace's
     digest-SKIPPED ``.disco`` dir by the untrusted build agent — which cannot read the
     server key — authorizes nothing."""
-    workspace_root = workspace.resolve()
     # SEC-10-B: sign the ownership-bearing fields with the server-controlled key so this
     # record can be TRUSTED by a later deploy (and only this server could have written it).
     signature = (
@@ -3535,7 +3783,7 @@ def _persist_record(
         },
         indent=2,
     )
-    rec_path = write_workspace_file(rec_rel, payload, workspace_root, exclusive=exclusive)
+    rec_path = write_workspace_file(rec_rel, payload, workspace, exclusive=exclusive)
     return str(rec_path)
 
 

@@ -25,6 +25,11 @@ from .events import (
     PlanEvent,
     QuestionsV2Event,
     StatusEvent,
+    WorkspaceMutationEvent,
+    agent_view_consistent_events,
+    current_workspace_agent_view_id,
+    current_workspace_agent_view_seq,
+    workspace_run_intent_admission_required,
 )
 
 
@@ -40,6 +45,9 @@ class ConversationState(BaseModel):
     iteration: int = 0  # count of ActionEvents in the current run
     max_iterations: int = 500  # hard ceiling (BoD §12.1)
     last_seq: int = 0  # highest seq observed
+    active_agent_view_id: str | None = None
+    active_agent_view_seq: int | None = None
+    agent_view_pending: bool = False
     # The id of an action awaiting confirmation, if status is
     # WAITING_FOR_CONFIRMATION. Enables the two-phase confirm step (BoD §12.4).
     pending_action_id: str | None = None
@@ -75,6 +83,14 @@ class ConversationState(BaseModel):
         max_iterations: int = 500,
     ) -> ConversationState:
         st = cls(conversation_id=conversation_id, max_iterations=max_iterations)
+        st.last_seq = max(
+            (event.seq for event in events if type(event.seq) is int),
+            default=0,
+        )
+        st.active_agent_view_id = current_workspace_agent_view_id(events)
+        st.active_agent_view_seq = current_workspace_agent_view_seq(events)
+        st.agent_view_pending = workspace_run_intent_admission_required(events)
+        events = agent_view_consistent_events(events)
         run_iteration = 0
         # The most recent action's id — the candidate awaiting confirmation when
         # the loop transitions to WAITING_FOR_CONFIRMATION (two-phase confirm).
@@ -95,10 +111,37 @@ class ConversationState(BaseModel):
         last_questions_v2_id: str | None = None
 
         for e in events:
-            if e.seq is not None:
-                st.last_seq = e.seq
-
-            if isinstance(e, StatusEvent):
+            if (
+                isinstance(e, WorkspaceMutationEvent)
+                and e.operation.startswith("agent.run-intent.")
+                and e.run_protocol_version == 1
+            ):
+                # A durable new instruction supersedes an earlier parked gate.
+                # The proposal remains auditable, but no extra click is needed
+                # before a fresh model view can consume the new instruction.
+                st.execution_status = ConversationStatus.RUNNING
+                st.pending_action_id = None
+                st.pending_plan_id = None
+                st.pending_alternatives_id = None
+                st.pending_question_id = None
+                st.pending_clarify_id = None
+                st.pending_questions_v2_id = None
+            elif (
+                isinstance(e, WorkspaceMutationEvent)
+                and e.operation == "agent.view-admitted"
+                and e.run_protocol_version == 1
+            ):
+                # The winning view supersedes gates proposed by an older
+                # generation. It starts from the latest instruction instead of
+                # remaining parked on a quarantined action, plan, or question.
+                st.execution_status = ConversationStatus.RUNNING
+                st.pending_action_id = None
+                st.pending_plan_id = None
+                st.pending_alternatives_id = None
+                st.pending_question_id = None
+                st.pending_clarify_id = None
+                st.pending_questions_v2_id = None
+            elif isinstance(e, StatusEvent):
                 st.execution_status = e.status
                 if e.status == ConversationStatus.WAITING_FOR_CONFIRMATION:
                     # The pending action is the latest one the agent proposed.

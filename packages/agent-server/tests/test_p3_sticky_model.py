@@ -56,6 +56,23 @@ def test_no_pick_ever_returns_none(tmp_path, monkeypatch):
     assert rt.get_last_selected_model() is None
 
 
+def test_context_window_uses_the_conversation_model_override(tmp_path, monkeypatch):
+    _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
+    cid = "conv_context_override"
+
+    assert rt._driver_context_window(cid) == 32768
+    rt.set_model_override(cid, "or-test-model")
+    assert rt._driver_context_window(cid) == 128000
+
+
+def test_stale_context_window_override_falls_back_to_default(tmp_path, monkeypatch):
+    _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
+    cid = "conv_stale_context_override"
+    rt._model_override[cid] = "deleted-model"
+
+    assert rt._driver_context_window(cid) == 32768
+
+
 def test_no_db_path_returns_none(tmp_path, monkeypatch):
     monkeypatch.delenv("PMX_DB", raising=False)
     rt = ConversationRuntime(

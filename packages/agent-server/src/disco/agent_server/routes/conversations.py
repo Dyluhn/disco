@@ -121,6 +121,11 @@ async def _create_conversation_response(
     body: CreateConversationBody,
     request: Request | None,
 ) -> dict:
+    if body.artifact_mode and body.appkit_mode:
+        raise HTTPException(
+            status_code=409,
+            detail="artifact_mode and appkit_mode are mutually exclusive",
+        )
     # KILL SWITCH: an explicit appkit_mode request against a deployment that
     # disabled AppKit is refused loudly BEFORE any event is persisted — a silent
     # downgrade to free-form would be a false affordance (the caller asked for
@@ -159,6 +164,7 @@ async def _create_conversation_response(
         space_id=body.space_id,
         title=seeded_title,
         surface=body.surface,  # persist so History routes it (even mid-run, no report yet)
+        appkit_mode=body.appkit_mode,
     )
     # Select surface and pin the driver model if the picker chose one.
     if runtime is not None:

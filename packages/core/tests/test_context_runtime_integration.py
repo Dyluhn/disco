@@ -90,6 +90,71 @@ async def test_plan_approval_skips_design_direction_for_decks() -> None:
     assert await store.read_design_direction() is None
 
 
+@pytest.mark.asyncio
+async def test_revised_plan_preserves_committed_direction_and_repairs_tokens(monkeypatch) -> None:
+    """An additive follow-up cannot silently reclassify the project's style."""
+
+    import disco.core.design as design
+
+    picks: list[str] = []
+
+    def adversarial_picker(brief: str, seed: str):
+        picks.append(brief)
+        direction_id = "gradient-mesh-warm" if len(picks) == 1 else "controlled-maximalism"
+        return design.DIRECTION_BY_ID[direction_id]
+
+    monkeypatch.setattr(design, "pick_direction", adversarial_picker)
+    initial = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "Ship a SaaS landing page with a hero",
+                    "steps": [{"title": "Build the site"}],
+                },
+            )
+        ]
+    )
+    loop, _event_store = build_plan_loop(initial, conversation_id="cxt7-sticky-direction")
+    fs = _MemFS()
+    loop.executor.sandbox = fs  # type: ignore[attr-defined]
+    await loop.send_message("build a SaaS landing page")
+    await loop.run()
+    await loop.approve_plan()
+
+    memory = ArtifactMemoryStore(fs)
+    original_direction = await memory.read_design_direction()
+    original_tokens = await memory.read_design_direction_tokens()
+    assert original_direction is not None and "gradient-mesh-warm" in original_direction
+    assert original_tokens is not None and "gradient-mesh-warm" in original_tokens
+
+    # A missing companion is repairable, but its source of truth remains the
+    # already committed direction.  The competing words would make the fake
+    # picker return a different style if revised approval called it again.
+    fs.files.pop(".disco/context/direction_tokens.css")
+    loop.agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "Add an expressive enterprise pricing grid",
+                    "steps": [{"title": "Add pricing without changing the design"}],
+                },
+            )
+        ]
+    )
+    await loop.enter_planning("Add Starter, Pro, and Enterprise pricing")
+    await loop.run()
+    await loop.approve_plan()
+
+    assert len(picks) == 1, "a revised approval re-ran the design classifier"
+    assert await memory.read_design_direction() == original_direction
+    assert await memory.read_design_direction_tokens() == original_tokens
+    assert await memory.read_goal() == "Add an expressive enterprise pricing grid"
+    todo = await memory.read_todo()
+    assert todo is not None and "Add pricing without changing the design" in todo
+
+
 # --- 2. resume reconstructs the ContextPack from durable files -----------------
 @pytest.mark.asyncio
 async def test_resume_reconstructs_context_pack() -> None:

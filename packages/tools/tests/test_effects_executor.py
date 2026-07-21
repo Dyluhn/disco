@@ -326,6 +326,98 @@ async def test_profile_persists_on_timeout_and_context_construction_failure(
 
 
 @pytest.mark.asyncio
+async def test_workspace_lock_blocks_tool_context_and_execution_until_released() -> None:
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+    entered = asyncio.Event()
+    allow_exit = asyncio.Event()
+
+    class _BlockingTool(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            entered.set()
+            await allow_exit.wait()
+            return ToolOutcome(success=True, content="ok")
+
+    tool = _BlockingTool(name="blocking", behavior=behavior, receipt=_read_receipt())
+    registry = ToolRegistry()
+    registry.register(tool)
+    workspace_lock = asyncio.Lock()
+    executor = DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=frozenset({"blocking"})),
+        workspace_lock=workspace_lock,
+    )
+
+    await workspace_lock.acquire()
+    task = asyncio.create_task(executor.execute(ToolCall(tool_name="blocking", arguments={})))
+    try:
+        # Scheduling the invocation while the host owns the workspace lock must
+        # not construct a context or enter the tool. This is the barrier that
+        # prevents a tool mutation from racing a host-owned final snapshot.
+        await asyncio.sleep(0)
+        assert entered.is_set() is False
+
+        workspace_lock.release()
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        allow_exit.set()
+        result = await asyncio.wait_for(task, timeout=1)
+    finally:
+        if workspace_lock.locked():
+            workspace_lock.release()
+        allow_exit.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_execution_superseded_is_a_structured_non_executing_result() -> None:
+    """A generation refusal is normal control flow, never a validation crash."""
+
+    behavior = ToolBehavior(
+        planner_safe=False,
+        possible_capabilities=frozenset({EffectCapability.OPAQUE_EXECUTE}),
+    )
+
+    class _MustNotRun(_EffectTool):
+        async def run(self, args: _Args, ctx: object) -> ToolOutcome:
+            del args, ctx
+            raise AssertionError("superseded tool reached its effect")
+
+    seen_view_ids: list[str | None] = []
+
+    async def refuse(agent_view_id: str | None) -> str:
+        seen_view_ids.append(agent_view_id)
+        return "a newer model view owns the workspace"
+
+    tool = _MustNotRun(name="superseded", behavior=behavior, receipt=_read_receipt())
+    registry = ToolRegistry()
+    registry.register(tool)
+    executor = DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=frozenset({"superseded"})),
+        execution_admission=refuse,
+    )
+
+    result = await executor.execute_attributed(
+        ToolCall(tool_name="superseded", arguments={}),
+        "aview_current",
+    )
+
+    assert seen_view_ids == ["aview_current"]
+    assert result.success is False
+    assert result.error == "a newer model view owns the workspace"
+    assert result.structured is not None
+    assert result.structured["kind"] == "execution_superseded"
+    assert result.action_profile == behavior.static_profile()
+
+
+@pytest.mark.asyncio
 async def test_pre_execution_refusals_have_no_action_profile() -> None:
     behavior = ToolBehavior(
         planner_safe=False,

@@ -91,6 +91,28 @@ class PreviewService:
             return None
         return port
 
+    async def resolve_active_preview_projection(
+        self,
+        conversation_id: str,
+        projection: Any,
+    ) -> bool:
+        """Whether the exact pre-FINISHED managed preview is still live.
+
+        This is intentionally passive apart from health/ownership probes.  It
+        never composes an executor, wakes a sandbox, installs dependencies, or
+        starts/restarts a command.
+        """
+
+        executor = self._rt._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        manager = getattr(session, "_preview_manager", None) if session is not None else None
+        if manager is None:
+            return False
+        try:
+            return await manager.resolve_active_projection(projection) is not None
+        except Exception:  # noqa: BLE001 — a stale/malformed generation fails closed
+            return False
+
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Generalized upstream resolution for any curated USER port (BP-10).
         expose_port itself refuses non-USER ports — defense stays in the backend.

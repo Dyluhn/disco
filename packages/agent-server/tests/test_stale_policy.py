@@ -721,12 +721,14 @@ async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
     await rt._store.append("c1", _agent_msg("partial answer before the driver died"))
     await rt._store.append("c1", StatusEvent(status=ConversationStatus.ERROR))
 
-    # Neutralize the spawned run task — kick still composes _loops[cid] via _loop_for
-    # BEFORE creating the task, which is all we assert.
+    # Neutralize the spawned run after its driver-context-gated composition; no live
+    # model call is needed because this test asserts only the composed loop binding.
     async def _noop_run(conversation_id, loop):  # noqa: ANN001
         return None
 
-    async def _noop_finalize(conversation_id, generation=None):  # noqa: ANN001
+    async def _noop_finalize(  # noqa: ANN001
+        conversation_id, generation=None, **_kwargs
+    ):
         return None
 
     monkeypatch.setattr(rt, "_run_with_persistence", _noop_run)
@@ -739,6 +741,9 @@ async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
 
     result = await rt.resume_conversation("c1")
     assert result["ok"] is True
+    # The task is registered before kick returns; composition now occurs as its first
+    # asynchronous stage so live context resolution cannot race the chosen model.
+    await asyncio.sleep(0)
     # The loop kick composed for the NEXT turn is bound to the NEW model.
     composed = rt._loops.get("c1")
     assert composed is not None

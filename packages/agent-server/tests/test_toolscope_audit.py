@@ -24,7 +24,7 @@ from disco.core import (
 from disco.core.llm import DefaultLLMRouter, ModelExecutionPolicy
 from disco.core.loop import RouterAgent
 from disco.tools import AGENT_TOOLS, DefaultToolExecutor, agent_scope, build_default_registry
-from disco.tools.sandbox import ExecResult, SandboxError, SandboxSpec
+from disco.tools.sandbox import ExecResult, SandboxSpec
 
 
 class _MemSandbox:
@@ -41,7 +41,7 @@ class _MemSandbox:
 
     async def read_file(self, path: str) -> bytes:
         if path not in self.files:
-            raise SandboxError(f"no such file: {path}")
+            raise FileNotFoundError(f"no such file: {path}")
         return self.files[path]
 
     async def write_file(self, path: str, data: bytes) -> None:

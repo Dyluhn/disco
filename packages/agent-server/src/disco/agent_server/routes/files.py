@@ -13,15 +13,17 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    StatusEvent,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageStatus, is_runtime_secret_path
+from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
 from ..uploads_ingest import parse_upload_to_doc
+from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from ._common import (
     _ARTIFACT_TYPES,
     _MAX_CONV_BYTES,
@@ -57,7 +59,11 @@ _INLINE_CSP = (
 ).strip()
 
 
-async def _read_artifact_bytes(runtime: Any, conversation_id: str, norm: str) -> bytes | None:
+async def _read_artifact_bytes(
+    runtime: Any,
+    conversation_id: str,
+    norm: str,
+) -> bytes | None:
     """Read a declared artifact's bytes: the live sandbox first, then the host
     ProjectStore snapshot (so a FINISHED run with a reaped sandbox still serves).
     Returns None if neither source has it. Caller enforces size + 404."""
@@ -79,8 +85,10 @@ async def _read_artifact_bytes(runtime: Any, conversation_id: str, norm: str) ->
     return None
 
 
-def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
-    router = APIRouter()
+def _register_upload_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    """Register the POST /conversations/{id}/files upload route."""
 
     @router.post("/conversations/{conversation_id}/files")
     async def upload_files(
@@ -109,29 +117,8 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
             raise HTTPException(status_code=409, detail={"reason": "no_active_sandbox"})
         session = runtime.upload_session(conversation_id)
 
-        # Existing uploads/ contents for quota and collision detection.
-        # DC-07: account for server-side sidecar uploads as well.
-        server_names = runtime.get_upload_names(conversation_id)
-        try:
-            sandbox_names: set[str] = set(await session.list_dir("uploads"))
-        except Exception:  # noqa: BLE001 — uploads/ may not exist yet
-            sandbox_names = set()
-
-        existing_names = server_names | sandbox_names
-
-        # Truth for quota is the server-side sidecar, but we check the sandbox for
-        # anything that might have been added manually (best effort).
-        existing_bytes = runtime.get_upload_size(conversation_id)
-        for fname in sandbox_names:
-            if fname not in server_names:
-                try:
-                    existing_bytes += len(await session.read_file(f"uploads/{fname}"))
-                except Exception:  # noqa: BLE001
-                    pass
-
         saved: list[dict] = []
         rejected: list[dict] = []
-        running_total = existing_bytes
 
         for upload in files:
             raw_name = upload.filename or ""
@@ -150,31 +137,46 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                 )
                 continue
 
-            if running_total + len(data) > _MAX_CONV_BYTES:
-                rejected.append(
-                    {
-                        "name": raw_name,
-                        "reason": "conversation upload quota (100 MB) would be exceeded",
-                    }
+            # Quota, collision choice, invalidation, and both writes share the
+            # finalization lock. Two simultaneous uploads can never select the
+            # same suffix or slip a write between FINISHED and its seal.
+            async with runtime.workspace_fence(conversation_id):
+                server_names = runtime.get_upload_names(conversation_id)
+                try:
+                    sandbox_names: set[str] = set(await session.list_dir("uploads"))
+                except Exception:  # noqa: BLE001 — uploads/ may not exist yet
+                    sandbox_names = set()
+                existing_names = server_names | sandbox_names
+                existing_bytes = runtime.get_upload_size(conversation_id)
+                for fname in sandbox_names - server_names:
+                    try:
+                        existing_bytes += len(await session.read_file(f"uploads/{fname}"))
+                    except Exception:  # noqa: BLE001
+                        pass
+                if existing_bytes + len(data) > _MAX_CONV_BYTES:
+                    rejected.append(
+                        {
+                            "name": raw_name,
+                            "reason": "conversation upload quota (100 MB) would be exceeded",
+                        }
+                    )
+                    continue
+
+                stem = Path(clean).stem
+                suffix = Path(clean).suffix
+                final_name = clean
+                counter = 2
+                while final_name in existing_names:
+                    final_name = f"{stem}-{counter}{suffix}"
+                    counter += 1
+                upload_path = f"uploads/{final_name}"
+                await runtime.record_workspace_mutation_locked(
+                    conversation_id,
+                    "upload.write",
+                    paths=(upload_path,),
                 )
-                continue
-
-            # Collision: suffix -2, -3, …
-            stem = Path(clean).stem
-            suffix = Path(clean).suffix
-            candidate = clean
-            counter = 2
-            while candidate in existing_names:
-                candidate = f"{stem}-{counter}{suffix}"
-                counter += 1
-            final_name = candidate
-
-            # DC-07: write to sandbox AND server-side storage.
-            await session.write_file(f"uploads/{final_name}", data)
-            runtime.store_upload(conversation_id, final_name, data)
-
-            existing_names.add(final_name)
-            running_total += len(data)
+                await session.write_file(upload_path, data)
+                runtime.store_upload(conversation_id, final_name, data)
 
             # G1/DR-4 F2: for supported document types, parse the bytes
             # into Passages and add them to the per-conversation upload corpus so
@@ -217,6 +219,12 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
             return JSONResponse({"saved": saved, "rejected": rejected}, status_code=413)
         return JSONResponse({"saved": saved, "rejected": rejected}, status_code=200)
 
+
+def _register_artifact_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    """Register the GET /conversations/{id}/artifacts/{path} download route."""
+
     @router.get("/conversations/{conversation_id}/artifacts/{path:path}")
     async def artifact_file(
         conversation_id: str,
@@ -253,7 +261,45 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         if norm not in await _declared_artifacts(store, conversation_id):
             raise HTTPException(status_code=404)
 
-        data = await _read_artifact_bytes(runtime, conversation_id, norm)
+        committed_data: bytes | None = None
+        events = await store.get_events(conversation_id)
+        latest_status = next(
+            (event for event in reversed(events) if isinstance(event, StatusEvent)),
+            None,
+        )
+        if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+            project_store = runtime.project_store()
+            if project_store is None or project_store.status() != StorageStatus.OK:
+                raise HTTPException(status_code=503, detail={"reason": "workspace_unsealed"})
+            try:
+                committed = resolve_committed_workspace(
+                    events,
+                    project_store,
+                    conversation_id,
+                )
+                with project_store.open_verified_version(
+                    conversation_id,
+                    committed.event.version_seq,
+                ) as version:
+                    if norm not in {entry.path for entry in version.files}:
+                        raise HTTPException(status_code=404)
+                    committed_data = version.read_bytes(norm, max_bytes=50 * 1024 * 1024)
+            except WorkspaceCommitUnavailable as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"reason": "workspace_unsealed"},
+                ) from exc
+            except StorageError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"reason": "workspace_unsealed"},
+                ) from exc
+
+        data = (
+            committed_data
+            if committed_data is not None
+            else await _read_artifact_bytes(runtime, conversation_id, norm)
+        )
         if data is None:
             raise HTTPException(status_code=404)
         if len(data) > 50 * 1024 * 1024:  # 50 MB cap
@@ -261,6 +307,11 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
 
         return _artifact_response(data, media_type, posixpath.basename(norm), inline)
 
+
+def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
+    router = APIRouter()
+    _register_upload_routes(router, store, runtime)
+    _register_artifact_routes(router, store, runtime)
     return router
 
 

@@ -226,6 +226,67 @@ def test_redact_token_count_keys_only_passthrough_numbers() -> None:
     assert result["out_tokens"] == 0
 
 
+def test_redact_request_budget_numeric_telemetry_survives() -> None:
+    """P-F6: request-budget arithmetic remains independently verifiable after
+    evidence redaction; all three values are counts rather than credentials."""
+    canonical_payload_bytes = 26_259
+    estimated_input_tokens = (canonical_payload_bytes * 4 + 12) // 13
+    max_output_tokens = 8_192
+    pressure_tokens = estimated_input_tokens + max_output_tokens
+    span = {
+        "span": "request_budget.preview",
+        "canonical_payload_bytes": canonical_payload_bytes,
+        "estimated_input_tokens": estimated_input_tokens,
+        "max_output_tokens": max_output_tokens,
+        "pressure_tokens": pressure_tokens,
+        "access_token": "sk-deadbeefdeadbeefdeadbeef0001",
+        "api_key": "sk-deadbeefdeadbeefdeadbeef0002",
+        "Authorization": "Bearer deadbeefdeadbeefdeadbeef",
+        "password": "never-persist-this",
+    }
+
+    result = redact(span)
+
+    assert result["estimated_input_tokens"] == estimated_input_tokens
+    assert result["max_output_tokens"] == max_output_tokens
+    assert result["pressure_tokens"] == pressure_tokens
+    assert result["estimated_input_tokens"] == (result["canonical_payload_bytes"] * 4 + 12) // 13
+    assert (
+        result["pressure_tokens"] == result["estimated_input_tokens"] + result["max_output_tokens"]
+    )
+    for secret_key in ("access_token", "api_key", "Authorization", "password"):
+        assert result[secret_key] == "***REDACTED***"
+
+
+def test_redact_request_budget_optional_output_count_and_type_boundary() -> None:
+    """P-F6: only typed count values cross the redaction boundary."""
+    without_output_reserve = redact(
+        {
+            "estimated_input_tokens": 8_080,
+            "pressure_tokens": 8_080,
+            "max_output_tokens": None,
+        }
+    )
+    assert without_output_reserve == {
+        "estimated_input_tokens": 8_080,
+        "pressure_tokens": 8_080,
+        "max_output_tokens": None,
+    }
+
+    invalid_shapes = redact(
+        {
+            "estimated_input_tokens": "8080",
+            "pressure_tokens": [8_080],
+            "max_output_tokens": True,
+        }
+    )
+    assert invalid_shapes == {
+        "estimated_input_tokens": "***REDACTED***",
+        "pressure_tokens": "***REDACTED***",
+        "max_output_tokens": "***REDACTED***",
+    }
+
+
 # ---------------------------------------------------------------------------
 # 3. make_traceparent / parse_traceparent
 # ---------------------------------------------------------------------------

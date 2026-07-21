@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
-from _eventlog import action, clean_smoke_log, msg, observation, plan, status
+from _eventlog import action, agent_error, clean_smoke_log, msg, observation, plan, status
 from disco.core.auth import path_preview_host_label
 
 import harness.build_soak.adapters.disco_api as _disco_mod
@@ -104,14 +104,22 @@ def _fake_inspect_trace() -> dict[str, Any]:
         "offered_count": 2,
         "allowed_count": 2,
     }
+    routing = {"chosen_model": "m"}
+    span = {"span": "agent.step", "event": "end"}
+    events = [
+        {"seq": 1, "kind": "routing", **routing},
+        {"seq": 2, "kind": "span", **span},
+        {"seq": 3, "kind": "tool_scope", **scope},
+    ]
     return {
         "conversation_id": _CID,
-        "event_count": 1,
+        "event_count": len(events),
         "dropped_event_count": 0,
-        "routing_decisions": [{"chosen_model": "m"}],
-        "spans": [{"span": "agent.step", "event": "end"}],
+        "routing_decisions": [routing],
+        "spans": [span],
         "tool_scopes": [scope],
-        "events": [{"seq": 1, "kind": "tool_scope", **scope}],
+        "progress_shadows": [],
+        "events": events,
     }
 
 
@@ -553,7 +561,15 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     assert run.events and run.events[0]["kind"] == "message"
 
     base = assemble_dossier(
-        tmp_path / "out", "run_smoke_001", scenario, run, model="fake-model", autonomous=False
+        tmp_path / "out",
+        "run_smoke_001",
+        scenario,
+        run,
+        model="fake-model",
+        autonomous=False,
+        commit="a" * 40,
+        repo_revision="a" * 40 + "+dirty.0123456789abcdef",
+        repo_dirty=True,
     )
     classification = classify_dossier(base, scenario, run, autonomous=False)
     assert classification["status"] == "PASS", classification
@@ -583,6 +599,10 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     assert (conv / "workspace-manifest.json").is_file()
     assert (conv / "preview" / "health.json").is_file()
     assert (conv / "preview" / "metadata.json").is_file()
+    manifest = load_manifest(base)
+    assert manifest.repo_commit == "a" * 40
+    assert manifest.repo_revision == "a" * 40 + "+dirty.0123456789abcdef"
+    assert manifest.repo_dirty is True
 
 
 def test_dossier_persists_required_provenance_and_replays_provider_oracle(tmp_path):
@@ -825,6 +845,8 @@ def _plant_snapshot(root, cid, files):
 
 
 def _workspace_commit(seq: int, digest: str, *, version_seq: int = 1) -> dict[str, Any]:
+    """Historical v1 marker, intentionally unsealed."""
+
     return {
         "id": f"workspace_version_{seq}",
         "seq": seq,
@@ -834,6 +856,492 @@ def _workspace_commit(seq: int, digest: str, *, version_seq: int = 1) -> dict[st
         "tree_digest": digest,
         "trigger": "finish",
     }
+
+
+def _sealed_workspace_commit(
+    seq: int,
+    version: Any,
+    *,
+    terminal_seq: int = 10,
+    latest_effect_seq: int | None = 8,
+    digest: str | None = None,
+    file_count: int | None = None,
+    total_bytes: int | None = None,
+    conversation_id: str = _CID,
+) -> dict[str, Any]:
+    """Schema-v1 final marker bound to one immutable ProjectStore version."""
+
+    effective_digest = version.tree_digest if digest is None else digest
+    marker = _workspace_commit(seq, effective_digest, version_seq=version.seq)
+    marker["final_seal"] = {
+        "schema_version": 1,
+        "scope": {"namespace": "workspace.tree", "identifier": conversation_id},
+        "terminal_seq": terminal_seq,
+        "latest_effect_seq": latest_effect_seq,
+        "version_seq": version.seq,
+        "tree_digest": effective_digest,
+        "file_count": version.file_count if file_count is None else file_count,
+        "total_bytes": version.total_bytes if total_bytes is None else total_bytes,
+    }
+    return marker
+
+
+def _strict_workspace_case(tmp_path, *, content: str = "<h1>sealed</h1>"):
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    _seed_db(db, _CID, _smoke_log_with_file_write("index.html", content))
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+    return db, projects, version, client
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "schema_version",
+        "scope",
+        "terminal_seq",
+        "latest_effect_seq",
+        "version_seq",
+        "tree_digest",
+        "file_count",
+        "total_bytes",
+    ],
+)
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_each_missing_final_seal_field(tmp_path, field):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    marker = _sealed_workspace_commit(11, version)
+    del marker["final_seal"][field]
+    _insert_event(db, _CID, marker)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["event_evidence_valid"] is False
+    assert raised.value.facts["final_seal_error"] == "final seal fields do not match schema v1"
+
+
+@pytest.mark.parametrize("field", ["namespace", "identifier"])
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_each_missing_scope_field(tmp_path, field):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    marker = _sealed_workspace_commit(11, version)
+    del marker["final_seal"]["scope"][field]
+    _insert_event(db, _CID, marker)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["event_evidence_valid"] is False
+    assert raised.value.facts["final_seal_error"] == "final seal scope is malformed"
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "schema_version",
+        "scope_namespace",
+        "scope_identifier",
+        "terminal_seq",
+        "latest_effect_seq",
+        "version_seq",
+        "tree_digest",
+        "file_count",
+        "total_bytes",
+    ],
+)
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_each_corrupt_final_seal_field(tmp_path, corruption):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    marker = _sealed_workspace_commit(11, version)
+    seal = marker["final_seal"]
+    if corruption == "schema_version":
+        seal["schema_version"] = True  # bool must not masquerade as integer schema v1
+    elif corruption == "scope_namespace":
+        seal["scope"]["namespace"] = "workspace.live"
+    elif corruption == "scope_identifier":
+        seal["scope"]["identifier"] = "another-conversation"
+    elif corruption == "terminal_seq":
+        seal["terminal_seq"] = 9
+    elif corruption == "latest_effect_seq":
+        seal["latest_effect_seq"] = 7
+    elif corruption == "version_seq":
+        seal["version_seq"] = version.seq + 1
+    elif corruption == "tree_digest":
+        seal["tree_digest"] = "b" * 64
+    elif corruption == "file_count":
+        seal["file_count"] = version.file_count + 1
+    elif corruption == "total_bytes":
+        seal["total_bytes"] = version.total_bytes + 1
+    _insert_event(db, _CID, marker)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    if corruption in {"file_count", "total_bytes"}:
+        assert raised.value.facts["event_evidence_valid"] is True
+        assert raised.value.facts["final_seal_error"] == (
+            "final seal tree facts do not match the immutable version"
+        )
+    else:
+        assert raised.value.facts["event_evidence_valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_boolean_latest_effect_sequence(tmp_path):
+    """A bool must never masquerade as schema-v1 integer sequence 1."""
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    events = [
+        action(1, "custom_mutator", action_id="effect-1"),
+        status(2, "FINISHED"),
+    ]
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, {"index.html": "sealed\n"})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    marker = _sealed_workspace_commit(
+        3,
+        version,
+        terminal_seq=2,
+        latest_effect_seq=True,
+    )
+    _insert_event(db, _CID, marker)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["event_evidence_valid"] is False
+    assert raised.value.facts["final_seal_error"] == (
+        "final seal latest effect sequence does not match the event log"
+    )
+
+
+@pytest.mark.parametrize(
+    "effect_kind",
+    ["action", "observation", "agent_error", "workspace_mutation"],
+)
+@pytest.mark.asyncio
+async def test_strict_workspace_fence_includes_every_effect_kind(tmp_path, effect_kind):
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>all effects fenced</h1>"
+    events = _smoke_log_with_file_write("index.html", content)
+    events[8] = {
+        "id": f"{effect_kind}_9",
+        "seq": 9,
+        "kind": effect_kind,
+        "source": "system" if effect_kind == "workspace_mutation" else "agent",
+    }
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    from disco.tools.projects.store import ProjectStore
+
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(db, _CID, _sealed_workspace_commit(11, version, latest_effect_seq=9))
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_post_terminal_workspace_mutation_invalidates_final_seal(tmp_path):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    _insert_event(
+        db,
+        _CID,
+        {
+            "id": "workspace_mutation_11",
+            "seq": 11,
+            "kind": "workspace_mutation",
+            "source": "system",
+            "operation": "editor.write",
+            "paths": ["index.html"],
+        },
+    )
+    _insert_event(db, _CID, _sealed_workspace_commit(12, version))
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["latest_effect_seq"] == 11
+    assert raised.value.facts["final_seal_error"] == (
+        "effect event exists at or after terminal FINISHED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "state"),
+    [("agent", "FINISHED"), ("system", "VERIFIED"), ("system", "RUNNING")],
+)
+@pytest.mark.asyncio
+async def test_strict_workspace_requires_latest_exact_system_finished(tmp_path, source, state):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    _insert_event(db, _CID, _sealed_workspace_commit(11, version))
+    later = status(12, state)
+    later["source"] = source
+    _insert_event(db, _CID, later)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["terminal_seq"] is None
+    assert raised.value.facts["final_seal_error"] == ("latest status is not exact SYSTEM FINISHED")
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_requires_finish_trigger(tmp_path):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    marker = _sealed_workspace_commit(11, version)
+    marker["trigger"] = "turn"
+    _insert_event(db, _CID, marker)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["final_seal_error"] == ("workspace version is not finish-triggered")
+
+
+@pytest.mark.parametrize("field", ["version_seq", "tree_digest", "trigger"])
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_each_missing_version_event_field(tmp_path, field):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    marker = _sealed_workspace_commit(11, version)
+    del marker[field]
+    _insert_event(db, _CID, marker)
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["event_evidence_valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_accepts_exact_no_effect_fence(tmp_path):
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>no effects</h1>"
+    _seed_db(db, _CID, [msg(1, "user", "answer"), status(2, "FINISHED")])
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(
+        db,
+        _CID,
+        _sealed_workspace_commit(
+            3,
+            version,
+            terminal_seq=2,
+            latest_effect_seq=None,
+        ),
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    manifest = await client.collect_workspace(_CID, [])
+
+    assert manifest["index.html"]["content"] == content
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_final_seal_proves_partial_final_bytes(tmp_path):
+    """K6: a valid immutable final-tree seal is authoritative byte proof.
+
+    A targeted edit does not carry its whole post-edit file in the action payload, so
+    the legacy action heuristic can only call it ``present_unproven``.  Strict live
+    collection has stronger host evidence: the exact immutable version was verified
+    before and after its manifest was read.  The declared file must therefore carry
+    ``final_tree_seal`` proof without forcing the model to rewrite or reread it.
+    """
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    content = "<h1>final targeted edit</h1>\n"
+    events = [
+        msg(1, "user", "revise it"),
+        action(2, "file_replace_lines", args={"path": "index.html"}, action_id="edit-2"),
+        {
+            "id": "observation-3",
+            "seq": 3,
+            "kind": "observation",
+            "source": "environment",
+            "action_id": "edit-2",
+            "tool_result": {
+                "call_id": "call_2",
+                "tool_name": "file_replace_lines",
+                "success": True,
+                "content": "edited",
+            },
+        },
+        status(4, "FINISHED"),
+    ]
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, {"index.html": content})
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(
+        db,
+        _CID,
+        _sealed_workspace_commit(
+            5,
+            version,
+            terminal_seq=4,
+            latest_effect_seq=3,
+        ),
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["content"] == content
+    assert manifest["index.html"]["sha256"] == hashlib.sha256(content.encode()).hexdigest()
+    assert manifest["index.html"]["proof"] == "final_tree_seal"
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_final_seal_proves_shape_agnostic_generated_files(tmp_path):
+    """K6: sealed proof cannot depend on a hard-coded tool or application shape.
+
+    AppKit is the measured example: its semantic tools already emit exact receipts,
+    but the old adapter only understood generic file tool names.  The final immutable
+    seal must prove every present declared file even when action-name inference has no
+    entry for it.
+    """
+    from disco.tools.projects.store import ProjectStore
+
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    files = {
+        ".disco/appspec.json": '{"name":"sealed"}\n',
+        ".disco/designspec.json": '{"theme":"warm"}\n',
+    }
+    events = [
+        msg(1, "user", "create the application"),
+        action(2, "app_create", args={"name": "sealed"}, action_id="app-create-2"),
+        {
+            "id": "observation-3",
+            "seq": 3,
+            "kind": "observation",
+            "source": "environment",
+            "action_id": "app-create-2",
+            "tool_result": {
+                "call_id": "call_2",
+                "tool_name": "app_create",
+                "success": True,
+                "content": "created",
+            },
+        },
+        status(4, "FINISHED"),
+    ]
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, files)
+    version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
+    assert version is not None
+    _insert_event(
+        db,
+        _CID,
+        _sealed_workspace_commit(
+            5,
+            version,
+            terminal_seq=4,
+            latest_effect_seq=3,
+        ),
+    )
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    manifest = await client.collect_workspace(_CID, list(files))
+
+    assert {manifest[path]["proof"] for path in files} == {"final_tree_seal"}
+    assert {path: manifest[path]["sha256"] for path in files} == {
+        path: hashlib.sha256(content.encode()).hexdigest() for path, content in files.items()
+    }
+
+
+@pytest.mark.asyncio
+async def test_strict_workspace_rejects_mutated_immutable_version_bytes(tmp_path):
+    from disco.tools.projects.store import ProjectStore
+
+    db, projects, version, client = _strict_workspace_case(tmp_path)
+    _insert_event(db, _CID, _sealed_workspace_commit(11, version))
+    immutable = ProjectStore(str(projects)).version_workspace_path(_CID, version.seq)
+    (immutable / "index.html").write_text("tampered after version publication", encoding="utf-8")
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["snapshot_dir"] is None
+    assert raised.value.facts["workspace_version_seq"] == 11
+    assert raised.value.facts["final_seal_error"] == (
+        "immutable workspace version could not be freshly verified"
+    )
+
+
+@pytest.mark.asyncio
+async def test_later_legacy_marker_invalidates_an_older_valid_seal(tmp_path):
+    db, _projects, version, client = _strict_workspace_case(tmp_path)
+    _insert_event(db, _CID, _sealed_workspace_commit(11, version))
+    _insert_event(db, _CID, _workspace_commit(12, version.tree_digest, version_seq=version.seq))
+
+    with pytest.raises(SnapshotNotReadyError) as raised:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert raised.value.facts["workspace_version_seq"] == 12
+    assert raised.value.facts["final_seal_error"] == "latest workspace version has no final seal"
 
 
 @pytest.mark.asyncio
@@ -863,17 +1371,28 @@ async def test_terminal_snapshot_requires_post_terminal_workspace_commit(tmp_pat
     assert raised.value.facts["workspace_version_seq"] is None
     assert raised.value.facts["observed_tree_digest"] is None
 
-    _insert_event(db, _CID, _workspace_commit(11, "0" * 64, version_seq=version.seq))
+    # A legacy marker is never sufficient in strict mode, even when its digest is exact.
+    _insert_event(db, _CID, _workspace_commit(11, version.tree_digest, version_seq=version.seq))
+    with pytest.raises(SnapshotNotReadyError) as legacy:
+        await client.collect_workspace(_CID, ["index.html"])
+    assert legacy.value.facts["final_seal_error"] == "latest workspace version has no final seal"
+    assert legacy.value.facts["observed_tree_digest"] is None
+
+    _insert_event(
+        db,
+        _CID,
+        _sealed_workspace_commit(12, version, digest="0" * 64),
+    )
     with pytest.raises(SnapshotNotReadyError) as mismatched:
         await client.collect_workspace(_CID, ["index.html"])
-    assert mismatched.value.facts["workspace_version_seq"] == 11
+    assert mismatched.value.facts["workspace_version_seq"] == 12
     assert mismatched.value.facts["workspace_version_digest"] == "0" * 64
     assert mismatched.value.facts["observed_tree_digest"] == tree_digest(workspace)
 
     _insert_event(
         db,
         _CID,
-        _workspace_commit(12, tree_digest(workspace), version_seq=version.seq),
+        _sealed_workspace_commit(13, version),
     )
     (workspace / "index.html").write_text("<h1>later uncommitted bytes</h1>")
     manifest = await client.collect_workspace(_CID, ["index.html"])
@@ -882,18 +1401,23 @@ async def test_terminal_snapshot_requires_post_terminal_workspace_commit(tmp_pat
 
 @pytest.mark.asyncio
 async def test_stale_preterminal_workspace_commit_cannot_bless_final_tree(tmp_path):
-    from disco.tools.projects.store import ProjectStore, tree_digest
+    from disco.tools.projects.store import ProjectStore
 
     db = tmp_path / "disco.db"
     projects = tmp_path / "projects"
     content = "<h1>final</h1>"
-    events = _smoke_log_with_file_write("index.html", content)
-    events[-1] = _workspace_commit(10, "0" * 64)
-    events.append(status(11, "FINISHED"))
-    _seed_db(db, _CID, events)
-    workspace = _plant_snapshot(projects, _CID, {"index.html": content})
+    _plant_snapshot(projects, _CID, {"index.html": content})
     version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
     assert version is not None
+    events = _smoke_log_with_file_write("index.html", content)
+    events[-1] = _sealed_workspace_commit(
+        10,
+        version,
+        terminal_seq=6,
+        latest_effect_seq=None,
+    )
+    events.append(status(11, "FINISHED"))
+    _seed_db(db, _CID, events)
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
         db_path=str(db),
@@ -906,12 +1430,15 @@ async def test_stale_preterminal_workspace_commit_cannot_bless_final_tree(tmp_pa
     with pytest.raises(SnapshotNotReadyError) as raised:
         await client.collect_workspace(_CID, ["index.html"])
     assert raised.value.facts["terminal_seq"] == 11
-    assert raised.value.facts["workspace_version_seq"] is None
+    assert raised.value.facts["workspace_version_seq"] == 10
+    assert raised.value.facts["final_seal_error"] == (
+        "workspace version does not follow terminal FINISHED"
+    )
 
     _insert_event(
         db,
         _CID,
-        _workspace_commit(12, tree_digest(workspace), version_seq=version.seq),
+        _sealed_workspace_commit(12, version, terminal_seq=11),
     )
     manifest = await client.collect_workspace(_CID, ["index.html"])
     assert manifest["index.html"]["content"] == content
@@ -924,6 +1451,7 @@ async def test_stale_preterminal_workspace_commit_cannot_bless_final_tree(tmp_pa
         ("seq", "11"),
         ("version_seq", "1"),
         ("tree_digest", "not-a-digest"),
+        ("trigger", "turn"),
     ],
 )
 @pytest.mark.asyncio
@@ -937,7 +1465,7 @@ async def test_strict_commit_rejects_forged_or_malformed_system_marker(tmp_path,
     _plant_snapshot(projects, _CID, {"index.html": content})
     version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
     assert version is not None
-    marker = _workspace_commit(11, version.tree_digest, version_seq=version.seq)
+    marker = _sealed_workspace_commit(11, version)
     marker[field] = value
     _insert_event(db, _CID, marker)
     client = DiscoApiClient(
@@ -952,7 +1480,6 @@ async def test_strict_commit_rejects_forged_or_malformed_system_marker(tmp_path,
     with pytest.raises(SnapshotNotReadyError) as raised:
         await client.collect_workspace(_CID, ["index.html"])
     assert raised.value.facts["event_evidence_valid"] is False
-    assert raised.value.facts["workspace_version_seq"] is None
 
 
 @pytest.mark.asyncio
@@ -969,7 +1496,7 @@ async def test_commit_before_late_action_outcome_cannot_bless_workspace(tmp_path
     _insert_event(
         db,
         _CID,
-        _workspace_commit(11, version.tree_digest, version_seq=version.seq),
+        _sealed_workspace_commit(11, version),
     )
     _insert_event(db, _CID, observation(12, "evt_7", tool="file_write"))
     client = DiscoApiClient(
@@ -1010,7 +1537,7 @@ async def test_committed_version_root_symlink_cannot_escape_projects_store(tmp_p
     _insert_event(
         db,
         _CID,
-        _workspace_commit(11, version.tree_digest, version_seq=version.seq),
+        _sealed_workspace_commit(11, version),
     )
     client = DiscoApiClient(
         FakeTransport(db, states=["FINISHED"], workspace={}),
@@ -1029,20 +1556,20 @@ async def test_committed_version_root_symlink_cannot_escape_projects_store(tmp_p
 
 @pytest.mark.asyncio
 async def test_old_terminal_commit_cannot_bless_later_running_mutation(tmp_path):
-    from disco.tools.projects.store import ProjectStore, tree_digest
+    from disco.tools.projects.store import ProjectStore
 
     db = tmp_path / "disco.db"
     projects = tmp_path / "projects"
     content = "<h1>old committed bytes</h1>"
     events = _smoke_log_with_file_write("index.html", content)
     _seed_db(db, _CID, events)
-    workspace = _plant_snapshot(projects, _CID, {"index.html": content})
+    _plant_snapshot(projects, _CID, {"index.html": content})
     version = ProjectStore(str(projects)).cut_version(_CID, trigger="finish")
     assert version is not None
     _insert_event(
         db,
         _CID,
-        _workspace_commit(11, tree_digest(workspace), version_seq=version.seq),
+        _sealed_workspace_commit(11, version),
     )
     _insert_event(db, _CID, status(12, "RUNNING"))
     _insert_event(
@@ -2051,13 +2578,27 @@ async def test_h190_collection_error_is_recorded_as_invalid_run(tmp_path):
         model="m",
         autonomous=False,
         commit="a" * 40,
+        repo_revision="a" * 40 + "+dirty.fedcba9876543210",
+        repo_dirty=True,
         timeout_s=5,
     )
 
     assert record["status"] == "INVALID_RUN"
     assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
     assert record["first_broken_link"] == ("browser_observation -> durable_screenshot_evidence")
-    assert not (tmp_path / "out" / "run_h190_missing_invalid" / "conversations").exists()
+    # F3: the invalidation verdict is unchanged, but the durable evidence the
+    # harness already held is FROZEN instead of discarded. The browser bytes
+    # themselves stay honestly absent — only the missing screenshot invalidates
+    # the run; the events/state/inspect slices must survive for diagnosis.
+    conv = tmp_path / "out" / "run_h190_missing_invalid" / "conversations" / _CID
+    assert (conv / "events.jsonl").exists()
+    assert not (conv / "browser-evidence").exists()
+    freeze = record["facts"]["evidence_freeze"]
+    assert freeze["dossier_written"] is True
+    assert "events" in freeze["present"]
+    manifest = load_manifest(tmp_path / "out" / "run_h190_missing_invalid")
+    assert manifest.repo_revision == "a" * 40 + "+dirty.fedcba9876543210"
+    assert manifest.repo_dirty is True
 
 
 @pytest.mark.asyncio
@@ -4261,19 +4802,29 @@ async def test_absent_required_inspect_trace_retains_collected_dossier(tmp_path)
     assert record["status"] == "INVALID_RUN"
     assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
     assert record["conversation_id"] == _CID
-    assert record["facts"]["missing_trace_parts"] == ["routing_decisions", "agent.step spans"]
+    assert record["facts"]["missing_trace_parts"] == [
+        "lossless inspect aggregation",
+        "routing_decisions",
+        "agent.step spans",
+    ]
 
     base = out_root / run_id
     conv = base / "conversations" / _CID
-    assert not (conv / "inspect-trace.json").exists()
+    retained_trace = json.loads((conv / "inspect-trace.json").read_text(encoding="utf-8"))
+    assert retained_trace["aggregation"]["lossless"] is False
+    assert retained_trace["aggregation"]["finalized"] is True
+    assert "inspect_unavailable" in retained_trace["aggregation"]["failure_reasons"]
     assert (conv / "events.jsonl").read_text(encoding="utf-8").strip()
     assert (conv / "state.initial.json").is_file()
     assert (conv / "state.final.json").is_file()
     assert (conv / "workspace-manifest.json").is_file()
     manifest = load_manifest(base)
-    assert {"events.jsonl", "state.final.json", "workspace-manifest.json"} <= set(
-        manifest.evidence_hashes
-    )
+    assert {
+        "events.jsonl",
+        "inspect-trace.json",
+        "state.final.json",
+        "workspace-manifest.json",
+    } <= set(manifest.evidence_hashes)
     assert verify_evidence_unchanged(base, manifest).intact
 
 
@@ -4664,11 +5215,17 @@ async def test_progress_aware_wait_hard_cap_bounds_a_progressing_run(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path):
+async def test_progressing_cutoff_is_invalid_run_not_product_fail(tmp_path, monkeypatch):
     # THE Bug 15 pin: a still-actively-progressing build cut off by the hard cap is
     # INCONCLUSIVE (INVALID_RUN / RUN_TIMEOUT_WHILE_PROGRESSING) so §17 re-runs it — it is
     # NEVER frozen mid-flight and mislabeled a product BUILD_DID_NOT_FINISH.
     db = tmp_path / "disco.db"
+    # Cleanup proof is part of this unit contract. Keep it hermetic: the host may
+    # deliberately deny Podman access (or have unrelated live containers), neither of
+    # which is evidence about the fake conversation exercised here.
+    monkeypatch.setattr(_run_mod, "_live_disco_container_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_disco_volume_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_dangling_volume_names", lambda: set())
     _seed_db(db, _CID, clean_smoke_log()[:-1])
     transport = _SandboxIdProgressTransport(db, finish_after=None)
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
@@ -4846,6 +5403,12 @@ async def test_genuinely_inactive_build_is_a_real_finding_not_inconclusive(tmp_p
     # inactivity window IS a real product finding — BUILD_DID_NOT_FINISH — NOT the
     # inconclusive INVALID_RUN reserved for an actively-progressing cutoff.
     db = tmp_path / "disco.db"
+    # This is a fake-transport product-adjudication test, not a live Podman probe.
+    # Pin an empty host baseline/after state so cleanup applicability cannot change
+    # with the developer machine's runtime permissions.
+    monkeypatch.setattr(_run_mod, "_live_disco_container_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_disco_volume_names", lambda: [])
+    monkeypatch.setattr(_run_mod, "_dangling_volume_names", lambda: set())
     events = clean_smoke_log()[:-1]
     screenshot_path = ".pmx/screenshots/nonterminal.png"
     events += [
@@ -7705,3 +8268,1421 @@ def test_h347_timeout_constants_are_bound_to_product_definitions():
     assert _disco_mod._DEFAULT_TOOL_TIMEOUT_S == default == 300
     assert _disco_mod._SLIDES_GENERATE_TIMEOUT_S == SlidesTool.definition.timeout_s == 900
     assert 0 < _disco_mod._ACTION_RESULT_PERSISTENCE_GRACE_S <= 30
+
+
+# ---- BF2A: lossless bounded-inspect aggregation ------------------------------
+
+
+def _inspect_span(seq: object, *, label: str | None = None) -> dict[str, Any]:
+    return {
+        "seq": seq,
+        "kind": "span",
+        "span": "agent.step",
+        "event": "end",
+        "request_id": label or f"request-{seq}",
+    }
+
+
+def _inspect_snapshot(
+    events: list[dict[str, Any]],
+    *,
+    dropped: object = 0,
+    conversation_id: str = _CID,
+) -> dict[str, Any]:
+    return {
+        "conversation_id": conversation_id,
+        "event_count": len(events),
+        "dropped_event_count": dropped,
+        # Deliberately untrusted/stale: the aggregate must derive projections
+        # exclusively from canonical events.
+        "routing_decisions": [{"stale": True}],
+        "spans": [{"stale": True}],
+        "tool_scopes": [{"stale": True}],
+        "progress_shadows": [{"stale": True}],
+        "events": events,
+    }
+
+
+class _InspectSnapshotTransport:
+    def __init__(self, snapshot: object) -> None:
+        self.snapshot = snapshot
+        self.raise_on_trace = False
+
+    async def get_json(self, _path):
+        if self.raise_on_trace:
+            raise ConnectionError("transient inspect failure")
+        return 200, self.snapshot
+
+
+def _inspect_client(transport: _InspectSnapshotTransport) -> DiscoApiClient:
+    return DiscoApiClient(cast(Any, transport), db_path=":memory:", poll_interval_s=100.0)
+
+
+@pytest.mark.asyncio
+async def test_bf2a_overlapping_windows_retain_more_than_ring_and_derive_projections():
+    events = [_inspect_span(seq) for seq in range(1, 1201)]
+    events[:3] = [
+        {"seq": 1, "kind": "routing", "role": "agent", "request_id": "request-1"},
+        {"seq": 2, "kind": "tool_scope", "mode": "execution", "request_id": "request-2"},
+        {
+            "seq": 3,
+            "kind": "progress_shadow",
+            "latest_event_seq": 3,
+            "request_id": "request-3",
+        },
+    ]
+    # Actual governed trace shape: log_event(..., kind="soft") overwrites
+    # the flattened outer kind="span" field. Exact span/event semantics retain
+    # it as a span projection while preserving the payload kind.
+    events[1099] = {
+        "seq": 1100,
+        "kind": "soft",
+        "span": "request_budget.preview",
+        "event": "point",
+        "request_id": "request-1100",
+    }
+    transport = _InspectSnapshotTransport(_inspect_snapshot(events[:1024]))
+    client = _inspect_client(transport)
+
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot(events[76:1100], dropped=76)
+    await client.collect_inspect_trace(_CID)
+    transport.snapshot = _inspect_snapshot(events[176:1200], dropped=176)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["event_count"] == 1200
+    assert trace["dropped_event_count"] == 0
+    assert trace["source_dropped_event_count"] == 176
+    assert len(trace["spans"]) == 1197
+    assert {span.get("kind") for span in trace["spans"]} == {None, "soft"}
+    assert trace["routing_decisions"] == [{"role": "agent", "request_id": "request-1"}]
+    assert trace["tool_scopes"] == [{"mode": "execution", "request_id": "request-2"}]
+    assert trace["progress_shadows"] == [{"latest_event_seq": 3, "request_id": "request-3"}]
+    assert trace["aggregation"]["lossless"] is True
+    assert trace["aggregation"]["continuity_reason"] == "overlap_proven"
+    assert trace["aggregation"]["overlap_sample_count"] >= 2
+    assert trace["aggregation"]["unique_event_count"] == 1200
+
+
+@pytest.mark.asyncio
+async def test_bf2a_expected_same_conversation_pretrace_404_is_not_a_failure():
+    class _PretraceTransport(_InspectSnapshotTransport):
+        async def get_json(self, _path):
+            if self.snapshot is None:
+                return 404, {"error": "no trace", "conversation_id": _CID}
+            return 200, self.snapshot
+
+    transport = _PretraceTransport(None)
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(1)])
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["pretrace_unavailable_count"] == 1
+    assert trace["aggregation"]["failure_reasons"] == []
+    assert trace["aggregation"]["lossless"] is True
+
+
+@pytest.mark.asyncio
+async def test_bf2a_same_conversation_no_trace_after_snapshot_is_source_loss():
+    class _DisappearingTraceTransport(_InspectSnapshotTransport):
+        async def get_json(self, _path):
+            if self.snapshot is None:
+                return 404, {"error": "no trace", "conversation_id": _CID}
+            return 200, self.snapshot
+
+    transport = _DisappearingTraceTransport(_inspect_snapshot([_inspect_span(1)]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = None
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert trace["aggregation"]["pretrace_unavailable_count"] == 0
+    assert trace["aggregation"]["unavailable_sample_count"] == 1
+    assert "source_reset" in trace["aggregation"]["failure_reasons"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        (404, {"error": "inspect disabled"}),
+        (404, {"error": "no trace", "conversation_id": "conv_other"}),
+        (503, {"error": "unavailable"}),
+    ],
+)
+async def test_bf2a_noncanonical_pretrace_http_failure_taints_collection(response):
+    class _HttpFailureTransport(_InspectSnapshotTransport):
+        async def get_json(self, _path):
+            if self.snapshot is None:
+                return response
+            return 200, self.snapshot
+
+    transport = _HttpFailureTransport(None)
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(1)])
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert "inspect_unavailable" in trace["aggregation"]["failure_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_pretrace_network_failure_is_not_forgiven_by_later_snapshot():
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1)]))
+    transport.raise_on_trace = True
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.raise_on_trace = False
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert trace["aggregation"]["pretrace_unavailable_count"] == 0
+    assert trace["aggregation"]["unavailable_sample_count"] == 1
+    assert "inspect_unavailable" in trace["aggregation"]["failure_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_empty_window_then_first_event_window_already_dropped_is_not_lossless():
+    transport = _InspectSnapshotTransport(_inspect_snapshot([]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(50)], dropped=49)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert "first_snapshot_already_dropped" in trace["aggregation"]["failure_reasons"]
+    assert trace["dropped_event_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_bf2a_eviction_without_overlap_is_an_explicit_gap():
+    transport = _InspectSnapshotTransport(
+        _inspect_snapshot([_inspect_span(seq) for seq in range(1, 4)])
+    )
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(seq) for seq in range(10, 13)], dropped=9)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert "eviction_gap_no_overlap" in trace["aggregation"]["failure_reasons"]
+    assert trace["aggregation"]["unique_event_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_bf2a_duplicate_sequence_changed_content_is_rejected():
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1, label="original")]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(1, label="changed"), _inspect_span(2)])
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert trace["aggregation"]["conflict_count"] == 1
+    assert trace["events"] == [_inspect_span(1, label="original")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first", "later", "reason"),
+    [
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([_inspect_span(True)]),
+            "malformed_snapshot",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([_inspect_span("2")]),
+            "malformed_snapshot",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([_inspect_span(2), _inspect_span(1)]),
+            "snapshot_sequence_regression",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(10), _inspect_span(11)]),
+            _inspect_snapshot([_inspect_span(1), _inspect_span(2)]),
+            "source_reset",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([_inspect_span(1)], conversation_id="conv_other"),
+            "conversation_mismatch",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([{"seq": 1, "kind": "soft", "value": 1}]),
+            "ambiguous_event_discriminator",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([{"seq": 1, "kind": True}]),
+            "ambiguous_event_discriminator",
+        ),
+        (
+            _inspect_snapshot([_inspect_span(1)]),
+            _inspect_snapshot([{"seq": 1, "kind": "routing", "span": "x", "event": "point"}]),
+            "ambiguous_event_discriminator",
+        ),
+    ],
+)
+async def test_bf2a_invalid_snapshot_seams_fail_closed(first, later, reason):
+    transport = _InspectSnapshotTransport(first)
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = later
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert reason in trace["aggregation"]["failure_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_dropped_count_regression_is_not_reset_green():
+    # The intermediate window is a PHYSICALLY POSSIBLE eviction (member 1 gone,
+    # new suffix 3 arrived) so the regression seam — not the impossible-
+    # transition seam — is what this test exercises.
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1), _inspect_span(2)]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(2), _inspect_span(3)], dropped=1)
+    await client.collect_inspect_trace(_CID)
+    transport.snapshot = _inspect_snapshot([_inspect_span(2), _inspect_span(3)], dropped=0)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    reasons = trace["aggregation"]["failure_reasons"]
+    assert "dropped_count_regression" in reasons
+    assert "source_reset" in reasons
+    assert trace["aggregation"]["source_max_dropped_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bf2a_transient_collector_failure_persists_after_later_overlap():
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1)]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.raise_on_trace = True
+    await client.collect_inspect_trace(_CID)
+    transport.raise_on_trace = False
+    transport.snapshot = _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert trace["aggregation"]["unavailable_sample_count"] == 1
+    assert "inspect_unavailable" in trace["aggregation"]["failure_reasons"]
+    assert trace["aggregation"]["unique_event_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_bf2a_start_finish_are_idempotent_and_poller_collects_dedicatedly():
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1)]))
+    client = DiscoApiClient(cast(Any, transport), db_path=":memory:", poll_interval_s=0.01)
+    await client.start_inspect_collection(_CID)
+    first_task = client._inspect_poll_tasks[_CID]
+    await client.start_inspect_collection(_CID)
+    assert client._inspect_poll_tasks[_CID] is first_task
+    transport.snapshot = _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+    await asyncio.sleep(0.04)
+    first = await client.finish_inspect_collection(_CID)
+    second = await client.finish_inspect_collection(_CID)
+
+    assert first == second
+    assert first is not None
+    assert first["aggregation"]["lossless"] is True
+    assert first["aggregation"]["unique_event_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_bf2a_cancelled_finish_caller_cannot_replace_collected_prefix():
+    class _BlockedFinalSampleTransport(_InspectSnapshotTransport):
+        def __init__(self):
+            super().__init__(_inspect_snapshot([_inspect_span(1)]))
+            self.calls = 0
+            self.final_sample_started = asyncio.Event()
+            self.release_final_sample = asyncio.Event()
+
+        async def get_json(self, _path):
+            self.calls += 1
+            if self.calls == 1:
+                return 200, self.snapshot
+            self.final_sample_started.set()
+            await self.release_final_sample.wait()
+            return 200, _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+
+    transport = _BlockedFinalSampleTransport()
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+
+    cancelled_caller = asyncio.create_task(client.finish_inspect_collection(_CID))
+    await transport.final_sample_started.wait()
+    cancelled_caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_caller
+
+    transport.release_final_sample.set()
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is True
+    assert trace["aggregation"]["finalized"] is True
+    assert trace["aggregation"]["unique_event_count"] == 2
+    assert [event["seq"] for event in trace["events"]] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_collection_starts_before_message_kick():
+    class _CreationTransport(_InspectSnapshotTransport):
+        def __init__(self):
+            super().__init__(None)
+            self.order: list[str] = []
+
+        async def post_json(self, path, _body):
+            self.order.append(path)
+            if path == "/conversations":
+                return 200, {"conversation_id": _CID}
+            return 200, {"ok": True}
+
+        async def get_json(self, _path):
+            self.order.append("inspect")
+            return 404, {"error": "no trace", "conversation_id": _CID}
+
+    transport = _CreationTransport()
+    client = _inspect_client(transport)
+    cid = await client.create_build_conversation("build", model="m")
+    await client.finish_inspect_collection(cid)
+
+    assert transport.order[:3] == ["/conversations", "inspect", f"/conversations/{_CID}/messages"]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_inspect_finalizes_before_later_browser_capture_failure(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    client = _client(FakeTransport(db, states=["FINISHED"]), tmp_path)
+
+    async def terminal(*_args, **_kwargs):
+        return "FINISHED"
+
+    async def workspace(*_args, **_kwargs):
+        return {"index.html": {"content": "ok"}}
+
+    def browser_failure(*_args, **_kwargs):
+        raise BrowserEvidenceCollectionError("missing browser bytes", {})
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", terminal)
+    monkeypatch.setattr(client, "collect_workspace", workspace)
+    monkeypatch.setattr(client, "collect_browser_evidence", browser_failure)
+
+    with pytest.raises(BrowserEvidenceCollectionError):
+        await drive_scenario(client, _smoke_scenario(), model="m", autonomous=False)
+
+    trace = await client.finish_inspect_collection(_CID)
+    assert trace is not None
+    assert trace["aggregation"]["finalized"] is True
+    assert trace["aggregation"]["lossless"] is True
+
+
+@pytest.mark.asyncio
+async def test_bf2a_required_gate_rejects_legacy_trace_without_aggregation(tmp_path, monkeypatch):
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=clean_smoke_log(),
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=_fake_inspect_trace(),
+    )
+
+    async def legacy_drive(*_args, **_kwargs):
+        return run
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", legacy_drive)
+    client = _client(FakeTransport(tmp_path / "missing.db", states=["FINISHED"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_bf2a_missing_aggregation",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=1,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert "lossless inspect aggregation" in record["facts"]["missing_trace_parts"]
+
+
+# ---- BF2A corrections: active-stop tail, impossible transitions, gate trust --
+
+
+class _ActiveReleaseTransport:
+    """Conversation in a configurable state whose kill emits one final trace event."""
+
+    def __init__(self, *, state: str = "RUNNING", kill_ack: bool = True) -> None:
+        self.snapshot = _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+        self.state = state
+        self.kill_ack = kill_ack
+        self.calls: list[str] = []
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self.calls.append("state")
+            return 200, {"execution_status": self.state}
+        self.calls.append("trace")
+        return 200, self.snapshot
+
+    async def post_json(self, path, _body):
+        if path.endswith("/kill"):
+            self.calls.append("kill")
+            # The still-active model flushes one final trace event as the stop lands.
+            self.snapshot = _inspect_snapshot(
+                [_inspect_span(1), _inspect_span(2), _inspect_span(3)]
+            )
+            if not self.kill_ack:
+                return 503, {"error": "kill rejected"}
+            return 200, {"killed": True, "state": {"execution_status": "IDLE"}}
+        return 200, {}
+
+
+@pytest.mark.asyncio
+async def test_bf2a_release_of_active_conversation_retains_kill_tail_event():
+    from harness.build_soak.run import _release_conversation
+
+    transport = _ActiveReleaseTransport()
+    client = DiscoApiClient(cast(Any, transport), db_path=":memory:", poll_interval_s=100.0)
+    await client.start_inspect_collection(_CID)
+
+    await _release_conversation(client, _CID)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert [event["seq"] for event in trace["events"]] == [1, 2, 3]
+    assert trace["aggregation"]["lossless"] is True
+    assert trace["aggregation"]["finalized"] is True
+    # The stop lands BEFORE the final sample, so the tail is observable.
+    kill_index = transport.calls.index("kill")
+    assert "trace" in transport.calls[kill_index:]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_release_of_terminal_conversation_freezes_inspect_before_kill():
+    from harness.build_soak.run import _release_conversation
+
+    transport = _ActiveReleaseTransport(state="FINISHED")
+    client = DiscoApiClient(cast(Any, transport), db_path=":memory:", poll_interval_s=100.0)
+    await client.start_inspect_collection(_CID)
+
+    await _release_conversation(client, _CID)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    # A terminal source emits nothing further; the aggregate freezes before the
+    # cleanup kill so release can never race the final sample.
+    assert [event["seq"] for event in trace["events"]] == [1, 2]
+    assert trace["aggregation"]["lossless"] is True
+    kill_index = transport.calls.index("kill")
+    assert "trace" not in transport.calls[kill_index:]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_release_with_unconfirmed_kill_taints_continuity():
+    from harness.build_soak.run import _release_conversation
+
+    transport = _ActiveReleaseTransport(kill_ack=False)
+    client = DiscoApiClient(cast(Any, transport), db_path=":memory:", poll_interval_s=100.0)
+    await client.start_inspect_collection(_CID)
+
+    await _release_conversation(client, _CID)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    # The observed prefix (and observable tail) is preserved, but quiescence was
+    # never proven, so the aggregate must not claim losslessness.
+    assert [event["seq"] for event in trace["events"]] == [1, 2, 3]
+    assert trace["aggregation"]["lossless"] is False
+    assert "active_stop_unconfirmed" in trace["aggregation"]["failure_reasons"]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_progress_hard_cap_stop_retains_kill_tail_event(tmp_path, monkeypatch):
+    class _HardCapTailTransport(FakeTransport):
+        def __init__(self, db_path, **kwargs):
+            super().__init__(db_path, **kwargs)
+            self.trace_snapshot = _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+            self.trace_reads_after_kill = 0
+
+        async def get_json(self, path):
+            if path == f"/api/debug/trace/{self.cid}":
+                if self._killed:
+                    self.trace_reads_after_kill += 1
+                return 200, json.loads(json.dumps(self.trace_snapshot))
+            return await super().get_json(path)
+
+        async def post_json(self, path, body):
+            status_code, data = await super().post_json(path, body)
+            if path.endswith("/kill"):
+                self.trace_snapshot = _inspect_snapshot(
+                    [_inspect_span(1), _inspect_span(2), _inspect_span(3)]
+                )
+            return status_code, data
+
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = _HardCapTailTransport(db, states=["RUNNING"])
+    client = _client(transport, tmp_path)
+
+    async def hard_capped(*_args, **_kwargs):
+        raise _disco_mod.InconclusiveRunError("progress-aware hard cap", {"elapsed_s": 1})
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", hard_capped)
+    with pytest.raises(_disco_mod.InconclusiveRunError) as excinfo:
+        await drive_scenario(client, _smoke_scenario(), model="m", autonomous=False)
+
+    run = excinfo.value.collected_run
+    assert run is not None
+    trace = run.inspect_trace
+    assert trace is not None
+    assert [event["seq"] for event in trace["events"]] == [1, 2, 3]
+    assert trace["aggregation"]["lossless"] is True
+    assert transport.trace_reads_after_kill >= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # A byte-identical retained window cannot raise the eviction counter.
+        ([1, 2, 3], ([1, 2, 3], 5)),
+        # Eviction without any new suffix is impossible: the ring evicts only
+        # while appending.
+        ([1, 2, 3], ([2, 3], 1)),
+        # A delta covering every prior member cannot leave an overlap behind.
+        ([1, 2], ([2, 6, 7], 3)),
+    ],
+)
+async def test_bf2a_impossible_dropped_count_transitions_fail_closed(first, second):
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(seq) for seq in first]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    seqs, dropped = second
+    transport.snapshot = _inspect_snapshot([_inspect_span(seq) for seq in seqs], dropped=dropped)
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    reasons = trace["aggregation"]["failure_reasons"]
+    assert "impossible_dropped_transition" in reasons
+    assert "source_reset" in reasons
+    assert trace["dropped_event_count"] is None
+
+
+@pytest.mark.asyncio
+async def test_bf2a_true_eviction_with_new_suffix_from_below_capacity_stays_green():
+    # The earlier sample was below ring capacity; the rule must enforce only the
+    # necessary eviction + new-suffix facts, never an exact capacity assumption.
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1), _inspect_span(2)]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = _inspect_snapshot(
+        [_inspect_span(2), _inspect_span(3), _inspect_span(4)], dropped=1
+    )
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is True
+    assert [event["seq"] for event in trace["events"]] == [1, 2, 3, 4]
+    assert trace["source_dropped_event_count"] == 1
+    assert trace["aggregation"]["continuity_reason"] == "overlap_proven"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        # Boolean event_count: True == 1 satisfies the length check, so only the
+        # exact non-bool type test rejects it.
+        {**_inspect_snapshot([_inspect_span(2)]), "event_count": True},
+        {**_inspect_snapshot([]), "event_count": -1},
+        {**_inspect_snapshot([_inspect_span(2)]), "dropped_event_count": True},
+        # NaN violates strict canonical JSON (allow_nan=False).
+        _inspect_snapshot([{**_inspect_span(2), "value": float("nan")}]),
+    ],
+)
+async def test_bf2a_boolean_negative_and_nan_snapshot_scalars_fail_closed(snapshot):
+    transport = _InspectSnapshotTransport(_inspect_snapshot([_inspect_span(1)]))
+    client = _inspect_client(transport)
+    await client.start_inspect_collection(_CID)
+    transport.snapshot = snapshot
+    trace = await client.finish_inspect_collection(_CID)
+
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert "malformed_snapshot" in trace["aggregation"]["failure_reasons"]
+    assert trace["aggregation"]["malformed_sample_count"] == 1
+
+
+def _honest_gate_trace() -> dict[str, Any]:
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(
+        _inspect_snapshot(
+            [
+                {"seq": 1, "kind": "routing", "role": "agent_driver", "chosen_model": "m"},
+                {"seq": 2, "kind": "span", "span": "agent.step", "event": "end"},
+                {"seq": 3, "kind": "tool_scope", "mode": "execution"},
+            ]
+        )
+    )
+    aggregation.finish()
+    return aggregation.render()
+
+
+def test_bf2a_validator_accepts_honest_lossless_and_honest_tainted_aggregates():
+    assert _disco_mod.inspect_aggregate_violations(_honest_gate_trace(), conversation_id=_CID) == []
+    tainted = _disco_mod._InspectTraceAggregation(_CID)
+    tainted.note_unavailable()
+    tainted.add_snapshot(_inspect_snapshot([_inspect_span(1)]))
+    tainted.finish()
+    assert _disco_mod.inspect_aggregate_violations(tainted.render(), conversation_id=_CID) == []
+
+
+@pytest.mark.parametrize(
+    ("tamper", "label"),
+    [
+        (lambda t: t.__setitem__("event_count", 99), "event_count"),
+        (lambda t: t["aggregation"].__setitem__("unique_event_count", 99), "event_count"),
+        (
+            lambda t: t["aggregation"].__setitem__("first_retained_seq", 7),
+            "retained_seq:first_retained_seq",
+        ),
+        (lambda t: t["events"].reverse(), "event_sequence"),
+        (lambda t: t["events"][0].__setitem__("seq", True), "event_sequence"),
+        (lambda t: t["events"][0].__setitem__("value", float("nan")), "event_not_canonical"),
+        (lambda t: t.__setitem__("routing_decisions", []), "projection:routing_decisions"),
+        (
+            lambda t: t.__setitem__("spans", [{"span": "agent.step", "event": "end", "forged": 1}]),
+            "projection:spans",
+        ),
+        (
+            lambda t: t["aggregation"].__setitem__("failure_reasons", ["not_a_reason"]),
+            "failure_reasons",
+        ),
+        (
+            lambda t: t["aggregation"].__setitem__(
+                "failure_reasons", ["source_reset", "event_content_conflict"]
+            ),
+            "failure_reasons",
+        ),
+        (lambda t: t["aggregation"].__setitem__("lossless", False), "lossless_incoherent"),
+        (lambda t: t.__setitem__("dropped_event_count", None), "dropped_event_count"),
+        (lambda t: t["aggregation"].__setitem__("continuity", "incomplete"), "continuity"),
+        (
+            lambda t: t["aggregation"].__setitem__("continuity_reason", "overlap_proven"),
+            "continuity_reason",
+        ),
+        (
+            lambda t: t.__setitem__("source_dropped_event_count", 3),
+            "source_dropped_event_count",
+        ),
+        (lambda t: t.__setitem__("extra", 1), "top_level_keys"),
+        (lambda t: t.__setitem__("conversation_id", "conv_other"), "conversation_id"),
+        (lambda t: t["aggregation"].pop("conflict_count"), "aggregation_keys"),
+        (lambda t: t["aggregation"].__setitem__("schema_version", True), "schema_version"),
+        (lambda t: t["aggregation"].__setitem__("sample_count", True), "counter:sample_count"),
+        (
+            lambda t: t["aggregation"].__setitem__("event_bearing_sample_count", 5),
+            "sample_accounting",
+        ),
+        # Counter <-> reason coherence: a disclosed rejected/unavailable/
+        # malformed sample or source eviction cannot coexist with a green wear.
+        (
+            lambda t: t["aggregation"].__setitem__("conflict_count", 1),
+            "conflict_reason_incoherent",
+        ),
+        (
+            lambda t: t["aggregation"].__setitem__("unavailable_sample_count", 1),
+            "unavailable_reason_incoherent",
+        ),
+        (
+            lambda t: t["aggregation"].__setitem__("malformed_sample_count", 1),
+            "malformed_reason_incoherent",
+        ),
+        (
+            lambda t: (
+                t.__setitem__("source_dropped_event_count", 2),
+                t["aggregation"].__setitem__("source_max_dropped_count", 2),
+            ),
+            "overlap_continuity_incoherent",
+        ),
+    ],
+)
+def test_bf2a_validator_flags_each_forged_inconsistency(tamper, label):
+    trace = _honest_gate_trace()
+    tamper(trace)
+    violations = _disco_mod.inspect_aggregate_violations(trace, conversation_id=_CID)
+    assert label in violations
+
+
+def _forged_lossless_trace() -> dict[str, Any]:
+    """Zero canonical events with projections asserted from thin air, wearing
+    caller-owned lossless/finalized/dropped fields that all assert green."""
+
+    return {
+        "conversation_id": _CID,
+        "event_count": 0,
+        "dropped_event_count": 0,
+        "source_dropped_event_count": 0,
+        "events": [],
+        "routing_decisions": [{"role": "agent_driver", "chosen_model": "forged"}],
+        "spans": [{"span": "agent.step", "event": "end", "request_id": "forged"}],
+        "tool_scopes": [],
+        "progress_shadows": [],
+        "aggregation": {
+            "schema_version": 1,
+            "sample_count": 1,
+            "accepted_sample_count": 1,
+            "event_bearing_sample_count": 0,
+            "pretrace_unavailable_count": 0,
+            "unavailable_sample_count": 0,
+            "malformed_sample_count": 0,
+            "overlap_sample_count": 0,
+            "source_max_dropped_count": 0,
+            "unique_event_count": 0,
+            "first_retained_seq": None,
+            "last_retained_seq": None,
+            "continuity": "complete",
+            "continuity_reason": "no_source_eviction_observed",
+            "conflict_count": 0,
+            "failure_reasons": [],
+            "lossless": True,
+            "finalized": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_bf2a_required_gate_rejects_forged_lossless_aggregate(tmp_path, monkeypatch):
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=clean_smoke_log(),
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=_forged_lossless_trace(),
+    )
+
+    async def forged_drive(*_args, **_kwargs):
+        return run
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", forged_drive)
+    client = _client(FakeTransport(tmp_path / "missing.db", states=["FINISHED"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_bf2a_forged_lossless",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=1,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert "internally consistent inspect aggregate" in record["facts"]["missing_trace_parts"]
+    violations = record["facts"]["inspect_aggregate_violations"]
+    assert "projection:routing_decisions" in violations
+    assert "projection:spans" in violations
+
+
+@pytest.mark.asyncio
+async def test_bf2a_required_gate_accepts_honest_lossless_aggregate(tmp_path, monkeypatch):
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=clean_smoke_log(),
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=_honest_gate_trace(),
+    )
+
+    async def honest_drive(*_args, **_kwargs):
+        return run
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", honest_drive)
+    client = _client(FakeTransport(tmp_path / "missing.db", states=["FINISHED"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_bf2a_honest_lossless",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=1,
+        require_inspect_trace=True,
+    )
+
+    # The gate must not reject an honest lossless aggregate; whatever later
+    # gates decide about this synthetic run, the inspect evidence is complete.
+    assert record["code"] != "MISSING_REQUIRED_EVIDENCE"
+    assert "missing_trace_parts" not in (record.get("facts") or {})
+
+
+def test_bf2a_batch_item_summary_discloses_bounded_aggregation_scalars(tmp_path):
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_inspect_span(1), _inspect_span(2)]))
+    aggregation.add_snapshot(_inspect_snapshot([_inspect_span(2), _inspect_span(3)], dropped=1))
+    aggregation.finish()
+    trace = aggregation.render()
+    conv_dir = tmp_path / "run_batch" / "conversations" / _CID
+    conv_dir.mkdir(parents=True)
+    (conv_dir / "inspect-trace.json").write_text(json.dumps(trace), encoding="utf-8")
+
+    summary = _run_mod._run_batch_item(
+        index=0,
+        run_id="run_batch",
+        base=tmp_path,
+        classification={"conversation_id": _CID, "status": "PASS", "scenario_id": "s"},
+    )
+
+    inspect_summary = summary["inspect"]
+    assert inspect_summary["captured"] is True
+    assert inspect_summary["lossless"] is True
+    assert inspect_summary["finalized"] is True
+    assert inspect_summary["continuity"] == "complete"
+    assert inspect_summary["continuity_reason"] == "overlap_proven"
+    assert inspect_summary["aggregate_dropped_event_count"] == 0
+    assert inspect_summary["source_dropped_event_count"] == 1
+    assert inspect_summary["sample_count"] == 2
+    assert inspect_summary["accepted_sample_count"] == 2
+    assert inspect_summary["overlap_sample_count"] == 1
+    assert inspect_summary["unique_event_count"] == 3
+    assert inspect_summary["first_retained_seq"] == 1
+    assert inspect_summary["last_retained_seq"] == 3
+    assert inspect_summary["conflict_count"] == 0
+    assert inspect_summary["failure_reasons"] == []
+    # Bounded scalars only — never the unbounded event list.
+    assert "events" not in inspect_summary
+
+
+@pytest.mark.asyncio
+async def test_bf2a_required_gate_rejects_laundered_conflict_aggregate(tmp_path, monkeypatch):
+    # Drive the real aggregation into a conflict taint, then wipe the taint and
+    # wear green: the disclosed conflict_count survives, so the validator's
+    # counter<->reason coherence must fail the gate.
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(
+        _inspect_snapshot(
+            [
+                {"seq": 1, "kind": "routing", "role": "agent_driver", "chosen_model": "m"},
+                {"seq": 2, "kind": "span", "span": "agent.step", "event": "end"},
+            ]
+        )
+    )
+    aggregation.add_snapshot(
+        _inspect_snapshot(
+            [
+                {"seq": 1, "kind": "routing", "role": "agent_driver", "chosen_model": "m"},
+                {"seq": 2, "kind": "span", "span": "agent.step", "event": "start"},
+            ]
+        )
+    )
+    aggregation.finish()
+    trace = aggregation.render()
+    assert trace["aggregation"]["conflict_count"] == 1
+    trace["aggregation"]["failure_reasons"] = []
+    trace["aggregation"]["lossless"] = True
+    trace["aggregation"]["continuity"] = "complete"
+    trace["aggregation"]["continuity_reason"] = "no_source_eviction_observed"
+    trace["dropped_event_count"] = 0
+
+    run = CollectedRun(
+        conversation_id=_CID,
+        events=clean_smoke_log(),
+        state_initial={"execution_status": "IDLE"},
+        state_final={"execution_status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        inspect_trace=trace,
+    )
+
+    async def laundered_drive(*_args, **_kwargs):
+        return run
+
+    monkeypatch.setattr(_run_mod, "drive_scenario", laundered_drive)
+    client = _client(FakeTransport(tmp_path / "missing.db", states=["FINISHED"]), tmp_path)
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_bf2a_laundered_conflict",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=1,
+        require_inspect_trace=True,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "MISSING_REQUIRED_EVIDENCE"
+    assert "internally consistent inspect aggregate" in record["facts"]["missing_trace_parts"]
+    assert "conflict_reason_incoherent" in record["facts"]["inspect_aggregate_violations"]
+
+
+class _NonterminalCollectionTransport(FakeTransport):
+    """RUNNING at the collection boundary; the kill emits one final trace event."""
+
+    def __init__(self, db_path, *, kill_ack: bool = True, **kwargs):
+        super().__init__(db_path, **kwargs)
+        self.kill_ack = kill_ack
+        self.trace_snapshot = _inspect_snapshot([_inspect_span(1), _inspect_span(2)])
+
+    async def get_json(self, path):
+        if path == f"/api/debug/trace/{self.cid}":
+            return 200, json.loads(json.dumps(self.trace_snapshot))
+        if path.endswith("/state") and not self._killed:
+            return 200, {"execution_status": "RUNNING"}
+        return await super().get_json(path)
+
+    async def post_json(self, path, body):
+        if path.endswith("/kill"):
+            self.trace_snapshot = _inspect_snapshot(
+                [_inspect_span(1), _inspect_span(2), _inspect_span(3)]
+            )
+            if not self.kill_ack:
+                return 503, {"error": "kill rejected"}
+        return await super().post_json(path, body)
+
+
+def _nonterminal_inactive_log():
+    """A genuinely inactive nonterminal prefix — no durable work terminal, so the
+    late-terminal race guard cannot reroute collection onto the strict path."""
+    return [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+        status(5, "RUNNING", "plan_approved"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bf2a_inactive_timeout_collection_stops_before_inspect_freeze(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, _nonterminal_inactive_log())
+    transport = _NonterminalCollectionTransport(db, states=["RUNNING"])
+    client = _client(transport, tmp_path)
+
+    async def inactive_drive(*_args, **_kwargs):
+        return INACTIVE_TIMEOUT
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", inactive_drive)
+    run = await drive_scenario(client, _smoke_scenario(), model="m", autonomous=False)
+
+    trace = run.inspect_trace
+    assert trace is not None
+    # The nonterminal conversation was stopped BEFORE the final sample, so the
+    # tail event emitted during the kill is retained and losslessness is honest.
+    assert [event["seq"] for event in trace["events"]] == [1, 2, 3]
+    assert trace["aggregation"]["lossless"] is True
+    # The dossier keeps the true pre-stop product state.
+    assert run.state_final == {"execution_status": "RUNNING"}
+
+
+@pytest.mark.asyncio
+async def test_bf2a_inactive_timeout_unconfirmed_stop_taints_continuity(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, _nonterminal_inactive_log())
+    transport = _NonterminalCollectionTransport(db, states=["RUNNING"], kill_ack=False)
+    client = _client(transport, tmp_path)
+
+    async def inactive_drive(*_args, **_kwargs):
+        return INACTIVE_TIMEOUT
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", inactive_drive)
+    run = await drive_scenario(client, _smoke_scenario(), model="m", autonomous=False)
+
+    trace = run.inspect_trace
+    assert trace is not None
+    assert trace["aggregation"]["lossless"] is False
+    assert "active_stop_unconfirmed" in trace["aggregation"]["failure_reasons"]
+
+
+# ---- F3: every invalidation return path freezes available evidence ----------
+#
+# The k6g 128k canary (2026-07-19) ended INVALID_RUN/WORKSPACE_SNAPSHOT_NOT_READY
+# and the runner wrote ONLY classification.json + timeline.md — the durable
+# events, the BF2A lossless inspect aggregate, and the provider slice the
+# harness already held in-process were discarded, and classification.json
+# carried conversation_id null. These tests pin the repaired contract: the
+# invalidation verdict is unchanged, but every available slice is frozen into
+# the ordinary hash-locked dossier and every missing slice is disclosed.
+
+
+def _snapshot_not_ready_exc(cid: str) -> SnapshotNotReadyError:
+    return SnapshotNotReadyError(
+        "workspace snapshot never reached the agent's final state within 45s",
+        {"conversation_id": cid, "snapshot_wait_s": 45.0},
+    )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_not_ready_freezes_available_evidence(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(db, states=["FINISHED", "FINISHED"])
+    client = _client(transport, tmp_path)
+
+    async def _raise_snapshot(cid, declared):
+        raise _snapshot_not_ready_exc(cid)
+
+    monkeypatch.setattr(client, "collect_workspace", _raise_snapshot)
+    out_root = tmp_path / "out"
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_f3_snapshot_001",
+        out_root=out_root,
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    # The invalidation verdict is byte-for-byte the pre-F3 product semantics …
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "WORKSPACE_SNAPSHOT_NOT_READY"
+    assert record["first_broken_link"] == "snapshot_flush -> snapshot_behind_agent_final_state"
+    assert record["required_evidence_present"] is False
+    # … but the exact conversation ID is preserved instead of null.
+    assert record["conversation_id"] == _CID
+
+    freeze = record["facts"]["evidence_freeze"]
+    assert freeze["attempted"] is True
+    assert freeze["dossier_written"] is True
+    assert {"events", "state_final", "inspect_trace"} <= set(freeze["present"])
+    # No relay log exists in this test: the provider slice is DISCLOSED missing.
+    assert "provider_ledger" in freeze["missing"]
+
+    base = out_root / "run_f3_snapshot_001"
+    conv = base / "conversations" / _CID
+    events_lines = (conv / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(events_lines) == len(clean_smoke_log())
+    assert json.loads((conv / "state.final.json").read_text(encoding="utf-8"))
+    assert json.loads((conv / "inspect-trace.json").read_text(encoding="utf-8"))
+    assert json.loads((conv / "thrash-monitor.json").read_text(encoding="utf-8")) is not None
+
+    # The workspace slice must NEVER look like terminal workspace truth.
+    workspace_manifest = json.loads((conv / "workspace-manifest.json").read_text(encoding="utf-8"))
+    assert workspace_manifest["files"] == {}
+    assert workspace_manifest["_capture"]["status"] == "not_collected_invalidation"
+    assert workspace_manifest["_capture"]["invalidation_code"] == "WORKSPACE_SNAPSHOT_NOT_READY"
+
+    # The frozen dossier is the ordinary hash-locked one: manifest verifies.
+    manifest = load_manifest(base)
+    integrity = verify_evidence_unchanged(base, manifest)
+    assert integrity.intact is True
+    assert integrity.mismatches == {}
+    # state.initial is an explicit capture marker, never fabricated state.
+    state_initial = json.loads((conv / "state.initial.json").read_text(encoding="utf-8"))
+    assert state_initial["_capture"]["status"] == "not_collected_invalidation"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_not_ready_freeze_discloses_missing_events(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(db, states=["FINISHED", "FINISHED"])
+    client = _client(transport, tmp_path)
+
+    armed = {"on": False}
+    real_collect_events = client.collect_events
+
+    def _collect_events(cid):
+        if armed["on"]:
+            raise RuntimeError("event store unreachable during freeze")
+        return real_collect_events(cid)
+
+    async def _raise_snapshot(cid, declared):
+        armed["on"] = True
+        raise _snapshot_not_ready_exc(cid)
+
+    monkeypatch.setattr(client, "collect_events", _collect_events)
+    monkeypatch.setattr(client, "collect_workspace", _raise_snapshot)
+    out_root = tmp_path / "out"
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_f3_snapshot_002",
+        out_root=out_root,
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "WORKSPACE_SNAPSHOT_NOT_READY"
+    assert record["conversation_id"] == _CID
+    freeze = record["facts"]["evidence_freeze"]
+    assert "events" in freeze["missing"]
+    assert freeze["errors"]["events"] == "RuntimeError"
+    # The independently collectable slices are still frozen, not discarded.
+    assert "state_final" in freeze["present"]
+    conv = out_root / "run_f3_snapshot_002" / "conversations" / _CID
+    assert (conv / "state.final.json").exists()
+    assert (conv / "events.jsonl").read_text(encoding="utf-8").strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_snapshot_not_ready_freeze_failure_never_masks_invalidation(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(db, states=["FINISHED", "FINISHED"])
+    client = _client(transport, tmp_path)
+
+    async def _raise_snapshot(cid, declared):
+        raise _snapshot_not_ready_exc(cid)
+
+    def _dossier_boom(*_args, **_kwargs):
+        raise OSError("disk full while freezing")
+
+    monkeypatch.setattr(client, "collect_workspace", _raise_snapshot)
+    monkeypatch.setattr(_run_mod, "assemble_dossier", _dossier_boom)
+    out_root = tmp_path / "out"
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_f3_snapshot_003",
+        out_root=out_root,
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    # The original invalidation survives a failed freeze, with the failure disclosed.
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "WORKSPACE_SNAPSHOT_NOT_READY"
+    assert record["conversation_id"] == _CID
+    freeze = record["facts"]["evidence_freeze"]
+    assert freeze["dossier_written"] is False
+    assert freeze["errors"]["dossier"] == "OSError"
+    assert (out_root / "run_f3_snapshot_003" / "classification.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_generic_post_create_error_freezes_evidence(tmp_path, monkeypatch):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(db, states=["FINISHED", "FINISHED"])
+    client = _client(transport, tmp_path)
+
+    async def _boom(cid, declared):
+        raise RuntimeError("collection transport dropped")
+
+    monkeypatch.setattr(client, "collect_workspace", _boom)
+    out_root = tmp_path / "out"
+    record = await run_once(
+        client,
+        _smoke_scenario(),
+        run_id="run_f3_generic_001",
+        out_root=out_root,
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=5,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "RUN_INTERRUPTED"
+    # The generic exception carries no facts: the client's own last-created
+    # conversation is the freeze target.
+    assert record["conversation_id"] == _CID
+    freeze = record["facts"]["evidence_freeze"]
+    assert freeze["attempted"] is True
+    assert "events" in freeze["present"]
+    conv = out_root / "run_f3_generic_001" / "conversations" / _CID
+    assert (conv / "events.jsonl").exists()
+    assert (
+        json.loads((conv / "workspace-manifest.json").read_text(encoding="utf-8"))["_capture"][
+            "status"
+        ]
+        == "not_collected_invalidation"
+    )
+
+
+# ---- F2: the live monitor needs CURRENT no-progress evidence ----------------
+
+
+def _thrash_smoke_scenario() -> dict[str, Any]:
+    scenario = json.loads(json.dumps(_smoke_scenario()))
+    scenario["assertions"]["thrash"] = {
+        "max_identical_action_repeats": 2,
+        "max_same_tool_error_repeats": 1,
+        "max_actionless_pauses": 0,
+        "max_same_model_repair_repeats": 1,
+        "max_total_model_repairs": 3,
+    }
+    return scenario
+
+
+def _same_signature_refusals() -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for seq in (11, 13):
+        action_id = f"a{seq}"
+        events.append(action(seq, "file_read", action_id=action_id, args={"path": "index.html"}))
+        events.append(
+            agent_error(
+                seq + 1,
+                action_id,
+                error="stuck_escape_tool_quarantine:file_read",
+                detail="withheld during the current loop",
+            )
+        )
+    return events
+
+
+def test_live_thrash_monitor_kills_only_on_current_no_progress_evidence(tmp_path):
+    """k6g F2.4: a finding superseded by trusted progress cannot kill the run;
+    the same finding with no later progress still can."""
+    scenario = _thrash_smoke_scenario()
+
+    current = _same_signature_refusals()
+    client = _client(FakeTransport(tmp_path / "current.db", states=["RUNNING"]), tmp_path)
+    client.enable_live_thrash_monitor(scenario)
+    assert not client.observe_live_thrash_snapshot(current, None, terminal_status="RUNNING")
+    assert client.observe_live_thrash_snapshot(current, None, terminal_status="RUNNING")
+    finding = client.live_thrash_monitor["findings"][0]["oracle_results"][0]
+    assert finding["code"] == "TOOL_ERROR_THRASH"
+    assert finding["facts"]["action_seqs"] == [11, 13]
+
+    # Identical history + a trusted changed-state receipt AFTER the crossing
+    # (the k6g resume shape): the historical finding is no longer current.
+    resumed = list(current)
+    write_id = "a15"
+    resumed.append(action(15, "file_edit", action_id=write_id, args={"path": "index.html"}))
+    write_result = observation(16, write_id, tool="file_edit", success=True)
+    write_result["tool_result"]["structured"] = {"path": "index.html", "sha256": "b" * 64}
+    resumed.append(write_result)
+    stale_client = _client(FakeTransport(tmp_path / "stale.db", states=["RUNNING"]), tmp_path)
+    stale_client.enable_live_thrash_monitor(scenario)
+    assert not stale_client.observe_live_thrash_snapshot(resumed, None, terminal_status="RUNNING")
+    assert not stale_client.observe_live_thrash_snapshot(resumed, None, terminal_status="RUNNING")
+    assert stale_client.live_thrash_monitor["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_superseded_stuck_terminal_does_not_force_strict_snapshot(tmp_path, monkeypatch):
+    """k6g F2 terminal ownership: a STUCK that was answered and superseded
+    (question -> user answer -> RUNNING -> monitor kill) is NOT the run's work
+    terminal; the confirmed live-thrash carve-out must engage and preserve the
+    nonterminal evidence slice instead of raising WORKSPACE_SNAPSHOT_NOT_READY."""
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+        status(5, "RUNNING", "plan_approved"),
+        status(6, "STUCK", "stuck_escape_tool_quarantine"),
+        status(7, "AWAITING_USER_QUESTION", "evt_q"),
+        msg(8, "user", "Use your best judgment and proceed."),
+        status(9, "RUNNING"),
+        status(10, "IDLE", "killed"),
+    ]
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(db, states=["IDLE"])
+    client = _client(transport, tmp_path)
+    scenario = _thrash_smoke_scenario()
+
+    async def thrash_drive(*_args, **_kwargs):
+        # drive_scenario re-enables (resets) the monitor before driving, so the
+        # confirmed finding is primed exactly where the real monitor records
+        # it: during the drive, before the LIVE_THRASH_STOP return.
+        client._live_thrash_samples = 2  # noqa: SLF001 - primed strict monitor state
+        client._live_thrash_findings = [  # noqa: SLF001
+            {
+                "detected_at_epoch": started.timestamp() + 8.5,
+                "terminal_status": "RUNNING",
+                "event_count": 9,
+                "max_event_seq": 9,
+                "confirmation_samples": 2,
+                "oracle_results": [
+                    {
+                        "oracle": "ThrashOracle",
+                        "status": "FAIL",
+                        "code": "TOOL_ERROR_THRASH",
+                    }
+                ],
+            }
+        ]
+        return LIVE_THRASH_STOP
+
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", thrash_drive)
+    run = await drive_scenario(client, scenario, model="m", autonomous=False)
+
+    capture = run.workspace_manifest.get("_capture") or {}
+    assert capture.get("status") == "not_collected_nonterminal"
+    assert capture.get("drive_status") == LIVE_THRASH_STOP
+
+
+@pytest.mark.asyncio
+async def test_v4_bare_idle_after_late_finished_keeps_the_strict_path(tmp_path, monkeypatch):
+    """Verifier V4: a resting/stop IDLE (any detail) is not product
+    supersession — a genuine late FINISHED still routes to strict capture."""
+    started = datetime(2026, 7, 15, 21, 0, tzinfo=UTC)
+    events = clean_smoke_log()
+    events.append(status(11, "IDLE"))
+    for offset, event in enumerate(events):
+        event["timestamp"] = datetime.fromtimestamp(started.timestamp() + offset, UTC).isoformat()
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    content = "<html><h1>Build Smoke OK</h1></html>"
+    transport = FakeTransport(
+        db, states=["IDLE"], workspace={"index.html": content}, preview_html=content
+    )
+    client = _client(transport, tmp_path)
+
+    workspace_calls = 0
+
+    async def counting_workspace(_conversation_id, _declared_paths):
+        nonlocal workspace_calls
+        workspace_calls += 1
+        return {"files": {}}
+
+    async def inactive_drive(*_args, **_kwargs):
+        return INACTIVE_TIMEOUT
+
+    monkeypatch.setattr(client, "collect_workspace", counting_workspace)
+    monkeypatch.setattr(_run_mod, "_drive_to_terminal", inactive_drive)
+    run = await drive_scenario(client, _smoke_scenario(), model="m", autonomous=False)
+
+    assert workspace_calls == 1
+    assert (run.workspace_manifest or {}).get("_capture") is None

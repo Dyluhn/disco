@@ -32,6 +32,7 @@ class FileStreamFrame(BaseModel):
     index: int
     delta: str
     field: Literal["content", "new"] = "content"
+    agent_view_id: str | None = None
 
 
 class WSServerFrame(BaseModel):

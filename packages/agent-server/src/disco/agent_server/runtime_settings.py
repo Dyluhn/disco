@@ -344,7 +344,12 @@ class RuntimeSettings:
         from disco.core.llm import ModelRole, resolve_policy
         from disco.core.llm.types import Requirement
 
-        override = self._rt._model_override.get(conversation_id)
+        compose_snapshot = self._rt._resolved_context_for_compose.get(conversation_id)
+        override = (
+            compose_snapshot.model_key
+            if compose_snapshot is not None
+            else self._rt._model_override.get(conversation_id)
+        )
         # This is a metadata read used by every /state response (the Assist badge).
         # Building a live router here needlessly resolves/decrypts every provider and
         # logs every disapproved catalogue entry on every poll.  The policy needs only
@@ -374,7 +379,12 @@ class RuntimeSettings:
         falls back to the global resolver). Mirrors _effective_policy's entry resolution."""
         from disco.core.llm import ModelRole
 
-        override = self._rt._model_override.get(conversation_id)
+        compose_snapshot = self._rt._resolved_context_for_compose.get(conversation_id)
+        override = (
+            compose_snapshot.model_key
+            if compose_snapshot is not None
+            else self._rt._model_override.get(conversation_id)
+        )
         # Tool-context metadata resolution needs the selected endpoint, not a live
         # provider object.  Avoid provider construction on read-only setup paths.
         config = self._rt._routing_config_now()
@@ -550,6 +560,9 @@ class RuntimeSettings:
         """Mark a conversation as artifact-mode (C6). In-memory only — the flag
         is set at create time from the body and is not needed to survive a restart
         (artifact-mode conversations are short-lived authoring sessions)."""
+        stored_appkit = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        if on and stored_appkit:
+            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
         self._rt._artifact_mode[conversation_id] = bool(on)
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
@@ -559,9 +572,25 @@ class RuntimeSettings:
     # ---- appkit_mode (EPIC F) ----------------------------------------------
 
     def set_appkit_mode(self, conversation_id: str, on: bool) -> None:
-        """Mark a conversation as an AppKit build. In-memory only, set at create
-        time; default OFF so normal Build/Research behavior is untouched."""
-        self._rt._appkit_mode[conversation_id] = bool(on)
+        """Capture immutable AppKit identity for legacy/internal create callers.
+
+        The public create route writes the bit with the rest of the conversation
+        row. This compatibility seam may create a missing row, but it can never
+        flip an existing identity in either direction.
+        """
+
+        requested = bool(on)
+        if requested and self._rt._artifact_mode.get(conversation_id, False):
+            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
+        stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        if stored is None:
+            self._rt._store.create_conversation(conversation_id, appkit_mode=requested)
+            stored = requested
+        elif stored != requested:
+            raise ValueError("appkit_mode is immutable after conversation creation")
+        # Retain the old map as a non-authoritative compatibility cache for code
+        # inspecting runtime internals. Every effective read below goes to SQLite.
+        self._rt._appkit_mode[conversation_id] = stored
 
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
         """True when the conversation was created with appkit_mode=True AND the
@@ -572,7 +601,8 @@ class RuntimeSettings:
         re-enabling the flag restores them — no stored state is touched."""
         from disco.core.flags import appkit_enabled
 
-        return appkit_enabled() and self._rt._appkit_mode.get(conversation_id, False)
+        stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        return appkit_enabled() and stored is True
 
     # ---- per-query research sources ---------------------------------------
 

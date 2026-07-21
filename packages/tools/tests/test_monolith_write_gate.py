@@ -1,23 +1,10 @@
-"""MONO-1 — the monolith write gate (all tiers).
+"""P-F5B — large source files stay editable without dictating product shape.
 
-file_write / file_append refuse to CREATE or GROW a web-source file
-(.html/.css/.js/…) past _MONOLITH_MAX_LINES / _MONOLITH_MAX_BYTES, with a
-corrective nudge naming the split (styles.css / app.js / one page per file).
-
-Live forensics behind the gate (Pillar-B gauntlet, 2026-07-07): one build wrote
-a single 71KB / 1,770-line index.html; every later edit then had to be grounded
-through the read-before-edit gates, costing 32 edit refusals and the whole
-run budget. Same-scope builds structured as 3-4 files ≤24KB paid 4-6 refusals
-and passed cleanly. Linting is too late — the gate fires AT the write.
-
-Boundaries proven here:
-  - new source file over the cap (lines OR bytes) → refused, nothing written
-  - under-cap source file → allowed
-  - non-source extensions (.json/.svg/.txt) → exempt at any size
-  - SHRINKING an existing over-cap file → allowed (cleanup never blocked)
-  - growing rewrite of an existing file past the cap → refused
-  - append that CROSSES the cap → refused; append to an ALREADY-over-cap
-    (legacy) file → allowed (repairs never obstructed)
+The old MONO-1 policy hard-refused source files above 800 lines / 48 KiB. A real
+eight-revision canary proved that this universal web recipe can directly
+contradict an explicit user/target file layout. Large-file reliability now comes
+from bounded reads, fresh grounding, targeted edits, and atomic writes — not a
+hard product-shape gate.
 """
 
 from __future__ import annotations
@@ -25,12 +12,12 @@ from __future__ import annotations
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
-    _MONOLITH_MAX_BYTES,
-    _MONOLITH_MAX_LINES,
     FileAppendArgs,
     FileAppendTool,
     FileReadArgs,
     FileReadTool,
+    FileReplaceLinesArgs,
+    FileReplaceLinesTool,
     FileWriteArgs,
     FileWriteTool,
     reset_read_tracker,
@@ -77,125 +64,56 @@ def _clear_tracker():
     reset_read_tracker()
 
 
-# Content helpers. Line-cap breach with small bytes; byte-cap breach with few lines.
-_OVER_LINES = "<div></div>\n" * (_MONOLITH_MAX_LINES + 1)
-_UNDER_CAP = "<div></div>\n" * 50
-_OVER_BYTES = "x" * (_MONOLITH_MAX_BYTES + 1) + "\n"
+# Realistic valid CSS shapes. The first reproduces the live 732 -> 895 append;
+# the second is the earlier 1,770-line / roughly 71 KiB stress shape.
+_BASE_732 = "".join(f"/* existing rule {i:04d} {'x' * 30} */\n" for i in range(1, 733))
+_PRICING_163 = "".join(f"/* pricing rule {i:04d} */\n" for i in range(1, 164))
+_LARGE_1770 = "".join(f"/* source rule {i:04d} {'x' * 24} */\n" for i in range(1, 1771))
 
 
 # --- creation ------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_new_source_file_over_line_cap_refused():
+async def test_new_1770_line_source_file_is_supported():
     sbx = _FakeSandbox()
     out = await FileWriteTool().run(
-        FileWriteArgs(path="index.html", content=_OVER_LINES), _ctx(sbx)
+        FileWriteArgs(path="styles.css", content=_LARGE_1770), _ctx(sbx)
     )
-    assert out.success is False
-    assert out.error == "monolith_write"
-    msg = out.content or ""
-    # The refusal is a DIAGNOSIS + RECIPE, not a rule citation: it must name the
-    # exact tripwire, state that nothing was written, and give the html-specific
-    # split recipe for the content the agent still holds.
-    assert f"{_MONOLITH_MAX_LINES}-line cap" in msg  # which limit tripped
-    assert "Nothing was written" in msg  # workspace-state clarity
-    assert "styles.css" in msg and "app.js" in msg  # html recipe
-    assert "<link" in msg and "<script src=" in msg  # concrete replacements
-    assert sbx.writes == []  # nothing touched the workspace
+    assert out.success is True, out.content
+    assert sbx._fs["styles.css"] == _LARGE_1770.encode()
 
 
 @pytest.mark.asyncio
-async def test_new_source_file_over_byte_cap_refused():
-    sbx = _FakeSandbox()
-    out = await FileWriteTool().run(FileWriteArgs(path="app.js", content=_OVER_BYTES), _ctx(sbx))
-    assert out.success is False and out.error == "monolith_write"
-    msg = out.content or ""
-    assert "KB cap" in msg  # the byte tripwire is named
-    # .js gets the module recipe, not the html one
-    assert "ES modules" in msg and "import/export" in msg
-
-
-@pytest.mark.asyncio
-async def test_under_cap_source_file_allowed():
-    sbx = _FakeSandbox()
-    out = await FileWriteTool().run(FileWriteArgs(path="index.html", content=_UNDER_CAP), _ctx(sbx))
-    assert out.success is True
-
-
-@pytest.mark.asyncio
-async def test_non_source_extension_exempt():
-    """Data/asset files legitimately run large — only source files are gated.
-    Content must be syntactically valid per type (the separate W3 syntax gate
-    still applies to everything); only the SIZE exemption is under test here."""
-    sbx = _FakeSandbox()
-    big = "x" * (_MONOLITH_MAX_BYTES + 1024)
-    cases = {
-        "data.json": '{"data": "' + big + '"}',
-        "notes.txt": big + "\n",
-    }
-    for path, content in cases.items():
-        assert len(content.encode()) > _MONOLITH_MAX_BYTES
-        out = await FileWriteTool().run(FileWriteArgs(path=path, content=content), _ctx(sbx))
-        assert out.success is True, f"{path} should be exempt: {out.content}"
-
-
-# --- existing files: shrink allowed, growth refused ------------------------------
-
-
-@pytest.mark.asyncio
-async def test_shrinking_an_over_cap_file_allowed():
-    """Cleanup of a legacy monolith must never be blocked — a rewrite that is
-    no larger than the current content passes even if still over the cap."""
-    legacy = _OVER_LINES.encode()
-    sbx = _FakeSandbox(existing={"index.html": legacy})
-    # ground the rewrite (read-before-write gate) then shrink by one line
-    await FileReadTool().run(FileReadArgs(path="index.html"), _ctx(sbx))
-    smaller = "<div></div>\n" * _MONOLITH_MAX_LINES  # still over? == cap → under
-    out = await FileWriteTool().run(FileWriteArgs(path="index.html", content=smaller), _ctx(sbx))
-    assert out.success is True
-
-
-@pytest.mark.asyncio
-async def test_growing_rewrite_past_cap_refused():
-    sbx = _FakeSandbox(existing={"index.html": _UNDER_CAP.encode()})
-    await FileReadTool().run(FileReadArgs(path="index.html"), _ctx(sbx))
-    out = await FileWriteTool().run(
-        FileWriteArgs(path="index.html", content=_OVER_LINES), _ctx(sbx)
-    )
-    assert out.success is False and out.error == "monolith_write"
-
-
-# --- append: crossing refused, legacy-over-cap repairable -------------------------
-
-
-@pytest.mark.asyncio
-async def test_append_crossing_cap_refused():
-    """The installment monolith: a file just under the cap + a chunk that would
-    push the RESULT over → refused (the result is judged, not the chunk)."""
-    base = ("y" * 1024 + "\n") * 40  # ~40KB, 40 lines — under both caps
-    sbx = _FakeSandbox(existing={"app.js": base.encode()})
-    chunk = ("z" * 1024 + "\n") * 10  # +10KB → crosses 48KB
-    out = await FileAppendTool().run(FileAppendArgs(path="app.js", content=chunk), _ctx(sbx))
-    assert out.success is False and out.error == "monolith_write"
-
-
-@pytest.mark.asyncio
-async def test_append_to_legacy_over_cap_file_allowed():
-    """A file ALREADY over the cap (created pre-gate) stays appendable — the
-    gate stops new monoliths forming, it does not wall off repairs (e.g.
-    re-adding a lost closing tag at EOF)."""
-    sbx = _FakeSandbox(existing={"index.html": _OVER_LINES.encode()})
+async def test_live_732_to_895_line_stylesheet_append_succeeds_in_place():
+    sbx = _FakeSandbox(existing={"styles.css": _BASE_732.encode()})
     out = await FileAppendTool().run(
-        FileAppendArgs(path="index.html", content="</body></html>\n"), _ctx(sbx)
+        FileAppendArgs(path="styles.css", content=_PRICING_163), _ctx(sbx)
     )
-    assert out.success is True
+    assert out.success is True, out.content
+    result = sbx._fs["styles.css"].decode()
+    assert len(result.splitlines()) == 895
+    assert "pricing rule 0163" in result
+    assert set(sbx._fs) == {"styles.css"}
 
 
 @pytest.mark.asyncio
-async def test_append_under_cap_allowed():
-    sbx = _FakeSandbox(existing={"index.html": _UNDER_CAP.encode()})
-    out = await FileAppendTool().run(
-        FileAppendArgs(path="index.html", content="<footer></footer>\n"), _ctx(sbx)
+async def test_large_source_supports_bounded_read_then_targeted_edit():
+    sbx = _FakeSandbox(existing={"styles.css": _LARGE_1770.encode()})
+    ctx = _ctx(sbx)
+
+    read = await FileReadTool().run(FileReadArgs(path="styles.css", offset=890, limit=20), ctx)
+    assert read.success is True
+    assert "source rule 0900" in (read.content or "")
+
+    out = await FileReplaceLinesTool().run(
+        FileReplaceLinesArgs(
+            path="styles.css",
+            start_line=900,
+            end_line=900,
+            new_text="/* source rule 0900 edited */",
+        ),
+        ctx,
     )
-    assert out.success is True
+    assert out.success is True, out.content
+    assert "source rule 0900 edited" in sbx._fs["styles.css"].decode()

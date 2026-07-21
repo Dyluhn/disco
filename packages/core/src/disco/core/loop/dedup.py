@@ -31,6 +31,7 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    WorkspaceMutationEvent,
 )
 from .resource_context import (
     canonical_workspace_identifier,
@@ -417,6 +418,46 @@ def collapse_superseded_reads(
     for receipt in prompt_receipt_tuple:
         latest_revisions[receipt.revision.resource] = receipt.revision
     selected_calls = {record.call_id for record in select_prompt_read_records(records)}
+    latest_run_intent_seq = max(
+        (
+            event.seq
+            for event in events
+            if isinstance(event, WorkspaceMutationEvent)
+            and event.operation.startswith("agent.run-intent.")
+            and type(event.seq) is int
+        ),
+        default=None,
+    )
+    # A model-requested read in the active run is high-attention evidence: keep
+    # its selected exact body in the recent tool-result position even when the
+    # cacheable CURRENT WORKSPACE prefix contains the same revision. Replacing
+    # that just-requested result with a pointer back to the prefix makes a
+    # successful read look unanswered and caused a real read/read/read loop in
+    # revision planning. The selected set is already resource/byte bounded, and
+    # a newer run intent naturally makes prior-run reads compactable again.
+    active_run_records = [
+        record
+        for record in records
+        if latest_run_intent_seq is not None
+        and record.observation_seq is not None
+        and record.observation_seq > latest_run_intent_seq
+    ]
+    active_run_visible_calls = {
+        record.call_id for record in active_run_records if record.call_id in selected_calls
+    }
+    # A targeted partial read may be set-theoretically redundant with an older
+    # complete read, but its immediate answer still belongs in the next request.
+    # Preserve at most that one extra result beyond the bounded selected set.
+    if active_run_records:
+        latest_active_record = max(
+            active_run_records,
+            key=lambda record: (
+                record.observation_seq if record.observation_seq is not None else -1,
+                record.action_seq if record.action_seq is not None else -1,
+                record.call_id,
+            ),
+        )
+        active_run_visible_calls.add(latest_active_record.call_id)
     messages_by_call: dict[str, list[LLMMessage]] = {}
     for message in messages:
         if message.role == "tool" and message.tool_call_id is not None:
@@ -469,6 +510,14 @@ def collapse_superseded_reads(
                 # No revision/range receipt (an old persisted event or a fake
                 # executor). Keep its bytes; latest-path guessing is the context
                 # loss this transform exists to remove.
+                out.append(msg)
+                continue
+            current_revision = latest_revisions.get(record.receipt.revision.resource)
+            if (
+                record.call_id in active_run_visible_calls
+                and _exact_body_is_present(record.call_id)
+                and current_revision == record.receipt.revision
+            ):
                 out.append(msg)
                 continue
             if receipt_covered_in_current_prompt(record.receipt, prompt_receipt_tuple):

@@ -36,7 +36,12 @@ from .errors import (
     LLMProviderUnavailable,
     LLMTransientError,
 )
-from .provider_ledger import emit_provider_attempt
+from .provider_ledger import (
+    ProviderRequestShape,
+    emit_provider_attempt,
+    provider_ledger_enabled,
+)
+from .request_budget import RequestBudgetEstimate
 from .toolcall_recovery import recover_tool_calls
 from .types import (
     EMPTY_REASONING_ONLY_METADATA_KEY,
@@ -73,6 +78,85 @@ def _is_anthropic(model: str) -> bool:
     string content + `prompt_cache_key` only."""
     m = model.lower()
     return "claude" in m or m.startswith("anthropic/")
+
+
+def _canonical_json_bytes(value: object) -> int:
+    """Deterministic UTF-8 JSON size for accounting, explicitly not wire bytes."""
+
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+
+
+def _image_shape(messages: object) -> tuple[int, int]:
+    """Return image count and URL characters without retaining either URL."""
+
+    if not isinstance(messages, list):
+        return 0, 0
+    image_count = 0
+    image_url_chars = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            image_count += 1
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else None
+            if isinstance(url, str):
+                image_url_chars += len(url)
+    return image_count, image_url_chars
+
+
+def _provider_request_shape(
+    req: CompletionRequest,
+    payload: dict,
+) -> ProviderRequestShape:
+    """Reduce an already-final payload to a fixed, content-free scalar shape."""
+
+    messages = payload.get("messages")
+    message_list = messages if isinstance(messages, list) else []
+    tools = payload.get("tools")
+    tool_list = tools if isinstance(tools, list) else []
+    role_counts = {"system": 0, "user": 0, "assistant": 0, "tool": 0}
+    for message in message_list:
+        if isinstance(message, dict) and message.get("role") in role_counts:
+            role_counts[message["role"]] += 1
+    image_count, image_url_chars = _image_shape(message_list)
+    raw_context_window = (req.metadata or {}).get("driver_context_window")
+    context_window = (
+        raw_context_window if type(raw_context_window) is int and raw_context_window > 0 else None
+    )
+    max_output_tokens = payload.get("max_tokens")
+    if type(max_output_tokens) is not int or max_output_tokens <= 0:
+        max_output_tokens = None
+    return ProviderRequestShape(
+        request_id=req.request_id,
+        driver_context_window=context_window,
+        model_repair_attempt=req.attempt,
+        stream=payload.get("stream") is True,
+        max_output_tokens=max_output_tokens,
+        canonical_payload_bytes=_canonical_json_bytes(payload),
+        messages_json_bytes=_canonical_json_bytes(message_list),
+        tools_json_bytes=_canonical_json_bytes(tool_list) if tool_list else 0,
+        message_count=len(message_list),
+        tool_count=len(tool_list),
+        system_message_count=role_counts["system"],
+        user_message_count=role_counts["user"],
+        assistant_message_count=role_counts["assistant"],
+        tool_message_count=role_counts["tool"],
+        image_count=image_count,
+        image_url_chars=image_url_chars,
+    )
 
 
 def _is_context_overflow(err_type: str, message: str) -> bool:
@@ -594,7 +678,9 @@ class OpenAIProvider:
         if "content_filter" in err_type.lower() or status == 451:
             raise LLMContentFiltered(safe_message, provider=self.name)
         if status == 429 or status >= 500:
-            raise LLMTransientError(safe_message, provider=self.name)
+            # http_status is an inert diagnostic attribute (UI labeling only) —
+            # same type, same safe_message, same raise site as before.
+            raise LLMTransientError(safe_message, provider=self.name, http_status=status)
         # P2 — provider-availability rejection classification. These messages
         # are upstream routing failures (Chutes/OpenRouter), NOT model errors:
         # the model payload is fine; an upstream provider is unavailable or
@@ -810,32 +896,75 @@ class OpenAIProvider:
 
     # -- the ModelProvider protocol -------------------------------------------
 
-    def _ledger_emit(self, req: CompletionRequest, model: str) -> None:
+    def _ledger_emit(
+        self,
+        req: CompletionRequest,
+        model: str,
+        payload: dict,
+    ) -> None:
         """Provider-request ledger (2026-07-09): when DISCO_PROVIDER_LEDGER names a
-        file, append one relay-format JSONL record per outbound completion request —
-        {ts (epoch float), host, model, has_tools, conversation_id}. This is the
+        file, append one relay-format JSONL record per outbound completion request.
+        The stable routing fields preserve the harness call-count contract; optional
+        aggregate payload counts are scalar-only and privacy-safe. This is the
         DIRECT-driver equivalent of the MiniMax relay's log: the build-soak harness
-        adjudicates provider-after-terminal (runaway loops) from it, and previously
-        REFUSED to run against direct drivers (no relay in the path = nothing to
-        audit). Schema matches harness provider_ledger.parse_relay_log's structured
-        branch; conversation_id scoping keeps PARALLEL soak lanes from
-        cross-contaminating each other's after-terminal counts. Best-effort:
-        ledger failure must never fail a live request. Unset env ⇒ zero overhead."""
+        adjudicates provider-after-terminal (runaway loops) from it. Conversation-id
+        scoping keeps parallel lanes isolated. Best-effort: accounting or ledger
+        failure must never fail a live request. Unset env means no shape work."""
+        if not provider_ledger_enabled():
+            return
         raw_cid = (req.metadata or {}).get("conversation_id")
+        try:
+            request_shape = _provider_request_shape(req, payload)
+        except Exception:  # noqa: BLE001 - accounting must never block provider traffic
+            request_shape = None
         emit_provider_attempt(
             base_url=self._base,
             model=model,
             has_tools=bool(req.tools),
             conversation_id=str(raw_cid).strip() if raw_cid else None,
+            request_shape=request_shape,
         )
 
+    def request_budget_preview(
+        self, req: CompletionRequest, model: str
+    ) -> RequestBudgetEstimate | None:
+        """Side-effect-free budget preview. No ledger record, no network I/O.
+
+        Calls the same _payload/_provider_request_shape paths the real request
+        uses. Returns None when the resulting shape lacks an authoritative
+        context window or when payload/shape construction fails.
+        """
+        try:
+            payload = self._payload(req, model, stream=True)
+        except Exception:
+            return None
+        try:
+            shape = _provider_request_shape(req, payload)
+        except Exception:
+            return None
+        if shape.driver_context_window is None:
+            return None
+        try:
+            return RequestBudgetEstimate(
+                driver_context_window=shape.driver_context_window,
+                max_output_tokens=shape.max_output_tokens,
+                canonical_payload_bytes=shape.canonical_payload_bytes,
+                messages_json_bytes=shape.messages_json_bytes,
+                tools_json_bytes=shape.tools_json_bytes,
+                message_count=shape.message_count,
+                tool_count=shape.tool_count,
+            )
+        except ValueError:
+            return None
+
     async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
-        self._ledger_emit(req, model)
+        payload = self._payload(req, model, stream=False)
+        self._ledger_emit(req, model, payload)
         try:
             async with self._client() as client:
                 resp = await client.post(
                     f"{self._base}/chat/completions",
-                    json=self._payload(req, model, stream=False),
+                    json=payload,
                     headers=self._headers(req),
                 )
         except httpx.TimeoutException as exc:
@@ -874,13 +1003,14 @@ class OpenAIProvider:
         finish: str | None = None
         usage: dict = {}
         model_used = model
-        self._ledger_emit(req, model)
+        payload = self._payload(req, model, stream=True)
+        self._ledger_emit(req, model, payload)
         try:
             async with self._client() as client:
                 async with client.stream(
                     "POST",
                     f"{self._base}/chat/completions",
-                    json=self._payload(req, model, stream=True),
+                    json=payload,
                     headers=self._headers(req),
                 ) as resp:
                     if resp.status_code >= 400:

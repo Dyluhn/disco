@@ -194,6 +194,88 @@ async def test_bulk_snapshot_uses_one_archive_and_reapplies_host_filters(tmp_pat
     assert not (tmp_path / "snap" / "node_modules").exists()
 
 
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_snapshot_preserves_host_owned_deployment_records_over_sandbox(
+    tmp_path: Path,
+    bulk: bool,
+) -> None:
+    dest = tmp_path / "snap"
+    record = dest / ".disco" / "cloudflare" / "deployments" / "receipt.json"
+    record.parent.mkdir(parents=True)
+    record.write_bytes(b"host-signed-record")
+    sandbox_files = {
+        "index.html": b"fresh app",
+        ".disco/cloudflare/deployments/receipt.json": b"stale sandbox copy",
+        ".disco/cloudflare/other.json": b"sandbox-owned sibling",
+    }
+    source = _BulkSandbox(sandbox_files) if bulk else _FakeSandbox(sandbox_files)
+
+    result = await snapshot_workspace(source, dest)
+
+    assert record.read_bytes() == b"host-signed-record"
+    assert (dest / "index.html").read_bytes() == b"fresh app"
+    assert (dest / ".disco" / "cloudflare" / "other.json").read_bytes() == (
+        b"sandbox-owned sibling"
+    )
+    assert ".disco/cloudflare/deployments/receipt.json" in result.paths
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+@pytest.mark.parametrize("blocking_path", [".disco", ".disco/cloudflare"])
+async def test_host_owned_record_wins_over_fresh_file_shaped_ancestor(
+    tmp_path: Path,
+    bulk: bool,
+    blocking_path: str,
+) -> None:
+    dest = tmp_path / "snap"
+    record = dest / ".disco" / "cloudflare" / "deployments" / "receipt.json"
+    record.parent.mkdir(parents=True)
+    record.write_bytes(b"host-signed-record")
+    files = {"index.html": b"fresh app", blocking_path: b"sandbox blocker"}
+    source = _BulkSandbox(files) if bulk else _FakeSandbox(files)
+
+    result = await snapshot_workspace(source, dest)
+
+    assert record.read_bytes() == b"host-signed-record"
+    assert (dest / "index.html").read_bytes() == b"fresh app"
+    assert ".disco/cloudflare/deployments/receipt.json" in result.paths
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_first_snapshot_reserves_host_owned_namespace_from_ancestor_file(
+    tmp_path: Path,
+    bulk: bool,
+) -> None:
+    files = {"index.html": b"app", ".disco": b"sandbox blocker"}
+    source = _BulkSandbox(files) if bulk else _FakeSandbox(files)
+    dest = tmp_path / "snap"
+
+    result = await snapshot_workspace(source, dest)
+
+    assert (dest / "index.html").read_bytes() == b"app"
+    assert not (dest / ".disco").is_file()
+    assert result.paths == ["index.html"]
+
+
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_first_snapshot_discards_untrusted_sandbox_host_owned_record(
+    tmp_path: Path,
+    bulk: bool,
+) -> None:
+    files = {
+        "index.html": b"app",
+        ".disco/cloudflare/deployments/forged.json": b"sandbox-forged",
+    }
+    source = _BulkSandbox(files) if bulk else _FakeSandbox(files)
+    dest = tmp_path / "snap"
+
+    result = await snapshot_workspace(source, dest)
+
+    assert (dest / "index.html").read_bytes() == b"app"
+    assert not (dest / ".disco" / "cloudflare" / "deployments").exists()
+    assert result.paths == ["index.html"]
+
+
 async def test_bulk_snapshot_rejects_links_without_replacing_last_good_tree(tmp_path: Path) -> None:
     from disco.tools.projects.archive import WorkspaceArchiveError
 

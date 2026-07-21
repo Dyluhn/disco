@@ -644,6 +644,11 @@ class _ContentGateMixin(_FinishGateProto):
                         "</system-reminder>"
                     ),
                 ),
+                # Typed provenance, matching this gate's sibling rejections
+                # (dod_unmet, plan_verification_evidence_invalid): a finish-gate
+                # refusal is a NEW proof obligation, and recovery-episode
+                # derivation must recognize it without parsing prose.
+                meta={"blocking": "user_literal_missing"},
             )
         )
         return False
@@ -742,6 +747,18 @@ class _ContentGateMixin(_FinishGateProto):
             conversation_id=self._loop.conversation_id,
         )
         if plan_verdict.passed:
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="plan_verification_passed",
+                    plan_verifier_pass=PlanVerifierPass(
+                        plan_revision=plan.revision,
+                        plan_event_id=plan.id,
+                        predicate_fingerprints=predicate_fingerprints(plan_predicates),
+                        spec_fingerprint=plan_verdict.spec_fingerprint,
+                    ),
+                )
+            )
             return True
         return await self._record_plan_verifier_failure(plan, plan_verdict, events)
 
@@ -903,6 +920,10 @@ class _ContentGateMixin(_FinishGateProto):
                         "</system-reminder>"
                     ),
                 ),
+                meta={
+                    "blocking": "plan_verifier_failed",
+                    "failure_fingerprint": failure_fingerprint,
+                },
             )
         )
 
@@ -1147,6 +1168,7 @@ class _ContentGateMixin(_FinishGateProto):
             and self._loop.mode != OperatingMode.PLANNING  # we're executing
             and not signals.productive_action_since_approval(events)
             and not signals.finish_intent_replan_after_prior_productive_work(events)
+            and not signals.verifier_repair_execution_active(events)
         ):
             # W5 cap: after _EXECUTION_NUDGE_CAP nudges without productive
             # action, TERMINALIZE the run as a FAILURE — NOT a false FINISHED.

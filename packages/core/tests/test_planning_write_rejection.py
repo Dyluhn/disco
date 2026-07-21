@@ -20,6 +20,7 @@ from disco.core import (
     PlanEvent,
     StatusEvent,
 )
+from disco.core.context import ArtifactMemoryStore
 from disco.core.dod import FileExistsPredicate
 from disco.core.events import ConversationStatus, EventSource
 from disco.core.llm import OperatingMode
@@ -27,8 +28,129 @@ from disco.core.loop import signals
 from loop_fakes import ScriptedAgent, action_step
 
 
+class _MemorySandbox:
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+
+
 def _submit_plan_step(summary="p"):
     return action_step("submit_plan", {"summary": summary, "steps": [{"title": "do"}]})
+
+
+async def test_empty_initial_plan_is_corrected_before_approval_and_seeds_design() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "Proposed plan", "steps": []}),
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "Build the two-page static site",
+                    "steps": [{"title": "Create the Home and About pages"}],
+                },
+            ),
+        ]
+    )
+    executor = BuildExecutor()
+    executor.sandbox = _MemorySandbox()  # type: ignore[attr-defined]
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-empty-initial-corrected",
+        executor=executor,
+    )
+
+    await loop.send_message("Create a two-page static site with Home and About pages.")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    events = await store.get_events(loop.conversation_id)
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert len(plans) == 1
+    assert plans[0].revision == 1
+    assert [step.title for step in plans[0].steps] == ["Create the Home and About pages"]
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "invalid_plan_no_steps"
+        for event in events
+    )
+    assert any(
+        isinstance(event, MessageEvent) and event.meta.get("blocking") == "invalid_plan_no_steps"
+        for event in events
+    )
+
+    await loop.approve_plan()
+    memory = ArtifactMemoryStore(executor.sandbox)  # type: ignore[attr-defined]
+    direction = await memory.read_design_direction()
+    tokens = await memory.read_design_direction_tokens()
+    assert direction is not None and "## Design Direction:" in direction
+    assert tokens is not None and "disco direction tokens" in tokens
+
+
+async def test_second_empty_initial_plan_recovers_exact_user_instruction() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "Proposed plan", "steps": []}),
+            action_step("submit_plan", {"summary": "Proposed plan", "steps": []}),
+        ]
+    )
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-empty-initial-user-recovery",
+        executor=BuildExecutor(),
+    )
+    instruction = "Create a two-page static site with Home and About pages."
+
+    await loop.send_message(instruction)
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    events = await store.get_events(loop.conversation_id)
+    plans = [event for event in events if isinstance(event, PlanEvent)]
+    assert len(plans) == 1
+    assert plans[0].revision == 1
+    assert [step.title for step in plans[0].steps] == [instruction]
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.detail == "plan_steps_recovered_from_user_instruction"
+        for event in events
+    )
+
+
+async def test_repeated_empty_initial_plan_without_user_instruction_fails_closed() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "Proposed plan", "steps": []}),
+            action_step("submit_plan", {"summary": "Proposed plan", "steps": []}),
+        ]
+    )
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-empty-initial-no-user",
+        executor=BuildExecutor(),
+    )
+    loop._autonomous = True
+    await store.append(
+        loop.conversation_id,
+        StatusEvent(status=ConversationStatus.RUNNING, detail="test_start"),
+    )
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.STUCK
+    events = await store.get_events(loop.conversation_id)
+    assert not any(isinstance(event, PlanEvent) for event in events)
+    assert any(
+        isinstance(event, StatusEvent)
+        and event.status == ConversationStatus.STUCK
+        and event.meta.get("legacy_detail") == "initial_plan_no_concrete_steps"
+        for event in events
+    )
 
 
 def _unsafe_done_conditions_plan():
@@ -392,6 +514,20 @@ async def test_revision_refusal_escalation_harvests_one_step_plan():
     plans = [e for e in events if isinstance(e, PlanEvent)]
     assert [p.revision for p in plans] == [1, 2]
     assert [step.title for step in plans[-1].steps] == [followup]
+    refused_writes = [
+        e for e in events if isinstance(e, ActionEvent) and e.tool_call.tool_name == "file_write"
+    ]
+    assert len(refused_writes) == 1, "revision recovery waited for a duplicate refusal"
+    assert (
+        len(
+            [
+                e
+                for e in events
+                if isinstance(e, AgentErrorEvent) and e.action_id == refused_writes[0].id
+            ]
+        )
+        == 1
+    )
     assert any(isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan" for e in events)
     assert not any(c.tool_name == "file_write" for c in executor.calls)
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL

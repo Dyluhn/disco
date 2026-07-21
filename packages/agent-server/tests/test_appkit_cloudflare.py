@@ -35,6 +35,7 @@ from disco.agent_server.appkit_cloudflare.wrangler import (
     SubprocessCommandRunner,
 )
 from disco.agent_server.redaction import redact_text
+from disco.agent_server.workspace_commit import WorkspaceCommitUnavailable
 from disco.core.appkit import (
     default_lead_gen_app_spec,
     generate,
@@ -605,6 +606,239 @@ async def test_dry_run_default_no_side_effects(workspace: Path, connected: Secre
     assert runner.calls == []  # the runner is NEVER called in dry-run
     # No deployment record was written.
     assert not (workspace / ".disco" / "cloudflare" / "deployments").exists()
+
+
+async def test_deploy_mutation_hooks_begin_at_first_record_and_finish_afterward(
+    workspace: Path, connected: SecretStore
+):
+    transitions: list[tuple[str, int]] = []
+    records = workspace / ".disco" / "cloudflare" / "deployments"
+
+    async def on_start() -> None:
+        transitions.append(("start", len(list(records.glob("*.json"))) if records.exists() else 0))
+
+    async def on_finish() -> None:
+        transitions.append(("finish", len(list(records.glob("*.json")))))
+
+    plan = cf.build_plan(workspace, connected)
+    result = await cf.execute_deploy(
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=FakeRunner(),
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
+        on_mutation_start=on_start,
+        on_mutation_finish=on_finish,
+    )
+
+    assert result.succeeded
+    assert transitions == [("start", 0), ("finish", 1)]
+
+
+async def test_readonly_deploy_abort_never_enters_mutation_scope(
+    workspace: Path, connected: SecretStore
+):
+    transitions: list[str] = []
+
+    async def on_start() -> None:
+        transitions.append("start")
+
+    async def on_finish() -> None:
+        transitions.append("finish")
+
+    plan = cf.build_plan(workspace, connected)
+    result = await cf.execute_deploy(
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=FakeRunner(fail_on="d1 list"),
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
+        on_mutation_start=on_start,
+        on_mutation_finish=on_finish,
+    )
+
+    assert not result.succeeded
+    assert transitions == []
+
+
+async def test_rejected_mutation_start_does_not_run_finish(workspace: Path, connected: SecretStore):
+    transitions: list[str] = []
+
+    async def on_start() -> None:
+        transitions.append("start")
+        raise WorkspaceCommitUnavailable("committed head changed before mutation")
+
+    async def on_finish() -> None:
+        transitions.append("finish")
+
+    plan = cf.build_plan(workspace, connected)
+    with pytest.raises(WorkspaceCommitUnavailable, match="committed head changed"):
+        await cf.execute_deploy(
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
+            on_mutation_start=on_start,
+            on_mutation_finish=on_finish,
+        )
+
+    assert transitions == ["start"]
+    assert not (workspace / ".disco" / "cloudflare" / "deployments").exists()
+
+
+async def test_repeatedly_cancelled_deploy_drains_mutation_finish_before_returning(
+    workspace: Path, connected: SecretStore
+):
+    mutation_reached = asyncio.Event()
+    release_runner = asyncio.Event()
+    finish_started = asyncio.Event()
+    finish_release = asyncio.Event()
+    finish_done = asyncio.Event()
+    finish_cancelled = asyncio.Event()
+    statuses_seen_at_finish: list[str] = []
+
+    class BlockingRunner(FakeRunner):
+        async def run(self, argv, *, cwd, env, stdin=None):  # noqa: ANN001
+            if _is_d1_create(argv):
+                mutation_reached.set()
+                await release_runner.wait()
+            return await super().run(argv, cwd=cwd, env=env, stdin=stdin)
+
+    async def on_start() -> None:
+        return None
+
+    async def on_finish() -> None:
+        records = workspace / ".disco" / "cloudflare" / "deployments"
+        statuses_seen_at_finish.extend(
+            json.loads(path.read_text(encoding="utf-8"))["status"]
+            for path in records.glob("*.json")
+        )
+        finish_started.set()
+        try:
+            await finish_release.wait()
+        except asyncio.CancelledError:
+            finish_cancelled.set()
+            raise
+        finish_done.set()
+
+    plan = cf.build_plan(workspace, connected)
+    task = asyncio.create_task(
+        cf.execute_deploy(
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=BlockingRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
+            on_mutation_start=on_start,
+            on_mutation_finish=on_finish,
+        )
+    )
+    await asyncio.wait_for(mutation_reached.wait(), timeout=10)
+    task.cancel("first")
+    await asyncio.wait_for(finish_started.wait(), timeout=10)
+    assert not task.done()
+    task.cancel("second")
+    await asyncio.sleep(0)
+    assert not task.done()
+    assert not finish_cancelled.is_set()
+    finish_release.set()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+    assert caught.value.args == ("first",)
+    assert finish_done.is_set()
+    assert not finish_cancelled.is_set()
+    assert statuses_seen_at_finish == ["failed"]
+    records = list((workspace / ".disco/cloudflare/deployments").glob("*.json"))
+    assert len(records) == 1
+    closed = json.loads(records[0].read_text(encoding="utf-8"))
+    assert closed["status"] == "failed"
+    assert closed["attempted_step"] == "deploy interrupted"
+    assert closed["error_detail"] == "Deploy execution was cancelled after the mutation fence."
+
+
+async def test_runner_exception_closes_exact_attempt_before_finish_hook(
+    workspace: Path,
+    connected: SecretStore,
+) -> None:
+    planted_secret = f"{_CF_TOKEN}-must-not-enter-record"
+    failure = RuntimeError(f"runner exploded with {planted_secret} at /host/private")
+    status_at_finish: list[str] = []
+
+    class RaisingRunner(FakeRunner):
+        async def run(self, argv, *, cwd, env, stdin=None):  # noqa: ANN001
+            if _is_d1_create(argv):
+                raise failure
+            return await super().run(argv, cwd=cwd, env=env, stdin=stdin)
+
+    async def on_finish() -> None:
+        record = next((workspace / ".disco/cloudflare/deployments").glob("*.json"))
+        status_at_finish.append(json.loads(record.read_text(encoding="utf-8"))["status"])
+
+    plan = cf.build_plan(workspace, connected)
+    with pytest.raises(RuntimeError) as caught:
+        await cf.execute_deploy(
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=RaisingRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
+            on_mutation_start=lambda: asyncio.sleep(0),
+            on_mutation_finish=on_finish,
+        )
+
+    assert caught.value is failure
+    assert status_at_finish == ["failed"]
+    records = list((workspace / ".disco/cloudflare/deployments").glob("*.json"))
+    assert len(records) == 1
+    raw = records[0].read_text(encoding="utf-8")
+    record = json.loads(raw)
+    assert record["status"] == "failed"
+    assert record["attempted_step"] == "deploy interrupted"
+    assert planted_secret not in raw
+    assert "/host/private" not in raw
+
+
+async def test_exception_after_d1_create_closes_attempt_as_partial_failure(
+    workspace: Path,
+    connected: SecretStore,
+) -> None:
+    failure = RuntimeError("migration runner escaped")
+
+    class RaisingRunner(FakeRunner):
+        async def run(self, argv, *, cwd, env, stdin=None):  # noqa: ANN001
+            if "d1 execute" in " ".join(argv):
+                raise failure
+            return await super().run(argv, cwd=cwd, env=env, stdin=stdin)
+
+    plan = cf.build_plan(workspace, connected)
+    with pytest.raises(RuntimeError) as caught:
+        await cf.execute_deploy(
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=RaisingRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
+        )
+
+    assert caught.value is failure
+    record_path = next((workspace / ".disco/cloudflare/deployments").glob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "partial_failure"
+    assert f"d1_create:{plan.db_name}" in record["mutations"]
+    assert record["attempted_step"] == "deploy interrupted"
 
 
 # ---- the real (fully-gated) deploy via the FAKE runner ----------------------
@@ -2596,6 +2830,7 @@ def test_no_raw_workspace_writes_outside_guarded_writer():
     raw_write = re.compile(r"\.(?:write_text|write_bytes|mkdir)\(")
     writer_src = (
         inspect.getsource(deploy_mod.write_workspace_file)
+        + inspect.getsource(deploy_mod._open_workspace_write_parent)
         + inspect.getsource(deploy_mod.ensure_workspace_dir)
         + inspect.getsource(deploy_mod._stage_deploy_tree)
         + inspect.getsource(deploy_mod._deploy_lock_dir)
@@ -2741,9 +2976,56 @@ def test_cfut_token_redacted():
 class _FakeRuntime:
     def __init__(self, ps: ProjectStore) -> None:
         self._ps = ps
+        self._lock = asyncio.Lock()
+        self.mutations: list[tuple[str, tuple[str, ...]]] = []
+        self._committed = ps.cut_verified_version(
+            "11111111-1111-1111-1111-111111111111",
+            trigger="finish",
+            pin=True,
+        )
+        assert self._committed is not None
 
     def project_store(self) -> ProjectStore:
         return self._ps
+
+    def workspace_lock(self, _conversation_id: str) -> asyncio.Lock:
+        return self._lock
+
+    async def require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
+        assert self._lock.locked()
+        facts = self._ps.inspect_workspace(conversation_id)
+        if (
+            facts.file_count != self._committed.file_count
+            or facts.total_bytes != self._committed.total_bytes
+            or facts.tree_digest != self._committed.tree_digest
+        ):
+            raise WorkspaceCommitUnavailable("test host mirror drifted")
+        return self._committed
+
+    async def record_workspace_mutation_locked(
+        self,
+        _conversation_id: str,
+        operation: str,
+        *,
+        paths: tuple[str, ...] = (),
+    ) -> None:
+        assert self._lock.locked()
+        self.mutations.append((operation, paths))
+
+    async def finalize_host_mirror_change_locked(
+        self,
+        conversation_id: str,
+        _operation: str,
+    ):  # noqa: ANN202
+        assert self._lock.locked()
+        committed = self._ps.cut_verified_version(
+            conversation_id,
+            trigger="finish",
+            pin=True,
+        )
+        assert committed is not None
+        self._committed = committed
+        return committed
 
 
 class FakeVerifier:
@@ -2767,6 +3049,7 @@ def _build_app(
     runner=None,
     build_backend=None,
     verifier=None,
+    runtime_factory=None,
     cors: str | None = None,
 ) -> tuple[FastAPI, ProjectStore, str]:
     """Assemble the deploy app + a ready conversation workspace. ``cors`` is None,
@@ -2806,7 +3089,7 @@ def _build_app(
     app.include_router(
         make_cloudflare_router(
             SqliteEventStore(":memory:"),
-            _FakeRuntime(ps),
+            _FakeRuntime(ps) if runtime_factory is None else runtime_factory(ps),
             runner=runner,
             build_backend=build_backend,
             verifier=verifier or FakeVerifier(),
@@ -2824,6 +3107,7 @@ def _client(
     owner_auth: bool = True,
     build_backend=None,
     verifier=None,
+    runtime_factory=None,
     cors: str | None = None,
 ) -> tuple[_RouteTestClient, ProjectStore, str]:
     # P0-3: every route is owner-gated; the test client presents the owner token by
@@ -2834,6 +3118,7 @@ def _client(
         runner=runner,
         build_backend=build_backend,
         verifier=verifier,
+        runtime_factory=runtime_factory,
         cors=("strict" if with_cors else cors),
     )
     headers = dict(_OWNER_HEADERS) if owner_auth else {}
@@ -2869,15 +3154,17 @@ def test_route_deploy_default_dry_run_then_real(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     runner = FakeRunner()
-    client, _ps, cid = _client(
+    client, ps, cid = _client(
         tmp_path, monkeypatch, runner=runner, build_backend=FakeBuildBackend()
     )
+    initial_versions = ps.list_versions(cid)
     client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     # default dry-run: executes nothing.
     res = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid})
     assert res.status_code == 200
     assert res.json()["dry_run"] is True and res.json()["executed"] is False
     assert runner.calls == []
+    assert ps.list_versions(cid) == initial_versions
     # real deploy needs the exact phrase.
     phrase = res.json()["plan"]["confirmation_phrase"]
     res2 = client.post(
@@ -2892,6 +3179,84 @@ def test_route_deploy_default_dry_run_then_real(tmp_path: Path, monkeypatch):
     assert res2.status_code == 200
     assert res2.json()["executed"] is True
     assert res2.json()["succeeded"] is True
+    latest = ps.list_versions(cid)[0]
+    assert latest.seq > initial_versions[0].seq
+    with ps.open_verified_version(cid, latest.seq) as verified:
+        records = [entry.path for entry in verified.files if entry.path.endswith(".json")]
+        deployment = next(
+            path for path in records if path.startswith(".disco/cloudflare/deployments/")
+        )
+        assert json.loads(verified.read_bytes(deployment))["status"] == "succeeded"
+
+
+def test_route_refuses_unsealed_mirror_drift_before_runner(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
+    monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
+    runner = FakeRunner()
+    client, ps, cid = _client(
+        tmp_path,
+        monkeypatch,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+    )
+    (ps.path_for(cid) / "schema.sql").write_text("-- unsealed drift", encoding="utf-8")
+
+    response = client.post(
+        "/api/appkit/cloudflare/deploy-plan",
+        json={"conversation_id": cid},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "workspace_not_committed"
+    assert runner.calls == []
+
+
+def test_route_revalidates_committed_head_at_first_mutation(tmp_path: Path, monkeypatch):
+    """Late drift after planning cannot be blessed by the mutation finalizer."""
+
+    class _LateDriftRuntime(_FakeRuntime):
+        def __init__(self, ps: ProjectStore) -> None:
+            super().__init__(ps)
+            self._require_calls = 0
+
+        async def require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
+            self._require_calls += 1
+            if self._require_calls == 3:
+                (self._ps.path_for(conversation_id) / "late-drift.txt").write_text(
+                    "not part of the committed deploy head",
+                    encoding="utf-8",
+                )
+            return await super().require_committed_host_mirror_locked(conversation_id)
+
+    monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
+    monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
+    runner = FakeRunner()
+    client, ps, cid = _client(
+        tmp_path,
+        monkeypatch,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        runtime_factory=_LateDriftRuntime,
+    )
+    initial_versions = ps.list_versions(cid)
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
+    phrase = client.post(
+        "/api/appkit/cloudflare/deploy-plan", json={"conversation_id": cid}
+    ).json()["confirmation_phrase"]
+
+    response = client.post(
+        "/api/appkit/cloudflare/deploy",
+        json={
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
+            "admin_token": _APP_ADMIN_TOKEN,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "workspace_not_committed"
+    assert ps.list_versions(cid) == initial_versions
+    assert not (ps.path_for(cid) / ".disco" / "cloudflare" / "deployments").exists()
 
 
 def test_route_deploy_refusal_no_confirmation(tmp_path: Path, monkeypatch):
@@ -4602,6 +4967,100 @@ def test_write_workspace_file_refuses_hardlinked_target(tmp_path: Path):
     assert outside.read_text() == "HOST"  # the host file was never clobbered
 
 
+def test_write_workspace_file_retries_short_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    payload = json.dumps({"status": "complete", "detail": "x" * 8192})
+    real_write = os.write
+    calls = 0
+
+    def short_write(fd: int, data: bytes | memoryview) -> int:
+        nonlocal calls
+        calls += 1
+        chunk = data[: max(1, len(data) // 3)]
+        return real_write(fd, chunk)
+
+    monkeypatch.setattr(cf.os, "write", short_write)
+    target = cf.write_workspace_file("rec.json", payload, ws.resolve())
+
+    assert calls > 1
+    assert target.read_text(encoding="utf-8") == payload
+    assert json.loads(target.read_text(encoding="utf-8"))["status"] == "complete"
+
+
+def test_write_workspace_file_publish_failure_preserves_previous_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    target = ws / "rec.json"
+    previous = json.dumps({"status": "in_progress", "attempt": 1})
+    target.write_text(previous, encoding="utf-8")
+
+    def fail_publish(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("injected crash before atomic publication")
+
+    monkeypatch.setattr(cf.os, "replace", fail_publish)
+    with pytest.raises(OSError, match="injected crash"):
+        cf.write_workspace_file(
+            "rec.json",
+            json.dumps({"status": "succeeded", "attempt": 1}),
+            ws.resolve(),
+        )
+
+    assert target.read_text(encoding="utf-8") == previous
+    assert json.loads(target.read_text(encoding="utf-8"))["status"] == "in_progress"
+    assert not list(ws.glob(".rec.json.*.tmp"))
+
+
+def test_write_workspace_file_refuses_workspace_root_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "real-workspace"
+    real.mkdir()
+    linked = tmp_path / "workspace-link"
+    linked.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(cf.DeployRefused) as caught:
+        cf.write_workspace_file("record.json", "payload", linked)
+
+    assert caught.value.reason == RefusalReason.WORKSPACE_SYMLINK_ESCAPE
+    assert not (real / "record.json").exists()
+
+
+def test_write_workspace_file_refuses_ancestor_swap_during_descriptor_walk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = tmp_path / "workspace"
+    original_disco = ws / ".disco"
+    (original_disco / "cloudflare" / "deployments").mkdir(parents=True)
+    moved_disco = ws / ".disco-before-swap"
+    outside = tmp_path / "outside"
+    (outside / "cloudflare" / "deployments").mkdir(parents=True)
+    real_open = os.open
+    swapped = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):  # noqa: ANN001, ANN202
+        nonlocal swapped
+        if path == ".disco" and dir_fd is not None and not swapped:
+            original_disco.rename(moved_disco)
+            original_disco.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(cf.os, "open", racing_open)
+    with pytest.raises(cf.DeployRefused) as caught:
+        cf.write_workspace_file(
+            ".disco/cloudflare/deployments/receipt.json",
+            "payload",
+            ws,
+        )
+
+    assert swapped
+    assert caught.value.reason == RefusalReason.WORKSPACE_SYMLINK_ESCAPE
+    assert not list(outside.rglob("*.json"))
+    assert not list(outside.rglob("*.tmp"))
+
+
 # ---- WAVE 3 CORR-7: effective_digest persisted at the worker_deploy step ------
 
 
@@ -5210,7 +5669,7 @@ def test_route_deploy_aborted_step_is_not_200(tmp_path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     runner = FakeRunner(fail_on="d1 execute")  # migration fails mid-deploy
-    client, _ps, cid = _client(
+    client, ps, cid = _client(
         tmp_path, monkeypatch, runner=runner, build_backend=FakeBuildBackend()
     )
     _connect(client)
@@ -5230,6 +5689,14 @@ def test_route_deploy_aborted_step_is_not_200(tmp_path, monkeypatch):
     assert "migrate" in (detail["failed_step"] or "")
     # The publish step never ran.
     assert not any(c["argv"][:3] == ["npx", "wrangler", "deploy"] for c in runner.calls)
+    latest = ps.list_versions(cid)[0]
+    with ps.open_verified_version(cid, latest.seq) as verified:
+        deployment = next(
+            entry.path
+            for entry in verified.files
+            if entry.path.startswith(".disco/cloudflare/deployments/")
+        )
+        assert json.loads(verified.read_bytes(deployment))["status"] == "partial_failure"
 
 
 def test_route_deploy_missing_workspace_is_404(tmp_path, monkeypatch):

@@ -68,37 +68,50 @@ class DiscoKernel:
 
         Returns the stored USER message (the REST send/followup routes report its
         id/seq) — byte-identical to the append the routes did inline before the seam."""
-        pending = []
-        if context:
-            pending.append(_context_message(context))
-        if build_brief is not None:
-            pending.append(_build_brief_message(build_brief))
-        pending.append(_user_message(text, steer=steer))
-        stored_events = await self._rt._store.append_many(conversation_id, pending)
-        stored = stored_events[-1]
-        # DURABLE NO_REPLAN fix (codex RCA2): a live revision STEER must re-enter
-        # PLANNING, but `kick()` is a no-op during an active run AND the loop's
-        # unprocessed-text re-plan guards get masked by in-flight Action/Observation
-        # events (the seq N+k write). Append a SEQUENCE-STABLE marker the loop consumes
-        # UNCONDITIONALLY (signals.pending_revision_steer → _maybe_reenter_planning_for_followup).
-        # Gated on is_revision_intent so a pure Q&A steer does NOT force a re-plan; the
-        # loop-side consumer additionally requires a prior plan_approved.
-        if steer:
-            from disco.core.loop import signals as _signals
-
-            if _signals.is_revision_intent(text) and not (
-                _signals.current_blocked_question_landing(
-                    await self._rt._store.get_events(conversation_id)
-                )
-            ):
-                await self._rt._store.append(
+        # The user turn, its durable revision marker, and task registration are
+        # one linearizable ingress operation relative to host-side mutations.
+        # The newly registered task queues on this same non-reentrant fence and
+        # cannot execute until this block publishes the complete turn.
+        async with self._rt.workspace_lock(conversation_id):
+            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+                pending = []
+                if context:
+                    pending.append(_context_message(context))
+                if build_brief is not None:
+                    pending.append(_build_brief_message(build_brief))
+                user_event = _user_message(text, steer=steer)
+                pending.append(user_event)
+                # USER and run-intent share one SQLite transaction: cancellation
+                # can leave neither or both, never a durable unmarked user turn.
+                stored_events = await self._rt._workspace.append_run_ingress_locked(
                     conversation_id,
-                    StatusEvent(
-                        status=ConversationStatus.RUNNING,
-                        detail="revision_steer_pending",
-                    ),
+                    pending,
+                    "user-turn",
                 )
-        self._rt.kick(conversation_id, claimed_user_seq=stored.seq)
+                stored = next(
+                    event
+                    for event in stored_events
+                    if isinstance(event, MessageEvent) and event.id == user_event.id
+                )
+                # A live revision steer needs a sequence-stable marker that cannot be
+                # masked by later in-flight Action/Observation events.
+                if steer:
+                    from disco.core.loop import signals as _signals
+
+                    if _signals.is_revision_intent(text) and not (
+                        _signals.current_blocked_question_landing(
+                            await self._rt._store.get_events(conversation_id)
+                        )
+                    ):
+                        await self._rt._store.append(
+                            conversation_id,
+                            StatusEvent(
+                                status=ConversationStatus.RUNNING,
+                                detail="revision_steer_pending",
+                            ),
+                        )
+                self._rt.kick(conversation_id, claimed_user_seq=stored.seq)
+                self._rt._workspace.claim_registered_run_locked(conversation_id)
         return cast("MessageEvent", stored)
 
     # -- plan gate ------------------------------------------------------------

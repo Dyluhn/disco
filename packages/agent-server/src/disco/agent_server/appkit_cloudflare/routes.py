@@ -70,6 +70,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+from ..workspace_commit import CommittedWorkspaceView, WorkspaceCommitUnavailable
+from ..workspace_process_fence import (
+    WorkspaceProcessBusy,
+    WorkspaceProcessFenceUnavailable,
+    workspace_process_fence,
+)
 from . import deploy as cf
 from .models import DeployPlan, DeployRefused, RefusalReason
 from .sandbox_build import build_backend_for_runtime
@@ -464,6 +470,172 @@ def _webhook_deploy_context(
     return WebhookDeployContext(dependencies, owner_id, cid) if dependencies is not None else None
 
 
+class _CommittedWorkspaceGate:
+    """Bind Cloudflare reads and mutations to one current immutable workspace head."""
+
+    def __init__(self, runtime: ConversationRuntime | None) -> None:
+        self._runtime = runtime
+
+    def runtime_required(self) -> ConversationRuntime:
+        if self._runtime is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "workspace_not_committed",
+                    "message": "A current immutable workspace commit is required.",
+                },
+            )
+        return self._runtime
+
+    def resolve_workspace(self, conversation_id: str) -> Path:
+        runtime = self.runtime_required()
+        ps = runtime.project_store()
+        if ps is None or ps.status() != StorageStatus.OK:
+            raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
+        try:
+            workspace = ps.path_for(conversation_id)
+        except Exception as exc:  # noqa: BLE001 — poisoned id → 400
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "bad_conversation_id", "message": _scrub_text(str(exc))},
+            ) from exc
+        if not workspace.exists() or not workspace.is_dir():
+            raise HTTPException(status_code=404, detail={"reason": "no_workspace"})
+        return workspace
+
+    async def require_locked(self, conversation_id: str) -> CommittedWorkspaceView:
+        try:
+            return await self.runtime_required().require_committed_host_mirror_locked(
+                conversation_id
+            )
+        except (WorkspaceCommitUnavailable, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "workspace_not_committed",
+                    "message": _scrub_text(str(exc)),
+                },
+            ) from exc
+
+
+async def _build_committed_plan(
+    gate: _CommittedWorkspaceGate,
+    conversation_id: str,
+    secret_store: cf.SecretStore,
+) -> DeployPlan:
+    runtime = gate.runtime_required()
+    workspace = gate.resolve_workspace(conversation_id)
+    try:
+        async with runtime.workspace_lock(conversation_id):
+            async with workspace_process_fence(workspace, wait=False):
+                before = await gate.require_locked(conversation_id)
+                try:
+                    plan = cf.build_plan(workspace, secret_store)
+                except DeployRefused as exc:
+                    raise HTTPException(
+                        status_code=_refusal_status(exc.reason),
+                        detail={"reason": exc.reason.value, "message": _scrub_text(exc.detail)},
+                    ) from exc
+                after = await gate.require_locked(conversation_id)
+                if after != before:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "reason": "workspace_not_committed",
+                            "message": "The committed workspace changed while planning; retry.",
+                        },
+                    )
+                return plan
+    except WorkspaceProcessBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "workspace_busy", "message": "The workspace is changing; retry."},
+        ) from exc
+    except WorkspaceProcessFenceUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "workspace_fence_unavailable", "message": _scrub_text(str(exc))},
+        ) from exc
+
+
+async def _execute_committed_deploy(
+    gate: _CommittedWorkspaceGate,
+    workspace: Path,
+    body: DeployBody,
+    secret_store: cf.SecretStore,
+    *,
+    runner: CommandRunner,
+    build_backend: BuildBackend | None,
+    admin_token: str | None,
+    owner_id: str | None,
+    stripe_dependencies: StripeDeployDependencies | None,
+    webhook_dependencies: WebhookDeployDependencies | None,
+) -> cf.DeployExecutionResult:
+    cid = body.conversation_id
+    runtime = gate.runtime_required()
+    try:
+        async with runtime.workspace_lock(cid):
+            async with workspace_process_fence(workspace, wait=False):
+                await gate.require_locked(cid)
+
+                async def begin_mutation() -> None:
+                    await gate.require_locked(cid)
+                    await runtime.record_workspace_mutation_locked(
+                        cid,
+                        "cloudflare.deploy-record",
+                        paths=(".disco/cloudflare/deployments",),
+                    )
+
+                async def finish_mutation() -> None:
+                    await runtime.finalize_host_mirror_change_locked(
+                        cid, "cloudflare.deploy-record"
+                    )
+
+                try:
+                    return await cf.execute_deploy(
+                        workspace,
+                        secret_store,
+                        dry_run=body.dry_run,
+                        confirmation=body.confirmation,
+                        autonomous=body.autonomous or _server_autonomous(),
+                        runner=runner,
+                        build_backend=build_backend,
+                        admin_token=admin_token,
+                        stripe_context=_stripe_deploy_context(stripe_dependencies, owner_id, cid),
+                        webhook_context=_webhook_deploy_context(
+                            webhook_dependencies, owner_id, cid
+                        ),
+                        on_mutation_start=begin_mutation,
+                        on_mutation_finish=finish_mutation,
+                    )
+                except DeployRefused as exc:
+                    raise HTTPException(
+                        status_code=_refusal_status(exc.reason),
+                        detail={
+                            "reason": exc.reason.value,
+                            "message": _scrub_text(exc.detail),
+                        },
+                    ) from exc
+                except WorkspaceCommitUnavailable as exc:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "reason": "workspace_reseal_failed",
+                            "message": _scrub_text(str(exc)),
+                        },
+                    ) from exc
+    except WorkspaceProcessBusy as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "workspace_busy", "message": "The workspace is changing; retry."},
+        ) from exc
+    except WorkspaceProcessFenceUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "workspace_fence_unavailable", "message": _scrub_text(str(exc))},
+        ) from exc
+
+
 def make_cloudflare_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -489,6 +661,7 @@ def make_cloudflare_router(
     # the production sandbox backend built from the runtime; tests inject a fake.
     # A real deploy is REFUSED when no isolating backend is available.
     deploy_build_backend: BuildBackend | None = build_backend or build_backend_for_runtime(runtime)
+    workspace_gate = _CommittedWorkspaceGate(runtime)
     # SEC-25: per-conversation deploy lock. Two owner deploy requests for the SAME
     # conversation/workspace must NOT interleave (they'd race the build sync-back,
     # D1 provisioning, and wrangler.toml substitution). A conversation id is held
@@ -499,19 +672,6 @@ def make_cloudflare_router(
 
     def _secret_store() -> cf.SecretStore:
         return cf.SecretStore()
-
-    def _resolve_workspace(conversation_id: str) -> Path:
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None or ps.status() != StorageStatus.OK:
-            raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
-        try:
-            return ps.path_for(conversation_id)
-        except Exception as exc:  # noqa: BLE001 — poisoned id → 400
-            # SEC-26 (boundary): scrub any absolute host path out of the message.
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": "bad_conversation_id", "message": _scrub_text(str(exc))},
-            ) from exc
 
     @router.get("/api/appkit/cloudflare/status")
     async def status() -> dict:
@@ -612,17 +772,11 @@ def make_cloudflare_router(
 
     @router.post("/api/appkit/cloudflare/deploy-plan")
     async def deploy_plan(body: DeployPlanBody) -> dict:
-        workspace = _resolve_workspace(body.conversation_id)
-        try:
-            plan = cf.build_plan(workspace, _secret_store())
-        except DeployRefused as exc:
-            # The planner fails closed (e.g. a workspace symlink escaping the
-            # workspace — P0 round 5). Surface the named refusal with its mapped
-            # status (404 for a missing workspace, else 409), never a generic 500.
-            raise HTTPException(
-                status_code=_refusal_status(exc.reason),
-                detail={"reason": exc.reason.value, "message": _scrub_text(exc.detail)},
-            ) from exc
+        plan = await _build_committed_plan(
+            workspace_gate,
+            body.conversation_id,
+            _secret_store(),
+        )
         return _plan_public(plan, body.conversation_id)
 
     @router.post("/api/appkit/cloudflare/deploy")
@@ -644,33 +798,22 @@ def make_cloudflare_router(
             )
         _deploys_in_flight.add(cid)
         try:
-            workspace = _resolve_workspace(cid)
+            workspace = workspace_gate.resolve_workspace(cid)
             owner_id = await store.conversation_owner_id(cid)
             admin_token = _secret_value(body.admin_token)
             _check_secret_len(admin_token, "admin_token")
-            autonomous = body.autonomous or _server_autonomous()
-            try:
-                result = await cf.execute_deploy(
-                    workspace,
-                    _secret_store(),
-                    dry_run=body.dry_run,
-                    confirmation=body.confirmation,
-                    autonomous=autonomous,
-                    runner=command_runner,
-                    build_backend=deploy_build_backend,
-                    admin_token=admin_token,
-                    stripe_context=_stripe_deploy_context(stripe_dependencies, owner_id, cid),
-                    webhook_context=_webhook_deploy_context(webhook_dependencies, owner_id, cid),
-                )
-            except DeployRefused as exc:
-                # CORR-25 — a deploy refused by a hard gate (a real, named
-                # precondition the owner must resolve) maps to its status: 404 for a
-                # missing workspace, else 409 Conflict. NOT a server error.
-                raise HTTPException(
-                    status_code=_refusal_status(exc.reason),
-                    # SEC-26: scrub any host/internal path from the client-facing detail.
-                    detail={"reason": exc.reason.value, "message": _scrub_text(exc.detail)},
-                ) from exc
+            result = await _execute_committed_deploy(
+                workspace_gate,
+                workspace,
+                body,
+                _secret_store(),
+                runner=command_runner,
+                build_backend=deploy_build_backend,
+                admin_token=admin_token,
+                owner_id=owner_id,
+                stripe_dependencies=stripe_dependencies,
+                webhook_dependencies=webhook_dependencies,
+            )
 
             # CORR-25 — a real deploy whose step ABORTED/failed must NOT be 200. It
             # is an upstream (wrangler/sandbox) failure → 502, carrying the failed

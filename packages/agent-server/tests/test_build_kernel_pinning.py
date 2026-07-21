@@ -8,13 +8,22 @@ legacy persisted values degrade to Disco without splitting a run.
 
 from __future__ import annotations
 
+import asyncio
 import types
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server.build_kernel import DiscoKernel
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import ConversationStatus, EventSource, SqliteEventStore
+from disco.core import (
+    ConversationStatus,
+    Event,
+    EventSource,
+    SqliteEventStore,
+    WorkspaceMutationEvent,
+)
 
 CID = "conv-pin-test"
 
@@ -33,6 +42,26 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._tasks = {}
     fake._pinned_kernels = {}
     fake._run_generation = {}
+    lock = asyncio.Lock()
+    fake.workspace_lock = lambda _conversation_id: lock
+    fake._workspace = MagicMock()
+
+    @asynccontextmanager
+    async def process_fence(_conversation_id: str) -> AsyncIterator[None]:
+        yield
+
+    async def append_run_ingress(
+        conversation_id: str,
+        events: list[Event],
+        source: str,
+    ) -> list[Event]:
+        return await store.append_many(
+            conversation_id,
+            [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
+        )
+
+    fake._workspace.interprocess_mutation_fence = process_fence
+    fake._workspace.append_run_ingress_locked = append_run_ingress
     fake._emit_toolscope_audit_summary = MagicMock()
     fake.kick = MagicMock()
     # CONTRACT-ACTIVATE: send_user_turn declares the contract from the brief

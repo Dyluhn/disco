@@ -33,6 +33,8 @@ from typing import Any
 
 import yaml
 
+from harness.reliability.state import source_revision as _source_revision
+
 from . import failure_codes as fc
 from .adapters.disco_api import (
     AWAITING_PLAN_APPROVAL,
@@ -54,6 +56,7 @@ from .adapters.disco_api import (
     SnapshotNotReadyError,
     Transport,
     _referenced_screenshot_paths,
+    inspect_aggregate_violations,
     validate_browser_evidence_relpath,
 )
 from .classify import CLASSIFICATION_NAME, classify
@@ -783,6 +786,18 @@ async def drive_scenario(
                 f"{type(kill_exc).__name__}"
             )
 
+        # Stop FIRST, then freeze: the conversation was still ACTIVE at the hard
+        # cap, so a pre-kill final sample could miss trace events the model
+        # emits while the stop lands — and the aggregate would still claim
+        # losslessness.  The poller stays alive through the kill; the idempotent
+        # owned finalizer then takes the post-stop sample and retains any prior
+        # canonical prefix even if this caller is cancelled.  An unconfirmed
+        # stop taints continuity instead of ever narrowing the retained prefix.
+        if not kill_acknowledged:
+            client.note_inspect_stop_unconfirmed(cid)
+        await client.finish_inspect_collection(cid)
+        inspect_trace = await client.collect_inspect_trace(cid)
+
         try:
             events = client.collect_events(cid)
         except Exception as events_exc:  # noqa: BLE001 — retain all other slices fail-closed
@@ -841,13 +856,6 @@ async def drive_scenario(
                 timeline.append(
                     f"progress hard-cap preview collection failed: {type(preview_exc).__name__}"
                 )
-        try:
-            inspect_trace = await client.collect_inspect_trace(cid)
-        except Exception as inspect_exc:  # noqa: BLE001
-            inspect_trace = None
-            timeline.append(
-                f"progress hard-cap inspect collection failed: {type(inspect_exc).__name__}"
-            )
         try:
             client.observe_live_thrash_snapshot(
                 events,
@@ -1044,17 +1052,76 @@ async def drive_scenario(
     # so ContractOracle can proceed to OutputTruthOracle's earlier terminal verdict.
     events = client.collect_events(cid)
     state_final = await client.get_state(cid)
+    # Inspect is independent evidence. Finalize it before workspace/browser
+    # capture can fail, and necessarily before terminal cleanup releases the
+    # source daemon/server state.  A conversation that is NOT durably terminal
+    # at this boundary (inactive timeout, parked gate cap, or a product stop
+    # that never confirmed) may still emit trace events after a pre-stop final
+    # sample, so it is stopped FIRST under the same acknowledged-kill contract
+    # as the hard-cap path; an unconfirmed stop taints continuity instead of
+    # letting the aggregate claim losslessness (work-order §6.2: on
+    # uncertainty, lossless is false).  The durable event/state boundary above
+    # was read BEFORE the stop, so the dossier keeps the true product state;
+    # workspace/browser evidence reads the host ProjectStore and durable
+    # bytes, which survive the kill, and the hard-cap path already set the
+    # precedent of capturing preview after the stop.
+    if DiscoApiClient._status_of(state_final) not in TERMINAL_STATES:
+        stop_confirmed = False
+        try:
+            stop_response = await client.kill(cid)
+            stop_confirmed = (
+                200 <= int(stop_response.get("http_status", 0)) < 300
+                and stop_response.get("killed") is True
+                and DiscoApiClient._status_of(stop_response.get("state") or {}) == "IDLE"
+            )
+            timeline.append(
+                "stopped nonterminal conversation before inspect freeze "
+                f"(confirmed={stop_confirmed}, http {stop_response.get('http_status')})"
+            )
+        except Exception as stop_exc:  # noqa: BLE001 — taint instead of crash
+            timeline.append(
+                f"pre-freeze stop of nonterminal conversation failed: {type(stop_exc).__name__}"
+            )
+        if not stop_confirmed:
+            client.note_inspect_stop_unconfirmed(cid)
+    await client.finish_inspect_collection(cid)
+    inspect_trace = await client.collect_inspect_trace(cid)
     try:
         frozen_events = normalize_events(events)
     except (NormalizationError, ValueError, TypeError):
         frozen_events = []
-    frozen_work_terminal = any(
-        event.get("kind") == "status"
-        and event.get("source") == "system"
-        and event.get("status") in terminal_snapshot_states
-        and type(event.get("seq")) is int
-        and (drive_terminal_baseline_seq is None or int(event["seq"]) > drive_terminal_baseline_seq)
-        for event in frozen_events
+    # k6g F2 terminal ownership: the work terminal is the LATEST product
+    # status, never merely "some terminal appeared". The canary carried a
+    # STUCK at seq 516 that was answered and superseded (AWAITING_USER_
+    # QUESTION -> user answer -> RUNNING -> monitor kill); treating that stale
+    # marker as the run's terminal forced the strict snapshot wait onto a
+    # killed, nonterminal run and masked the product outcome as INVALID_RUN.
+    # IDLE markers are resting/stop states, never product supersession: the
+    # harness's ``IDLE(killed)``, the product's steer-ingest bare ``IDLE`` and
+    # ``IDLE(cancelled)`` all leave the latest WORK status authoritative — a
+    # genuine late FINISHED stays strict (H302, verifier finding V4), while a
+    # superseding RUNNING/AWAITING transition (the k6g answered-STUCK shape)
+    # still routes to the carve-out. Mirrors `derive_final_workspace_fence`'s
+    # latest-status principle in core events.
+    latest_status_event: dict[str, Any] | None = None
+    for event in frozen_events:
+        if (
+            event.get("kind") == "status"
+            and event.get("source") == "system"
+            and type(event.get("seq")) is int
+        ):
+            event_status, _event_detail = _status_value_and_detail(event)
+            if event_status == "IDLE":
+                continue
+            if latest_status_event is None or int(event["seq"]) > int(latest_status_event["seq"]):
+                latest_status_event = event
+    frozen_work_terminal = (
+        latest_status_event is not None
+        and latest_status_event.get("status") in terminal_snapshot_states
+        and (
+            drive_terminal_baseline_seq is None
+            or int(latest_status_event["seq"]) > drive_terminal_baseline_seq
+        )
     )
     # Late-terminal race guard: if a real work terminal landed after the poll's
     # inactivity decision but before this frozen read, use the ordinary strict
@@ -1130,7 +1197,6 @@ async def drive_scenario(
             browser_evidence = {}
             browser_evidence_collection_exc = exc
     preview = await client.collect_preview(cid) if _preview_required(scenario) else None
-    inspect_trace = await client.collect_inspect_trace(cid)
     client.observe_live_thrash_snapshot(
         events,
         inspect_trace,
@@ -1252,6 +1318,8 @@ def assemble_dossier(
     model: str | None,
     autonomous: bool,
     commit: str = "",
+    repo_revision: str = "",
+    repo_dirty: bool = False,
     seed: int | None = None,
     mode: str = "api",
     kernel: str = "disco",
@@ -1394,6 +1462,8 @@ def assemble_dossier(
         scenario_sha256=sha256_file(scenario_path),
         seed=seed,
         repo_commit=commit,
+        repo_revision=repo_revision,
+        repo_dirty=repo_dirty,
         model=model or "",
         provider=provider,
         autonomous=autonomous,
@@ -1753,6 +1823,156 @@ def _invalid_run_record(
     return record
 
 
+def _invalidation_conversation_id(
+    facts: dict[str, Any] | None, client: DiscoApiClient
+) -> str | None:
+    """Resolve the failed run's exact conversation ID for the evidence freeze.
+
+    The exception's own facts win (they are bound to the failing collection);
+    the client's last-created conversation is the fallback for exceptions that
+    carry none. Never guesses across runs: ``last_conversation_id`` is reset by
+    ``run_once`` before each create.
+    """
+
+    raw = (facts or {}).get("conversation_id")
+    if isinstance(raw, str) and raw:
+        return raw
+    return client.last_conversation_id
+
+
+async def _freeze_invalidation_evidence(
+    client: DiscoApiClient,
+    out_root: str | Path,
+    run_id: str,
+    scenario: dict[str, Any],
+    *,
+    model: str | None,
+    autonomous: bool,
+    commit: str,
+    repo_revision: str,
+    repo_dirty: bool,
+    kernel: str,
+    started_at: str | None,
+    conversation_id: str | None,
+    invalidation_code: str,
+    invalidation_reason: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Bounded best-effort dossier freeze for an INVALID_RUN return path.
+
+    Every post-create invalidation must attempt this before returning: the
+    durable events, final state, the in-process lossless inspect aggregate,
+    the thrash-monitor record, and this run's provider-ledger slice are all
+    still reachable through the client's idempotent collection APIs even when
+    strict workspace capture failed. Reuses the H262 hard-cap freeze
+    architecture (`assemble_dossier`, including its hash-locked manifest)
+    rather than inventing a parallel dossier format.
+
+    Never raises and never changes the caller's classification semantics: the
+    return value is (`facts` update, timeline markdown). Each slice is
+    collected independently; a missing slice is DISCLOSED in the
+    ``evidence_freeze`` facts (present/missing lists with the failure kind),
+    never fabricated and never silently omitted. Nonterminal workspace bytes
+    are deliberately NOT captured here — a diagnostic freeze must never
+    produce something a FINISHED deliverable/output oracle could mistake for
+    terminal workspace truth (`workspace-manifest.json` carries an explicit
+    ``not_collected_invalidation`` capture status instead).
+    """
+
+    freeze: dict[str, Any] = {
+        "attempted": True,
+        "present": [],
+        "missing": [],
+        "errors": {},
+    }
+    if not conversation_id:
+        freeze["attempted"] = False
+        freeze["missing"] = ["events", "state_final", "inspect_trace", "provider_ledger"]
+        freeze["errors"]["conversation_id"] = "unknown before failure"
+        return {"evidence_freeze": freeze}, None
+
+    def _note(slice_name: str, present: bool, error: BaseException | None = None) -> None:
+        (freeze["present"] if present else freeze["missing"]).append(slice_name)
+        if error is not None:
+            freeze["errors"][slice_name] = type(error).__name__
+
+    events: list[dict[str, Any]] = []
+    try:
+        events = client.collect_events(conversation_id)
+        _note("events", True)
+    except Exception as exc:  # noqa: BLE001 — disclosed, never fabricated
+        _note("events", False, exc)
+
+    capture_marker = {
+        "_capture": {
+            "status": "not_collected_invalidation",
+            "invalidation_code": invalidation_code,
+            "reason": invalidation_reason,
+        }
+    }
+    state_final: dict[str, Any] = dict(capture_marker)
+    try:
+        state_final = await client.get_state(conversation_id)
+        _note("state_final", True)
+    except Exception as exc:  # noqa: BLE001
+        _note("state_final", False, exc)
+
+    inspect_trace: dict[str, Any] | None = None
+    try:
+        await client.finish_inspect_collection(conversation_id)
+        inspect_trace = await client.collect_inspect_trace(conversation_id)
+        _note("inspect_trace", inspect_trace is not None)
+    except Exception as exc:  # noqa: BLE001
+        _note("inspect_trace", False, exc)
+
+    try:
+        thrash_monitor = client.live_thrash_monitor
+    except Exception:  # noqa: BLE001
+        thrash_monitor = {}
+
+    frozen = CollectedRun(
+        conversation_id=conversation_id,
+        events=events,
+        state_initial=dict(capture_marker),
+        state_final=state_final,
+        workspace_manifest={"files": {}, **capture_marker},
+        preview=None,
+        inspect_trace=inspect_trace,
+        thrash_monitor=thrash_monitor,
+        timeline=[
+            f"invalidation evidence freeze for {invalidation_code}: {invalidation_reason}",
+            f"slices present={freeze['present']} missing={freeze['missing']}",
+        ],
+    )
+    provider_ledger: list[dict[str, Any]] | None = None
+    try:
+        provider_ledger = _provider_ledger_for_run(frozen)
+        _note("provider_ledger", provider_ledger is not None)
+    except Exception as exc:  # noqa: BLE001
+        _note("provider_ledger", False, exc)
+
+    try:
+        assemble_dossier(
+            out_root,
+            run_id,
+            scenario,
+            frozen,
+            model=model,
+            autonomous=autonomous,
+            commit=commit,
+            repo_revision=repo_revision,
+            repo_dirty=repo_dirty,
+            kernel=kernel,
+            started_at=started_at,
+            provider_ledger=provider_ledger,
+        )
+        freeze["dossier_written"] = True
+    except Exception as exc:  # noqa: BLE001 — the freeze may not mask the invalidation
+        freeze["dossier_written"] = False
+        freeze["errors"]["dossier"] = type(exc).__name__
+        return {"evidence_freeze": freeze}, None
+    return {"evidence_freeze": freeze}, _timeline_md(scenario, frozen)
+
+
 # ---- runner hygiene: kill an abandoned conversation -------------------------
 
 
@@ -1776,19 +1996,49 @@ async def _release_conversation(
     is safe."""
     if not cid:
         return
+    # Every exit path, including cancellation and evidence-collection errors,
+    # reaches this fallback.  The idempotent owned inspect finalizer is ordered
+    # against the kill by the conversation's ACTIVITY, not by convenience: a
+    # terminal conversation can emit no further trace events, so inspect is
+    # frozen BEFORE the cleanup kill can release the runtime that owns the
+    # bounded source ring; an ACTIVE/unknown conversation is stopped FIRST so
+    # the final sample can observe any tail events the still-running model
+    # emitted while the kill landed, and an unconfirmed stop taints continuity
+    # instead of silently claiming losslessness.
     status = ""
     with contextlib.suppress(Exception):
         status = DiscoApiClient._status_of(await client.get_state(cid))
-    # Release regardless of terminal status — the orphan-container teardown. kill is idempotent +
-    # suppressed, so a non-terminal abandon and a terminal release share the one proven path.
+    if status in TERMINAL_STATES:
+        with contextlib.suppress(Exception):
+            await client.finish_inspect_collection(cid)
+        # Release even though the run is TERMINAL — the orphan-container teardown.
+        # kill is idempotent + suppressed so this can never crash a real verdict.
+        with contextlib.suppress(Exception):
+            resp = await client.kill(cid)
+            if timeline is not None:
+                timeline.append(
+                    f"released terminal conversation {cid} — sandbox + sidecar containers "
+                    f"destroyed (was {status or 'unknown'}, http {resp.get('http_status')})"
+                )
+        return
+    kill_confirmed = False
     with contextlib.suppress(Exception):
         resp = await client.kill(cid)
+        kill_confirmed = (
+            200 <= int(resp.get("http_status", 0)) < 300
+            and resp.get("killed") is True
+            and DiscoApiClient._status_of(resp.get("state") or {}) == "IDLE"
+        )
         if timeline is not None:
-            verb = "released terminal" if status in TERMINAL_STATES else "killed abandoned"
             timeline.append(
-                f"{verb} conversation {cid} — sandbox + sidecar containers destroyed "
-                f"(was {status or 'unknown'}, http {resp.get('http_status')})"
+                f"killed abandoned conversation {cid} — sandbox + sidecar containers "
+                f"destroyed (was {status or 'unknown'}, http {resp.get('http_status')})"
             )
+    if not kill_confirmed:
+        with contextlib.suppress(Exception):
+            client.note_inspect_stop_unconfirmed(cid)
+    with contextlib.suppress(Exception):
+        await client.finish_inspect_collection(cid)
 
 
 _DISCO_CONTAINER_PREFIXES = ("disco-sbx-", "disco-egr-")
@@ -2242,6 +2492,8 @@ async def run_once(
     model: str | None,
     autonomous: bool,
     commit: str,
+    repo_revision: str = "",
+    repo_dirty: bool = False,
     kernel: str = "disco",
     timeout_s: float,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
@@ -2306,10 +2558,37 @@ async def run_once(
                     model=model,
                     autonomous=autonomous,
                     commit=commit,
+                    repo_revision=repo_revision,
+                    repo_dirty=repo_dirty,
                     kernel=kernel,
                     started_at=run_started_at,
                     provider_ledger=provider_ledger,
                 )
+            hardcap_facts = exc.facts
+            hardcap_cid = frozen.conversation_id if frozen is not None else None
+            hardcap_timeline = _timeline_md(scenario, frozen) if frozen is not None else None
+            if frozen is None:
+                # No collected run survived the hard cap — attempt the same bounded
+                # best-effort freeze every other invalidation path performs (F3)
+                # instead of returning classification+timeline only.
+                hardcap_cid = _invalidation_conversation_id(exc.facts, client)
+                freeze_facts, hardcap_timeline = await _freeze_invalidation_evidence(
+                    client,
+                    out_root,
+                    run_id,
+                    scenario,
+                    model=model,
+                    autonomous=autonomous,
+                    commit=commit,
+                    repo_revision=repo_revision,
+                    repo_dirty=repo_dirty,
+                    kernel=kernel,
+                    started_at=run_started_at,
+                    conversation_id=hardcap_cid,
+                    invalidation_code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
+                    invalidation_reason=exc.reason,
+                )
+                hardcap_facts = {**exc.facts, **freeze_facts}
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -2317,15 +2596,32 @@ async def run_once(
                 exc.reason,
                 code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
                 first_broken_link="terminal_wait -> no_terminal_before_hard_cap",
-                facts=exc.facts,
-                conversation_id=(frozen.conversation_id if frozen is not None else None),
-                timeline_markdown=(_timeline_md(scenario, frozen) if frozen is not None else None),
+                facts=hardcap_facts,
+                conversation_id=hardcap_cid,
+                timeline_markdown=hardcap_timeline,
             )
         except FollowupPickupError as exc:
             # H1/V2: an after-terminal follow-up was never picked up by the engine (the
             # finalization dead-window) even after a re-kick. This is a HARNESS SEQUENCING
             # failure, not a product verdict — INVALID_RUN so §17 re-runs it. We must NOT drive
             # on the stale terminal (V1's silent-proceed is what collapsed the follow-ups).
+            cid = _invalidation_conversation_id(exc.facts, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                conversation_id=cid,
+                invalidation_code=fc.RUN_INTERRUPTED,
+                invalidation_reason=exc.reason,
+            )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -2333,9 +2629,28 @@ async def run_once(
                 exc.reason,
                 code=fc.RUN_INTERRUPTED,
                 first_broken_link="followup_send -> no_pickup_before_bound",
-                facts=exc.facts,
+                facts={**exc.facts, **freeze_facts},
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
             )
         except CancelMissedWindowError as exc:
+            cid = _invalidation_conversation_id(exc.facts, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                conversation_id=cid,
+                invalidation_code=fc.CANCEL_MISSED_WINDOW,
+                invalidation_reason=exc.reason,
+            )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -2343,14 +2658,35 @@ async def run_once(
                 exc.reason,
                 code=fc.CANCEL_MISSED_WINDOW,
                 first_broken_link="cancel_at -> terminal_before_kill",
-                facts=exc.facts,
+                facts={**exc.facts, **freeze_facts},
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
             )
         except SnapshotNotReadyError as exc:
             # The host workspace snapshot never settled on the build's AGENT-FINAL state
             # within the snapshot-wait budget (a slow/failed flush, or a multi-revision build
             # whose later bytes hadn't flushed). FAIL-FAST → INVALID_RUN rather than launder a
             # stale capture into a false ARTIFACT_TRUTH_MISMATCH or a silent stale PASS; §17
-            # re-runs it. Bounded — never hangs.
+            # re-runs it. Bounded — never hangs. The snapshot verdict stays the downstream
+            # evidence fact it is; the durable events / inspect aggregate / provider slice the
+            # harness already holds are frozen first instead of being discarded (finding F3).
+            cid = _invalidation_conversation_id(exc.facts, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                conversation_id=cid,
+                invalidation_code=fc.WORKSPACE_SNAPSHOT_NOT_READY,
+                invalidation_reason=exc.reason,
+            )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -2358,9 +2694,28 @@ async def run_once(
                 exc.reason,
                 code=fc.WORKSPACE_SNAPSHOT_NOT_READY,
                 first_broken_link="snapshot_flush -> snapshot_behind_agent_final_state",
-                facts=exc.facts,
+                facts={**exc.facts, **freeze_facts},
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
             )
         except BrowserEvidenceCollectionError as exc:
+            cid = _invalidation_conversation_id(exc.facts, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                conversation_id=cid,
+                invalidation_code=fc.MISSING_REQUIRED_EVIDENCE,
+                invalidation_reason=exc.reason,
+            )
             return _invalid_run_record(
                 out_root,
                 run_id,
@@ -2368,13 +2723,41 @@ async def run_once(
                 exc.reason,
                 code=fc.MISSING_REQUIRED_EVIDENCE,
                 first_broken_link="browser_observation -> durable_screenshot_evidence",
-                facts=exc.facts,
+                facts={**exc.facts, **freeze_facts},
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
             )
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
-            return _invalid_run_record(out_root, run_id, scenario, f"{type(exc).__name__}: {exc}")
+            cid = _invalidation_conversation_id(None, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                conversation_id=cid,
+                invalidation_code=fc.RUN_INTERRUPTED,
+                invalidation_reason=f"{type(exc).__name__}: {exc}",
+            )
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                f"{type(exc).__name__}: {exc}",
+                facts=freeze_facts,
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
+            )
 
         if require_inspect_trace:
             trace = run.inspect_trace or {}
+            aggregation = trace.get("aggregation")
             routing = trace.get("routing_decisions")
             spans = trace.get("spans")
             agent_spans = (
@@ -2393,9 +2776,28 @@ async def run_once(
                 run, trace, routing, agent_spans, scenario
             )
             terminal_preloop = terminal_driver_preflight or terminal_sandbox_preflight
+            # The gate re-derives validity from the canonical events instead of
+            # trusting the caller-owned lossless/finalized/dropped assertions —
+            # a forged or tampered aggregate must fail closed HERE, not surface
+            # later as a bogus analyzer input.  The shared validator lives next
+            # to the aggregation so producer and gate cannot drift.
+            aggregate_violations = inspect_aggregate_violations(
+                trace, conversation_id=str(run.conversation_id or "")
+            )
             missing_trace_parts = [
                 name
                 for name, present in (
+                    (
+                        "internally consistent inspect aggregate",
+                        not aggregate_violations,
+                    ),
+                    (
+                        "lossless inspect aggregation",
+                        isinstance(aggregation, dict)
+                        and aggregation.get("lossless") is True
+                        and aggregation.get("finalized") is True
+                        and trace.get("dropped_event_count") == 0,
+                    ),
                     ("routing_decisions", isinstance(routing, list) and bool(routing)),
                     ("agent.step spans", bool(agent_spans) or terminal_preloop),
                 )
@@ -2422,6 +2824,8 @@ async def run_once(
                     model=model,
                     autonomous=autonomous,
                     commit=commit,
+                    repo_revision=repo_revision,
+                    repo_dirty=repo_dirty,
                     kernel=kernel,
                     started_at=run_started_at,
                     provider_ledger=provider_ledger,
@@ -2433,7 +2837,13 @@ async def run_once(
                     "required per-conversation inspect trace was absent or incomplete",
                     code=fc.MISSING_REQUIRED_EVIDENCE,
                     first_broken_link="model_request -> inspect_trace",
-                    facts={"missing_trace_parts": missing_trace_parts},
+                    facts={
+                        "missing_trace_parts": missing_trace_parts,
+                        "inspect_aggregate_violations": aggregate_violations,
+                        "inspect_aggregation": aggregation
+                        if isinstance(aggregation, dict)
+                        else None,
+                    },
                     conversation_id=run.conversation_id,
                     timeline_markdown=_timeline_md(scenario, run),
                 )
@@ -2520,6 +2930,8 @@ async def run_once(
                 model=model,
                 autonomous=autonomous,
                 commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
                 provider_ledger=provider_ledger,
@@ -2571,6 +2983,8 @@ async def run_once(
             model=model,
             autonomous=autonomous,
             commit=commit,
+            repo_revision=repo_revision,
+            repo_dirty=repo_dirty,
             kernel=kernel,
             started_at=run_started_at,
             provider_ledger=provider_ledger,
@@ -2594,14 +3008,6 @@ async def run_once(
 
 
 # ---- CLI --------------------------------------------------------------------
-
-
-def _git_commit(repo_root: Path) -> str:
-    with contextlib.suppress(Exception):
-        return subprocess.check_output(
-            ["git", "-C", str(repo_root), "rev-parse", "HEAD"], text=True
-        ).strip()
-    return ""
 
 
 def _exit_code(status: str) -> int:
@@ -2652,6 +3058,11 @@ def _run_batch_item(
         ),
         None,
     )
+    # Bounded aggregation scalars only (work-order §6.2): the batch summary must
+    # disclose source drops, continuity, finalization, conflicts, and the
+    # lossless verdict without ever copying the unbounded event list.
+    aggregation_raw = trace.get("aggregation")
+    aggregation = aggregation_raw if isinstance(aggregation_raw, dict) else {}
     return {
         "index": index,
         "run_id": run_id,
@@ -2666,6 +3077,20 @@ def _run_batch_item(
             "event_count": int(trace.get("event_count") or 0),
             "routing_decisions": len(trace.get("routing_decisions") or []),
             "spans": len(trace.get("spans") or []),
+            "aggregate_dropped_event_count": trace.get("dropped_event_count"),
+            "source_dropped_event_count": trace.get("source_dropped_event_count"),
+            "lossless": aggregation.get("lossless"),
+            "finalized": aggregation.get("finalized"),
+            "continuity": aggregation.get("continuity"),
+            "continuity_reason": aggregation.get("continuity_reason"),
+            "sample_count": aggregation.get("sample_count"),
+            "accepted_sample_count": aggregation.get("accepted_sample_count"),
+            "overlap_sample_count": aggregation.get("overlap_sample_count"),
+            "unique_event_count": aggregation.get("unique_event_count"),
+            "first_retained_seq": aggregation.get("first_retained_seq"),
+            "last_retained_seq": aggregation.get("last_retained_seq"),
+            "conflict_count": aggregation.get("conflict_count"),
+            "failure_reasons": aggregation.get("failure_reasons"),
         },
         "thrash_oracle": thrash,
     }
@@ -2759,7 +3184,14 @@ async def _amain(args: argparse.Namespace) -> int:
             print(f"[build-soak] INFRA_FAILURE: {exc}", file=sys.stderr)
             return 3
     repo_root = Path(__file__).resolve().parents[2]
-    commit = _git_commit(repo_root)
+    try:
+        repo_revision, commit, repo_dirty = _source_revision(repo_root)
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as exc:
+        print(
+            f"[build-soak] INFRA_FAILURE: could not determine exact source identity: {exc}",
+            file=sys.stderr,
+        )
+        return 3
     db_path = args.db or os.environ.get("DISCO_DB") or str(repo_root / "disco.db")
     model = args.model or os.environ.get("DISCO_SOAK_MODEL") or None
 
@@ -2881,6 +3313,8 @@ async def _amain(args: argparse.Namespace) -> int:
                     model=model,
                     autonomous=autonomous,
                     commit=commit,
+                    repo_revision=repo_revision,
+                    repo_dirty=repo_dirty,
                     kernel=args.kernel,
                     timeout_s=args.timeout,
                     hard_cap_s=args.hard_cap,
@@ -2931,6 +3365,8 @@ async def _amain(args: argparse.Namespace) -> int:
             {str(scenario.get("surface", "build")) for scenario in selected.values()}
         ),
         "commit": commit,
+        "repo_revision": repo_revision,
+        "repo_dirty": repo_dirty,
         "model": model,
         "started_at": started_at,
         "finished_at": datetime.now(UTC).isoformat(),

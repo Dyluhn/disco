@@ -8,8 +8,12 @@ from pathlib import Path
 import pytest
 from disco.core import (
     ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     DoDSpec,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
     ObservationEvent,
     PlanEvent,
     PlanVerificationTransition,
@@ -386,6 +390,7 @@ async def test_h567_exact_finish_retry_replans_then_finishes_without_thrash(
         ScriptedAgent([]),
         executor=executor,
         conversation_id="h567-exact-flow",
+        planning_tools=frozenset({"file_read", "submit_plan"}),
         dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
     )
     bad = CommandExitPredicate(
@@ -421,6 +426,16 @@ async def test_h567_exact_finish_retry_replans_then_finishes_without_thrash(
         summary="corrected verifier",
         predicate=CommandExitPredicate(cmd="test -s primes.py"),
     )
+    repair_events = await store.get_events(loop.conversation_id)
+    repair_transition = next(
+        event.plan_verification_transition
+        for event in reversed(repair_events)
+        if isinstance(event, StatusEvent) and event.plan_verification_transition is not None
+    )
+    assert repair_transition.reason == signals.APPROVED_PLAN_VERIFIER_REPAIR
+    assert signals.verifier_repair_execution_active(repair_events)
+    loop.mode = OperatingMode.LONG_HORIZON
+    assert await loop._finish.gate_execution_nudge(finish_step, repair_events) is Disp.FALLTHROUGH
     normalized, disp = await loop._finish.normalize_finish_step(
         finish_step, await store.get_events(loop.conversation_id)
     )
@@ -437,6 +452,26 @@ async def test_h567_exact_finish_retry_replans_then_finishes_without_thrash(
     assert (await loop.get_state()).execution_status == ConversationStatus.FINISHED
 
     events = await store.get_events(loop.conversation_id)
+    verifier_passes = [
+        event
+        for event in events
+        if isinstance(event, StatusEvent)
+        and event.detail == "plan_verification_passed"
+        and getattr(event, "plan_verifier_pass", None) is not None
+    ]
+    assert len(verifier_passes) == 1
+    verifier_pass = verifier_passes[0].plan_verifier_pass
+    assert verifier_pass is not None
+    assert verifier_pass.plan_event_id == replacement.id
+    assert verifier_pass.plan_revision == replacement.revision
+    assert verifier_pass.predicate_fingerprints == predicate_fingerprints(
+        [step.done_condition for step in replacement.steps if step.done_condition is not None]
+    )
+    assert (verifier_passes[0].seq or 0) < next(
+        event.seq or 0
+        for event in events
+        if isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+    )
     exact_shell_actions = [
         event
         for event in events
@@ -454,6 +489,130 @@ async def test_h567_exact_finish_retry_replans_then_finishes_without_thrash(
     ]
     assert len(failures) == 2
     assert signals.latest_approved_plan(events).id == replacement.id  # type: ignore[union-attr]
+    assert not any(
+        getattr(event, "message", None) is not None
+        and "approved plan has not been executed" in event.message.content.lower()
+        for event in events
+    )
+
+
+async def test_h567_user_revision_cannot_inherit_verifier_repair_bypass(tmp_path: Path) -> None:
+    """Fresh USER scope between failure and approval restores normal execution gates."""
+
+    (tmp_path / "ready.txt").write_text("ready\n")
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        conversation_id="h567-user-revision",
+        planning_tools=frozenset({"file_read", "submit_plan"}),
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    await _approve(
+        loop,
+        summary="bad verifier",
+        predicate=FileExistsPredicate(path="missing.txt"),
+    )
+    await _emit_successful_shell_receipt(loop, "test -s ready.txt")
+    finish_step = action_step("finish", {"summary": "ready"})
+
+    first, first_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    second, second_disp = await loop._finish.normalize_finish_step(
+        finish_step, await store.get_events(loop.conversation_id)
+    )
+    assert first.finished is False and first_disp is Disp.CONTINUE
+    assert second.finished is False and second_disp is Disp.CONTINUE
+    assert loop.mode is OperatingMode.PLANNING
+
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Also change the product copy."),
+        )
+    )
+    await _approve(
+        loop,
+        summary="Change product copy",
+        predicate=FileExistsPredicate(path="ready.txt"),
+    )
+
+    events = await store.get_events(loop.conversation_id)
+    transition = next(
+        event.plan_verification_transition
+        for event in reversed(events)
+        if isinstance(event, StatusEvent) and event.plan_verification_transition is not None
+    )
+    assert transition.reason == "approved_plan_revision"
+    assert not signals.verifier_repair_execution_active(events)
+
+    loop.mode = OperatingMode.LONG_HORIZON
+    assert await loop._finish.gate_execution_nudge(finish_step, events) is Disp.CONTINUE
+    events = await store.get_events(loop.conversation_id)
+    assert any(
+        isinstance(event, MessageEvent)
+        and "approved plan has not been executed" in event.message.content.lower()
+        for event in events
+    )
+
+
+async def test_h567_verifier_repair_refusal_cannot_harvest_stale_user_plan(
+    tmp_path: Path,
+) -> None:
+    """A forbidden edit in verifier repair cannot erase the failed predicate."""
+
+    executor = FakeExecutor()
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        executor=executor,
+        conversation_id="h567-repair-forbidden-write",
+        planning_tools=frozenset({"file_read", "submit_plan"}),
+        dod_evaluator_factory=lambda: DoDEvaluator(tmp_path),
+    )
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Build the original site."),
+        )
+    )
+    old = await _approve(
+        loop,
+        summary="Build original site",
+        predicate=FileExistsPredicate(path="missing-verifier.txt"),
+    )
+    await _emit_successful_shell_receipt(loop, "test -s ready.txt")
+    finish_step = action_step("finish", {"summary": "done"})
+    for _attempt in range(2):
+        normalized, disp = await loop._finish.normalize_finish_step(
+            finish_step, await store.get_events(loop.conversation_id)
+        )
+        assert normalized.finished is False and disp is Disp.CONTINUE
+    assert loop.mode is OperatingMode.PLANNING
+
+    forbidden = action_step("file_write", {"path": "app.py", "content": "changed"})
+    assert await loop._gate_planning_mode(forbidden, await loop._events()) is Disp.CONTINUE
+
+    events = await store.get_events(loop.conversation_id)
+    assert [event.id for event in events if isinstance(event, PlanEvent)] == [old.id]
+    attempts = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call.tool_name == "file_write"
+    ]
+    assert len(attempts) == 1
+    assert (
+        sum(
+            isinstance(event, AgentErrorEvent) and event.action_id == attempts[0].id
+            for event in events
+        )
+        == 1
+    )
+    assert not any(
+        isinstance(event, StatusEvent) and event.detail == "harvested_revision_plan"
+        for event in events
+    )
+    assert not executor.calls
+    assert (await loop.get_state()).execution_status == ConversationStatus.RUNNING
+    assert loop.mode is OperatingMode.PLANNING
 
 
 async def test_h567_unchanged_replacement_stucks_before_optional_verify_repeat(

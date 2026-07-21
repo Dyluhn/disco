@@ -166,6 +166,13 @@ async def test_list_field_item_wrapper_unwraps_for_submit_plan():
     assert "plan received" in res.content
 
 
+def test_submit_plan_schema_requires_at_least_one_step():
+    from disco.tools.builtin.plan import SubmitPlanArgs
+
+    steps = SubmitPlanArgs.model_json_schema()["properties"]["steps"]
+    assert steps["minItems"] == 1
+
+
 async def test_list_field_items_wrapper_unwraps_generically():
     ex = _executor()
     res = await ex.execute(
@@ -208,6 +215,59 @@ async def test_submit_plan_wrong_steps_shape_still_refuses_with_example():
     seen = res.error or ""
     assert "steps must be a JSON array" in seen
     assert '{"steps": [{"title": "..."}]}' in seen
+
+
+async def test_submit_plan_done_condition_error_teaches_only_valid_shapes():
+    """A malformed optional union gets a copyable correction, never a string
+    placeholder that repeats the same validation failure."""
+    ex = _executor()
+    bad = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps=[{"title": "Create the page", "done_condition": "static"}],
+        )
+    )
+
+    assert bad.success is False
+    assert bad.structured["kind"] == "invalid_arguments"
+    seen = bad.error or ""
+    assert "'steps[*].done_condition'" in seen
+    assert '{"kind": "file_exists", "path": "..."}' in seen
+    assert "set it to null, or omit it" in seen
+    assert "Do not send a string" in seen
+    assert '"done_condition": "..."' not in seen
+
+    # Every correction the hint proposes is accepted by the unchanged schema.
+    object_condition = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps=[
+                {
+                    "title": "Create the page",
+                    "done_condition": {"kind": "file_exists", "path": "..."},
+                }
+            ],
+        )
+    )
+    null_condition = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps=[{"title": "Create the page", "done_condition": None}],
+        )
+    )
+    omitted_condition = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps=[{"title": "Create the page"}],
+        )
+    )
+    assert object_condition.success is True
+    assert null_condition.success is True
+    assert omitted_condition.success is True
 
 
 async def test_list_wrapper_does_not_affect_non_list_fields():
@@ -441,4 +501,9 @@ def test_tool_context_has_no_secret_field():
         "primitive_live_verifier",
         # Current scope names, for recovery text only.
         "scope_allowed_tools",
+        # BF1: bounded, host-owned browser/workspace-coherence metadata (exact
+        # ints + a fixed lane label) — not secrets, not model-facing arguments.
+        "browser_workspace_epoch",
+        "browser_generation",
+        "browser_lane",
     }

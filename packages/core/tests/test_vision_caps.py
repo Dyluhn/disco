@@ -760,9 +760,12 @@ class TestVisionAwarePrompts:
         )
 
     def test_anti_monolith_in_execution_prompt(self):
-        """The execution prompt includes the anti-monolith steer."""
+        """Modularity is guidance; explicit user/target file shapes win."""
         prompt = self._system_prompt(vision=False, mode=OperatingMode.LONG_HORIZON)
-        assert "monolith" in prompt.lower() or "split output" in prompt.lower()
+        assert "user or target requires a particular layout" in prompt
+        assert "large files are supported" in prompt.lower()
+        assert "800 lines" not in prompt
+        assert "48KB" not in prompt
 
     def test_vision_bullet_caps_gated(self):
         """The vision bullet appears IFF VISION is in capabilities."""

@@ -27,9 +27,12 @@ exactly that surface.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 import shlex
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -180,6 +183,34 @@ class PreviewCommandError(ValueError):
     literal `{port}` placeholder. Surfaced to the model as a recoverable tool failure."""
 
 
+def preview_projection_digest(
+    *,
+    name: str,
+    port: int,
+    command: str,
+    exec_dir: str | None,
+    intent: dict[str, Any],
+) -> str | None:
+    """Canonical identity of the accepted launch, excluding ephemeral health state."""
+
+    try:
+        encoded = json.dumps(
+            {
+                "command": command,
+                "exec_dir": exec_dir,
+                "intent": intent,
+                "name": name,
+                "port": port,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    except (TypeError, ValueError):
+        return None
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass
 class PreviewSession:
     """One supervised preview. `port` is platform-assigned; `intent` records what the
@@ -191,6 +222,9 @@ class PreviewSession:
     command: str  # fully-resolved command actually run (port already baked in)
     exec_dir: str | None
     intent: dict[str, Any]
+    projection_id: str = field(default_factory=lambda: f"pv_{uuid.uuid4().hex}")
+    sandbox_instance_id: str | None = None
+    sandbox_generation: int | None = None
     status: PreviewStatus = PreviewStatus.STARTING
     url: str | None = None
     restart_count: int = 0
@@ -205,6 +239,14 @@ class PreviewSession:
     _reset_budget_on_healthy: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
+        launch_kind = self.intent.get("launch_kind")
+        intent_digest = preview_projection_digest(
+            name=self.name,
+            port=self.port,
+            command=self.command,
+            exec_dir=self.exec_dir,
+            intent=self.intent,
+        )
         return {
             "name": self.name,
             "port": self.port,
@@ -213,6 +255,11 @@ class PreviewSession:
             "command": self.command,
             "exec_dir": self.exec_dir,
             "intent": self.intent,
+            "launch_kind": launch_kind,
+            "projection_id": self.projection_id,
+            "intent_digest": intent_digest,
+            "sandbox_instance_id": self.sandbox_instance_id,
+            "sandbox_generation": self.sandbox_generation,
             "restart_count": self.restart_count,
             "detail": self.detail,
         }
@@ -731,6 +778,7 @@ class PreviewManager:
                         "serve_dir": serve_dir,
                         "command": command,
                         "framework": framework,
+                        "cwd": cwd,
                         "launch_kind": self._launch_kind(command=command, framework=framework),
                     }
                     await self._recover_explicit(
@@ -759,6 +807,7 @@ class PreviewManager:
                     "serve_dir": serve_dir,
                     "command": command,
                     "framework": framework,
+                    "cwd": cwd,
                     "launch_kind": self._launch_kind(command=command, framework=framework),
                 },
                 _supervise=supervise,
@@ -789,10 +838,16 @@ class PreviewManager:
         A manager with no health-proven preview returns ``None``. This is distinct
         from a sandbox with no manager, where the legacy static preview remains 8000.
         """
+        selected = self.canonical_session()
+        return selected.port if selected is not None else None
+
+    def canonical_session(self) -> PreviewSession | None:
+        """Newest still-servable explicit selection, without launching anything."""
+
         for name in reversed(self._selection_order):
             session = self._sessions.get(name)
             if session is not None and self._is_servable(session):
-                return session.port
+                return session
         return None
 
     async def _launch(self, session: PreviewSession) -> None:
@@ -835,6 +890,10 @@ class PreviewManager:
 
     def _mark_running(self, session: PreviewSession) -> None:
         """Healthy on the platform port — expose the URL, or degrade gracefully."""
+        sandbox_id = getattr(self._sandbox, "id", None)
+        sandbox_generation = getattr(self._sandbox, "generation", None)
+        session.sandbox_instance_id = sandbox_id if isinstance(sandbox_id, str) else None
+        session.sandbox_generation = sandbox_generation if type(sandbox_generation) is int else None
         session._auto_restart_armed = True
         if session._reset_budget_on_healthy:
             session.restart_count = 0
@@ -982,6 +1041,10 @@ class PreviewManager:
             session.detail = f"crashed; restart budget ({self.MAX_RESTARTS}) exhausted"
             return
         session.restart_count += 1
+        # A restarted OS process is a new live projection even when it uses the
+        # same accepted command, port, and sandbox. Rotate at the actual re-exec
+        # boundary so a pre-FINISHED observation cannot authorize a later process.
+        session.projection_id = f"pv_{uuid.uuid4().hex}"
         session.status = PreviewStatus.RESTARTING
         session.detail = f"crash detected; restart #{session.restart_count}"
         _LOG.info("restarting crashed preview %s on port %d", session.name, session.port)
@@ -1021,6 +1084,7 @@ class PreviewManager:
         session.command = command
         session.exec_dir = exec_dir
         session.intent = intent
+        session.projection_id = f"pv_{uuid.uuid4().hex}"
         session.status = PreviewStatus.RESTARTING
         session.detail = "explicit recovery of crashed preview"
         _LOG.info(
@@ -1068,6 +1132,60 @@ class PreviewManager:
             for session in targets:
                 await self._refresh(session)
             return targets
+
+    async def resolve_active_projection(self, projection: Any) -> PreviewSession | None:
+        """Match one exact live projection without restart, repair, or allocation."""
+
+        from .preview_projection import projection_identity
+
+        async with self._lock:
+            session = self._sessions.get(getattr(projection, "session_name", ""))
+            if session is None or session.status is PreviewStatus.STOPPED:
+                return None
+            # Read the *current* SandboxSession identity before probing.  The
+            # PreviewSession fields describe the generation that originally became
+            # healthy; a dead/recreated box must not inherit that cached authority.
+            # In particular, do not let the health probe lazily create a new box.
+            expected_sandbox = (
+                getattr(projection, "sandbox_instance_id", None),
+                getattr(projection, "sandbox_generation", None),
+            )
+            current_sandbox = (
+                getattr(self._sandbox, "id", None),
+                getattr(self._sandbox, "generation", None),
+            )
+            if current_sandbox != expected_sandbox:
+                return None
+            if not await self._probe_health(
+                session.port,
+                require_success=self._requires_successful_root(session),
+            ):
+                return None
+            # A typed backend-death probe may replace the underlying instance.
+            # Recheck after the await so that replacement fails this request closed.
+            if (
+                getattr(self._sandbox, "id", None),
+                getattr(self._sandbox, "generation", None),
+            ) != expected_sandbox:
+                return None
+            if await self._verify_owns_port(session) is False:
+                return None
+            if (
+                getattr(self._sandbox, "id", None),
+                getattr(self._sandbox, "generation", None),
+            ) != expected_sandbox:
+                return None
+            current = session.to_dict()
+            current_identity = (
+                current.get("projection_id"),
+                current.get("name"),
+                current.get("port"),
+                current.get("launch_kind"),
+                current.get("intent_digest"),
+                current.get("sandbox_instance_id"),
+                current.get("sandbox_generation"),
+            )
+            return session if current_identity == projection_identity(projection) else None
 
     async def logs(self, name: str | None = None, *, tail_chars: int = 4000) -> dict[str, str]:
         """Recent stdout/stderr per preview (from the in-sandbox shell session)."""

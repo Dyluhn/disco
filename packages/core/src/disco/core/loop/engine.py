@@ -18,7 +18,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -46,6 +49,11 @@ from ..events import (
     ToolCall,
     ToolResult,
     VerifierVerdictEvent,
+    WorkspaceMutationEvent,
+    agent_view_consistent_events,
+    current_workspace_agent_view_id,
+    event_matches_current_workspace_view,
+    latest_workspace_run_intent,
 )
 from ..llm import (
     LLMRouter,
@@ -93,7 +101,6 @@ from .finish import (  # noqa: F401 — finish helpers/consts re-exported for ba
     _static_verify_command,
     host_verify_authoritative_enabled,
 )
-from .messages import STUCK_ESCAPE_PROGRESS_DIAGNOSTIC, stuck_escape_progress_reminder
 from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
     _FANOUT_INPUT_MAX_CHARS,
     Observer,
@@ -353,6 +360,23 @@ _MIDSTEP_STEER_REFUSAL = (
     "read (file_read/file_list/search/extract) or ask/questions_v2 first.\n"
     "</system-reminder>"
 )
+
+
+def _out_of_phase_submit_plan_refusal(revision: int | None) -> str:
+    approved = (
+        f"Plan revision {revision} is already APPROVED and execution is active. "
+        if revision is not None
+        else "The loop is in EXECUTION mode, not PLANNING mode. "
+    )
+    return (
+        "<system-reminder>\n"
+        "REFUSED: `submit_plan` had no effect. "
+        f"{approved}Do not retry `submit_plan`; continue the approved work with "
+        "execution tools. If new user input or execution evidence proves the plan "
+        "itself must change, use `propose_plan_update` instead.\n"
+        "</system-reminder>"
+    )
+
 
 # _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
 
@@ -707,6 +731,60 @@ def _delegate_explore_tool_spec():
 
 _DELEGATE_EXPLORE_TOOL_SPEC = None
 
+TerminalCommitHook = Callable[[StatusEvent], Awaitable[Event]] | None
+ControlFenceFactory = Callable[[], AbstractAsyncContextManager[None]] | None
+_ACTIVE_AGENT_VIEW_ID: ContextVar[str | None] = ContextVar(
+    "disco_active_agent_view_id", default=None
+)
+
+
+class AgentViewSuperseded(RuntimeError):
+    """This worker lost durable ownership of the model view it was driving."""
+
+
+@asynccontextmanager
+async def _optional_async_fence(factory: ControlFenceFactory):
+    if factory is None:
+        yield
+        return
+    async with factory():
+        yield
+
+
+async def _admit_run_intent_for_view(
+    store: EventStore,
+    conversation_id: str,
+    events: list[Event],
+) -> tuple[list[Event], str | None]:
+    """Publish and verify one fresh generation for the exact model view."""
+
+    intent = latest_workspace_run_intent(events)
+    if intent is None:
+        return events, None
+    # A newer atomic USER+intent or competing view may land between our append
+    # and re-read. Only call the provider when our exact marker is still latest.
+    for _attempt in range(16):
+        view_id = f"aview_{uuid.uuid4().hex}"
+        await store.append(
+            conversation_id,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                agent_view_id=view_id,
+                run_intent_id=intent.id,
+                run_protocol_version=1,
+            ),
+        )
+        events = await store.get_events(conversation_id)
+        newest = latest_workspace_run_intent(events)
+        if newest is not None and newest.id == intent.id:
+            if current_workspace_agent_view_id(events) == view_id:
+                return events, view_id
+            raise AgentViewSuperseded("another worker admitted the same run intent")
+        if newest is None:
+            return events, None
+        intent = newest
+    raise RuntimeError("agent view admission could not stabilize on the current intent")
+
 
 def _delegate_explore_tool_singleton():
     global _DELEGATE_EXPLORE_TOOL_SPEC
@@ -744,6 +822,12 @@ class AgentLoop:
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
         autonomous: bool = False,
         model_policy: ModelExecutionPolicy = _DEFAULT_MODEL_POLICY,
+        # The already-resolved context window of this loop's effective driver.
+        # Runtime resolves it once (including the per-conversation model pick)
+        # and threads the same scalar to the executor, condenser, and view.  A
+        # None default preserves legacy/test callers and selects conservative
+        # context caps.
+        driver_context_window: int | None = None,
         # P6 — the active Build contract's verification finalizer name (e.g.
         # "ready_for_app_verification"). When set, it is advertised + recognized as a
         # per-kind ALIAS of the `finish` virtual tool, routed through the SAME host-truth
@@ -784,6 +868,8 @@ class AgentLoop:
         verifier_judge: VerifierJudge | None = None,
         verifier_judge_timeout_s: float = 30.0,
         workflow_run: WorkflowRun | None = None,
+        terminal_commit_hook: TerminalCommitHook = None,
+        control_fence: ControlFenceFactory = None,
         quiet: bool = False,
         strict_appkit_active: Callable[[], bool] | None = None,
     ) -> None:
@@ -800,12 +886,17 @@ class AgentLoop:
         # phase, so a confirmed CUSTOM_BUILD widening restores ordinary predicates
         # without reconstructing the loop. A configured callback fails closed.
         self._strict_appkit_active_reader = strict_appkit_active
-        # P6 — the contract finalizer alias for `finish` (None when no contract governs).
         self._finish_alias = finish_alias
-        self._workflow_run = workflow_run
+        self._workflow_run, self._terminal_commit_hook = workflow_run, terminal_commit_hook
+        self._control_fence = control_fence
         # Execution policy (T1): the SINGLE source of truth for model-tier execution.
         # `_assist` is a read-only property delegating to `_model_policy.assist`.
         self._model_policy = model_policy
+        self._driver_context_window_value = (
+            driver_context_window
+            if isinstance(driver_context_window, int) and driver_context_window > 0
+            else None
+        )
         self.conversation_id = conversation_id
         self.store = store
         self.agent = agent
@@ -1005,6 +1096,16 @@ class AgentLoop:
         source of truth is `_model_policy.assist`."""
         return self._model_policy.assist
 
+    def _driver_context_window(self) -> int | None:
+        """Return the immutable driver window used to compose this loop.
+
+        View rendering must not re-probe independently after the executor and
+        condenser have already fixed their budgets; one loop therefore owns one
+        resolved value for its lifetime.
+        """
+
+        return self._driver_context_window_value
+
     # ---- emission + small helpers -------------------------------------------
 
     # Tools whose streamed arguments carry a file body/edit replacement worth
@@ -1017,15 +1118,42 @@ class AgentLoop:
     _STREAM_FLUSH_CHARS = 24
 
     def _build_stream_hook(self) -> StreamHook | None:
-        """Delegates to Driver.build_stream_hook (self._driver). Kept as an
-        instance method for tests."""
+        """Delegate to the driver while preserving the test seam."""
         return self._driver.build_stream_hook()
 
     async def _emit(self, event: Event) -> Event:
-        return await self.store.append(self.conversation_id, event)
+        view_id = _ACTIVE_AGENT_VIEW_ID.get()
+        if (
+            view_id is not None
+            and event.agent_view_id is None
+            and event.source is not EventSource.USER
+        ):
+            event = cast("Event", event.model_copy(update={"agent_view_id": view_id}))
+        return await _route_event(
+            self.store, self.conversation_id, event, self._terminal_commit_hook
+        )
+
+    @staticmethod
+    def _current_agent_view_id() -> str | None:
+        return _ACTIVE_AGENT_VIEW_ID.get()
 
     async def _events(self) -> list[Event]:
-        return await self.store.get_events(self.conversation_id)
+        return agent_view_consistent_events(await self.store.get_events(self.conversation_id))
+
+    async def _prepare_executor(self, events: list[Event] | None = None) -> None:
+        """Reconcile an optional dynamic executor before advertise/effect."""
+        prepare = getattr(self.executor, "prepare_for_events", None)
+        if callable(prepare):
+            await cast(Any, prepare)(events if events is not None else await self._events())
+
+    async def _assert_current_agent_view(self) -> None:
+        events = await self.store.get_events(self.conversation_id)
+        intent = latest_workspace_run_intent(events)
+        view_id = _ACTIVE_AGENT_VIEW_ID.get()
+        if intent is not None and (
+            view_id is None or current_workspace_agent_view_id(events) != view_id
+        ):
+            raise AgentViewSuperseded("model view was superseded before provider use")
 
     async def get_state(self) -> ConversationState:
         return await self.store.get_state(self.conversation_id)
@@ -1111,9 +1239,33 @@ class AgentLoop:
         return await self._recit.maybe_emit_reground(events)
 
     async def _materialize_view(self, events: list[Event]) -> View:
-        """Delegates to ViewBuilder.build (self._view). Kept as an instance
-        method for tests + run()."""
+        """Render exactly the supplied history without changing authority state.
+
+        This remains the deterministic projection seam used by recitation,
+        truncation, and context tests.  Durable run-intent admission belongs to
+        ``_materialize_current_view`` so rendering a caller-owned history can
+        never silently replace it with unrelated store contents.
+        """
         return await self._view.build(events)
+
+    async def _materialize_current_view(self) -> tuple[View, list[Event]]:
+        """Admit and render the latest durable model view under the control fence."""
+
+        # Admission is an authority transition, so serialize it with workspace
+        # effects, host mutations, and control decisions. Re-read after taking
+        # the fence: a competing effect may have completed while we waited, and
+        # the new view must include its paired Action/result rather than split it.
+        async with _optional_async_fence(self._control_fence):
+            events = await self.store.get_events(self.conversation_id)
+            events, view_id = await _admit_run_intent_for_view(
+                self.store, self.conversation_id, events
+            )
+            _ACTIVE_AGENT_VIEW_ID.set(view_id)
+            await self._prepare_executor(events)
+            consistent_events = agent_view_consistent_events(events)
+            view = await self._view.build(consistent_events)
+            await self._assert_current_agent_view()
+        return view, consistent_events
 
     def _f8_shrink_file_write_args(
         self, messages: list[LLMMessage], events: list[Event]
@@ -1147,7 +1299,11 @@ class AgentLoop:
     async def _execute_and_observe(self, action: ActionEvent) -> None:
         """Delegates to Observer.execute_and_observe (self._observe). Kept as an
         instance method for run()/confirm()/pick_alternative()/verify + tests."""
-        await self._observe.execute_and_observe(action)
+        token = _ACTIVE_AGENT_VIEW_ID.set(action.agent_view_id)
+        try:
+            await self._observe.execute_and_observe(action)
+        finally:
+            _ACTIVE_AGENT_VIEW_ID.reset(token)
 
     async def _run_fanout(
         self, args: dict, events: list[Event], *, call_id: str = ""
@@ -1229,6 +1385,7 @@ class AgentLoop:
         guidance: str = "",
         legacy_status: ConversationStatus = ConversationStatus.STUCK,
         legacy_detail: str | None = None,
+        extra_meta: dict[str, str | int] | None = None,
     ) -> None:
         """Delegate all breaker dead-ends to the shared explain+ask lander."""
         await self._valve.land_blocked(
@@ -1236,6 +1393,7 @@ class AgentLoop:
             guidance=guidance,
             legacy_status=legacy_status,
             legacy_detail=legacy_detail,
+            extra_meta=extra_meta,
         )
 
     async def _maybe_synthesize_finish_after_actionless_pauses(
@@ -1455,7 +1613,17 @@ class AgentLoop:
                         tool_call_id=tc.call_id,
                     )
                 )
-                if refusal_streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
+                # A pending USER revision already supplies the plan's authority
+                # and literal goal.  Harvest it after the first forbidden write
+                # instead of deliberately waiting for a second identical error:
+                # the live thrash oracle correctly permits one repair, while the
+                # old two-strike recovery activated at the same event that the
+                # oracle killed.  Initial planning keeps its existing runway.
+                revision_refusal = signals.in_planning_for_revision(events)
+                verifier_repair = signals.verifier_repair_planning_active(events)
+                if not verifier_repair and (
+                    revision_refusal or refusal_streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT
+                ):
                     harvested = await harvest_revision_plan_after_refusal(self)
                     if harvested is not None:
                         return harvested
@@ -1470,39 +1638,103 @@ class AgentLoop:
                 await self._planner.note_planning_read_and_maybe_force()
         return Disp.FALLTHROUGH
 
+    async def _gate_out_of_phase_submit_plan(self, step: AgentStep, events: list[Event]) -> Disp:
+        """Refuse the planning-only signal at the execution dispatch boundary.
+
+        ``submit_plan`` remains callable in the executor's broad security scope
+        because the same executor backs both phases, but Driver deliberately
+        withholds it from execution requests.  A provider may still return a
+        remembered/unoffered name.  Letting that reach the executor produces an
+        inert acknowledgement or an argument-schema error, neither of which
+        tells the model the important fact: its corrected plan was approved and
+        it should execute.  Persist a paired, phase-aware refusal instead.
+        """
+
+        tool_call = step.tool_call
+        plan_name = getattr(self._plan_tool, "name", self._plan_tool)
+        if tool_call is None or tool_call.tool_name != plan_name:
+            return Disp.FALLTHROUGH
+        if self._reconcile_mode_from_events(events) == OperatingMode.PLANNING:
+            return Disp.FALLTHROUGH
+        approved = signals.latest_approved_plan(events)
+        action = ActionEvent(
+            thought=step.thought,
+            tool_call=tool_call,
+            self_assessed_risk=step.self_assessed_risk,
+            llm_response_id=step.llm_response_id,
+        )
+        stored = cast("ActionEvent", await self._emit(action))
+        await self._emit(
+            AgentErrorEvent(
+                error=_out_of_phase_submit_plan_refusal(
+                    approved.revision if approved is not None else None
+                ),
+                action_id=stored.id,
+                tool_call_id=tool_call.call_id,
+            )
+        )
+        return Disp.CONTINUE
+
     async def _gate_stuck_escape_tool_quarantine(
         self, step: AgentStep, events: list[Event]
     ) -> Disp:
-        """Persist and bound a model call to an actively quarantined tool.
+        """Persist and bound a model call withheld by the active recovery episode.
 
-        The tool is absent from the provider schema, but a model may still
-        hallucinate its name. Treat that as an explicit paired refusal, not a
-        hidden in-call requery: the append-only pair is visible on the next
-        ordinary turn and survives restart. A second same-tool refusal in the
-        same escape episode lands through the existing blocked path.
+        Two refusal classes exist, both durable, paired, and restart-stable:
+
+        - a read-BYPASS alias (general shell/code execution, delegated
+          exploration) selected while the episode has zero trusted progress —
+          those tools are absent from the schema but a model may hallucinate
+          the name;
+        - a ``file_read`` whose every requested line is PROVABLY redundant
+          (already held in visible context at the current content digest).
+          ``file_read`` itself stays offered: the k6g canary showed tool-level
+          quarantine convicts legitimate different-resource reads (F1).
+
+        The halt bound counts refusals of the SAME withheld target (the same
+        bypass tool, or the same redundant resource) within the current
+        episode; refusals of different targets are independent recoverable
+        errors, never one repeated behavior.
         """
         tool_call = step.tool_call
         if tool_call is None:
             return Disp.FALLTHROUGH
         blocked_tools = self._driver.stuck_escape_blocked_tools_for_step(events)
-        if tool_call.tool_name not in blocked_tools:
-            return Disp.FALLTHROUGH
-
-        prior_refusals = signals.stuck_escape_refusal_count(events, tool_call.tool_name)
-        loop_causing_tools = signals.stuck_escape_blocked_tools(events)
-        if tool_call.tool_name in loop_causing_tools:
-            refusal_detail = (
-                f"`{tool_call.tool_name}` is withheld because repeating it caused the "
-                "current loop. It remains unavailable until a different tool produces "
-                "a trusted changed-state receipt. Choose a different offered tool now."
-            )
-        else:
+        bound_path: str | None = None
+        refusal_floor: int | None = None
+        if tool_call.tool_name in blocked_tools:
             refusal_detail = (
                 f"`{tool_call.tool_name}` is temporarily withheld during the current "
                 "read-loop recovery because general execution or delegated exploration "
-                "can bypass the typed read quarantine. Use a structured mutation, "
-                "verifier, or finish tool instead."
+                "can bypass the typed read quarantine. It returns once real progress "
+                "lands (a trusted changed-state receipt), a plan revision is approved, "
+                "or the user replies. Use a structured mutation, verifier, or finish "
+                "tool instead."
             )
+        else:
+            refusal = self._driver.stuck_escape_redundant_read_refusal(events, tool_call)
+            if refusal is None:
+                return Disp.FALLTHROUGH
+            bound_path = str(refusal["path"])
+            raw_floor = refusal.get("refusal_floor_seq")
+            refusal_floor = raw_floor if type(raw_floor) is int else None
+            held_spans = cast("list[tuple[int, int]]", refusal["held_spans"])
+            held = ", ".join(f"{start}-{end}" for start, end in held_spans)
+            refusal_detail = (
+                f"`file_read` of `{bound_path}` (lines "
+                f"{refusal['requested_start_line']}-{refusal['requested_end_line']}) is "
+                "withheld: every requested line is already in your context, "
+                f"byte-identical (you hold lines {held} of {refusal['total_lines']}; "
+                f"content digest {refusal['digest_prefix']} unchanged). Re-reading "
+                "unchanged bytes is what caused the current loop. This file becomes "
+                "readable again when its content changes, a plan revision is approved, "
+                "or the user replies. Available now: edit it directly with the exact "
+                "content you already hold, read a different file or an unseen line "
+                "range, run a structured verifier, or call `finish`."
+            )
+        prior_refusals = signals.stuck_escape_refusal_count(
+            events, tool_call.tool_name, action_path=bound_path, after_seq=refusal_floor
+        )
         action = ActionEvent(
             thought=step.thought,
             tool_call=tool_call,
@@ -1522,45 +1754,14 @@ class AgentLoop:
             await self._land_blocked(
                 reason="stuck_escape_tool_quarantine",
                 guidance=(
-                    "The model selected the same quarantined recovery tool twice during "
-                    "the current escape episode. The tool was not executed."
+                    "The model selected the same withheld recovery target twice during "
+                    "the current escape episode. The action was not executed."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="stuck_escape_tool_quarantine",
             )
             return Disp.HALT
         return Disp.CONTINUE
-
-    async def _gate_stuck_escape_progression(self, events: list[Event]) -> Disp:
-        """Persist one progress-only instruction after each consumed read allowance."""
-        for tool_name, observation_seq in sorted(
-            self._driver.stuck_escape_verification_consumptions(events).items()
-        ):
-            already_emitted = any(
-                isinstance(event, MessageEvent)
-                and event.source == EventSource.ENVIRONMENT
-                and event.meta.get("diagnostic") == STUCK_ESCAPE_PROGRESS_DIAGNOSTIC
-                and event.meta.get("verification_observation_seq") == observation_seq
-                for event in events
-            )
-            if already_emitted:
-                continue
-            await self._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=stuck_escape_progress_reminder(tool_name),
-                    ),
-                    meta={
-                        "diagnostic": STUCK_ESCAPE_PROGRESS_DIAGNOSTIC,
-                        "tool_name": tool_name,
-                        "verification_observation_seq": observation_seq,
-                    },
-                )
-            )
-            return Disp.CONTINUE
-        return Disp.FALLTHROUGH
 
     async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
         # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
@@ -1718,11 +1919,12 @@ class AgentLoop:
         ):
             # Paused/waiting/finished/stuck/error: a fresh run must be re-armed by
             # a control op (resume/confirm) or a new message. IDLE means "ready".
+            if state.execution_status is ConversationStatus.PAUSED:
+                return state
             if state.execution_status in (
-                ConversationStatus.PAUSED,
                 ConversationStatus.WAITING_FOR_CONFIRMATION,
                 ConversationStatus.AWAITING_PLAN_APPROVAL,
-            ):
+            ) and not self._has_unprocessed_user_message(await self._events()):
                 return state
             # AWAITING_USER_DECISION / AWAITING_USER_QUESTION: the agent
             # voluntarily paused for the user (pick-a-card or free-form question).
@@ -1895,15 +2097,8 @@ class AgentLoop:
                 if disp is Disp.HALT:
                     return await self.get_state()
 
-                # H583: once the single post-receipt verification read is consumed,
-                # persist an observation-bound instruction before the next provider
-                # request. This is append-only/restart-stable, not a hidden requery.
-                disp = await self._gate_stuck_escape_progression(events)
-                if disp is Disp.CONTINUE:
-                    continue
-
                 # (d) build the model-facing View, condensing if triggered (§8)
-                view = await self._materialize_view(events)
+                view, events = await self._materialize_current_view()
 
                 step, disp = await self._driver.drive_step(view, events)
                 if disp is Disp.CONTINUE:
@@ -1938,6 +2133,14 @@ class AgentLoop:
                     continue
                 if disp is Disp.HALT:
                     return await self.get_state()
+
+                # The plan tool is intentionally withheld once approval flips
+                # the model into execution.  Enforce that semantic phase scope
+                # even when a provider returns the remembered, unoffered name;
+                # do this before meta dispatch or executor argument validation.
+                disp = await self._gate_out_of_phase_submit_plan(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
 
                 # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
                 # AFFIRMATIVE: the agent ends a run only by calling the `finish`
@@ -2134,23 +2337,21 @@ class AgentLoop:
                     and action_to_execute.tool_call.tool_name
                     not in self._driver.planning_allowed_tool_names()
                 )
-            await self._emit(action_to_execute)
-            if steer_refused and action_to_execute.tool_call is not None:
+            stored_action = cast("ActionEvent", await self._emit(action_to_execute))
+            if steer_refused and stored_action.tool_call is not None:
                 # Paired refusal (mirrors _gate_midstep_steer_replan): action_id +
                 # tool_call_id keep the assistant tool_call PAIRED with a tool-role
                 # result the View keeps, so the refusal is recoverable, not orphaned.
                 await self._emit(
                     AgentErrorEvent(
-                        error=_MIDSTEP_STEER_REFUSAL.format(
-                            tool=action_to_execute.tool_call.tool_name
-                        ),
-                        action_id=action_to_execute.id,
-                        tool_call_id=action_to_execute.tool_call.call_id,
+                        error=_MIDSTEP_STEER_REFUSAL.format(tool=stored_action.tool_call.tool_name),
+                        action_id=stored_action.id,
+                        tool_call_id=stored_action.tool_call.call_id,
                     )
                 )
                 continue
-            await self._execute_and_observe(action_to_execute)
-            if await self._maybe_apply_read_churn_valve(action_to_execute) is Disp.HALT:
+            await self._execute_and_observe(stored_action)
+            if await self._maybe_apply_read_churn_valve(stored_action) is Disp.HALT:
                 return await self.get_state()
             # loop continues
 
@@ -2215,7 +2416,7 @@ class AgentLoop:
     async def confirm(self) -> ConversationState:
         """Phase 2 of the confirmation gate: execute EXACTLY the pending action
         (no re-ask to the model), then resume (§5)."""
-        async with self._lock:
+        async with self._lock, _optional_async_fence(self._control_fence):
             state = await self.get_state()
             if (
                 state.execution_status != ConversationStatus.WAITING_FOR_CONFIRMATION
@@ -2223,7 +2424,28 @@ class AgentLoop:
             ):
                 return state
             pending = await self._event_by_id(state.pending_action_id)
-            await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+            events = await self._events()
+            if not isinstance(pending, ActionEvent) or not event_matches_current_workspace_view(
+                events, pending
+            ):
+                await self._emit(
+                    AgentErrorEvent(
+                        error="<system-reminder>That proposed action belongs to a superseded "
+                        "model view and was not executed. Continue from the latest user "
+                        "instruction.</system-reminder>",
+                        action_id=state.pending_action_id,
+                    )
+                )
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.RUNNING, detail="stale_confirmation")
+                )
+                return await self.get_state()
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    agent_view_id=pending.agent_view_id,
+                )
+            )
         if isinstance(pending, ActionEvent):
             await self._execute_and_observe(pending)  # outside the lock
         return await self.get_state()
@@ -2236,13 +2458,20 @@ class AgentLoop:
         in an implicit `<system-reminder>` — the action did not produce an error,
         the human declined it. Paired with the proposed action's call_id so the
         provider adapter sees a properly-correlated tool result."""
-        async with self._lock:
+        async with self._lock, _optional_async_fence(self._control_fence):
             state = await self.get_state()
             if state.execution_status != ConversationStatus.WAITING_FOR_CONFIRMATION:
                 return state
             pending = (
                 await self._event_by_id(state.pending_action_id)
                 if state.pending_action_id
+                else None
+            )
+            events = await self._events()
+            pending_view_id = (
+                pending.agent_view_id
+                if isinstance(pending, ActionEvent)
+                and event_matches_current_workspace_view(events, pending)
                 else None
             )
             call_id: str | None = None
@@ -2260,9 +2489,15 @@ class AgentLoop:
                     error=reminder,
                     action_id=state.pending_action_id,
                     tool_call_id=call_id,
+                    agent_view_id=pending_view_id,
                 )
             )
-            await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    agent_view_id=pending_view_id,
+                )
+            )
         return await self.get_state()
 
     @staticmethod
@@ -2285,6 +2520,13 @@ class AgentLoop:
         """
         old_plan = signals.latest_approved_plan(events)
         external = await self.store.get_external_dod_spec(self.conversation_id)
+        reason = (
+            signals.APPROVED_PLAN_VERIFIER_REPAIR
+            if signals.plan_is_verifier_repair(events, plan)
+            else "approved_plan_revision"
+            if old_plan is not None
+            else "approved_initial_plan"
+        )
         transition = PlanVerificationTransition(
             old_plan_revision=old_plan.revision if old_plan is not None else None,
             old_plan_event_id=old_plan.id if old_plan is not None else None,
@@ -2299,7 +2541,7 @@ class AgentLoop:
             external_predicate_fingerprints=predicate_fingerprints(
                 external.predicates if external is not None else []
             ),
-            reason=("approved_plan_revision" if old_plan is not None else "approved_initial_plan"),
+            reason=reason,
         )
         return StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -2311,7 +2553,7 @@ class AgentLoop:
         """Approve the pending plan: flip into execution mode (full tools restored)
         and resume to RUNNING. The caller then re-runs the loop. The per-action
         risk gate still governs the build that follows (defense in depth)."""
-        async with self._lock:
+        async with self._lock, _optional_async_fence(self._control_fence):
             state = await self.get_state()
             if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
                 return state
@@ -2331,7 +2573,13 @@ class AgentLoop:
                     self.conversation_id,
                 )
                 return state
-            await self._emit(await self._plan_approval_status(plan, events))
+            if not event_matches_current_workspace_view(events, plan):
+                await self._emit(
+                    StatusEvent(status=ConversationStatus.RUNNING, detail="stale_plan_approval")
+                )
+                return await self.get_state()
+            approval = await self._plan_approval_status(plan, events)
+            await self._emit(approval.model_copy(update={"agent_view_id": plan.agent_view_id}))
             self.mode = self._execution_mode
             await self._seed_context_from_plan()
         return await self.get_state()
@@ -2348,6 +2596,7 @@ class AgentLoop:
         try:
             from ..context import ArtifactMemoryStore
             from ..design import (
+                direction_from_markdown,
                 direction_tokens_css,
                 pick_direction,
                 render_design_direction,
@@ -2363,13 +2612,35 @@ class AgentLoop:
             if plan.summary:
                 await store.write_goal(plan.summary)
             await store.seed_todo(render_plan_as_todo_markdown(plan))
+            committed_markdown = await store.read_design_direction()
+            if committed_markdown is not None:
+                # The direction is a project commitment, not a fresh classifier
+                # result for every revised plan.  Re-picking from free-form plan
+                # prose made unrelated follow-ups silently restyle the project and
+                # could even flip the reference back on the next approval.  Keep a
+                # valid commitment byte-identical and repair only its mechanical
+                # companion from the committed ID.
+                committed = direction_from_markdown(committed_markdown)
+                if committed is None:
+                    _LOG.warning(
+                        "CXT-7 committed design direction is unparseable for %s; "
+                        "preserving it instead of silently selecting a new style",
+                        self.conversation_id,
+                    )
+                    return
+                expected_tokens = direction_tokens_css(committed)
+                if await store.read_design_direction_tokens() != expected_tokens:
+                    await store.write_design_direction_tokens(expected_tokens)
+                return
             brief = _design_direction_brief_text(plan, events)
             if brief:
                 direction = pick_direction(brief, self.conversation_id)
-                await store.write_design_direction(render_design_direction(direction))
-                # Mechanical bridge: also emit a ready-to-use tokens.css so
-                # conformance is copy-paste (never blocks approval — same try/except).
+                # Write the companion first and the parsed markdown commitment
+                # last.  If a backend dies between the writes, the next approval
+                # has no valid commitment marker and deterministically repairs
+                # both instead of accepting a direction without matching tokens.
                 await store.write_design_direction_tokens(direction_tokens_css(direction))
+                await store.write_design_direction(render_design_direction(direction))
         except Exception:
             _LOG.warning(
                 "CXT-7 context seed from plan failed for %s", self.conversation_id, exc_info=True
@@ -2385,7 +2656,7 @@ class AgentLoop:
         _execute_and_observe path (including the risk gate).
 
         Idempotent: a pick on a non-pending state is a no-op."""
-        async with self._lock:
+        async with self._lock, _optional_async_fence(self._control_fence):
             state = await self.get_state()
             if state.execution_status != ConversationStatus.AWAITING_USER_DECISION:
                 return state
@@ -2401,6 +2672,14 @@ class AgentLoop:
                 # reminder + clear to RUNNING so the user isn't trapped.
                 await self._emit(
                     StatusEvent(status=ConversationStatus.RUNNING, detail="alternatives_missing")
+                )
+                return await self.get_state()
+            if not event_matches_current_workspace_view(events, alt):
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="stale_alternative_selection",
+                    )
                 )
                 return await self.get_state()
             # D2 BYPASS — "Continue anyway": the user lets the agent keep going with
@@ -2496,6 +2775,7 @@ class AgentLoop:
                 # self-explanatory.
                 action = ActionEvent(
                     source=EventSource.AGENT,
+                    agent_view_id=alt.agent_view_id,
                     thought=f"User picked alternative: {option.title}. {option.description}",
                     tool_call=ToolCall(
                         tool_name=option.tool_name,
@@ -2577,7 +2857,13 @@ class AgentLoop:
                 )
             self.mode = OperatingMode.PLANNING
             self._plan_explore_reads = 0  # (B2/B6) fresh planning segment
-            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
+            events = await self._events()
+            latest_status = next(
+                (event for event in reversed(events) if isinstance(event, StatusEvent)),
+                None,
+            )
+            if latest_status is None or latest_status.detail != "planning":
+                await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
             # (B2/B6) On a revision (prior plan_approved) with a concrete new
             # instruction, frame the turn so the model RE-plans instead of
             # free-building against the OLD plan (logic in Planner).
@@ -2752,6 +3038,23 @@ def _new_retry_interrupt() -> asyncio.Event:
     return asyncio.Event()
 
 
+async def _route_event(
+    store: EventStore,
+    conversation_id: str,
+    event: Event,
+    terminal_commit_hook: TerminalCommitHook = None,
+) -> Event:
+    """Route Build status transitions through the workspace coordinator.
+
+    FINISHED becomes an immutable commit pipeline; other statuses share its
+    serialization lock so a run cannot become active during a host mutation.
+    Non-status events and loops without the hook retain the ordinary store path.
+    """
+    if terminal_commit_hook is not None and isinstance(event, StatusEvent):
+        return await terminal_commit_hook(event)
+    return await store.append(conversation_id, event)
+
+
 async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: list[Event]) -> Disp:
     """Validate, persist, and route one structured plan submission."""
     loop._plan_explore_reads = 0
@@ -2818,6 +3121,92 @@ async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: l
             )
         )
         return Disp.CONTINUE
+
+    # An initial summary-only plan is not an executable contract and cannot seed
+    # goal/todo/design context.  The ordinary tool executor would reject this from
+    # SubmitPlanArgs, but PLANNING intercepts submit_plan before that boundary, so
+    # enforce it here too.  Give one precise correction turn without persisting an
+    # empty PlanEvent (the corrected proposal stays revision 1); if the same malformed
+    # shape recurs, recover a single coarse step from the exact USER instruction rather
+    # than spending an unbounded sequence of model calls.  Revision replans retain the
+    # established, separately-tested force-submit recovery below.
+    if not plan.steps and not signals.revision_planning_has_prior_approval(events):
+        loop._planner.discard_plan_predicates(plan.revision)
+        start_seq = signals.current_planning_segment_start_seq(events)
+        prior = sum(
+            1
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.detail == "invalid_plan_no_steps"
+            and (start_seq is None or (event.seq or 0) > start_seq)
+        )
+        attempt = prior + 1
+        await loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="invalid_plan_no_steps",
+            )
+        )
+        if attempt == 1:
+            await loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="force_submit_plan",
+                )
+            )
+            await loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            "Your proposed plan was NOT accepted because `steps` was "
+                            "empty. Submit it again with at least one concrete step object, "
+                            'for example: {"summary":"Build the requested site",'
+                            '"steps":[{"title":"Create and verify the requested site"}]}. '
+                            "A single broad step is valid; do not invent extra scope.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                    meta={"blocking": "invalid_plan_no_steps"},
+                )
+            )
+            loop._plan_nudges = 0
+            return Disp.CONTINUE
+
+        instruction = signals.latest_user_text(events)
+        if not instruction:
+            await loop._land_blocked(
+                reason="initial_plan_no_concrete_steps",
+                guidance=(
+                    "The planner repeatedly submitted an empty initial plan and no "
+                    "user-owned instruction was available for bounded recovery. No plan "
+                    "was approved and no execution began."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="initial_plan_no_concrete_steps",
+            )
+            return Disp.HALT
+        recovered = PlanEvent(
+            summary=(instruction[:120] if plan.summary == "Proposed plan" else plan.summary),
+            steps=[PlanStep(title=instruction[:200])],
+            revision=plan.revision,
+            context=(f"{plan.context}\n\n" if plan.context else "")
+            + (
+                "Host-recovered one capstone from the exact user instruction after "
+                "two empty submissions."
+            ),
+        )
+        await loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="plan_steps_recovered_from_user_instruction",
+            )
+        )
+        await loop._emit(recovered)
+        loop._plan_nudges = 0
+        return await loop._route_plan_approval_gate(recovered)
 
     await loop._emit(plan)
     if (

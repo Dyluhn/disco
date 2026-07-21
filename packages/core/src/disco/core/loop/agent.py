@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import cast
 
 from ..env import disco_env
 from ..events import ToolCall
@@ -45,6 +46,7 @@ from ..llm import (
     OverflowSignal,
     Requirement,
 )
+from ..llm.request_budget import RequestBudgetEstimate
 from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from ..obs import log_span
 from ..think import strip_think_spans
@@ -135,6 +137,7 @@ class RouterAgent:
         conversation_id: str | None = None,
         requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
         model_override: str | None = None,
+        driver_context_window: int | None = None,
         temperature: float = 0.4,
         prose_finishes: bool = True,
     ) -> None:
@@ -161,11 +164,103 @@ class RouterAgent:
         # overriding the settings assignment. None → follow settings. Set by the
         # app/agent server from the per-conversation pill selection.
         self._model_override = model_override
+        # Immutable run binding resolved by the runtime before composition.  This
+        # is evidence metadata only; the agent never probes or rereads config.
+        # Exact type is intentional because bool is an int subclass in Python.
+        self._driver_context_window = (
+            driver_context_window
+            if type(driver_context_window) is int and driver_context_window > 0
+            else None
+        )
 
     def set_finish_alias(self, alias: str | None) -> None:
         """P6 — bind the active Build contract's verification finalizer (or None). Set by
         the runtime once the contract resolves, so the agent treats that name as `finish`."""
         self._finish_alias = alias
+
+    def _build_completion_request(
+        self,
+        view: View,
+        tools: list,
+        *,
+        mode: OperatingMode,
+        overflow_signal: OverflowSignal,
+        temperature: float | None = None,
+        assist: bool = False,
+        attempt: int = 1,
+        provider_prefs: dict | None = None,
+    ) -> CompletionRequest:
+        prefill = None
+        if mode == OperatingMode.PLANNING and disco_env("PLAN_PREFILL") == "1":
+            prefill = (
+                "I've analyzed the request and current workspace state. To advance, I will now"
+            )
+        elif mode == OperatingMode.LONG_HORIZON and disco_env("EXEC_PREFILL") == "1":
+            prefill = (
+                "Given the current workspace state and the last tool result, my next action is to"
+            )
+
+        return CompletionRequest(
+            profile=CapabilityProfile(
+                role=ModelRole.AGENT_DRIVER,
+                difficulty=overflow_signal.difficulty,
+                requirements=self._requirements,
+                mode=mode,
+            ),
+            messages=view.messages,
+            tools=tools,
+            assistant_prefill=prefill,
+            assist=assist,
+            temperature=temperature if temperature is not None else self._temperature,
+            request_id=f"req_{uuid.uuid4().hex}",
+            attempt=attempt,
+            provider_prefs=provider_prefs,
+            metadata=(
+                {"driver_context_window": self._driver_context_window}
+                if self._driver_context_window is not None
+                else None
+            ),
+        )
+
+    def _build_call_context(self, overflow_signal: OverflowSignal) -> CallContext:
+        return CallContext(
+            conversation_id=self._cid,
+            consecutive_tool_errors=overflow_signal.consecutive_tool_errors,
+            last_local_confidence=overflow_signal.last_local_confidence,
+            model_override=self._model_override,
+        )
+
+    def request_budget_preview(
+        self,
+        view: View,
+        tools: list,
+        *,
+        mode: OperatingMode,
+        overflow_signal: OverflowSignal,
+        temperature: float | None = None,
+        assist: bool = False,
+    ) -> RequestBudgetEstimate | None:
+        """Synchronous best-effort budget preview. Uses the same request-shaping
+        path as real step() with attempt=1/provider_prefs=None. Returns None
+        when the router or provider lacks preview support."""
+        preview_fn = getattr(self._router, "request_budget_preview", None)
+        if not callable(preview_fn):
+            return None
+        req = self._build_completion_request(
+            view,
+            tools,
+            mode=mode,
+            overflow_signal=overflow_signal,
+            temperature=temperature,
+            assist=assist,
+            attempt=1,
+            provider_prefs=None,
+        )
+        ctx = self._build_call_context(overflow_signal)
+        try:
+            return cast(RequestBudgetEstimate | None, preview_fn(req, context=ctx))
+        except Exception:
+            return None
 
     async def step(
         self,
@@ -180,59 +275,17 @@ class RouterAgent:
         attempt: int = 1,
         provider_prefs: dict | None = None,
     ) -> AgentStep:
-        # B9: Assistant prefill. In PLANNING mode, force
-        # the model to start its thought with an honest acknowledgment of
-        # the task, reducing the "lazy prose" failure. Gated by flag.
-        prefill = None
-        if mode == OperatingMode.PLANNING and disco_env("PLAN_PREFILL") == "1":
-            prefill = (
-                "I've analyzed the request and current workspace state. To advance, I will now"
-            )
-        # C13: Mirror the B9 prefill pattern for the EXECUTION phase
-        # (LONG_HORIZON mode in the engine: `execution_mode: OperatingMode =
-        # OperatingMode.LONG_HORIZON`). Biases the model toward a concrete
-        # next-action tool call rather than another "let me think..."
-        # prose turn. Gated by an independent flag so it can be A/B'd
-        # against the planning flag; default OFF keeps the gated-experiment
-        # contract — flag OFF is byte-identical to today (prefill stays None).
-        elif mode == OperatingMode.LONG_HORIZON and disco_env("EXEC_PREFILL") == "1":
-            prefill = (
-                "Given the current workspace state and the last tool result, my next action is to"
-            )
-
-        req = CompletionRequest(
-            profile=CapabilityProfile(
-                role=ModelRole.AGENT_DRIVER,
-                difficulty=overflow_signal.difficulty,
-                requirements=self._requirements,
-                mode=mode,
-            ),
-            messages=view.messages,
-            tools=tools,
-            assistant_prefill=prefill,
-            assist=assist,  # weak-model assist gate → F1 reads req.assist for recovery
-            # Cluster 9: a small non-zero temperature for the driver (anti-fewshot).
-            # A long uniform run at temp 0.0 is a near-deterministic self-imitation
-            # chain — maximally prone to repeating a prior failing pattern. The
-            # summarizer + other structured roles stay at 0.0 (they set it
-            # explicitly); only the acting driver gets the jitter. A per-step
-            # `temperature` override (the loop's stuck-escape bump) wins when given.
-            temperature=temperature if temperature is not None else self._temperature,
-            request_id=f"req_{uuid.uuid4().hex}",
-            # F5 — repair-attempt counter. The engine increments this on each
-            # retry of a failed call; the provider reads it to disable thinking
-            # on attempt ≥ 2. Default 1 = first try; assist-OFF callers ignore.
+        req = self._build_completion_request(
+            view,
+            tools,
+            mode=mode,
+            overflow_signal=overflow_signal,
+            temperature=temperature,
+            assist=assist,
             attempt=attempt,
-            # P2 — provider routing escalation (threaded from the driver on
-            # LLMProviderUnavailable retries; None on first/normal calls).
             provider_prefs=provider_prefs,
         )
-        ctx = CallContext(
-            conversation_id=self._cid,
-            consecutive_tool_errors=overflow_signal.consecutive_tool_errors,
-            last_local_confidence=overflow_signal.last_local_confidence,
-            model_override=self._model_override,
-        )
+        ctx = self._build_call_context(overflow_signal)
         # STREAM the driver call, not `complete()`. This is load-bearing, not an
         # optimization: for large tool-call arguments (e.g. a `file_write` with a big
         # file body), some OpenAI-compatible providers (observed: DeepSeek via
@@ -242,7 +295,14 @@ class RouterAgent:
         # correctly-assembled response; surfacing the intermediate deltas to the UI
         # (watch-it-write) is the next layer on top of this.
         resp = None
-        with log_span("agent.step", role="agent_driver", cid=self._cid) as span:
+        with log_span(
+            "agent.step",
+            role="agent_driver",
+            cid=self._cid,
+            request_id=req.request_id,
+            driver_context_window=self._driver_context_window,
+            model_repair_attempt=req.attempt,
+        ) as span:
             async for chunk in self._router.stream_complete(req, context=ctx):
                 # Forward tool-call arg deltas (the file body) to the watch-it-write
                 # hook. The agent stays ignorant of tool semantics — it just relays the
@@ -261,6 +321,10 @@ class RouterAgent:
             span["out_tokens"] = resp.usage.output_tokens
             span["cached_tokens"] = resp.usage.cached_tokens
             span["finish"] = str(resp.finish_reason)
+            if resp.routing is not None:
+                span["provider"] = resp.routing.provider
+                span["path"] = resp.routing.path
+                span["provider_attempt"] = resp.routing.attempt
 
         empty_reasoning_diagnostic = getattr(resp, "response_metadata", {}).get(
             EMPTY_REASONING_ONLY_METADATA_KEY
@@ -339,6 +403,7 @@ class ResearchAgent(RouterAgent):
         conversation_id: str | None = None,
         requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
         model_override: str | None = None,
+        driver_context_window: int | None = None,
         temperature: float = 0.0,
     ) -> None:
         super().__init__(
@@ -346,6 +411,7 @@ class ResearchAgent(RouterAgent):
             conversation_id=conversation_id,
             requirements=requirements,
             model_override=model_override,
+            driver_context_window=driver_context_window,
             temperature=temperature,
             prose_finishes=True,
         )
@@ -365,6 +431,7 @@ class BuildAgent(RouterAgent):
         conversation_id: str | None = None,
         requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
         model_override: str | None = None,
+        driver_context_window: int | None = None,
         temperature: float = 0.4,
     ) -> None:
         super().__init__(
@@ -372,6 +439,7 @@ class BuildAgent(RouterAgent):
             conversation_id=conversation_id,
             requirements=requirements,
             model_override=model_override,
+            driver_context_window=driver_context_window,
             temperature=temperature,
             prose_finishes=False,
         )

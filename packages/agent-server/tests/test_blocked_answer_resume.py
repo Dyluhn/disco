@@ -8,13 +8,17 @@ gate instead of letting the approved execution segment continue.
 
 from __future__ import annotations
 
+import asyncio
 import types
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock
 
 from disco.agent_server.build_kernel.disco_kernel import DiscoKernel
 from disco.core import (
     ActionEvent,
     ConversationStatus,
+    Event,
     EventSource,
     LLMMessage,
     MessageEvent,
@@ -23,6 +27,7 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
     ToolResult,
+    WorkspaceMutationEvent,
 )
 from disco.core.llm import (
     CompletionRequest,
@@ -205,7 +210,30 @@ async def _plan_approve_and_land_blocked(loop: AgentLoop) -> None:
 async def _answer_with_kernel(
     store: SqliteEventStore, cid: str, text: str, *, steer: bool = True
 ) -> None:
-    runtime = types.SimpleNamespace(_store=store, kick=MagicMock())
+    lock = asyncio.Lock()
+    runtime = types.SimpleNamespace(
+        _store=store,
+        kick=MagicMock(),
+        workspace_lock=lambda _conversation_id: lock,
+        _workspace=MagicMock(),
+    )
+
+    @asynccontextmanager
+    async def process_fence(_conversation_id: str) -> AsyncIterator[None]:
+        yield
+
+    async def append_run_ingress(
+        conversation_id: str,
+        events: list[Event],
+        source: str,
+    ) -> list[Event]:
+        return await store.append_many(
+            conversation_id,
+            [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
+        )
+
+    runtime._workspace.interprocess_mutation_fence = process_fence
+    runtime._workspace.append_run_ingress_locked = append_run_ingress
     await DiscoKernel(runtime).send_user_turn(cid, text, steer=steer)
 
 

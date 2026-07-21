@@ -27,6 +27,7 @@ from disco.core.observations import scan_for_destructive_elision
 from .. import failure_codes as fc
 from ..events import terminal_status
 from .schema import OracleResult, failing, passing, skipping
+from .workspace_contract import is_platform_managed_path
 
 _ORACLE = "OutputTruthOracle"
 
@@ -138,7 +139,12 @@ class OutputTruthOracle:
         assertions = (scenario or {}).get("assertions") or {}
         workspace_assert = assertions.get("workspace") or {}
         preview_assert = assertions.get("preview") or {}
-        wants_output = bool(workspace_assert.get("files")) or bool(preview_assert.get("required"))
+        exact_paths = workspace_assert.get("exact_paths")
+        wants_output = (
+            bool(workspace_assert.get("files"))
+            or exact_paths is not None
+            or bool(preview_assert.get("required"))
+        )
 
         if not wants_output:
             return [skipping(_ORACLE, reason="scenario asserts no output truth")]
@@ -172,6 +178,41 @@ class OutputTruthOracle:
             ]
 
         files = _normalize_workspace(workspace_manifest)
+
+        # --- exact product-file-set truth -----------------------------------
+        # This assertion is deliberately opt-in. Most valid builds have an open
+        # file set; when a user/target explicitly requires an exact shape, compare
+        # it against the adapter's complete authoritative snapshot. Host-owned
+        # runtime/context evidence is outside the product contract, but arbitrary
+        # hidden files are not.
+        if isinstance(exact_paths, list):
+            expected = sorted(str(path) for path in exact_paths)
+            actual = sorted(path for path in files if not is_platform_managed_path(path))
+            missing_paths = sorted(set(expected) - set(actual))
+            unexpected_paths = sorted(set(actual) - set(expected))
+            if missing_paths or unexpected_paths:
+                facts = {
+                    "expected_paths": expected,
+                    "missing_paths": missing_paths,
+                    "unexpected_paths": unexpected_paths,
+                }
+                if missing_paths:
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.FALSE_FINISH_NO_OUTPUT,
+                            first_broken_link="finish -> exact_workspace_shape",
+                            facts=facts,
+                        )
+                    ]
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.ARTIFACT_TRUTH_MISMATCH,
+                        first_broken_link="finish -> exact_workspace_shape",
+                        facts=facts,
+                    )
+                ]
 
         # --- workspace file existence + content truth ---
         # Existence is judged FIRST and hard (a missing required deliverable is FALSE_FINISH,

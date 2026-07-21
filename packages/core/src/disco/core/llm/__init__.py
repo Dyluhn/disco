@@ -59,6 +59,7 @@ from .prompts import (
     derive_family,
 )
 from .provider import ModelProvider
+from .request_budget import RequestBudgetEstimate
 from .routing import (
     CallContext,
     CostTracker,
@@ -120,6 +121,7 @@ __all__ = [
     "PromptProvider",
     "ProviderSettings",
     "ProposedToolCall",
+    "RequestBudgetEstimate",
     "Requirement",
     "ModelExecutionPolicy",
     "resolve_policy",

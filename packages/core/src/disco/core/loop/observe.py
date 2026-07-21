@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from ..effects import ActionProfile, EffectCapability
 from ..events import (
@@ -551,8 +551,47 @@ class Observer:
                 return
         sbx = getattr(self._loop.executor, "sandbox", None)
         gen_before = getattr(sbx, "generation", 0) if sbx is not None else 0
+
+        async def persist_primary_result(result: ToolResult) -> None:
+            if any(
+                isinstance(event, (ObservationEvent, AgentErrorEvent))
+                and event.action_id == action.id
+                for event in await self._loop.store.get_events(self._loop.conversation_id)
+            ):
+                return
+            if result.success:
+                await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
+                return
+            error = result.error or "tool failed"
+            await self._loop._emit(
+                AgentErrorEvent(
+                    error=error,
+                    detail=_error_detail(
+                        error,
+                        result.content,
+                        carries_delivery=bool((result.structured or {}).get("delivered_read")),
+                    ),
+                    action_id=action.id,
+                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                    action_profile=result.action_profile,
+                    effect_receipts=result.effect_receipts,
+                )
+            )
+
+        primary_persisted = False
         try:
-            result = await self._loop.executor.execute(action.tool_call)
+            attributed_execute = getattr(self._loop.executor, "execute_attributed", None)
+            if callable(attributed_execute):
+                result = await cast(Any, attributed_execute)(
+                    action.tool_call,
+                    action.agent_view_id,
+                    persist_primary_result,
+                    self._loop._prepare_executor,
+                )
+                primary_persisted = True
+            else:
+                await self._loop._prepare_executor()
+                result = await self._loop.executor.execute(action.tool_call)
         except LLMContextWindowExceeded:
             raise  # handled by view-materialization hard-reset (§8)
         except Exception as e:  # noqa: BLE001 — any tool/exec failure is observable
@@ -565,8 +604,9 @@ class Observer:
             )
             await self.maybe_emit_sandbox_restart(sbx, gen_before)
             return
+        if not primary_persisted:
+            await persist_primary_result(result)
         if result.success:
-            await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
             # W-39 — emit the advisory shell-verify reminder AFTER the
             # observation (so it never splits the action/result pair). Only on
             # a SUCCESSFUL re-run: if the re-run actually FAILED, the workspace
@@ -586,24 +626,6 @@ class Observer:
             # nudges, never duplicates the C1c finish gate. Steps without
             # a predicate are an immediate no-op (back-compat).
             await self._loop._maybe_emit_plan_step_done_condition_note(action)
-        else:
-            _err = result.error or "tool failed"
-            await self._loop._emit(
-                AgentErrorEvent(
-                    error=_err,
-                    detail=_error_detail(
-                        _err,
-                        result.content,
-                        # [REL-6 cap fix] delivered-content refusals are the recovery — never
-                        # truncate them down to a 600-char hint.
-                        carries_delivery=bool((result.structured or {}).get("delivered_read")),
-                    ),
-                    action_id=action.id,
-                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
-                    action_profile=result.action_profile,
-                    effect_receipts=result.effect_receipts,
-                )
-            )
         await self.maybe_emit_sandbox_restart(sbx, gen_before)
 
     async def maybe_emit_sandbox_restart(self, sbx: object | None, gen_before: int) -> None:

@@ -13,8 +13,8 @@ the selection agent, so edit-mode needs its own route.
 What it does, per request:
   1. Jail ``path`` to the conversation workspace (reject ``..`` / absolute / escape
      — mirrors files.py / preview.py).
-  2. Read the file bytes via the SAME mechanism files.py uses (``_read_artifact_bytes``:
-     live sandbox first, then the host ProjectStore snapshot).
+  2. For FINISHED, read only the immutable workspace named by its final seal;
+     otherwise use the symlink-safe mutable host mirror.
   3. Non-HTML or missing → 404.
   4. ``stamp_oids(html, path)`` — add ``data-oid="{relpath}:{line}"`` to every
      element (the keystone; serve-time only, the agent's source stays UNSTAMPED).
@@ -47,21 +47,23 @@ import importlib.resources
 import posixpath
 import secrets
 
+from disco.core import ConversationStatus, StatusEvent
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageStatus, is_runtime_secret_path
+from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..oid_stamp import stamp_oids
 from ..runtime import ConversationRuntime
+from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from ._common import require_owned_conversation
 
 
-def _read_workspace_file_safe(
+def _read_mutable_workspace_file_safe(
     runtime: ConversationRuntime, conversation_id: str, norm: str
 ) -> bytes | None:
     """Read a workspace file SYMLINK-SAFELY from the host ProjectStore snapshot.
 
-    Deliberately NOT files.py's ``_read_artifact_bytes``: that reads the LIVE
+    Deliberately NOT files.py's ``_read_artifact_bytes``: mutable reads there may use the LIVE
     container session first, where ``read_file`` runs ``cat -- target`` and FOLLOWS
     symlinks — so a planted ``leak.html -> /etc/passwd`` would escape the workspace.
     This route serves ANY workspace path (not just declared artifacts), so it must be
@@ -86,6 +88,45 @@ def _read_workspace_file_safe(
         return resolved.read_bytes()
     except Exception:  # noqa: BLE001
         return None
+
+
+async def _read_workspace_file_safe(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    norm: str,
+) -> bytes | None:
+    """Read FINISHED bytes from their seal; otherwise read the mutable mirror."""
+
+    if is_runtime_secret_path(norm):
+        return None
+    try:
+        events = await store.get_events(conversation_id)
+    except Exception as exc:  # noqa: BLE001 — unknown state cannot authorize mutable bytes
+        raise HTTPException(status_code=503, detail="workspace evidence unavailable") from exc
+    latest_status = next(
+        (event for event in reversed(events) if isinstance(event, StatusEvent)),
+        None,
+    )
+    if latest_status is None or latest_status.status is not ConversationStatus.FINISHED:
+        return _read_mutable_workspace_file_safe(runtime, conversation_id, norm)
+
+    project_store = runtime.project_store()
+    if project_store is None or project_store.status() != StorageStatus.OK:
+        raise HTTPException(status_code=503, detail="finished workspace unavailable")
+    try:
+        committed = resolve_committed_workspace(events, project_store, conversation_id)
+        with project_store.open_verified_version(
+            conversation_id,
+            committed.event.version_seq,
+        ) as verified:
+            if norm not in {entry.path for entry in verified.files}:
+                return None
+            return verified.read_bytes(norm, max_bytes=50 * 1024 * 1024)
+    except WorkspaceCommitUnavailable as exc:
+        raise HTTPException(status_code=503, detail="finished workspace is unsealed") from exc
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail="finished workspace proof failed") from exc
 
 
 # Media types this route serves. HTML is stamped + script-injected; the sibling
@@ -146,7 +187,7 @@ def make_preview_edit_router(
         _, ext = posixpath.splitext(norm)
         ext = ext.lower()
 
-        data = _read_workspace_file_safe(runtime, conversation_id, norm)
+        data = await _read_workspace_file_safe(store, runtime, conversation_id, norm)
         if data is None:
             raise HTTPException(status_code=404)
         if len(data) > 50 * 1024 * 1024:  # 50 MB cap (parity with files.py)

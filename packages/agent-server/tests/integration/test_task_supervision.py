@@ -45,16 +45,18 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     )
 
 
-async def _kicked_conversation(store, runtime) -> str:
+async def _kicked_conversation(store, runtime) -> tuple[str, int]:
     cid = f"sup-{uuid.uuid4().hex[:8]}"
     store.create_conversation(cid, owner_id="local", surface="build")
     runtime.set_surface(cid, "build")
     runtime.set_artifact_mode(cid, True)
-    await store.append(
+    stored = await store.append(
         cid,
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
     )
-    return cid
+    seq = stored.seq
+    assert isinstance(seq, int)
+    return cid, seq
 
 
 class _BoomLoop:
@@ -73,10 +75,10 @@ class _CancelLoop:
 async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _BoomLoop())
 
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=seq)
     task = runtime._tasks.get(cid)
     assert task is not None
     with contextlib.suppress(Exception):
@@ -96,10 +98,10 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
 async def test_cancellation_is_not_reported_as_error(monkeypatch):
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _CancelLoop())
 
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=seq)
     task = runtime._tasks.get(cid)
     assert task is not None
     await asyncio.sleep(0.1)
@@ -118,7 +120,7 @@ async def test_terminalize_is_idempotent(monkeypatch):
     """If the run already concluded (e.g. FINISHED) before the callback, don't overwrite."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
 
     class _FinishThenRaise:
         async def run(self):
@@ -126,7 +128,7 @@ async def test_terminalize_is_idempotent(monkeypatch):
             raise RuntimeError("late crash after finishing")
 
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _FinishThenRaise())
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=seq)
     task = runtime._tasks.get(cid)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
@@ -159,7 +161,7 @@ async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
     """A run that keeps returning at RUNNING is re-kicked ONCE, then terminalized STUCK."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
 
     calls = {"n": 0}
 
@@ -171,7 +173,7 @@ async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
 
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
 
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=seq)
     state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)
 
     assert state.execution_status == ConversationStatus.STUCK, (
@@ -191,7 +193,7 @@ async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypa
     """The FIRST return stalls at RUNNING; the re-kick FINISHES — no STUCK is emitted."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, user_seq = await _kicked_conversation(store, runtime)
 
     seq = {"n": 0}
 
@@ -204,7 +206,7 @@ async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypa
 
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _TransientStall())
 
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=user_seq)
     state = await _drain_until(
         store, cid, lambda s: s.execution_status == ConversationStatus.FINISHED
     )
@@ -220,7 +222,7 @@ async def test_clean_return_at_paused_is_left_alone(monkeypatch):
     """A legitimate parked return (PAUSED/awaiting) must NOT be re-kicked or clobbered."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
 
     calls = {"n": 0}
 
@@ -232,7 +234,7 @@ async def test_clean_return_at_paused_is_left_alone(monkeypatch):
 
     monkeypatch.setattr(runtime, "_loop_for", lambda _c: _Park())
 
-    runtime.kick(cid)
+    runtime.kick(cid, claimed_user_seq=seq)
     await asyncio.sleep(0.4)
 
     state = await store.get_state(cid)
@@ -245,7 +247,7 @@ async def test_stranded_running_swept_to_recovery(monkeypatch):
     routes it through recovery (re-kick → STUCK), so a lost done-callback self-heals."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
-    cid = await _kicked_conversation(store, runtime)
+    cid, seq = await _kicked_conversation(store, runtime)
 
     class _ReturnAtRunning:
         async def run(self):
@@ -256,6 +258,7 @@ async def test_stranded_running_swept_to_recovery(monkeypatch):
     # Simulate a stranded conversation: a loop this process owns, status RUNNING in the
     # store, but NO live task in self._tasks (the done-callback never fired).
     runtime._loops[cid] = _ReturnAtRunning()  # type: ignore[assignment]
+    runtime._run_claimed_user_seq[cid] = seq
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
     acted = await runtime.sweep_stranded_runs_once()

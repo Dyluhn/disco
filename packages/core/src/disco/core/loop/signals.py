@@ -8,6 +8,7 @@ no instance state, no emission, and no I/O. They were `@staticmethod`s on
 
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -25,10 +26,13 @@ from ..events import (
     PlanEvent,
     PlanStep,
     StatusEvent,
+    latest_workspace_run_intent,
+    pending_workspace_run_intent,
 )
 from ..llm import OperatingMode
 from ..think import strip_think_spans
 from ..view import effective_plan_progress
+from ..workspace_paths import strip_redundant_workspace_prefix
 
 if TYPE_CHECKING:
     from ..view import View
@@ -257,6 +261,204 @@ def latest_approved_plan(events: list[Event]) -> PlanEvent | None:
         if isinstance(event, PlanEvent) and (event.seq or 0) < (approval.seq or 0)
     ]
     return max(candidates, key=lambda event: (event.seq or 0, event.revision), default=None)
+
+
+APPROVED_PLAN_VERIFIER_REPAIR = "approved_plan_verifier_repair"
+
+
+def plan_is_verifier_repair(events: list[Event], plan: PlanEvent) -> bool:
+    """Whether ``plan`` is a correction of the current plan-owned verifier only.
+
+    The classification is deliberately causal rather than textual.  It requires
+    the current approved plan to have completed productive work, its exact typed
+    verifier to have failed twice and forced planning, no intervening USER
+    instruction, and the replacement to carry a different predicate set.  A
+    normal user revision, spoofed reminder, or unchanged failed verifier cannot
+    acquire verifier-repair authority.
+    """
+
+    old_plan = latest_approved_plan(events)
+    if old_plan is None:
+        return False
+    persisted_plan = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, PlanEvent)
+            and event.id == plan.id
+            and event.revision == plan.revision
+        ),
+        None,
+    )
+    if persisted_plan is None or (persisted_plan.seq or 0) <= 0:
+        return False
+    if predicate_fingerprints(
+        [step.done_condition for step in persisted_plan.steps if step.done_condition is not None]
+    ) != predicate_fingerprints(
+        [step.done_condition for step in plan.steps if step.done_condition is not None]
+    ):
+        return False
+    plan_seq = persisted_plan.seq or 0
+    approval = max(
+        (
+            event
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.detail == "plan_approved"
+            and (event.seq or 0) < plan_seq
+        ),
+        key=lambda event: event.seq or 0,
+        default=None,
+    )
+    if approval is None:
+        return False
+    approval_seq = approval.seq or 0
+    old_fingerprints = predicate_fingerprints(
+        [step.done_condition for step in old_plan.steps if step.done_condition is not None]
+    )
+    failures = [
+        event
+        for event in events
+        if isinstance(event, StatusEvent)
+        and event.plan_verifier_failure is not None
+        and approval_seq < (event.seq or 0) < plan_seq
+        and event.plan_verifier_failure.plan_event_id == old_plan.id
+        and event.plan_verifier_failure.plan_revision == old_plan.revision
+        and event.plan_verifier_failure.predicate_fingerprints == old_fingerprints
+    ]
+    if not failures:
+        return False
+    failure_event = max(failures, key=lambda event: event.seq or 0)
+    failure = failure_event.plan_verifier_failure
+    assert failure is not None
+    failure_seq = failure_event.seq or 0
+    if failure.attempt_for_approved_plan < 2 or not failure.replan_allowed:
+        return False
+    if not any(
+        isinstance(event, StatusEvent)
+        and event.detail == "planning"
+        and failure_seq < (event.seq or 0) < plan_seq
+        for event in events
+    ):
+        return False
+    if any(
+        isinstance(event, MessageEvent)
+        and event.source == EventSource.USER
+        and failure_seq < (event.seq or 0) < plan_seq
+        for event in events
+    ):
+        return False
+    new_fingerprints = predicate_fingerprints(
+        [step.done_condition for step in plan.steps if step.done_condition is not None]
+    )
+    if new_fingerprints == failure.predicate_fingerprints:
+        return False
+
+    successful = _successful_action_ids(events)
+    return any(
+        approval_seq < (event.seq or 0) < failure_seq
+        and _is_successful_productive_action(event, successful)
+        for event in events
+    )
+
+
+def approved_plan_verifier_repair_event(events: list[Event]) -> StatusEvent | None:
+    """Return the latest exact, independently reconstructable repair approval."""
+
+    approval = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, StatusEvent) and event.detail == "plan_approved"
+        ),
+        None,
+    )
+    if approval is None or approval.plan_verification_transition is None:
+        return None
+    if approval.plan_verification_transition.reason != APPROVED_PLAN_VERIFIER_REPAIR:
+        return None
+    plan = latest_approved_plan(events)
+    if plan is None:
+        return None
+    prefix = [event for event in events if (event.seq or 0) < (approval.seq or 0)]
+    return approval if plan_is_verifier_repair(prefix, plan) else None
+
+
+def verifier_repair_planning_active(events: list[Event]) -> bool:
+    """True while a twice-failed plan verifier has forced a no-user replan."""
+
+    old_plan = latest_approved_plan(events)
+    if old_plan is None:
+        return False
+    old_fingerprints = predicate_fingerprints(
+        [step.done_condition for step in old_plan.steps if step.done_condition is not None]
+    )
+    failure_event = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, StatusEvent)
+            and event.plan_verifier_failure is not None
+            and event.plan_verifier_failure.plan_event_id == old_plan.id
+            and event.plan_verifier_failure.plan_revision == old_plan.revision
+            and event.plan_verifier_failure.predicate_fingerprints == old_fingerprints
+            and event.plan_verifier_failure.attempt_for_approved_plan >= 2
+            and event.plan_verifier_failure.replan_allowed
+        ),
+        None,
+    )
+    if failure_event is None:
+        return False
+    failure_seq = failure_event.seq or 0
+    planning_seq = max(
+        (
+            event.seq or 0
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.detail == "planning"
+            and (event.seq or 0) > failure_seq
+        ),
+        default=0,
+    )
+    if planning_seq <= failure_seq:
+        return False
+    if any(
+        isinstance(event, MessageEvent)
+        and event.source == EventSource.USER
+        and (event.seq or 0) > failure_seq
+        for event in events
+    ):
+        return False
+    return not any(
+        isinstance(event, StatusEvent)
+        and event.detail == "plan_approved"
+        and (event.seq or 0) > planning_seq
+        for event in events
+    )
+
+
+def verifier_repair_execution_active(events: list[Event]) -> bool:
+    """Keep verifier-only approval truth live until work/user/terminal supersedes it."""
+
+    approval = approved_plan_verifier_repair_event(events)
+    if approval is None:
+        return False
+    approval_seq = approval.seq or 0
+    successful = _successful_action_ids(events)
+    for event in events:
+        if (event.seq or 0) <= approval_seq:
+            continue
+        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+            return False
+        if isinstance(event, StatusEvent) and event.status in {
+            ConversationStatus.FINISHED,
+            ConversationStatus.STUCK,
+            ConversationStatus.ERROR,
+        }:
+            return False
+        if _is_successful_productive_action(event, successful):
+            return False
+    return True
 
 
 def _step_is_finish_intent(step: PlanStep) -> bool:
@@ -555,16 +757,58 @@ def fresh_read_autoground_target(events: list[Event]) -> str | None:
     return target
 
 
+# Recovery boundaries end the current stuck-escape recovery episode exactly like
+# a fresh user message: an approved plan revision / harvested revision / manual
+# alternative pick starts a NEW execution segment, and the old segment's
+# read-loop evidence must not convict it. Mirrors stuck.py's
+# `_RECOVERY_BOUNDARY_DETAILS` (kept inline so neither module imports the other
+# — stuck.py already imports from signals.py; a detail added there must be
+# added here too). The k6g 128k canary proved the asymmetry: detection already
+# reset at `plan_approved` while the quarantine episode ran on for 100+ events.
+_ESCAPE_RECOVERY_BOUNDARY_DETAILS = frozenset(
+    {"plan_approved", "harvested_revision_plan", "alternative_picked:manual"}
+)
+
+
+def _ends_stuck_escape_episode(event: Event) -> bool:
+    """Whether *event* closes the current stuck-escape recovery episode.
+
+    Episode boundaries are host-authored, typed, and derived purely from the
+    append-only log (restart-stable): a real USER turn, a recovery-boundary
+    status transition, or a typed blocking proof obligation (a finish-gate
+    rejection's ``meta.blocking`` marker — a NEW obligation means the next
+    grounding read serves that obligation, not the old loop).
+    """
+
+    if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+        return True
+    if (
+        isinstance(event, StatusEvent)
+        and event.source == EventSource.SYSTEM
+        and (event.detail or "") in _ESCAPE_RECOVERY_BOUNDARY_DETAILS
+    ):
+        return True
+    blocking = event.meta.get("blocking") if isinstance(event, MessageEvent) else None
+    return (
+        isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and isinstance(blocking, str)
+        and bool(blocking)
+    )
+
+
 def stuck_escape_seq(events: list[Event]) -> int | None:
-    """The seq of the most recent `stuck_escape` marker since the last USER
-    message, else None. Reset only on a USER message — NOT on a successful
-    observation: pattern-1 stuck (the same *succeeding* no-op action repeated)
-    would otherwise reset every cycle and reframe forever. One reframe escape per
-    user turn; a second stall in the same turn halts."""
+    """The seq of the most recent `stuck_escape` marker in the CURRENT recovery
+    episode, else None. The episode ends on a USER message, a recovery-boundary
+    status (`_ESCAPE_RECOVERY_BOUNDARY_DETAILS`), or a typed blocking proof
+    obligation — NOT on a successful observation: pattern-1 stuck (the same
+    *succeeding* no-op action repeated) would otherwise reset every cycle and
+    reframe forever. One reframe escape per episode; a second stall in the same
+    episode halts."""
     for e in reversed(events):
         if isinstance(e, StatusEvent) and e.detail == "stuck_escape":
             return e.seq
-        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+        if _ends_stuck_escape_episode(e):
             return None
     return None
 
@@ -575,11 +819,13 @@ def stuck_escape_blocked_tools(events: list[Event]) -> frozenset[str]:
     The block is load-bearing state, so it is encoded in SYSTEM StatusEvent
     details immediately before the existing ``stuck_escape`` marker rather
     than volatile metadata. Exact adjacency binds the block to that escape;
-    a stale marker, intervening event, or non-system spoof is inert.
+    a stale marker, intervening event, or non-system spoof is inert. The walk
+    stops at any episode boundary (user turn, recovery boundary, typed
+    blocking obligation) so an ended episode leaves no residual block.
     """
     for index in range(len(events) - 1, -1, -1):
         event = events[index]
-        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+        if _ends_stuck_escape_episode(event):
             return frozenset()
         if not (
             isinstance(event, StatusEvent)
@@ -612,7 +858,23 @@ def stuck_escape_blocked_tools(events: list[Event]) -> frozenset[str]:
     return frozenset()
 
 
-def stuck_escape_refusal_count(events: list[Event], tool_name: str) -> int:
+def normalized_workspace_read_path(raw: object) -> str | None:
+    """Canonical workspace-relative identity for one read/mutation path argument."""
+
+    path = str(raw or "").strip()
+    if not path:
+        return None
+    normalized = posixpath.normpath(strip_redundant_workspace_prefix(path))
+    return normalized if normalized not in ("", ".") else None
+
+
+def stuck_escape_refusal_count(
+    events: list[Event],
+    tool_name: str,
+    *,
+    action_path: str | None = None,
+    after_seq: int | None = None,
+) -> int:
     """Count canonical paired refusals in the current authenticated escape.
 
     A quarantine refusal is load-bearing retry state, so the count is derived
@@ -620,18 +882,31 @@ def stuck_escape_refusal_count(events: list[Event], tool_name: str) -> int:
     inspect spans, metadata, or an in-memory drive-step counter. Only exact
     post-escape pairs for the requested blocked tool count; stale, unpaired, or
     forged-looking errors are inert. This makes the bound restart-stable.
+
+    With ``action_path`` set, only refusals whose PAIRED action targeted that
+    exact normalized resource count: two refused reads of two different files
+    are two recoverable refusals, not one repeated behavior (k6g finding F1 —
+    the halt bound must key on the redundant TARGET, not the tool name).
+    ``after_seq`` (verifier finding V2) additionally floors the count at the
+    latest trusted progress on that target: a refusal before the loop
+    resource's own mutation and one after it are independent recoveries.
     """
     escape_seq = stuck_escape_seq(events)
     if escape_seq is None:
         return 0
+    floor = escape_seq if after_seq is None else max(escape_seq, after_seq)
     actions = {
         event.id: event
         for event in events
         if isinstance(event, ActionEvent)
         and event.seq is not None
-        and event.seq > escape_seq
+        and event.seq > floor
         and event.tool_call is not None
         and event.tool_call.tool_name == tool_name
+        and (
+            action_path is None
+            or normalized_workspace_read_path(event.tool_call.arguments.get("path")) == action_path
+        )
     }
     expected_error = f"{STUCK_ESCAPE_REFUSAL_ERROR_PREFIX}{tool_name}"
     return sum(
@@ -639,7 +914,7 @@ def stuck_escape_refusal_count(events: list[Event], tool_name: str) -> int:
         for event in events
         if isinstance(event, AgentErrorEvent)
         and event.seq is not None
-        and event.seq > escape_seq
+        and event.seq > floor
         and event.error == expected_error
         and event.action_id in actions
         and event.tool_call_id == actions[event.action_id].tool_call.call_id
@@ -1701,6 +1976,8 @@ def estimate_tokens(view: View) -> int:
 def has_unprocessed_user_message(events: list[Event]) -> bool:
     """True if a USER message arrived after the most recent agent activity —
     i.e. there is fresh work (a new goal, or a reopen after FINISHED/STUCK)."""
+    if pending_workspace_run_intent(events) is not None:
+        return True
     last_user = max(
         (
             e.seq or 0
@@ -1751,6 +2028,21 @@ def latest_unprocessed_user_text(events: list[Event]) -> str | None:
             if latest is None or (e.seq or 0) >= (latest.seq or 0):
                 latest = e
     if latest is None:
+        return None
+    latest_intent = latest_workspace_run_intent(events)
+    if (
+        latest_intent is not None
+        and type(latest.seq) is int
+        and type(latest_intent.seq) is int
+        and latest.seq < latest_intent.seq
+    ):
+        # The run-intent is the durable ownership edge for this ingress. A
+        # later model-view generation can make that intent pending again until
+        # the new view emits progress, but it cannot turn the request that
+        # launched the run into a mid-step *follow-up*. Keep
+        # has_unprocessed_user_message() true so the run still executes; only
+        # the steer/re-plan text signal is suppressed. A genuinely later USER
+        # message has seq > intent.seq and remains visible here.
         return None
     return (latest.message.content or "").strip() or None
 

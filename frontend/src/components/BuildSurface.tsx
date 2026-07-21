@@ -50,6 +50,7 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { ImportProjectDialog } from "@/components/build/ImportProjectDialog";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
+import { DriverOutageBanner } from "@/components/build/DriverOutageBanner";
 import { ClarifyPanel } from "@/components/build/ClarifyPanel";
 import { QuestionsV2Panel } from "@/components/build/QuestionsV2Panel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
@@ -421,6 +422,12 @@ export function BuildSurface({
             modelId={b.modelId}
             seq={b.maxSeq}
           />
+          {/* Honest provider-outage label for the autonomous flavor: the run
+              CONCLUDED at PAUSED (no ask gate), so the WHY renders here next to
+              the status bar + Resume. Non-interactive — Resume is the wired path. */}
+          {b.driverOutage && b.status === "PAUSED" && (
+            <DriverOutageBanner outage={b.driverOutage} />
+          )}
           <div className="flex items-center justify-between gap-inline">
             <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">
               {taskLabel}
@@ -663,6 +670,12 @@ export function BuildSurface({
               }))}
               onAnswer={b.answer}
             />
+          )}
+          {/* Interactive flavor of the same honesty: the driver-outage landing
+              parks at the ask gate, so the WHY (usage/rate limit vs outage)
+              renders beside the question instead of only the generic blocked copy. */}
+          {b.driverOutage && b.awaitingQuestion && (
+            <DriverOutageBanner outage={b.driverOutage} />
           )}
           {b.awaitingQuestion && !b.pendingQuestionsV2 && !b.pendingClarify && (
             <AskPanel

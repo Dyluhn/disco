@@ -43,6 +43,39 @@ def test_close_is_idempotent_and_finalizer_releases_forgotten_connection() -> No
     forgotten.__del__()  # idempotent even when finalization is retried
 
 
+def test_appkit_identity_is_immutable_and_survives_store_restart(tmp_path) -> None:
+    path = tmp_path / "events.db"
+    first = SqliteEventStore(path)
+    first.create_conversation("appkit", appkit_mode=True)
+    first.create_conversation("appkit", appkit_mode=False)
+    first.create_conversation("ordinary")
+    assert first.conversation_appkit_mode_sync("appkit") is True
+    assert first.conversation_appkit_mode_sync("ordinary") is False
+    assert first.conversation_appkit_mode_sync("missing") is None
+    first.close()
+
+    reopened = SqliteEventStore(path)
+    assert reopened.conversation_appkit_mode_sync("appkit") is True
+    assert reopened.conversation_appkit_mode_sync("ordinary") is False
+    reopened.close()
+
+
+def test_appkit_identity_migration_defaults_existing_rows_off(tmp_path) -> None:
+    path = tmp_path / "legacy.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE conversations (conversation_id TEXT PRIMARY KEY, "
+        "owner_id TEXT NOT NULL, title TEXT, created_at TEXT NOT NULL)"
+    )
+    legacy.execute("INSERT INTO conversations VALUES ('legacy', 'local', NULL, '2026-07-18')")
+    legacy.commit()
+    legacy.close()
+
+    migrated = SqliteEventStore(path)
+    assert migrated.conversation_appkit_mode_sync("legacy") is False
+    migrated.close()
+
+
 # ---- append-only ------------------------------------------------------------
 
 
