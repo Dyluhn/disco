@@ -4,13 +4,17 @@
   "excludes_self": "docs/export-track1-recovery-inventory.json",
   "expected_proof": {
     "failed": 0,
-    "passed": 105,
+    "passed": 311,
     "tests": [
       "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
       "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
       "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py",
       "packages/tools/tests/test_security.py",
-      "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py"
+      "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py",
+      "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py",
+      "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py",
+      "packages/tools/tests/test_heavy_validators.py",
+      "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py"
     ]
   },
   "external_evidence": [
@@ -21,24 +25,46 @@
     }
   ],
   "files": {
-    "docs/export-track1-closeout-acceptance.sha256": "cd4e197745bb45fdebb0a1446dd01b49c9947f368a113712d63893e4566ea17c",
-    "packages/agent-server/tests/integration/_closeout_live_support.py": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
+    ".github/workflows/export-track1-closeout.yml": "172847a024bc60005814d43500a95c32b31689823743c4c2e0a13fd69dbddd94",
+    "docs/export-track1-closeout-acceptance.sha256": "6e47fdb2e2dd331dd4f0209d533e4d3ad9ca1b07ade9a87c6d2759e8e054484c",
+    "docs/export-track1-closeout-work-orders.md": "8f60d501e10f2e3ecdae74d5b3d4406f62a58e81008d02bed204aafe18a1aa46",
+    "packages/agent-server/tests/integration/_closeout_live_support.py": "610d35d90cb6ee5460a677422ff985b6d61feeaf5c0e833b810ca09e1ed474ca",
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
-    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py": "1ef564e9bfda947638d975969c68690d2f5a9fff3a25f20939017f55dba706b7",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "efedec42a06b7c1e8af0cca4d67830007f56c05701078066f413a27d9fde2b99",
     "packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py": "dadc38c955441d6901a0548e573cd0a8fc47d1a1b09075eef9a1aea5925dba83",
     "packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "fcfffb64b82962a85d1717c9ac540043822909885ac4b9f6c3b6aaaa037c501f",
     "packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "c79ec6c51d58f358feecf67f793ea134127ee6aa6585195758de55024c4ad100",
     "packages/agent-server/tests/test_disco_verify_runner.py": "d7bf919bdaabc5f16ddfad2c40a974a0e20ec4aa0e943831b892162c164f8bf2",
-    "packages/core/src/disco/core/release/detect.py": "3b1031fed467a335135aafd1c48600458a83111772be93ce982e78d8a5cd54cd",
-    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "a030e73790a78b7dd5a43f095b4c71786921f0efbfd47b8c62426ba99866863c",
-    "packages/tools/src/disco/tools/verify/heavy_validators.py": "ed67c2e157176248de4375364c9ea42ad11b04c9520ba1fcb8c5d4f1f31b54a9",
-    "packages/tools/tests/test_heavy_validators.py": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
+    "packages/core/src/disco/core/release/detect.py": "689490329dab25e2dccf65c06629e859e6b32d38239fe0bff827009fcbcdf2ca",
+    "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py": "d9283af73ac4dddd5f4dc7c56ef9998de88438860262a372a38537c1f819c2d9",
+    "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py": "467a87d790ec4165840b8ce2d5372514988273664d722107a090449cc39c6e69",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "2cdaf49827beca7a8ef738b62de1ca2c536c8de0d9fd8485e405f3897e71c252",
+    "packages/tools/src/disco/tools/verify/heavy_validators.py": "0fa76b60204934f72bbb49b15d334d6168cba23a6c346a1683d11c02cdac72e4",
+    "packages/tools/tests/test_heavy_validators.py": "c9533c76e86e3ab2aa4495884cf0f2697e944b3fd3f513b77070a8c7f98a5296",
     "packages/tools/tests/test_security.py": "45b311043f39a4cc7868d7ba5d1fe086a46adaf7989c7643eed22dbbf900f533",
-    "scripts/export_track1_candidate_receipt.py": "c59de92e06e93952488929f9e3854abd32b20945147911710224a51c8f5a868b",
-    "scripts/gen_closeout_acceptance_manifest.py": "59930a0027d0d1df7ee1d008545e5f338fe0a4e069d4d20102a8cd008cf40aae",
-    "scripts/verify_export_track1_closeout.py": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c"
+    "scripts/export_track1_candidate_receipt.py": "131975dc70389542dca7d2d2ba9dc0770264c01b03cb9eb2530d2d7810c5504b",
+    "scripts/gen_closeout_acceptance_manifest.py": "d755bf53355488f43f177bcff7d36aae36a62af2d79c4e08db94deed88e3503f",
+    "scripts/verify_export_track1_closeout.py": "d25555382bdcc34593693cbb3984cfc54e1560820cbbd58e9b1ae96541418ca6"
   },
   "note": "Hash inventory for the Export Track-1 recovery (base c0c4f728..HEAD). Regenerate with scripts/export_track1_candidate_receipt.py --emit-inventory (authoring aid; the protection is human review of this file's diff + the operator-supplied HEAD). external_evidence is OPTIONAL and NON-AUTHORITATIVE (owner policy 2026-07-17): bytes are pinned for a tamper-evident trail; the receipt never executes it.",
   "schema": "export-track1-recovery-inventory/v1",
-  "trusted_interpreter_sha256": "74fceb0fdd29c31cf066ac8d92465975ea4ac8592308d7c888e26a70092d8eeb"
+  "trusted_interpreter_sha256": "74fceb0fdd29c31cf066ac8d92465975ea4ac8592308d7c888e26a70092d8eeb",
+  "trusted_launch_policy": {
+    "bytecode": "writes disabled (-B) and cache prefix pinned to /dev/null; ordinary __pycache__ is neither loaded nor written",
+    "git": "fixed /usr/bin/git or /bin/git; all inherited GIT_* removed",
+    "operator_tcb": "trusted operator and uncompromised pre-launch host, repository metadata, interpreter/dependencies, and toolchain; the certificate proves truthful execution, not resistance to a user controlling those prerequisites or continuous same-UID replacement races",
+    "required_python_flags": {
+      "dont_write_bytecode": true,
+      "isolated": true,
+      "no_site": true,
+      "pycache_prefix_devnull": true,
+      "safe_path": true
+    },
+    "runtime_hash_schema": "export-track1-no-site-runtime-tree/v2",
+    "runtime_root": "venv/lib/python3.13/site-packages",
+    "runtime_tree": "all directory/file/symlink entries, modes, regular-file bytes, and symlink targets, hashed as raw per-run bytes for strict pre/post mutation detection",
+    "schema": "export-track1-trusted-launch-policy/v1",
+    "site_processing": "disabled (-S); .pth bytes remain included in the per-run digest"
+  }
 }
