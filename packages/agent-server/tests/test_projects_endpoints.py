@@ -7,13 +7,24 @@ from __future__ import annotations
 
 import asyncio
 import io
+import shutil
 import zipfile
 from pathlib import Path
 
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.agent_server.routes import projects as projects_routes
-from disco.core import EventSource, MessageEvent, SqliteEventStore
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    FinalWorkspaceSeal,
+    MessageEvent,
+    ResourceKey,
+    SqliteEventStore,
+    StatusEvent,
+    WorkspaceVersionEvent,
+    derive_final_workspace_fence,
+)
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
@@ -196,7 +207,16 @@ def test_download_and_manifest_exclude_legacy_runtime_secret_files(store, tmp_pa
     download = client.get(f"/api/projects/{cid}/download")
     assert download.status_code == 200
     with zipfile.ZipFile(io.BytesIO(download.content)) as zf:
-        assert sorted(zf.namelist()) == [".dev.vars.example", "index.html"]
+        names = set(zf.namelist())
+        # Secret hygiene (the point of this test): the runtime-secret file is
+        # excluded; the template + source survive. (WO-7: a root index.html is a
+        # static release candidate, so the download also carries the generated
+        # self-host overlay — hence a membership check, not exact equality.)
+        assert ".dev.vars" not in names
+        assert {".dev.vars.example", "index.html"} <= names
+        # The real secret VALUE never appears in ANY zip entry (incl. the overlay).
+        for name in names:
+            assert b"whsec_real" not in zf.read(name)
 
     manifest = client.get(f"/api/projects/{cid}/manifest")
     assert manifest.status_code == 200
@@ -204,6 +224,82 @@ def test_download_and_manifest_exclude_legacy_runtime_secret_files(store, tmp_pa
         ".dev.vars.example",
         "index.html",
     }
+
+
+def _seal_finished(store: SqliteEventStore, ps: ProjectStore, cid: str) -> int:
+    """Reliability's finish seal: cut a pinned verified version and append the
+    FINISHED status + final-seal WorkspaceVersionEvent that the consumer-workspace
+    projection resolves."""
+    version = ps.cut_verified_version(cid, trigger="finish", pin=True)
+    assert version is not None
+    terminal = asyncio.run(store.append(cid, StatusEvent(status=ConversationStatus.FINISHED)))
+    assert terminal.seq is not None
+    fence = derive_final_workspace_fence(asyncio.run(store.get_events(cid)))
+    asyncio.run(
+        store.append(
+            cid,
+            WorkspaceVersionEvent(
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                trigger="finish",
+                final_seal=FinalWorkspaceSeal(
+                    scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                    terminal_seq=fence[0],
+                    latest_effect_seq=fence[1],
+                    version_seq=version.seq,
+                    tree_digest=version.tree_digest,
+                    file_count=version.file_count,
+                    total_bytes=version.total_bytes,
+                ),
+            ),
+        )
+    )
+    return version.seq
+
+
+def test_download_finished_project_serves_committed_bytes_over_diverged_or_lost_mirror(
+    store, tmp_path
+):
+    """The merged download contract (reliability x export): a FINISHED project's
+    DEFAULT download serves the immutable, hash-verified committed version — a
+    post-finish divergence of the mutable mirror never leaks into the zip
+    (negative control), and loss of the mutable recovery mirror never hides
+    still-verified committed bytes (positive control) — while the unfinished
+    path elsewhere in this file keeps streaming the live workspace."""
+    runtime = _runtime(store, root=str(tmp_path))
+    ps = ProjectStore(str(tmp_path))
+    cid = "conv_sealed"
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True)
+    (workspace / "index.txt").write_bytes(b"committed truth")
+    ps.write_manifest(
+        cid,
+        title="sealed",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=1,
+        total_bytes=15,
+    )
+    store.create_conversation(cid, owner_id="local", title="sealed")
+    _seal_finished(store, ps, cid)
+
+    client = TestClient(create_app(store, runtime=runtime))
+
+    # Diverge the mutable mirror AFTER the seal: the download must not follow it.
+    (workspace / "index.txt").write_bytes(b"diverged mirror")
+    (workspace / "stray.txt").write_bytes(b"not committed")
+    res = client.get(f"/api/projects/{cid}/download")
+    assert res.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        assert zf.read("index.txt") == b"committed truth"
+        assert "stray.txt" not in zf.namelist()
+
+    # Loss of the mutable recovery mirror must not hide the committed bytes.
+    shutil.rmtree(workspace)
+    res = client.get(f"/api/projects/{cid}/download")
+    assert res.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        assert zf.read("index.txt") == b"committed truth"
 
 
 def test_download_files_missing_returns_404_with_reason(store, tmp_path):

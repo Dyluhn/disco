@@ -28,6 +28,8 @@ from disco.core.effects import EffectReceipt, ToolBehavior
 from disco.core.llm import ToolSpec
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .release_intent import ReleaseIntentWriter
+
 
 class Capability(str, Enum):
     """Execution-environment capabilities a tool requires (distinct from the
@@ -99,6 +101,14 @@ class ToolContext(BaseModel):
         pattern=r"^[0-9a-f]{32}$",
     )
     browser_lane: Literal["agent", "host_verifier"] = "agent"
+    # WO-C1: the NARROW host-owned release-intent writer. The runtime injects a
+    # closure that resolves the ACTIVE configured ProjectStore at INVOCATION time and
+    # persists ONE conversation's typed intent under it (fail-closed on invalid root /
+    # owner mismatch / persistence failure). release_declare (an in_process host tool)
+    # writes host state ONLY through this handle — it receives no raw root and has no
+    # fallback store. None is the safe default: without the capability the tool fails
+    # closed and can persist nothing (standalone executors carry no host writer).
+    release_intent_writer: ReleaseIntentWriter | None = None
 
 
 class ToolOutcome(BaseModel):

@@ -170,4 +170,22 @@ describe("DeliverablePanel", () => {
     );
     expect(screen.queryByRole("link", { name: /deployed/i })).not.toBeInTheDocument();
   });
+
+  it("WO-9: the whole-workspace download is labelled 'Download source', not 'Site .zip'", () => {
+    // An app deliverable with a cid + directory path renders the whole-workspace
+    // export link (/api/projects/{cid}/download) — the workspace-zip action.
+    render(
+      <DeliverablePanel
+        deliverable={{ id: "d", title: "Landing page", path: "dist", kind: "app" }}
+        cid="conv-9"
+        onOpen={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Download source" });
+    expect(link).toHaveAttribute("href", expect.stringContaining("/api/projects/conv-9/download"));
+    expect(link).toHaveAttribute("download");
+    // The old label is gone.
+    expect(screen.queryByText("Site .zip")).not.toBeInTheDocument();
+  });
 });

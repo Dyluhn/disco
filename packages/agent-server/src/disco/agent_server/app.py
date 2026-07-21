@@ -51,6 +51,7 @@ from .routes import (
     make_preview_router,
     make_probes_router,
     make_projects_router,
+    make_release_router,
     make_report_router,
     make_sandbox_router,
     make_schedules_router,
@@ -250,6 +251,7 @@ def create_app(
     app.include_router(make_preview_edit_router(store, runtime))
     app.include_router(make_sessions_router(store, runtime))
     app.include_router(make_projects_router(store, runtime))
+    app.include_router(make_release_router(store, runtime))
     app.include_router(make_storage_router(store, runtime))
     app.include_router(make_suggestions_router(store, runtime))
     app.include_router(make_workflows_router(store, runtime))

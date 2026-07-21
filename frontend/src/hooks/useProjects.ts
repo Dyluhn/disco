@@ -10,9 +10,12 @@ import {
   downloadProject,
   exportProjectManifest,
   getProjectManifest,
+  getProjectRelease,
   listProjects,
+  type DownloadBinding,
 } from "@/api/projects";
 import type { ProjectManifest, ProjectsList } from "@/types/project";
+import type { ReleaseResponse } from "@/types/release";
 
 export const PROJECTS_KEY = ["projects"] as const;
 
@@ -32,9 +35,14 @@ export function useDeleteProject() {
   });
 }
 
+/** Download a project's workspace zip. The mutation variable carries the optional
+ * SOURCE binding: a self-host `candidate` passes its concrete `{version_seq,
+ * spec_digest}` so the download is pinned to that immutable version; a plain
+ * (unbound) download passes `binding: null`. */
 export function useDownloadProject() {
   return useMutation({
-    mutationFn: (id: string) => downloadProject(id),
+    mutationFn: (vars: { id: string; binding: DownloadBinding | null }) =>
+      downloadProject(vars.id, vars.binding),
   });
 }
 
@@ -48,6 +56,18 @@ export function useProjectManifest(conversationId: string | null) {
   return useQuery<ProjectManifest>({
     queryKey: ["project-manifest", conversationId],
     queryFn: () => getProjectManifest(conversationId!),
+    enabled: !!conversationId,
+  });
+}
+
+/** The WO-7 release verdict for a project (can it be self-hosted, what env NAMES
+ * it needs, its ingress). Gated on a non-null id like `useProjectManifest`; offline
+ * it resolves the in-repo fixture verdict so the capabilities UI works with no
+ * backend. */
+export function useProjectRelease(conversationId: string | null) {
+  return useQuery<ReleaseResponse>({
+    queryKey: ["project-release", conversationId],
+    queryFn: () => getProjectRelease(conversationId!),
     enabled: !!conversationId,
   });
 }

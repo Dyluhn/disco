@@ -506,4 +506,45 @@ def test_tool_context_has_no_secret_field():
         "browser_workspace_epoch",
         "browser_generation",
         "browser_lane",
+        # WO-C1: host-owned release-intent writer callable. Carries NO secret — the
+        # runtime closure captures the store/config, and the tool passes only the
+        # conversation id, owner id, and the NAMES-only ReleaseIntent (no values).
+        "release_intent_writer",
     }
+
+
+async def test_release_declare_behavior_is_truthful_and_never_dirties_the_workspace_epoch():
+    """Areas 3+4 union coherence: release_declare registers under the fail-closed
+    exhaustive-declaration registry with a TRUTHFUL declaration — it persists HOST
+    project-store metadata (the intent sidecar, outside workspace/) only through the
+    injected writer and never touches a workspace byte the browser/preview serves.
+    So (a) the pinned declaration is planner-unsafe with NO reliability-policy
+    capability, and (b) a SUCCESSFUL declaration must NOT advance the BF1
+    browser/workspace mutation epoch — a false WORKSPACE_MUTATE claim would
+    spuriously invalidate browser freshness after every declaration."""
+    from disco.tools.builtin import ReleaseDeclareTool
+
+    tool = ReleaseDeclareTool()
+    behavior = tool.definition.behavior
+    assert behavior is not None
+    assert behavior.planner_safe is False  # durable host effect; matches read_only=False
+    assert behavior.possible_capabilities == frozenset()  # exhaustive: none apply
+
+    registry = ToolRegistry()  # production-strict: no test-only escape hatch
+    registry.register(tool)  # would raise without an exhaustive declaration
+
+    recorded: list[tuple[str, str, object]] = []
+
+    async def writer(conversation_id: str, owner_id: str, intent) -> None:
+        recorded.append((conversation_id, owner_id, intent))
+
+    ex = DefaultToolExecutor(
+        registry,
+        ToolScope(allowed_tools=frozenset({"release_declare"})),
+        release_intent_writer=writer,
+    )
+    result = await ex.execute(call("release_declare", start_cmd=["node", "server.js"]))
+    assert result.success, result.error
+    assert len(recorded) == 1  # the typed intent reached the HOST writer exactly once
+    ctx = await ex._build_context(tool.definition)
+    assert ctx.browser_workspace_epoch is None  # the workspace epoch stayed clean

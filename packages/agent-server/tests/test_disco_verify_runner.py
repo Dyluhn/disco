@@ -331,17 +331,23 @@ class FakeVerifyClient(AbstractVerifyClient):
 
 
 def _clean_pptx_bytes() -> bytes:
-    """A real, minimal .pptx (no embedded images) — passes validate_deck_file cleanly."""
+    """A real, CONTENTFUL .pptx (no embedded images) — passes the deck validators
+    cleanly INCLUDING the heavy render path (C9-01: a blank deck renders to a
+    text-free PDF, which the PDF validator rightly rejects on hosts with
+    LibreOffice; the happy-path fixture must be genuinely renderable)."""
     import io
 
     from pptx import Presentation
 
+    prs = Presentation()
+    title = prs.slides.add_slide(prs.slide_layouts[0])
+    title.shapes.title.text = "Verify Runner Happy-Path Deck"
+    title.placeholders[1].text = "Generated for the dossier scenario"
+    body = prs.slides.add_slide(prs.slide_layouts[1])
+    body.shapes.title.text = "Deliverable Contents"
+    body.placeholders[1].text_frame.text = "Real extractable text for the render validators."
     buf = io.BytesIO()
-    presentation = Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
-    slide.shapes.title.text = "Reliability proof"
-    slide.placeholders[1].text = "This deck contains real extractable content."
-    presentation.save(buf)
+    prs.save(buf)
     return buf.getvalue()
 
 

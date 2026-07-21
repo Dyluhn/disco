@@ -28,6 +28,13 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
 
+# The runtime-secret path classifier now lives in `disco.core` (the leaf package)
+# so the release validation plane can share the exact same predicate. Re-exported
+# here so every existing `from disco.tools.projects import is_runtime_secret_path`
+# / `from .archive import is_runtime_secret_path` import keeps resolving unchanged.
+# `tools` -> `core` is a legal downward import.
+from disco.core.secret_paths import is_runtime_secret_path
+
 # Sensible defaults: deep enough for realistic project trees, large enough for the
 # kinds of artifacts a build agent produces (bundled JS, small images). Raised
 # only by the caller if a project legitimately needs more headroom.
@@ -58,29 +65,10 @@ _SNAPSHOT_EXCLUDED_DIRS = frozenset(
 # (a dropped ssh pipe fails every subsequent call) — abort instead of grinding
 # through thousands of doomed round-trips.
 _SNAPSHOT_MAX_CONSECUTIVE_FAILURES = 10
-_SAFE_TEMPLATE_SUFFIXES = frozenset({"example", "sample", "dist", "template"})
 # Server-owned durable audit state is not part of the sandbox's authored tree.
 # A later sandbox snapshot must preserve it from the host mirror rather than
 # letting an older/absent in-box copy erase deployment ownership evidence.
 _DEFAULT_HOST_OWNED_PATHS = (".disco/cloudflare/deployments",)
-
-
-def is_runtime_secret_path(relative_path: str) -> bool:
-    """Whether a workspace path can carry runtime credentials.
-
-    Real dotenv/dev-var files never enter snapshots, versions, imports, manifests,
-    rehydration, or downloads. Explicit template suffixes remain exportable.
-    """
-    parts = tuple(part.lower() for part in Path(relative_path).parts)
-    for name in parts:
-        for stem in (".dev.vars", ".env"):
-            if name == stem:
-                return True
-            if name.startswith(stem + "."):
-                suffix = name.rsplit(".", 1)[-1]
-                if suffix not in _SAFE_TEMPLATE_SUFFIXES:
-                    return True
-    return False
 
 
 class _WorkspaceIO(Protocol):

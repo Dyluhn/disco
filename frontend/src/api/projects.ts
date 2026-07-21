@@ -30,6 +30,7 @@ import type {
   ProjectStorageConfig,
   ProjectStorageSaveInput,
 } from "@/types/project";
+import type { ReleaseResponse } from "@/types/release";
 
 // ---- fixture state (offline mode) ------------------------------------------
 // A small in-memory mirror so the Projects UI renders + tests run without a
@@ -77,6 +78,102 @@ const fixtureProjects: Project[] = [
   },
 ];
 
+// ---- release assessment fixtures (offline mode) ----------------------------
+// One release verdict per demo project, mirroring the WO-7 `/release` wire shape
+// EXACTLY (the same key set for every assessment: non-applicable fields are
+// `null`/empty, never absent). Covers the three Track-1 assessments so the UI +
+// tests exercise all of them with no live backend: `candidate` (self-hostable),
+// `needs_review` (ambiguous topology), `not_web` (no web entrypoint). `required_env`
+// entries carry NAMES only — never a `value` (secret hygiene).
+
+const RELEASE_COMMAND = "docker compose up -d --build";
+
+const fixtureReleases: Record<string, ReleaseResponse> = {
+  // A self-hostable Node web app: validation passed, so `self_host` is true and
+  // the download would carry the generated overlay.
+  conv_demo_snake: {
+    assessment: "candidate",
+    reasons: ["A Node web server binding $PORT was detected (server.js)."],
+    blockers: [],
+    required_env: [
+      { name: "PORT", scope: "runtime", required: true, secret: false },
+      { name: "SESSION_SECRET", scope: "runtime", required: true, secret: true },
+    ],
+    command: RELEASE_COMMAND,
+    ingress: { service: "web", port: "PORT", health_path: "/healthz" },
+    self_host: true,
+    spec_digest: "sha256:demo-candidate-0001",
+    version_seq: 3,
+    tree_digest: "sha256:tree-snake-0001",
+  },
+  // Ambiguous: more than one plausible entrypoint, so no single ingress resolved.
+  // The unresolved release field is reported as a repairable blocker; `ingress`
+  // and `spec_digest` are null (no topology bound yet).
+  conv_demo_landing: {
+    assessment: "needs_review",
+    reasons: ["Multiple candidate entrypoints were found; the public ingress is ambiguous."],
+    blockers: [
+      {
+        code: "release_field_unresolved",
+        field: "ingress",
+        message: "no single web entrypoint could be resolved — declare which service is public.",
+        path: null,
+      },
+    ],
+    required_env: [{ name: "API_BASE_URL", scope: "build", required: false, secret: false }],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 5,
+    tree_digest: "sha256:tree-landing-0002",
+  },
+  // Not a web app at all (static docs / script bundle): no ingress, no env, and
+  // self-host is off — the Download stays the plain filtered zip (no overlay).
+  conv_demo_orphan: {
+    assessment: "not_web",
+    reasons: ["No web server entrypoint was detected; this looks like a static bundle."],
+    blockers: [],
+    required_env: [],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 1,
+    tree_digest: "sha256:tree-orphan-0003",
+  },
+};
+
+/** True when `cid` names an offline DEMO project that has a persisted workspace
+ * snapshot (`last_snapshot_at` set in the fixture registry). Such a project was
+ * committed at a finished state, so RESUMING it offline legitimately rehydrates to a
+ * FINISHED view — exactly what a live agent does on resume (restore the committed
+ * snapshot). The agent-stream fixture consults this to decide whether a bare resume
+ * (no kick) should surface the finished-handoff panels, mirroring the real backend
+ * consulting its workspace store. Driven by the registry, never a spec/test marker. */
+export function isSnapshottedDemoProject(cid: string): boolean {
+  return fixtureProjects.some((p) => p.id === cid && p.last_snapshot_at != null);
+}
+
+/** The offline release verdict for `cid`. Unknown projects get the stable
+ * `not_web` shape (same key set, empty topology) — never a missing/partial body. */
+function fixtureRelease(cid: string): ReleaseResponse {
+  const known = fixtureReleases[cid];
+  if (known) return { ...known };
+  return {
+    assessment: "not_web",
+    reasons: ["No web server entrypoint was detected."],
+    blockers: [],
+    required_env: [],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 1,
+    tree_digest: `sha256:tree-${cid}`,
+  };
+}
+
 // ---- projects list / download / delete (AGENT server) ----------------------
 
 export async function listProjects(): Promise<ProjectsList> {
@@ -91,14 +188,52 @@ export async function listProjects(): Promise<ProjectsList> {
   return agentGet<ProjectsList>("/api/projects");
 }
 
-/** Trigger a browser download of the project's workspace zip. Returns nothing
+/** A SOURCE binding pins a self-host download to the EXACT immutable committed
+ * version the operator was shown (WO-C2 §6). BOTH fields are concrete (non-null) by
+ * construction — a caller with a nullable release field must narrow it first, so an
+ * unsnapshotted/unbound release can never fabricate a binding onto the URL. */
+export interface DownloadBinding {
+  version_seq: number;
+  spec_digest: string;
+}
+
+/** The real browser-download mechanism: an anchor navigation to `href`. Used for
+ * BOTH the live blob URL (after the authed fetch streams the zip) and the offline
+ * bound URL (the browser GETs the pinned zip directly). jsdom no-ops the click; a
+ * real browser downloads. Appended before click (some browsers require it). */
+function triggerAnchorDownload(href: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** Trigger a browser download of the project's workspace zip. When `binding` is
+ * supplied the download is SOURCE-BOUND: its query carries the exact
+ * (`version_seq`, `spec_digest`) the release verdict named, so the byte stream is the
+ * immutable stored version — never a drifting live mirror (WO-C2 §6). A `null`
+ * binding requests the plain, unbound zip and fabricates NO query. Returns nothing
  * on success; throws on a server error (e.g. files_missing → 404). */
-export async function downloadProject(cid: string): Promise<void> {
+export async function downloadProject(cid: string, binding: DownloadBinding | null): Promise<void> {
+  // Real URL-encoding (URLSearchParams → `:` becomes `%3A`), not a raw splice.
+  const query = binding
+    ? `?${new URLSearchParams({
+        version_seq: String(binding.version_seq),
+        spec_digest: binding.spec_digest,
+      }).toString()}`
+    : "";
+  const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/download${query}`;
   if (!agentLive()) {
     await fixtureDelay();
+    // Offline/demo fidelity: a BOUND download still issues a real, browser-observable
+    // GET to the bound URL so the operator's browser downloads the pinned zip (the
+    // fixture server 404s the body — the binding riding the query is the point). An
+    // UNBOUND offline download has no live workspace to stream, so it stays a no-op.
+    if (binding) triggerAnchorDownload(url, `${cid}.zip`);
     return;
   }
-  const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/download`;
   const res = await agentFetch(url, { headers: { accept: "application/zip" } });
   if (!res.ok) {
     let reason = `${res.status}`;
@@ -112,12 +247,7 @@ export async function downloadProject(cid: string): Promise<void> {
   }
   const blob = await res.blob();
   const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = `${cid}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  triggerAnchorDownload(objectUrl, `${cid}.zip`);
   URL.revokeObjectURL(objectUrl);
 }
 
@@ -142,12 +272,7 @@ export async function exportProjectManifest(cid: string): Promise<void> {
   const text = JSON.stringify(await res.json(), null, 2);
   const blob = new Blob([text], { type: "application/json" });
   const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = objectUrl;
-  a.download = `${cid}-manifest.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  triggerAnchorDownload(objectUrl, `${cid}-manifest.json`);
   URL.revokeObjectURL(objectUrl);
 }
 
@@ -166,6 +291,19 @@ export async function getProjectManifest(cid: string): Promise<ProjectManifest> 
     };
   }
   return agentGet<ProjectManifest>(`/api/projects/${encodeURIComponent(cid)}/manifest`);
+}
+
+/** Assess whether a project's committed workspace can be self-hosted (WO-7).
+ * Live: `GET /api/projects/{cid}/release` on the AGENT server (the runtime owns
+ * the workspace + release intent). Offline: the in-repo fixture verdict, so the
+ * capabilities UI renders + tests run with no backend. NAMES only — never secret
+ * values (the response type has no `value` field). */
+export async function getProjectRelease(cid: string): Promise<ReleaseResponse> {
+  if (!agentLive()) {
+    await fixtureDelay();
+    return fixtureRelease(cid);
+  }
+  return agentGet<ReleaseResponse>(`/api/projects/${encodeURIComponent(cid)}/release`);
 }
 
 export async function deleteProject(cid: string): Promise<{ id: string }> {

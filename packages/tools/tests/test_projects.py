@@ -389,6 +389,91 @@ async def test_bulk_snapshot_cancellation_leaves_old_tree_and_no_transaction(
     assert not list(tmp_path.glob(".snap.snapshot-*"))
 
 
+def test_imported_provenance_is_recorded_and_survives_resnapshot(tmp_path: Path) -> None:
+    """The `imported` release-provenance bit is durable: set once at import time, it
+    is PRESERVED across later re-snapshots (which rewrite the manifest without it) —
+    a re-snapshot that dropped it would silently demote an imported project's release
+    assessment from needs_review back to not_web."""
+    store = ProjectStore(str(tmp_path))
+    cid = "conv_imported"
+    workspace = store.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "README.md").write_text("imported")
+
+    # import-time write records the provenance.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        imported=True,
+    )
+    assert store.get(cid).imported is True
+    assert store.list_projects()[0].imported is True
+
+    # a re-snapshot (no `imported` arg) MUST preserve it, not reset it to False.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+    )
+    assert store.get(cid).imported is True
+
+    # an explicit False clears it; a fresh (never-imported) project defaults False.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        imported=False,
+    )
+    assert store.get(cid).imported is False
+
+    fresh = "conv_fresh"
+    (store.path_for(fresh)).mkdir(parents=True, exist_ok=True)
+    (store.path_for(fresh) / "a").write_text("x")
+    store.write_manifest(
+        fresh, title=None, owner_id="local", created_at=None, file_count=1, total_bytes=1,
+    )
+    assert store.get(fresh).imported is False
+
+
+def test_release_intent_sidecar_round_trip_and_fail_closed(tmp_path: Path) -> None:
+    """Store-level contract for the host-owned release-intent sidecar: it lives
+    NEXT TO manifest.json (outside the workspace/ tree), round-trips typed,
+    reports an ABSENT sidecar as None, fails CLOSED (StorageError) on a corrupt
+    sidecar rather than silently reporting 'no intent', honors the poisoned-id
+    guard, and is removed by delete() together with the rest of the project."""
+    from disco.core.release.spec import ReleaseIntent
+    from disco.tools.projects import StorageError
+
+    store = ProjectStore(str(tmp_path))
+    cid = "conv_release"
+    workspace = store.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "server.js").write_text("x")
+
+    # absent sidecar -> None (a never-declared intent is not an error)
+    assert store.read_release_intent(cid) is None
+
+    intent = ReleaseIntent(
+        start_cmd=("node", "server.js"),
+        required_env=("API_BASE_URL", "SESSION_SECRET"),
+    )
+    sidecar = store.write_release_intent(cid, intent)
+    # host-owned location: next to manifest.json, OUTSIDE workspace/
+    assert sidecar == store.release_intent_for(cid)
+    assert sidecar.parent == store.manifest_for(cid).parent
+    assert "workspace" not in sidecar.relative_to(tmp_path).parts
+    # typed round-trip through the persisted JSON
+    assert store.read_release_intent(cid) == intent
+
+    # corrupt sidecar -> fail closed, never a silent None
+    sidecar.write_bytes(b"{ not valid json")
+    with pytest.raises(StorageError, match="release intent unreadable"):
+        store.read_release_intent(cid)
+
+    # poisoned id -> rejected before any path is derived
+    with pytest.raises(StorageError, match="unsafe conversation_id"):
+        store.release_intent_for("../escape")
+
+    # delete() removes the whole project dir, sidecar included
+    assert store.delete(cid) is True
+    assert not sidecar.exists()
+
+
 def test_runtime_secret_path_classifier_keeps_only_explicit_templates() -> None:
     for path in (
         ".env",

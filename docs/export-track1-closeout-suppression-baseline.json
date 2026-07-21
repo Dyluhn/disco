@@ -1,0 +1,12 @@
+{
+  "schema": "export-track1-closeout-suppression-baseline/v1",
+  "note": "Owner-approved, independently-reviewed record of PRE-EXISTING suppressions present in the campaign diff (git diff BASELINE_SHA..HEAD). The R6 anti-bypass scanner lane (scripts/verify_export_track1_closeout.py::_scan_campaign_diff_suppressions) scans every ADDED line in the campaign diff, restricted to code/config files (.py/.ts/.tsx/.js/.jsx/.yml/.yaml) and EXCLUDING the two gate-definition scripts and the release_remediation meta-test dir (both legitimately embed suppression tokens as detection patterns / test fixtures). Any suppression token (# noqa, # type: ignore, # pyright: ignore, # ruff: noqa, eslint-disable, // @ts-ignore, continue-on-error:, @pytest.mark.skip/skipif, pytest.skip(, @pytest.mark.xfail, pytest.xfail(, describe/test/it.skip(, describe/test/it.only() in an added line whose (file, stripped-line) pair is NOT listed under `approved` makes the scanner lane RED. Adding an entry here is an owner action that changes this frozen file's hash, forcing a manifest regeneration + re-review — a new suppression can never be self-approved silently. Each entry is matched by `file` (repo-relative) and `line` (the git-diff added line with its leading '+' removed and surrounding whitespace stripped); line numbers are intentionally NOT used so line drift does not break the match.",
+  "approved": [
+    {
+      "file": "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py",
+      "line": "except Exception as exc:  # noqa: BLE001 — surface a churner crash to the test",
+      "kind": "noqa",
+      "reason": "G18 ratified pre-existing suppression (the SINGLE one on the acceptance branch): it STRENGTHENS the test by surfacing an otherwise-swallowed churner crash to the assertion. Recorded in the acceptance manifest's remediation_r0.ratified_baseline_suppression."
+    }
+  ]
+}

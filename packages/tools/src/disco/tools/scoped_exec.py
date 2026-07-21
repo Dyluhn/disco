@@ -11,6 +11,7 @@ from disco.core.llm import ModelExecutionPolicy
 
 from .executor import DefaultToolExecutor
 from .registry import ToolRegistry, ToolScope
+from .release_intent import ReleaseIntentWriter
 from .sandbox.base import SandboxInstance
 from .secrets import CapabilityBroker
 from .workflow_scope import workflow_router_denial_message, workflow_run_denial_message
@@ -32,6 +33,7 @@ class ExecutorKwargs(TypedDict, total=False):
     starter_kit: str | None
     workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None
     primitive_live_verifier: PrimitiveLiveVerifier | None
+    release_intent_writer: ReleaseIntentWriter | None
 
 
 class ScopedPhaseExecutor(DefaultToolExecutor):

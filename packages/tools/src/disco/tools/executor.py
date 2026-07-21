@@ -38,6 +38,7 @@ from pydantic import BaseModel, ValidationError
 from .anatomy import Tool, ToolContext, ToolDef, ToolExecutionError, ToolOutcome
 from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
+from .release_intent import ReleaseIntentWriter
 from .sandbox.base import SandboxError, SandboxInstance
 from .secrets import CapabilityBroker, CapabilityDenied
 
@@ -464,6 +465,7 @@ class DefaultToolExecutor:
         workspace_lock: asyncio.Lock | None = None,
         workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None = None,
         execution_admission: Callable[[str | None], Awaitable[str | None]] | None = None,
+        release_intent_writer: ReleaseIntentWriter | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -492,6 +494,10 @@ class DefaultToolExecutor:
         self._workspace_lock = workspace_lock
         self._workspace_fence = workspace_fence
         self._execution_admission = execution_admission
+        # WO-C1: the host-owned release-intent writer stamped onto every ToolContext
+        # so release_declare (in_process) persists under the ACTIVE configured store.
+        # None ⇒ no host writer wired (standalone executor) ⇒ the tool fails closed.
+        self._release_intent_writer = release_intent_writer
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -778,7 +784,12 @@ class DefaultToolExecutor:
         try:
             args = tool.definition.args_model.model_validate(arguments)
         except ValidationError as e:
-            errors = [dict(err) for err in e.errors()]  # ErrorDetails -> plain dict
+            # ErrorDetails -> plain dict, MINUS the raw `input` value. `hide_input_in_errors`
+            # only affects `str(e)`; `.errors()` still carries the rejected input, which a
+            # value-guard (e.g. a release argv/URL/path token) could make a secret. The
+            # surfaced `validation_errors`/`content` must never echo a rejected value
+            # (WO-C5 crit 3), and no consumer reads the input back, so it is dropped here.
+            errors = [{k: v for k, v in err.items() if k != "input"} for err in e.errors()]
             return self._fail(
                 call,
                 "invalid_arguments",
@@ -1015,6 +1026,7 @@ class DefaultToolExecutor:
             ),
             browser_generation=self._browser_generation,
             browser_lane="agent",
+            release_intent_writer=self._release_intent_writer,
         )
 
     def _fail(

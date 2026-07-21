@@ -138,6 +138,45 @@ yet**, so control frames and token streaming are accepted but produce nothing.
   (scoped to the session owner; the agent-server's id-only list — the **library** list
   with titles is the app-server's `/api/conversations`)
 
+### Projects (Build persistence) — owner-scoped
+
+Source: `packages/agent-server/src/disco/agent_server/routes/{projects,release}.py`. All
+are owner-scoped from the session; `403 project_forbidden` (another owner), `404
+project_not_found` (no manifest), `404 storage_unavailable` (storage unconfigured/invalid),
+`404 files_missing` (workspace tree gone).
+
+- ✅ **GET `/api/projects`** → `{ projects: […], status, root }` — Build projects joined
+  with conversation metadata (title/surface/created_at).
+- ✅ **POST `/api/projects/import`** — seed a new Build project from a zip upload, local
+  directory (admin), or shallow git clone. Runtime-secret paths (`.env`, `.dev.vars`) are
+  rejected; `.env.example`/`.dev.vars.example` templates are kept.
+- ✅ **GET `/api/projects/{id}/download`** — stream a zip of the workspace (runtime-secret
+  files always excluded). **WO-7:** when `/api/projects/{id}/release` assesses `candidate`
+  and validation passes, the zip ADDITIONALLY carries the generated self-host overlay
+  (`compose.yaml`, `Dockerfile`(s), `.dockerignore`, `.env.example`, `SELFHOST.md`,
+  `release.json`); a workspace file wins any path collision. Every other project's zip is
+  byte-for-byte the plain filtered workspace zip (no overlay).
+- ✅ **GET `/api/projects/{id}/release`** — assess whether the committed workspace can be
+  self-hosted. Reads the workspace + the host-owned release-intent sidecar, runs the pure
+  detector + validator (NO subprocess, nothing runs at finish time), and returns a stable
+  shape (identical key set for every assessment):
+  ```jsonc
+  { "assessment": "candidate" | "needs_review" | "not_web",
+    "reasons": string[],
+    "blockers": [ { "code": string, "message": string,
+                    "field"?: string|null, "path"?: string|null } ],
+    "required_env": [ { "name": string, "scope": "runtime"|"build",
+                        "required": boolean, "secret": boolean } ],   // NAMES only, never values
+    "command": "docker compose up -d --build",
+    "ingress": { "service": string, "port": string, "health_path": string|null } | null,
+    // ingress.port is the env-var NAME the ingress binds (the `$PORT` contract), never a literal number
+    "self_host": boolean,          // true iff candidate AND validation passes
+    "spec_digest": string|null,    // stable content id of the release spec (null when no topology)
+    "version_seq": number, "tree_digest": string }   // the committed source binding
+  ```
+- ✅ **GET `/api/projects/{id}/manifest`** → project metadata + file tree + last deliverable.
+- ✅ **DELETE `/api/projects/{id}`** → `{ id, deleted }` (removes manifest + workspace).
+
 ### WebSocket
 
 - ✅ **WS `/ws/conversations/{cid}?last_seq=`** — the handshake is Origin-checked and

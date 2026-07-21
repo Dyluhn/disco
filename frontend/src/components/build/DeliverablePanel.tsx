@@ -77,13 +77,13 @@ export function DeliverablePanel({
         <a
           href={`${agentHttpBase()}/api/projects/${cid}/download`}
           download
-          aria-label={`Download the site as a .zip: ${deliverable.title}`}
-          title="Download the whole site (.zip)"
+          aria-label="Download source"
+          title="Download the project source (.zip)"
           data-disco-control="build.download-site-zip"
           className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
         >
           <Download className="size-3.5" aria-hidden />
-          Site .zip
+          Download source
         </a>
       )}
       {/* When the agent served to a canonical URL, surface it as a real link. */}
