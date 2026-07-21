@@ -116,7 +116,7 @@ bundle-digests.json
 docker-versions.txt
 docker-inspect-sanitized.json
 compose-ps.json
-cleanup.txt
+cleanup.json
 ```
 
 `evidence.json` must record `passed: true` only after every required file was produced and
@@ -732,8 +732,12 @@ measure portability, but it cannot replace Docker proof for this closeout.
 1. Rebase/merge all C1–C8 changes onto one candidate commit.
 2. Confirm the candidate diff does not change frozen acceptance paths compared with
    `export-track1-closeout-acceptance-v1`.
-3. Run `scripts/verify_export_track1_closeout.py --all --evidence-dir <outside-repo>` from
-   a clean checkout on a Docker-capable host.
+3. From the canonical repository root, run
+   `.venv/bin/python3 -I -S -P -B -X pycache_prefix=/dev/null
+   scripts/verify_export_track1_closeout.py --all --evidence-dir <outside-repo>` from a
+   clean checkout on a Docker-capable host. Manifest generation/checking uses the same
+   Python flags. The verifier records and rechecks the exact interpreter, fixed system
+   Git binary, canonical worktree top level, and linked-worktree-aware absolute Git dir.
 4. Confirm every global, non-live, frontend, and live gate passed for the same SHA.
 5. Confirm the worktree remains clean after the run.
 6. Have a reviewer other than the implementing agent inspect:
@@ -748,6 +752,15 @@ measure portability, but it cannot replace Docker proof for this closeout.
    accepting uploaded logs alone.
 8. Only the reviewer records final status in a separate closeout report containing the
    exact candidate SHA and evidence manifest SHA-256.
+
+This certificate assumes a trusted operator and an uncompromised pre-launch host,
+repository metadata, interpreter/dependency tree, and external toolchain. It proves that
+the governed lanes executed truthfully at the recorded identities; it is not a security
+boundary against a user who controls those prerequisites or can continuously race the
+same-UID process. Ordinary Python cache loading/writing is disabled by the required
+`-B -X pycache_prefix=/dev/null` launch. Deliberately planted sourceless bytecode or
+malicious Git metadata is therefore an operator-trust violation, not an adversarial claim
+made by this closeout harness.
 
 ### Final pass conditions
 

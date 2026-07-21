@@ -109,6 +109,7 @@ def synthetic(tmp_path: Path) -> dict[str, object]:
         "trusted_interpreter_sha256": hashlib.sha256(
             Path(sys.executable).resolve().read_bytes()
         ).hexdigest(),
+        "trusted_launch_policy": receipt.trusted_launch_policy(),
         "expected_proof": {"tests": ["test_receipt_proof.py"], "passed": 1, "failed": 0},
         "files": {"recovery.py": _sha256(campaign), "test_receipt_proof.py": _sha256(proof)},
     }
@@ -525,6 +526,13 @@ def test_interpreter_identity_is_recorded_in_evidence(
     interp = payload["interpreter"]
     assert interp["realpath"] and interp["version"] and interp["sha256"]
     assert payload["post_run_checks"], "post-run rechecks must be recorded"
+    interpreter_recheck = next(
+        check
+        for check in payload["post_run_checks"]
+        if check["name"] == "post-run: interpreter identity unchanged"
+    )
+    assert interpreter_recheck["ok"] is True
+    assert interpreter_recheck["data"] == {"initial": interp, "final": interp}
 
 
 def test_base_override_is_rejected_in_certification(synthetic: dict[str, object]) -> None:

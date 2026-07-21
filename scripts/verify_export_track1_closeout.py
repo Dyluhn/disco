@@ -26,6 +26,9 @@ Lanes (all wired; each is honestly recorded, none is ``not_wired_yet``):
   * ``live-docker`` — the live clean-room lane (plan §3.4). On a host WITHOUT a real
     Docker engine the tests FAIL (never skip). Green iff exit 0 with zero
     failed/errors/skipped.
+  * ``hermetic-live-support-fail-closed`` — separately frozen supplemental regressions
+    that seam subprocess to prove Docker-command failures cannot look empty/clean. Exact
+    node/pass/exit enforcement; explicitly not a substitute for ``live-docker``.
   * ``anti-bypass-scan`` — a real AST/lexical scan (plan §4.4 / §4.9) proving the
     frozen tests seam the system only at the allowlisted config/env seams and that
     production source carries no closeout test-switch. Green iff zero violations.
@@ -37,9 +40,11 @@ byte-fresh tamper check; ``evidence.json`` is written outside the checkout.
 and EVERY lane is green.
 
 Usage:
-    uv run python scripts/verify_export_track1_closeout.py --all \\
+    .venv/bin/python3 -I -S -P -B -X pycache_prefix=/dev/null \\
+        scripts/verify_export_track1_closeout.py --all \\
         --evidence-dir /path/outside/checkout
-    uv run python scripts/verify_export_track1_closeout.py --author \\
+    .venv/bin/python3 -I -S -P -B -X pycache_prefix=/dev/null \\
+        scripts/verify_export_track1_closeout.py --author \\
         --evidence-dir /tmp/evidence            # dirty tree OK; passed always false
 """
 
@@ -47,8 +52,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
+import importlib.util
 import json
-import os
 import re
 import secrets
 import shutil
@@ -58,8 +64,26 @@ import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 
-import gen_closeout_acceptance_manifest as manifest_mod
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+
+
+def _load_manifest_module() -> ModuleType:
+    path = _SCRIPTS_DIR / "gen_closeout_acceptance_manifest.py"
+    existing = sys.modules.get("gen_closeout_acceptance_manifest")
+    if isinstance(existing, ModuleType) and Path(str(existing.__file__)).resolve() == path:
+        return existing
+    spec = importlib.util.spec_from_file_location("gen_closeout_acceptance_manifest", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load acceptance generator: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+manifest_mod = _load_manifest_module()
 
 # ---- structured per-test report plugin (R6b harness correction, plan §9.3) --------
 # A governed pytest lane is green ONLY when EVERY governed-selected test truly PASSED.
@@ -70,12 +94,13 @@ import gen_closeout_acceptance_manifest as manifest_mod
 # objects, never console text) plus the marker-governed selection. The verifier then
 # requires ``selected == represented-as-passed`` exactly. ``scripts/`` is prepended to the
 # lane subprocess PYTHONPATH so ``-p closeout_pytest_report`` resolves by bare module name.
-_SCRIPTS_DIR = Path(__file__).resolve().parent
 _CLOSEOUT_REPORT_PLUGIN = "closeout_pytest_report"
+_UNTRUSTED_PYTHON_ENV_PREFIXES = ("PYTHON", "PYTEST", "LD_", "DYLD_", "COVERAGE")
 _NONLIVE_REPORT_FILE = "closeout-report-nonlive.json"
 _CLOSEOUT_REPORT_FILE = "closeout-report-closeout.json"
 _LIVE_REPORT_FILE = "closeout-report-live.json"
 _CAPTURE_REPORT_FILE = "closeout-report-capture.json"
+_SUPPORT_FAIL_CLOSED_REPORT_FILE = "closeout-report-support-fail-closed.json"
 # The one green category; every other category (failed/error/skipped/xfailed/xpassed) — and
 # a governed-selected node that produced NO result (a within-selection deselection) — is a
 # violation that forces the lane NON-green with a distinct, specific reason.
@@ -110,6 +135,7 @@ _HYGIENE_SCAN_FILES: tuple[str, ...] = (
     "pytest-closeout.xml",
     "pytest-live.xml",
     "pytest-capture.xml",
+    "pytest-live-support-fail-closed.xml",
     "frontend-vitest.json",
     # R6: the structured Firefox e2e report is a written text artifact too — a planted
     # credential sentinel here must likewise force passed:false (plan §9.4 / criterion 6).
@@ -271,14 +297,19 @@ def _run(
 
 
 def _pytest_env() -> dict[str, str]:
-    """The child environment for a governed pytest lane: this process's env with ``scripts/``
-    prepended to ``PYTHONPATH`` so ``-p closeout_pytest_report`` imports by bare module name
-    inside the ``python -m pytest`` subprocess (whose sys.path carries cwd, not scripts/)."""
-    env = dict(os.environ)
-    scripts = str(_SCRIPTS_DIR)
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = scripts + (os.pathsep + existing if existing else "")
+    """Isolated environment for governed pytest lanes.
+
+    Inherited import, pytest-plugin, loader, and coverage injection is removed. The
+    The ``-I -S -P -B -X pycache_prefix=/dev/null`` bootstrap adds only the
+    complete-hashed venv site-packages tree and Git-bound repo source/scripts paths;
+    it never processes .pth/sitecustomize or ordinary ``__pycache__``.
+    """
+    env, _ = manifest_mod._launch_module().sanitized_python_env()
     return env
+
+
+def _pytest_command_prefix(repo: Path) -> list[str]:
+    return manifest_mod.controlled_pytest_command(repo, ["-p", _CLOSEOUT_REPORT_PLUGIN])
 
 
 def _load_structured_report(path: Path) -> dict[str, object] | None:
@@ -294,11 +325,114 @@ def _load_structured_report(path: Path) -> dict[str, object] | None:
 
 
 def _git(repo: Path, *args: str) -> str:
-    return _run(["git", *args], cwd=repo).stdout.strip()
+    launch = manifest_mod._launch_module()
+    env, _ = launch.sanitized_git_env()
+    proc = _run([str(launch.resolve_system_git()), *args], cwd=repo, env=env)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()[-500:]
+        raise subprocess.CalledProcessError(
+            proc.returncode, proc.args, output=proc.stdout, stderr=detail
+        )
+    return proc.stdout.strip()
 
 
 def _is_clean(repo: Path) -> bool:
-    return _git(repo, "status", "--porcelain") == ""
+    # ``all`` prevents an untracked directory from collapsing to one opaque entry and
+    # makes the recorded claim exactly "no tracked OR untracked bytes".
+    launch = manifest_mod._launch_module()
+    return (
+        _git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+        and launch.check_index_entry_flags(repo).ok
+    )
+
+
+def _governed_byte_snapshot(repo: Path, stored: dict[str, object] | None) -> dict[str, str]:
+    """Hash the manifest itself plus every path it governs.
+
+    The manifest excludes itself to avoid a recursive hash.  Holding this independent
+    snapshot across the run closes that necessary self-exclusion: neither the manifest
+    nor any governed file may change while lanes execute, even if a later edit tried to
+    restore a clean-looking manifest relationship.
+    """
+    rels = {manifest_mod.MANIFEST_REL}
+    files = stored.get("files") if isinstance(stored, dict) else None
+    if isinstance(files, dict):
+        rels.update(str(rel) for rel in files)
+    snapshot: dict[str, str] = {}
+    for rel in sorted(rels):
+        path = repo / rel
+        if path.is_file():
+            snapshot[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            snapshot[rel] = "<missing>"
+    return snapshot
+
+
+def _post_run_integrity(
+    repo: Path,
+    *,
+    candidate_sha: str,
+    stored_manifest: dict[str, object] | None,
+    initial_snapshot: dict[str, str],
+    initial_trusted_launch: dict[str, object],
+) -> tuple[bool, dict[str, object]]:
+    """Re-check the candidate after every lane and before computing ``passed``."""
+    try:
+        final_head = _git(repo, "rev-parse", "HEAD")
+        final_clean = _is_clean(repo)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return False, {
+            "ok": False,
+            "initial_head": candidate_sha,
+            "final_head": None,
+            "head_unchanged": False,
+            "final_clean_tree": False,
+            "frozen_manifest_ok": False,
+            "frozen_manifest_note": "not evaluated after git failure",
+            "governed_bytes_unchanged": False,
+            "changed_governed_paths": [],
+            "trusted_launch_unchanged": False,
+            "final_trusted_launch": {},
+            "git_error": str(exc),
+        }
+    final_frozen_ok, final_frozen_note = _verify_frozen_manifest(
+        repo, stored_manifest, "initial manifest unavailable"
+    )
+    final_snapshot = _governed_byte_snapshot(repo, stored_manifest)
+    try:
+        final_trusted_launch = manifest_mod.observed_launch_identity(repo)
+        trusted_launch_unchanged = final_trusted_launch == initial_trusted_launch
+    except (OSError, RuntimeError) as exc:
+        final_trusted_launch = {"error": str(exc)}
+        trusted_launch_unchanged = False
+    changed = sorted(
+        set(initial_snapshot) ^ set(final_snapshot)
+        | {
+            rel
+            for rel in set(initial_snapshot) & set(final_snapshot)
+            if initial_snapshot[rel] != final_snapshot[rel]
+        }
+    )
+    ok = bool(
+        final_head == candidate_sha
+        and final_clean
+        and final_frozen_ok
+        and not changed
+        and trusted_launch_unchanged
+    )
+    return ok, {
+        "ok": ok,
+        "initial_head": candidate_sha,
+        "final_head": final_head,
+        "head_unchanged": final_head == candidate_sha,
+        "final_clean_tree": final_clean,
+        "frozen_manifest_ok": final_frozen_ok,
+        "frozen_manifest_note": final_frozen_note,
+        "governed_bytes_unchanged": not changed,
+        "changed_governed_paths": changed,
+        "trusted_launch_unchanged": trusted_launch_unchanged,
+        "final_trusted_launch": final_trusted_launch,
+    }
 
 
 def _tool_versions(repo: Path) -> dict[str, str]:
@@ -312,13 +446,62 @@ def _tool_versions(repo: Path) -> dict[str, str]:
         line = (proc.stdout or proc.stderr).strip().splitlines()
         versions[key] = line[0] if line else "unknown"
 
-    _probe("python", [sys.executable, "--version"])
-    _probe("pytest", [sys.executable, "-m", "pytest", "--version"])
-    _probe("git", ["git", "--version"])
+    _probe(
+        "python",
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-P",
+            "-B",
+            "-X",
+            "pycache_prefix=/dev/null",
+            "--version",
+        ],
+    )
+    pytest_proc = _run(
+        manifest_mod.controlled_pytest_command(repo, ["--version"]),
+        cwd=repo,
+        env=_pytest_env(),
+    )
+    pytest_lines = (pytest_proc.stdout or pytest_proc.stderr).strip().splitlines()
+    versions["pytest"] = pytest_lines[0] if pytest_lines else "unknown"
+    launch = manifest_mod._launch_module()
+    git_env, _ = launch.sanitized_git_env()
+    git_proc = _run([str(launch.resolve_system_git()), "--version"], cwd=repo, env=git_env)
+    git_lines = (git_proc.stdout or git_proc.stderr).strip().splitlines()
+    versions["git"] = git_lines[0] if git_lines else "unknown"
     _probe("node", ["node", "--version"])
     _probe("npm", ["npm", "--version"])
     _probe("docker", ["docker", "--version"])
     return versions
+
+
+def _host_tool_preflight() -> dict[str, dict[str, object]]:
+    """Record host executables; only Git is manifest-pinned.
+
+    Docker/Node/LibreOffice remain explicit operator TCB prerequisites whose real lanes
+    establish behavior. Recording their bytes is attribution, not self-certification.
+    """
+    launch = manifest_mod._launch_module()
+    tools: dict[str, dict[str, object]] = {}
+    for name in ("git", "docker", "node", "npm", "npx", "libreoffice"):
+        try:
+            raw = str(launch.resolve_system_git()) if name == "git" else shutil.which(name)
+            if not raw:
+                tools[name] = {"available": False, "operator_tcb": name != "git"}
+                continue
+            path = Path(raw).resolve(strict=True)
+            tools[name] = {
+                "available": True,
+                "realpath": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "operator_tcb": name != "git",
+                "manifest_pinned": name == "git",
+            }
+        except OSError as exc:
+            tools[name] = {"available": False, "error": str(exc), "operator_tcb": name != "git"}
+    return tools
 
 
 def _parse_junit(path: Path) -> dict[str, int]:
@@ -357,16 +540,12 @@ def _run_pytest_lane(
     junit_path.unlink(missing_ok=True)
     report_path.unlink(missing_ok=True)
     cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
+        *_pytest_command_prefix(repo),
         *paths,
         "-o",
         "addopts=",
         "-m",
         marker,
-        "-p",
-        _CLOSEOUT_REPORT_PLUGIN,
         "--closeout-report-json",
         str(report_path),
         f"--junitxml={junit_path}",
@@ -697,6 +876,9 @@ def _run_frontend_lane(
     detail["npx_available"] = True
 
     vitest_json = evidence_dir / "frontend-vitest.json"
+    # A reused evidence directory must not let an old green reporter output survive a
+    # crash/non-writing invocation.
+    vitest_json.unlink(missing_ok=True)
     vproc = _run(
         [
             "npx",
@@ -718,7 +900,8 @@ def _run_frontend_lane(
     # inside a frozen file must make the lane non-green even when the file set matches.
     titles_ok, titles_detail = _diff_frontend_titles(frozen_inventory, observed_titles)
     vitest_ok = (
-        parsed_ok
+        vproc.returncode == 0
+        and parsed_ok
         and counts["failed"] == 0
         and counts["pending"] == 0
         and counts["todo"] == 0
@@ -879,6 +1062,9 @@ def _run_browser_e2e(repo: Path, evidence_dir: Path) -> dict[str, object]:
     success-shaped report — so the frontend lane's browser gate is non-green."""
     frontend_dir = repo / "frontend"
     out_path = evidence_dir / "frontend-e2e.json"
+    # The command writes via stdout rather than an output-file flag, so remove any
+    # prior report before dispatch just as the governed pytest/vitest lanes do.
+    out_path.unlink(missing_ok=True)
     summary: dict[str, object] = {"command": manifest_mod.COMMAND_INVENTORY["browser_e2e"]}
     if shutil.which("npx") is None:
         summary["status"] = "not_executed_offline"
@@ -897,7 +1083,7 @@ def _run_browser_e2e(repo: Path, evidence_dir: Path) -> dict[str, object]:
             report = json.loads(stdout)
         except json.JSONDecodeError:
             report = None
-    if isinstance(report, dict):
+    if isinstance(report, dict) and proc.returncode == 0:
         out_path.write_text(
             json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
@@ -909,7 +1095,7 @@ def _run_browser_e2e(repo: Path, evidence_dir: Path) -> dict[str, object]:
             "status": "browser_run_failed",
             "exit_code": proc.returncode,
             "note": (
-                "playwright did not emit a parseable JSON report on stdout; the Firefox "
+                "playwright did not exit 0 with a parseable JSON report; the Firefox "
                 "e2e lane did not complete — recorded as failed, not faked"
             ),
         }
@@ -991,17 +1177,13 @@ def _run_capture_lane(
     report_path.unlink(missing_ok=True)
     proc = _run(
         [
-            sys.executable,
-            "-m",
-            "pytest",
+            *_pytest_command_prefix(repo),
             manifest_mod.CAPTURE_TEST_FILE,
             "-o",
             "addopts=",
             "-m",
             manifest_mod.CLOSEOUT_MARKER_LIVE,
             "-ra",
-            "-p",
-            _CLOSEOUT_REPORT_PLUGIN,
             "--closeout-report-json",
             str(report_path),
             f"--junitxml={junit_path}",
@@ -1017,16 +1199,23 @@ def _run_capture_lane(
         junit_path=str(junit_path),
         report_path=str(report_path),
     )
-    observed = manifest_mod.collect_capture_node_ids(repo)
+    collect_error: str | None = None
+    try:
+        observed = manifest_mod.collect_capture_node_ids(repo)
+    except RuntimeError as exc:
+        observed = []
+        collect_error = str(exc)
     expected = sorted(frozen_capture_inventory)
     missing = sorted(set(expected) - set(observed))
     extra = sorted(set(observed) - set(expected))
     inventory_ok = bool(expected) and not missing and not extra
-    inventory_reasons = (
-        []
-        if inventory_ok
-        else [f"governed capture inventory mismatch: missing={missing} extra={extra}"]
-    )
+    inventory_reasons = []
+    if collect_error is not None:
+        inventory_reasons.append(f"governed capture collect-only failed: {collect_error}")
+    if not inventory_ok:
+        inventory_reasons.append(
+            f"governed capture inventory mismatch: missing={missing} extra={extra}"
+        )
     summary = _finalize_pytest_lane(
         lane,
         report=_load_structured_report(report_path),
@@ -1038,6 +1227,99 @@ def _run_capture_lane(
         "observed_count": len(observed),
         "missing": missing,
         "extra": extra,
+        "collect_ok": collect_error is None,
+        "collect_error": collect_error,
+        "structured": summary,
+    }
+    return lane
+
+
+def _run_support_fail_closed_lane(
+    repo: Path, evidence_dir: Path, frozen_inventory: list[str]
+) -> LaneResult:
+    """Run the supplemental hermetic support-adapter regressions as an exact lane.
+
+    This is intentionally NOT Docker lifecycle proof: the tests seam ``subprocess.run``
+    to force command failures.  It is separately frozen/governed so those valuable
+    fail-closed controls cannot be silently omitted or mistaken for the live lane.
+    """
+    junit_path = evidence_dir / "pytest-live-support-fail-closed.xml"
+    report_path = evidence_dir / _SUPPORT_FAIL_CLOSED_REPORT_FILE
+    junit_path.unlink(missing_ok=True)
+    report_path.unlink(missing_ok=True)
+    proc = _run(
+        [
+            *_pytest_command_prefix(repo),
+            manifest_mod.SUPPORT_FAIL_CLOSED_TEST_FILE,
+            "-o",
+            "addopts=",
+            "-m",
+            manifest_mod.NONLIVE_MARKER,
+            "-ra",
+            "--closeout-report-json",
+            str(report_path),
+            f"--junitxml={junit_path}",
+        ],
+        cwd=repo,
+        env=_pytest_env(),
+    )
+    lane = LaneResult(
+        name="hermetic-live-support-fail-closed",
+        status="ran",
+        exit_code=proc.returncode,
+        junit=_parse_junit(junit_path),
+        junit_path=str(junit_path),
+        report_path=str(report_path),
+    )
+    collect_error: str | None = None
+    try:
+        observed = manifest_mod.collect_support_fail_closed_node_ids(repo)
+    except RuntimeError as exc:
+        observed = []
+        collect_error = str(exc)
+    expected = sorted(frozen_inventory)
+    report = _load_structured_report(report_path)
+    selected_raw = report.get("selected") if isinstance(report, dict) else None
+    selected = sorted(str(node) for node in selected_raw) if isinstance(selected_raw, list) else []
+    missing = sorted(set(expected) - set(observed))
+    extra = sorted(set(observed) - set(expected))
+    selected_missing = sorted(set(expected) - set(selected))
+    selected_extra = sorted(set(selected) - set(expected))
+    inventory_ok = bool(expected) and not missing and not extra
+    selected_ok = bool(expected) and not selected_missing and not selected_extra
+    exact_pass_count_ok = (lane.junit or {}).get("tests") == len(expected)
+    reasons: list[str] = []
+    if collect_error is not None:
+        reasons.append(f"support fail-closed collect-only failed: {collect_error}")
+    if not inventory_ok:
+        reasons.append(f"support fail-closed inventory mismatch: missing={missing} extra={extra}")
+    if not selected_ok:
+        reasons.append(
+            "support fail-closed executed selection mismatch: "
+            f"missing={selected_missing} extra={selected_extra}"
+        )
+    if not exact_pass_count_ok:
+        reasons.append(
+            "support fail-closed JUnit count mismatch: "
+            f"tests={(lane.junit or {}).get('tests')} expected={len(expected)}"
+        )
+    summary = _finalize_pytest_lane(lane, report=report, extra_reasons=reasons)
+    lane.detail = {
+        "inventory_ok": inventory_ok,
+        "selected_ok": selected_ok,
+        "exact_pass_count_ok": exact_pass_count_ok,
+        "expected_count": len(expected),
+        "observed_count": len(observed),
+        "selected_count": len(selected),
+        "expected": expected,
+        "observed": observed,
+        "selected": selected,
+        "missing": missing,
+        "extra": extra,
+        "selected_missing": selected_missing,
+        "selected_extra": selected_extra,
+        "collect_ok": collect_error is None,
+        "collect_error": collect_error,
         "structured": summary,
     }
     return lane
@@ -1066,17 +1348,13 @@ def _run_live_lane(repo: Path, evidence_dir: Path, run_id: str) -> LaneResult:
     live_env["CLOSEOUT_EVIDENCE_RUN_ID"] = run_id
     proc = _run(
         [
-            sys.executable,
-            "-m",
-            "pytest",
+            *_pytest_command_prefix(repo),
             manifest_mod.LIVE_TEST_FILE,
             "-o",
             "addopts=",
             "-m",
             manifest_mod.CLOSEOUT_MARKER_LIVE,
             "-ra",
-            "-p",
-            _CLOSEOUT_REPORT_PLUGIN,
             "--closeout-report-json",
             str(report_path),
             f"--junitxml={junit_path}",
@@ -1329,6 +1607,13 @@ def _is_test_path(parts: tuple[str, ...], name: str) -> bool:
 
 
 def _frozen_python_test_files(repo: Path) -> list[Path]:
+    """Files subject to the live-test anti-bypass seam policy.
+
+    ``SUPPORT_FAIL_CLOSED_TEST_FILE`` is intentionally excluded: it is separately
+    byte-frozen, exact-node inventoried, and run as a required hermetic lane, but it
+    deliberately seams ``subprocess.run`` to manufacture Docker CLI failures and is not
+    represented as live proof. Applying the live seam ban to it would erase its purpose.
+    """
     files: list[Path] = []
     for rel in manifest_mod.CLOSEOUT_TEST_DIRS:
         base = repo / rel
@@ -1470,27 +1755,51 @@ def _scan_campaign_diff_suppressions(
 # ---- command inventory gate (G19 / plan §9 criterion 3) -----------------------
 
 
-def _observed_command_ids(repo: Path) -> set[str]:
-    """The set of command IDs this verifier actually dispatches on this host. The Python
-    lanes always run; the frontend/browser/G11 commands run only when node/npm/npx are
-    present. On a real acceptance host (all tools present) this equals
-    ``manifest_mod.REQUIRED_COMMAND_IDS``; a host missing a toolchain OMITS commands and
-    the inventory gate then fails (an acceptance run cannot omit a required command)."""
-    ids = {
-        "python_nonlive",
-        "python_closeout",
-        "python_closeout_collect",
-        "live_docker",
-        "live_capture",
-    }
-    if shutil.which("npx") is not None and shutil.which("npm") is not None:
-        ids |= {
-            "frontend_vitest",
-            "frontend_typecheck",
-            "frontend_build",
-            "g11_typecheck",
-            "browser_e2e",
-        }
+def _successful_command_ids(
+    *,
+    nonlive: LaneResult,
+    closeout: LaneResult,
+    closeout_collect_ok: bool,
+    browser_summary: dict[str, object],
+    frontend: LaneResult,
+    g11: LaneResult,
+    live: LaneResult,
+    capture: LaneResult,
+    support_fail_closed: LaneResult,
+) -> set[str]:
+    """Return commands that were actually dispatched *and exited zero*.
+
+    Tool presence is not execution evidence.  This deliberately treats a non-zero
+    required command as missing from the successful inventory (its lane remains red as
+    well), so a parsed stale artifact cannot manufacture a complete command record.
+    """
+    ids: set[str] = set()
+    if nonlive.exit_code == 0:
+        ids.add("python_nonlive")
+    if closeout.exit_code == 0:
+        ids.add("python_closeout")
+    if closeout_collect_ok:
+        ids.add("python_closeout_collect")
+    if browser_summary.get("status") == "executed" and browser_summary.get("exit_code") == 0:
+        ids.add("browser_e2e")
+    fe = frontend.detail
+    vitest_detail = fe.get("vitest")
+    typecheck_detail = fe.get("typecheck")
+    build_detail = fe.get("build")
+    if isinstance(vitest_detail, dict) and vitest_detail.get("exit_code") == 0:
+        ids.add("frontend_vitest")
+    if isinstance(typecheck_detail, dict) and typecheck_detail.get("exit_code") == 0:
+        ids.add("frontend_typecheck")
+    if isinstance(build_detail, dict) and build_detail.get("exit_code") == 0:
+        ids.add("frontend_build")
+    if g11.exit_code == 0:
+        ids.add("g11_typecheck")
+    if live.exit_code == 0:
+        ids.add("live_docker")
+    if capture.exit_code == 0:
+        ids.add("live_capture")
+    if support_fail_closed.exit_code == 0:
+        ids.add("hermetic_live_support_fail_closed")
     return ids
 
 
@@ -1562,17 +1871,25 @@ def _run_scanner_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     # diff.noprefix=true (or a noprefix alias); a prefix-less diff would otherwise leave
     # the parser's cur_file None and silently no-op the whole scan (fail-open). The parser
     # is also hardened to anchor on the `diff --git` header (see _DIFF_GIT_HEADER_RE).
-    diff_text = _run(
-        [
-            "git",
+    try:
+        diff_text = _git(
+            repo,
             "diff",
             "--src-prefix=a/",
             "--dst-prefix=b/",
             f"{manifest_mod.BASELINE_SHA}..HEAD",
-        ],
-        cwd=repo,
-    ).stdout
-    diff_violations = _scan_campaign_diff_suppressions(diff_text, suppression_baseline)
+        )
+        diff_violations = _scan_campaign_diff_suppressions(diff_text, suppression_baseline)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        # A missing/failed campaign diff is a red scanner result, never an empty diff.
+        diff_violations = [
+            {
+                "file": "<git-diff>",
+                "line": 0,
+                "rule": "campaign_diff_unavailable",
+                "detail": str(exc),
+            }
+        ]
     violations.extend(diff_violations)
 
     def _violation_sort_key(v: dict[str, object]) -> tuple[str, int, str]:
@@ -1690,6 +2007,53 @@ _REQUIRED_EVIDENCE_FAMILIES = (
     "appkit",
     "public_build_env_vite",
 )
+_DOCKER_DF_TYPES = frozenset({"Images", "Containers", "Local Volumes", "Build Cache"})
+_DOCKER_DF_KEYS = frozenset({"Type", "TotalCount", "Active", "Size", "Reclaimable"})
+_CANONICAL_COUNT_RE = re.compile(r"(?:0|[1-9][0-9]*)\Z")
+_DOCKER_SIZE_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:B|kB|MB|GB|TB|PB)\Z")
+_DOCKER_RECLAIMABLE_RE = re.compile(
+    r"(?P<size>(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:B|kB|MB|GB|TB|PB))"
+    r"(?: \((?P<percent>0|[1-9][0-9]?|100)%\))?\Z"
+)
+
+
+def _valid_docker_disk_usage(value: object) -> bool:
+    """Mirror the live-capture schema; parity vectors pin both implementations."""
+    if not isinstance(value, dict) or set(value) != {"rows"}:
+        return False
+    rows = value.get("rows")
+    if not isinstance(rows, list) or len(rows) != len(_DOCKER_DF_TYPES):
+        return False
+    observed_types: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != _DOCKER_DF_KEYS:
+            return False
+        row_type = row.get("Type")
+        total = row.get("TotalCount")
+        active = row.get("Active")
+        size = row.get("Size")
+        reclaimable = row.get("Reclaimable")
+        if not isinstance(row_type, str) or row_type not in _DOCKER_DF_TYPES:
+            return False
+        if row_type in observed_types:
+            return False
+        observed_types.add(row_type)
+        if (
+            not isinstance(total, str)
+            or _CANONICAL_COUNT_RE.fullmatch(total) is None
+            or not isinstance(active, str)
+            or _CANONICAL_COUNT_RE.fullmatch(active) is None
+            or int(active) > int(total)
+        ):
+            return False
+        if not isinstance(size, str) or _DOCKER_SIZE_RE.fullmatch(size) is None:
+            return False
+        if (
+            not isinstance(reclaimable, str)
+            or _DOCKER_RECLAIMABLE_RE.fullmatch(reclaimable) is None
+        ):
+            return False
+    return observed_types == _DOCKER_DF_TYPES
 
 
 def _read_family_evidence(fixtures_dir: Path, kind: str) -> dict[str, dict[str, object]]:
@@ -1706,6 +2070,99 @@ def _read_family_evidence(fixtures_dir: Path, kind: str) -> dict[str, dict[str, 
         if isinstance(data, dict):
             out[family] = data
     return out
+
+
+def _release_binding_reasons(family: str, record: dict[str, object]) -> list[str]:
+    """Independently verify the release response/bundle/source binding.
+
+    ``binding_matches_response`` is helper-authored evidence and therefore cannot be the
+    oracle for its own correctness.  Recompute the ReleaseSpec digest from parsed
+    ``release.json`` and compare each binding field across all three representations.
+    """
+    reasons: list[str] = []
+    rj = record.get("release_json")
+    resp = record.get("release_response")
+    source = record.get("source_binding")
+    if not isinstance(rj, dict):
+        return [f"live evidence: {family} release.json is not an object"]
+    if not isinstance(resp, dict):
+        return [f"live evidence: {family} release response is not an object"]
+    if not isinstance(source, dict):
+        return [f"live evidence: {family} source binding is not an object"]
+    if source.get("release_status") != 200 or source.get("response_matches_supplied") is not True:
+        reasons.append(
+            f"live evidence: {family} second release response was not a matching 200 response"
+        )
+
+    response_seq = resp.get("version_seq")
+    release_seq = rj.get("version_seq")
+    bound_seq = source.get("bound_version_seq")
+    if (
+        not isinstance(response_seq, int)
+        or isinstance(response_seq, bool)
+        or response_seq < 1
+        or release_seq != response_seq
+        or bound_seq != response_seq
+    ):
+        reasons.append(
+            f"live evidence: {family} version_seq disagrees across response/release.json/binding"
+        )
+
+    response_tree = resp.get("tree_digest")
+    release_tree = rj.get("tree_digest")
+    if (
+        not isinstance(response_tree, str)
+        or re.fullmatch(r"[0-9a-f]{64}", response_tree) is None
+        or release_tree != response_tree
+    ):
+        reasons.append(
+            f"live evidence: {family} tree_digest disagrees across response/release.json"
+        )
+
+    canonical = json.dumps(rj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    recomputed_spec = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    response_spec = resp.get("spec_digest")
+    bound_spec = source.get("bound_spec_digest")
+    if response_spec != recomputed_spec or bound_spec != recomputed_spec:
+        reasons.append(f"live evidence: {family} spec_digest does not match canonical release.json")
+
+    provenance = rj.get("provenance")
+    release_assessment = provenance.get("assessment") if isinstance(provenance, dict) else None
+    response_assessment = resp.get("assessment")
+    bound_assessment = source.get("bundle_assessment")
+    if (
+        not isinstance(release_assessment, str)
+        or not release_assessment
+        or response_assessment != release_assessment
+        or bound_assessment != release_assessment
+    ):
+        reasons.append(
+            f"live evidence: {family} assessment disagrees across response/release.json/binding"
+        )
+    return reasons
+
+
+def _cleanup_evidence_reasons(family: str, record: dict[str, object]) -> list[str]:
+    """Validate cleanup truth without trusting summary booleans."""
+    reasons: list[str] = []
+    remaining = record.get("remaining")
+    required_resource_keys = {"containers", "images", "volumes", "networks"}
+    all_empty = (
+        isinstance(remaining, dict)
+        and set(remaining) == required_resource_keys
+        and all(isinstance(value, list) and not value for value in remaining.values())
+    )
+    if record.get("zero_remaining") is not True or not all_empty:
+        reasons.append(f"live evidence: {family} cleanup did not consistently reach zero remaining")
+    if record.get("errors") != []:
+        reasons.append(f"live evidence: {family} cleanup recorded one or more errors")
+
+    disk_before, disk_after = record.get("disk_before"), record.get("disk_after")
+    if not _valid_docker_disk_usage(disk_before) or not _valid_docker_disk_usage(disk_after):
+        reasons.append(f"live evidence: {family} cleanup missing real disk before/after")
+    return reasons
 
 
 def _finalize_live_evidence(evidence_dir: Path, run_id: str) -> tuple[bool, list[str]]:
@@ -1764,6 +2221,9 @@ def _finalize_live_evidence(evidence_dir: Path, run_id: str) -> tuple[bool, list
                 reasons.append(
                     f"live evidence: {family} source binding does not match the response"
                 )
+            # The helper boolean above is only corroboration.  This independent check is
+            # the load-bearing binding oracle.
+            reasons.extend(_release_binding_reasons(family, d))
         ins = inspects.get(family)
         if not _run_id_ok(ins):
             reasons.append(
@@ -1794,17 +2254,8 @@ def _finalize_live_evidence(evidence_dir: Path, run_id: str) -> tuple[bool, list
                 f"live evidence: {family} cleanup is not from this run (run_id mismatch)"
             )
         else:
-            remaining = cl.get("remaining") if isinstance(cl, dict) else None
-            all_empty = isinstance(remaining, dict) and all(
-                isinstance(v, list) and not v for v in remaining.values()
-            )
-            if cl.get("zero_remaining") is not True or not all_empty:
-                reasons.append(
-                    f"live evidence: {family} cleanup did not consistently reach zero remaining"
-                )
-            db, da = cl.get("disk_before"), cl.get("disk_after")
-            if not (isinstance(db, dict) and db) or not (isinstance(da, dict) and da):
-                reasons.append(f"live evidence: {family} cleanup missing real disk before/after")
+            assert isinstance(cl, dict)
+            reasons.extend(_cleanup_evidence_reasons(family, cl))
 
     # Aggregate the four required artifacts (overwriting the placeholder markers).
     (evidence_dir / "bundle-digests.json").write_text(
@@ -1898,6 +2349,7 @@ def _final_verdict(
     hygiene_ok: bool,
     command_inventory_ok: bool = True,
     live_evidence_ok: bool = True,
+    post_run_integrity_ok: bool = True,
 ) -> bool:
     """The single release-verdict conjunction: ``passed`` is true iff the frozen manifest
     verified, EVERY lane is green, the checkout is clean, this is NOT an ``--author`` run,
@@ -1913,6 +2365,7 @@ def _final_verdict(
         and hygiene_ok
         and command_inventory_ok
         and live_evidence_ok
+        and post_run_integrity_ok
     )
 
 
@@ -1926,6 +2379,7 @@ def _not_passed_reasons(
     command_inventory_ok: bool = True,
     command_inventory_detail: dict[str, object] | None = None,
     live_evidence_reasons: list[str] | None = None,
+    post_run_integrity_ok: bool = True,
 ) -> list[str]:
     reasons: list[str] = []
     if author:
@@ -1958,6 +2412,8 @@ def _not_passed_reasons(
         )
     if live_evidence_reasons:
         reasons.extend(live_evidence_reasons)
+    if not post_run_integrity_ok:
+        reasons.append("candidate identity/cleanliness/governed bytes changed during verification")
     return reasons
 
 
@@ -1965,6 +2421,16 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     repo = args.repo_root.resolve()
     evidence_dir = args.evidence_dir.resolve()
+
+    launch = manifest_mod._launch_module()
+    if not launch.trusted_launch_isolated():
+        print(
+            "ERROR: refusing certification; launch with python -I -S -P -B "
+            "-X pycache_prefix=/dev/null. The invoked "
+            "interpreter/stdlib/native host is an operator trust prerequisite.",
+            file=sys.stderr,
+        )
+        return 2
 
     if repo == evidence_dir or repo in evidence_dir.parents:
         print(
@@ -1974,6 +2440,55 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    stored, load_note = _load_manifest(repo)
+    launch_policy = manifest_mod.trusted_launch_policy(repo)
+    expected_launch_policy = (
+        stored.get("trusted_launch_policy") if isinstance(stored, dict) else None
+    )
+    if launch_policy != expected_launch_policy:
+        evidence = {
+            "schema": "export-track1-closeout-evidence/v1",
+            "passed": False,
+            "refused": "trusted_launch_policy_mismatch",
+            "trusted_launch_policy": {
+                "expected": expected_launch_policy,
+                "actual": launch_policy,
+            },
+            "operator_tcb": (
+                "pre-launch interpreter/dependency/toolchain integrity and continuous "
+                "same-UID races"
+            ),
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+        (evidence_dir / "evidence.json").write_text(
+            json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
+        )
+        print("ERROR: trusted-launch policy does not match the frozen manifest", file=sys.stderr)
+        return 2
+
+    initial_trusted_launch: dict[str, object]
+    try:
+        initial_trusted_launch = manifest_mod.observed_launch_identity(repo)
+    except (OSError, RuntimeError) as exc:
+        initial_trusted_launch = {"error": str(exc)}
+    if "error" in initial_trusted_launch:
+        evidence = {
+            "schema": "export-track1-closeout-evidence/v1",
+            "passed": False,
+            "refused": "observed_launch_identity_unavailable",
+            "observed_launch_identity": initial_trusted_launch,
+            "operator_tcb": (
+                "pre-launch interpreter/dependency/toolchain integrity and continuous "
+                "same-UID races"
+            ),
+            "generated_at": datetime.now(UTC).isoformat(),
+        }
+        (evidence_dir / "evidence.json").write_text(
+            json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
+        )
+        print("ERROR: could not capture observed launch identity", file=sys.stderr)
+        return 2
 
     clean = _is_clean(repo)
     candidate_sha = _git(repo, "rev-parse", "HEAD")
@@ -1999,10 +2514,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    stored, load_note = _load_manifest(repo)
     frozen_ok, frozen_note = _verify_frozen_manifest(repo, stored, load_note)
+    initial_governed_snapshot = _governed_byte_snapshot(repo, stored)
     frozen_inventory: list[str] = []
     frozen_capture_inventory: list[str] = []
+    frozen_support_inventory: list[str] = []
     frontend_inventory: dict[str, object] = {}
     if stored is not None:
         raw_py = stored.get("python_closeout_inventory", [])
@@ -2011,11 +2527,15 @@ def main(argv: list[str] | None = None) -> int:
         raw_cap = stored.get("governed_capture_inventory", [])
         if isinstance(raw_cap, list):
             frozen_capture_inventory = [str(x) for x in raw_cap]
+        raw_support = stored.get("governed_support_fail_closed_inventory", [])
+        if isinstance(raw_support, list):
+            frozen_support_inventory = [str(x) for x in raw_support]
         raw_fe = stored.get("frontend_closeout_inventory", {})
         if isinstance(raw_fe, dict):
             frontend_inventory = raw_fe
 
     tool_versions = _tool_versions(repo)
+    host_tool_preflight = _host_tool_preflight()
     lanes: list[LaneResult] = []
 
     nonlive = _run_pytest_lane(
@@ -2048,15 +2568,22 @@ def main(argv: list[str] | None = None) -> int:
         junit_filename="pytest-closeout.xml",
         report_filename=_CLOSEOUT_REPORT_FILE,
     )
-    observed = manifest_mod.collect_python_closeout_ids(repo)
+    closeout_collect_error: str | None = None
+    try:
+        observed = manifest_mod.collect_python_closeout_ids(repo)
+    except RuntimeError as exc:
+        observed = []
+        closeout_collect_error = str(exc)
     expected = sorted(frozen_inventory)
     missing = sorted(set(expected) - set(observed))
     extra = sorted(set(observed) - set(expected))
     inventory_ok = bool(expected) and not missing and not extra
     inventory_note = f"missing={missing} extra={extra}" if not inventory_ok else "match"
-    inventory_reasons = (
-        [] if inventory_ok else [f"frozen node-ID inventory mismatch: {inventory_note}"]
-    )
+    inventory_reasons = []
+    if closeout_collect_error is not None:
+        inventory_reasons.append(f"closeout collect-only failed: {closeout_collect_error}")
+    if not inventory_ok:
+        inventory_reasons.append(f"frozen node-ID inventory mismatch: {inventory_note}")
     closeout_summary = _finalize_pytest_lane(
         closeout,
         report=_load_structured_report(Path(closeout.report_path or "")),
@@ -2068,6 +2595,8 @@ def main(argv: list[str] | None = None) -> int:
         "observed_count": len(observed),
         "missing": missing,
         "extra": extra,
+        "collect_ok": closeout_collect_error is None,
+        "collect_error": closeout_collect_error,
         "structured": closeout_summary,
     }
     lanes.append(closeout)
@@ -2094,6 +2623,13 @@ def main(argv: list[str] | None = None) -> int:
     capture = _run_capture_lane(repo, evidence_dir, frozen_capture_inventory)
     lanes.append(capture)
 
+    # Supplemental hermetic harness proof. It deliberately seams subprocess and is not
+    # counted as live Docker evidence; its exact frozen nodes still gate certification.
+    support_fail_closed = _run_support_fail_closed_lane(
+        repo, evidence_dir, frozen_support_inventory
+    )
+    lanes.append(support_fail_closed)
+
     scanner = _run_scanner_lane(repo, evidence_dir)
     lanes.append(scanner)
 
@@ -2115,7 +2651,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # G19 / §9 criterion 3: the observed command inventory must EXACTLY equal the frozen
     # required inventory (omitted OR substitute/extra commands rejected).
-    observed_command_ids = _observed_command_ids(repo)
+    observed_command_ids = _successful_command_ids(
+        nonlive=nonlive,
+        closeout=closeout,
+        closeout_collect_ok=closeout_collect_error is None,
+        browser_summary=browser_summary,
+        frontend=frontend,
+        g11=g11,
+        live=live,
+        capture=capture,
+        support_fail_closed=support_fail_closed,
+    )
     command_inventory_ok, command_inventory_detail = _check_command_inventory(
         observed_command_ids, manifest_mod.REQUIRED_COMMAND_IDS
     )
@@ -2126,6 +2672,16 @@ def main(argv: list[str] | None = None) -> int:
     # weakening an existing gate (it can only make passing harder).
     hygiene_ok, hygiene_violations = _scan_evidence_hygiene(evidence_dir)
 
+    # FINAL identity boundary: lanes are executable code and may mutate the checkout or
+    # move HEAD.  Re-verify after all of them, before computing or writing the verdict.
+    post_run_integrity_ok, post_run_integrity = _post_run_integrity(
+        repo,
+        candidate_sha=candidate_sha,
+        stored_manifest=stored,
+        initial_snapshot=initial_governed_snapshot,
+        initial_trusted_launch=initial_trusted_launch,
+    )
+
     all_lanes_green = all(lane.green is True for lane in lanes)
     passed = _final_verdict(
         frozen_ok=frozen_ok,
@@ -2135,6 +2691,7 @@ def main(argv: list[str] | None = None) -> int:
         hygiene_ok=hygiene_ok,
         command_inventory_ok=command_inventory_ok,
         live_evidence_ok=live_evidence_ok,
+        post_run_integrity_ok=post_run_integrity_ok,
     )
 
     browser_written = browser_summary.get("status") in {"executed", "browser_run_failed"}
@@ -2144,10 +2701,15 @@ def main(argv: list[str] | None = None) -> int:
         "author_mode": args.author,
         "candidate_sha": candidate_sha,
         "clean_tree": clean,
+        "post_run_integrity": post_run_integrity,
+        "source_changed_during_run": not post_run_integrity_ok,
         "baseline_sha": manifest_mod.BASELINE_SHA,
         "acceptance_tag": manifest_mod.ACCEPTANCE_TAG,
         "generated_at": datetime.now(UTC).isoformat(),
         "tool_versions": tool_versions,
+        "host_tool_preflight": host_tool_preflight,
+        "trusted_launch_policy": launch_policy,
+        "observed_launch_identity": initial_trusted_launch,
         "frozen_manifest": {"ok": frozen_ok, "note": frozen_note},
         "closeout_inventory": {
             "ok": inventory_ok,
@@ -2155,6 +2717,14 @@ def main(argv: list[str] | None = None) -> int:
             "observed": observed,
             "missing": missing,
             "extra": extra,
+        },
+        "support_fail_closed_inventory": {
+            "ok": support_fail_closed.detail.get("inventory_ok") is True,
+            "expected": support_fail_closed.detail.get("expected", []),
+            "observed": support_fail_closed.detail.get("observed", []),
+            "selected": support_fail_closed.detail.get("selected", []),
+            "missing": support_fail_closed.detail.get("missing", []),
+            "extra": support_fail_closed.detail.get("extra", []),
         },
         "command_inventory": {
             **command_inventory_detail,
@@ -2180,6 +2750,12 @@ def main(argv: list[str] | None = None) -> int:
             _CAPTURE_REPORT_FILE: (
                 "written" if Path(capture.report_path or "").is_file() else "absent"
             ),
+            "pytest-live-support-fail-closed.xml": (
+                "written" if Path(support_fail_closed.junit_path or "").is_file() else "absent"
+            ),
+            _SUPPORT_FAIL_CLOSED_REPORT_FILE: (
+                "written" if Path(support_fail_closed.report_path or "").is_file() else "absent"
+            ),
             "frontend-vitest.json": "written" if frontend.detail.get("npx_available") else "absent",
             "frontend-e2e.json": "written" if browser_written else "absent",
             "g11-typecheck.txt": "written",
@@ -2196,6 +2772,7 @@ def main(argv: list[str] | None = None) -> int:
             command_inventory_ok=command_inventory_ok,
             command_inventory_detail=command_inventory_detail,
             live_evidence_reasons=live_evidence_reasons,
+            post_run_integrity_ok=post_run_integrity_ok,
         ),
     }
     (evidence_dir / "evidence.json").write_text(
