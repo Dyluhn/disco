@@ -158,13 +158,123 @@ def test_file_stream_ephemeral_payload_is_normalized_for_ws_frame():
 
     frame = WSServerFrame(type="file_stream", file_stream=payload).model_dump(mode="json")
     assert frame["type"] == "file_stream"
+    # `agent_view_id` is a first-class FileStreamFrame field (core/wire.py) with no
+    # `exclude_none`, so a bare model_dump — the SAME one the live ws send path uses
+    # (routes/ws.py:_file_stream_payload → WSServerFrame → model_dump) — always
+    # carries the key. This payload declares no agent_view_id, so the
+    # normalized-and-serialized value is None (the absent-value contract). The
+    # frontend gates watch-it-write deltas on this key (useBuildStream.ts:
+    # `if (fs.agent_view_id !== activeAgentViewId) return state`), so it must stay
+    # on the wire — this stays an EXACT dict rather than dropping/broadening the key.
     assert frame["file_stream"] == {
         "tool": "file_edit",
         "path": "src/App.tsx",
         "index": 0,
         "delta": "return <main>Live</main>;\n",
         "field": "new",
+        "agent_view_id": None,
     }
+
+
+def test_file_stream_payload_normalizes_and_serializes_agent_view_id():
+    """Positive: a real agent_view_id is normalized onto the typed frame and
+    serialized on the wire verbatim (the multi-view routing field the frontend
+    gates on). Mirrors the exact-dict shape of the ephemeral test above but for the
+    POPULATED case — same construction the live ws send path uses (routes/ws.py:
+    _file_stream_payload → WSServerFrame → model_dump). Index/field normalization
+    (`"0"→0`, `field="new"`) still hold alongside the id."""
+    from disco.agent_server.routes.ws import _file_stream_payload
+    from disco.core import WSServerFrame
+
+    payload = _file_stream_payload(
+        {
+            "type": "file_stream",
+            "tool": "file_edit",
+            "path": "src/App.tsx",
+            "index": "0",
+            "delta": "return <main>Live</main>;\n",
+            "field": "new",
+            "agent_view_id": "aview_v2",
+        }
+    )
+
+    frame = WSServerFrame(type="file_stream", file_stream=payload).model_dump(mode="json")
+    assert frame["file_stream"] == {
+        "tool": "file_edit",
+        "path": "src/App.tsx",
+        "index": 0,
+        "delta": "return <main>Live</main>;\n",
+        "field": "new",
+        "agent_view_id": "aview_v2",
+    }
+
+
+def test_file_stream_payload_agent_view_id_absent_or_falsy_is_none():
+    """Negative/contract: _file_stream_payload maps absent, empty, and other falsy
+    agent_view_id inputs to None (never a bare '' on the wire) and coerces a
+    truthy non-string id to str — the exact current normalization contract
+    (routes/ws.py:55). None is still serialized as an explicit key (the frame has
+    no exclude_none), so the frontend gate always sees the field."""
+    from disco.agent_server.routes.ws import _file_stream_payload
+    from disco.core import WSServerFrame
+
+    base = {"type": "file_stream", "tool": "file_write", "path": "p", "index": 0, "delta": "d"}
+
+    # absent key → None
+    assert _file_stream_payload(base).agent_view_id is None
+    # explicit falsy values → None (not "" and not 0)
+    assert _file_stream_payload({**base, "agent_view_id": ""}).agent_view_id is None
+    assert _file_stream_payload({**base, "agent_view_id": None}).agent_view_id is None
+    assert _file_stream_payload({**base, "agent_view_id": 0}).agent_view_id is None
+    # truthy non-string → coerced to str; a real id is preserved verbatim
+    assert _file_stream_payload({**base, "agent_view_id": 123}).agent_view_id == "123"
+    assert _file_stream_payload({**base, "agent_view_id": "aview_x"}).agent_view_id == "aview_x"
+
+    # the absent-value None is a serialized wire key, not a dropped one
+    absent = WSServerFrame(type="file_stream", file_stream=_file_stream_payload(base)).model_dump(
+        mode="json"
+    )
+    assert "agent_view_id" in absent["file_stream"]
+    assert absent["file_stream"]["agent_view_id"] is None
+
+
+def test_file_stream_agent_view_id_round_trips_on_live_ws_path():
+    """Positive (live path): a real agent_view_id on an ephemeral file_stream
+    survives the actual production send path — routes/ws.py drains the ephemeral
+    bus → _file_stream_payload → WSServerFrame → _send_json_redacted — to the exact
+    bytes the client receives. The consumer quarantines deltas whose agent_view_id
+    != activeAgentViewId (useBuildStream.ts:205), so this field must reach the
+    wire; dropping it (e.g. exclude_none) would suppress every delta in a
+    multi-view session. A non-secret id is unaffected by redaction."""
+    store = SqliteEventStore(":memory:")
+    client = TestClient(create_app(store))
+    cid = _create(client)
+
+    with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
+        assert ws.receive_json()["type"] == "state"
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
+        store.publish_ephemeral(
+            cid,
+            {
+                "type": "file_stream",
+                "tool": "file_edit",
+                "path": "src/App.tsx",
+                "index": "0",
+                "delta": "return <main>Live</main>;\n",
+                "field": "new",
+                "agent_view_id": "aview_live",
+            },
+        )
+        frame = ws.receive_json()
+
+    assert frame["type"] == "file_stream"
+    assert frame["file_stream"]["agent_view_id"] == "aview_live"
+    # normalization still holds end-to-end on the live path
+    assert frame["file_stream"]["index"] == 0
+    assert frame["file_stream"]["field"] == "new"
+    assert frame["file_stream"]["path"] == "src/App.tsx"
+    assert frame["file_stream"]["delta"] == "return <main>Live</main>;\n"
 
 
 def test_file_stream_ephemeral_frame_is_redacted_on_live_ws_path():
