@@ -736,9 +736,7 @@ def test_generic_depends_on_coexists_with_migrate_ordering() -> None:
                 port_env="PORT",
             ),
         ),
-        env=(
-            EnvVarDecl(name="DATABASE_URL", scope=EnvScope.runtime, required=True, binding="db"),
-        ),
+        env=(EnvVarDecl(name="DATABASE_URL", scope=EnvScope.runtime, required=True, binding="db"),),
         resources=(_sqlite_resource(("npm", "run", "migrate")),),
         provenance=_prov(),
     )
@@ -818,8 +816,14 @@ def test_docker_compose_config_accepts_bundle(tmp_path):
 
     There is no compose provider on the build host, so this is integration-marked
     and excluded from the required unit run. On a host with Docker Compose v2 it
-    writes the emitted bundle to disk and asserts `docker compose config` parses
-    it; without one it skips."""
+    writes the emitted bundle to disk and proves both halves of the bundle's own
+    env contract, hermetically: the required names are scrubbed from the
+    subprocess environment so a developer shell that happens to export one of
+    them can neither satisfy nor break the proof.
+
+    Negative control: as-shipped (no `.env`), the `${NAME:?}` guard must fail
+    closed and name the missing variable. Positive control: the documented
+    SELFHOST.md flow (`cp .env.example .env`, fill in the values) must parse."""
     compose = which("docker")
     if compose is None:
         pytest.skip("docker not available on this host — compose config is deferred [LIVE]")
@@ -828,11 +832,38 @@ def test_docker_compose_config_accepts_bundle(tmp_path):
         dest = tmp_path / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
-    proc = subprocess.run(
+    # Required host-supplied names, read from the bundle's own NAMES-ONLY
+    # .env.example (required vars are the bare `NAME=` lines).
+    required = [
+        line[:-1]
+        for line in overlay[ENV_EXAMPLE_PATH].splitlines()
+        if line.endswith("=") and not line.startswith("#")
+    ]
+    assert required, ".env.example lists no required host-supplied vars for this spec"
+    scrubbed = {k: v for k, v in _os.environ.items() if k not in set(required)}
+
+    as_shipped = subprocess.run(
         ["docker", "compose", "config"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,
+        env=scrubbed,
     )
-    assert proc.returncode == 0, proc.stderr
+    assert as_shipped.returncode != 0, (
+        "the required-var guard must fail closed when the host supplies nothing"
+    )
+    assert any(name in as_shipped.stderr for name in required), as_shipped.stderr
+
+    (tmp_path / ".env").write_text(
+        "".join(f"{name}=filled-by-host\n" for name in required), encoding="utf-8"
+    )
+    filled = subprocess.run(
+        ["docker", "compose", "config"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=scrubbed,
+    )
+    assert filled.returncode == 0, filled.stderr

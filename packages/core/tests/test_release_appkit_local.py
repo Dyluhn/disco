@@ -384,10 +384,7 @@ def test_wo6_diff_does_not_touch_appkit_packages() -> None:
         path = line[3:].split(" -> ")[-1].strip().strip('"')
         changed.append(path)
     offenders = [
-        path
-        for path in changed
-        for prefix in _FORBIDDEN_DIFF_PREFIXES
-        if path.startswith(prefix)
+        path for path in changed for prefix in _FORBIDDEN_DIFF_PREFIXES if path.startswith(prefix)
     ]
     assert not offenders, offenders
 
@@ -457,10 +454,31 @@ def test_docker_compose_up_appkit_bundle(tmp_path: Path) -> None:
     try:
         assert up.returncode == 0, up.stderr
     finally:
-        subprocess.run(
-            ["docker", "compose", "down"],
+        # Teardown re-reads (and re-interpolates) the compose file, so it needs the
+        # same required env the up used — without it the `${ADMIN_TOKEN:?}` guard
+        # fails the `down` itself and the whole project silently leaks. `-v` reclaims
+        # the named volume: volume persistence across a plain `down` is the live
+        # closeout lane's proof, not this smoke's.
+        down = subprocess.run(
+            ["docker", "compose", "down", "-v"],
             cwd=tmp_path,
             capture_output=True,
             text=True,
             check=False,
+            env={**os.environ, "ADMIN_TOKEN": "test"},
         )
+    # A failed teardown must fail the test — outside the finally so it can never
+    # mask the primary `up` assertion.
+    assert down.returncode == 0, down.stderr
+    leftover = subprocess.run(
+        ["docker", "compose", "ps", "-aq"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "ADMIN_TOKEN": "test"},
+    )
+    assert leftover.returncode == 0, leftover.stderr
+    assert leftover.stdout.strip() == "", (
+        f"compose project leaked containers after down -v: {leftover.stdout}"
+    )
