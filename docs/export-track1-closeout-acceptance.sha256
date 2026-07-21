@@ -1,18 +1,35 @@
 {
   "schema": "export-track1-closeout-acceptance/v1",
-  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v6 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (the CURRENT candidacy is acceptance-v6 — see remediation_v6.ratification_status; remediation_r0 is a HISTORICAL record). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, the ratification_status (the v4 candidacy is SUPERSEDED by acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
-  "acceptance_tag": "export-track1-closeout-acceptance-v6",
+  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag export-track1-closeout-acceptance-v7 is a CANDIDATE: an independent human must create the signed annotated tag and protect it in the authoritative remote — it does not yet exist and no human has ratified it (the CURRENT candidacy is acceptance-v7 — see remediation_v7.ratification_status; remediation_v6 and remediation_r0 are HISTORICAL records). python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ every it(...) leaf title) the frontend lane compares PER FILE — the verifier diffs each file's EXECUTED (passed|failed) leaf-title set against the frozen list, so a dropped/renamed/skipped/extra title is non-green even when the filename set matches (see remediation_r0.frontend_inventory_enforcement). red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v4 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13 plus the self-discriminating G08 URL-binding red and the G11 nullable-binding COMPILE red; remediation_r0 carries the 15-node backend proving set, the frontend proving reds, the G11 compile red + evidence-hygiene regression, the ratification_status (the v4 candidacy is SUPERSEDED by acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). The supplemental support fail-closed test is byte-frozen, exact-node inventoried, and required as its own hermetic lane; it deliberately seams subprocess.run and is excluded from the live-proof anti-bypass seam scan, so it cannot be mistaken for or replace the real Docker lifecycle. Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v7",
   "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
   "seed": {
     "env": "CLOSEOUT_SEED",
     "default": "export-track1-closeout-v1"
   },
   "manifest_excludes_self": "docs/export-track1-closeout-acceptance.sha256",
+  "trusted_launch_policy": {
+    "schema": "export-track1-trusted-launch-policy/v1",
+    "required_python_flags": {
+      "isolated": true,
+      "no_site": true,
+      "safe_path": true,
+      "dont_write_bytecode": true,
+      "pycache_prefix_devnull": true
+    },
+    "runtime_hash_schema": "export-track1-no-site-runtime-tree/v2",
+    "runtime_root": "venv/lib/python3.13/site-packages",
+    "runtime_tree": "all directory/file/symlink entries, modes, regular-file bytes, and symlink targets, hashed as raw per-run bytes for strict pre/post mutation detection",
+    "site_processing": "disabled (-S); .pth bytes remain included in the per-run digest",
+    "bytecode": "writes disabled (-B) and cache prefix pinned to /dev/null; ordinary __pycache__ is neither loaded nor written",
+    "git": "fixed /usr/bin/git or /bin/git; all inherited GIT_* removed",
+    "operator_tcb": "trusted operator and uncompromised pre-launch host, repository metadata, interpreter/dependencies, and toolchain; the certificate proves truthful execution, not resistance to a user controlling those prerequisites or continuous same-UID replacement races"
+  },
   "anti_bypass_operational_reading": "A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
   "files": {
-    ".github/workflows/export-track1-closeout.yml": "651bb2d05a31225f660445f40f212e1fdabbea16a447ea2e4d0d38fbfe0827ec",
+    ".github/workflows/export-track1-closeout.yml": "172847a024bc60005814d43500a95c32b31689823743c4c2e0a13fd69dbddd94",
     "docs/export-track1-closeout-suppression-baseline.json": "c558fae43af0e8e38ad8293694a0d2ff83cf0a13c43191e6d08c043486d2a3b7",
-    "docs/export-track1-closeout-work-orders.md": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
+    "docs/export-track1-closeout-work-orders.md": "8f60d501e10f2e3ecdae74d5b3d4406f62a58e81008d02bed204aafe18a1aa46",
     "frontend/e2e/export-track1-closeout/selfhost-candidate.spec.ts": "e4ad1f8651e7203c0e4c6946b294514b1619af18f1c3a2bdd4f6d02a45265447",
     "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts": "24079e15f0df881970332bed369df2df1436738594cf8d990b0690b1aa27910b",
     "frontend/e2e/export-track1-closeout/selfhost-needs-review.spec.ts": "099dc48229cae1a23c708caacc697356fc0bc1edc6532e5881e2ec9281f83dce",
@@ -46,20 +63,27 @@
     "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py": "19db9a3acb3fcbbd35dd6db992691163d4e5a50287302c6bb4418bba74550e21",
     "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "3d90bfc39a976be1ea952c6d893efc1cdc6a532e8ea946ab20e4891071355dac",
     "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
-    "packages/agent-server/tests/integration/_closeout_live_support.py": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
+    "packages/agent-server/tests/integration/_closeout_live_support.py": "610d35d90cb6ee5460a677422ff985b6d61feeaf5c0e833b810ca09e1ed474ca",
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
-    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py": "1ef564e9bfda947638d975969c68690d2f5a9fff3a25f20939017f55dba706b7",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "efedec42a06b7c1e8af0cca4d67830007f56c05701078066f413a27d9fde2b99",
     "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/core/tests/export_track1_closeout/test_c4_build_secret_validate_gate.py": "68709d61f8a3e68073b4c67ca438524cd0985abe36a12ec252b9a60ec3332b9e",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py": "050a28f1a8caca3b8db87607cc14e884e8620cde33169cdb2b33b0a35cdb7e06",
+    "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py": "d9283af73ac4dddd5f4dc7c56ef9998de88438860262a372a38537c1f819c2d9",
+    "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py": "467a87d790ec4165840b8ce2d5372514988273664d722107a090449cc39c6e69",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "2cdaf49827beca7a8ef738b62de1ca2c536c8de0d9fd8485e405f3897e71c252",
     "packages/tools/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py": "0aa05166c3af801774f78f154cb1e34a6522b937c9f12329cfba473ad31f6976",
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
+    "packages/tools/tests/test_heavy_validators.py": "c9533c76e86e3ab2aa4495884cf0f2697e944b3fd3f513b77070a8c7f98a5296",
     "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
-    "scripts/gen_closeout_acceptance_manifest.py": "59930a0027d0d1df7ee1d008545e5f338fe0a4e069d4d20102a8cd008cf40aae",
-    "scripts/verify_export_track1_closeout.py": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c"
+    "scripts/export_track1_candidate_receipt.py": "131975dc70389542dca7d2d2ba9dc0770264c01b03cb9eb2530d2d7810c5504b",
+    "scripts/gen_closeout_acceptance_manifest.py": "d755bf53355488f43f177bcff7d36aae36a62af2d79c4e08db94deed88e3503f",
+    "scripts/verify_export_track1_closeout.py": "d25555382bdcc34593693cbb3984cfc54e1560820cbbd58e9b1ae96541418ca6",
+    "uv.lock": "930c9457dd9a0308eb92681481329c1538df353d457bc45bed4f98d7f4e6c5fd"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
@@ -266,6 +290,7 @@
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[g11-typecheck.txt]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-capture.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-closeout.xml]",
+    "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-live-support-fail-closed.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-live.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_marker_in_each_scanned_artifact_is_a_violation[pytest-nonlive.xml]",
     "packages/agent-server/tests/export_track1_closeout/test_evidence_hygiene_regression.py::test_real_g02_proving_reds_leave_no_credential_in_evidence",
@@ -473,6 +498,44 @@
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_ruled_source_shapes_are_pinned_on_the_ast",
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_secret_embedded_in_compose_yaml_still_fails_the_sweep",
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py::test_structural_rendering_supports_the_topology_assertions"
+  ],
+  "governed_support_fail_closed_inventory": [
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_cleanup_artifact_records_query_failure_and_never_claims_zero",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_compose_ps_capture_rejects_failed_command_before_writing_evidence",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_digest_helper_binds_response_to_parsed_release_manifest[False]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_digest_helper_binds_response_to_parsed_release_manifest[True]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_digest_helper_rejects_failed_or_unrelated_second_release_response[200-True]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_digest_helper_rejects_failed_or_unrelated_second_release_response[503-False]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_capture_rejects_a_failed_command",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_normalizes_supported_docker_json_shapes[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_normalizes_supported_docker_json_shapes[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}\\n{\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}\\n{\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}\\n{\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[42]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"02\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (101%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\", \"Extra\": \"forbidden\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}, \"scalar\"]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"1\", \"Size\": \"NaNGB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": \"2\", \"Active\": \"3\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[[{\"Type\": \"Images\", \"TotalCount\": true, \"Active\": \"1\", \"Size\": \"12MB\", \"Reclaimable\": \"4MB (33%)\"}, {\"Type\": \"Containers\", \"TotalCount\": \"1\", \"Active\": \"1\", \"Size\": \"6.074MB\", \"Reclaimable\": \"0B (0%)\"}, {\"Type\": \"Local Volumes\", \"TotalCount\": \"0\", \"Active\": \"0\", \"Size\": \"0B\", \"Reclaimable\": \"0B\"}, {\"Type\": \"Build Cache\", \"TotalCount\": \"10\", \"Active\": \"0\", \"Size\": \"10.24GB\", \"Reclaimable\": \"10.24GB (100%)\"}]]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[not-json]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_disk_usage_rejects_malformed_scalar_or_incomplete_rows[{\"Type\": \"Images\", \"Size\": \"12MB\"}]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_binary_export_with_empty_stdout_is_not_filesystem_evidence",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_compose_logs_with_empty_stdout_is_not_secret_free_evidence",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_image_history_with_empty_stdout_is_not_secret_free_evidence",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_resource_query_with_empty_stdout_is_not_zero_resources[args0]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_resource_query_with_empty_stdout_is_not_zero_resources[args1]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_resource_query_with_empty_stdout_is_not_zero_resources[args2]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_failed_resource_query_with_empty_stdout_is_not_zero_resources[args3]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_image_filesystem_rejects_failed_or_empty_export_and_removes_temp_container[0-]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_image_filesystem_rejects_failed_or_empty_export_and_removes_temp_container[75-]",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_image_filesystem_rejects_failed_temporary_container_creation",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_image_filesystem_rejects_failed_temporary_container_removal",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_inspect_capture_rejects_a_failed_image_inspect",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_successful_evidence_and_cleanup_controls_remain_accepted",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_teardown_attempts_other_families_but_rejects_a_failed_purge_query",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_teardown_rejects_failed_compose_down_after_still_attempting_label_purge",
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py::test_teardown_rejects_failed_resource_removal_even_when_final_queries_are_empty"
   ],
   "frontend_closeout_inventory": {
     "c3-candidate-copy.test.tsx": {
@@ -789,5 +852,98 @@
       }
     },
     "ratification_status": "acceptance-v6 is a CANDIDATE for independent human review. No human has reviewed, signed, or protected any v6 tag; a v5 tag was never signed either. Ratification succeeds only when a human creates the signed annotated export-track1-closeout-acceptance-v6 tag and publishes it to the protected authoritative remote. This authoring claims NO human ratification and moves no tag."
+  },
+  "remediation_v7": {
+    "authored": "2026-07-20",
+    "supersedes": "acceptance-v6",
+    "authority": "The independent C9 final-certification review at /var/home/dylan/closeout-evidence-archive/2026-07-20-export-track1-c9-final-certification/INDEPENDENT-C9-VERDICT.md rejected v6 and authorized one bounded correction. Acceptance-v7 records that correction without treating the acceptance harness as its own authority. Product source changed ONLY detect.py + heavy_validators.py; the AppKit generator, session auth, and RBAC were untouched.",
+    "independent_c9_authority_report": "/var/home/dylan/closeout-evidence-archive/2026-07-20-export-track1-c9-final-certification/INDEPENDENT-C9-VERDICT.md",
+    "closed_v6_blockers": [
+      "Docker command and cleanup failures could fail open",
+      "candidate identity and governed bytes lacked a complete post-run binding",
+      "command exits could be ignored and stale output accepted",
+      "Python launch/runtime and external-evidence trust boundaries admitted bypasses",
+      "Vite raw-text inspection falsely rejected valid literal content",
+      "downloaded release evidence was not fully bound to the supplied release",
+      "cleanup evidence used a mismatched filename",
+      "OOXML validation admitted unbounded resource exhaustion"
+    ],
+    "bounded_re_review": "Independent bounded re-review completed 117/0 plus 25/25. One verifier-owned harness seed correction was made before those final counts; it was not a product change and no failing result was reclassified or discarded.",
+    "product_scope": "Production changes are confined to detect.py and heavy_validators.py. AppKit, session authentication, and RBAC are byte-untouched. The remaining labeled-regex exotic ceiling is safe-direction only: unusual shapes can be conservatively sent to review, but are not falsely certified.",
+    "practical_trust_boundary": "A trusted operator starts certification on an uncompromised host with trustworthy initial repository metadata, Git objects/index/stat cache, interpreter, dependencies, and external tools. Within that boundary v7 proves the exact candidate behavior and evidence and requires the recorded interpreter, dependency, Git, governed-source, and tool identities to remain coherent pre/post. It does not claim hostile-host attestation.",
+    "out_of_scope_tcb": [
+      "malicious Git stat/mtime/config/object forgery performed by the operator",
+      "direct ignored sourceless-bytecode placement before launch",
+      "pre-launch host, interpreter, dependency, or tool replacement",
+      "continuous same-UID replacement races"
+    ],
+    "frozen_byte_changes_v6_to_v7": {
+      ".github/workflows/export-track1-closeout.yml": {
+        "before_v6": "651bb2d05a31225f660445f40f212e1fdabbea16a447ea2e4d0d38fbfe0827ec",
+        "after_v7": "172847a024bc60005814d43500a95c32b31689823743c4c2e0a13fd69dbddd94",
+        "why": "bind the corrected v7 certification invocation and required lanes"
+      },
+      "docs/export-track1-closeout-work-orders.md": {
+        "before_v6": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
+        "after_v7": "8f60d501e10f2e3ecdae74d5b3d4406f62a58e81008d02bed204aafe18a1aa46",
+        "why": "record the bounded C9R3 correction and exact owner acceptance boundary"
+      },
+      "packages/agent-server/tests/integration/_closeout_live_support.py": {
+        "before_v6": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
+        "after_v7": "610d35d90cb6ee5460a677422ff985b6d61feeaf5c0e833b810ca09e1ed474ca",
+        "why": "Docker command, disk-evidence, release-binding, and cleanup paths fail closed"
+      },
+      "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+        "before_v6": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+        "after_v7": "efedec42a06b7c1e8af0cca4d67830007f56c05701078066f413a27d9fde2b99",
+        "why": "bind the corrected live release and cleanup evidence contracts"
+      },
+      "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py": {
+        "before_v6": null,
+        "after_v7": "1ef564e9bfda947638d975969c68690d2f5a9fff3a25f20939017f55dba706b7",
+        "why": "new governed C9R3 fail-closed Docker-support adversarial suite"
+      },
+      "scripts/verify_export_track1_closeout.py": {
+        "before_v6": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c",
+        "after_v7": "d25555382bdcc34593693cbb3984cfc54e1560820cbbd58e9b1ae96541418ca6",
+        "why": "post-run binding, exit/output validation, isolated launch, and evidence checks"
+      },
+      "scripts/export_track1_candidate_receipt.py": {
+        "before_v6": "c59de92e06e93952488929f9e3854abd32b20945147911710224a51c8f5a868b",
+        "after_v7": "131975dc70389542dca7d2d2ba9dc0770264c01b03cb9eb2530d2d7810c5504b",
+        "why": "freeze the corrected receipt, portable launch policy, and pre/post identities"
+      },
+      "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": {
+        "before_v6": "a030e73790a78b7dd5a43f095b4c71786921f0efbfd47b8c62426ba99866863c",
+        "after_v7": "2cdaf49827beca7a8ef738b62de1ca2c536c8de0d9fd8485e405f3897e71c252",
+        "why": "freeze the receipt's fail-closed mutation proof"
+      },
+      "packages/tools/tests/test_heavy_validators.py": {
+        "before_v6": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
+        "after_v7": "c9533c76e86e3ab2aa4495884cf0f2697e944b3fd3f513b77070a8c7f98a5296",
+        "why": "freeze bounded OOXML resource-exhaustion regressions"
+      },
+      "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py": {
+        "before_v6": null,
+        "after_v7": "467a87d790ec4165840b8ce2d5372514988273664d722107a090449cc39c6e69",
+        "why": "new C9R3 verifier/receipt trust-boundary adversarial suite"
+      },
+      "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py": {
+        "before_v6": null,
+        "after_v7": "d9283af73ac4dddd5f4dc7c56ef9998de88438860262a372a38537c1f819c2d9",
+        "why": "new C9R3 Vite literal-text and labeled-regex boundary suite"
+      },
+      "uv.lock": {
+        "before_v6": null,
+        "after_v7": "930c9457dd9a0308eb92681481329c1538df353d457bc45bed4f98d7f4e6c5fd",
+        "why": "newly frozen dependency-resolution input; no host-specific venv hash is frozen"
+      },
+      "scripts/gen_closeout_acceptance_manifest.py": {
+        "before_v6": "(self-referential: see the v6 manifest files map)",
+        "after_v7": "(self-referential: see the files map of this manifest)",
+        "why": "acceptance-v7 authoring, remediation_v7, expanded frozen set, and v7 note"
+      }
+    },
+    "ratification_status": "UNRATIFIED CANDIDATE. Ratification requires an independent owner run from the exact clean published SHA of the complete frozen battery, including real Docker and Firefox, followed by review, a signed annotated export-track1-closeout-acceptance-v7 tag, and publication to the protected authoritative remote. No tag was created, signed, moved, or published by this authoring step."
   }
 }

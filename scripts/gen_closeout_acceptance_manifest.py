@@ -20,19 +20,76 @@ The manifest hashes EVERY frozen acceptance file listed in plan §1.1 EXCEPT its
 files are byte-unchanged since the acceptance tag and (b) compare the frozen node-ID
 inventory against the live ``--collect-only``.
 
-    uv run python scripts/gen_closeout_acceptance_manifest.py           # write
-    uv run python scripts/gen_closeout_acceptance_manifest.py --check   # verify fresh
+    .venv/bin/python3 -I -S -P -B -X pycache_prefix=/dev/null \
+        scripts/gen_closeout_acceptance_manifest.py          # write
+    .venv/bin/python3 -I -S -P -B -X pycache_prefix=/dev/null \
+        scripts/gen_closeout_acceptance_manifest.py --check  # verify
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+
+_LAUNCH_MODULE: ModuleType | None = None
+
+
+def _launch_module() -> ModuleType:
+    """Load the single trusted-launch implementation shared with the receipt."""
+    global _LAUNCH_MODULE
+    if _LAUNCH_MODULE is not None:
+        return _LAUNCH_MODULE
+    path = Path(__file__).resolve().with_name("export_track1_candidate_receipt.py")
+    spec = importlib.util.spec_from_file_location("_export_track1_trusted_launch", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load trusted-launch module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    _LAUNCH_MODULE = module
+    return module
+
+
+def trusted_launch_policy(root: Path) -> dict[str, object]:
+    """Portable policy frozen in v7; never embeds host/worktree identity."""
+    del root
+    return _launch_module().trusted_launch_policy()
+
+
+def observed_launch_identity(root: Path) -> dict[str, object]:
+    """Actual per-run identity, recorded and compared pre/post but not frozen."""
+    launch = _launch_module()
+    runtime_ok, runtime = launch.complete_python_runtime_identity(Path(sys.executable), root)
+    if not runtime_ok:
+        raise RuntimeError(f"cannot derive complete Python runtime identity: {runtime}")
+    return {
+        "interpreter": launch.interpreter_identity(),
+        "python_runtime": runtime,
+        "git": launch.git_runtime_identity(),
+        "repository": launch.git_repository_identity(root),
+        "operator_tcb": (
+            "trusted operator and uncompromised pre-launch host/repository metadata, "
+            "invoked interpreter, stdlib/native host, external Docker/Node/LibreOffice "
+            "binaries, and continuous same-UID races"
+        ),
+    }
+
+
+def controlled_pytest_command(root: Path, arguments: list[str]) -> list[str]:
+    return _launch_module().controlled_pytest_command(Path(sys.executable), root, arguments)
+
+
+def _collect_env() -> dict[str, str]:
+    env, _ = _launch_module().sanitized_python_env()
+    return env
+
 
 # ---- frozen harness definition (plan §1.1) ------------------------------------
 
@@ -53,6 +110,8 @@ FROZEN_DIR_GLOBS: tuple[str, ...] = (
 FROZEN_FILES: tuple[str, ...] = (
     "scripts/verify_export_track1_closeout.py",
     "scripts/gen_closeout_acceptance_manifest.py",
+    "scripts/export_track1_candidate_receipt.py",
+    "uv.lock",
     # R6b: the purpose-built pytest reporting plugin the verifier loads into every governed
     # pytest lane (``-p closeout_pytest_report``) to prove every governed-selected test truly
     # PASSED (JUnit collapses xfail->skipped, hides a non-strict xpass, and omits a vanished
@@ -66,6 +125,14 @@ FROZEN_FILES: tuple[str, ...] = (
     # externally supplied env (an in-yaml secret still fails). Frozen so the ruled
     # guarantees cannot be silently weakened.
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py",
+    # C9R3: supplemental HERMETIC fail-closed proofs for the Docker support adapter.
+    # These deliberately seam subprocess and are therefore not live lifecycle proof,
+    # but their bytes and exact node inventory are governed as a separate required lane.
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py",
+    "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py",
+    "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py",
+    "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py",
+    "packages/tools/tests/test_heavy_validators.py",
     ".github/workflows/export-track1-closeout.yml",
     "docs/export-track1-closeout-work-orders.md",
     # The dedicated tsconfig for the G11 nullable-binding compile lane (acceptance-v4).
@@ -79,7 +146,7 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v6"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v7"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -98,6 +165,9 @@ CLOSEOUT_MARKER_LIVE = "export_track1_closeout and integration"
 # with its own frozen exact node inventory (missing/skipped/extra/unexecuted is fatal).
 CAPTURE_TEST_FILE = (
     "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py"
+)
+SUPPORT_FAIL_CLOSED_TEST_FILE = (
+    "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py"
 )
 
 # The frontend lanes (plan §3.3).
@@ -128,19 +198,25 @@ NONLIVE_MARKER = "not integration"
 # Descriptors use repo/frontend-relative paths for byte-stability across hosts.
 COMMAND_INVENTORY: dict[str, str] = {
     "python_nonlive": (
-        "python -m pytest packages/core/tests packages/tools/tests "
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
+        "packages/core/tests packages/tools/tests "
         "packages/agent-server/tests -o addopts= -m 'not integration' "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout": (
-        "python -m pytest packages/core/tests/export_track1_closeout "
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
+        "packages/core/tests/export_track1_closeout "
         "packages/tools/tests/export_track1_closeout "
         "packages/agent-server/tests/export_track1_closeout -o addopts= "
         "-m 'export_track1_closeout and not integration' "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout_collect": (
-        "python -m pytest packages/core/tests/export_track1_closeout "
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
+        "packages/core/tests/export_track1_closeout "
         "packages/tools/tests/export_track1_closeout "
         "packages/agent-server/tests/export_track1_closeout -o addopts= "
         "-m 'export_track1_closeout and not integration' --collect-only -q"
@@ -153,15 +229,24 @@ COMMAND_INVENTORY: dict[str, str] = {
         "npx playwright test e2e/export-track1-closeout --reporter=json --project=firefox"
     ),
     "live_docker": (
-        "python -m pytest "
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
         "packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
         "-o addopts= -m 'export_track1_closeout and integration' -ra "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "live_capture": (
-        "python -m pytest "
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
         "packages/agent-server/tests/integration/test_closeout_live_capture_regression.py "
         "-o addopts= -m 'export_track1_closeout and integration' -ra "
+        "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
+    ),
+    "hermetic_live_support_fail_closed": (
+        "python -I -S -P -B -X pycache_prefix=/dev/null "
+        "-c <controlled-no-site-pytest-bootstrap> <explicit-plugins> "
+        "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py "
+        "-o addopts= -m 'not integration' -ra "
         "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
 }
@@ -604,6 +689,134 @@ RED_TESTS: tuple[dict[str, object], ...] = (
 # `pytest --collect-only` (the machine-truth python_closeout_inventory).
 _R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
 _R0_TOOLS = "packages/tools/tests/export_track1_closeout"
+REMEDIATION_V7: dict[str, object] = {
+    "authored": "2026-07-20",
+    "supersedes": "acceptance-v6",
+    "authority": (
+        "The independent C9 final-certification review at /var/home/dylan/"
+        "closeout-evidence-archive/2026-07-20-export-track1-c9-final-certification/"
+        "INDEPENDENT-C9-VERDICT.md rejected v6 and authorized one bounded correction. "
+        "Acceptance-v7 records that correction without treating the acceptance harness "
+        "as its own authority. Product source changed ONLY detect.py + "
+        "heavy_validators.py; the AppKit generator, session auth, and RBAC were untouched."
+    ),
+    "independent_c9_authority_report": (
+        "/var/home/dylan/closeout-evidence-archive/"
+        "2026-07-20-export-track1-c9-final-certification/INDEPENDENT-C9-VERDICT.md"
+    ),
+    "closed_v6_blockers": [
+        "Docker command and cleanup failures could fail open",
+        "candidate identity and governed bytes lacked a complete post-run binding",
+        "command exits could be ignored and stale output accepted",
+        "Python launch/runtime and external-evidence trust boundaries admitted bypasses",
+        "Vite raw-text inspection falsely rejected valid literal content",
+        "downloaded release evidence was not fully bound to the supplied release",
+        "cleanup evidence used a mismatched filename",
+        "OOXML validation admitted unbounded resource exhaustion",
+    ],
+    "bounded_re_review": (
+        "Independent bounded re-review completed 117/0 plus 25/25. One verifier-owned "
+        "harness seed correction was made before those final counts; it was not a product "
+        "change and no failing result was reclassified or discarded."
+    ),
+    "product_scope": (
+        "Production changes are confined to detect.py and heavy_validators.py. AppKit, "
+        "session authentication, and RBAC are byte-untouched. The remaining labeled-regex "
+        "exotic ceiling is safe-direction only: unusual shapes can be conservatively sent "
+        "to review, but are not falsely certified."
+    ),
+    "practical_trust_boundary": (
+        "A trusted operator starts certification on an uncompromised host with trustworthy "
+        "initial repository metadata, Git objects/index/stat cache, interpreter, "
+        "dependencies, and external tools. Within that boundary v7 proves the exact "
+        "candidate behavior and evidence and requires the recorded interpreter, dependency, "
+        "Git, governed-source, and tool identities to remain coherent pre/post. It does not "
+        "claim hostile-host attestation."
+    ),
+    "out_of_scope_tcb": [
+        "malicious Git stat/mtime/config/object forgery performed by the operator",
+        "direct ignored sourceless-bytecode placement before launch",
+        "pre-launch host, interpreter, dependency, or tool replacement",
+        "continuous same-UID replacement races",
+    ],
+    "frozen_byte_changes_v6_to_v7": {
+        ".github/workflows/export-track1-closeout.yml": {
+            "before_v6": "651bb2d05a31225f660445f40f212e1fdabbea16a447ea2e4d0d38fbfe0827ec",
+            "after_v7": "172847a024bc60005814d43500a95c32b31689823743c4c2e0a13fd69dbddd94",
+            "why": "bind the corrected v7 certification invocation and required lanes",
+        },
+        "docs/export-track1-closeout-work-orders.md": {
+            "before_v6": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
+            "after_v7": "8f60d501e10f2e3ecdae74d5b3d4406f62a58e81008d02bed204aafe18a1aa46",
+            "why": "record the bounded C9R3 correction and exact owner acceptance boundary",
+        },
+        "packages/agent-server/tests/integration/_closeout_live_support.py": {
+            "before_v6": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
+            "after_v7": "610d35d90cb6ee5460a677422ff985b6d61feeaf5c0e833b810ca09e1ed474ca",
+            "why": "Docker command, disk-evidence, release-binding, and cleanup paths fail closed",
+        },
+        "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": {
+            "before_v6": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+            "after_v7": "efedec42a06b7c1e8af0cca4d67830007f56c05701078066f413a27d9fde2b99",
+            "why": "bind the corrected live release and cleanup evidence contracts",
+        },
+        "packages/agent-server/tests/integration/test_closeout_live_support_fail_closed.py": {
+            "before_v6": None,
+            "after_v7": "1ef564e9bfda947638d975969c68690d2f5a9fff3a25f20939017f55dba706b7",
+            "why": "new governed C9R3 fail-closed Docker-support adversarial suite",
+        },
+        "scripts/verify_export_track1_closeout.py": {
+            "before_v6": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c",
+            "after_v7": "d25555382bdcc34593693cbb3984cfc54e1560820cbbd58e9b1ae96541418ca6",
+            "why": "post-run binding, exit/output validation, isolated launch, and evidence checks",
+        },
+        "scripts/export_track1_candidate_receipt.py": {
+            "before_v6": "c59de92e06e93952488929f9e3854abd32b20945147911710224a51c8f5a868b",
+            "after_v7": "131975dc70389542dca7d2d2ba9dc0770264c01b03cb9eb2530d2d7810c5504b",
+            "why": "freeze the corrected receipt, portable launch policy, and pre/post identities",
+        },
+        "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": {
+            "before_v6": "a030e73790a78b7dd5a43f095b4c71786921f0efbfd47b8c62426ba99866863c",
+            "after_v7": "2cdaf49827beca7a8ef738b62de1ca2c536c8de0d9fd8485e405f3897e71c252",
+            "why": "freeze the receipt's fail-closed mutation proof",
+        },
+        "packages/tools/tests/test_heavy_validators.py": {
+            "before_v6": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
+            "after_v7": "c9533c76e86e3ab2aa4495884cf0f2697e944b3fd3f513b77070a8c7f98a5296",
+            "why": "freeze bounded OOXML resource-exhaustion regressions",
+        },
+        "packages/core/tests/release_remediation/test_c9r3_verifier_receipt_hardening.py": {
+            "before_v6": None,
+            "after_v7": "467a87d790ec4165840b8ce2d5372514988273664d722107a090449cc39c6e69",
+            "why": "new C9R3 verifier/receipt trust-boundary adversarial suite",
+        },
+        "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py": {
+            "before_v6": None,
+            "after_v7": "d9283af73ac4dddd5f4dc7c56ef9998de88438860262a372a38537c1f819c2d9",
+            "why": "new C9R3 Vite literal-text and labeled-regex boundary suite",
+        },
+        "uv.lock": {
+            "before_v6": None,
+            "after_v7": "930c9457dd9a0308eb92681481329c1538df353d457bc45bed4f98d7f4e6c5fd",
+            "why": "newly frozen dependency-resolution input; no host-specific venv hash is frozen",
+        },
+        "scripts/gen_closeout_acceptance_manifest.py": {
+            "before_v6": "(self-referential: see the v6 manifest files map)",
+            "after_v7": "(self-referential: see the files map of this manifest)",
+            "why": "acceptance-v7 authoring, remediation_v7, expanded frozen set, and v7 note",
+        },
+    },
+    "ratification_status": (
+        "UNRATIFIED CANDIDATE. Ratification requires an independent owner run from the "
+        "exact clean published SHA of the complete frozen battery, including real Docker "
+        "and Firefox, followed by review, a signed annotated "
+        "export-track1-closeout-acceptance-v7 tag, and publication to the protected "
+        "authoritative remote. No tag was created, signed, moved, or published by this "
+        "authoring step."
+    ),
+}
+
+
 REMEDIATION_V6: dict[str, object] = {
     "authored": "2026-07-17",
     "supersedes": "acceptance-v5",
@@ -943,44 +1156,85 @@ def parse_collect_only_ids(stdout: str) -> list[str]:
     return ids
 
 
+def _collect_only_ids(root: Path, cmd: list[str], *, lane: str) -> list[str]:
+    """Run one governed collection command and return its fresh node IDs.
+
+    Collection is evidence, not discovery best-effort: a non-zero subprocess or a
+    zero-node result is invalid and must never be represented as an ordinary empty
+    inventory.  ``stdout`` comes from this invocation directly (there is no reusable
+    on-disk report), so stale output cannot satisfy the gate.
+    """
+    proc = subprocess.run(
+        cmd,
+        cwd=root,
+        env=_collect_env(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ids = sorted(parse_collect_only_ids(proc.stdout))
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        tail = detail[-1] if detail else "no diagnostic"
+        raise RuntimeError(f"{lane} collect-only exited {proc.returncode}: {tail}")
+    if not ids:
+        raise RuntimeError(f"{lane} collect-only exited 0 but collected zero governed tests")
+    return ids
+
+
 def collect_python_closeout_ids(root: Path) -> list[str]:
     """The sorted node-ID inventory of the focused closeout lane, via a real
     ``pytest --collect-only``. Deterministic (sorted; parametrize IDs are static
     literals; the seeded RNG runs at test time, not collection)."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        *CLOSEOUT_TEST_DIRS,
-        "-o",
-        "addopts=",
-        "-m",
-        CLOSEOUT_MARKER_NONLIVE,
-        "--collect-only",
-        "-q",
-    ]
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
-    return sorted(parse_collect_only_ids(proc.stdout))
+    cmd = controlled_pytest_command(
+        root,
+        [
+            *CLOSEOUT_TEST_DIRS,
+            "-o",
+            "addopts=",
+            "-m",
+            CLOSEOUT_MARKER_NONLIVE,
+            "--collect-only",
+            "-q",
+        ],
+    )
+    return _collect_only_ids(root, cmd, lane="python-closeout")
 
 
 def collect_capture_node_ids(root: Path) -> list[str]:
     """The sorted node-ID inventory of the governed A/E capture lane (C9-03), via a real
     ``pytest --collect-only`` over ``CAPTURE_TEST_FILE`` under the live marker. Frozen so
     a missing/renamed/dropped capture test makes the lane non-green."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        CAPTURE_TEST_FILE,
-        "-o",
-        "addopts=",
-        "-m",
-        CLOSEOUT_MARKER_LIVE,
-        "--collect-only",
-        "-q",
-    ]
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
-    return sorted(parse_collect_only_ids(proc.stdout))
+    cmd = controlled_pytest_command(
+        root,
+        [
+            CAPTURE_TEST_FILE,
+            "-o",
+            "addopts=",
+            "-m",
+            CLOSEOUT_MARKER_LIVE,
+            "--collect-only",
+            "-q",
+        ],
+    )
+    return _collect_only_ids(root, cmd, lane="live-capture")
+
+
+def collect_support_fail_closed_node_ids(root: Path) -> list[str]:
+    """Exact collection for the supplemental hermetic support fail-closed lane."""
+    cmd = controlled_pytest_command(
+        root,
+        [
+            SUPPORT_FAIL_CLOSED_TEST_FILE,
+            "-o",
+            "addopts=",
+            "-m",
+            NONLIVE_MARKER,
+            "--collect-only",
+            "-q",
+        ],
+    )
+    return _collect_only_ids(root, cmd, lane="hermetic-live-support-fail-closed")
 
 
 _DESCRIBE_RE = re.compile(r"""\bdescribe\(\s*(["'])((?:\\.|(?!\1).)*)\1""")
@@ -1015,8 +1269,9 @@ def build_manifest(root: Path) -> dict[str, object]:
         "EXCEPT this manifest (a file cannot hash itself). The intended acceptance tag "
         f"{ACCEPTANCE_TAG} is a CANDIDATE: an independent human must create the signed "
         "annotated tag and protect it in the authoritative remote — it does not yet exist "
-        "and no human has ratified it (the CURRENT candidacy is acceptance-v6 — see "
-        "remediation_v6.ratification_status; remediation_r0 is a HISTORICAL record). "
+        "and no human has ratified it (the CURRENT candidacy is acceptance-v7 — see "
+        "remediation_v7.ratification_status; remediation_v6 and remediation_r0 are "
+        "HISTORICAL records). "
         "python_closeout_inventory is generated deterministically from "
         "`pytest --collect-only` over the closeout dirs (marker "
         "'export_track1_closeout and not integration'); the verifier reads it back FROM "
@@ -1036,6 +1291,10 @@ def build_manifest(root: Path) -> dict[str, object]:
         "acceptance-v5 — see remediation_v5; no human has signed/protected any tag), and "
         "the R4-activated / record-only / ratified-baseline "
         "ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
+        "The supplemental support fail-closed test is byte-frozen, exact-node "
+        "inventoried, and required as its own hermetic lane; it deliberately seams "
+        "subprocess.run and is excluded from the live-proof anti-bypass seam scan, so it "
+        "cannot be mistaken for or replace the real Docker lifecycle. "
         "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
     return {
@@ -1045,16 +1304,19 @@ def build_manifest(root: Path) -> dict[str, object]:
         "baseline_sha": BASELINE_SHA,
         "seed": {"env": "CLOSEOUT_SEED", "default": "export-track1-closeout-v1"},
         "manifest_excludes_self": MANIFEST_REL,
+        "trusted_launch_policy": trusted_launch_policy(root),
         "anti_bypass_operational_reading": OPERATIONAL_READING,
         "files": dict(sorted(files.items())),
         "missing_frozen_paths": missing,
         "python_closeout_inventory": collect_python_closeout_ids(root),
         "governed_capture_inventory": collect_capture_node_ids(root),
+        "governed_support_fail_closed_inventory": collect_support_fail_closed_node_ids(root),
         "frontend_closeout_inventory": frontend_closeout_inventory(root),
         "red_tests": list(RED_TESTS),
         "remediation_r0": REMEDIATION_R0,
         "remediation_v5": REMEDIATION_V5,
         "remediation_v6": REMEDIATION_V6,
+        "remediation_v7": REMEDIATION_V7,
     }
 
 
@@ -1063,6 +1325,14 @@ def render(manifest: dict[str, object]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not _launch_module().trusted_launch_isolated():
+        print(
+            "refusing acceptance generation: launch with python -I -S -P -B "
+            "-X pycache_prefix=/dev/null; the invoked "
+            "interpreter/stdlib/native host is an operator trust prerequisite",
+            file=sys.stderr,
+        )
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
