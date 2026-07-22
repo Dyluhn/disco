@@ -250,7 +250,18 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
     fake._emit_toolscope_audit_summary = MagicMock()
-    fake._maybe_shadow_fold_finished_manifest = AsyncMock()
+
+    # [F2 watchdog fix] STUCK terminalization appends the terminal status
+    # through the real run-authority-aware helper `_append_task_status_if_current`
+    # (bound below); with no view/run-intent authority it delegates to
+    # `_workspace.append_status`. Provide a faithful workspace whose append_status
+    # DURABLY writes to the store so the STUCK projection is real.
+    # (Removed the prior `_maybe_shadow_fold_finished_manifest` stub: dead
+    # scaffolding for a renamed-away method never called on the finalize path.)
+    async def _append_status(conversation_id: str, event: Event) -> None:
+        await store.append(conversation_id, event)
+
+    fake._workspace = types.SimpleNamespace(append_status=_append_status)
     for attr in (
         "_CONCLUDED_STATUSES",
         "_RUN_PARKED_STATUSES",
@@ -260,6 +271,7 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
         setattr(fake, attr, getattr(ConversationRuntime, attr))
     for name in (
         "_finalize_clean_return",
+        "_append_task_status_if_current",
         "_maybe_rekick_for_stranded_followup",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
