@@ -57,6 +57,10 @@ class ModelEntry(BaseModel):
     model_id: str  # provider's id string [VERIFY]
     provider: str  # the endpoint key (one OpenAIProvider per distinct backend) [VERIFY]
     context_window: int  # [VERIFY]
+    # Provider/model output capability. ``None`` means the catalogue did not
+    # report one, so callers must let the provider choose instead of inventing
+    # a fixed ceiling. This is distinct from the total context window.
+    max_output_tokens: int | None = Field(default=None, ge=1)
     capabilities: frozenset[Requirement] = frozenset()
     quantization: str | None = None  # e.g. "Q4_K_M"; informational provenance
     # per-million-token prices for cost accounting; 0 for local. [VERIFY]

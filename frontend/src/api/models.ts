@@ -386,6 +386,7 @@ export function openRouterUpsert(m: OpenRouterModel): ModelUpsert {
     // this env var to actually authenticate.
     api_key_env: "DISCO_OPENROUTER_API_KEY",
     context_window: m.context_length,
+    max_output_tokens: m.max_output_tokens ?? null,
     quantization: null,
     capabilities: [...m.capabilities],
     price_in_per_m: m.price_in_per_m,

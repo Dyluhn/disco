@@ -37,6 +37,7 @@ const BLANK: ModelUpsert = {
   base_url: "",
   api_key_env: "",
   context_window: 8192,
+  max_output_tokens: null,
   quantization: "",
   capabilities: [],
   price_in_per_m: 0,
@@ -51,6 +52,7 @@ function toUpsert(m: ModelInfo): ModelUpsert {
     base_url: m.base_url ?? "",
     api_key_env: m.api_key_env ?? "",
     context_window: m.context_window,
+    max_output_tokens: m.max_output_tokens ?? null,
     quantization: m.quantization ?? "",
     capabilities: [...m.capabilities],
     price_in_per_m: m.price_in_per_m,
@@ -90,6 +92,7 @@ function ModelForm({
       ...form,
       base_url: form.base_url?.trim() || null,
       api_key_env: form.api_key_env?.trim() || null,
+      max_output_tokens: form.max_output_tokens || null,
       quantization: form.quantization?.trim() || null,
     };
     try {
@@ -152,6 +155,19 @@ function ModelForm({
             min={1}
             onChange={(e) => set("context_window", Number(e.target.value))}
             required
+          />
+        </label>
+        <label className="flex flex-col gap-hair">
+          <span className={labelCls}>Maximum output tokens (optional)</span>
+          <input
+            type="number"
+            className={field}
+            value={form.max_output_tokens ?? ""}
+            min={1}
+            placeholder="Provider default"
+            onChange={(e) =>
+              set("max_output_tokens", e.target.value ? Number(e.target.value) : null)
+            }
           />
         </label>
         <label className="flex flex-col gap-hair">

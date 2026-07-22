@@ -259,7 +259,12 @@ function BrowseProvider({
       });
     } else {
       enable.mutate(
-        { model_id: m.model_id, label: m.label, context_window: m.context_window },
+        {
+          model_id: m.model_id,
+          label: m.label,
+          context_window: m.context_window,
+          max_output_tokens: m.max_output_tokens,
+        },
         { onError: (err) => setToggleError(errorText(err)), onSettled: cleanup },
       );
     }

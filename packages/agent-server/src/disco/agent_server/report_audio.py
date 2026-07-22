@@ -243,7 +243,7 @@ async def _emit(on_progress: ProgressCallback | None, event: dict[str, Any]) -> 
 # ---- The pipeline ----------------------------------------------------------
 
 
-def _resolve_report_llm() -> tuple[str, str, str | None, str]:
+def _resolve_report_llm() -> tuple[str, str, str | None, str, int | None]:
     from disco.core.llm import ConfigStore, ModelRole
 
     cfg = ConfigStore().load()
@@ -256,6 +256,7 @@ def _resolve_report_llm() -> tuple[str, str, str | None, str]:
         entry.model_id,
         entry.api_key_env,
         f"model:{entry.provider}",
+        entry.max_output_tokens,
     )
 
 
@@ -330,7 +331,7 @@ async def _generate_turn_script(
 ) -> list[Any]:
     """Generate a complete mode-aware script through the shared batch protocol."""
 
-    llm_url, llm_model, api_key_env, purpose = _resolve_report_llm()
+    llm_url, llm_model, api_key_env, purpose, max_output_tokens = _resolve_report_llm()
     acronym_instruction = {
         "role": "system",
         "content": (
@@ -359,6 +360,7 @@ async def _generate_turn_script(
             mode=mode,
             call_llm=call,
             system_messages=(acronym_instruction,),
+            max_output_tokens=max_output_tokens,
         )
     except audio_overview.AudioScriptGenerationError as exc:
         raise TurnScriptError(str(exc)) from exc

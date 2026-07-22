@@ -263,6 +263,7 @@ def test_enable_creates_catalogue_entry_visible_in_models(client, monkeypatch):
                 model_id="anthropic/claude-3.5-sonnet",
                 label="Claude 3.5 Sonnet",
                 context_window=200000,
+                max_output_tokens=8192,
                 price_in_per_m=3.0,
                 price_out_per_m=15.0,
                 capabilities=["vision", "long_context"],
@@ -291,6 +292,7 @@ def test_enable_creates_catalogue_entry_visible_in_models(client, monkeypatch):
     added = next(m for m in models if m["api_key_env"] == "provider_openrouter-generic")
     assert added["base_url"] == "https://openrouter.ai/api/v1"
     assert added["model_id"] == "anthropic/claude-3.5-sonnet"
+    assert added["max_output_tokens"] == 8192
     assert added["price_in_per_m"] == 3.0
     assert "vision" in added["capabilities"]
 
@@ -305,6 +307,7 @@ def test_normalizers_use_recorded_provider_shapes():
     openrouter = providers_mod._normalize_catalogue("openai-compat", _payload("openrouter"))
     assert openrouter[0].model_id == "anthropic/claude-3.5-sonnet"
     assert openrouter[0].context_window == 200000
+    assert openrouter[0].max_output_tokens == 8192
     assert openrouter[0].price_in_per_m == 3.0
     assert openrouter[0].price_out_per_m == 15.0
     assert set(openrouter[0].capabilities) == {
@@ -326,6 +329,7 @@ def test_normalizers_use_recorded_provider_shapes():
     gemini = providers_mod._normalize_catalogue("gemini", _payload("gemini"))
     assert gemini[0].model_id == "gemini-1.5-pro"
     assert gemini[0].context_window == 1048576
+    assert gemini[0].max_output_tokens == 8192
     assert "long_context" in gemini[0].capabilities
 
 

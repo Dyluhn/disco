@@ -91,6 +91,7 @@ def _configure_real_adapter(monkeypatch: pytest.MonkeyPatch, factory: _HTTPFacto
             "audio-model",
             "provider.secret_ref",
             "model:test-provider",
+            8192,
         ),
     )
     monkeypatch.setattr(ConfigStore, "origin_approved", lambda *_args: True)
@@ -161,6 +162,7 @@ async def test_audio_ledger_records_one_attempt_per_normal_segment(
 
     assert len(turns) == 12
     assert len(factory.posts) == 3
+    assert all(post["json"]["max_tokens"] == 4096 for post in factory.posts)
     _assert_audio_records(
         path,
         expected_attempts=len(factory.posts),

@@ -25,6 +25,7 @@ describe("ModelCatalogue subscription pricing", () => {
     // Default Metered → the per-token price fields are present.
     expect(screen.getByText("Price in / Mtok (0 = free)")).toBeDefined();
     expect(screen.getByText("Price out / Mtok")).toBeDefined();
+    expect(screen.getByText("Maximum output tokens (optional)")).toBeDefined();
 
     // Switch Pricing → Subscription.
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "subscription" } });

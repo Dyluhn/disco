@@ -260,6 +260,11 @@ class ProviderConfigService:
             base_url=provider.base_url,
             api_key_env=provider.secret_name,
             context_window=context_window,
+            max_output_tokens=(
+                body.max_output_tokens
+                if body.max_output_tokens is not None
+                else (catalogue_model.max_output_tokens if catalogue_model else None)
+            ),
             capabilities=capabilities,
             price_in_per_m=(
                 catalogue_model.price_in_per_m

@@ -32,6 +32,7 @@ class ModelDTO(BaseModel):
     base_url: str | None = None
     api_key_env: str | None = None
     context_window: int
+    max_output_tokens: int | None = None
     quantization: str | None = None
 
 
@@ -45,6 +46,7 @@ class ModelUpsert(BaseModel):
     base_url: str | None = None
     api_key_env: str | None = None
     context_window: int = 8192
+    max_output_tokens: int | None = Field(default=None, ge=1)
     quantization: str | None = None
     capabilities: list[str] = []
     price_in_per_m: float = 0.0
@@ -61,6 +63,7 @@ class OpenRouterModelDTO(BaseModel):
     id: str  # slug, e.g. "anthropic/claude-3.5-sonnet"
     name: str
     context_length: int
+    max_output_tokens: int | None = None
     price_in_per_m: float
     price_out_per_m: float
     capabilities: list[str]
@@ -127,6 +130,7 @@ class ProviderCatalogueModelDTO(BaseModel):
     model_id: str
     label: str
     context_window: int | None = None
+    max_output_tokens: int | None = None
     price_in_per_m: float | None = None
     price_out_per_m: float | None = None
     capabilities: list[str] = []
@@ -138,6 +142,7 @@ class ProviderEnableBody(BaseModel):
     # Required when the provider's catalogue doesn't report a context window —
     # silently defaulting (the old 8192) poisons the engine's context budgeting.
     context_window: int | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1)
 
 
 class SecretBody(BaseModel):

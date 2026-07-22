@@ -133,6 +133,16 @@ def _context(value: object) -> int | None:
     return parsed or None
 
 
+def _output_limit(*values: object) -> int | None:
+    """Return the first positive provider-declared output-token limit."""
+
+    for value in values:
+        parsed = _context(value)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return None
+
+
 def _caps(
     *,
     context_window: int | None,
@@ -169,6 +179,8 @@ def _normalize_openai_compat(payload: dict) -> list[ProviderCatalogueModelDTO]:
         raw_arch = raw.get("architecture")
         pricing = raw_pricing if isinstance(raw_pricing, dict) else {}
         arch = raw_arch if isinstance(raw_arch, dict) else {}
+        raw_top_provider = raw.get("top_provider")
+        top_provider = raw_top_provider if isinstance(raw_top_provider, dict) else {}
         context_window = _context(
             raw.get("context_length")
             or raw.get("context_window")
@@ -181,6 +193,12 @@ def _normalize_openai_compat(payload: dict) -> list[ProviderCatalogueModelDTO]:
                 model_id=model_id,
                 label=str(raw.get("name") or raw.get("display_name") or model_id),
                 context_window=context_window,
+                max_output_tokens=_output_limit(
+                    raw.get("max_output_tokens"),
+                    raw.get("max_completion_tokens"),
+                    raw.get("output_token_limit"),
+                    top_provider.get("max_completion_tokens"),
+                ),
                 price_in_per_m=_token_price_per_m(
                     pricing.get("prompt") or pricing.get("input") or pricing.get("input_token")
                 ),
@@ -214,6 +232,9 @@ def _normalize_anthropic(payload: dict) -> list[ProviderCatalogueModelDTO]:
                 model_id=model_id,
                 label=str(raw.get("display_name") or model_id),
                 context_window=_context(raw.get("context_window") or raw.get("input_token_limit")),
+                max_output_tokens=_output_limit(
+                    raw.get("max_output_tokens"), raw.get("output_token_limit")
+                ),
             )
         )
     return out
@@ -234,6 +255,7 @@ def _normalize_gemini(payload: dict) -> list[ProviderCatalogueModelDTO]:
                 model_id=model_id,
                 label=str(raw.get("displayName") or model_id),
                 context_window=context_window,
+                max_output_tokens=_output_limit(raw.get("outputTokenLimit")),
                 capabilities=_caps(context_window=context_window),
             )
         )

@@ -90,6 +90,16 @@ def _endpoint_host(base_url: str | None) -> str | None:
     return base_url.split("://", 1)[-1].split("/", 1)[0]
 
 
+def _positive_int(value: object) -> int | None:
+    if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _note(entry) -> str:
     """A quiet provenance caption from REAL config: context window, quant, endpoint
     — so the settings catalogue reflects what's actually deployed, not seed labels."""
@@ -126,6 +136,7 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
                 base_url=entry.base_url,
                 api_key_env=entry.api_key_env,
                 context_window=entry.context_window,
+                max_output_tokens=entry.max_output_tokens,
                 quantization=entry.quantization,
             )
         )
@@ -139,6 +150,7 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
     for m in data:
         pricing = m.get("pricing") or {}
         arch = m.get("architecture") or {}
+        top_provider = m.get("top_provider") or {}
         params = m.get("supported_parameters") or []
         ctx = int(m.get("context_length") or 0)
         caps: list[str] = []
@@ -162,6 +174,11 @@ def normalize_openrouter(data: list[dict]) -> list[OpenRouterModelDTO]:
                 id=str(m.get("id")),
                 name=str(m.get("name") or m.get("id")),
                 context_length=ctx,
+                max_output_tokens=_positive_int(
+                    top_provider.get("max_completion_tokens")
+                    if isinstance(top_provider, dict)
+                    else None
+                ),
                 price_in_per_m=_price(pricing.get("prompt")),
                 price_out_per_m=_price(pricing.get("completion")),
                 capabilities=caps,
@@ -191,6 +208,7 @@ def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
         model_id=upsert.model_id,
         provider=provider,
         context_window=upsert.context_window,
+        max_output_tokens=upsert.max_output_tokens,
         capabilities=_capabilities(upsert.capabilities),
         quantization=upsert.quantization,
         price_in_per_m=upsert.price_in_per_m,

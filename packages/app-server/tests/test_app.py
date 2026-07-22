@@ -331,6 +331,7 @@ def test_model_crud_add_edit_remove(client):
         "model_id": "llama-3.3-70b.gguf",
         "base_url": "http://192.168.1.50:8080/v1",
         "context_window": 32768,
+        "max_output_tokens": 6144,
         "quantization": "Q4_K_M",
         "capabilities": ["tool_calling", "long_context"],
     }
@@ -340,6 +341,7 @@ def test_model_crud_add_edit_remove(client):
     by_id = {m["id"]: m for m in r.json()}
     assert by_id["my-llama"]["model_id"] == "llama-3.3-70b.gguf"
     assert by_id["my-llama"]["base_url"] == "http://192.168.1.50:8080/v1"
+    assert by_id["my-llama"]["max_output_tokens"] == 6144
     assert by_id["my-llama"]["provider"] == "local"  # free -> local view
     assert set(by_id["my-llama"]["capabilities"]) == {"tool_calling", "long_context"}
     # duplicate id is rejected
@@ -348,10 +350,11 @@ def test_model_crud_add_edit_remove(client):
     client.put("/api/models/assignments", json={"roles": {"rag_answerer": "my-llama"}})
     assert client.get("/api/models/assignments").json()["roles"]["rag_answerer"] == "my-llama"
     # edit
-    edited = {**new, "context_window": 8192}
+    edited = {**new, "context_window": 8192, "max_output_tokens": 4096}
     r = client.put("/api/models/my-llama", json=edited)
     assert r.status_code == 200
     assert {m["id"]: m for m in r.json()}["my-llama"]["context_window"] == 8192
+    assert {m["id"]: m for m in r.json()}["my-llama"]["max_output_tokens"] == 4096
     # cannot remove while assigned
     assert client.delete("/api/models/my-llama").status_code == 400
     # reassign away, then remove
@@ -376,6 +379,7 @@ def test_normalize_openrouter_maps_pricing_and_capabilities():
             "id": "anthropic/claude-3.5-sonnet",
             "name": "Anthropic: Claude 3.5 Sonnet",
             "context_length": 200000,
+            "top_provider": {"max_completion_tokens": 8192},
             "pricing": {"prompt": "0.000003", "completion": "0.000015"},
             "architecture": {"input_modalities": ["text", "image"]},
             "supported_parameters": ["tools", "response_format"],
@@ -384,6 +388,7 @@ def test_normalize_openrouter_maps_pricing_and_capabilities():
     ]
     out = {m.id: m for m in normalize_openrouter(raw)}
     sonnet = out["anthropic/claude-3.5-sonnet"]
+    assert sonnet.max_output_tokens == 8192
     assert sonnet.price_in_per_m == 3.0 and sonnet.price_out_per_m == 15.0  # /token -> /Mtok
     assert set(sonnet.capabilities) == {"vision", "tool_calling", "json_mode", "long_context"}
     assert out["tiny/model"].price_in_per_m == 0.0

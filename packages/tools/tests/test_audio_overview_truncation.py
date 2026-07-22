@@ -44,6 +44,45 @@ def _batch_response(
     )
 
 
+def test_unknown_output_limit_defers_to_provider() -> None:
+    payload = audio._build_segment_payload_for_model(
+        "report",
+        "provider-owned-limit",
+        mode="podcast",
+        start_turn=1,
+        requested_turns=4,
+        total_turns=None,
+        prior_turns=(),
+    )
+    assert "max_tokens" not in payload
+
+
+def test_reported_output_limit_caps_each_segment() -> None:
+    payload = audio._build_segment_payload_for_model(
+        "report",
+        "bounded-model",
+        mode="podcast",
+        start_turn=1,
+        requested_turns=4,
+        total_turns=None,
+        prior_turns=(),
+        max_output_tokens=3500,
+    )
+    assert payload["max_tokens"] == 3500
+
+    roomy = audio._build_segment_payload_for_model(
+        "report",
+        "roomy-model",
+        mode="podcast",
+        start_turn=1,
+        requested_turns=2,
+        total_turns=None,
+        prior_turns=(),
+        max_output_tokens=16000,
+    )
+    assert roomy["max_tokens"] == 3072 + 2 * 256
+
+
 @pytest.mark.asyncio
 async def test_http_adapter_preserves_length_finish_reason(monkeypatch) -> None:
     class _Response:

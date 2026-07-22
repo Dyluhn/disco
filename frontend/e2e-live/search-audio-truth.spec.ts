@@ -238,7 +238,10 @@ test("a new grounded report renders real synthesis progress and exports playable
     let trace: Record<string, unknown>;
     try {
       const inspect = await inspectTrace(request, cid);
-      assertNoThrash(events, inspect);
+      // Deep Research drives the routed phase engine directly, not AgentLoop, so
+      // it truthfully has routing decisions but no synthetic `agent.step` span.
+      // Keep every event/repair/repetition check while using that surface contract.
+      assertNoThrash(events, inspect, { requireCompletedAgentStep: false });
       trace = inspect;
     } catch (error) {
       // A diagnostic reuse may target a report created before the current

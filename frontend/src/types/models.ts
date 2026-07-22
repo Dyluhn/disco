@@ -39,6 +39,7 @@ export interface ModelInfo {
   base_url?: string | null;
   api_key_env?: string | null;
   context_window: number;
+  max_output_tokens?: number | null;
   quantization?: string | null;
 }
 
@@ -55,6 +56,7 @@ export interface OpenRouterModel {
   id: string; // slug, becomes the model's model_id
   name: string;
   context_length: number;
+  max_output_tokens?: number | null;
   price_in_per_m: number;
   price_out_per_m: number;
   capabilities: Capability[];
@@ -115,6 +117,7 @@ export interface ProviderCatalogueModel {
   model_id: string;
   label: string;
   context_window?: number | null;
+  max_output_tokens?: number | null;
   price_in_per_m?: number | null;
   price_out_per_m?: number | null;
   capabilities: Capability[];
@@ -125,6 +128,7 @@ export interface ProviderEnableBody {
   label?: string | null;
   /** Required when the provider's catalogue doesn't report a context window. */
   context_window?: number | null;
+  max_output_tokens?: number | null;
 }
 
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
@@ -134,6 +138,7 @@ export interface ModelUpsert {
   base_url?: string | null;
   api_key_env?: string | null;
   context_window: number;
+  max_output_tokens?: number | null;
   quantization?: string | null;
   capabilities: Capability[];
   price_in_per_m: number;

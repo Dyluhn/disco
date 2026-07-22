@@ -70,7 +70,6 @@ _SCRIPT_MAX_PROVIDER_CALLS = 32
 _SCRIPT_MAX_TRUNCATIONS_PER_BATCH = 3
 _SCRIPT_REASONING_TOKEN_RESERVE = 3072
 _SCRIPT_TOKENS_PER_TURN = 256
-_SCRIPT_MAX_OUTPUT_TOKENS = 4096
 
 
 @dataclass
@@ -140,13 +139,13 @@ def _build_llm_payload_for_model(report_text: str, model: str, mode: str = "podc
     )
 
 
-def _segment_output_tokens(requested_turns: int) -> int:
-    """Bound output by batch size while retaining room for reasoning models."""
+def _segment_output_tokens(requested_turns: int, max_output_tokens: int | None) -> int | None:
+    """Use a real model capability when known; otherwise defer to the provider."""
 
-    return min(
-        _SCRIPT_MAX_OUTPUT_TOKENS,
-        _SCRIPT_REASONING_TOKEN_RESERVE + requested_turns * _SCRIPT_TOKENS_PER_TURN,
-    )
+    if max_output_tokens is None:
+        return None
+    requested = _SCRIPT_REASONING_TOKEN_RESERVE + requested_turns * _SCRIPT_TOKENS_PER_TURN
+    return min(max_output_tokens, requested)
 
 
 def _build_segment_payload_for_model(
@@ -159,6 +158,7 @@ def _build_segment_payload_for_model(
     total_turns: int | None,
     prior_turns: Sequence[Turn],
     system_messages: Sequence[dict[str, str]] = (),
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     prompt = _SINGLE_SCRIPT_PROMPT if mode == "single" else _TURN_SCRIPT_PROMPT
     min_turns, max_turns = (10, 16) if mode == "single" else (12, 20)
@@ -201,7 +201,7 @@ Never repeat an earlier turn index. Do not include markdown fences or prose outs
 """
         + context
     )
-    return {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [
             *system_messages,
@@ -211,8 +211,11 @@ Never repeat an earlier turn index. Do not include markdown fences or prose outs
             },
         ],
         "temperature": 0.7,
-        "max_tokens": _segment_output_tokens(requested_turns),
     }
+    output_tokens = _segment_output_tokens(requested_turns, max_output_tokens)
+    if output_tokens is not None:
+        payload["max_tokens"] = output_tokens
+    return payload
 
 
 async def _call_llm(payload: dict, llm_url: str) -> LLMResponse:
@@ -496,6 +499,7 @@ async def _generate_segmented_turn_script(
     mode: str,
     call_llm: Callable[[dict[str, Any]], Awaitable[LLMResponseLike]],
     system_messages: Sequence[dict[str, str]] = (),
+    max_output_tokens: int | None = None,
 ) -> list[Turn]:
     """Generate and deterministically assemble bounded, independently valid batches."""
 
@@ -530,6 +534,7 @@ async def _generate_segmented_turn_script(
                 total_turns=total_turns,
                 prior_turns=accepted[-2:],
                 system_messages=system_messages,
+                max_output_tokens=max_output_tokens,
             )
             try:
                 response = _coerce_llm_response(await call_llm(payload))
@@ -787,7 +792,12 @@ class AudioOverviewTool:
         return resolved, None
 
     async def _generate_turn_script(
-        self, report_text: str, llm_url: str, llm_model: str, llm_key: str = ""
+        self,
+        report_text: str,
+        llm_url: str,
+        llm_model: str,
+        llm_key: str = "",
+        max_output_tokens: int | None = None,
     ) -> tuple[list[Turn] | None, ToolOutcome | None]:
         """Generate a complete script through the bounded shared batch protocol."""
 
@@ -802,6 +812,7 @@ class AudioOverviewTool:
                 llm_model,
                 mode="podcast",
                 call_llm=call,
+                max_output_tokens=max_output_tokens,
             )
         except AudioScriptGenerationError as exc:
             return None, ToolOutcome(
@@ -924,7 +935,7 @@ class AudioOverviewTool:
             transcript_lines.append("")
         return "\n".join(transcript_lines)
 
-    def _resolve_script_llm(self) -> tuple[str, str, str, str | None]:
+    def _resolve_script_llm(self) -> tuple[str, str, str, int | None, str | None]:
         from disco.core.llm import ConfigStore, ModelRole
         from disco.core.llm.secret_refs import (
             resolve_provider_secret,
@@ -937,18 +948,30 @@ class AudioOverviewTool:
         key = cfg.assignments.get(ModelRole.RAG_ANSWERER) or cfg.default_model
         entry = cfg.models.get(key)
         if entry is None or not entry.base_url:
-            return "", "local-model", "", "LLM endpoint is not configured"
+            return "", "local-model", "", None, "LLM endpoint is not configured"
         llm_url = entry.base_url.rstrip("/")
         llm_model = entry.model_id
         api_key_env = entry.api_key_env
         if not store.origin_approved(llm_url, f"model:{entry.provider}", api_key_env or ""):
-            return "", llm_model, "", "LLM origin not approved"
+            return "", llm_model, "", entry.max_output_tokens, "LLM origin not approved"
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
-            return "", llm_model, "", "LLM secret_ref not allowed for this origin"
+            return (
+                "",
+                llm_model,
+                "",
+                entry.max_output_tokens,
+                "LLM secret_ref not allowed for this origin",
+            )
         key = resolve_provider_secret(api_key_env, SecretStore()) if api_key_env else None
         if api_key_env and not key:
-            return "", llm_model, "", "LLM secret_ref is not decryptable"
-        return llm_url, llm_model, key or "", None
+            return (
+                "",
+                llm_model,
+                "",
+                entry.max_output_tokens,
+                "LLM secret_ref is not decryptable",
+            )
+        return llm_url, llm_model, key or "", entry.max_output_tokens, None
 
     async def run(self, args: AudioOverviewArgs, ctx: ToolContext) -> ToolOutcome:
         from disco.agent_server.audio_config import (
@@ -973,11 +996,11 @@ class AudioOverviewTool:
         voice_b = tts_cfg.voice_b
 
         # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
-        llm_url, llm_model, llm_key, llm_error = self._resolve_script_llm()
+        llm_url, llm_model, llm_key, max_output_tokens, llm_error = self._resolve_script_llm()
         if llm_error is not None:
             return ToolOutcome(success=False, content=llm_error, error=llm_error)
         turns, gen_failure = await self._generate_turn_script(
-            report_text, llm_url, llm_model, llm_key
+            report_text, llm_url, llm_model, llm_key, max_output_tokens
         )
         if gen_failure is not None:
             return gen_failure

@@ -268,7 +268,11 @@ function stableAction(event: EventJson): string | null {
   return `${call.tool_name}:${JSON.stringify(call.arguments ?? {}, Object.keys(call.arguments ?? {}).sort())}`;
 }
 
-export function assertNoThrash(events: EventJson[], trace: InspectTrace): void {
+export function assertNoThrash(
+  events: EventJson[],
+  trace: InspectTrace,
+  options: { requireCompletedAgentStep?: boolean } = {},
+): void {
   expect(
     events.some((event) => event.kind === "status" && event.status === "STUCK"),
   ).toBe(false);
@@ -283,10 +287,12 @@ export function assertNoThrash(events: EventJson[], trace: InspectTrace): void {
     routing.length,
     "inspect trace has no model routing decisions",
   ).toBeGreaterThan(0);
-  expect(
-    stepEnds.length,
-    "inspect trace has no completed agent.step spans",
-  ).toBeGreaterThan(0);
+  if (options.requireCompletedAgentStep !== false) {
+    expect(
+      stepEnds.length,
+      "inspect trace has no completed agent.step spans",
+    ).toBeGreaterThan(0);
+  }
   expect(
     repairs.length,
     `too many hidden model/provider repairs: ${JSON.stringify(repairs)}`,
