@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from disco.agent_server.preview_manager import PreviewSession, PreviewStatus
 from disco.agent_server.runtime import ConversationRuntime, build_sandbox_service
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, DefaultLLMRouter, SandboxSettings
@@ -218,8 +219,18 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
             return f"http://managed:{port}" if port == 5173 else None
 
     session = _ManagedSession("gvisor", None)
+    managed_preview = PreviewSession(
+        name="web",
+        port=5173,
+        command="npm run dev -- --port 5173",
+        exec_dir="/workspace",
+        intent={"framework": "vite", "launch_kind": "framework"},
+        projection_id="pv_generation_1",
+        status=PreviewStatus.RUNNING,
+    )
     session._preview_manager = SimpleNamespace(
         canonical_port=lambda: 5173,
+        canonical_lifecycle_session=lambda: managed_preview,
     )
     rt._executors["managed"] = _FakeExecutor(session)
 
@@ -244,12 +255,110 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
     assert rt.preview_upstream("managed") == "http://managed:5173"
     assert preview["available"] is True
     assert preview["port"] == 5173
+    assert preview["status"] == "running"
+    assert preview["generation"] == "pv_generation_1"
+    assert preview["launch_kind"] == "framework"
+    assert preview["reload_strategy"] == "hmr"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "detail", "reason_fragment"),
+    [
+        (PreviewStatus.STARTING, "", "Preparing preview"),
+        (PreviewStatus.RESTARTING, "restart #1", "restarting"),
+        (PreviewStatus.CRASHED, "process exited", "process exited"),
+    ],
+)
+async def test_managed_preview_reports_exact_unready_lifecycle(status, detail, reason_fragment):
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    session = _FakeSession("gvisor", None)
+    managed_preview = PreviewSession(
+        name="web",
+        port=5173,
+        command="npm run dev -- --port 5173",
+        exec_dir="/workspace",
+        intent={"framework": "vite", "launch_kind": "framework"},
+        projection_id="pv_unready_generation",
+        status=status,
+        detail=detail,
+    )
+    session._preview_manager = SimpleNamespace(
+        canonical_port=lambda: None,
+        canonical_lifecycle_session=lambda: managed_preview,
+    )
+    rt._executors["managed-unready"] = _FakeExecutor(session)
+
+    import unittest.mock
+
+    with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
+        preview = await rt.preview("managed-unready")
+
+    assert preview["available"] is False
+    assert reason_fragment in preview["reason"]
+    assert preview["port"] == 5173
+    assert preview["status"] == status.value
+    assert preview["generation"] == "pv_unready_generation"
+    assert preview["launch_kind"] == "framework"
+    assert preview["reload_strategy"] == "hmr"
+
+
+@pytest.mark.asyncio
+async def test_managed_unexposable_preview_never_claims_available():
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+
+    class _ManagedSession(_FakeSession):
+        def expose_port(self, port: int) -> str | None:
+            return None
+
+    session = _ManagedSession("podman", None)
+    managed_preview = PreviewSession(
+        name="web",
+        port=5173,
+        command="npm run dev -- --port 5173",
+        exec_dir="/workspace",
+        intent={"framework": "vite", "launch_kind": "framework"},
+        projection_id="pv_unexposable_generation",
+        status=PreviewStatus.UNAVAILABLE,
+        detail="Runtime is healthy, but this backend cannot expose it.",
+    )
+    session._preview_manager = SimpleNamespace(
+        canonical_port=lambda: 5173,
+        canonical_lifecycle_session=lambda: managed_preview,
+    )
+    rt._executors["managed-unexposable"] = _FakeExecutor(session)
+
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    async def mock_port_owners(inst, ports):  # noqa: ANN001
+        return {
+            port: PortOwner(port=port, pid=1234, cmdline="npm run dev", session="disco-web")
+            if port == 5173
+            else None
+            for port in ports
+        }
+
+    import unittest.mock
+
+    with unittest.mock.patch(
+        "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
+    ):
+        preview = await rt.preview("managed-unexposable")
+
+    assert preview["available"] is False
+    assert preview["status"] == "unavailable"
+    assert "cannot expose" in preview["reason"]
+    assert preview["port"] == 5173
+    assert preview["owner"]["pid"] == 1234
 
 
 def test_canonical_preview_refuses_manager_without_healthy_selection():
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     session = _FakeSession("gvisor", None)
-    session._preview_manager = SimpleNamespace(canonical_port=lambda: None)
+    session._preview_manager = SimpleNamespace(
+        canonical_port=lambda: None,
+        canonical_lifecycle_session=lambda: None,
+    )
     rt._executors["unhealthy"] = _FakeExecutor(session)
 
     assert rt.preview_target_port("unhealthy") is None

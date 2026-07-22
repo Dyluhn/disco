@@ -181,18 +181,13 @@ test("contract prompt drives kill→start-in-session→look, no hard-denies (liv
   );
   expect(denies, "no action was hard-denied").toHaveLength(0);
 
-  // ---- UI surface: live preview is the real Vite server + feed screenshot ----
+  // ---- UI surface: the one Preview is the real Vite server ----
   await page.getByRole("tab", { name: /preview/i }).click();
-  const liveToggle = page.getByRole("button", { name: /live server/i });
-  await expect(liveToggle).toBeVisible({ timeout: 60_000 });
-  await liveToggle.click();
-  // the port-owner caption must name the actual dev-server process, not python
-  await expect(page.getByText(/Serving: .*(vite|node|npm)/)).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(page.getByRole("button", { name: /rendered/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /live server/i })).toHaveCount(0);
   await expect(
     page
-      .frameLocator('iframe[title="Live preview"]')
+      .frameLocator('iframe[title="Preview"]')
       .getByText("BP03 contract"),
   ).toBeVisible({ timeout: 60_000 });
   await page.screenshot({

@@ -16,6 +16,7 @@ from disco.core.auth import (
     PREVIEW_BOOTSTRAP_PATH,
     SESSION_COOKIE,
     AuthSession,
+    PreviewCapability,
     PreviewCapabilitySigner,
     SessionSigner,
     allowed_frontend_origins,
@@ -258,6 +259,23 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             # full session. Canonical callers use the isolated capability route;
             # the deprecated direct path now fails closed.
             return _private_no_store(Response("preview capability required", status_code=403))
+        canonical_cap = request.scope.get("state", {}).get("canonical_preview_capability")
+        if isolated_path and isinstance(canonical_cap, PreviewCapability):
+            match = _PATH_PREVIEW_RE.match(path)
+            assert match is not None
+            if (
+                canonical_cap.authority_id is None
+                or canonical_cap.conversation_id != match.group("cid")
+                or method not in canonical_cap.http_methods
+            ):
+                return _private_no_store(Response("preview capability required", status_code=403))
+            owner = await self._store.conversation_owner_id(canonical_cap.conversation_id)
+            if owner is None:
+                return _private_no_store(Response("conversation not found", status_code=404))
+            if owner != canonical_cap.owner_id:
+                return _private_no_store(Response("conversation forbidden", status_code=403))
+            request.state.preview_capability = canonical_cap
+            return _private_no_store(await call_next(request))
         if _is_public_http(path, method):
             return await call_next(request)
         # WO-A2.2: the host-service bus uses its own bearer-token auth and must

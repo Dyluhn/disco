@@ -850,8 +850,8 @@ async def test_process_daemon_grants_installed_playwright_package_root(monkeypat
         await tool._ensure_daemon(ctx)
 
     command = ctx.sessions.exec.await_args.args[1]
+    assert command.startswith("TMPDIR=/var/tmp DISCO_BROWSER_PORT=0")
     assert "PYTHONPATH=/opt/disco/site-packages" in command
-    assert "DISCO_BROWSER_PORT=0" in command
     assert "/opt/disco/bin/python3 /workspace/.pmx/_browser_daemon.py" in command
 
 

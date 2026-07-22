@@ -51,6 +51,13 @@ class PreviewStatus(str, Enum):
     STOPPED = "stopped"  # stopped on request
 
 
+class PreviewReloadStrategy(str, Enum):
+    """How the canonical client should observe workspace changes for this launch."""
+
+    HMR = "hmr"
+    RELOAD = "reload"
+
+
 # How a bare framework name maps to a start command. `{port}` is filled with the
 # PLATFORM-allocated port — never anything the model supplied. Anything not listed
 # falls through to the static file server (the safe MVP default).
@@ -67,6 +74,12 @@ _FRAMEWORK_COMMANDS: dict[str, str] = {
     "node": "PORT={port} npm start",
     "express": "PORT={port} npm start",
 }
+
+# These configured framework intents start development servers whose own runtime
+# supplies hot-module updates. Static launches, generic node servers, and arbitrary
+# custom commands have no such platform-guaranteed contract, so clients reload them
+# when relevant workspace bytes change.
+_HMR_FRAMEWORKS = frozenset({"vite", "next", "nextjs", "react", "cra", "astro", "svelte"})
 
 # Port flags a model might bake into a raw `command`. These are handled on the SHLEX'D
 # ARGV TOKENS (see `_classify_port_flag` / `_scrub_port_flag_tokens`), NOT by a regex on
@@ -238,6 +251,14 @@ class PreviewSession:
     # retries. Only proof that the attempt is healthy resets the automatic budget.
     _reset_budget_on_healthy: bool = field(default=False, repr=False)
 
+    @property
+    def reload_strategy(self) -> PreviewReloadStrategy:
+        framework = self.intent.get("framework")
+        if self.intent.get("launch_kind") == "framework" and isinstance(framework, str):
+            if framework.strip().lower() in _HMR_FRAMEWORKS:
+                return PreviewReloadStrategy.HMR
+        return PreviewReloadStrategy.RELOAD
+
     def to_dict(self) -> dict[str, Any]:
         launch_kind = self.intent.get("launch_kind")
         intent_digest = preview_projection_digest(
@@ -256,6 +277,10 @@ class PreviewSession:
             "exec_dir": self.exec_dir,
             "intent": self.intent,
             "launch_kind": launch_kind,
+            # Public preview generation: stable for one supervised OS process and
+            # rotated at every automatic or explicit re-exec boundary.
+            "generation": self.projection_id,
+            "reload_strategy": self.reload_strategy.value,
             "projection_id": self.projection_id,
             "intent_digest": intent_digest,
             "sandbox_instance_id": self.sandbox_instance_id,
@@ -842,11 +867,41 @@ class PreviewManager:
         return selected.port if selected is not None else None
 
     def canonical_session(self) -> PreviewSession | None:
-        """Newest still-servable explicit selection, without launching anything."""
+        """Return the selected session only when that exact selection is servable.
+
+        Stopped selections are retired and may reveal the prior selection. A
+        preparing or crashed newest selection remains authoritative lifecycle
+        state, however: routing must not silently substitute an older healthy app.
+        The browser can retain its already-loaded frame while recovery proceeds.
+        """
 
         for name in reversed(self._selection_order):
             session = self._sessions.get(name)
-            if session is not None and self._is_servable(session):
+            if session is None or session.status is PreviewStatus.STOPPED:
+                continue
+            return session if self._is_servable(session) else None
+        return None
+
+    def canonical_lifecycle_session(self) -> PreviewSession | None:
+        """Canonical preview state, including an honest not-yet-servable verdict.
+
+        Routing continues to use :meth:`canonical_session`, which refuses to replace a
+        failed current selection with superseded bytes. When no selection is servable,
+        status clients still receive the exact managed launch that is preparing,
+        crashed, or otherwise unavailable instead of a generic "no server" guess.
+        """
+
+        servable = self.canonical_session()
+        if servable is not None:
+            return servable
+        for name in reversed(self._selection_order):
+            session = self._sessions.get(name)
+            if session is not None and session.status is not PreviewStatus.STOPPED:
+                return session
+        # A launch that failed its initial health check is intentionally not a
+        # successful selection, but it remains the authoritative lifecycle verdict.
+        for session in reversed(self._sessions.values()):
+            if session.status is not PreviewStatus.STOPPED:
                 return session
         return None
 

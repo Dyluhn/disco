@@ -34,7 +34,7 @@ from disco.agent_server.verify.scenarios import (
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
-from disco.core.auth import SESSION_COOKIE, path_preview_host_label
+from disco.core.auth import SESSION_COOKIE
 
 
 async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path() -> None:
@@ -79,8 +79,7 @@ async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_pa
 async def test_http_verify_client_fetches_selected_preview_through_clean_capability() -> None:
     seen: list[str] = []
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 5173)
-    isolated_path = f"/__disco/isolated-preview/{cid}/"
+    bootstrap_path = "/__disco/preview-auth"
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
@@ -99,22 +98,22 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
             assert request.headers["x-disco-csrf"] == "csrf-proof"
             assert json.loads(request.content) == {
                 "target_path": "/",
-                "transport": "path",
+                "transport": "canonical",
             }
             return httpx.Response(
                 200,
                 json={
-                    "bootstrap_url": (
-                        f"http://{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4"
-                    ),
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
                     "port": 5173,
-                    "transport": "path",
+                    "transport": "canonical",
+                    "preview_authority": "live:proof",
                 },
             )
-        if request.url.path == "/__disco/path-preview-auth/a1b2c3d4":
-            assert request.url.host == f"{path_host}.localhost"
+        if request.url.path == bootstrap_path:
+            assert request.url.host == "127.0.0.2"
+            assert request.url.port == 19120
             assert request.headers["origin"] == "http://127.0.0.1:8000"
             assert "disco_session" not in request.headers.get("cookie", "")
             assert request.content == b"intent=one-use-intent"
@@ -123,15 +122,15 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
                 content=b"bootstrap",
                 headers={
                     "set-cookie": (
-                        "disco_path_preview_a1b2c3d4=cap-proof; "
-                        f"Path={isolated_path}; HttpOnly; SameSite=Strict"
+                        "disco_local_preview_19120=cap-proof; Path=/; HttpOnly; SameSite=Strict"
                     )
                 },
             )
-        if request.url.path == isolated_path:
+        if request.url.path == "/":
             cookie = request.headers.get("cookie", "")
-            assert request.url.host == f"{path_host}.localhost"
-            assert "disco_path_preview_a1b2c3d4=cap-proof" in cookie
+            assert request.url.host == "127.0.0.2"
+            assert request.url.port == 19120
+            assert "disco_local_preview_19120=cap-proof" in cookie
             assert "disco_path_preview_isolated" not in cookie
             assert "disco_session" not in cookie
             assert "origin" not in request.headers
@@ -147,42 +146,41 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
         "/api/auth/pairing-token",
         "/api/auth/mint",
         f"/conversations/{cid}/preview/capability",
-        "/__disco/path-preview-auth/a1b2c3d4",
-        isolated_path,
+        bootstrap_path,
+        "/",
     ]
 
 
 async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() -> None:
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 8000)
+    bootstrap_path = "/__disco/preview-auth"
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == f"/conversations/{cid}/preview/capability":
             return httpx.Response(
                 200,
                 json={
-                    "bootstrap_url": (
-                        f"http://{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4"
-                    ),
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
                     "port": 8000,
-                    "transport": "path",
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
                 },
             )
-        if request.url.path == "/__disco/path-preview-auth/a1b2c3d4":
+        if request.url.path == bootstrap_path:
             return httpx.Response(
                 200,
                 content=b"unsafe bootstrap",
                 headers=[
                     (
                         "set-cookie",
-                        "disco_path_preview_a1b2c3d4=cap-proof; Path=/; HttpOnly",
+                        "disco_local_preview_19120=cap-proof; Path=/; HttpOnly",
                     ),
                     ("set-cookie", "disco_session=must-not-cross; Path=/; HttpOnly"),
                 ],
             )
-        if request.url.path.startswith("/__disco/isolated-preview/"):
+        if request.url.path == "/":
             raise AssertionError("isolated content must not load with an app session")
         return httpx.Response(404)
 
@@ -190,14 +188,6 @@ async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() 
     client._csrf_token = "csrf-proof"
     client._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
     assert await client.fetch_preview(cid) is None
-    assert (
-        client._validated_isolated_preview_url(
-            cid,
-            8000,
-            f"http://user@{path_host}.localhost:8000/__disco/path-preview-auth/a1b2c3d4",
-        )
-        is None
-    )
 
 
 # ---------------------------------------------------------------------------

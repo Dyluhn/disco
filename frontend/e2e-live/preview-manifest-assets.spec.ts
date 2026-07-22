@@ -774,7 +774,16 @@ async function assertBuildIframe(
   page.on("response", listener);
   try {
     await page.getByRole("tab", { name: "Preview" }).click();
-    const frame = page.frameLocator('iframe[title="Static preview"]').first();
+    // Completed static builds use the same canonical Preview contract as an
+    // active runtime; the immutable committed authority is hidden behind it.
+    const iframe = page.locator('iframe[title="Preview"]').first();
+    await expect(iframe).toBeVisible({ timeout: 120_000 });
+    const attachedFrame = await (await iframe.elementHandle())?.contentFrame();
+    expect(attachedFrame, "canonical Preview iframe did not attach").not.toBeNull();
+    const frameUrl = new URL(attachedFrame!.url());
+    expect(frameUrl.hostname).toMatch(/^127(?:\.\d+){3}$/);
+    expect(frameUrl.origin).not.toBe(new URL(page.url()).origin);
+    const frame = iframe.contentFrame();
     const body = frame.locator("body");
     await expect(body).toContainText(marker, { timeout: 120_000 });
     await expect(body).toHaveAttribute("data-script-loaded", "true", { timeout: 120_000 });

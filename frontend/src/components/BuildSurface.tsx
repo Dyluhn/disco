@@ -21,7 +21,7 @@ import {
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
 import { isolationForBackend } from "@/lib/isolation";
-import { agentFetch, agentLive, pathPreviewBootstrapUrl } from "@/api/client";
+import { agentFetch, agentLive, canonicalPreviewBootstrapUrl } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
@@ -626,7 +626,7 @@ export function BuildSurface({
               b.status === "FINISHED" && b.cid && deliverable?.kind === "app"
                 ? () =>
                     openFreshPreview(
-                      () => pathPreviewBootstrapUrl(b.cid!, "/"),
+                      () => canonicalPreviewBootstrapUrl(b.cid!, "/"),
                       (reason) =>
                         toast.show({
                           title:

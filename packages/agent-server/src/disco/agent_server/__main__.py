@@ -14,7 +14,11 @@ loop) and serves the wire/REST surface. Env (DISCO_* preferred; legacy PMX_* hon
 
 from __future__ import annotations
 
+import contextlib
+import socket
+
 import uvicorn
+from disco.core.auth import local_preview_gateway_host, local_preview_gateway_ports
 from disco.core.env import disco_env
 from disco.core.llm.secrets import ensure_process_secret_key
 from disco.core.store.sqlite import SqliteEventStore
@@ -90,7 +94,7 @@ def main() -> None:
     assert host is not None  # default above is non-None
     port = disco_env("PORT", "8000")
     assert port is not None  # default above is non-None
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=host,
         port=int(port),
@@ -100,6 +104,25 @@ def main() -> None:
         # preserves the ASGI WebSocket contract used by the agent surface.
         ws="websockets-sansio",
     )
+    sockets = [config.bind_socket()]
+    gateway_bind = (disco_env("LOCAL_PREVIEW_BIND", "") or "").strip()
+    try:
+        for gateway_port in local_preview_gateway_ports():
+            gateway = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            gateway.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Host-process deployments bind the exact loopback identity for
+            # cookie isolation. Containers bind all internal interfaces; their
+            # published host mappings remain exact 127/8 literals.
+            bind_host = gateway_bind or local_preview_gateway_host(gateway_port)
+            gateway.bind((bind_host, gateway_port))
+            gateway.listen(socket.SOMAXCONN)
+            gateway.set_inheritable(True)
+            sockets.append(gateway)
+        uvicorn.Server(config).run(sockets=sockets)
+    finally:
+        for bound in sockets:
+            with contextlib.suppress(OSError):
+                bound.close()
 
 
 if __name__ == "__main__":

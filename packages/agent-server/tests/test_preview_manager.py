@@ -15,6 +15,7 @@ import pytest
 from disco.agent_server.preview_manager import (
     NoPreviewPortAvailableError,
     PreviewManager,
+    PreviewReloadStrategy,
     PreviewStatus,
 )
 from disco.agent_server.preview_projection import ActiveLivePreviewProjection
@@ -143,6 +144,9 @@ async def test_start_allocates_url_from_platform() -> None:
     # the command the platform actually ran bakes in ITS port, serving the dir
     assert "http.server 3000" in session.command
     assert "dist" in session.command
+    assert session.reload_strategy is PreviewReloadStrategy.RELOAD
+    assert session.to_dict()["generation"] == session.projection_id
+    assert session.to_dict()["reload_strategy"] == "reload"
 
 
 @pytest.mark.asyncio
@@ -244,6 +248,7 @@ async def test_active_projection_is_revoked_by_automatic_process_restart() -> No
     assert session.status is PreviewStatus.RUNNING
     assert len(sandbox.sessions.exec_calls) == 2
     assert session.projection_id != projection.projection_id
+    assert session.to_dict()["generation"] == session.projection_id
     assert await mgr.resolve_active_projection(projection) is None
     await mgr.aclose()
 
@@ -265,6 +270,40 @@ async def test_canonical_selection_tracks_explicit_success_and_falls_back() -> N
     assert mgr.canonical_port() == web.port
     web.status = PreviewStatus.CRASHED
     assert mgr.canonical_port() is None
+    assert mgr.canonical_lifecycle_session() is web
+
+
+@pytest.mark.asyncio
+async def test_crashed_newest_selection_never_substitutes_older_healthy_app() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    older = await mgr.start(serve_dir="older", name="older", supervise=False)
+    newest = await mgr.start(serve_dir="newest", name="newest", supervise=False)
+
+    newest.status = PreviewStatus.CRASHED
+    newest.detail = "runtime exited"
+
+    assert older.status is PreviewStatus.RUNNING
+    assert mgr.canonical_session() is None
+    assert mgr.canonical_port() is None
+    assert mgr.canonical_lifecycle_session() is newest
+
+
+@pytest.mark.asyncio
+async def test_reload_strategy_comes_from_authoritative_launch_intent() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
+
+    vite = await mgr.start(framework="vite", name="vite", supervise=False)
+    node = await mgr.start(framework="node", name="node", supervise=False)
+    custom = await mgr.start(command="npm run dev", name="custom", supervise=False)
+
+    assert vite.intent["launch_kind"] == "framework"
+    assert vite.reload_strategy is PreviewReloadStrategy.HMR
+    assert node.intent["launch_kind"] == "framework"
+    assert node.reload_strategy is PreviewReloadStrategy.RELOAD
+    assert custom.intent["launch_kind"] == "custom"
+    assert custom.reload_strategy is PreviewReloadStrategy.RELOAD
 
 
 @pytest.mark.asyncio
@@ -286,7 +325,8 @@ async def test_delayed_health_activates_newest_explicit_canonical_selection() ->
     sandbox.fetch_inside = delayed_fetch  # type: ignore[method-assign]
     second = await mgr.start(command="python3 server.py", name="second", supervise=True)
     assert second.status is PreviewStatus.STARTING
-    assert mgr.canonical_port() == first.port
+    assert mgr.canonical_port() is None
+    assert mgr.canonical_lifecycle_session() is second
 
     delay_second = False
     await mgr._supervise_once()

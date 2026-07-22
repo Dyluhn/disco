@@ -17,11 +17,12 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * DC-01 UI rung: Hostname-based preview proxy.
+ * DC-01 UI rung: canonical managed Preview.
  *
  * Drives a real conversation that builds the bp-16 frozen scenario shape
  * (Vite+React app on :8000 reading `/api/readings` from :3000); asserts the
- * preview iframe's document contains REAL table cells with the CSV values.
+ * canonical Preview iframe contains REAL table cells with the CSV values while
+ * explicit host capabilities independently prove the two upstream ports.
  */
 
 const SCREENSHOT_DIR = path.resolve(__dirname, "../../test-record/screenshots/dc-01");
@@ -40,6 +41,13 @@ const PROMPT =
 
 interface ConversationState {
   execution_status: string;
+}
+
+interface PreviewState {
+  available: boolean;
+  generation?: string;
+  port?: number | null;
+  status?: string;
 }
 
 async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
@@ -118,7 +126,7 @@ async function redeemHostPreview(
   }
 }
 
-test("Origin-true preview shows the Vite app and successfully fetches the API", async ({
+test("Canonical Preview shows the Vite app and successfully fetches the API", async ({
   page,
   request,
 }) => {
@@ -154,10 +162,8 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   await composer.press("Enter");
   await page.getByRole("button", { name: /approve\s*&\s*build/i }).click({ timeout: 300_000 });
 
-  // DC-01's surface is the proxy DURING a live run (post-FINISHED survival is
-  // DC-02). Poll the origin-true hostnames directly until BOTH upstreams answer
-  // through the proxy — that's the moment the servers are up and the run is
-  // still holding (the prompt's `sleep 600` window).
+  // Poll explicit diagnostic capabilities until BOTH upstreams answer. The user
+  // surface below remains the one canonical Preview selected by the platform.
   let vitePreviewForCleanup: Awaited<ReturnType<typeof redeemHostPreview>> | null = null;
   let apiPreviewForCleanup: Awaited<ReturnType<typeof redeemHostPreview>> | null = null;
   try {
@@ -194,28 +200,18 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   expect(JSON.stringify(readings)).toContain("42");
   expect(JSON.stringify(readings)).toContain("84");
 
-  // The pane DEFAULTS to the rendered (srcdoc) view when the agent wrote an
-  // entry HTML — a Vite app always does — so the live iframe only appears
-  // after the explicit "Live server" toggle (orchestrator fix: the draft
-  // waited 600s for an iframe that could never render in rendered mode).
-  // Mid-run the canvas follows the agent's activity (files/terminal) — the
-  // PreviewPane lives behind the explicit "Preview" canvas tab.
-  await page.getByRole("tab", { name: "Preview" }).click({ timeout: 30_000 });
+  const preview = await getJson<PreviewState>(
+    request,
+    `${AGENT_API}/conversations/${cid}/preview`,
+  );
+  expect(preview).toMatchObject({ available: true, port: 8000, status: "running" });
+  expect(preview.generation, "managed preview generation was absent").toBeTruthy();
 
-  const liveToggle = page.getByRole("button", { name: /live server/i });
-  const iframe = page.locator('iframe[title="Live preview"]');
-  await expect
-    .poll(
-      async () => {
-        if (await iframe.isVisible()) return true;
-        if (await liveToggle.isVisible()) await liveToggle.click();
-        return iframe.isVisible();
-      },
-      // Short: the upstreams already answer; only UI propagation is left, and
-      // the run's sleep-window is ~600s total.
-      { timeout: 60_000, intervals: [1_000] },
-    )
-    .toBe(true);
+  // Mid-run the canvas follows agent activity (files/terminal), so select the
+  // single canonical Preview. There is no Rendered/Live representation toggle.
+  await page.getByRole("tab", { name: "Preview" }).click({ timeout: 30_000 });
+  const iframe = page.locator('iframe[title="Preview"]');
+  await expect(iframe).toBeVisible({ timeout: 60_000 });
 
   const frame = iframe.contentFrame();
   await expect
@@ -223,9 +219,11 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
       const handle = await iframe.elementHandle();
       return (await handle?.contentFrame())?.url() ?? "";
     })
-    .toMatch(new RegExp(`^${viteOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?\\?r=\\d+$`));
+    .toMatch(/^http:\/\/127(?:\.\d+){3}:\d+\//);
   const iframeHandle = await iframe.elementHandle();
   const iframeUrl = (await iframeHandle?.contentFrame())?.url() ?? "";
+  expect(new URL(iframeUrl).origin).not.toBe(new URL(page.url()).origin);
+  expect(new URL(iframeUrl).origin).not.toBe(viteOrigin);
   // Vite pre-bundles deps on the FIRST browser request; over the SSH->gVisor
   // transport that first paint can take tens of seconds (run 3 failed with the
   // module graph mid-load at the 60s mark). Be patient and nudge with the
@@ -248,23 +246,6 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
   await expect(cells.filter({ hasText: "84" })).toHaveCount(1);
 
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, "host-preview-table.png") });
-
-  // Port pill :3000 → the Express API through its own origin-true hostname.
-  let port3000Url: string | null = null;
-  const pill3000 = page.getByRole("tab", { name: ":3000" });
-  if (await pill3000.isVisible()) {
-    await pill3000.click();
-    await expect
-      .poll(async () => {
-        const handle = await iframe.elementHandle();
-        return (await handle?.contentFrame())?.url() ?? "";
-      }, { timeout: 30_000 })
-      .toMatch(new RegExp(`^${apiOrigin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\/?\\?r=\\d+$`));
-    const handle = await iframe.elementHandle();
-    port3000Url = (await handle?.contentFrame())?.url() ?? null;
-    await page.waitForTimeout(2_000);
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, "host-preview-port-3000.png") });
-  }
 
   // Honest lifecycle coda: once the run cleanly FINISHES, today's runtime tears
   // the sandbox down and the proxy MUST answer 503 (not hang, not 502 noise).
@@ -293,7 +274,8 @@ test("Origin-true preview shows the Vite app and successfully fetches the API", 
       {
         cid,
         iframeUrl,
-        port3000Url,
+        previewGeneration: preview.generation,
+        apiDiagnosticOrigin: apiOrigin,
         readings,
         finalStatus,
         postFinishProxyStatus: postFinishStatus,

@@ -32,6 +32,31 @@
   var _sel     = null;   // most recently clicked element
   var _ring    = null;   // the absolutely-positioned hover ring div
 
+  /* The host owns static refreshes. Report the real in-frame route so a reload
+   * preserves navigation instead of reminting the application root. This is
+   * observational only: the page retains complete routing authority. */
+  function reportLocation() {
+    window.parent.postMessage({
+      v: 1,
+      channel: 'disco-preview',
+      type: 'location',
+      path: window.location.pathname + window.location.search + window.location.hash,
+    }, '*');
+  }
+
+  ['pushState', 'replaceState'].forEach(function (name) {
+    var original = window.history[name];
+    if (typeof original !== 'function') return;
+    window.history[name] = function () {
+      var result = original.apply(window.history, arguments);
+      reportLocation();
+      return result;
+    };
+  });
+  window.addEventListener('popstate', reportLocation);
+  window.addEventListener('hashchange', reportLocation);
+  reportLocation();
+
   /* ── Ring ────────────────────────────────────────────────────────────────── */
 
   function ensureRing() {

@@ -16,6 +16,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { FileCode2, Gauge, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
+import { useSnapToAction } from "@/lib/useSnapToAction";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useProjectManifest } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
@@ -57,16 +58,21 @@ export function ExecutionCanvas({
    * Undefined when steering isn't available (no conversation / static view). */
   onSteer?: (text: string) => void;
   /** P8 click-to-edit — submit a selected element's ref + change to the host. */
-  onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
+  onSelectionEdit?: (
+    ref: SelectionRef,
+    instruction: string,
+    humanLabel?: string,
+  ) => void;
   /** Element mention — attach the next clicked preview element to the next chat message. */
   onElementMention?: (payload: ElementMentionPayload) => void;
 }) {
-  // C5: detect any previewable HTML — either a client-side artifact (srcDoc) or
-  // a server-side .html from slides_generate / deliverable (empty content, served
-  // via ?inline=true).  Used for both initial tab selection and the FINISHED auto-switch.
-  function _hasPreviewableHtml(evts: AgentEvent[]): boolean {
+  // Recognize the canonical app handoff independently from later file
+  // deliverables. Runtime apps may hand off a directory or server entry rather
+  // than an HTML file, so srcdoc eligibility is not the Preview authority.
+  function _hasPreviewableApp(evts: AgentEvent[]): boolean {
     const files = deriveFiles(evts);
     return (
+      evts.some((event) => event.kind === "deliverable" && event.artifact_kind === "app") ||
       deriveSrcDoc(files) != null ||
       files.some((f) => !f.content && /\.html$/i.test(f.path))
     );
@@ -77,7 +83,7 @@ export function ExecutionCanvas({
   // Terminal if anything ran, else Files.
   const initial: TabId = useMemo(
     () =>
-      _hasPreviewableHtml(events)
+      _hasPreviewableApp(events)
         ? "preview"
         : deriveTerminal(events).length > 0
           ? "terminal"
@@ -90,12 +96,13 @@ export function ExecutionCanvas({
   // the hero moment). We only force the switch on the streaming RISING edge — once
   // the user clicks away mid-write, we respect it (no repeated yank per delta).
   const [tab, setTab] = useState<TabId>(initial);
+  const { snapToAction, setSnapToAction } = useSnapToAction();
   const wasStreaming = useRef(false);
   useEffect(() => {
     const now = streamingFile != null;
-    if (now && !wasStreaming.current) setTab("files");
+    if (snapToAction && now && !wasStreaming.current) setTab("files");
     wasStreaming.current = now;
-  }, [streamingFile]);
+  }, [snapToAction, streamingFile]);
   // Auto-switch to Preview at the capstone: when the run FINISHES and there's a
   // renderable artifact, pull focus to the result (the deliverable handoff — the
   // user wants to SEE the finished app, not stare at the file tree). Only on the
@@ -103,7 +110,7 @@ export function ExecutionCanvas({
   const wasFinished = useRef(false);
   useEffect(() => {
     const finished = status === "FINISHED";
-    if (finished && !wasFinished.current && _hasPreviewableHtml(events)) {
+    if (finished && !wasFinished.current && _hasPreviewableApp(events)) {
       setTab("preview");
     }
     wasFinished.current = finished;
@@ -147,34 +154,60 @@ export function ExecutionCanvas({
       data-active-tab={tab}
       className="flex h-full min-h-0 flex-col"
     >
-      <Tabs.List className="flex shrink-0 items-center gap-px border-b border-hairline px-inline">
-        {TABS.map((t) => (
-          <Tabs.Trigger
-            key={t.id}
-            value={t.id}
+      <div className="flex shrink-0 items-center border-b border-hairline px-inline">
+        <Tabs.List className="flex min-w-0 items-center gap-px">
+          {TABS.map((t) => (
+            <Tabs.Trigger
+              key={t.id}
+              value={t.id}
+              className={cn(
+                "flex items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
+                "border-b-2 border-transparent hover:text-text",
+                "data-[state=active]:border-accent data-[state=active]:text-text",
+              )}
+            >
+              <t.icon className="size-3.5" aria-hidden />
+              {t.label}
+              {t.id === "files" && streamingFile && (
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-accent"
+                  aria-label="writing"
+                />
+              )}
+              {t.id === "terminal" && anySessionBusy && (
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-accent"
+                  aria-label="session running"
+                />
+              )}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={snapToAction}
+          aria-label="Snap to action — automatically show Files when the agent starts writing"
+          title="Automatically switch to Files when the agent starts writing. Turn this off to keep the tab you selected."
+          data-disco-control="build.snap-to-action-toggle"
+          onClick={() => setSnapToAction(!snapToAction)}
+          className={cn(
+            "ml-auto flex shrink-0 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem] transition-colors",
+            snapToAction
+              ? "border-accent/50 bg-accent/5 text-accent"
+              : "border-hairline text-text-faint hover:text-text-muted",
+          )}
+        >
+          <span
+            aria-hidden
             className={cn(
-              "flex items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
-              "border-b-2 border-transparent hover:text-text",
-              "data-[state=active]:border-accent data-[state=active]:text-text",
+              "size-1.5 rounded-full",
+              snapToAction ? "bg-accent" : "bg-text-faint",
             )}
-          >
-            <t.icon className="size-3.5" aria-hidden />
-            {t.label}
-            {t.id === "files" && streamingFile && (
-              <span
-                className="size-1.5 animate-pulse rounded-full bg-accent"
-                aria-label="writing"
-              />
-            )}
-            {t.id === "terminal" && anySessionBusy && (
-              <span
-                className="size-1.5 animate-pulse rounded-full bg-accent"
-                aria-label="session running"
-              />
-            )}
-          </Tabs.Trigger>
-        ))}
-      </Tabs.List>
+          />
+          Snap to action
+        </button>
+      </div>
       <div className="min-h-0 flex-1">
         <Tabs.Content value="files" className="h-full focus:outline-none">
           <FilesPane

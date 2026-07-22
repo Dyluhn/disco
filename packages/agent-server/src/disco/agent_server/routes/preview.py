@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import json as _json
 import logging
 import mimetypes
 import re
 import secrets
+import time
 import urllib.parse
 from pathlib import PurePosixPath
 from typing import Literal
@@ -30,20 +32,25 @@ from disco.core.auth import (
     PATH_PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_APP_HTTP_METHODS,
     PREVIEW_BOOTSTRAP_PATH,
+    AuthSession,
+    PreviewCapability,
     PreviewCapabilitySigner,
     SessionSigner,
     cookie_header_from_headers,
+    local_preview_gateway_host,
+    local_preview_gateway_ports,
     origin_matches_request_host,
     path_preview_cookie_name,
     path_preview_host_label,
     preview_ttl_s,
 )
 from disco.core.env import disco_env
+from disco.core.events import Event
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
-from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
+from fastapi import APIRouter, HTTPException, Request, Response, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -75,7 +82,8 @@ class PreviewCapabilityBody(BaseModel):
     # value is accepted only when it exactly matches that server selection.
     port: int | None = None
     target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
-    transport: Literal["host", "path", "path_live"] = "host"
+    transport: Literal["host", "path", "path_live", "canonical"] = "host"
+    workspace_version: int | None = Field(default=None, ge=1)
 
 
 _ENCODED_PREVIEW_STRUCTURAL = re.compile(r"%([0-9a-fA-F]{2})")
@@ -339,11 +347,22 @@ async def _path_preview_websocket_capability_owner(
 
 def _forwarded_preview_query(request: Request) -> str:
     pairs = urllib.parse.parse_qsl(request.url.query, keep_blank_values=True)
-    # ``version`` belongs to the host snapshot selector and must never leak to a
-    # user's dev server.  All other query fields retain their semantic values.
-    return urllib.parse.urlencode(
-        [(key, value) for key, value in pairs if key != "version"], doseq=True
-    )
+    return urllib.parse.urlencode(pairs, doseq=True)
+
+
+def _legacy_workspace_version(request: Request) -> int | None:
+    values = request.query_params.getlist("version")
+    if not values:
+        return None
+    if len(values) != 1:
+        raise HTTPException(status_code=422, detail="invalid workspace version")
+    try:
+        version = int(values[0])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid workspace version") from exc
+    if version < 1:
+        raise HTTPException(status_code=422, detail="invalid workspace version")
+    return version
 
 
 def _serve_static_from_snapshot(
@@ -424,7 +443,12 @@ def _serve_static_from_snapshot(
 
 
 async def _fetch_inside_response(
-    runtime: ConversationRuntime, conversation_id: str, port: int, rel_path: str
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    port: int,
+    rel_path: str,
+    *,
+    inject_selection: bool = False,
 ) -> Response | None:
     """Fix 2 (B-E): when no host port is published (sealed/filtered backend), reach
     the agent's dev server through a liveness proxy that curls it from INSIDE the
@@ -450,6 +474,8 @@ async def _fetch_inside_response(
         return None
     status, body, ctype = got
     media_type = ctype or "application/octet-stream"
+    if inject_selection:
+        body = inject_selection_agent(body, media_type)
     return Response(
         content=inject_element_mention_picker(body, media_type),
         status_code=status,
@@ -464,6 +490,7 @@ async def _serve_active_finished_projection(
     projection: ActiveLivePreviewProjection,
     *,
     capability_port: int | None,
+    inject_selection: bool = False,
 ) -> Response | None:
     """Proxy only the exact already-running generation proven before FINISHED."""
 
@@ -481,6 +508,7 @@ async def _serve_active_finished_projection(
             conversation_id,
             projection.port,
             rel_path,
+            inject_selection=inject_selection,
         )
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
@@ -491,10 +519,14 @@ async def _serve_active_finished_projection(
             conversation_id,
             projection.port,
             rel_path,
+            inject_selection=inject_selection,
         )
     media_type = response.headers.get("content-type", "text/html")
+    body = response.content
+    if inject_selection:
+        body = inject_selection_agent(body, media_type)
     return Response(
-        content=inject_element_mention_picker(response.content, media_type),
+        content=inject_element_mention_picker(body, media_type),
         status_code=response.status_code,
         media_type=media_type,
     )
@@ -638,6 +670,32 @@ def _preview_bootstrap_url(request: Request, cid8: str, port: int) -> str:
     return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", "", ""))
 
 
+def _local_preview_request(request: Request) -> bool:
+    hostname = (request.url.hostname or "").lower().rstrip(".")
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _local_preview_bootstrap_url(request: Request, listener_port: int) -> str:
+    """Return a DNS-free loopback origin served by the gateway listener pool."""
+
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
+    scheme = forwarded if forwarded in {"http", "https"} else request.url.scheme
+    if scheme != "http":
+        # A loopback HTTP listener embedded by an HTTPS UI would be mixed
+        # content. Operators terminating TLS use PREVIEW_ORIGIN_BASE instead.
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "local_preview_https_requires_preview_origin_base"},
+        )
+    host = local_preview_gateway_host(listener_port)
+    return f"http://{host}:{listener_port}{PREVIEW_BOOTSTRAP_PATH}"
+
+
 def _path_preview_bootstrap_url(request: Request, conversation_id: str, port: int) -> str:
     """Return a Firefox-safe, per-CID origin for path/static previews."""
     cid8 = conversation_id.removeprefix("conv_")[:8]
@@ -698,22 +756,12 @@ async def _committed_static_capability_available(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
     conversation_id: str,
-    target_parts: urllib.parse.SplitResult,
+    workspace_version: int | None = None,
 ) -> bool:
     """Narrow legacy-8000 namespace for a proven immutable app snapshot only."""
     if runtime is None:
         return False
-    versions = urllib.parse.parse_qs(target_parts.query).get("version", [])
-    version: int | None = None
-    if versions:
-        if len(versions) != 1:
-            return False
-        try:
-            version = int(versions[0])
-        except ValueError:
-            return False
-        if version < 1:
-            return False
+    version = workspace_version
     try:
         events = await store.get_events(conversation_id)
     except Exception:  # noqa: BLE001 — missing evidence cannot authorize fallback
@@ -742,6 +790,104 @@ async def _committed_static_capability_available(
         inject_selection=False,
     )
     return served is not None and served.status_code < 400
+
+
+def _preview_authority_label(kind: str, *parts: object) -> str:
+    material = _json.dumps([kind, *parts], separators=(",", ":"), ensure_ascii=True)
+    return f"{kind}:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
+
+
+async def _canonical_preview_authority(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    selected_port: int,
+    *,
+    workspace_version: int | None = None,
+) -> str | None:
+    """Bind one canonical browser origin to exact live or immutable authority."""
+
+    if runtime is None:
+        return None
+    try:
+        events = await store.get_events(conversation_id)
+    except Exception:  # noqa: BLE001 — missing authority evidence fails closed
+        return None
+    if workspace_version is not None:
+        version = workspace_version
+        candidates = [
+            event
+            for event in events
+            if isinstance(event, WorkspaceVersionEvent) and event.version_seq == version
+        ]
+        if not candidates:
+            return None
+        version_event = max(candidates, key=lambda event: event.seq or -1)
+        entry = _selected_app_entry(events, version=version)
+        if entry is None:
+            return None
+        return _preview_authority_label(
+            "version", conversation_id, version, version_event.tree_digest, entry
+        )
+
+    latest_status = next(
+        (event for event in reversed(events) if isinstance(event, StatusEvent)),
+        None,
+    )
+    if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+        project_store = runtime.project_store()
+        if project_store is None or project_store.status() != StorageStatus.OK:
+            return None
+        try:
+            committed = resolve_committed_workspace(events, project_store, conversation_id)
+        except WorkspaceCommitUnavailable:
+            return None
+        entry = _selected_app_entry(
+            events,
+            version=committed.event.version_seq,
+            marker_seq=committed.event.seq,
+        )
+        if entry is None:
+            return None
+        seal = committed.event.final_seal
+        projection = (
+            derive_active_live_preview_projection(events, terminal_seq=seal.terminal_seq)
+            if seal is not None
+            else None
+        )
+        if projection is not None:
+            if selected_port != projection.port:
+                return None
+            resolver = getattr(runtime, "resolve_active_preview_projection", None)
+            if resolver is None or not await resolver(conversation_id, projection):
+                return None
+            return _preview_authority_label(
+                "sealed-live",
+                conversation_id,
+                committed.event.version_seq,
+                committed.event.tree_digest,
+                projection.projection_id,
+                projection.port,
+                entry,
+            )
+        return _preview_authority_label(
+            "committed",
+            conversation_id,
+            committed.event.version_seq,
+            committed.event.tree_digest,
+            entry,
+        )
+
+    try:
+        metadata = await runtime.preview(conversation_id)
+    except Exception:  # noqa: BLE001 — lifecycle authority cannot be guessed
+        return None
+    generation = metadata.get("generation") if isinstance(metadata, dict) else None
+    metadata_port = metadata.get("port") if isinstance(metadata, dict) else None
+    if not isinstance(generation, str) or not generation or metadata_port != selected_port:
+        return None
+    entry = _selected_app_entry(events, version=None)
+    return _preview_authority_label("live", conversation_id, generation, selected_port, entry or "")
 
 
 async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_path: str) -> None:
@@ -817,6 +963,234 @@ async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_
             await ws_client.close()
 
 
+async def _mint_canonical_preview(
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    request: Request,
+    session: AuthSession,
+    signer: PreviewCapabilitySigner,
+    conversation_id: str,
+    cid8: str,
+    port: int,
+    target: str,
+    workspace_version: int | None,
+) -> tuple[str, str, str, int | None]:
+    authority_id = await _canonical_preview_authority(
+        store,
+        runtime,
+        conversation_id,
+        port,
+        workspace_version=workspace_version,
+    )
+    if authority_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "preview_authority_unavailable"},
+        )
+    if _local_preview_request(request) and not disco_env("PREVIEW_ORIGIN_BASE", "").strip():
+        now = int(time.time())
+        lease = store.acquire_local_preview_lease(
+            conversation_id=conversation_id,
+            owner_id=session.owner_id,
+            target_port=port,
+            authority_id=authority_id,
+            now=now,
+            expires_at=now + preview_ttl_s(),
+            listener_ports=local_preview_gateway_ports(),
+        )
+        if lease is None:
+            raise HTTPException(
+                status_code=503,
+                detail={"reason": "local_preview_origin_pool_exhausted"},
+            )
+        bootstrap = _local_preview_bootstrap_url(request, lease.listener_port)
+    else:
+        bootstrap = _preview_bootstrap_url(request, cid8, port)
+    intent = signer.mint_intent(
+        session=session,
+        conversation_id=conversation_id,
+        port=port,
+        target_path=target,
+        allow_websocket=True,
+        http_methods=PREVIEW_APP_HTTP_METHODS,
+        authority_id=authority_id,
+        immutable_version=workspace_version,
+    )
+    return bootstrap, intent, authority_id, workspace_version
+
+
+async def _canonical_preview_workspace_version(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    request: Request,
+    preview_cap: object | None,
+) -> tuple[int | None, Response | None]:
+    canonical = (
+        preview_cap
+        if isinstance(preview_cap, PreviewCapability) and preview_cap.authority_id is not None
+        else None
+    )
+    if canonical is None:
+        return _legacy_workspace_version(request), None
+    authority = await _canonical_preview_authority(
+        store,
+        runtime,
+        conversation_id,
+        canonical.port,
+        workspace_version=canonical.immutable_version,
+    )
+    if authority != canonical.authority_id:
+        return canonical.immutable_version, Response(
+            "preview generation changed",
+            status_code=409,
+            media_type="text/plain",
+        )
+    return canonical.immutable_version, None
+
+
+def _historical_preview_response(
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    safe_path: str,
+    events: list[Event],
+    workspace_version: int,
+    *,
+    inject_selection: bool,
+) -> Response:
+    entry_path = _selected_app_entry(events, version=workspace_version)
+    served = _serve_static_from_snapshot(
+        runtime,
+        conversation_id,
+        safe_path,
+        version=workspace_version,
+        entry_path=entry_path,
+        inject_selection=inject_selection,
+    )
+    if served is not None:
+        return served
+    if entry_path is not None:
+        return Response("committed preview unavailable", status_code=503, media_type="text/plain")
+    return Response("version not found", status_code=404, media_type="text/plain")
+
+
+async def _preview_capability_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    cap_signer: PreviewCapabilitySigner,
+    conversation_id: str,
+    body: PreviewCapabilityBody,
+    request: Request,
+) -> Response:
+    if body.port is not None and body.port not in USER_PORTS:
+        raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
+    if body.workspace_version is not None and body.transport != "canonical":
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "workspace_version_requires_canonical_preview"},
+        )
+    session = current_session(request)
+    conversation_id = await require_owned_conversation(request, store, conversation_id)
+    cid8 = conversation_id.removeprefix("conv_")[:8]
+    target = body.target_path if body.target_path.startswith("/") else f"/{body.target_path}"
+    target_parts = urllib.parse.urlsplit(target)
+    if target_parts.scheme or target_parts.netloc:
+        raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
+    safe_target = _safe_capability_target_path(target_parts.path)
+    if safe_target is None:
+        raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
+    if body.transport in {"path", "path_live", "canonical"}:
+        selected_port = (
+            _canonical_preview_port(runtime, conversation_id)
+            if runtime is not None
+            else PREVIEW_PORT
+        )
+        if (
+            selected_port is None
+            and body.transport in {"path", "canonical"}
+            and await _committed_static_capability_available(
+                store,
+                runtime,
+                conversation_id,
+                body.workspace_version,
+            )
+        ):
+            selected_port = PREVIEW_PORT
+        if selected_port is None:
+            raise HTTPException(status_code=409, detail={"reason": "preview_unavailable"})
+        if body.port is not None and body.port != selected_port:
+            raise HTTPException(status_code=400, detail={"reason": "path_preview_port_mismatch"})
+        port = selected_port
+    else:
+        port = body.port if body.port is not None else PREVIEW_PORT
+
+    authority_id: str | None = None
+    immutable_version: int | None = None
+    if body.transport == "canonical":
+        bootstrap, intent, authority_id, immutable_version = await _mint_canonical_preview(
+            store=store,
+            runtime=runtime,
+            request=request,
+            session=session,
+            signer=cap_signer,
+            conversation_id=conversation_id,
+            cid8=cid8,
+            port=port,
+            target=target,
+            workspace_version=body.workspace_version,
+        )
+    elif body.transport == "host":
+        reserved_host_target = (
+            target_parts.path == PREVIEW_BOOTSTRAP_PATH
+            or target_parts.path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
+            or (
+                target_parts.path.startswith("/conversations/")
+                and "/preview-app/" in target_parts.path
+            )
+        )
+        if reserved_host_target:
+            raise HTTPException(status_code=400, detail={"reason": "reserved_preview_path"})
+        bootstrap = _preview_bootstrap_url(request, cid8, port)
+        intent = cap_signer.mint_intent(
+            session=session,
+            conversation_id=conversation_id,
+            port=port,
+            target_path=target,
+            allow_websocket=True,
+            http_methods=PREVIEW_APP_HTTP_METHODS,
+        )
+    else:
+        path_prefix = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/"
+        path_target = f"{path_prefix}{safe_target}"
+        if target_parts.query:
+            path_target = f"{path_target}?{target_parts.query}"
+        if len(path_target) > MAX_PREVIEW_TARGET_PATH_CHARS:
+            raise HTTPException(status_code=400, detail={"reason": "preview_target_too_long"})
+        bootstrap = _path_preview_bootstrap_url(request, conversation_id, port)
+        intent = cap_signer.mint_intent(
+            session=session,
+            conversation_id=conversation_id,
+            port=port,
+            target_path=path_target,
+            path_prefix=path_prefix,
+            allow_websocket=body.transport == "path_live",
+        )
+
+    return JSONResponse(
+        {
+            "bootstrap_url": bootstrap,
+            "bootstrap_intent": intent,
+            "target_path": target,
+            "port": port,
+            "transport": body.transport,
+            "preview_authority": authority_id,
+            "immutable_version": immutable_version,
+        },
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
 def _register_preview_capability_route(
     router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> None:
@@ -828,90 +1202,8 @@ def _register_preview_capability_route(
         body: PreviewCapabilityBody,
         request: Request,
     ) -> Response:
-        if body.port is not None and body.port not in USER_PORTS:
-            raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
-        session = current_session(request)
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
-        cid8 = conversation_id.removeprefix("conv_")[:8]
-        target = body.target_path if body.target_path.startswith("/") else f"/{body.target_path}"
-        target_parts = urllib.parse.urlsplit(target)
-        if target_parts.scheme or target_parts.netloc or target_parts.fragment:
-            raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
-        safe_target = _safe_capability_target_path(target_parts.path)
-        if safe_target is None:
-            raise HTTPException(status_code=400, detail={"reason": "invalid_preview_path"})
-        if body.transport in {"path", "path_live"}:
-            selected_port = (
-                _canonical_preview_port(runtime, conversation_id)
-                if runtime is not None
-                else PREVIEW_PORT
-            )
-            if (
-                selected_port is None
-                and body.transport == "path"
-                and await _committed_static_capability_available(
-                    store, runtime, conversation_id, target_parts
-                )
-            ):
-                selected_port = PREVIEW_PORT
-            if selected_port is None:
-                raise HTTPException(status_code=409, detail={"reason": "preview_unavailable"})
-            if body.port is not None and body.port != selected_port:
-                raise HTTPException(
-                    status_code=400, detail={"reason": "path_preview_port_mismatch"}
-                )
-            port = selected_port
-        else:
-            port = body.port if body.port is not None else PREVIEW_PORT
-
-        if body.transport == "host":
-            reserved_host_target = (
-                target_parts.path == PREVIEW_BOOTSTRAP_PATH
-                or target_parts.path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
-                or (
-                    target_parts.path.startswith("/conversations/")
-                    and "/preview-app/" in target_parts.path
-                )
-            )
-            if reserved_host_target:
-                raise HTTPException(status_code=400, detail={"reason": "reserved_preview_path"})
-            # Construct/validate the isolated origin before registering a JTI.
-            # Invalid bare-IP deployments therefore leave no unusable intent.
-            bootstrap = _preview_bootstrap_url(request, cid8, port)
-            intent = cap_signer.mint_intent(
-                session=session,
-                conversation_id=conversation_id,
-                port=port,
-                target_path=target,
-                allow_websocket=True,
-                http_methods=PREVIEW_APP_HTTP_METHODS,
-            )
-        else:
-            path_prefix = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/"
-            path_target = f"{path_prefix}{safe_target}"
-            if target_parts.query:
-                path_target = f"{path_target}?{target_parts.query}"
-            if len(path_target) > MAX_PREVIEW_TARGET_PATH_CHARS:
-                raise HTTPException(status_code=400, detail={"reason": "preview_target_too_long"})
-            bootstrap = _path_preview_bootstrap_url(request, conversation_id, port)
-            intent = cap_signer.mint_intent(
-                session=session,
-                conversation_id=conversation_id,
-                port=port,
-                target_path=path_target,
-                path_prefix=path_prefix,
-                allow_websocket=body.transport == "path_live",
-            )
-
-        return JSONResponse(
-            {
-                "bootstrap_url": bootstrap,
-                "bootstrap_intent": intent,
-                "target_path": target,
-                "port": port,
-                "transport": body.transport,
-            },
-            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        return await _preview_capability_response(
+            store, runtime, cap_signer, conversation_id, body, request
         )
 
     @router.post(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{{cid8}}")
@@ -965,7 +1257,7 @@ def _register_preview_capability_route(
         if redeemed is None:
             return Response("invalid preview intent", status_code=403, media_type="text/plain")
         token, target = redeemed
-        target_path = target.split("?", 1)[0]
+        target_path = urllib.parse.urlsplit(target).path
         cap = cap_signer.verify(
             token,
             cid8=cid8,
@@ -1300,6 +1592,202 @@ def _register_preview_meta_routes(
         return {"ok": await runtime.ensure_preview(conversation_id)}
 
 
+async def _finished_preview_response(
+    runtime: ConversationRuntime,
+    request: Request,
+    conversation_id: str,
+    safe_path: str,
+    events: list[Event],
+    preview_cap: PreviewCapability | None,
+) -> Response:
+    project_store = runtime.project_store()
+    if project_store is None or project_store.status() != StorageStatus.OK:
+        return Response(
+            "finished workspace is not sealed", status_code=503, media_type="text/plain"
+        )
+    try:
+        committed = resolve_committed_workspace(events, project_store, conversation_id)
+    except WorkspaceCommitUnavailable:
+        return Response(
+            "finished workspace is finalizing or unsealed",
+            status_code=503,
+            media_type="text/plain",
+        )
+    committed_version = committed.event.version_seq
+    entry_path = _selected_app_entry(
+        events,
+        version=committed_version,
+        marker_seq=committed.event.seq,
+    )
+    seal = committed.event.final_seal
+    projection = (
+        derive_active_live_preview_projection(events, terminal_seq=seal.terminal_seq)
+        if seal is not None
+        else None
+    )
+    if projection is not None:
+        query = _forwarded_preview_query(request)
+        active_path = f"{safe_path}?{query}" if query else safe_path
+        active = await _serve_active_finished_projection(
+            runtime,
+            conversation_id,
+            active_path,
+            projection,
+            capability_port=(preview_cap.port if preview_cap is not None else None),
+            inject_selection=preview_cap is not None,
+        )
+        if active is not None:
+            return active
+        return Response(
+            "sealed runtime preview unavailable", status_code=503, media_type="text/plain"
+        )
+    served = _serve_static_from_snapshot(
+        runtime,
+        conversation_id,
+        safe_path,
+        version=committed_version,
+        entry_path=entry_path,
+        inject_selection=preview_cap is not None,
+        committed=True,
+    )
+    if served is not None:
+        return served
+    message = (
+        "committed preview unavailable"
+        if entry_path is not None
+        else "committed preview target unavailable"
+    )
+    return Response(message, status_code=503, media_type="text/plain")
+
+
+async def _active_preview_response(
+    runtime: ConversationRuntime,
+    request: Request,
+    conversation_id: str,
+    safe_path: str,
+    events: list[Event],
+    preview_cap: PreviewCapability | None,
+    owner_id: str,
+) -> Response:
+    entry_path = _selected_app_entry(events, version=None)
+    target_port = (
+        preview_cap.port
+        if preview_cap is not None
+        else _canonical_preview_port(runtime, conversation_id)
+    )
+    cid8 = conversation_id.removeprefix("conv_")[:8]
+    upstream = (
+        await _wake_for_preview(runtime, cid8, target_port, owner_id=owner_id)
+        if target_port is not None
+        else None
+    )
+    query = _forwarded_preview_query(request)
+    upstream_path = f"{safe_path}?{query}" if query else safe_path
+    if upstream is None:
+        served = (
+            await _fetch_inside_response(
+                runtime,
+                conversation_id,
+                target_port,
+                upstream_path,
+                inject_selection=preview_cap is not None,
+            )
+            if target_port is not None
+            else None
+        )
+        if served is None:
+            served = _serve_static_from_snapshot(
+                runtime,
+                conversation_id,
+                safe_path,
+                version=None,
+                entry_path=entry_path,
+                inject_selection=preview_cap is not None,
+            )
+        return served or Response("preview not available", status_code=503, media_type="text/plain")
+    assert target_port is not None
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False) as client:
+            target_url = f"{upstream.rstrip('/')}/{safe_path}"
+            if query:
+                target_url = f"{target_url}?{query}"
+            response = await client.get(target_url)
+    except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
+        served = await _fetch_inside_response(
+            runtime,
+            conversation_id,
+            target_port,
+            upstream_path,
+            inject_selection=preview_cap is not None,
+        )
+        return served or Response(
+            "preview upstream unreachable", status_code=502, media_type="text/plain"
+        )
+    media_type = response.headers.get("content-type", "text/html")
+    body = response.content
+    if preview_cap is not None:
+        body = inject_selection_agent(body, media_type)
+    return Response(
+        content=inject_element_mention_picker(body, media_type),
+        status_code=response.status_code,
+        media_type=media_type,
+    )
+
+
+async def _preview_app_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    request: Request,
+    conversation_id: str,
+    path: str,
+) -> Response:
+    preview_cap = getattr(request.state, "preview_capability", None)
+    if preview_cap is not None and not isinstance(preview_cap, PreviewCapability):
+        return Response("invalid preview capability", status_code=403, media_type="text/plain")
+    if preview_cap is None:
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        owner_id = current_session(request).owner_id
+    else:
+        if preview_cap.conversation_id != conversation_id:
+            return Response("preview capability mismatch", status_code=403, media_type="text/plain")
+        owner_id = preview_cap.owner_id
+    if runtime is None:
+        return Response("preview not available", status_code=503, media_type="text/plain")
+    safe_path = _safe_preview_path(path, allow_leading_slash=True)
+    if safe_path is None or is_runtime_secret_path(safe_path):
+        return Response("preview path not found", status_code=404, media_type="text/plain")
+    try:
+        events = await store.get_events(conversation_id)
+    except Exception:  # noqa: BLE001 — selected-target metadata is security relevant
+        _LOG.warning("preview target metadata unavailable for %s", conversation_id, exc_info=True)
+        return Response("preview metadata unavailable", status_code=503, media_type="text/plain")
+    workspace_version, authority_error = await _canonical_preview_workspace_version(
+        store, runtime, conversation_id, request, preview_cap
+    )
+    if authority_error is not None:
+        return authority_error
+    if workspace_version is not None:
+        return _historical_preview_response(
+            runtime,
+            conversation_id,
+            safe_path,
+            events,
+            workspace_version,
+            inject_selection=preview_cap is not None,
+        )
+    latest_status = next(
+        (event for event in reversed(events) if isinstance(event, StatusEvent)),
+        None,
+    )
+    if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
+        return await _finished_preview_response(
+            runtime, request, conversation_id, safe_path, events, preview_cap
+        )
+    return await _active_preview_response(
+        runtime, request, conversation_id, safe_path, events, preview_cap, owner_id
+    )
+
+
 def _register_preview_app_routes(
     router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> None:
@@ -1309,204 +1797,12 @@ def _register_preview_app_routes(
     @router.get("/conversations/{conversation_id}/preview-app/")
     @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/{{path:path}}")
     @router.get(f"{ISOLATED_PATH_PREVIEW_PREFIX}/{{conversation_id}}/")
-    # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
-    # WALK-10: now wakes suspended sandboxes via wake_for_preview — fixes the Open button
-    # and the PreviewPane "Open in new tab" link that returned 503 after sandbox auto-suspend.
     async def preview_app(
         request: Request,
         conversation_id: str,
         path: str = "",
-        version: int | None = Query(default=None),
     ) -> Response:
-        """Proxy the agent's dev server through THIS (tailnet-reachable) origin — the
-        backend-derived upstream (localhost for local, the remote tailnet IP for gVisor) is
-        reached server-side, so no random container port is exposed and previews work over
-        the tailnet. Forwards GET; good for a built page (single-origin assets).
-
-        Uses wake_for_preview so a suspended sandbox is rematerialised on demand —
-        the passive preview_upstream check only finds live in-memory executors."""
-        preview_cap = getattr(request.state, "preview_capability", None)
-        if preview_cap is None:
-            conversation_id = await require_owned_conversation(request, store, conversation_id)
-            owner_id = current_session(request).owner_id
-        else:
-            if preview_cap.conversation_id != conversation_id:
-                return Response(
-                    "preview capability mismatch", status_code=403, media_type="text/plain"
-                )
-            owner_id = preview_cap.owner_id
-        if runtime is None:
-            return Response("preview not available", status_code=503, media_type="text/plain")
-        cid8 = conversation_id.removeprefix("conv_")[:8]
-        safe_path = _safe_preview_path(path, allow_leading_slash=True)
-        if safe_path is None or is_runtime_secret_path(safe_path):
-            return Response("preview path not found", status_code=404, media_type="text/plain")
-        try:
-            events = await store.get_events(conversation_id)
-        except Exception:  # noqa: BLE001 — selected-target metadata is security relevant
-            _LOG.warning(
-                "preview target metadata unavailable for %s", conversation_id, exc_info=True
-            )
-            return Response(
-                "preview metadata unavailable", status_code=503, media_type="text/plain"
-            )
-        # Historical preview is static-only AND must NEVER fall through to the live
-        # proxy: a ?version request answered by the live sandbox would show current
-        # bytes under a "viewing vN" banner — a false affordance. Version requests
-        # serve from the version snapshot or 404, full stop.
-        if version is not None:
-            entry_path = _selected_app_entry(events, version=version)
-            served = _serve_static_from_snapshot(
-                runtime,
-                conversation_id,
-                safe_path,
-                version=version,
-                entry_path=entry_path,
-                inject_selection=preview_cap is not None,
-            )
-            if served is not None:
-                return served
-            if entry_path is not None:
-                return Response(
-                    "committed preview unavailable", status_code=503, media_type="text/plain"
-                )
-            return Response("version not found", status_code=404, media_type="text/plain")
-
-        latest_status = next(
-            (event for event in reversed(events) if isinstance(event, StatusEvent)),
-            None,
-        )
-        # FINISHED is not itself a byte commit. A completed conversation either
-        # serves its freshly verified immutable seal or fails closed while final
-        # capture/recovery is pending. It never wakes a live server or reads the
-        # mutable mirror under a completed-build affordance.
-        if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
-            project_store = runtime.project_store()
-            if project_store is None or project_store.status() != StorageStatus.OK:
-                return Response(
-                    "finished workspace is not sealed",
-                    status_code=503,
-                    media_type="text/plain",
-                )
-            try:
-                committed = resolve_committed_workspace(
-                    events,
-                    project_store,
-                    conversation_id,
-                )
-            except WorkspaceCommitUnavailable:
-                return Response(
-                    "finished workspace is finalizing or unsealed",
-                    status_code=503,
-                    media_type="text/plain",
-                )
-            committed_version = committed.event.version_seq
-            entry_path = _selected_app_entry(
-                events,
-                version=committed_version,
-                marker_seq=committed.event.seq,
-            )
-            served = _serve_static_from_snapshot(
-                runtime,
-                conversation_id,
-                safe_path,
-                version=committed_version,
-                entry_path=entry_path,
-                inject_selection=preview_cap is not None,
-                committed=True,
-            )
-            if served is not None:
-                return served
-            if entry_path is not None:
-                return Response(
-                    "committed preview unavailable", status_code=503, media_type="text/plain"
-                )
-            seal = committed.event.final_seal
-            projection = (
-                derive_active_live_preview_projection(
-                    events,
-                    terminal_seq=seal.terminal_seq,
-                )
-                if seal is not None
-                else None
-            )
-            if projection is not None:
-                query = _forwarded_preview_query(request)
-                active_path = f"{safe_path}?{query}" if query else safe_path
-                active = await _serve_active_finished_projection(
-                    runtime,
-                    conversation_id,
-                    active_path,
-                    projection,
-                    capability_port=(preview_cap.port if preview_cap is not None else None),
-                )
-                if active is not None:
-                    return active
-            return Response(
-                "committed preview target unavailable",
-                status_code=503,
-                media_type="text/plain",
-            )
-
-        entry_path = _selected_app_entry(events, version=None)
-        target_port = (
-            preview_cap.port
-            if preview_cap is not None
-            else _canonical_preview_port(runtime, conversation_id)
-        )
-        upstream = (
-            await _wake_for_preview(runtime, cid8, target_port, owner_id=owner_id)
-            if target_port is not None
-            else None
-        )
-        query = _forwarded_preview_query(request)
-        upstream_path = f"{safe_path}?{query}" if query else safe_path
-        if upstream is None:
-            served = (
-                await _fetch_inside_response(runtime, conversation_id, target_port, upstream_path)
-                if target_port is not None
-                else None
-            )
-            if served is not None:
-                return served
-            # runthru-v2: the sandbox can't be woken (finished build / backend
-            # unavailable), but the built static site may already be on the host
-            # snapshot — serve it directly instead of a 503 for a file we have.
-            served = _serve_static_from_snapshot(
-                runtime,
-                conversation_id,
-                safe_path,
-                version=version,
-                entry_path=entry_path,
-                inject_selection=preview_cap is not None,
-            )
-            if served is not None:
-                return served
-            return Response("preview not available", status_code=503, media_type="text/plain")
-        assert target_port is not None  # upstream cannot resolve without a selected port
-        try:
-            async with httpx.AsyncClient(
-                timeout=15, follow_redirects=False, trust_env=False
-            ) as client:
-                target_url = f"{upstream.rstrip('/')}/{safe_path}"
-                if query:
-                    target_url = f"{target_url}?{query}"
-                r = await client.get(target_url)
-        except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
-            served = await _fetch_inside_response(
-                runtime, conversation_id, target_port, upstream_path
-            )
-            if served is not None:
-                return served
-            return Response(
-                "preview upstream unreachable", status_code=502, media_type="text/plain"
-            )  # noqa: E501
-        media_type = r.headers.get("content-type", "text/html")
-        return Response(
-            content=inject_element_mention_picker(r.content, media_type),
-            status_code=r.status_code,
-            media_type=media_type,
-        )
+        return await _preview_app_response(store, runtime, request, conversation_id, path)
 
 
 def _register_preview_app_websocket_routes(
@@ -1524,8 +1820,19 @@ def _register_preview_app_websocket_routes(
         path: str = "",
     ) -> None:
         """Proxy live preview WebSockets (Vite HMR) through the path preview URL."""
+        canonical_cap = websocket.scope.get("state", {}).get("canonical_preview_capability")
         session = websocket_session(websocket)
-        if session is None:
+        if isinstance(canonical_cap, PreviewCapability) and canonical_cap.authority_id is not None:
+            if canonical_cap.conversation_id != conversation_id:
+                await _close_ws(websocket, 1008, "preview capability mismatch")
+                return
+            stored_owner = await store.conversation_owner_id(conversation_id)
+            if stored_owner is None or stored_owner != canonical_cap.owner_id:
+                await _close_ws(websocket, 1008, "conversation forbidden")
+                return
+            owner_id = canonical_cap.owner_id
+            target_port = canonical_cap.port
+        elif session is None:
             (
                 owner_id,
                 capability_error,
@@ -1550,7 +1857,10 @@ def _register_preview_app_websocket_routes(
         if runtime is None:
             await _close_ws(websocket, 1008, "preview not available")
             return
-        if websocket.query_params.get("version") is not None:
+        if (
+            isinstance(canonical_cap, PreviewCapability)
+            and canonical_cap.immutable_version is not None
+        ):
             await _close_ws(websocket, 1008, "historical previews are static")
             return
         try:
@@ -1558,6 +1868,18 @@ def _register_preview_app_websocket_routes(
         except Exception:  # noqa: BLE001 — status uncertainty cannot authorize a wake
             await _close_ws(websocket, 1008, "preview metadata unavailable")
             return
+        if isinstance(canonical_cap, PreviewCapability):
+            canonical_port = canonical_cap.port
+            current_authority = await _canonical_preview_authority(
+                store,
+                runtime,
+                conversation_id,
+                canonical_port,
+                workspace_version=canonical_cap.immutable_version,
+            )
+            if current_authority != canonical_cap.authority_id:
+                await _close_ws(websocket, 1008, "preview generation changed")
+                return
         latest_status = next(
             (event for event in reversed(events) if isinstance(event, StatusEvent)),
             None,

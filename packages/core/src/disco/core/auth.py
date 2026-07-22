@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import time
@@ -29,6 +30,17 @@ PATH_PREVIEW_BOOTSTRAP_PATH = "/__disco/path-preview-auth"
 ISOLATED_PATH_PREVIEW_PREFIX = "/__disco/isolated-preview"
 PATH_PREVIEW_HOST_PREFIX = "p3s"
 PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS = 40
+LOCAL_PREVIEW_COOKIE_PREFIX = "disco_local_preview_"
+
+# DNS-free canonical Preview origins use a small, explicitly published loopback
+# listener pool. A durable lease gives one conversation one browser origin while
+# it is active. Each slot uses a distinct literal host in 127.0.0.0/8 as well as a
+# distinct port: browser cookies ignore ports, so 127.0.0.1 on many ports would
+# leak generated-app cookies between conversations. Literal loopback hosts need
+# no Firefox DNS preference. The gateway itself strips Disco cookies and exposes
+# no authenticated application routes.
+DEFAULT_LOCAL_PREVIEW_PORT_START = 19120
+DEFAULT_LOCAL_PREVIEW_PORT_COUNT = 32
 
 _DEFAULT_SESSION_TTL_S = 12 * 60 * 60
 _DEFAULT_PREVIEW_TTL_S = 15 * 60
@@ -72,6 +84,8 @@ class PreviewCapability:
     path_prefix: str
     expires_at: int
     allow_websocket: bool = False
+    authority_id: str | None = None
+    immutable_version: int | None = None
 
 
 class PreviewIntentRedemptionStore(Protocol):
@@ -88,6 +102,49 @@ def path_preview_cookie_name(cid8: str) -> str:
     if len(normalized) != 8:
         raise ValueError("path preview cookie requires an eight-character hex id")
     return f"disco_path_preview_{normalized}"
+
+
+def local_preview_cookie_name(listener_port: int) -> str:
+    """Cookie name scoped to one leased DNS-free Preview listener.
+
+    Cookies are not port-scoped. Encoding the listener in the name prevents two
+    concurrent per-conversation Preview origins on 127.0.0.1 from overwriting one
+    another's capability cookie.
+    """
+
+    if not 1 <= listener_port <= 65535:
+        raise ValueError("local preview listener port is invalid")
+    return f"{LOCAL_PREVIEW_COOKIE_PREFIX}{listener_port}"
+
+
+def local_preview_gateway_ports() -> tuple[int, ...]:
+    """Configured bounded listener pool for DNS-free local Preview origins."""
+
+    raw_start = disco_env("LOCAL_PREVIEW_PORT_START", str(DEFAULT_LOCAL_PREVIEW_PORT_START))
+    raw_count = disco_env("LOCAL_PREVIEW_PORT_COUNT", str(DEFAULT_LOCAL_PREVIEW_PORT_COUNT))
+    try:
+        start = int(raw_start or "")
+        count = int(raw_count or "")
+    except ValueError as exc:
+        raise ValueError("local preview port range must be numeric") from exc
+    # Rotation needs a second origin so generation N's capability cannot be
+    # silently reused for generation N+1 on the same browser origin.
+    if start < 1024 or count < 2 or count > 253 or start + count - 1 > 65535:
+        raise ValueError("local preview port range is outside the bounded user-port range")
+    return tuple(range(start, start + count))
+
+
+def local_preview_gateway_host(listener_port: int) -> str:
+    """Return the DNS-free, cookie-isolated loopback host for one listener slot."""
+
+    ports = local_preview_gateway_ports()
+    try:
+        slot = ports.index(listener_port)
+    except ValueError as exc:
+        raise ValueError("local preview listener is outside the configured pool") from exc
+    # .1 remains the ordinary UI/API loopback identity. Slots begin at .2 and
+    # the bounded pool cannot reach the broadcast-like .255 address.
+    return f"127.0.0.{slot + 2}"
 
 
 def cookie_header_values(cookie_header: str | None, name: str) -> tuple[str, ...]:
@@ -202,6 +259,70 @@ def validated_isolated_path_preview_url(
             "",
         )
     )
+
+
+def validated_canonical_preview_url(
+    base_url: str,
+    conversation_id: str,
+    port: int,
+    bootstrap_url: str,
+) -> str | None:
+    """Validate a canonical Preview bootstrap and derive its bearer-free root URL.
+
+    Local deployments use one of the configured literal-loopback gateway listeners.
+    Remote deployments retain the exact configured isolated preview base (or the
+    trusted API host when no separate base is configured). The one-use intent is
+    always delivered in the POST body, never copied into the resulting URL.
+    """
+
+    try:
+        base = urlsplit(base_url)
+        bootstrap = urlsplit(bootstrap_url)
+        base_hostname = (base.hostname or "").lower().rstrip(".")
+        cid8 = conversation_id.removeprefix("conv_")[:8].lower()
+        if (
+            len(cid8) != 8
+            or any(ch not in "0123456789abcdef" for ch in cid8)
+            or not 1 <= port <= 65535
+            or not base_hostname
+            or bootstrap.path != PREVIEW_BOOTSTRAP_PATH
+            or bootstrap.query
+            or bootstrap.fragment
+            or bootstrap.username is not None
+            or bootstrap.password is not None
+        ):
+            return None
+
+        try:
+            local_base = (
+                base_hostname == "localhost" or ipaddress.ip_address(base_hostname).is_loopback
+            )
+        except ValueError:
+            local_base = False
+        bootstrap_hostname = (bootstrap.hostname or "").lower().rstrip(".")
+        configured = (disco_env("PREVIEW_ORIGIN_BASE", "") or "").strip()
+        if local_base and not configured:
+            listener_port = bootstrap.port
+            if (
+                bootstrap.scheme != "http"
+                or listener_port not in local_preview_gateway_ports()
+                or bootstrap_hostname != local_preview_gateway_host(listener_port)
+            ):
+                return None
+        else:
+            origin_base = urlsplit(configured) if configured else base
+            origin_hostname = (origin_base.hostname or "").lower().rstrip(".")
+            expected_hostname = f"p2-{cid8}-{port}.{origin_hostname}"
+            if (
+                not origin_hostname
+                or bootstrap.scheme != origin_base.scheme
+                or bootstrap_hostname != expected_hostname
+                or bootstrap.port != origin_base.port
+            ):
+                return None
+    except (ValueError, UnicodeError):
+        return None
+    return urlunsplit((bootstrap.scheme, bootstrap.netloc, "/", "", ""))
 
 
 def allowed_frontend_origins() -> tuple[str, ...]:
@@ -661,16 +782,26 @@ class PreviewCapabilitySigner:
         path_prefix: str = "/",
         allow_websocket: bool = False,
         http_methods: tuple[str, ...] = ("GET",),
+        authority_id: str | None = None,
+        immutable_version: int | None = None,
     ) -> str:
         target = target_path if target_path.startswith("/") else f"/{target_path}"
         prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
         if len(target) > MAX_PREVIEW_TARGET_PATH_CHARS:
             raise ValueError("preview target path is too long")
-        if not target.split("?", 1)[0].startswith(prefix):
+        if not urlsplit(target).path.startswith(prefix):
             raise ValueError("preview target must be inside its capability prefix")
         methods = tuple(dict.fromkeys(method.upper() for method in http_methods))
         if not methods or any(method not in _PREVIEW_HTTP_METHODS for method in methods):
             raise ValueError("invalid preview HTTP method scope")
+        if authority_id is not None and (not authority_id or len(authority_id) > 256):
+            raise ValueError("invalid preview authority")
+        if immutable_version is not None and (
+            not isinstance(immutable_version, int)
+            or isinstance(immutable_version, bool)
+            or immutable_version < 1
+        ):
+            raise ValueError("invalid immutable preview version")
         now = int(time.time())
         store = self._redemption_store
         if store is None:
@@ -688,6 +819,8 @@ class PreviewCapabilitySigner:
                 "prefix": prefix,
                 "target": target,
                 "ws": bool(allow_websocket),
+                "authority": authority_id,
+                "version": immutable_version,
                 "jti": jti,
                 "exp": expires_at,
             }
@@ -703,6 +836,9 @@ class PreviewCapabilitySigner:
         port: int,
         path_scope: Literal["host", "static"],
         request_host_label: str | None = None,
+        expected_conversation_id: str | None = None,
+        expected_owner_id: str | None = None,
+        expected_authority_id: str | None = None,
     ) -> tuple[str, str] | None:
         """Validate an endpoint-specific intent, then atomically exchange it once.
 
@@ -723,7 +859,10 @@ class PreviewCapabilitySigner:
             if cap is not None
             else ""
         )
-        target_path = target.split("?", 1)[0] if isinstance(target, str) else ""
+        try:
+            target_path = urlsplit(target).path if isinstance(target, str) else ""
+        except ValueError:
+            target_path = ""
         static_host_matches = path_scope != "static"
         if cap is not None and path_scope == "static":
             try:
@@ -743,6 +882,12 @@ class PreviewCapabilitySigner:
             or cap.path_prefix != expected_prefix
             or not target_path.startswith(expected_prefix)
             or not static_host_matches
+            or (
+                expected_conversation_id is not None
+                and cap.conversation_id != expected_conversation_id
+            )
+            or (expected_owner_id is not None and cap.owner_id != expected_owner_id)
+            or (expected_authority_id is not None and cap.authority_id != expected_authority_id)
         ):
             return None
         if not self._consume_intent(intent_payload):
@@ -767,10 +912,90 @@ class PreviewCapabilitySigner:
                 "methods": list(cap.http_methods),
                 "prefix": cap.path_prefix,
                 "ws": cap.allow_websocket,
+                "authority": cap.authority_id,
+                "version": cap.immutable_version,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
         return token, target
+
+    def mint_storage_handoff(
+        self,
+        cap: PreviewCapability,
+        target: str,
+        *,
+        partitioned: bool,
+    ) -> str:
+        """Mint a one-use post-reset exchange without exposing a capability cookie."""
+
+        target_path = urlsplit(target).path
+        if not target.startswith("/") or not target_path.startswith(cap.path_prefix):
+            raise ValueError("preview reset target is outside its capability prefix")
+        store = self._redemption_store
+        if store is None:
+            raise RuntimeError("preview handoff minting requires a durable redemption store")
+        now = int(time.time())
+        jti = secrets.token_urlsafe(18)
+        expires_at = now + intent_ttl_s()
+        handoff = self._codec.sign(
+            {
+                "v": 1,
+                "kind": "preview_storage_handoff",
+                "owner": cap.owner_id,
+                "cid": cap.conversation_id,
+                "port": cap.port,
+                "methods": list(cap.http_methods),
+                "prefix": cap.path_prefix,
+                "target": target,
+                "ws": cap.allow_websocket,
+                "authority": cap.authority_id,
+                "version": cap.immutable_version,
+                "partitioned": partitioned,
+                "jti": jti,
+                "exp": expires_at,
+            }
+        )
+        store.register_preview_intent(jti, expires_at)
+        return handoff
+
+    def redeem_storage_handoff(
+        self,
+        handoff: str,
+        *,
+        cid8: str,
+        port: int,
+        expected_conversation_id: str,
+        expected_owner_id: str,
+        expected_authority_id: str,
+    ) -> tuple[str, str, bool] | None:
+        """Atomically exchange a reset handoff for the final capability cookie."""
+
+        payload = self._codec.unsign(handoff)
+        if payload is None:
+            return None
+        cap = self._cap_from_payload(payload, kind="preview_storage_handoff")
+        target = payload.get("target")
+        partitioned = payload.get("partitioned")
+        try:
+            target_path = urlsplit(target).path if isinstance(target, str) else ""
+        except ValueError:
+            target_path = ""
+        if (
+            cap is None
+            or cap.conversation_id.removeprefix("conv_")[:8] != cid8
+            or cap.port != int(port)
+            or cap.conversation_id != expected_conversation_id
+            or cap.owner_id != expected_owner_id
+            or cap.authority_id != expected_authority_id
+            or not isinstance(target, str)
+            or not target.startswith("/")
+            or not target_path.startswith(cap.path_prefix)
+            or not isinstance(partitioned, bool)
+            or not self._consume_intent(payload)
+        ):
+            return None
+        token, verified_target = self._mint_cookie(cap, target)
+        return token, verified_target, partitioned
 
     def verify(
         self,
@@ -826,6 +1051,8 @@ class PreviewCapabilitySigner:
         prefix = payload.get("prefix")
         exp = payload.get("exp")
         allow_websocket = payload.get("ws", False)
+        authority_id = payload.get("authority")
+        immutable_version = payload.get("version")
         if not isinstance(owner, str) or not isinstance(cid, str):
             return None
         if not isinstance(prefix, str):
@@ -833,6 +1060,16 @@ class PreviewCapabilitySigner:
         if not isinstance(port, int) or not isinstance(exp, int):
             return None
         if not isinstance(allow_websocket, bool):
+            return None
+        if authority_id is not None and (
+            not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
+        ):
+            return None
+        if immutable_version is not None and (
+            not isinstance(immutable_version, int)
+            or isinstance(immutable_version, bool)
+            or immutable_version < 1
+        ):
             return None
         # Short-lived pre-upgrade GET-only cookies remain readable during a
         # rolling deploy, but newly minted tokens always carry the explicit,
@@ -858,4 +1095,6 @@ class PreviewCapabilitySigner:
             prefix,
             exp,
             allow_websocket=allow_websocket,
+            authority_id=authority_id,
+            immutable_version=immutable_version,
         )

@@ -1,156 +1,251 @@
-/**
- * W-42 — PreviewPane auto-refresh on file rewrite.
- *
- * The live-server iframe's src carries the reloadKey as `?r=N`. When the agent
- * rewrites a file (the event stream changes the derived files signature), a
- * debounced effect bumps reloadKey so the iframe reloads with fresh content —
- * but only while RUNNING (a finished preview isn't fought), and not when the
- * files are unchanged.
- */
+/** Canonical Preview refresh policy: static runtimes remint on writes, HMR does not. */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
-import type { AgentEvent, ConversationStatus, PreviewInfo } from "@/types/agent";
+import type {
+  AgentEvent,
+  ConversationStatus,
+  PreviewInfo,
+} from "@/types/agent";
 
-const { useBuildPreviewMock, previewBootstrapUrlMock } = vi.hoisted(() => ({
-  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
-  previewBootstrapUrlMock: vi.fn((_cid: string, _port: number, targetPath = "/") =>
+const {
+  canonicalPreviewBootstrapUrlMock,
+  useBuildPreviewMock,
+  useWorkspaceVersionsMock,
+} = vi.hoisted(() => ({
+  canonicalPreviewBootstrapUrlMock: vi.fn((cid: string, target: string) =>
     Promise.resolve({
-      url: "http://preview.test/__disco/preview-auth",
-      intent: `intent-${targetPath}`,
+      url: "http://127.77.0.3:8000/__disco/preview-auth",
+      intent: `${cid}:${target}`,
     }),
   ),
+  useBuildPreviewMock: vi.fn<
+    (...args: unknown[]) => { data: PreviewInfo | null }
+  >(() => ({ data: null })),
+  useWorkspaceVersionsMock: vi.fn<
+    (...args: unknown[]) => {
+      versions: never[];
+      loading: boolean;
+      refetch: ReturnType<typeof vi.fn>;
+    }
+  >(() => ({ versions: [], loading: false, refetch: vi.fn() })),
 }));
 
 vi.mock("@/hooks/useBuildPreview", () => ({
   useBuildPreview: (...args: unknown[]) => useBuildPreviewMock(...args),
 }));
 
+vi.mock("@/hooks/useWorkspaceVersions", () => ({
+  useWorkspaceVersions: (...args: unknown[]) =>
+    useWorkspaceVersionsMock(...args),
+}));
+
 vi.mock("@/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
+  const actual =
+    await vi.importActual<typeof import("@/api/client")>("@/api/client");
   return {
     ...actual,
-    agentHttpBase: () => "http://agent.test:8000",
-    previewHostUrl: () => "http://preview.test",
-    previewBootstrapUrl: previewBootstrapUrlMock,
+    canonicalPreviewBootstrapUrl: canonicalPreviewBootstrapUrlMock,
   };
 });
 
-const LIVE: PreviewInfo = {
-  available: true,
-  owner: { pid: 1, cmdline: "vite", session: null },
-  ports: [{ port: 8000, owner: { pid: 1, cmdline: "vite", session: null } }],
-};
-
 function withClient(ui: ReactElement) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>;
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
 }
 
 function fileWrite(path: string, content: string): AgentEvent {
   return {
-    id: `w-${path}-${content.length}`,
+    id: `write-${path}-${content.length}`,
     kind: "action",
     thought: "",
     tool_call: { tool_name: "file_write", arguments: { path, content } },
   } as AgentEvent;
 }
 
-function mintedTargets(): string[] {
-  return previewBootstrapUrlMock.mock.calls.map((call) => String(call[2]));
+const APP: AgentEvent = {
+  id: "app",
+  kind: "deliverable",
+  title: "App",
+  path: "index.html",
+  artifact_kind: "app",
+} as AgentEvent;
+
+const STATIC: PreviewInfo = {
+  available: true,
+  status: "running",
+  generation: "static-generation",
+  launch_kind: "static",
+  reload_strategy: "reload",
+  port: 43120,
+};
+
+const HMR: PreviewInfo = {
+  ...STATIC,
+  generation: "hmr-generation",
+  launch_kind: "framework",
+  reload_strategy: "hmr",
+};
+
+function renderPane(status: ConversationStatus, events: AgentEvent[]) {
+  return render(
+    withClient(
+      <PreviewPane
+        status={status}
+        cid="conv_reload"
+        events={[...events, APP]}
+      />,
+    ),
+  );
 }
 
 beforeEach(() => {
-  useBuildPreviewMock.mockReturnValue({ data: LIVE });
-  previewBootstrapUrlMock.mockClear();
-  vi.useFakeTimers();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  useBuildPreviewMock.mockReturnValue({ data: STATIC });
+  useWorkspaceVersionsMock.mockReturnValue({
+    versions: [],
+    loading: false,
+    refetch: vi.fn(),
+  });
+  canonicalPreviewBootstrapUrlMock.mockImplementation(
+    (cid: string, target: string) =>
+      Promise.resolve({
+        url: "http://127.77.0.3:8000/__disco/preview-auth",
+        intent: `${cid}:${target}`,
+      }),
+  );
 });
+
 afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
 });
 
-function renderPane(status: ConversationStatus, events: AgentEvent[]) {
-  const rendered = render(
-    withClient(<PreviewPane status={status} cid="conv_reload1" events={events} />),
-  );
-  // The product now defaults to the deterministic rendered/srcdoc view. W-42
-  // specifically governs the live-server iframe, so switch to that view before
-  // asserting its cache-busting URL.
-  fireEvent.click(screen.getByRole("button", { name: /live server/i }));
-  return rendered;
-}
+describe("PreviewPane — canonical refresh policy", () => {
+  it("debounces a plain/static file rewrite into one canonical remint", async () => {
+    const initial = [fileWrite("index.html", "<h1>one</h1>")];
+    const { rerender } = renderPane("RUNNING", initial);
+    expect(await screen.findByTitle("Preview")).toBeInTheDocument();
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+      "conv_reload",
+      "/?_disco_refresh=0",
+    );
 
-describe("PreviewPane — W-42 auto-refresh", () => {
-  it("bumps reloadKey (debounced) when a file is rewritten while RUNNING", async () => {
-    const v1 = [fileWrite("index.html", "<h1>one</h1>")];
-    const { rerender } = renderPane("RUNNING", v1);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
-
-    // Agent rewrites the file → new content → signature changes.
-    const v2 = [fileWrite("index.html", "<h1>two — much longer now</h1>")];
-    rerender(withClient(<PreviewPane status="RUNNING" cid="conv_reload1" events={v2} />));
-
-    // Debounced: nothing yet before the timer fires.
-    await act(async () => {
-      vi.advanceTimersByTime(200);
-      await Promise.resolve();
-    });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
-
-    // After the debounce window the iframe reloads.
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-      await Promise.resolve();
-    });
-    expect(mintedTargets()).toEqual(["/?r=0", "/?r=1"]);
-  });
-
-  it("does NOT bump when the files are unchanged", async () => {
-    const v1 = [fileWrite("index.html", "<h1>one</h1>")];
-    const { rerender } = renderPane("RUNNING", v1);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
-
-    // Re-render with an equivalent file set (same path + content).
     rerender(
       withClient(
         <PreviewPane
           status="RUNNING"
-          cid="conv_reload1"
-          events={[fileWrite("index.html", "<h1>one</h1>")]}
+          cid="conv_reload"
+          events={[fileWrite("index.html", "<h1>two, changed</h1>"), APP]}
         />,
       ),
     );
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(599);
       await Promise.resolve();
     });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "conv_reload",
+        "/?_disco_refresh=1",
+      ),
+    );
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledTimes(2);
   });
 
-  it("does NOT auto-reload when not RUNNING (finished preview isn't fought)", async () => {
-    const v1 = [fileWrite("index.html", "<h1>one</h1>")];
-    const { rerender } = renderPane("FINISHED", v1);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
+  it("leaves a framework frame mounted so HMR owns the update", async () => {
+    useBuildPreviewMock.mockReturnValue({ data: HMR });
+    const initial = [fileWrite("index.html", "<div>one</div>")];
+    const { rerender } = renderPane("RUNNING", initial);
+    const frame = (await screen.findByTitle("Preview")) as HTMLIFrameElement;
 
-    const v2 = [fileWrite("index.html", "<h1>two — much longer now</h1>")];
-    rerender(withClient(<PreviewPane status="FINISHED" cid="conv_reload1" events={v2} />));
+    rerender(
+      withClient(
+        <PreviewPane
+          status="RUNNING"
+          cid="conv_reload"
+          events={[fileWrite("index.html", "<div>two</div>"), APP]}
+        />,
+      ),
+    );
     await act(async () => {
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1_000);
       await Promise.resolve();
     });
-    expect(mintedTargets()).toEqual(["/?r=0"]);
+
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTitle("Preview")).toBe(frame);
+  });
+
+  it("preserves the frame-reported route when a static runtime reloads", async () => {
+    const initial = [fileWrite("index.html", "<h1>one</h1>")];
+    const { rerender } = renderPane("RUNNING", initial);
+    const frame = (await screen.findByTitle("Preview")) as HTMLIFrameElement;
+
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: "http://127.77.0.3:8000",
+          source: frame.contentWindow,
+          data: {
+            channel: "disco-preview",
+            type: "location",
+            path: "/nested/page?mode=edit#inspector",
+          },
+        }),
+      );
+    });
+    rerender(
+      withClient(
+        <PreviewPane
+          status="RUNNING"
+          cid="conv_reload"
+          events={[fileWrite("index.html", "<h1>two</h1>"), APP]}
+        />,
+      ),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "conv_reload",
+        "/nested/page?mode=edit&_disco_refresh=1#inspector",
+      ),
+    );
+  });
+
+  it("does not event-refresh a finished immutable Preview", async () => {
+    const initial = [fileWrite("index.html", "<h1>one</h1>")];
+    const { rerender } = renderPane("FINISHED", initial);
+    await screen.findByTitle("Preview");
+
+    rerender(
+      withClient(
+        <PreviewPane
+          status="FINISHED"
+          cid="conv_reload"
+          events={[fileWrite("index.html", "<h1>two</h1>"), APP]}
+        />,
+      ),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -13,6 +13,7 @@ from disco.agent_server.host_proxy import (
     MAX_PREVIEW_REQUEST_BODY_BYTES,
     PREVIEW_HOST_RE,
     HostPreviewProxyMiddleware,
+    _rewrite_canonical_upstream_location,
 )
 from disco.core.auth import (
     PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS,
@@ -27,6 +28,7 @@ from starlette.applications import Starlette
 from starlette.endpoints import WebSocketEndpoint
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route, WebSocketRoute
+from starlette.types import Scope
 
 
 class EchoHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -307,6 +309,64 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
 
 
 @pytest.mark.asyncio
+async def test_canonical_live_proxy_preserves_real_http_and_rejects_stale_authority(
+    upstream_http,
+) -> None:
+    store = SqliteEventStore(":memory:")
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    session = AuthSession("owner-a", "csrf", "session", 2**31)
+    authority = "live:" + "a" * 64
+    intent = signer.mint_intent(
+        session=session,
+        conversation_id="conv_aaaaaaaafull",
+        port=8000,
+        target_path="/",
+        allow_websocket=True,
+        http_methods=PREVIEW_APP_HTTP_METHODS,
+        authority_id=authority,
+    )
+    redeemed = signer.redeem_intent(intent, cid8="aaaaaaaa", port=8000, path_scope="host")
+    assert redeemed is not None
+    token, _target = redeemed
+    current = {"authority": authority}
+    app = Starlette()
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda *_args: upstream_http,
+        require_capability=True,
+        redemption_store=store,
+        canonical_authority_resolver=lambda *_args: current["authority"],
+    )
+    transport = httpx.ASGITransport(app=app)
+    host = "p2-aaaaaaaa-8000.localhost"
+    cookie = f"{PREVIEW_COOKIE}={token}; app_session=kept"
+    async with httpx.AsyncClient(transport=transport, base_url=f"http://{host}") as client:
+        redirect = await client.get("/redirect", headers={"Cookie": cookie}, follow_redirects=False)
+        assert redirect.status_code == 301
+        assert redirect.headers["location"] == "/new-location"
+
+        cookies = await client.get("/cookies", headers={"Cookie": cookie})
+        assert cookies.status_code == 200
+        assert "app_session=kept" in "; ".join(cookies.json()["cookies"])
+        assert PREVIEW_COOKIE not in "; ".join(cookies.json()["cookies"])
+        assert "app_session=preserved; Path=/" in cookies.headers.get_list("set-cookie")
+
+        posted = await client.post(
+            "/action",
+            headers={"Cookie": cookie, "Origin": f"http://{host}"},
+            content=b"real interaction",
+        )
+        assert posted.status_code == 201
+        assert posted.json()["body"] == "real interaction"
+
+        current["authority"] = "live:" + "b" * 64
+        stale = await client.get("/", headers={"Cookie": cookie})
+        assert stale.status_code == 409
+        assert stale.text == "preview generation changed"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_live_capability_disconnect_does_not_spin() -> None:
     store = SqliteEventStore(":memory:")
 
@@ -540,8 +600,7 @@ async def test_published_get_exhaustion_uses_authenticated_session_fallback_once
 
     failing_client = FailingPublishedClient(
         message=(
-            "https://private.invalid/asset.js?token=super-secret "
-            "Authorization: Bearer super-secret"
+            "https://private.invalid/asset.js?token=super-secret Authorization: Bearer super-secret"
         )
     )
     monkeypatch.setattr(host_proxy_module, "_get_client", lambda: failing_client)
@@ -623,8 +682,7 @@ async def test_published_and_session_failure_emit_one_sanitized_502(
     long_connect_error = type("C" * 100, (httpx.ConnectError,), {})
     failing_client = FailingPublishedClient(
         message=(
-            "https://private.invalid/?token=super-secret "
-            "Cookie: disco_preview_cap=super-secret"
+            "https://private.invalid/?token=super-secret Cookie: disco_preview_cap=super-secret"
         ),
         error_type=long_connect_error,
     )
@@ -676,9 +734,7 @@ async def test_published_and_session_failure_emit_one_sanitized_502(
     assert session.calls == 1
 
     logs = "\n".join(record.getMessage() for record in caplog.records)
-    assert (
-        "preview in-session fallback failed category=internal class=RuntimeError" in logs
-    )
+    assert "preview in-session fallback failed category=internal class=RuntimeError" in logs
     assert (
         "preview published upstream transport exhausted attempts=5 category=connect "
         f"class={'C' * 64} in_session_fallback=unavailable" in logs
@@ -837,6 +893,27 @@ async def test_redirect_untouched(mock_app):
         resp = await client.get("/redirect")
         assert resp.status_code == 301
         assert resp.headers["location"] == "/new-location"
+
+
+def test_canonical_redirect_rewrites_only_the_exact_managed_upstream_origin() -> None:
+    scope: Scope = {
+        "type": "http",
+        "scheme": "http",
+        "headers": [(b"host", b"127.0.0.2:19120")],
+    }
+    def rewrite(value: str) -> str:
+        return _rewrite_canonical_upstream_location(
+            value,
+            upstream="http://127.0.0.1:5173",
+            scope=scope,
+        )
+
+    assert rewrite("http://127.0.0.1:5173/account?next=1#profile") == (
+        "http://127.0.0.2:19120/account?next=1#profile"
+    )
+    assert rewrite("/account") == "/account"
+    assert rewrite("https://example.com/account") == "https://example.com/account"
+    assert rewrite("http://127.0.0.1:5174/account") == "http://127.0.0.1:5174/account"
 
 
 @pytest.mark.asyncio

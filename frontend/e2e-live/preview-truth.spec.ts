@@ -5,11 +5,11 @@ import { expect, test } from "@playwright/test";
  *
  * Real stack end-to-end: live agent-server on :8000 with the gVisor backend
  * (VM-201 over SSH), real 27B driver, real UI. Proves:
- *   1. a live build writes index.html → the auto-served 'preview' session serves
- *      it through the proxy iframe, and the caption names the true owner;
- *   2. the agent kills the preview session → the UI reports the preview down —
+ *   1. a live build writes index.html → the canonical Preview serves it from
+ *      the platform-managed generation on a DNS-free isolated loopback origin;
+ *   2. the agent kills the preview session → the Preview API reports it down —
  *      truth, not a stale "serving" (the old supervised keepalive would lie here);
- *   3. the Refresh button (ensure_preview path) brings it back, caption returns.
+ *   3. Refresh recovers a new managed generation and the same Preview shows it.
  * Screenshots: preview-owner.png / preview-down.png / preview-restarted.png.
  */
 
@@ -24,6 +24,21 @@ const BUILD_PROMPT =
 const KILL_PROMPT =
   "Kill the shell session named 'preview' (shell_kill_process). Confirm with " +
   "server_status that port 8000 is FREE, then finish.";
+
+interface PreviewState {
+  available: boolean;
+  generation?: string;
+  status?: string;
+}
+
+async function previewState(
+  page: import("@playwright/test").Page,
+  cid: string,
+): Promise<PreviewState> {
+  const response = await page.request.get(`${AGENT_API}/conversations/${cid}/preview`);
+  expect(response.ok(), await response.text()).toBe(true);
+  return (await response.json()) as PreviewState;
+}
 
 async function approvePlan(page: import("@playwright/test").Page) {
   const approve = page.getByRole("button", { name: /approve & build/i });
@@ -60,19 +75,33 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
   await input.press("Enter");
   await approvePlan(page);
 
-  // ---- 1. live serving truth: proxy up, owner caption names http.server ----
+  // ---- 1. live serving truth: one canonical Preview and one managed generation ----
   await page.getByRole("tab", { name: /preview/i }).click();
-  const liveToggle = page.getByRole("button", { name: /live server/i });
-  await expect(liveToggle).toBeVisible({ timeout: 300_000 });
-  await liveToggle.click();
-
-  const caption = page.getByText(/Serving: .*http\.server/);
-  await expect(caption).toBeVisible({ timeout: 60_000 });
+  expect(cid, "conversation id captured from API traffic").toBeTruthy();
+  let firstGeneration = "";
+  await expect
+    .poll(
+      async () => {
+        const state = await previewState(page, cid);
+        firstGeneration = state.generation ?? "";
+        return {
+          available: state.available,
+          generation: Boolean(firstGeneration),
+          status: state.status,
+        };
+      },
+      { timeout: 300_000, intervals: [2_000] },
+    )
+    .toEqual({ available: true, generation: true, status: "running" });
+  const iframe = page.locator('iframe[title="Preview"]');
   await expect(
-    page
-      .frameLocator('iframe[title="Live preview"]')
-      .getByText("BP02 preview truth"),
+    iframe.contentFrame().getByText("BP02 preview truth"),
   ).toBeVisible({ timeout: 60_000 });
+  const firstFrame = await (await iframe.elementHandle())?.contentFrame();
+  expect(firstFrame, "canonical Preview iframe did not attach").not.toBeNull();
+  const firstFrameUrl = new URL(firstFrame!.url());
+  expect(firstFrameUrl.hostname).toMatch(/^127(?:\.\d+){3}$/);
+  expect(firstFrameUrl.origin).not.toBe(new URL(page.url()).origin);
   await page.screenshot({
     path: testInfo.outputPath("preview-owner.png"),
     fullPage: true,
@@ -87,8 +116,15 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
   await replan.press("Enter");
   await approvePlan(page);
 
-  // availability polls every 4s; the live pane falls back once the proxy is down.
-  await expect(caption).toBeHidden({ timeout: 300_000 });
+  await expect
+    .poll(
+      async () => {
+        const state = await previewState(page, cid);
+        return state.available || state.status === "running";
+      },
+      { timeout: 300_000, intervals: [2_000] },
+    )
+    .toBe(false);
   await page.screenshot({
     path: testInfo.outputPath("preview-down.png"),
     fullPage: true,
@@ -104,7 +140,6 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
   // finish, so the box stays alive and Refresh exercises the live-session
   // ensure_preview path; the torn-down re-materialize path is pinned by unit
   // tests in test_sandbox_config.py.
-  expect(cid, "conversation id captured from API traffic").toBeTruthy();
   await expect
     .poll(
       async () => {
@@ -119,18 +154,23 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
     .toBe("FINISHED");
 
   await page.getByRole("button", { name: /refresh|restarting/i }).click();
-  // The pane's view mode is sticky: part 1 toggled "live", so the moment the
-  // proxy comes back (4s availability poll) it returns STRAIGHT to the live
-  // view with the owner caption — there is no "Live server" button to click
-  // again (that toggle only renders in the rendered view).
-  await expect(page.getByText(/Serving: .*http\.server/)).toBeVisible({
-    timeout: 120_000,
-  });
+  await expect
+    .poll(
+      async () => {
+        const state = await previewState(page, cid);
+        return {
+          available: state.available,
+          generationChanged:
+            typeof state.generation === "string" && state.generation !== firstGeneration,
+          status: state.status,
+        };
+      },
+      { timeout: 120_000, intervals: [2_000] },
+    )
+    .toEqual({ available: true, generationChanged: true, status: "running" });
   // the revived preview serves the REHYDRATED snapshot, not an empty workspace
   await expect(
-    page
-      .frameLocator('iframe[title="Live preview"]')
-      .getByText("BP02 preview truth"),
+    page.frameLocator('iframe[title="Preview"]').getByText("BP02 preview truth"),
   ).toBeVisible({ timeout: 60_000 });
   await page.screenshot({
     path: testInfo.outputPath("preview-restarted.png"),

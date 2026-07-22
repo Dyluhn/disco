@@ -92,6 +92,49 @@ def test_stack_copies_all_signed_model_state(monkeypatch, tmp_path: Path) -> Non
     assert manager.env["DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV"] == "1"
 
 
+def test_adjacent_isolated_agent_ports_get_non_overlapping_preview_ranges(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(StackManager, "_prepare_config", lambda self: None)
+    first = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "first",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=None,
+        seed_secrets=None,
+        seed_approvals=None,
+    )
+    second = StackManager(
+        repo=tmp_path,
+        root=tmp_path / "second",
+        agent_port=18001,
+        app_port=18801,
+        ui_port=5275,
+        seed_config=None,
+        seed_secrets=None,
+        seed_approvals=None,
+    )
+    first_ports = set(
+        range(
+            first.local_preview_port_start,
+            first.local_preview_port_start + first.local_preview_port_count,
+        )
+    )
+    second_ports = set(
+        range(
+            second.local_preview_port_start,
+            second.local_preview_port_start + second.local_preview_port_count,
+        )
+    )
+    assert first_ports.isdisjoint(second_ports)
+    assert first.env["DISCO_LOCAL_PREVIEW_PORT_START"] == "20000"
+    assert second.env["DISCO_LOCAL_PREVIEW_PORT_START"] == "20016"
+    assert first.env["DISCO_LOCAL_PREVIEW_BIND"] == ""
+    assert second.env["DISCO_LOCAL_PREVIEW_BIND"] == ""
+
+
 def test_stack_close_removes_secret_artifacts_but_preserves_diagnostics(
     monkeypatch, tmp_path: Path
 ) -> None:

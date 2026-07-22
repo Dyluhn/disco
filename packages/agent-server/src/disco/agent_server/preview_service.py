@@ -58,6 +58,61 @@ class PreviewService:
         except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
             return False
 
+    @staticmethod
+    def _empty_preview_metadata(*, port: int | None = None) -> dict[str, Any]:
+        return {
+            "port": port,
+            "status": None,
+            "generation": None,
+            "launch_kind": None,
+            "reload_strategy": None,
+        }
+
+    @classmethod
+    def _managed_preview_metadata(cls, manager: Any) -> tuple[dict[str, Any], str]:
+        """Read the canonical lifecycle snapshot without probing or launching."""
+
+        if manager is None:
+            return cls._empty_preview_metadata(), ""
+        try:
+            lifecycle = manager.canonical_lifecycle_session()
+            data = lifecycle.to_dict() if lifecycle is not None else None
+        except Exception:  # noqa: BLE001 — malformed registry fails closed
+            data = None
+        if not isinstance(data, dict):
+            return cls._empty_preview_metadata(), ""
+        port = data.get("port")
+        if not isinstance(port, int) or isinstance(port, bool):
+            port = None
+        status = data.get("status")
+        generation = data.get("generation")
+        launch_kind = data.get("launch_kind")
+        reload_strategy = data.get("reload_strategy")
+        metadata = {
+            "port": port,
+            "status": status if isinstance(status, str) else None,
+            "generation": generation if isinstance(generation, str) else None,
+            "launch_kind": launch_kind if isinstance(launch_kind, str) else None,
+            "reload_strategy": (reload_strategy if reload_strategy in {"hmr", "reload"} else None),
+        }
+        detail = data.get("detail")
+        return metadata, detail if isinstance(detail, str) else ""
+
+    @staticmethod
+    def _managed_unavailable_reason(status: str | None, detail: str) -> str | None:
+        if status == "starting":
+            return "Preparing preview: the managed runtime is starting."
+        if status == "restarting":
+            return "Preparing preview: the managed runtime is restarting."
+        if status == "crashed":
+            suffix = f" {detail}" if detail else ""
+            return f"The managed preview runtime crashed.{suffix}"
+        if status == "stopped":
+            return "The managed preview runtime is stopped."
+        if status == "unavailable":
+            return detail or "The managed preview is healthy but cannot be exposed here."
+        return None
+
     def preview_target_port(self, conversation_id: str) -> int | None:
         """Resolve the canonical preview route to its sole managed live preview.
 
@@ -198,7 +253,15 @@ class PreviewService:
         executor = self._rt._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
-            return {"available": False, "reason": "The agent hasn't started a sandbox yet."}
+            return {
+                "available": False,
+                "reason": "The agent hasn't started a sandbox yet.",
+                "owner": None,
+                "ports": [],
+                **self._empty_preview_metadata(),
+            }
+        manager = getattr(session, "_preview_manager", None)
+        metadata, managed_detail = self._managed_preview_metadata(manager)
         # Passive probe ONLY: this GET is polled by the UI, and a read path must not
         # create a sandbox (that's _ensure()'s side effect) or surface its failures
         # as a 500. No live instance → no preview, plainly stated.
@@ -206,8 +269,11 @@ class PreviewService:
         if inst is None:
             return {
                 "available": False,
-                "reason": "The agent's sandbox isn't running yet.",
+                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                or "The agent's sandbox isn't running yet.",
                 "owner": None,
+                "ports": [],
+                **metadata,
             }
         try:
             owners = await port_owners(inst, sorted(USER_PORTS))
@@ -230,22 +296,38 @@ class PreviewService:
             if o is not None and o.pid is not None
         ]
 
+        if metadata["status"] == "unavailable":
+            return {
+                "available": False,
+                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail),
+                "owner": _owner_json(owner)
+                if owner is not None and owner.pid is not None
+                else None,
+                "ports": ports_payload,
+                **metadata,
+            }
         if target_port is None:
             return {
                 "available": False,
-                "reason": "No health-verified managed preview is currently available.",
+                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                or "No health-verified managed preview is currently available.",
                 "owner": None,
                 "ports": ports_payload,
-                "port": None,
+                **metadata,
             }
         if owner is None or owner.pid is None:
             return {
                 "available": False,
-                "reason": f"No dev server detected. Run one on port {target_port} inside the "
+                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                or f"No dev server detected. Run one on port {target_port} inside the "
                 "sandbox to see a live preview.",
                 "owner": None,
                 "ports": ports_payload,
-                "port": target_port,
+                **(
+                    metadata
+                    if manager is not None
+                    else self._empty_preview_metadata(port=target_port)
+                ),
             }
 
         return {
@@ -253,7 +335,7 @@ class PreviewService:
             "proxy": True,
             "owner": _owner_json(owner),
             "ports": ports_payload,
-            "port": target_port,
+            **(metadata if manager is not None else self._empty_preview_metadata(port=target_port)),
         }
 
     async def ensure_preview(self, conversation_id: str) -> bool:

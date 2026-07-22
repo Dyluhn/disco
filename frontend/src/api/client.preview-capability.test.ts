@@ -30,7 +30,7 @@ describe("preview capability ownership", () => {
       }
       mintNumber += 1;
       const request = JSON.parse(String(init?.body)) as {
-        transport: "host" | "path" | "path_live";
+        transport: "host" | "path" | "path_live" | "canonical";
       };
       return jsonResponse({
         bootstrap_url: `http://${request.transport}.example/__disco/preview-auth`,
@@ -45,13 +45,14 @@ describe("preview capability ownership", () => {
       client.pathPreviewBootstrapUrl("conv_deadbeef", "/?r=0"),
       client.pathPreviewBootstrapUrl("conv_deadbeef", "/?r=0"),
       client.livePathPreviewBootstrapUrl("conv_deadbeef", "/?r=0"),
+      client.canonicalPreviewBootstrapUrl("conv_deadbeef", "/nested?mode=edit", 7),
     ]);
 
-    expect(new Set(launches.map((launch) => launch?.intent)).size).toBe(5);
+    expect(new Set(launches.map((launch) => launch?.intent)).size).toBe(6);
     const capabilityCalls = fetchStub.mock.calls.filter(([url]) =>
       String(url).includes("/preview/capability"),
     );
-    expect(capabilityCalls).toHaveLength(5);
+    expect(capabilityCalls).toHaveLength(6);
     expect(
       capabilityCalls.map(([, init]) => JSON.parse(String((init as RequestInit).body))),
     ).toEqual([
@@ -60,10 +61,15 @@ describe("preview capability ownership", () => {
       { target_path: "/?r=0", transport: "path" },
       { target_path: "/?r=0", transport: "path" },
       { target_path: "/?r=0", transport: "path_live" },
+      {
+        workspace_version: 7,
+        target_path: "/nested?mode=edit",
+        transport: "canonical",
+      },
     ]);
   });
 
-  it("returns the selected bare bootstrap and body-only intent", async () => {
+  it("returns a canonical bare bootstrap with a body-only intent", async () => {
     const client = await importLiveClient();
     const fetchStub = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url) === "http://agent/api/auth/session") {
@@ -76,7 +82,7 @@ describe("preview capability ownership", () => {
     });
     vi.stubGlobal("fetch", fetchStub);
 
-    const launch = await client.pathPreviewBootstrapUrl("conv_deadbeef", "/");
+    const launch = await client.canonicalPreviewBootstrapUrl("conv_deadbeef", "/");
     expect(launch).toEqual({
       url: "http://path.example/__disco/path-preview-auth/deadbeef",
       intent: "signed-body-only-intent",

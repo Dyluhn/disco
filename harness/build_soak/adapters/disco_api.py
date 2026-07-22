@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
-from disco.core.auth import SESSION_COOKIE, validated_isolated_path_preview_url
+from disco.core.auth import SESSION_COOKIE, validated_canonical_preview_url
 from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.projects.store import tree_digest as project_tree_digest
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
@@ -4059,7 +4059,7 @@ class HttpTransport:
             return r.status_code, r.content, dict(r.headers)
 
     async def fetch_isolated_preview(self, conversation_id: str) -> tuple[int, str, dict[str, str]]:
-        """Mint/redeem a path capability without crossing the app session.
+        """Mint/redeem the generation-bound canonical Preview without the app session.
 
         Capability response fields and the isolated origin are validated before
         the one-time bearer is redeemed.  Redemption and generated-content fetch
@@ -4079,7 +4079,7 @@ class HttpTransport:
                     f"{self.base_url}/conversations/{conversation_id}/preview/capability",
                     json={
                         "target_path": "/",
-                        "transport": "path",
+                        "transport": "canonical",
                     },
                     headers=self._headers(unsafe=True),
                 )
@@ -4088,8 +4088,10 @@ class HttpTransport:
             body = _safe_json(minted)
             selected_port = body.get("port")
             if (
-                body.get("transport") != "path"
+                body.get("transport") != "canonical"
                 or body.get("target_path") != "/"
+                or not isinstance(body.get("preview_authority"), str)
+                or not body.get("preview_authority")
                 or not isinstance(selected_port, int)
                 or isinstance(selected_port, bool)
                 or selected_port not in USER_PORTS
@@ -4098,7 +4100,7 @@ class HttpTransport:
                 return 502, "invalid preview capability response", {}
             bootstrap_url = str(body.get("bootstrap_url") or "")
             intent = str(body.get("bootstrap_intent") or "")
-            isolated_url = validated_isolated_path_preview_url(
+            isolated_url = validated_canonical_preview_url(
                 self.base_url,
                 conversation_id,
                 selected_port,

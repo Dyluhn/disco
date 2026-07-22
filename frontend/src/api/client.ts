@@ -165,13 +165,38 @@ function mintPreviewCapability(
   cid: string,
   port: number | undefined,
   targetPath: string,
-  transport: "host" | "path" | "path_live",
+  transport: "host" | "path" | "path_live" | "canonical",
+  workspaceVersion?: number,
 ) {
   return agentSend<PreviewCapabilityResponse>(
     "POST",
     `/conversations/${encodeURIComponent(cid)}/preview/capability`,
-    { ...(port === undefined ? {} : { port }), target_path: targetPath, transport },
+    {
+      ...(port === undefined ? {} : { port }),
+      ...(workspaceVersion === undefined ? {} : { workspace_version: workspaceVersion }),
+      target_path: targetPath,
+      transport,
+    },
   );
+}
+
+/** The one user-facing Build Preview contract. The server selects a DNS-free
+ * isolated local origin or the configured remote preview origin, then binds it
+ * to the current managed runtime / sealed snapshot generation. */
+export async function canonicalPreviewBootstrapUrl(
+  cid: string,
+  targetPath = "/",
+  workspaceVersion?: number,
+): Promise<PreviewLaunch | null> {
+  if (!agentLive()) return null;
+  const result = await mintPreviewCapability(
+    cid,
+    undefined,
+    targetPath,
+    "canonical",
+    workspaceVersion,
+  );
+  return { url: result.bootstrap_url, intent: result.bootstrap_intent };
 }
 
 export async function previewBootstrapUrl(

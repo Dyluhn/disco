@@ -73,6 +73,25 @@ __all__ = ["_sanitize_name", "create_app"]
 _LOG = logging.getLogger(__name__)
 
 
+async def _resolve_canonical_authority(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    port: int,
+    workspace_version: int | None,
+) -> str | None:
+    # Imported lazily to keep the app assembler free of route-module cycles.
+    from .routes.preview import _canonical_preview_authority
+
+    return await _canonical_preview_authority(
+        store,
+        runtime,
+        conversation_id,
+        port,
+        workspace_version=workspace_version,
+    )
+
+
 def _webhook_approvals(runtime: object | None) -> OriginApprovalStore | None:
     """Extract real runtime approval wiring without assuming test doubles have it."""
     config_store = getattr(runtime, "_config_store", None)
@@ -218,6 +237,19 @@ def create_app(
         session_resolver=make_preview_session_resolver(runtime),
         require_capability=True,
         redemption_store=store,
+        local_lease_resolver=store.resolve_local_preview_lease,
+        local_storage_reset_committer=store.complete_local_preview_storage_reset,
+        canonical_authority_resolver=(
+            None
+            if runtime is None
+            else lambda conversation_id, port, workspace_version: _resolve_canonical_authority(
+                store,
+                runtime,
+                conversation_id,
+                port,
+                workspace_version,
+            )
+        ),
     )
     # EPIC O P0-3 — strip the permissive wildcard CORS from the owner-only
     # Cloudflare deploy surface. Added LAST so it is the OUTERMOST middleware and

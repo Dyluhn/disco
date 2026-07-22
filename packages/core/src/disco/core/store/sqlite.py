@@ -34,6 +34,7 @@ from ..migration import migrate_event
 from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
+from .preview_leases import LocalPreviewLease, LocalPreviewLeaseStore
 from .preview_redemptions import PreviewRedemptionStore
 from .sqlite_schedules import ScheduleStore
 
@@ -144,6 +145,23 @@ CREATE TABLE IF NOT EXISTS preview_redemptions (
 );
 CREATE INDEX IF NOT EXISTS idx_preview_redemptions_expiry
     ON preview_redemptions (expires_at);
+CREATE TABLE IF NOT EXISTS local_preview_leases (
+    conversation_id TEXT PRIMARY KEY,
+    owner_id        TEXT NOT NULL,
+    listener_port   INTEGER NOT NULL UNIQUE,
+    target_port     INTEGER NOT NULL,
+    authority_id    TEXT NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
+);
+CREATE INDEX IF NOT EXISTS idx_local_preview_leases_expiry
+    ON local_preview_leases (expires_at);
+CREATE TABLE IF NOT EXISTS local_preview_origin_state (
+    -- Retained after a lease expires so a recycled browser origin is purged
+    -- before another authority can receive generated-app cookies or storage.
+    listener_port INTEGER PRIMARY KEY,
+    authority_id  TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS schedules (
     -- RP-08: cron-style recurring agent runs. One row per user-created schedule.
     -- `rrule` stores a cron expression (cronsim-parseable, 5-field standard cron).
@@ -334,6 +352,47 @@ class _ClosableSqliteStore:
 
     _closed: bool
     _conn: sqlite3.Connection
+    _preview_redemptions: PreviewRedemptionStore
+    _local_preview_leases: LocalPreviewLeaseStore
+
+    def register_preview_intent(self, jti: str, expires_at: int) -> None:
+        self._preview_redemptions.register(jti, expires_at)
+
+    def consume_preview_intent(self, jti: str, *, now: int) -> bool:
+        return self._preview_redemptions.consume(jti, now=now)
+
+    def acquire_local_preview_lease(
+        self,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        target_port: int,
+        authority_id: str,
+        now: int,
+        expires_at: int,
+        listener_ports: tuple[int, ...],
+    ) -> LocalPreviewLease | None:
+        return self._local_preview_leases.acquire(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            target_port=target_port,
+            authority_id=authority_id,
+            now=now,
+            expires_at=expires_at,
+            listener_ports=listener_ports,
+        )
+
+    def resolve_local_preview_lease(
+        self, listener_port: int, *, now: int
+    ) -> LocalPreviewLease | None:
+        return self._local_preview_leases.resolve(listener_port, now=now)
+
+    def complete_local_preview_storage_reset(
+        self, listener_port: int, *, authority_id: str, now: int
+    ) -> bool:
+        return self._local_preview_leases.complete_storage_reset(
+            listener_port, authority_id=authority_id, now=now
+        )
 
     def close(self) -> None:
         """Release the connection; safe to call more than once."""
@@ -419,6 +478,15 @@ class SqliteEventStore(_ClosableSqliteStore):
             )
         except sqlite3.OperationalError:
             pass  # column already exists
+        try:
+            self._conn.execute(
+                "ALTER TABLE local_preview_leases ADD COLUMN authority_id TEXT NOT NULL DEFAULT ''"
+            )
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        # Pre-authority local Preview leases cannot safely survive the upgrade:
+        # their listener may refer to any process generation on the same port.
+        self._conn.execute("DELETE FROM local_preview_leases WHERE authority_id = ''")
         # Legacy share rows could not preserve their original metadata. Freeze
         # the current values once at upgrade so they at least stop tracking
         # future title/surface changes after this security migration. The NULL
@@ -438,6 +506,7 @@ class SqliteEventStore(_ClosableSqliteStore):
         self._schedules = ScheduleStore(self._conn)
         self._write_lock = asyncio.Lock()
         self._preview_redemptions = PreviewRedemptionStore(self._conn)
+        self._local_preview_leases = LocalPreviewLeaseStore(self._conn)
         # conversation_id -> set of live subscriber queues.
         self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
             defaultdict(set)
@@ -449,12 +518,6 @@ class SqliteEventStore(_ClosableSqliteStore):
         # only; a late joiner simply misses in-flight deltas and gets the final
         # persisted ActionEvent instead.
         self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
-
-    def register_preview_intent(self, jti: str, expires_at: int) -> None:
-        self._preview_redemptions.register(jti, expires_at)
-
-    def consume_preview_intent(self, jti: str, *, now: int) -> bool:
-        return self._preview_redemptions.consume(jti, now=now)
 
     # ---- conversation metadata (extends the protocol; used by app-server) ----
 

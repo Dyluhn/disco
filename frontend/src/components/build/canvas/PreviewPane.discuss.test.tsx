@@ -1,17 +1,8 @@
-/**
- * PreviewPane — W-26 "Discuss with agent" wiring (build path).
- *
- * The build PreviewPane mounts SelectionOverlay over the srcdoc preview. When a
- * selection exists AND steering is available (onSteer defined), a "Discuss" button
- * forwards the named-element context to the agent via onSteer (the steer →
- * send_message path). No onSteer ⇒ no Discuss (no false affordance).
- *
- * useElementSelect is mocked to inject a canned selection so the overlay's label bar
- * (and thus the Discuss button) renders without driving the iframe postMessage flow.
- */
+/** Discuss/inspect remains attached to the canonical Preview frame. */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
@@ -20,90 +11,147 @@ import type { SelectionEnvelope } from "@/lib/selectionBridge";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
 const {
-  previewBootstrapUrlMock,
-  useBuildPreviewMock,
-  resetSelectionSpy,
-  disarmSpy,
+  canonicalPreviewBootstrapUrlMock,
+  disarmMock,
+  resetSelectionMock,
   selectionRef,
+  useBuildPreviewMock,
+  useWorkspaceVersionsMock,
 } = vi.hoisted(() => ({
-  previewBootstrapUrlMock: vi.fn(() => new Promise<never>(() => {})),
-  useBuildPreviewMock: vi.fn<(...args: unknown[]) => { data: PreviewInfo | null }>(() => ({ data: null })),
-  resetSelectionSpy: vi.fn(),
-  disarmSpy: vi.fn(),
+  canonicalPreviewBootstrapUrlMock: vi.fn(() =>
+    Promise.resolve({
+      url: "http://127.77.0.6:8000/__disco/preview-auth",
+      intent: "canonical-discuss",
+    }),
+  ),
+  disarmMock: vi.fn(),
+  resetSelectionMock: vi.fn(),
   selectionRef: { current: null as SelectionEnvelope | null },
+  useBuildPreviewMock: vi.fn<
+    (...args: unknown[]) => { data: PreviewInfo | null }
+  >(() => ({ data: null })),
+  useWorkspaceVersionsMock: vi.fn<
+    (...args: unknown[]) => {
+      versions: never[];
+      loading: boolean;
+      refetch: ReturnType<typeof vi.fn>;
+    }
+  >(() => ({ versions: [], loading: false, refetch: vi.fn() })),
 }));
 
 vi.mock("@/hooks/useBuildPreview", () => ({
   useBuildPreview: (...args: unknown[]) => useBuildPreviewMock(...args),
 }));
 
-vi.mock("@/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/api/client")>("@/api/client");
-  return {
-    ...actual,
-    agentHttpBase: () => "http://agent.test:8000",
-    previewBootstrapUrl: previewBootstrapUrlMock,
-  };
-});
+vi.mock("@/hooks/useWorkspaceVersions", () => ({
+  useWorkspaceVersions: (...args: unknown[]) =>
+    useWorkspaceVersionsMock(...args),
+}));
 
 vi.mock("@/hooks/useElementSelect", () => ({
   useElementSelect: () => ({
     armed: true,
     arm: vi.fn(),
-    disarm: disarmSpy,
+    disarm: disarmMock,
     selection: selectionRef.current,
     walkUp: vi.fn(),
-    resetSelection: resetSelectionSpy,
+    resetSelection: resetSelectionMock,
   }),
 }));
 
-function withClient(ui: ReactElement) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>;
-}
-
-function fileWrite(path: string, content: string): AgentEvent {
+vi.mock("@/api/client", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/api/client")>("@/api/client");
   return {
-    id: `w-${path}`,
-    kind: "action",
-    thought: "",
-    tool_call: { tool_name: "file_write", arguments: { path, content } },
-  } as AgentEvent;
+    ...actual,
+    canonicalPreviewBootstrapUrl: canonicalPreviewBootstrapUrlMock,
+  };
+});
+
+function withClient(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
 }
 
-const HTML = fileWrite("index.html", "<html><body><h1>Done</h1></body></html>");
+const HTML: AgentEvent = {
+  id: "write-index",
+  kind: "action",
+  thought: "",
+  tool_call: {
+    tool_name: "file_write",
+    arguments: { path: "index.html", content: "<h1>Done</h1>" },
+  },
+} as AgentEvent;
 
 const SELECTION: SelectionEnvelope = {
   v: 1,
   channel: "disco-select",
-  nonce: "n",
+  nonce: "nonce",
   type: "disco:selection",
-  selection_ref: { kind: "source", oid: "index.html:1", file: "index.html", line: 1 },
+  selection_ref: {
+    kind: "source",
+    oid: "index.html:1",
+    file: "index.html",
+    line: 1,
+  },
   human_label: "h1 — “Done”",
   rect: { x: 5, y: 5, width: 40, height: 20 },
 };
 
 beforeEach(() => {
-  useBuildPreviewMock.mockReturnValue({ data: null });
   selectionRef.current = SELECTION;
+  useBuildPreviewMock.mockReturnValue({
+    data: {
+      available: true,
+      status: "running",
+      generation: "discuss-generation",
+      reload_strategy: "reload",
+    },
+  });
+  canonicalPreviewBootstrapUrlMock.mockResolvedValue({
+    url: "http://127.77.0.6:8000/__disco/preview-auth",
+    intent: "canonical-discuss",
+  });
 });
+
 afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("PreviewPane — Discuss with agent (W-26)", () => {
-  it("forwards the formatted selection context to onSteer when Discuss is clicked", () => {
+describe("PreviewPane canonical Discuss wiring", () => {
+  it("forwards selection context without replacing the running frame", async () => {
+    const user = userEvent.setup();
     const onSteer = vi.fn();
-    render(withClient(<PreviewPane status="FINISHED" cid="c1" events={[HTML]} onSteer={onSteer} />));
-    fireEvent.click(screen.getByRole("button", { name: /discuss/i }));
-    expect(onSteer).toHaveBeenCalledOnce();
+    render(
+      withClient(
+        <PreviewPane
+          status="RUNNING"
+          cid="conv_discuss"
+          events={[HTML]}
+          onSteer={onSteer}
+        />,
+      ),
+    );
+    const frame = await screen.findByTitle("Preview");
+    await user.click(screen.getByRole("button", { name: /discuss/i }));
+
     expect(onSteer).toHaveBeenCalledWith(formatSelectionContext(SELECTION));
-    // the selection is cleared after dispatch (no stale highlight)
-    expect(resetSelectionSpy).toHaveBeenCalled();
+    expect(resetSelectionMock).toHaveBeenCalled();
+    expect(disarmMock).toHaveBeenCalled();
+    expect(screen.getByTitle("Preview")).toBe(frame);
   });
 
-  it("does NOT render Discuss when onSteer is absent (non-steerable → no false affordance)", () => {
-    render(withClient(<PreviewPane status="FINISHED" cid="c1" events={[HTML]} />));
-    expect(screen.queryByRole("button", { name: /discuss/i })).toBeNull();
+  it("does not render Discuss when steering is unavailable", async () => {
+    render(
+      withClient(
+        <PreviewPane status="RUNNING" cid="conv_discuss" events={[HTML]} />,
+      ),
+    );
+    await screen.findByTitle("Preview");
+    expect(
+      screen.queryByRole("button", { name: /discuss/i }),
+    ).not.toBeInTheDocument();
   });
 });

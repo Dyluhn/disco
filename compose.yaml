@@ -112,6 +112,12 @@ services:
       # Optional remote security boundary. This must be a wildcard-routed origin
       # on a different registrable site from the UI (see docs/self-host.md).
       DISCO_PREVIEW_ORIGIN_BASE: "${DISCO_PREVIEW_ORIGIN_BASE:-}"
+      # Firefox-safe canonical Preview origins. The agent process listens on
+      # every bounded gateway port inside the container; Compose exposes those
+      # listeners on host loopback only, never on the operator's LAN bind.
+      DISCO_LOCAL_PREVIEW_BIND: "0.0.0.0"
+      DISCO_LOCAL_PREVIEW_PORT_START: "19120"
+      DISCO_LOCAL_PREVIEW_PORT_COUNT: "32"
       # Bind posture for first-run auth — keep in LOCKSTEP with the app-server
       # block above (see the comment there).
       DISCO_BIND: "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}"
@@ -184,6 +190,41 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_AGENT_PORT:-${PMX_AGENT_PORT:-8000}}:8000"
+      # One literal loopback host per Preview lease. Cookies are host-scoped,
+      # not port-scoped, so publishing every listener on 127.0.0.1 would let
+      # generated applications overwrite one another's session cookies.
+      - "127.0.0.2:19120:19120"
+      - "127.0.0.3:19121:19121"
+      - "127.0.0.4:19122:19122"
+      - "127.0.0.5:19123:19123"
+      - "127.0.0.6:19124:19124"
+      - "127.0.0.7:19125:19125"
+      - "127.0.0.8:19126:19126"
+      - "127.0.0.9:19127:19127"
+      - "127.0.0.10:19128:19128"
+      - "127.0.0.11:19129:19129"
+      - "127.0.0.12:19130:19130"
+      - "127.0.0.13:19131:19131"
+      - "127.0.0.14:19132:19132"
+      - "127.0.0.15:19133:19133"
+      - "127.0.0.16:19134:19134"
+      - "127.0.0.17:19135:19135"
+      - "127.0.0.18:19136:19136"
+      - "127.0.0.19:19137:19137"
+      - "127.0.0.20:19138:19138"
+      - "127.0.0.21:19139:19139"
+      - "127.0.0.22:19140:19140"
+      - "127.0.0.23:19141:19141"
+      - "127.0.0.24:19142:19142"
+      - "127.0.0.25:19143:19143"
+      - "127.0.0.26:19144:19144"
+      - "127.0.0.27:19145:19145"
+      - "127.0.0.28:19146:19146"
+      - "127.0.0.29:19147:19147"
+      - "127.0.0.30:19148:19148"
+      - "127.0.0.31:19149:19149"
+      - "127.0.0.32:19150:19150"
+      - "127.0.0.33:19151:19151"
     depends_on:
       # NOTE: no container-state dependency on sandbox-image — it exits 0 by design
       # and podman-compose rejects an exited dependency ("container state improper").

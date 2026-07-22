@@ -22,6 +22,7 @@ from disco.core.auth import (
     local_preview_origin_crosses_host,
     path_preview_cookie_name,
     path_preview_host_label,
+    validated_canonical_preview_url,
     validated_isolated_path_preview_url,
 )
 from disco.core.store.sqlite import SqliteEventStore
@@ -238,6 +239,53 @@ def test_validated_isolated_path_preview_url_rejects_untrusted_bootstrap(
             "conv_a1b2c3d4owner",
             8000,
             bootstrap,
+        )
+        is None
+    )
+
+
+def test_validated_canonical_preview_url_accepts_only_configured_local_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "19120")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+    cid = "conv_a1b2c3d4owner"
+    assert (
+        validated_canonical_preview_url(
+            "http://localhost:8000",
+            cid,
+            8000,
+            "http://127.0.0.3:19121/__disco/preview-auth",
+        )
+        == "http://127.0.0.3:19121/"
+    )
+    for hostile in (
+        "http://127.0.0.4:19122/__disco/preview-auth",
+        "http://127.0.0.2:19121/__disco/preview-auth",
+        "http://evil.example:19121/__disco/preview-auth",
+        "http://user:pass@127.0.0.3:19121/__disco/preview-auth",
+        "http://127.0.0.3:19121/__disco/preview-auth?intent=leak",
+        "https://127.0.0.3:19121/__disco/preview-auth",
+    ):
+        assert validated_canonical_preview_url("http://localhost:8000", cid, 8000, hostile) is None
+
+
+def test_validated_canonical_preview_url_uses_configured_remote_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCO_PREVIEW_ORIGIN_BASE", "https://preview.example.net:9443")
+    cid = "conv_a1b2c3d4owner"
+    expected = "https://p2-a1b2c3d4-8000.preview.example.net:9443/__disco/preview-auth"
+    assert (
+        validated_canonical_preview_url("https://app.example.com", cid, 8000, expected)
+        == "https://p2-a1b2c3d4-8000.preview.example.net:9443/"
+    )
+    assert (
+        validated_canonical_preview_url(
+            "https://app.example.com",
+            cid,
+            8000,
+            "https://p2-a1b2c3d4-8000.app.example.com/__disco/preview-auth",
         )
         is None
     )
@@ -462,4 +510,84 @@ def test_preview_get_capability_allows_only_matching_websocket_scope(
         )
         is None
     )
+    store.close()
+
+
+def test_preview_capability_preserves_signed_immutable_version_across_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "immutable-preview-version-secret")
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    authority = "version:" + "a" * 64
+    intent = signer.mint_intent(
+        session=_session(),
+        conversation_id="conv_a1b2c3d4owner",
+        port=8000,
+        target_path="/?version=7",
+        authority_id=authority,
+        immutable_version=7,
+    )
+    redeemed = signer.redeem_intent(
+        intent,
+        cid8="a1b2c3d4",
+        port=8000,
+        path_scope="host",
+        expected_authority_id=authority,
+    )
+    assert redeemed is not None
+    token, target = redeemed
+    assert target == "/?version=7"
+    capability = signer.verify(
+        token,
+        cid8="a1b2c3d4",
+        port=8000,
+        method="GET",
+        path="/assets/app.js",
+    )
+    assert capability is not None
+    assert capability.authority_id == authority
+    assert capability.immutable_version == 7
+
+    for invalid in (0, -1, True):
+        with pytest.raises(ValueError, match="immutable preview version"):
+            signer.mint_intent(
+                session=_session(),
+                conversation_id="conv_a1b2c3d4owner",
+                port=8000,
+                immutable_version=invalid,
+            )
+    store.close()
+
+
+def test_preview_intent_preserves_bounded_hash_route_without_expanding_path_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "preview-hash-route-secret")
+    store = SqliteEventStore(tmp_path / "events.sqlite3")
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    intent = signer.mint_intent(
+        session=_session(),
+        conversation_id="conv_a1b2c3d4owner",
+        port=8000,
+        target_path="/work?tab=details#inspector",
+    )
+
+    redeemed = signer.redeem_intent(
+        intent,
+        cid8="a1b2c3d4",
+        port=8000,
+        path_scope="host",
+    )
+
+    assert redeemed is not None
+    token, target = redeemed
+    assert target == "/work?tab=details#inspector"
+    assert signer.verify(
+        token,
+        cid8="a1b2c3d4",
+        port=8000,
+        method="GET",
+        path="/work",
+    ) is not None
     store.close()

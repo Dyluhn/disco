@@ -23,8 +23,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 let buildState: Record<string, unknown>;
-const { pathPreviewBootstrapUrlMock, showToastMock } = vi.hoisted(() => ({
-  pathPreviewBootstrapUrlMock: vi.fn(),
+const { canonicalPreviewBootstrapUrlMock, showToastMock } = vi.hoisted(() => ({
+  canonicalPreviewBootstrapUrlMock: vi.fn(),
   showToastMock: vi.fn(),
 }));
 
@@ -44,7 +44,7 @@ vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),
   agentLive: () => true,
   agentHttpBase: () => "",
-  pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
+  canonicalPreviewBootstrapUrl: canonicalPreviewBootstrapUrlMock,
 }));
 vi.mock("@/components/toastApi", () => ({
   useToast: () => ({ show: showToastMock }),
@@ -128,9 +128,9 @@ function stubStateFetch(title: string | null) {
 
 beforeEach(() => {
   stubStateFetch(null);
-  pathPreviewBootstrapUrlMock.mockResolvedValue(
+  canonicalPreviewBootstrapUrlMock.mockResolvedValue(
     {
-      url: "http://localhost:18250/__disco/path-preview-auth/deadbeef",
+      url: "http://127.0.0.2:19120/__disco/preview-auth",
       intent: "signed-body-intent",
     },
   );
@@ -213,32 +213,47 @@ describe("finished app handoff isolation", () => {
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", { name: /open the deliverable/i });
-    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "cid-1",
+        "/?_disco_refresh=0",
+      ),
+    );
+    expect(canonicalPreviewBootstrapUrlMock).not.toHaveBeenCalledWith("cid-1", "/");
     await userEvent.click(button);
-    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/");
+    expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/");
     expect(open).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^disco-preview-popup-/));
     expect(popup.opener).toBeNull();
     await waitFor(() =>
-      expect(submissions).toEqual([
+      expect(submissions).toEqual(expect.arrayContaining([
         {
-          action: "http://localhost:18250/__disco/path-preview-auth/deadbeef",
+          action: "http://127.0.0.2:19120/__disco/preview-auth",
           intent: "signed-body-intent",
         },
-      ]),
+      ])),
     );
   });
 
   it("closes the blank popup when an isolated handoff cannot be minted", async () => {
-    pathPreviewBootstrapUrlMock.mockRejectedValue(new Error("capability unavailable"));
     const popup = { opener: window, close: vi.fn() };
     vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
     buildState = baseBuild({ status: "FINISHED", events: appEvents });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const button = await screen.findByRole("button", { name: /open the deliverable/i });
-    expect(pathPreviewBootstrapUrlMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "cid-1",
+        "/?_disco_refresh=0",
+      ),
+    );
+    canonicalPreviewBootstrapUrlMock.mockRejectedValueOnce(
+      new Error("capability unavailable"),
+    );
     await userEvent.click(button);
-    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/"),
+    );
     await waitFor(() => expect(popup.close).toHaveBeenCalled());
     expect(showToastMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Couldn’t open preview" }),

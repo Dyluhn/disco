@@ -98,6 +98,7 @@ class StackManager:
         seed_approvals: Path | None,
         preserve_seed_sandbox: bool = False,
         sandbox_backend: str | None = None,
+        local_preview_port_start: int | None = None,
     ) -> None:
         if preserve_seed_sandbox and sandbox_backend is not None:
             raise ValueError("preserve_seed_sandbox and sandbox_backend are mutually exclusive")
@@ -108,6 +109,19 @@ class StackManager:
         self.agent_port = agent_port
         self.app_port = app_port
         self.ui_port = ui_port
+        self.local_preview_port_count = 16
+        # Reliability lanes conventionally allocate agent ports from 18000 up.
+        # Multiplying that lane offset by the whole block width makes adjacent
+        # agent ports non-overlapping. An out-of-band caller can name an exact
+        # block explicitly instead of inheriting the product-default range.
+        preview_start = (
+            local_preview_port_start
+            if local_preview_port_start is not None
+            else 20_000 + (agent_port - 18_000) * self.local_preview_port_count
+        )
+        if preview_start < 1_024 or preview_start + self.local_preview_port_count - 1 > 65_535:
+            raise ValueError("local Preview listener range is outside user ports")
+        self.local_preview_port_start = preview_start
         self.python = repo / ".venv" / "bin" / "python3"
         self.agent: subprocess.Popen[bytes] | None = None
         self.app: subprocess.Popen[bytes] | None = None
@@ -177,6 +191,16 @@ class StackManager:
                 "DISCO_AGENT_PORT": str(self.agent_port),
                 "DISCO_APP_PORT": str(self.app_port),
                 "DISCO_UI_PORT": str(self.ui_port),
+                # Each disposable stack's agent port deterministically owns a
+                # separate gateway block, so parallel suites never all contend
+                # for the product-default 19120-19151 listeners.
+                # Empty means the host-process server binds each slot's exact
+                # 127/8 identity. Binding every socket to .1 would make the
+                # cookie-isolated .2+ URLs unreachable. Explicitly override any
+                # ambient container-only 0.0.0.0 posture.
+                "DISCO_LOCAL_PREVIEW_BIND": "",
+                "DISCO_LOCAL_PREVIEW_PORT_START": str(self.local_preview_port_start),
+                "DISCO_LOCAL_PREVIEW_PORT_COUNT": str(self.local_preview_port_count),
                 "DISCO_INSPECT": "1",
                 "DISCO_LOG_JSON": "1",
                 "DISCO_LOG_LEVEL": os.environ.get("DISCO_RELIABILITY_LOG_LEVEL", "INFO"),
@@ -310,6 +334,8 @@ class StackManager:
             "db": str(self.db_path),
             "projects": str(self.root / "projects"),
             "sandbox_backend": self.effective_sandbox_backend,
+            "local_preview_port_start": self.local_preview_port_start,
+            "local_preview_port_count": self.local_preview_port_count,
         }
         target = self.root / "stack.json"
         temporary = target.with_suffix(".json.tmp")
@@ -390,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--agent-port", type=int, default=18000)
     parser.add_argument("--app-port", type=int, default=18800)
     parser.add_argument("--ui-port", type=int, default=5274)
+    parser.add_argument("--local-preview-port-start", type=int)
     parser.add_argument(
         "--clean",
         action="store_true",
@@ -431,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
         seed_approvals=(None if args.clean else _seed_path("DISCO_RELIABILITY_SEED_APPROVALS")),
         preserve_seed_sandbox=args.preserve_seed_sandbox,
         sandbox_backend=args.sandbox_backend,
+        local_preview_port_start=args.local_preview_port_start,
     )
     control: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None

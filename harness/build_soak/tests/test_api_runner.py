@@ -19,7 +19,6 @@ from typing import Any, cast
 import httpx
 import pytest
 from _eventlog import action, agent_error, clean_smoke_log, msg, observation, plan, status
-from disco.core.auth import path_preview_host_label
 
 import harness.build_soak.adapters.disco_api as _disco_mod
 from harness.build_soak import run as _run_mod
@@ -4129,9 +4128,7 @@ async def test_collect_preview_carries_canonical_wrong_body_without_forgery(tmp_
 @pytest.mark.asyncio
 async def test_http_transport_redeems_preview_capability_without_app_session():
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 5173)
-    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
-    isolated_path = f"/__disco/isolated-preview/{cid}/"
+    bootstrap_path = "/__disco/preview-auth"
     seen: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -4142,20 +4139,22 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
             assert request.headers["x-disco-csrf"] == "csrf-proof"
             assert json.loads(request.content) == {
                 "target_path": "/",
-                "transport": "path",
+                "transport": "canonical",
             }
             return httpx.Response(
                 200,
                 json={
-                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
                     "port": 5173,
-                    "transport": "path",
+                    "transport": "canonical",
+                    "preview_authority": "live:proof",
                 },
             )
         if request.url.path == bootstrap_path:
-            assert request.url.host == f"{path_host}.localhost"
+            assert request.url.host == "127.0.0.2"
+            assert request.url.port == 19120
             assert request.headers["origin"] == "http://127.0.0.1:8000"
             assert "cookie" not in request.headers
             assert "authorization" not in request.headers
@@ -4165,15 +4164,15 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
                 200,
                 headers={
                     "set-cookie": (
-                        "disco_path_preview_a1b2c3d4=preview-proof; "
-                        f"Path={isolated_path}; HttpOnly; SameSite=Strict"
+                        "disco_local_preview_19120=preview-proof; Path=/; HttpOnly; SameSite=Strict"
                     )
                 },
             )
-        if request.url.path == isolated_path:
+        if request.url.path == "/":
             cookie = request.headers.get("cookie", "")
-            assert request.url.host == f"{path_host}.localhost"
-            assert "disco_path_preview_a1b2c3d4=preview-proof" in cookie
+            assert request.url.host == "127.0.0.2"
+            assert request.url.port == 19120
+            assert "disco_local_preview_19120=preview-proof" in cookie
             assert "disco_session" not in cookie
             assert "one-use-intent" not in cookie
             assert "origin" not in request.headers
@@ -4193,18 +4192,16 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
 
     assert status == 200
     assert body == "<h1>Build Smoke OK</h1>"
-    assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path, isolated_path]
+    assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path, "/"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bootstrap_url",
     [
-        "http://evil.example:8000/__disco/path-preview-auth/a1b2c3d4",
-        "http://user:pass@p3s-a1b2c3d4-invalid-8000.localhost:8000/"
-        "__disco/path-preview-auth/a1b2c3d4",
-        "http://p3s-a1b2c3d4-invalid-8000.localhost:8000/"
-        "__disco/path-preview-auth/a1b2c3d4?intent=leak",
+        "http://evil.example:19120/__disco/preview-auth",
+        "http://user:pass@127.0.0.2:19120/__disco/preview-auth",
+        "http://127.0.0.2:19120/__disco/preview-auth?intent=leak",
     ],
 )
 async def test_http_transport_rejects_malformed_preview_bootstrap_before_redemption(
@@ -4222,7 +4219,8 @@ async def test_http_transport_rejects_malformed_preview_bootstrap_before_redempt
                 "bootstrap_intent": "must-not-be-redeemed",
                 "target_path": "/",
                 "port": 8000,
-                "transport": "path",
+                "transport": "canonical",
+                "preview_authority": "committed:proof",
             },
         )
 
@@ -4243,8 +4241,7 @@ async def test_http_transport_rejects_malformed_preview_bootstrap_before_redempt
 @pytest.mark.asyncio
 async def test_http_transport_rejects_preview_bootstrap_that_sets_app_session():
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 8000)
-    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
+    bootstrap_path = "/__disco/preview-auth"
     seen: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -4253,18 +4250,19 @@ async def test_http_transport_rejects_preview_bootstrap_that_sets_app_session():
             return httpx.Response(
                 200,
                 json={
-                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
                     "bootstrap_intent": "one-use-intent",
                     "target_path": "/",
                     "port": 8000,
-                    "transport": "path",
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
                 },
             )
         if request.url.path == bootstrap_path:
             return httpx.Response(
                 200,
                 headers=[
-                    ("set-cookie", "disco_path_preview_a1b2c3d4=preview-proof; Path=/"),
+                    ("set-cookie", "disco_local_preview_19120=preview-proof; Path=/"),
                     ("set-cookie", "disco_session=must-not-cross; Path=/"),
                 ],
             )
@@ -4287,8 +4285,7 @@ async def test_http_transport_rejects_preview_bootstrap_that_sets_app_session():
 @pytest.mark.asyncio
 async def test_http_transport_never_retains_intent_reflected_by_failed_redemption():
     cid = "conv_a1b2c3d4proof"
-    path_host = path_preview_host_label(cid, 8000)
-    bootstrap_path = "/__disco/path-preview-auth/a1b2c3d4"
+    bootstrap_path = "/__disco/preview-auth"
     intent = "one-use-intent-must-not-be-retained"
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -4296,11 +4293,12 @@ async def test_http_transport_never_retains_intent_reflected_by_failed_redemptio
             return httpx.Response(
                 200,
                 json={
-                    "bootstrap_url": f"http://{path_host}.localhost:8000{bootstrap_path}",
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
                     "bootstrap_intent": intent,
                     "target_path": "/",
                     "port": 8000,
-                    "transport": "path",
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
                 },
             )
         if request.url.path == bootstrap_path:

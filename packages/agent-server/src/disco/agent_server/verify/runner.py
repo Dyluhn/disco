@@ -36,7 +36,7 @@ import httpx
 from disco.core.auth import (
     CSRF_HEADER,
     SESSION_COOKIE,
-    validated_isolated_path_preview_url,
+    validated_canonical_preview_url,
 )
 from disco.core.evidence.schema import redact
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
@@ -147,13 +147,11 @@ class AbstractVerifyClient(ABC):
         return None
 
     async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
-        """Fetch the capability-isolated preview bytes a browser receives.
+        """Fetch the same generation-bound canonical Preview a browser receives.
 
         For a URL-less app handoff this is the real selected output, not the
-        declared-artifact jail. The production client mints a fresh path
-        capability, redeems it through a clean cookie jar, and fetches the
-        dedicated isolated route; a full application session is never sent to
-        generated content.
+        declared-artifact jail. The production client redeems through a clean
+        cookie jar; a full application session is never sent to generated content.
         """
         return None
 
@@ -465,7 +463,7 @@ class HttpVerifyClient(AbstractVerifyClient):
                     headers=headers,
                     json={
                         "target_path": "/",
-                        "transport": "path",
+                        "transport": "canonical",
                     },
                 )
             if minted.status_code != 200:
@@ -473,8 +471,10 @@ class HttpVerifyClient(AbstractVerifyClient):
             body = minted.json()
             selected_port = body.get("port")
             if (
-                body.get("transport") != "path"
+                body.get("transport") != "canonical"
                 or body.get("target_path") != "/"
+                or not isinstance(body.get("preview_authority"), str)
+                or not body.get("preview_authority")
                 or not isinstance(selected_port, int)
                 or isinstance(selected_port, bool)
                 or selected_port not in USER_PORTS
@@ -483,8 +483,13 @@ class HttpVerifyClient(AbstractVerifyClient):
                 return None
             bootstrap_url = str(body.get("bootstrap_url") or "")
             intent = str(body.get("bootstrap_intent") or "")
-            isolated_url = self._validated_isolated_preview_url(cid, selected_port, bootstrap_url)
-            if not intent or isolated_url is None:
+            canonical_url = validated_canonical_preview_url(
+                self._base_url,
+                cid,
+                selected_port,
+                bootstrap_url,
+            )
+            if not intent or canonical_url is None:
                 return None
 
             # Deliberately clean: the verifier's full application session stays
@@ -508,22 +513,11 @@ class HttpVerifyClient(AbstractVerifyClient):
                     # cookies. Fail closed if a route regression ever tries to
                     # smuggle a full app session into generated content.
                     return None
-                resp = await preview.get(isolated_url)
+                resp = await preview.get(canonical_url)
                 return resp.status_code, resp.content
         except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash
             log.warning("fetch_preview(%s) failed: %s", cid, exc)
             return None
-
-    def _validated_isolated_preview_url(
-        self, cid: str, port: int, bootstrap_url: str
-    ) -> str | None:
-        """Validate the server-minted p3s origin before the verifier fetches it."""
-        return validated_isolated_path_preview_url(
-            self._base_url,
-            cid,
-            port,
-            bootstrap_url,
-        )
 
 
 # ---------------------------------------------------------------------------

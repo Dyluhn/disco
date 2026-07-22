@@ -30,12 +30,36 @@ def test_app_entrypoint_uses_maintained_websocket_adapter(monkeypatch) -> None:
 def test_agent_entrypoint_uses_maintained_websocket_adapter(monkeypatch) -> None:
     captured = _capture_uvicorn(monkeypatch, agent_main)
     monkeypatch.setattr(agent_main, "_sandbox_service", lambda: None)
+    monkeypatch.setattr(agent_main, "local_preview_gateway_ports", lambda: ())
     monkeypatch.setattr(
         agent_main,
         "ConversationRuntime",
         lambda _store, sandbox_service=None: object(),
     )
 
+    class FakeSocket:
+        def close(self) -> None:
+            captured["socket_closed"] = True
+
+    class FakeConfig:
+        def __init__(self, _app: object, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def bind_socket(self) -> FakeSocket:
+            return FakeSocket()
+
+    class FakeServer:
+        def __init__(self, _config: FakeConfig) -> None:
+            pass
+
+        def run(self, *, sockets: list[FakeSocket]) -> None:
+            captured["socket_count"] = len(sockets)
+
+    monkeypatch.setattr(agent_main.uvicorn, "Config", FakeConfig)
+    monkeypatch.setattr(agent_main.uvicorn, "Server", FakeServer)
+
     agent_main.main()
 
     assert captured["ws"] == "websockets-sansio"
+    assert captured["socket_count"] == 1
+    assert captured["socket_closed"] is True

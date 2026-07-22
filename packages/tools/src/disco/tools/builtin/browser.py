@@ -761,8 +761,15 @@ class BrowserTool:
             pythonpath_env = (
                 f" PYTHONPATH={shlex.quote(playwright_pythonpath)}" if playwright_pythonpath else ""
             )
+            # Chromium creates its ephemeral profile below TMPDIR and traps when
+            # the resulting Unix-domain socket path is too long.  Process
+            # workspaces commonly exceed that limit.  Keep the sandbox's clean
+            # HOME/PATH contract, but give this trusted platform daemon the
+            # system's short sticky temp root.  Playwright creates its random
+            # profile directory mode-private; screenshots and all durable
+            # browser output remain jailed below DISCO_WORKSPACE.
             command = (
-                f"DISCO_BROWSER_PORT=0{executable_env}{pythonpath_env} "
+                f"TMPDIR=/var/tmp DISCO_BROWSER_PORT=0{executable_env}{pythonpath_env} "
                 f"{shlex.quote(daemon_python)} {_DAEMON_PATH}"
             )
         else:

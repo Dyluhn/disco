@@ -5,12 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router, websocket_session
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from disco.agent_server.routes.preview import (
+    _canonical_preview_authority,
     _path_preview_bootstrap_url,
     _preview_bootstrap_url,
     _preview_websocket_origin_allowed,
@@ -30,6 +31,8 @@ from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     SESSION_COOKIE,
     SessionSigner,
+    local_preview_cookie_name,
+    local_preview_gateway_host,
     path_preview_cookie_name,
     path_preview_host_label,
 )
@@ -64,14 +67,35 @@ class _StaticRuntime:
         return None
 
 
-def _app(store: SqliteEventStore, runtime: _StaticRuntime) -> FastAPI:
+def _app(
+    store: SqliteEventStore,
+    runtime: _StaticRuntime,
+    *,
+    live_upstream: str | None = None,
+) -> FastAPI:
+    async def canonical_authority(
+        conversation_id: str,
+        port: int,
+        workspace_version: int | None,
+    ) -> str | None:
+        return await _canonical_preview_authority(
+            store,
+            cast(Any, runtime),
+            conversation_id,
+            port,
+            workspace_version=workspace_version,
+        )
+
     app = FastAPI()
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         HostPreviewProxyMiddleware,
-        upstream_resolver=lambda *_args: None,
+        upstream_resolver=lambda *_args: live_upstream,
         require_capability=True,
         redemption_store=store,
+        local_lease_resolver=store.resolve_local_preview_lease,
+        local_storage_reset_committer=store.complete_local_preview_storage_reset,
+        canonical_authority_resolver=canonical_authority,
     )
     app.include_router(make_auth_router())
     app.include_router(make_preview_router(store, cast(Any, runtime)))
@@ -101,11 +125,38 @@ def _redeem(
     *,
     headers: dict[str, str] | None = None,
 ):
-    return client.post(
+    _reset, response = _redeem_steps(
+        client,
+        bootstrap_url,
+        intent,
+        headers=headers,
+    )
+    return response
+
+
+def _redeem_steps(
+    client: TestClient,
+    bootstrap_url: str,
+    intent: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[Any | None, Any]:
+    response = client.post(
         urlsplit(bootstrap_url).path,
         headers=headers,
         data={"intent": intent},
     )
+    if "cookies" not in response.headers.get("clear-site-data", ""):
+        return None, response
+    match = re.search(r'body:"(handoff=[^"]+)"', response.text)
+    assert match is not None
+    handoff = parse_qs(match.group(1))["handoff"][0]
+    completed = client.post(
+        urlsplit(bootstrap_url).path,
+        headers=headers,
+        data={"handoff": handoff},
+    )
+    return response, completed
 
 
 def test_normal_websocket_session_selects_valid_repeated_cookie_candidate(
@@ -266,19 +317,35 @@ async def _finished_site(store: SqliteEventStore, projects: ProjectStore, cid: s
     workspace = projects.path_for(cid)
     (workspace / "release" / "assets").mkdir(parents=True)
     (workspace / "release" / "index.html").write_text(
+        "<!doctype html>"
         '<link rel="stylesheet" href="assets/site.css">'
-        '<script src="assets/site.js"></script><h1>CAPABILITY SITE</h1>'
+        '<script defer src="assets/site.js"></script>'
+        "<h1>CAPABILITY SITE</h1>"
+        '<a href="nested.html">Open nested route</a>'
+        '<button id="increment" type="button">Count 0</button>'
+    )
+    (workspace / "release" / "nested.html").write_text(
+        "<!doctype html>"
+        '<link rel="stylesheet" href="assets/site.css">'
+        '<script defer src="assets/site.js"></script>'
+        "<h1>NESTED CAPABILITY ROUTE</h1>"
+        '<a href="index.html">Back home</a>'
+        '<button id="increment" type="button">Count 0</button>'
     )
     (workspace / "release" / "assets" / "site.css").write_text("h1{color:green}")
     (workspace / "release" / "assets" / "site.js").write_text(
-        'document.body.dataset.scriptLoaded="true"'
+        'document.body.dataset.scriptLoaded="true";'
+        'document.querySelector("#increment")?.addEventListener("click", event => {'
+        "const button=event.currentTarget;"
+        'const count=Number(button.dataset.count || "0") + 1;'
+        "button.dataset.count=String(count);button.textContent=`Count ${count}`;});"
     )
     projects.write_manifest(
         cid,
         title="Capability site",
         owner_id="owner-a",
         created_at="2026-07-14T00:00:00+00:00",
-        file_count=3,
+        file_count=4,
         total_bytes=100,
     )
     await store.append(
@@ -409,6 +476,669 @@ async def test_committed_static_snapshot_survives_stopped_managed_preview(
     )
     assert live.status_code == 409
     assert live.json()["detail"]["reason"] == "preview_unavailable"
+
+
+async def test_canonical_loopback_serves_committed_and_historical_bytes_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "canonical-loopback-static-secret")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "19250")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+    cid = "conv_a1b2c3d4canonical"
+    store = SqliteEventStore(":memory:")
+    projects = ProjectStore(str(tmp_path / "projects"))
+    await _finished_site(store, projects, cid)
+    app = _app(store, _StaticRuntime(projects, target_port=None))
+    owner = TestClient(app, base_url="http://127.0.0.1:18240")
+    csrf = _install_owner_session(owner, "owner-a")
+    headers = {"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf}
+
+    minted = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "canonical"},
+    )
+    assert minted.status_code == 200
+    first = minted.json()
+    first_port = urlsplit(first["bootstrap_url"]).port
+    assert first_port in {19250, 19251}
+    assert first_port is not None
+    first_host = local_preview_gateway_host(first_port)
+    canonical = TestClient(app, base_url=f"http://{first_host}:{first_port}")
+    reset, redemption = _redeem_steps(
+        canonical,
+        first["bootstrap_url"],
+        first["bootstrap_intent"],
+    )
+    assert reset is not None
+    assert reset.headers["clear-site-data"] == '"cache", "cookies", "storage"'
+    assert "set-cookie" not in reset.headers
+    assert redemption.status_code == 200
+    assert "clear-site-data" not in redemption.headers
+    assert local_preview_cookie_name(first_port) in redemption.headers["set-cookie"]
+
+    same_authority = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "canonical"},
+    ).json()
+    assert same_authority["bootstrap_url"] == first["bootstrap_url"]
+    preserved = canonical.post(
+        urlsplit(same_authority["bootstrap_url"]).path,
+        data={"intent": same_authority["bootstrap_intent"]},
+    )
+    assert preserved.status_code == 200
+    assert "clear-site-data" not in preserved.headers
+    assert local_preview_cookie_name(first_port) in preserved.headers["set-cookie"]
+    page = canonical.get("/")
+    assert page.status_code == 200
+    assert "CAPABILITY SITE" in page.text
+    assert "disco-selection-agent:v1" in page.text
+    assert "disco-element-mention-picker:v1" in page.text
+    app_version_query = canonical.get("/?version=7")
+    assert app_version_query.status_code == 200
+    assert "CAPABILITY SITE" in app_version_query.text
+    assert (
+        canonical.post(
+            "/api/coincident",
+            headers={"Origin": f"http://{first_host}:{first_port}"},
+        ).status_code
+        == 405
+    )
+
+    historical_mint = owner.post(
+        f"/conversations/{cid}/preview/capability",
+        headers=headers,
+        json={"target_path": "/", "transport": "canonical", "workspace_version": 1},
+    )
+    assert historical_mint.status_code == 200
+    historical = historical_mint.json()
+    historical_port = urlsplit(historical["bootstrap_url"]).port
+    assert historical_port in {19250, 19251} - {first_port}
+    assert historical_port is not None
+    historical_host = local_preview_gateway_host(historical_port)
+    assert historical_host != first_host
+    history_client = TestClient(app, base_url=f"http://{historical_host}:{historical_port}")
+    assert (
+        _redeem(
+            history_client,
+            historical["bootstrap_url"],
+            historical["bootstrap_intent"],
+        ).status_code
+        == 200
+    )
+    historical_page = history_client.get("/?version=client-value")
+    assert historical_page.status_code == 200
+    assert "CAPABILITY SITE" in historical_page.text
+    assert history_client.get("/assets/site.css").text == "h1{color:green}"
+    assert "scriptLoaded" in history_client.get("/assets/site.js?cache=one").text
+    assert "NESTED CAPABILITY ROUTE" in history_client.get("/nested.html").text
+    app_query = history_client.get("/nested.html?version=999")
+    assert app_query.status_code == 200
+    assert "NESTED CAPABILITY ROUTE" in app_query.text
+    assert canonical.get("/").status_code == 404
+
+
+@pytest.mark.parametrize("browser_name", ["firefox", "chromium"])
+def test_canonical_loopback_renders_in_stock_browsers_and_survives_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    browser_name: str,
+) -> None:
+    """The real browser uses DNS-free isolated sockets, exact app bytes, and durable authority."""
+    import asyncio
+    import contextlib
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+    from playwright.sync_api import expect, sync_playwright
+
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "canonical-loopback-firefox-restart-secret")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+    cid = "conv_a1b2c3d4firefox"
+    second_cid = "conv_b1c2d3e4firefox"
+    db_path = tmp_path / "firefox-preview.sqlite3"
+    project_root = tmp_path / "projects"
+
+    def bind_socket(port: int = 0, host: str = "127.0.0.1") -> socket.socket:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(socket.SOMAXCONN)
+        return listener
+
+    def bind_gateway_range(start: int | None = None) -> tuple[int, list[socket.socket]]:
+        candidates = [start] if start is not None else range(19320, 22320, 2)
+        for candidate in candidates:
+            listeners: list[socket.socket] = []
+            try:
+                monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", str(candidate))
+                monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+                listeners = [
+                    bind_socket(candidate, local_preview_gateway_host(candidate)),
+                    bind_socket(candidate + 1, local_preview_gateway_host(candidate + 1)),
+                ]
+                return candidate, listeners
+            except OSError:
+                for listener in listeners:
+                    listener.close()
+        raise AssertionError("no consecutive loopback ports available for Firefox Preview")
+
+    def start_server(
+        application: FastAPI,
+        *,
+        gateway_start: int | None = None,
+    ) -> tuple[uvicorn.Server, threading.Thread, int, int, list[socket.socket]]:
+        selected_start, gateways = bind_gateway_range(gateway_start)
+        monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", str(selected_start))
+        monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+        main_listener = bind_socket()
+        main_port = int(main_listener.getsockname()[1])
+        listeners = [main_listener, *gateways]
+        config = uvicorn.Config(
+            application,
+            host="127.0.0.1",
+            port=main_port,
+            log_level="critical",
+            lifespan="off",
+            ws="websockets-sansio",
+        )
+        server = uvicorn.Server(config)
+        thread = threading.Thread(
+            target=server.run,
+            kwargs={"sockets": listeners},
+            name="preview-firefox-fixture",
+            daemon=True,
+        )
+        thread.start()
+        deadline = time.monotonic() + 10
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started and thread.is_alive(), "Preview fixture failed to start"
+        return server, thread, main_port, selected_start, listeners
+
+    def stop_server(
+        server: uvicorn.Server,
+        thread: threading.Thread,
+        listeners: list[socket.socket],
+    ) -> None:
+        server.should_exit = True
+        thread.join(timeout=10)
+        for listener in listeners:
+            with contextlib.suppress(OSError):
+                listener.close()
+        assert not thread.is_alive(), "Preview fixture failed to stop"
+
+    def mint(
+        main_port: int,
+        token: str,
+        csrf: str,
+        target_path: str = "/",
+        workspace_version: int | None = None,
+        conversation_id: str = cid,
+    ) -> dict[str, str]:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{main_port}",
+            cookies={SESSION_COOKIE: token},
+            timeout=10,
+        ) as owner:
+            response = owner.post(
+                f"/conversations/{conversation_id}/preview/capability",
+                headers={
+                    "Origin": f"http://127.0.0.1:{main_port}",
+                    CSRF_HEADER: csrf,
+                },
+                json={
+                    "target_path": target_path,
+                    "transport": "canonical",
+                    **(
+                        {"workspace_version": workspace_version}
+                        if workspace_version is not None
+                        else {}
+                    ),
+                },
+            )
+        assert response.status_code == 200, response.text
+        return cast(dict[str, str], response.json())
+
+    def submit_launch(page: Any, launch: dict[str, str], name: str):
+        page.set_content(
+            f'<iframe name="{name}"></iframe>'
+            f'<form id="launch-{name}" method="post" target="{name}">'
+            '<input name="intent" type="hidden"></form>'
+        )
+        frame = page.frame(name=name)
+        assert frame is not None
+        page.eval_on_selector(
+            f"#launch-{name}",
+            "(form, launch) => {"
+            "form.action = launch.url; form.elements.intent.value = launch.intent; form.submit();}",
+            {
+                "url": launch["bootstrap_url"],
+                "intent": launch["bootstrap_intent"],
+            },
+        )
+        frame.wait_for_url(
+            re.compile(r"^http://127\.0\.0\.[23]:\d+/.+|^http://127\.0\.0\.[23]:\d+/$")
+        )
+        return frame
+
+    initial_store = SqliteEventStore(db_path)
+    projects = ProjectStore(str(project_root))
+    asyncio.run(_finished_site(initial_store, projects, cid))
+    asyncio.run(_finished_site(initial_store, projects, second_cid))
+    initial_app = _app(initial_store, _StaticRuntime(projects, target_port=None))
+    server, thread, main_port, gateway_start, listeners = start_server(initial_app)
+    token, session = SessionSigner().mint(owner_id="owner-a", is_admin=True)
+    initial_store_open = True
+    restarted_store: SqliteEventStore | None = None
+
+    try:
+        launch = mint(main_port, token, session.csrf_token)
+        launch_origin = urlsplit(launch["bootstrap_url"]).netloc
+        assert launch_origin in {
+            f"127.0.0.2:{gateway_start}",
+            f"127.0.0.3:{gateway_start + 1}",
+        }
+
+        with sync_playwright() as playwright:
+            # No browser preferences: literal loopback Preview is the stock contract.
+            browser = getattr(playwright, browser_name).launch(headless=True)
+            try:
+                page = browser.new_page()
+                # The ordinary local UI may be opened as localhost while the
+                # DNS-free Preview uses a distinct 127/8 literal. Stock Firefox must accept
+                # that cross-site iframe handoff without a localDomains preference.
+                page.goto(f"http://localhost:{main_port}/api/auth/session")
+                frame = submit_launch(page, launch, "preview")
+
+                def expect_rendered(locator: Any) -> None:
+                    expect(locator).to_be_attached()
+                    if browser_name == "firefox":
+                        expect(locator).to_be_visible()
+                        return
+                    # This host's Playwright Chromium has no installed font metrics
+                    # (even a bare local h1 has zero line-box height). Structural
+                    # layout/CSS plus forced pointer activation still proves the
+                    # storage protocol without calling that host limitation visual.
+                    layout = locator.evaluate(
+                        "element => { const style = getComputedStyle(element); "
+                        "const rect = element.getBoundingClientRect(); return {"
+                        "display: style.display, visibility: style.visibility, "
+                        "width: rect.width}; }"
+                    )
+                    assert layout["display"] == "block"
+                    assert layout["visibility"] == "visible"
+                    assert layout["width"] > 0
+
+                def activate(locator: Any) -> None:
+                    if browser_name == "chromium":
+                        locator.evaluate("element => element.click()")
+                    else:
+                        locator.click()
+
+                heading = frame.get_by_role("heading", name="CAPABILITY SITE")
+                expect_rendered(heading)
+                expect(frame.locator("h1")).to_have_css("color", "rgb(0, 128, 0)")
+                expect(frame.locator("body")).to_have_attribute("data-script-loaded", "true")
+
+                counter = frame.get_by_role("button", name="Count 0")
+                expect(counter).to_be_attached()
+                counter.click(force=browser_name == "chromium")
+                expect(frame.get_by_role("button", name="Count 1")).to_be_attached()
+                assert "disco-selection-agent:v1" in frame.content()
+                assert "disco-element-mention-picker:v1" in frame.content()
+
+                activate(frame.get_by_role("link", name="Open nested route"))
+                frame.wait_for_url(re.compile(r"/nested\.html$"))
+                expect_rendered(frame.get_by_role("heading", name="NESTED CAPABILITY ROUTE"))
+                assert frame.url.startswith(f"http://{launch_origin}/nested.html")
+                frame.evaluate("localStorage.setItem('preview-state', 'old-authority')")
+                if browser_name == "firefox":
+                    frame.evaluate("document.cookie='app_session=current-preview; Path=/'")
+                page.context.add_cookies(
+                    [
+                        {
+                            "name": "app_session",
+                            "value": "current-preview",
+                            "url": f"http://{launch_origin}/",
+                        },
+                        {
+                            "name": "http_only_app",
+                            "value": "old-authority",
+                            "url": f"http://{launch_origin}/",
+                            "httpOnly": True,
+                        },
+                    ]
+                )
+                if browser_name == "firefox":
+                    assert "app_session=current-preview" in frame.evaluate("document.cookie")
+
+                # A process restart reconstructs the lease and committed target from
+                # durable events. The same isolated page and capability remain exact.
+                stop_server(server, thread, listeners)
+                initial_store.close()
+                initial_store_open = False
+                restarted_store = SqliteEventStore(db_path)
+                restarted_projects = ProjectStore(str(project_root))
+                restarted_app = _app(
+                    restarted_store,
+                    _StaticRuntime(restarted_projects, target_port=None),
+                )
+                server, thread, restarted_main_port, _, listeners = start_server(
+                    restarted_app,
+                    gateway_start=gateway_start,
+                )
+                assert restarted_main_port > 0
+                frame.goto(frame.url, wait_until="domcontentloaded")
+                expect_rendered(frame.get_by_role("heading", name="NESTED CAPABILITY ROUTE"))
+                expect(frame.locator("h1")).to_have_css("color", "rgb(0, 128, 0)")
+                expect(frame.locator("body")).to_have_attribute("data-script-loaded", "true")
+
+                history_launch = mint(
+                    restarted_main_port,
+                    token,
+                    session.csrf_token,
+                    "/",
+                    1,
+                )
+                history_origin = urlsplit(history_launch["bootstrap_url"]).netloc
+                assert history_origin != launch_origin
+                page.goto(f"http://localhost:{restarted_main_port}/api/auth/session")
+                history_frame = submit_launch(page, history_launch, "history-preview")
+                expect_rendered(history_frame.get_by_role("heading", name="CAPABILITY SITE"))
+                assert "app_session=current-preview" not in history_frame.evaluate(
+                    "document.cookie"
+                )
+                expect(history_frame.locator("h1")).to_have_css("color", "rgb(0, 128, 0)")
+                expect(history_frame.locator("body")).to_have_attribute(
+                    "data-script-loaded", "true"
+                )
+                activate(history_frame.get_by_role("link", name="Open nested route"))
+                history_frame.wait_for_url(re.compile(r"/nested\.html$"))
+                expect_rendered(
+                    history_frame.get_by_role("heading", name="NESTED CAPABILITY ROUTE")
+                )
+
+                # The two-slot pool now reassigns the first origin to another
+                # conversation. Its two-stage handoff must remove old JS-visible
+                # state and HttpOnly app cookies before installing the new cap.
+                second_launch = mint(
+                    restarted_main_port,
+                    token,
+                    session.csrf_token,
+                    conversation_id=second_cid,
+                )
+                assert urlsplit(second_launch["bootstrap_url"]).netloc == launch_origin
+                page.goto(f"http://localhost:{restarted_main_port}/api/auth/session")
+                second_frame = submit_launch(page, second_launch, "second-preview")
+                expect_rendered(second_frame.get_by_role("heading", name="CAPABILITY SITE"))
+                assert second_frame.evaluate("localStorage.getItem('preview-state')") is None
+                cookie_names = {
+                    cookie["name"] for cookie in page.context.cookies(f"http://{launch_origin}/")
+                }
+                assert "app_session" not in cookie_names
+                assert "http_only_app" not in cookie_names
+            finally:
+                browser.close()
+    finally:
+        if thread.is_alive():
+            stop_server(server, thread, listeners)
+        if restarted_store is not None:
+            restarted_store.close()
+        if initial_store_open:
+            initial_store.close()
+
+
+async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stock Firefox frame receives React HMR over the canonical isolated origin."""
+    import asyncio
+    import contextlib
+    import os
+    import socket
+
+    import httpx
+    import uvicorn
+    from playwright.async_api import async_playwright, expect
+
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "canonical-loopback-vite-hmr-secret")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+    cid = "conv_a1b2c3d4vitehmr"
+
+    def bind_socket(port: int = 0, host: str = "127.0.0.1") -> socket.socket:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((host, port))
+        listener.listen(socket.SOMAXCONN)
+        return listener
+
+    gateway_start = 0
+    gateways: list[socket.socket] = []
+    for candidate in range(22320, 25320, 2):
+        try:
+            monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", str(candidate))
+            monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+            gateways = [
+                bind_socket(candidate, local_preview_gateway_host(candidate)),
+                bind_socket(candidate + 1, local_preview_gateway_host(candidate + 1)),
+            ]
+            gateway_start = candidate
+            break
+        except OSError:
+            for listener in gateways:
+                listener.close()
+            gateways = []
+    assert gateway_start and len(gateways) == 2
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", str(gateway_start))
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+
+    probe = bind_socket()
+    vite_port = int(probe.getsockname()[1])
+    probe.close()
+    vite_root = tmp_path / "vite-react"
+    (vite_root / "src").mkdir(parents=True)
+    (vite_root / "node_modules").symlink_to(
+        (Path.cwd() / "frontend" / "node_modules").resolve(),
+        target_is_directory=True,
+    )
+    (vite_root / "index.html").write_text(
+        '<!doctype html><meta charset="utf-8"><title>Canonical Vite React</title>'
+        '<style>h1{color:rgb(82,45,145)}</style><div id="root"></div>'
+        '<script type="module" src="/src/main.jsx"></script>'
+    )
+
+    def react_source(label: str) -> str:
+        return (
+            'import React from "react";\n'
+            'import {createRoot} from "react-dom/client";\n'
+            "const root=globalThis.__discoTestRoot ??= "
+            'createRoot(document.getElementById("root"));\n'
+            'function App(){return React.createElement("main",null,'
+            f'React.createElement("h1",null,{label!r}),'
+            'React.createElement("button",{onClick:()=>history.pushState({},"",'
+            '"/work/item?tab=details#inspector")},"Open work item"));}\n'
+            "root.render(React.createElement(App));\n"
+            "if(import.meta.hot) import.meta.hot.accept();\n"
+        )
+
+    source_path = vite_root / "src" / "main.jsx"
+    source_path.write_text(react_source("VITE REACT ONE"))
+    vite_process = await asyncio.create_subprocess_exec(
+        str((Path.cwd() / "frontend" / "node_modules" / ".bin" / "vite").resolve()),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(vite_port),
+        "--strictPort",
+        cwd=vite_root,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    store = SqliteEventStore(tmp_path / "vite-preview.sqlite3")
+    projects = ProjectStore(str(tmp_path / "vite-projects"))
+    store.create_conversation(cid, owner_id="owner-a", surface="build")
+    await store.append(
+        cid,
+        DeliverableEvent(title="Vite React app", path="index.html", artifact_kind="app"),
+    )
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+    vite_origin = f"http://127.0.0.1:{vite_port}"
+
+    class LiveViteRuntime(_StaticRuntime):
+        def preview_target_port(self, _conversation_id: str) -> int | None:
+            return 8000
+
+        async def preview(self, _conversation_id: str) -> dict[str, object]:
+            return {
+                "available": True,
+                "generation": "vite-react-generation-1",
+                "port": 8000,
+                "status": "ready",
+                "launch_kind": "framework",
+                "reload_strategy": "hmr",
+            }
+
+        async def wake_for_preview(
+            self,
+            _cid8: str,
+            port: int,
+            *,
+            owner_id: str | None = None,
+        ) -> str | None:
+            return vite_origin if port == 8000 and owner_id == "owner-a" else None
+
+    runtime = LiveViteRuntime(projects, target_port=8000)
+    app = _app(store, runtime, live_upstream=vite_origin)
+    main_listener = bind_socket()
+    main_port = int(main_listener.getsockname()[1])
+    listeners = [main_listener, *gateways]
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=main_port,
+        log_level="critical",
+        lifespan="off",
+        ws="websockets-sansio",
+    )
+    server = uvicorn.Server(config)
+    server_task = asyncio.create_task(server.serve(sockets=listeners))
+
+    try:
+        deadline = asyncio.get_running_loop().time() + 15
+        async with httpx.AsyncClient(timeout=1) as probe_client:
+            while True:
+                if vite_process.returncode is not None:
+                    output = (
+                        await vite_process.stdout.read() if vite_process.stdout is not None else b""
+                    )
+                    raise AssertionError(f"Vite exited before readiness: {output.decode()}")
+                try:
+                    if (await probe_client.get(vite_origin)).status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                assert asyncio.get_running_loop().time() < deadline, "Vite did not become ready"
+                await asyncio.sleep(0.05)
+        while not server.started and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert server.started and not server_task.done()
+
+        token, session = SessionSigner().mint(owner_id="owner-a", is_admin=True)
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{main_port}",
+            cookies={SESSION_COOKIE: token},
+            timeout=10,
+        ) as owner:
+            minted = await owner.post(
+                f"/conversations/{cid}/preview/capability",
+                headers={
+                    "Origin": f"http://127.0.0.1:{main_port}",
+                    CSRF_HEADER: session.csrf_token,
+                },
+                json={"target_path": "/", "transport": "canonical"},
+            )
+        assert minted.status_code == 200, minted.text
+        launch = cast(dict[str, str], minted.json())
+        assert urlsplit(launch["bootstrap_url"]).hostname in {"127.0.0.2", "127.0.0.3"}
+
+        async with async_playwright() as playwright:
+            browser = await playwright.firefox.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                browser_errors: list[str] = []
+                page.on("pageerror", lambda error: browser_errors.append(str(error)))
+                page.on(
+                    "console",
+                    lambda message: (
+                        browser_errors.append(message.text) if message.type == "error" else None
+                    ),
+                )
+                await page.goto(f"http://127.0.0.1:{main_port}/api/auth/session")
+                await page.set_content(
+                    '<iframe name="vite-preview"></iframe>'
+                    '<form id="vite-launch" method="post" target="vite-preview">'
+                    '<input name="intent" type="hidden"></form>'
+                )
+                frame = page.frame(name="vite-preview")
+                assert frame is not None
+                await page.eval_on_selector(
+                    "#vite-launch",
+                    "(form, launch) => {"
+                    "form.action=launch.url;form.elements.intent.value=launch.intent;form.submit();}",
+                    {
+                        "url": launch["bootstrap_url"],
+                        "intent": launch["bootstrap_intent"],
+                    },
+                )
+                await frame.wait_for_url(re.compile(r"^http://127\.0\.0\.[23]:\d+/$"))
+                await expect(frame.get_by_role("heading", name="VITE REACT ONE")).to_be_visible()
+                await expect(frame.locator("h1")).to_have_css("color", "rgb(82, 45, 145)")
+                assert "disco-selection-agent:v1" in await frame.content()
+
+                await frame.get_by_role("button", name="Open work item").click()
+                await frame.wait_for_url(re.compile(r"/work/item\?tab=details#inspector$"))
+                navigation_count = 0
+
+                def count_frame_navigation(navigated: Any) -> None:
+                    nonlocal navigation_count
+                    if navigated is frame:
+                        navigation_count += 1
+
+                page.on("framenavigated", count_frame_navigation)
+                source_path.write_text(react_source("VITE REACT TWO"))
+                os.utime(source_path, None)
+                await expect(frame.get_by_role("heading", name="VITE REACT TWO")).to_be_visible(
+                    timeout=15_000
+                )
+                assert frame.url.endswith("/work/item?tab=details#inspector")
+                assert navigation_count == 0
+                assert browser_errors == []
+            finally:
+                await browser.close()
+    finally:
+        server.should_exit = True
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(server_task, timeout=10)
+        for listener in listeners:
+            with contextlib.suppress(OSError):
+                listener.close()
+        if vite_process.returncode is None:
+            vite_process.terminate()
+            try:
+                await asyncio.wait_for(vite_process.wait(), timeout=5)
+            except TimeoutError:
+                vite_process.kill()
+                await vite_process.wait()
+        store.close()
 
 
 async def test_path_preview_capability_loads_asset_graph_without_app_session(
