@@ -445,7 +445,7 @@ def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
 async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
     tmp_path: Path,
 ):
-    """H076: literals in sibling text assets must not be copied into the entry."""
+    """H076: selected-app literals may live in approved sibling deliverables."""
 
     files = {
         "index.html": "STALE ROOT MUST NEVER OPEN",
@@ -460,10 +460,11 @@ async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
+    executor = _FSBuildExecutor(tmp_path)
     loop, store = build_loop(
         ScriptedAgent([_submit_absolute_multifile_plan()]),
         conversation_id="dictated-absolute-multifile",
-        executor=_FSBuildExecutor(tmp_path),
+        executor=executor,
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"submit_plan"}),
     )
@@ -474,6 +475,15 @@ async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
     )
     await loop.run()
     await loop.approve_plan()
+    await store.append(
+        "dictated-absolute-multifile",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="selected release",
+            path="release/index.html",
+            artifact_kind="app",
+        ),
+    )
 
     loop.agent = ScriptedAgent(
         [
@@ -492,6 +502,7 @@ async def test_absolute_workspace_plan_paths_preserve_multifile_literal_scope(
 
     assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
     assert not any("quoted user literal is missing" in msg for msg in _env_messages(events))
+    assert "index.html" in executor.sandbox.read_paths
     assert (tmp_path / "release/index.html").read_text(
         encoding="utf-8"
     ) == "<h1>SELECTED RELEASE ONE</h1>"

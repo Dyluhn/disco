@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { ISOLATED_PREVIEW_PREFIX, isIsolatedPreviewUrl } from "./previewUrlOracle";
+import {
+  ISOLATED_PREVIEW_PREFIX,
+  isIsolatedPreviewUrl,
+  isStaticPreviewHostnameForCid,
+} from "./previewUrlOracle";
 
 describe("isIsolatedPreviewUrl", () => {
   it.each([
@@ -19,5 +23,26 @@ describe("isIsolatedPreviewUrl", () => {
     "not a URL",
   ])("rejects non-preview and malformed lookalikes: %s", (url) => {
     expect(isIsolatedPreviewUrl(url)).toBe(false);
+  });
+
+  it.each(["8000", "5173"])(
+    "binds a committed-static hostname to its CID at valid port %s",
+    (port) => {
+      expect(
+        isStaticPreviewHostnameForCid(
+          `p3s-deadbeef-${"a".repeat(40)}-${port}.localhost`,
+          "conv_deadbeef12345678",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    `p3s-feedface-${"a".repeat(40)}-5173.localhost`,
+    `p3s-deadbeef-${"a".repeat(39)}-5173.localhost`,
+    `p3s-deadbeef-${"a".repeat(40)}-8.localhost`,
+    "p2-deadbeef-5173.localhost",
+  ])("rejects a static hostname not bound to the exact CID contract: %s", (hostname) => {
+    expect(isStaticPreviewHostnameForCid(hostname, "conv_deadbeef12345678")).toBe(false);
   });
 });

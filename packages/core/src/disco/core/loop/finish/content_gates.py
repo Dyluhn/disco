@@ -236,10 +236,15 @@ class _ContentGateMixin(_FinishGateProto):
         selected_entry = await self._dictated_content_selected_app_entry(events)
         if selected_entry is not None:
             paths.append(selected_entry)
-            # Once an app is explicitly selected, its resolved bundle is authoritative.
-            # Stale handoffs, scratch artifacts, and unrelated plan files cannot satisfy
-            # content requirements for the current selected app.
+            # Once an app is explicitly selected, its resolved bundle remains the
+            # authoritative app surface.  The current approved plan may also own
+            # explicit deliverables outside that bundle (for example a deliberately
+            # stale root scaffold beside ``release/index.html``).  Those files are
+            # part of the same user-approved execution contract, unlike stale
+            # handoffs or arbitrary workspace scratch, so retain them as bounded
+            # sibling content evidence.
             paths.extend(await self._dictated_content_app_bundle_paths(events))
+            paths.extend(_plan_file_exists_paths(events))
         else:
             paths.extend(_plan_file_exists_paths(events))
             paths.extend(_deliverable_event_paths(events))

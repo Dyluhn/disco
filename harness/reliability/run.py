@@ -72,7 +72,26 @@ _PROVIDER_LEDGER_REQUIRED_KEYS = {
     "conversation_id",
 }
 _PROVIDER_LEDGER_OPTIONAL_KEYS = {"purpose", "call_kind"}
+_PROVIDER_LEDGER_REQUEST_SHAPE_KEYS = {
+    "request_id",
+    "driver_context_window",
+    "model_repair_attempt",
+    "stream",
+    "max_output_tokens",
+    "canonical_payload_bytes",
+    "messages_json_bytes",
+    "tools_json_bytes",
+    "message_count",
+    "tool_count",
+    "system_message_count",
+    "user_message_count",
+    "assistant_message_count",
+    "tool_message_count",
+    "image_count",
+    "image_url_chars",
+}
 _PROVIDER_LEDGER_LABEL_RE = re.compile(r"[a-z][a-z0-9_.:-]{0,63}\Z")
+_PROVIDER_LEDGER_REQUEST_ID_RE = re.compile(r"req_[0-9a-f]{32}\Z")
 
 
 def _utc_now() -> str:
@@ -401,7 +420,12 @@ def _provider_ledger_record_result(
 
     keys = set(record)
     missing = sorted(_PROVIDER_LEDGER_REQUIRED_KEYS - keys)
-    unexpected = sorted(keys - _PROVIDER_LEDGER_REQUIRED_KEYS - _PROVIDER_LEDGER_OPTIONAL_KEYS)
+    unexpected = sorted(
+        keys
+        - _PROVIDER_LEDGER_REQUIRED_KEYS
+        - _PROVIDER_LEDGER_OPTIONAL_KEYS
+        - _PROVIDER_LEDGER_REQUEST_SHAPE_KEYS
+    )
     if missing or unexpected:
         return (
             INVALID,
@@ -437,6 +461,59 @@ def _provider_ledger_record_result(
         value = record[label]
         if not isinstance(value, str) or _PROVIDER_LEDGER_LABEL_RE.fullmatch(value) is None:
             return INVALID, None, f"provider ledger record {index} has invalid {label}"
+    shape_keys = keys & _PROVIDER_LEDGER_REQUEST_SHAPE_KEYS
+    if shape_keys and shape_keys != _PROVIDER_LEDGER_REQUEST_SHAPE_KEYS:
+        missing_shape = sorted(_PROVIDER_LEDGER_REQUEST_SHAPE_KEYS - shape_keys)
+        return (
+            INVALID,
+            None,
+            f"provider ledger record {index} has incomplete request shape "
+            f"(missing={missing_shape})",
+        )
+    if shape_keys:
+        request_id = record["request_id"]
+        if request_id is not None and (
+            not isinstance(request_id, str)
+            or _PROVIDER_LEDGER_REQUEST_ID_RE.fullmatch(request_id) is None
+        ):
+            return INVALID, None, f"provider ledger record {index} has invalid request_id"
+        for label in ("driver_context_window", "max_output_tokens"):
+            value = record[label]
+            if value is not None and (type(value) is not int or value <= 0):  # noqa: E721
+                return INVALID, None, f"provider ledger record {index} has invalid {label}"
+        if type(record["model_repair_attempt"]) is not int or record["model_repair_attempt"] <= 0:  # noqa: E721
+            return (
+                INVALID,
+                None,
+                f"provider ledger record {index} has invalid model_repair_attempt",
+            )
+        if type(record["stream"]) is not bool:  # noqa: E721
+            return INVALID, None, f"provider ledger record {index} has invalid stream"
+        count_labels = _PROVIDER_LEDGER_REQUEST_SHAPE_KEYS - {
+            "request_id",
+            "driver_context_window",
+            "model_repair_attempt",
+            "stream",
+            "max_output_tokens",
+        }
+        for label in count_labels:
+            value = record[label]
+            if type(value) is not int or value < 0:  # noqa: E721
+                return INVALID, None, f"provider ledger record {index} has invalid {label}"
+        if record["canonical_payload_bytes"] < (
+            record["messages_json_bytes"] + record["tools_json_bytes"]
+        ):
+            return (
+                INVALID,
+                None,
+                f"provider ledger record {index} has inconsistent request byte counts",
+            )
+        if has_tools != (record["tool_count"] > 0):
+            return (
+                INVALID,
+                None,
+                f"provider ledger record {index} has inconsistent tool count",
+            )
     return PASS, (host, model, has_tools, conversation_id), ""
 
 

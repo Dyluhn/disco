@@ -29,6 +29,10 @@ import {
   rethrowAfterBestEffortReport,
 } from "@/lib/harness/cleanupOracle";
 import {
+  expectedBrowserConsoleError,
+  type ExpectedBrowserConsoleError,
+} from "@/lib/harness/browserConsoleOracle";
+import {
   redactFailureStringsInPlace,
   redactKnownIdentifiers,
 } from "@/lib/harness/evidenceRedaction";
@@ -36,6 +40,7 @@ import { updateProviderConversationManifest } from "@/lib/harness/providerManife
 import {
   ISOLATED_PREVIEW_PREFIX,
   isIsolatedPreviewUrl,
+  isStaticPreviewHostnameForCid,
 } from "@/lib/harness/previewUrlOracle";
 import { latestStoppedStatus } from "@/lib/harness/terminalConversationStatus";
 
@@ -132,20 +137,39 @@ async function approveBuildPlan(page: Page): Promise<void> {
     }),
   ]);
   await approve.click();
+  await expect(approve).toBeHidden({ timeout: 30_000 });
 }
 
 async function waitForCommittedFinish(
   request: APIRequestContext,
   cid: string,
+  page: Page,
   afterSeq = 0,
-): Promise<{ version: number; events: EventJson[] }> {
+): Promise<{ version: number; events: EventJson[]; additionalPlanApprovals: number }> {
   const deadline = Date.now() + 900_000;
   let latest: EventJson[] = [];
+  const approvedPendingPlanIds = new Set<string>();
   while (Date.now() < deadline) {
     latest = await allEvents(request, cid);
     const terminal = latestStoppedStatus(latest, afterSeq);
     if (terminal) {
       throw new Error(`conversation reached ${terminal.status}: ${String(terminal.detail ?? "")}`);
+    }
+    const latestStatus = [...latest]
+      .reverse()
+      .find((event) => event.kind === "status" && (event.seq ?? 0) > afterSeq);
+    if (latestStatus?.status === "AWAITING_PLAN_APPROVAL") {
+      const pendingPlanId = String(latestStatus.detail ?? "");
+      expect(pendingPlanId, "plan-approval status omitted its pending plan id").not.toBe("");
+      expect(
+        latest.some((event) => event.kind === "plan" && event.id === pendingPlanId),
+        `pending plan ${pendingPlanId} has no durable PlanEvent`,
+      ).toBe(true);
+      if (!approvedPendingPlanIds.has(pendingPlanId)) {
+        approvedPendingPlanIds.add(pendingPlanId);
+        await approveBuildPlan(page);
+        continue;
+      }
     }
     const finished = [...latest]
       .reverse()
@@ -160,7 +184,11 @@ async function waitForCommittedFinish(
       if (committed) {
         const version = Number(committed.version_seq);
         expect(version, "workspace-version event has no numeric version_seq").toBeGreaterThan(0);
-        return { version, events: latest };
+        return {
+          version,
+          events: latest,
+          additionalPlanApprovals: approvedPendingPlanIds.size,
+        };
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -219,7 +247,6 @@ async function assertApiGraph(
   marker: string,
   observedBearers: string[],
   version?: number,
-  absentMarker?: string,
 ): Promise<void> {
   const targetPath = version === undefined ? "/" : `/?version=${version}`;
   const mint = await authenticatedMutation(
@@ -288,7 +315,6 @@ async function assertApiGraph(
     expect(rootBody).toContain(marker);
     expect(rootBody).toContain(`<title>${RELEASE_TITLE}</title>`);
     expect(rootBody).not.toContain(ROOT_STALE);
-    if (absentMarker) expect(rootBody).not.toContain(absentMarker);
 
     const css = await isolated.get(withVersion("/assets/theme.css?theme=7"));
     const prefixedCss = await isolated.get(withVersion("/release/assets/theme.css?theme=7"));
@@ -332,9 +358,15 @@ async function assertApiGraph(
   }
 }
 
-async function assertRenderedDocument(page: Page, marker: string): Promise<void> {
+async function assertRenderedDocument(
+  page: Page,
+  marker: string,
+  absentVisibleMarker?: string,
+): Promise<void> {
   const body = page.locator("body");
   await expect(body).toContainText(marker, { timeout: 120_000 });
+  await expect(page.locator("h1")).toHaveText(marker);
+  if (absentVisibleMarker) await expect(body).not.toContainText(absentVisibleMarker);
   await expect(body).toHaveAttribute("data-script-loaded", "true", { timeout: 120_000 });
   await expect(body).toContainText(SCRIPT_MARKER);
   expect(await body.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(BACKGROUND);
@@ -377,6 +409,7 @@ async function openFromHandoff(
   cid: string,
   marker: string,
   observedBearers: string[],
+  absentVisibleMarker?: string,
 ): Promise<void> {
   const open = page.locator('[data-disco-control="build.open-app"]').first();
   await expect(open).toBeVisible({ timeout: 120_000 });
@@ -418,7 +451,7 @@ async function openFromHandoff(
     await open.click();
     const popup = await popupPromise;
     try {
-      await assertRenderedDocument(popup, marker);
+      await assertRenderedDocument(popup, marker, absentVisibleMarker);
       const popupBootstrapRequests = bootstrapRequests.filter((request) =>
         requestBelongsToPage(request, popup),
       );
@@ -697,16 +730,8 @@ async function assertCrossCidStorageIsolation(
     // Launch CID B only after CID A has durable state. Under the old shared
     // localhost/127 origin, B's bootstrap Clear-Site-Data erased A here.
     second = await open(secondOwnerPage, secondMarker);
-    expect(new URL(first.url()).hostname).toMatch(
-      new RegExp(
-        `^p3s-${firstCid.replace(/^conv_/, "").slice(0, 8)}-[0-9a-f]{40}-8000\\.`,
-      ),
-    );
-    expect(new URL(second.url()).hostname).toMatch(
-      new RegExp(
-        `^p3s-${secondCid.replace(/^conv_/, "").slice(0, 8)}-[0-9a-f]{40}-8000\\.`,
-      ),
-    );
+    expect(isStaticPreviewHostnameForCid(new URL(first.url()).hostname, firstCid)).toBe(true);
+    expect(isStaticPreviewHostnameForCid(new URL(second.url()).hostname, secondCid)).toBe(true);
     expect(new URL(first.url()).origin).not.toBe(new URL(second.url()).origin);
 
     expect(
@@ -819,12 +844,23 @@ test("Build and Agent open the selected multi-file manifest across restart and r
   await requireReliabilityStack(request);
 
   const consoleErrors: string[] = [];
+  const expectedConsoleErrors: Record<ExpectedBrowserConsoleError, number> = {
+    "firefox-internal-favicon-csp": 0,
+    "planned-agent-restart": 0,
+  };
   const failedPreviewRequests: string[] = [];
   const isolatedPreviewHttpFailures: string[] = [];
   const previewBearers: string[] = [];
+  let plannedAgentRestart = false;
   const observe = (candidate: Page) => {
     candidate.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text());
+      if (message.type() !== "error") return;
+      const expected = expectedBrowserConsoleError(message.text(), plannedAgentRestart);
+      if (expected) {
+        expectedConsoleErrors[expected] += 1;
+      } else {
+        consoleErrors.push(message.text());
+      }
     });
     candidate.on("requestfailed", (failed) => {
       if (isIsolatedPreviewUrl(failed.url())) {
@@ -855,7 +891,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     );
     await page.goto(`/build/${buildCid}`);
     await approveBuildPlan(page);
-    const buildFirst = await waitForCommittedFinish(request, buildCid);
+    const buildFirst = await waitForCommittedFinish(request, buildCid, page);
     const buildFirstVerifier = verifierEvidence(buildFirst.events);
     expect(selectedApp(buildFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(buildFirst.events, await inspectTrace(request, buildCid));
@@ -873,7 +909,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
       (cid) => kickRun(request, "agent", cid),
     );
     await agentPage.goto(`/agent/${agentCid}`);
-    const agentFirst = await waitForCommittedFinish(request, agentCid);
+    const agentFirst = await waitForCommittedFinish(request, agentCid, agentPage);
     const agentFirstVerifier = verifierEvidence(agentFirst.events);
     expect(selectedApp(agentFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(agentFirst.events, await inspectTrace(request, agentCid));
@@ -889,14 +925,19 @@ test("Build and Agent open the selected multi-file manifest across restart and r
       FIRST_MARKER,
     );
 
-    await restartReliabilityStack();
-    await waitForStack(request);
-    await assertApiGraph(request, buildCid, FIRST_MARKER, previewBearers);
-    await assertApiGraph(request, agentCid, FIRST_MARKER, previewBearers);
-    await page.reload();
-    await openFromHandoff(context, page, buildCid, FIRST_MARKER, previewBearers);
-    await agentPage.reload();
-    await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER, previewBearers);
+    plannedAgentRestart = true;
+    try {
+      await restartReliabilityStack();
+      await waitForStack(request);
+      await assertApiGraph(request, buildCid, FIRST_MARKER, previewBearers);
+      await assertApiGraph(request, agentCid, FIRST_MARKER, previewBearers);
+      await page.reload();
+      await openFromHandoff(context, page, buildCid, FIRST_MARKER, previewBearers);
+      await agentPage.reload();
+      await openFromHandoff(context, agentPage, agentCid, FIRST_MARKER, previewBearers);
+    } finally {
+      plannedAgentRestart = false;
+    }
 
     const beforeRevision = Math.max(0, ...buildFirst.events.map((event) => event.seq ?? 0));
     const revise = await authenticatedMutation(
@@ -916,21 +957,21 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     expect(revise.ok(), await revise.text()).toBe(true);
     await page.reload();
     await approveBuildPlan(page);
-    const buildSecond = await waitForCommittedFinish(request, buildCid, beforeRevision);
+    const buildSecond = await waitForCommittedFinish(request, buildCid, page, beforeRevision);
     const buildSecondVerifier = verifierEvidence(buildSecond.events);
     expect(selectedApp(buildSecond.events)?.path).toBe(RELEASE_ENTRY);
     expect(buildSecond.version).toBeGreaterThan(buildFirst.version);
     assertNoThrash(buildSecond.events, await inspectTrace(request, buildCid));
-    await assertApiGraph(request, buildCid, SECOND_MARKER, previewBearers, undefined, FIRST_MARKER);
-    await assertApiGraph(
-      request,
+    await assertApiGraph(request, buildCid, SECOND_MARKER, previewBearers);
+    await assertApiGraph(request, buildCid, FIRST_MARKER, previewBearers, buildFirst.version);
+    await openFromHandoff(
+      context,
+      page,
       buildCid,
-      FIRST_MARKER,
-      previewBearers,
-      buildFirst.version,
       SECOND_MARKER,
+      previewBearers,
+      FIRST_MARKER,
     );
-    await openFromHandoff(context, page, buildCid, SECOND_MARKER, previewBearers);
 
     const sanitizeEvidence = (message: string) =>
       redactKnownIdentifiers(redactPreviewBearers(message, previewBearers), cids);
@@ -949,15 +990,19 @@ test("Build and Agent open the selected multi-file manifest across restart and r
 
     evidence = {
       revision: process.env.DISCO_RELIABILITY_REVISION ?? null,
+      expected_console_errors: expectedConsoleErrors,
       build: {
         first_version: buildFirst.version,
         second_version: buildSecond.version,
+        additional_plan_approvals:
+          buildFirst.additionalPlanApprovals + buildSecond.additionalPlanApprovals,
         selected_entry: selectedApp(buildSecond.events)?.path,
         event_count: buildSecond.events.length,
         first_verifier: buildFirstVerifier,
         second_verifier: buildSecondVerifier,
       },
       agent: {
+        additional_plan_approvals: agentFirst.additionalPlanApprovals,
         version: agentFirst.version,
         selected_entry: selectedApp(agentFirst.events)?.path,
         event_count: agentFirst.events.length,

@@ -352,6 +352,71 @@ def test_provider_evidence_requires_exact_host_model_and_trial_coverage(tmp_path
     )[:2] == (PASS, 3)
 
 
+def test_provider_evidence_accepts_complete_sanitized_request_shape(tmp_path: Path) -> None:
+    path = tmp_path / "provider.jsonl"
+    shape = {
+        "request_id": "req_0123456789abcdef0123456789abcdef",
+        "driver_context_window": 128000,
+        "model_repair_attempt": 1,
+        "stream": False,
+        "max_output_tokens": None,
+        "canonical_payload_bytes": 500,
+        "messages_json_bytes": 200,
+        "tools_json_bytes": 250,
+        "message_count": 3,
+        "tool_count": 2,
+        "system_message_count": 1,
+        "user_message_count": 1,
+        "assistant_message_count": 1,
+        "tool_message_count": 0,
+        "image_count": 0,
+        "image_url_chars": 0,
+    }
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_1",
+                **shape,
+            }
+        ],
+    )
+
+    assert _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )[:2] == (PASS, 1)
+
+
+def test_provider_evidence_rejects_partial_request_shape(tmp_path: Path) -> None:
+    path = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": "conv_1",
+                "request_id": "req_0123456789abcdef0123456789abcdef",
+            }
+        ],
+    )
+
+    status, units, reason = _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+    )
+
+    assert (status, units) == (INVALID, 0)
+    assert "incomplete request shape" in reason
+
+
 def test_provider_ledger_requires_private_regular_file(tmp_path: Path) -> None:
     path = tmp_path / "provider.jsonl"
     _write_provider_ledger(

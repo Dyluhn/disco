@@ -40,16 +40,6 @@ export function useBuildNotifications(
   // The pristine title to restore to (captured once, before we ever badge it).
   const baseTitle = useRef<string>(typeof document !== "undefined" ? document.title : "");
 
-  // Lazily ask for Notification permission once a run is actually under way — close
-  // enough to the user's submit gesture, and only if they haven't decided yet.
-  useEffect(() => {
-    if (status !== "RUNNING") return;
-    if (typeof window === "undefined" || !("Notification" in window)) return;
-    if (Notification.permission === "default") {
-      void Notification.requestPermission().catch(() => {});
-    }
-  }, [status]);
-
   // Badge + notify on the meaningful transition, but only while tabbed away.
   useEffect(() => {
     const was = prev.current;

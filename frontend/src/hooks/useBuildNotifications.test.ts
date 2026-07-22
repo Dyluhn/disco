@@ -88,4 +88,21 @@ describe("useBuildNotifications", () => {
     expect(ctor.mock.calls[0][0]).toMatch(/Build finished/);
     expect(ctor.mock.calls[0][1]).toEqual({ body: "make fizzbuzz" });
   });
+
+  it("does not request permission outside a user gesture", () => {
+    class FakeNotification {
+      static permission = "default";
+      static requestPermission = vi.fn();
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+
+    const { rerender } = renderHook(
+      ({ s }: { s: ConversationStatus }) => useBuildNotifications(s),
+      { initialProps: { s: "IDLE" as ConversationStatus } },
+    );
+    rerender({ s: "RUNNING" });
+    rerender({ s: "FINISHED" });
+
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
 });
