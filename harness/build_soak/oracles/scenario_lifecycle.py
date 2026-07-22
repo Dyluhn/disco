@@ -114,6 +114,7 @@ class ContextPressureOracle:
             return [skipping(_CONTEXT, reason="no context-pressure assertion")]
         path = str(config.get("path") or "")
         min_offsets = int(config.get("min_distinct_offsets", 2))
+        max_reads_per_offset = int(config.get("max_reads_per_offset", 2))
         require_compaction = config.get("require_compaction") is True
 
         reads: list[tuple[int, str]] = []
@@ -148,16 +149,22 @@ class ContextPressureOracle:
                 range_hints += 1
 
         offsets = sorted({offset for _seq, offset in reads})
+        offset_counts = {
+            offset: sum(1 for _seq, seen in reads if seen == offset) for offset in offsets
+        }
         compactions = sum(1 for event in events if event.get("kind") == "condensation")
         ok = (
             len(offsets) >= min_offsets
             and range_hints >= 1
+            and all(count <= max_reads_per_offset for count in offset_counts.values())
             and (not require_compaction or compactions >= 1)
         )
         facts = {
             "path": path,
             "read_count": len(reads),
             "distinct_offsets": offsets,
+            "offset_counts": offset_counts,
+            "max_reads_per_offset": max_reads_per_offset,
             "range_hint_count": range_hints,
             "compaction_count": compactions,
             "required_compaction": require_compaction,

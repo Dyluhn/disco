@@ -278,6 +278,8 @@ class ContractOracle:
                 or not context_pressure.get("path")
                 or type(context_pressure.get("min_distinct_offsets", 2)) is not int
                 or int(context_pressure.get("min_distinct_offsets", 2)) < 2
+                or type(context_pressure.get("max_reads_per_offset", 2)) is not int
+                or int(context_pressure.get("max_reads_per_offset", 2)) < 1
                 or type(context_pressure.get("require_compaction")) is not bool
             ):
                 return [
@@ -288,7 +290,7 @@ class ContractOracle:
                         facts={
                             "reason": (
                                 "context_pressure requires path, min_distinct_offsets >= 2, "
-                                "and boolean require_compaction"
+                                "max_reads_per_offset >= 1, and boolean require_compaction"
                             )
                         },
                     )

@@ -121,6 +121,7 @@ def test_context_pressure_requires_distinct_ranges_hint_and_compaction() -> None
             "context_pressure": {
                 "path": "catalog.txt",
                 "min_distinct_offsets": 2,
+                "max_reads_per_offset": 2,
                 "require_compaction": True,
             }
         }
@@ -144,3 +145,26 @@ def test_context_pressure_missing_compaction_fails() -> None:
         _context_events(compacted=False), scenario=scenario
     )[0]
     assert result.code == "CONTEXT_PRESSURE_NOT_OBSERVED"
+
+
+def test_context_pressure_rejects_silent_reread_churn() -> None:
+    events = _context_events()
+    events.insert(2, {**events[0], "seq": 21})
+    events.insert(3, {**events[1], "seq": 22})
+
+    result = ContextPressureOracle().check(
+        events,
+        scenario={
+            "assertions": {
+                "context_pressure": {
+                    "path": "catalog.txt",
+                    "min_distinct_offsets": 2,
+                    "max_reads_per_offset": 1,
+                    "require_compaction": True,
+                }
+            }
+        },
+    )[0]
+
+    assert result.code == "CONTEXT_PRESSURE_NOT_OBSERVED"
+    assert result.facts["offset_counts"]["0"] == 2

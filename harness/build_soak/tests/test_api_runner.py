@@ -43,6 +43,7 @@ from harness.build_soak.classify import (
 )
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
 from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
+from harness.build_soak.oracles.contract import ContractOracle
 from harness.build_soak.oracles.thrash import ThrashOracle
 from harness.build_soak.run import (
     _driver_catalog_contains,
@@ -495,6 +496,37 @@ def test_scenarios_yaml_parses_all_15_scenarios():
         "must_contain": ["Live Server Up"],
     }
     assert devserver["assertions"]["browser_verification"]["required"] is True
+
+
+def test_phase4_counted_scenarios_are_frozen_and_contract_valid() -> None:
+    path = Path(__file__).resolve().parents[1] / "scenarios_phase4.yaml"
+    scenarios = load_scenarios(path)
+
+    assert len(scenarios) == 23
+    assert sum(scenario.get("appkit") is True for scenario in scenarios.values()) == 5
+    assert {
+        "p4_ff_static_basic",
+        "p4_ff_react_basic",
+        "p4_ff_node_basic",
+        "p4_ff_python_basic",
+        "p4_ff_import_basic",
+        "p4_ff_context_catalog",
+        "p4_appkit_create",
+        "p4_appkit_restart",
+    } <= set(scenarios)
+
+    evidence = {
+        "events",
+        "workspace",
+        "preview",
+        "tool_scope",
+        "product_evidence",
+        "browser_verification",
+    }
+    for scenario_id, scenario in scenarios.items():
+        result = ContractOracle().check(scenario, available_evidence=evidence)[0]
+        assert result.passed, (scenario_id, result.to_dict())
+        assert "{{seed}}" in json.dumps(scenario)
 
 
 def test_live_thrash_monitor_confirms_repeated_model_repair(tmp_path):
