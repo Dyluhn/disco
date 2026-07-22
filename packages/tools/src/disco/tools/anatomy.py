@@ -101,6 +101,10 @@ class ToolContext(BaseModel):
         pattern=r"^[0-9a-f]{32}$",
     )
     browser_lane: Literal["agent", "host_verifier"] = "agent"
+    # Host-only evidence request.  A configured independent verifier may need
+    # screenshot bytes even when the driving model is text-only.  Capturing the
+    # bytes is provenance, not proof that any model inspected their contents.
+    browser_capture_screenshot_b64: bool = False
     # WO-C1: the NARROW host-owned release-intent writer. The runtime injects a
     # closure that resolves the ACTIVE configured ProjectStore at INVOCATION time and
     # persists ONE conversation's typed intent under it (fail-closed on invalid root /

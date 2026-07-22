@@ -12,8 +12,15 @@ import asyncio
 import pytest
 from disco.agent_server.verify.host import HostWebAppVerifier
 from disco.core.loop import HostVerificationDeliverable
+from disco.core.verification import (
+    HostVerificationClaim,
+    PreviewSelectionIdentity,
+    VerificationClaimKind,
+    default_structured_web_claims,
+)
 from disco.tools import ToolContext, ToolOutcome
 from disco.tools.builtin.browser import BrowserTool
+from disco.tools.builtin.preview import PreviewStatusTool
 from disco.tools.builtin.verify_app import VerifyWebAppTool
 
 
@@ -46,6 +53,165 @@ def _deliverable() -> HostVerificationDeliverable:
     )
 
 
+def _preview_selection() -> PreviewSelectionIdentity:
+    return PreviewSelectionIdentity(
+        projection_id="pv_" + "1" * 32,
+        session_name="static-site",
+        port=8123,
+        url="http://127.0.0.1:8123/",
+        launch_kind="static",
+        intent_digest="2" * 64,
+        sandbox_instance_id="sandbox-a",
+        sandbox_generation=3,
+        static_serve_dir=".",
+        source_action_id="evt-preview-action",
+        source_action_seq=2,
+        source_observation_id="evt-preview-observation",
+        source_observation_seq=3,
+    )
+
+
+def _preview_status(selection: PreviewSelectionIdentity) -> dict[str, object]:
+    return {
+        "projection_id": selection.projection_id,
+        "name": selection.session_name,
+        "port": selection.port,
+        "url": selection.url,
+        "launch_kind": selection.launch_kind,
+        "intent_digest": selection.intent_digest,
+        "sandbox_instance_id": selection.sandbox_instance_id,
+        "sandbox_generation": selection.sandbox_generation,
+        "status": "running",
+    }
+
+
+@pytest.mark.asyncio
+async def test_game_host_lowers_exact_interaction_probe_without_vision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _preview_selection()
+    interaction = HostVerificationClaim(
+        claim_id="web.interaction:canvas-keyboard-smoke",
+        kind=VerificationClaimKind.INTERACTION,
+        expected=(
+            "host browser completed canvas click, Space, ArrowRight, and post-interaction capture"
+        ),
+        source_authority="target.game.functional_interaction@1",
+    )
+    deliverable = _deliverable().model_copy(
+        update={
+            "verification_medium": "game",
+            "preview_selection": selection,
+            "preview_binding_required": True,
+            "required_claims": (*default_structured_web_claims(), interaction),
+        }
+    )
+    observed_medium: list[str] = []
+
+    async def status_run(self, args, ctx):  # noqa: ANN001
+        del self, args, ctx
+        return ToolOutcome(
+            success=True,
+            content="running",
+            structured={"previews": [_preview_status(selection)]},
+        )
+
+    async def verify_run(self, args, ctx):  # noqa: ANN001
+        del self
+        observed_medium.append(args.medium)
+        assert args.url == "http://127.0.0.1:8123/site"
+        assert ctx.browser_capture_screenshot_b64 is False
+        steps = [
+            {"action": "click", "success": True},
+            {"action": "press", "key": "Space", "success": True},
+            {"action": "press", "key": "ArrowRight", "success": True},
+            {"action": "screenshot", "success": True},
+        ]
+        return ToolOutcome(
+            success=True,
+            content="pass",
+            structured={
+                "passed": True,
+                "verdict": "pass",
+                "url": args.url,
+                "http_status": 200,
+                "meaningful_content": True,
+                "rendered_text": "Canvas game",
+                "console_errors": [],
+                "network_failures": [],
+                "game_interaction": {
+                    "before_screenshot_path": ".pmx/screenshots/before.png",
+                    "after_screenshot_path": ".pmx/screenshots/after.png",
+                    "steps": steps,
+                },
+            },
+        )
+
+    async def close_lane(self, ctx):  # noqa: ANN001
+        del self, ctx
+        return True
+
+    monkeypatch.setattr(PreviewStatusTool, "run", status_run)
+    monkeypatch.setattr(VerifyWebAppTool, "run", verify_run)
+    monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", close_lane)
+
+    verdict = await HostWebAppVerifier(_Executor()).verify(deliverable)
+
+    assert observed_medium == ["game"]
+    result = verdict["verification_result"]
+    assert result["status"] == "pass"
+    interaction_result = next(
+        claim for claim in result["claim_results"] if claim["claim_id"] == interaction.claim_id
+    )
+    assert interaction_result["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_changed_live_preview_projection_fails_before_browser_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _preview_selection()
+    deliverable = _deliverable().model_copy(
+        update={"preview_selection": selection, "preview_binding_required": True}
+    )
+    browser_calls = 0
+
+    async def status_run(self, args, ctx):  # noqa: ANN001
+        del self, args, ctx
+        changed = _preview_status(selection)
+        changed["projection_id"] = "pv_" + "9" * 32
+        return ToolOutcome(
+            success=True,
+            content="running",
+            structured={"previews": [changed]},
+        )
+
+    async def verify_run(self, args, ctx):  # noqa: ANN001
+        nonlocal browser_calls
+        del self, args, ctx
+        browser_calls += 1
+        raise AssertionError("foreign preview must not be probed")
+
+    async def close_lane(self, ctx):  # noqa: ANN001
+        del self, ctx
+        return True
+
+    monkeypatch.setattr(PreviewStatusTool, "run", status_run)
+    monkeypatch.setattr(VerifyWebAppTool, "run", verify_run)
+    monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", close_lane)
+
+    verdict = await HostWebAppVerifier(_Executor()).verify(deliverable)
+
+    assert browser_calls == 0
+    assert verdict["verdict"] == "fail"
+    artifact = next(
+        claim
+        for claim in verdict["verification_result"]["claim_results"]
+        if claim["kind"] == "artifact_identity"
+    )
+    assert artifact["status"] == "fail"
+
+
 @pytest.mark.asyncio
 async def test_host_verifier_uses_only_fixed_serial_lane_and_closes_it(
     monkeypatch: pytest.MonkeyPatch,
@@ -54,13 +220,20 @@ async def test_host_verifier_uses_only_fixed_serial_lane_and_closes_it(
     verifier = HostWebAppVerifier(executor)
     active = 0
     maximum_active = 0
-    lanes: list[tuple[str, int | None, str]] = []
+    lanes: list[tuple[str, int | None, str, bool]] = []
     closed: list[str] = []
 
     async def verify_run(self, args, ctx):  # noqa: ANN001
         nonlocal active, maximum_active
         del self, args
-        lanes.append((ctx.browser_lane, ctx.browser_workspace_epoch, ctx.browser_generation))
+        lanes.append(
+            (
+                ctx.browser_lane,
+                ctx.browser_workspace_epoch,
+                ctx.browser_generation,
+                ctx.browser_capture_screenshot_b64,
+            )
+        )
         active += 1
         maximum_active = max(maximum_active, active)
         await asyncio.sleep(0.01)
@@ -86,12 +259,46 @@ async def test_host_verifier_uses_only_fixed_serial_lane_and_closes_it(
     assert first["passed"] is True and second["passed"] is True
     assert maximum_active == 1
     assert lanes == [
-        ("host_verifier", 4, "a" * 32),
-        ("host_verifier", 4, "a" * 32),
+        ("host_verifier", 4, "a" * 32, False),
+        ("host_verifier", 4, "a" * 32, False),
     ]
     assert closed == ["host_verifier", "host_verifier"]
     # model_copy derives the host lane; the executor's canonical contexts stay agent-owned.
     assert [ctx.browser_lane for ctx in executor.contexts] == ["agent", "agent"]
+
+
+@pytest.mark.asyncio
+async def test_visual_claim_requests_pixels_from_host_lane_not_driver_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = HostWebAppVerifier(_Executor())
+    observed: list[bool] = []
+    visual = HostVerificationClaim(
+        claim_id="web.visual:reference",
+        kind=VerificationClaimKind.VISUAL_SEMANTIC,
+        expected="reference_image_sha256:" + "a" * 64,
+        source_authority="user_event:evt-reference:image:0",
+    )
+
+    async def verify_run(self, args, ctx):  # noqa: ANN001
+        del self, args
+        observed.append(ctx.browser_capture_screenshot_b64)
+        return ToolOutcome(
+            success=True,
+            content="unavailable until independent judge",
+            structured={"passed": True, "verdict": "pass"},
+        )
+
+    async def close_lane(self, ctx):  # noqa: ANN001
+        del self, ctx
+        return True
+
+    monkeypatch.setattr(VerifyWebAppTool, "run", verify_run)
+    monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", close_lane)
+
+    await verifier.verify(_deliverable().model_copy(update={"required_claims": (visual,)}))
+
+    assert observed == [True]
 
 
 @pytest.mark.asyncio
@@ -144,7 +351,9 @@ async def test_lane_cleanup_failure_does_not_replace_host_verdict(
     monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", broken_close)
 
     verdict = await verifier.verify(_deliverable())
-    assert verdict == {"passed": True, "verdict": "pass"}
+    assert verdict["passed"] is True
+    assert verdict["verdict"] == "pass"
+    assert verdict["verification_result"]["verifier_id"] == "host.verify_web_app@1"
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from disco.core import (
     FileStreamFrame,
     WSClientFrame,
     WSServerFrame,
+    active_verification_requirements_event,
 )
 from disco.core.appkit import classify_build_brief
 from disco.core.selection_edit import (
@@ -85,9 +86,9 @@ async def _handle_frame(
         # the WS is one of them (the easy-to-miss kick site). Refuse, don't kick.
         await _send_json_redacted(
             websocket,
-            WSServerFrame(
-                type="error", error={"detail": "imported_read_only"}
-            ).model_dump(mode="json"),
+            WSServerFrame(type="error", error={"detail": "imported_read_only"}).model_dump(
+                mode="json"
+            ),
         )
     elif frame.type == "send_message" and frame.content is not None:
         brief = classify_build_brief(frame.content) if frame.build_brief is not None else None
@@ -100,15 +101,38 @@ async def _handle_frame(
         # context+user append + kick. (No runtime ⇒ append only, unchanged.)
         if runtime is not None:
             await runtime.send_user_turn(
-                conversation_id, frame.content, context=frame.context, build_brief=brief
+                conversation_id,
+                frame.content,
+                context=frame.context,
+                build_brief=brief,
+                verification_requirements=frame.verification_requirements,
             )
         else:
+            if frame.verification_requirements is not None:
+                active = active_verification_requirements_event(
+                    await store.get_events(conversation_id)
+                )
+                expected = active.id if active is not None else None
+                if frame.verification_requirements.supersedes_event_id != expected:
+                    await _send_json_redacted(
+                        websocket,
+                        WSServerFrame(
+                            type="error",
+                            error={"detail": "stale_verification_requirements"},
+                        ).model_dump(mode="json"),
+                    )
+                    return
             pending = []
             if frame.context:
                 pending.append(_context_message(frame.context))
             if brief is not None:
                 pending.append(_build_brief_message(brief))
-            pending.append(_user_message(frame.content))
+            pending.append(
+                _user_message(
+                    frame.content,
+                    verification_requirements=frame.verification_requirements,
+                )
+            )
             await store.append_many(conversation_id, pending)
     elif frame.type == "steer" and frame.steer_text is not None:
         # D3: when a DR run is in flight for this cid, route the steer into the
@@ -343,9 +367,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
         stream = await store.subscribe(conversation_id, after_seq=last_seq)
         eph_stream = await store.subscribe_ephemeral(conversation_id)
 
-        sender = asyncio.create_task(
-            _pump_conversation_events(websocket, stream, projection)
-        )
+        sender = asyncio.create_task(_pump_conversation_events(websocket, stream, projection))
         eph_sender = asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream))
         try:
             while True:

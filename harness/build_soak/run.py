@@ -967,14 +967,19 @@ async def drive_scenario(
     lifecycle = scenario.get("lifecycle") or {}
     if not isinstance(lifecycle, dict):
         raise ValueError("lifecycle must be an object")
-    cid = await client.create_build_conversation(
-        prompt,
-        model=model,
-        autonomous=autonomous,
-        appkit=appkit,
-        surface=surface,
-        import_fixture=import_fixture,
-    )
+    verification_requirements = scenario.get("verification_requirements")
+    if verification_requirements is not None and not isinstance(verification_requirements, dict):
+        raise ValueError("verification_requirements must be an object")
+    create_options: dict[str, Any] = {
+        "model": model,
+        "autonomous": autonomous,
+        "appkit": appkit,
+        "surface": surface,
+        "import_fixture": import_fixture,
+    }
+    if verification_requirements is not None:
+        create_options["verification_requirements"] = verification_requirements
+    cid = await client.create_build_conversation(prompt, **create_options)
     timeline.append(
         f"created {surface} conversation {cid} (autonomous={autonomous}, appkit={appkit})"
     )

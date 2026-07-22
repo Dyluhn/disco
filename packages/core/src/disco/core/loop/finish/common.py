@@ -16,6 +16,8 @@ in-collaborator).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import posixpath
 import re
@@ -58,9 +60,21 @@ from ...events import (
     VerifierShadowEvent,
     VerifierStartedEvent,
     VerifierVerdictEvent,
+    current_build_platform_admission,
+    current_workspace_agent_view_id,
+    latest_workspace_run_intent,
 )
 from ...llm import OperatingMode
 from ...state import ConversationState
+from ...verification import (
+    HostVerificationClaim,
+    HostVerificationResult,
+    VerificationClaimKind,
+    VerificationClaimStatus,
+    VerifierReferenceImage,
+    apply_semantic_verifier_result,
+    default_structured_web_claims,
+)
 from ...view import effective_plan_progress
 from .. import signals
 from ..boundaries import (
@@ -121,6 +135,11 @@ def _appkit_scope_active(loop: AgentLoop) -> bool:
     executor = getattr(loop, "executor", None)
     if executor is None:
         return False
+    # The phase object persists even while the strict verifier is temporarily
+    # hidden from an earlier AppKit phase's tool allowlist.  Generic web PASS
+    # must never delegate around the strict AppKit floor in that window.
+    if getattr(executor, "appkit_phase", None) is not None:
+        return True
     try:
         return any(
             getattr(tool, "name", None) == "verify_appkit_app"

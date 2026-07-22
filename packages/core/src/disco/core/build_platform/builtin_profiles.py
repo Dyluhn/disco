@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..verification import default_structured_web_claims
 from .builtin_inputs import builtin_input_catalog
 from .compiler import ModuleBody, PromptContextInputs, ToolDescriptor
 from .contracts import (
@@ -227,6 +228,7 @@ class _LegacyWebTarget:
                             operation="host.verify_deliverable",
                             required_capabilities=frozenset({"workspace.read"}),
                         ),
+                        claims=default_structured_web_claims(),
                     ),
                 )
             ),

@@ -79,10 +79,10 @@ def test_verdict_vision_on_seeds_screenshot_and_checklist():
     assert v["passed"] is True and v["verdict"] == "pass"
 
 
-def test_verdict_vision_off_is_byte_identical_and_lean():
+def test_verdict_vision_off_is_lean_and_carries_structured_claim_evidence():
     """H1: without screenshot_b64 (no-vision model), the verdict carries NO
     screenshot_b64 key, vision.used stays False, and the structured verdict is
-    byte-identical to today's for the same inputs (no behavior change)."""
+    still carries no pixels while retaining bounded DOM/freshness evidence."""
     kwargs = dict(
         url="http://127.0.0.1:8000/",
         reachable=True,
@@ -93,8 +93,7 @@ def test_verdict_vision_off_is_byte_identical_and_lean():
     v = compute_verdict(**kwargs)  # type: ignore[arg-type]
     assert "screenshot_b64" not in v
     assert v["vision"] == {"used": False, "passed": None, "notes": []}
-    # The verdict schema is exactly the pre-change key set — no new keys leak in
-    # when vision is off (proves the additive path is inert / no behavior change).
+    # Claim evidence is structured and text-only; screenshot bytes remain absent.
     assert set(v.keys()) == {
         "passed",
         "verdict",
@@ -109,6 +108,8 @@ def test_verdict_vision_off_is_byte_identical_and_lean():
         "console_warnings",
         "network_failures",
         "screenshot_path",
+        "rendered_text",
+        "freshness",
         "vision",
         "failure_fingerprint",
         "summary",

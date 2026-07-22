@@ -15,6 +15,7 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    active_verification_requirements_event,
 )
 from disco.core.appkit import classify_build_brief
 from disco.core.flags import appkit_enabled
@@ -361,12 +362,32 @@ def make_conversations_router(
         _reject_if_imported(store, conversation_id)
         brief = classify_build_brief(body.content) if body.build_brief is not None else None
         if runtime is not None:
-            stored = await runtime.send_user_turn(conversation_id, body.content, build_brief=brief)
+            stored = await runtime.send_user_turn(
+                conversation_id,
+                body.content,
+                build_brief=brief,
+                verification_requirements=body.verification_requirements,
+            )
         else:
+            if body.verification_requirements is not None:
+                active = active_verification_requirements_event(
+                    await store.get_events(conversation_id)
+                )
+                expected = active.id if active is not None else None
+                if body.verification_requirements.supersedes_event_id != expected:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="stale_verification_requirements",
+                    )
             pending = []
             if brief is not None:
                 pending.append(_build_brief_message(brief))
-            pending.append(_user_message(body.content))
+            pending.append(
+                _user_message(
+                    body.content,
+                    verification_requirements=body.verification_requirements,
+                )
+            )
             stored = (await store.append_many(conversation_id, pending))[-1]
         return {"event_id": stored.id, "seq": stored.seq}
 

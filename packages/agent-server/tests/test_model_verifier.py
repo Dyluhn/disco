@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 
 import pytest
@@ -17,8 +19,13 @@ from disco.core.llm import (
     Requirement,
     TokenUsage,
 )
-from disco.core.loop import VerifierContextSeed, VerifierScreenshot
+from disco.core.loop import VerifierContextSeed, VerifierReferenceImage, VerifierScreenshot
 from disco.core.verify_medium import detect_html_medium
+
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+_PNG_URL = "data:image/png;base64," + base64.b64encode(_PNG).decode("ascii")
 
 
 class _Router:
@@ -82,7 +89,19 @@ async def test_model_verifier_uses_verifier_role_and_seed_only() -> None:
         check_results={"passed": True, "summary": "checks passed"},
         screenshot=VerifierScreenshot(
             path=".pmx/screenshots/0001.png",
-            image_data_url="data:image/png;base64,abc123",
+            image_data_url=_PNG_URL,
+        ),
+        reference_images=(
+            VerifierReferenceImage(
+                source_event_id="evt-user-reference",
+                source_index=0,
+                sha256=hashlib.sha256(_PNG).hexdigest(),
+                media_type="image/png",
+                instruction="Match this reference.",
+                instruction_sha256=hashlib.sha256(b"Match this reference.").hexdigest(),
+                instruction_complete=True,
+                image_data_url=_PNG_URL,
+            ),
         ),
     )
 
@@ -94,14 +113,25 @@ async def test_model_verifier_uses_verifier_role_and_seed_only() -> None:
     req = router.requests[0]
     assert req.profile.role is ModelRole.VERIFIER
     assert Requirement.JSON_MODE in req.profile.requirements
+    assert Requirement.VISION in req.profile.requirements
     assert req.response_format == "json"
     assert req.tools is None
     assert req.messages[0].role == "system"
     assert req.messages[1].role == "user"
-    assert req.messages[1].images == ["data:image/png;base64,abc123"]
+    assert req.messages[1].images == [
+        _PNG_URL,
+        _PNG_URL,
+    ]
 
     payload = json.loads(req.messages[1].content)
-    assert set(payload) == {"contract", "deliverable_paths", "check_results", "screenshot"}
+    assert set(payload) == {
+        "contract",
+        "deliverable_paths",
+        "check_results",
+        "screenshot",
+        "reference_images",
+        "claims",
+    }
     assert payload["contract"] == {"kind": "static.site"}
     assert payload["deliverable_paths"] == ["index.html"]
     assert payload["check_results"] == {"passed": True, "summary": "checks passed"}
@@ -110,6 +140,19 @@ async def test_model_verifier_uses_verifier_role_and_seed_only() -> None:
         "image_attached": True,
         "image_data_url": "[attached as message image]",
     }
+    assert payload["reference_images"] == [
+        {
+            "source_event_id": "evt-user-reference",
+            "source_index": 0,
+            "sha256": hashlib.sha256(_PNG).hexdigest(),
+            "media_type": "image/png",
+            "instruction": "Match this reference.",
+            "instruction_sha256": hashlib.sha256(b"Match this reference.").hexdigest(),
+            "instruction_complete": True,
+            "image_attached": True,
+            "image_data_url": "[attached as message image]",
+        }
+    ]
 
 
 @pytest.mark.asyncio

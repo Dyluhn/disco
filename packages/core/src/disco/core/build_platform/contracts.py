@@ -14,6 +14,8 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..verification import HostVerificationClaim
+
 _ID_PART = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 _VERSION = re.compile(r"^[1-9][0-9]*(?:\.[0-9]+){0,2}$")
 _OPEN_NAME = re.compile(r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$")
@@ -215,6 +217,7 @@ class VerifierCheck(FrozenModel):
     check_id: str = Field(min_length=1, max_length=128)
     intent: ComponentIntent
     required: bool = True
+    claims: tuple[HostVerificationClaim, ...] = ()
 
 
 class VerifierPolicy(FrozenModel):
@@ -233,6 +236,9 @@ class VerifierPlan(FrozenModel):
         ids = [check.check_id for check in value]
         if len(ids) != len(set(ids)):
             raise ValueError("verifier check ids must be unique")
+        claim_ids = [claim.claim_id for check in value for claim in check.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("verifier claim ids must be unique across checks")
         return value
 
 

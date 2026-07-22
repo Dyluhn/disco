@@ -6,6 +6,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import cast
 
+from ...events import active_verification_requirements_event
+from ...verification import PreviewSelectionIdentity, validated_image_data_url
 from ...verify_medium import (
     VerifierMediumHint,
     detect_html_medium,
@@ -57,6 +59,10 @@ _MODEL_VERIFIER_META_KEYS = (
     "model_verifier_cause",
 )
 _HOST_VERDICT_SCREENSHOT_PATH_MAX_CHARS = 512
+_GAME_INTERACTION_CLAIM_ID = "web.interaction:canvas-keyboard-smoke"
+_GAME_INTERACTION_EXPECTED = (
+    "host browser completed canvas click, Space, ArrowRight, and post-interaction capture"
+)
 _SAFE_MODEL_VERIFIER_CAUSE_RE = re.compile(
     r"(?:"
     r"model verifier unavailable \("
@@ -102,17 +108,376 @@ def _bounded_host_verdict_screenshot_path(value: object) -> str | None:
     return path
 
 
-def _model_verifier_fallback(base: dict[str, Any], *, status: str, cause: object) -> dict[str, Any]:
-    out = dict(base)
-    out.update(
-        {
-            "model_verifier": True,
-            "model_verifier_status": status,
-            "model_verifier_applied": False,
-            "model_verifier_cause": _bounded_model_verifier_cause(cause),
+def _host_verification_claims(
+    contract: dict[str, Any],
+    events: list[Event],
+) -> tuple[HostVerificationClaim, ...]:
+    admission = current_build_platform_admission(events)
+    claims = list(
+        admission.verification_claims
+        if admission is not None and admission.verification_claims
+        else default_structured_web_claims()
+    )
+    for condition in dictated_content_conditions_from_events(events):
+        digest = hashlib.sha256(condition.literal.encode("utf-8")).hexdigest()[:24]
+        claims.append(
+            HostVerificationClaim(
+                claim_id=f"web.visible_text:{digest}",
+                kind=VerificationClaimKind.VISIBLE_TEXT,
+                expected=condition.literal,
+                source_authority=f"user_event:{condition.source_event_id}",
+            )
+        )
+    requested_claims, _ = _user_verification_material(events)
+    claims.extend(requested_claims)
+    if contract:
+        claims.append(
+            HostVerificationClaim(
+                claim_id="web.contract_semantic",
+                kind=VerificationClaimKind.CONTRACT_SEMANTIC,
+                expected=hashlib.sha256(
+                    json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                source_authority="registered_build_contract@1",
+            )
+        )
+    return tuple(claims)
+
+
+def _user_verification_material(
+    events: list[Event],
+) -> tuple[tuple[HostVerificationClaim, ...], tuple[VerifierReferenceImage, ...]]:
+    """Fold the current explicit user/scenario requirement snapshot.
+
+    Ordinary user images never imply visual inspection. A replacement is active
+    only when it causally names the prior directive event; malformed replay
+    retains the prior stricter snapshot rather than weakening it.
+    """
+
+    event = active_verification_requirements_event(events)
+    if event is None or event.verification_requirements is None:
+        return (), ()
+    directive = event.verification_requirements
+    claims: tuple[HostVerificationClaim, ...] = ()
+    references: tuple[VerifierReferenceImage, ...] = ()
+    if event is not None:
+        raw_instruction = event.message.content or ""
+        instruction_complete = len(raw_instruction) <= 8192
+        instruction = raw_instruction if instruction_complete else ""
+        instruction_digest = hashlib.sha256(raw_instruction.encode()).hexdigest()
+        next_references: list[VerifierReferenceImage] = []
+        image_identities: dict[int, tuple[str, str]] = {}
+        for index, image in enumerate(directive.reference_images):
+            valid = validated_image_data_url(image)
+            if valid is None:
+                continue
+            media_type, digest = valid
+            image_identities[index] = valid
+            next_references.append(
+                VerifierReferenceImage(
+                    source_event_id=event.id,
+                    source_index=index,
+                    sha256=digest,
+                    media_type=media_type,
+                    instruction=instruction,
+                    instruction_sha256=instruction_digest,
+                    instruction_complete=instruction_complete,
+                    image_data_url=image,
+                )
+            )
+        next_claims: list[HostVerificationClaim] = []
+        for requested in directive.claims:
+            reference = (
+                image_identities.get(requested.reference_image_index)
+                if requested.reference_image_index is not None
+                else None
+            )
+            next_claims.append(
+                HostVerificationClaim(
+                    claim_id=requested.claim_id,
+                    kind=requested.kind,
+                    required=requested.required,
+                    expected=requested.expected,
+                    source_authority=f"user_event:{event.id}",
+                    reference_image_sha256=(reference[1] if reference is not None else None),
+                )
+            )
+        claims = tuple(next_claims)
+        references = tuple(next_references)
+    return claims, references
+
+
+def _preview_selection_at(
+    events: list[Event],
+    *,
+    through_seq: int,
+) -> PreviewSelectionIdentity | None:
+    """Fold the exact host-observed preview selected through one event sequence."""
+
+    actions: dict[str, ActionEvent] = {}
+    active: dict[str, tuple[int, PreviewSelectionIdentity]] = {}
+    ordered = sorted(
+        (event for event in events if type(event.seq) is int and (event.seq or 0) <= through_seq),
+        key=lambda event: event.seq or -1,
+    )
+    for event in ordered:
+        if isinstance(event, ActionEvent):
+            actions[event.id] = event
+            continue
+        if not isinstance(event, ObservationEvent):
+            continue
+        result = event.tool_result
+        if result.tool_name == "preview_start" and result.success is True:
+            action = actions.get(event.action_id or "")
+            structured = result.structured
+            if (
+                action is None
+                or action.tool_call.tool_name != "preview_start"
+                or result.call_id != action.tool_call.call_id
+                or event.action_id != action.id
+                or not isinstance(structured, dict)
+                or structured.get("status") not in {"running", "unavailable"}
+                or type(action.seq) is not int
+                or type(event.seq) is not int
+            ):
+                active.clear()
+                continue
+            identity = PreviewSelectionIdentity.from_structured(
+                action_id=action.id,
+                action_seq=action.seq,
+                observation_id=event.id,
+                observation_seq=event.seq,
+                structured=structured,
+            )
+            if identity is None:
+                active.clear()
+                continue
+            active[identity.session_name] = (event.seq, identity)
+            continue
+        if result.tool_name == "preview_stop" and result.success is True:
+            stopped = (
+                result.structured.get("stopped") if isinstance(result.structured, dict) else None
+            )
+            if not isinstance(stopped, list) or not all(
+                isinstance(name, str) and name for name in stopped
+            ):
+                active.clear()
+                continue
+            for name in stopped:
+                active.pop(name, None)
+    return max(active.values(), key=lambda item: item[0])[1] if active else None
+
+
+def _bind_host_verification_authority(
+    gate: Any,
+    deliverable: HostVerificationDeliverable,
+    events: list[Event],
+) -> HostVerificationDeliverable:
+    admission = current_build_platform_admission(events)
+    intent = latest_workspace_run_intent(events)
+    handoff = _latest_deliverable_event(events)
+    executor = getattr(gate._loop, "executor", None)
+    generation = str(getattr(executor, "_browser_generation", "") or "")
+    raw_epoch = getattr(executor, "_workspace_mutation_epoch", None)
+    epoch = raw_epoch if isinstance(raw_epoch, int) and raw_epoch > 0 else None
+    max_seq = max((event.seq or 0 for event in events), default=0)
+    handoff_selection = (
+        _preview_selection_at(events, through_seq=handoff.seq)
+        if handoff is not None and type(handoff.seq) is int
+        else None
+    )
+    current_selection = _preview_selection_at(events, through_seq=max_seq)
+    stable_selection = (
+        current_selection
+        if handoff_selection is None
+        else handoff_selection
+        if current_selection is not None
+        and handoff_selection.operational_identity == current_selection.operational_identity
+        else None
+    )
+    return deliverable.model_copy(
+        update={
+            "run_intent_id": (
+                admission.run_intent_id
+                if admission is not None
+                else intent.id
+                if intent is not None
+                else None
+            ),
+            "run_identity": admission.run_identity if admission is not None else None,
+            "agent_view_id": current_workspace_agent_view_id(events),
+            "deliverable_event_id": handoff.id if handoff is not None else None,
+            "workspace_revision": _last_productive_seq(events),
+            "workspace_generation": generation,
+            "workspace_epoch": epoch,
+            "observed_after_seq": max_seq,
+            "required_claims": (
+                _host_verification_claims(gate._verifier_contract_payload(), events)
+                if deliverable.artifact_kind == "app"
+                else ()
+            ),
+            "preview_selection": stable_selection,
+            "preview_binding_required": (
+                deliverable.artifact_kind == "app"
+                and (
+                    admission is not None
+                    or handoff_selection is not None
+                    or current_selection is not None
+                )
+            ),
         }
     )
-    return out
+
+
+def _typed_host_result(
+    verdict: dict[str, Any],
+    deliverable: HostVerificationDeliverable,
+) -> HostVerificationResult | None:
+    raw = verdict.get("verification_result")
+    try:
+        result = (
+            raw
+            if isinstance(raw, HostVerificationResult)
+            else HostVerificationResult.model_validate(raw)
+        )
+    except Exception:
+        return None
+    return (
+        result
+        if result.is_current_for(
+            deliverable,
+            observed_url=str(verdict.get("url") or ""),
+        )
+        else None
+    )
+
+
+async def _prepare_typed_host_verdict(
+    gate: Any,
+    deliverable: HostVerificationDeliverable,
+    events: list[Event],
+    host_verdict: dict[str, Any],
+) -> tuple[dict[str, Any], HostVerificationResult | None, bool]:
+    host_verdict = await gate._model_judged_verdict(deliverable, events, host_verdict)
+    browser_unavailable = bool(
+        host_verdict.get("browser_unavailable") is True
+        or host_verdict.get("failure_fingerprint") == "browser_unavailable"
+        or (
+            gate._verdict_label(host_verdict) == "unverifiable"
+            and host_verdict.get("model_verifier_applied") is not True
+        )
+    )
+    typed_result = (
+        _typed_host_result(host_verdict, deliverable)
+        if deliverable.artifact_kind == "app"
+        else None
+    )
+    if deliverable.artifact_kind == "app" and typed_result is None:
+        host_verdict = gate._host_unavailable_verdict(
+            deliverable,
+            "verification could not run: host verifier omitted or mismatched "
+            "the typed authority/claim receipt.",
+        )
+    if typed_result is not None:
+        host_verdict["passed"] = typed_result.passed
+        host_verdict["verdict"] = typed_result.status.value
+        host_verdict["summary"] = typed_result.reason
+    return host_verdict, typed_result, browser_unavailable
+
+
+async def _emit_browser_unavailable_release(loop: Any) -> Disp:
+    await loop._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_release"))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content=(
+                    "⚠ Finished WITHOUT browser-render verification — the host verifier "
+                    "reported the structured browser claims unavailable. The deliverable "
+                    "is UNVERIFIED and may be INCOMPLETE; do not report it as a verified pass."
+                ),
+            ),
+        )
+    )
+    loop._browser_verify_refusals = 0
+    return Disp.FALLTHROUGH
+
+
+async def _emit_host_verdict_audit(
+    gate: Any,
+    deliverable: HostVerificationDeliverable,
+    events: list[Event],
+    host_verdict: dict[str, Any],
+    typed_result: HostVerificationResult | None,
+    host_screenshot_path: str | None,
+) -> str | None:
+    inline_verdict = _latest_verify_verdict(
+        events,
+        _last_productive_seq(events),
+        target_url=None,
+        tool_name=gate._active_verify_tool() or "verify_web_app",
+    )
+    host_label = gate._verdict_label(host_verdict)
+    inline_label = gate._verdict_label(inline_verdict)
+    agreement = (
+        host_label == inline_label if host_label is not None and inline_label is not None else None
+    )
+    detail = str(host_verdict.get("summary") or host_verdict.get("detail") or "")
+    startup_diagnostic = str(host_verdict.get("startup_diagnostic") or "").strip()
+    if startup_diagnostic:
+        startup_diagnostic = "".join(
+            char for char in startup_diagnostic if char in "\n\t" or ord(char) >= 32
+        )
+        startup_diagnostic = _STARTUP_DIAGNOSTIC_SECRET_RE.sub("<redacted>", startup_diagnostic)[
+            :1280
+        ]
+        detail = (
+            f"{detail}\nBrowser startup diagnostic: {startup_diagnostic}"
+            if detail
+            else f"Browser startup diagnostic: {startup_diagnostic}"
+        )
+
+    verifier_meta: dict[str, Any] = {"requested_verification": deliverable.requested_verification}
+    for key in _MODEL_VERIFIER_META_KEYS:
+        if key in host_verdict:
+            verifier_meta[key] = host_verdict[key]
+    await gate._loop._emit(
+        VerifierShadowEvent(
+            artifact_path=deliverable.artifact_path,
+            artifact_kind=deliverable.artifact_kind,
+            inline_verdict=inline_label,
+            host_verdict=host_label,
+            agreement=agreement,
+            detail=detail or None,
+            meta=dict(verifier_meta),
+        )
+    )
+    verdict_event = await gate._loop._emit(
+        VerifierVerdictEvent(
+            artifact_path=deliverable.artifact_path,
+            artifact_kind=deliverable.artifact_kind,
+            verified=host_verdict.get("passed") is True and host_label == "pass",
+            verdict=host_label,
+            detail=detail or None,
+            failures=gate._verdict_failures(host_verdict),
+            screenshot_path=host_screenshot_path,
+            verification_result=typed_result,
+            meta=dict(verifier_meta),
+        )
+    )
+    hook = getattr(gate._loop, "_host_verifier_verdict_hook", None)
+    if hook is not None:
+        try:
+            await hook(cast(VerifierVerdictEvent, verdict_event))
+        except Exception:  # noqa: BLE001 — canary bookkeeping is non-authoritative
+            _LOG.warning(
+                "REL-1d host verifier canary hook failed for %s:%s",
+                gate._loop.conversation_id,
+                deliverable.artifact_path,
+                exc_info=True,
+            )
+    return host_label
 
 
 class _WorkflowPathParams(dict[str, object]):
@@ -146,7 +511,7 @@ class _FinishVerifyMixin(_FinishGateProto):
         MEDIUM and run unimpeded. Returns (passed, malformed): `passed` is True
         iff the check ran and passed; `malformed` is True iff the verify command
         itself is broken (command-not-found / SyntaxError) rather than the task."""
-        if _appkit_scope_active(self._loop):
+        if getattr(getattr(self._loop, "executor", None), "appkit_phase", None) is not None:
             # Strict AppKit has no raw shell surface. Its authoritative finish
             # verification is the structured `verify_appkit_app` gate that runs
             # later in the shared finish path, so the model-authored shell probe is
@@ -350,6 +715,140 @@ class _FinishVerifyMixin(_FinishGateProto):
         return None
 
 
+async def _judge_semantic_claims(
+    gate: Any,
+    deliverable: HostVerificationDeliverable,
+    events: list[Event],
+    host_verdict: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind each bounded independent judgement to one exact semantic claim."""
+
+    judge = getattr(gate._loop, "_verifier_judge", None)
+    if judge is None or gate._verdict_label(host_verdict) in {"unavailable", "unverifiable"}:
+        return host_verdict
+    semantic_claims = tuple(
+        claim
+        for claim in deliverable.required_claims
+        if claim.kind
+        in {
+            VerificationClaimKind.CONTRACT_SEMANTIC,
+            VerificationClaimKind.VISUAL_SEMANTIC,
+        }
+    )
+    if not semantic_claims:
+        return host_verdict
+    try:
+        raw_receipt = host_verdict.get("verification_result")
+        receipt = (
+            raw_receipt
+            if isinstance(raw_receipt, HostVerificationResult)
+            else HostVerificationResult.model_validate(raw_receipt)
+        )
+    except Exception:
+        return host_verdict
+
+    contract = gate._verifier_contract_payload()
+    out = dict(host_verdict)
+    failures: list[dict[str, Any]] = []
+    applied = False
+    fallback_cause = ""
+    for claim in semantic_claims:
+        seed = await gate._verifier_context_seed(
+            deliverable,
+            events,
+            host_verdict,
+            contract=contract,
+            claims=(claim,),
+        )
+        missing_pixels = (
+            claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
+            and not seed.screenshot.image_data_url
+        )
+        missing_reference = (
+            claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
+            and "reference_image_sha256:" in claim.expected
+            and not any(
+                reference.image_data_url and reference.instruction_complete
+                for reference in seed.reference_images
+            )
+        )
+        if missing_pixels or missing_reference:
+            detail = (
+                "visual claim has no captured output pixel evidence"
+                if missing_pixels
+                else "visual claim's user reference pixels are unavailable"
+            )
+            typed = TypedVerifierVerdict(
+                verified=False,
+                verdict="unavailable",
+                detail=detail,
+                failures=[{"kind": "visual_evidence_unavailable", "message": detail}],
+                failure_fingerprint="model_verifier_unavailable",
+            )
+            fallback_cause = detail
+        else:
+            try:
+                raw_typed = await asyncio.wait_for(
+                    judge.judge(seed),
+                    timeout=max(
+                        0.001,
+                        float(getattr(gate._loop, "_verifier_judge_timeout_s", 30.0)),
+                    ),
+                )
+                typed = (
+                    raw_typed
+                    if isinstance(raw_typed, TypedVerifierVerdict)
+                    else TypedVerifierVerdict.model_validate(raw_typed)
+                )
+                applied = True
+                if (
+                    typed.verdict in {"unavailable", "unverifiable"}
+                    and typed.failure_fingerprint == "model_verifier_unavailable"
+                ):
+                    fallback_cause = typed.detail or typed.failure_fingerprint
+            except TimeoutError:
+                typed = TypedVerifierVerdict(
+                    verified=False,
+                    verdict="unavailable",
+                    detail="model verifier deadline exceeded",
+                    failure_fingerprint="model_verifier_unavailable",
+                )
+                fallback_cause = typed.detail
+            except Exception as exc:  # noqa: BLE001 — verifier failure stays bounded
+                typed = TypedVerifierVerdict(
+                    verified=False,
+                    verdict="unavailable",
+                    detail=f"judge exception: {type(exc).__name__}",
+                    failure_fingerprint="model_verifier_unavailable",
+                )
+                fallback_cause = typed.detail
+        receipt = apply_semantic_verifier_result(
+            receipt,
+            verified=typed.verified,
+            verdict=typed.verdict,
+            detail=typed.detail,
+            claim_id=claim.claim_id,
+        )
+        failures.extend(typed.failures)
+
+    out.update(
+        {
+            "passed": receipt.passed,
+            "verdict": receipt.status.value,
+            "summary": receipt.reason,
+            "detail": receipt.reason,
+            "failures": failures,
+            "verification_result": receipt.model_dump(mode="json"),
+            "model_verifier": True,
+            "model_verifier_status": receipt.status.value,
+            "model_verifier_applied": applied,
+        }
+    )
+    if fallback_cause:
+        out["model_verifier_cause"] = _bounded_model_verifier_cause(fallback_cause)
+    return out
+
+
 class _HostVerifyGateMixin(_FinishGateProto):
     async def _host_artifact_file_exists(self, path: str) -> bool | None:
         sbx = getattr(self._loop.executor, "sandbox", None)
@@ -506,7 +1005,8 @@ class _HostVerifyGateMixin(_FinishGateProto):
             step, events, include_unverifiable=include_unverifiable
         )
         if manifest_deliverable is not None:
-            return manifest_deliverable
+            bound = _bind_host_verification_authority(self, manifest_deliverable, events)
+            return await self._with_host_verification_profile(bound, events)
 
         app_event = _latest_app_deliverable_event(events)
         any_event = _latest_deliverable_event(events) if include_unverifiable else app_event
@@ -522,12 +1022,44 @@ class _HostVerifyGateMixin(_FinishGateProto):
             return None
         deployment_url = any_event.deployment_url if any_event is not None else ""
         artifact_kind = any_event.artifact_kind if any_event is not None else "app"
-        return HostVerificationDeliverable(
+        deliverable = HostVerificationDeliverable(
             conversation_id=self._loop.conversation_id,
             artifact_path=path,
             artifact_kind=artifact_kind,
             deployment_url=deployment_url or "",
             requested_verification=step.requested_verification,
+        )
+        bound = _bind_host_verification_authority(self, deliverable, events)
+        return await self._with_host_verification_profile(bound, events)
+
+    async def _with_host_verification_profile(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+    ) -> HostVerificationDeliverable:
+        """Lower deterministic target-medium evidence into exact host claims."""
+
+        # Medium selection belongs to the selected artifact only. Historical
+        # handoffs/plan paths are useful bounded context for a semantic judge,
+        # but reading them here can classify a stale app (or traverse an alias)
+        # as the current target.
+        paths = [deliverable.artifact_path]
+        hint = await self._verifier_medium_hint(paths)
+        medium = hint.kind if hint is not None else "web"
+        claims = list(deliverable.required_claims)
+        if medium == "game" and not any(
+            claim.claim_id == _GAME_INTERACTION_CLAIM_ID for claim in claims
+        ):
+            claims.append(
+                HostVerificationClaim(
+                    claim_id=_GAME_INTERACTION_CLAIM_ID,
+                    kind=VerificationClaimKind.INTERACTION,
+                    expected=_GAME_INTERACTION_EXPECTED,
+                    source_authority="target.game.functional_interaction@1",
+                )
+            )
+        return deliverable.model_copy(
+            update={"verification_medium": medium, "required_claims": tuple(claims)}
         )
 
     @staticmethod
@@ -756,39 +1288,36 @@ class _HostVerifyGateMixin(_FinishGateProto):
         check_verdict: dict[str, Any],
         *,
         contract: dict[str, Any],
+        claims: tuple[HostVerificationClaim, ...] | None = None,
     ) -> VerifierContextSeed:
         deliverable_paths = await self._verifier_deliverable_paths(deliverable, events)
+        selected_claims = claims if claims is not None else deliverable.required_claims
+        screenshot = _screenshot_from_verdict(check_verdict)
+        if not any(
+            claim.kind is VerificationClaimKind.VISUAL_SEMANTIC for claim in selected_claims
+        ):
+            # A screenshot file is still useful provenance, but attaching its
+            # pixels would manufacture a VISION requirement for non-visual work.
+            screenshot = screenshot.model_copy(update={"image_data_url": ""})
+        _, all_references = _user_verification_material(events)
+        reference_images = tuple(
+            reference
+            for reference in all_references
+            if any(
+                claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
+                and claim.reference_image_sha256 == reference.sha256
+                for claim in selected_claims
+            )
+        )
         return VerifierContextSeed(
             contract=contract,
             deliverable_paths=deliverable_paths,
             check_results=_bounded_verifier_check_results(check_verdict),
-            screenshot=_screenshot_from_verdict(check_verdict),
+            screenshot=screenshot,
+            reference_images=reference_images,
             medium=await self._verifier_medium_hint(deliverable_paths),
+            claims=selected_claims,
         )
-
-    @staticmethod
-    def _typed_verifier_verdict_to_host_verdict(
-        base: dict[str, Any], typed: TypedVerifierVerdict
-    ) -> dict[str, Any]:
-        out = dict(base)
-        out.update(
-            {
-                "passed": bool(typed.verified),
-                "verdict": typed.verdict,
-                "summary": typed.detail or str(base.get("summary") or ""),
-                "detail": typed.detail or None,
-                "next_action": typed.next_action or str(base.get("next_action") or ""),
-                "failure_fingerprint": (
-                    typed.failure_fingerprint
-                    or str(base.get("failure_fingerprint") or "model_verifier")
-                ),
-                "failures": list(typed.failures),
-                "model_verifier": True,
-                "model_verifier_status": typed.verdict,
-                "model_verifier_applied": True,
-            }
-        )
-        return out
 
     async def _model_judged_verdict(
         self,
@@ -796,95 +1325,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         events: list[Event],
         host_verdict: dict[str, Any],
     ) -> dict[str, Any]:
-        """Run the optional model verifier behind a bounded context boundary.
-
-        The seed is built from contract + deliverable paths + deterministic check
-        results + screenshot only. The model transcript is never appended to the
-        builder event log; only the typed verdict summary returned here can flow
-        into VerifierVerdictEvent and wake-on-fail.
-        """
-
-        judge = getattr(self._loop, "_verifier_judge", None)
-        if judge is None:
-            return host_verdict
-        host_label = self._verdict_label(host_verdict)
-        if host_label in {"unavailable", "unverifiable"}:
-            return host_verdict
-
-        # The model judge evaluates requirement compliance, not basic runtime
-        # reachability. Plain Freeform builds intentionally have no registered
-        # requirement contract/finalizer; asking the judge to assess an empty
-        # contract turns a deterministic host PASS into a spurious
-        # ``unverifiable`` result. Keep the host-owned browser verdict in that
-        # case. Contract-bound builds still receive the independent typed judge.
-        contract = self._verifier_contract_payload()
-        if not contract:
-            return host_verdict
-
-        seed = await self._verifier_context_seed(
-            deliverable,
-            events,
-            host_verdict,
-            contract=contract,
-        )
-        try:
-            raw_typed = await asyncio.wait_for(
-                judge.judge(seed),
-                timeout=max(
-                    0.001,
-                    float(getattr(self._loop, "_verifier_judge_timeout_s", 30.0)),
-                ),
-            )
-            typed = (
-                raw_typed
-                if isinstance(raw_typed, TypedVerifierVerdict)
-                else TypedVerifierVerdict.model_validate(raw_typed)
-            )
-        except TimeoutError:
-            _LOG.warning(
-                "model verifier timed out for %s:%s",
-                self._loop.conversation_id,
-                deliverable.artifact_path,
-            )
-            return _model_verifier_fallback(
-                host_verdict,
-                status="timeout",
-                cause="model verifier deadline exceeded",
-            )
-        except Exception as exc:  # noqa: BLE001 — verifier judge must not crash finish flow
-            _LOG.warning(
-                "model verifier failed for %s:%s",
-                self._loop.conversation_id,
-                deliverable.artifact_path,
-                exc_info=True,
-            )
-            return _model_verifier_fallback(
-                host_verdict,
-                status="error",
-                cause=f"judge exception: {type(exc).__name__}",
-            )
-
-        judged = self._typed_verifier_verdict_to_host_verdict(host_verdict, typed)
-        if (
-            typed.verdict == "unavailable"
-            and typed.failure_fingerprint == "model_verifier_unavailable"
-        ):
-            return _model_verifier_fallback(
-                host_verdict,
-                status="unavailable",
-                cause=typed.detail or typed.failure_fingerprint,
-            )
-        # Deterministic host failures are a hard floor. A reading/vision judge can
-        # add detail to a failure, but it cannot green-light a broken runtime.
-        if host_verdict.get("passed") is not True and (
-            typed.verified or typed.verdict in {"unavailable", "unverifiable"}
-        ):
-            return _model_verifier_fallback(
-                host_verdict,
-                status=typed.verdict,
-                cause="deterministic host failure floor retained",
-            )
-        return judged
+        return await _judge_semantic_claims(self, deliverable, events, host_verdict)
 
     async def _host_verify_failure_disposition(
         self, deliverable: HostVerificationDeliverable, verdict: dict
@@ -956,6 +1397,11 @@ class _HostVerifyGateMixin(_FinishGateProto):
         self-verify/browser gate as sole enforcement.
         """
 
+        # AppKit's nine-check target verifier is a strict floor.  A generic web
+        # receipt may never run first and delegate around verify_appkit_app.
+        if getattr(getattr(self._loop, "executor", None), "appkit_phase", None) is not None:
+            return Disp.FALLTHROUGH
+
         authoritative = self._host_verify_authoritative()
         host_verifier = getattr(self._loop, "_host_verifier", None)
         if host_verifier is None and not authoritative:
@@ -1021,83 +1467,42 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     f"verification could not run: host verifier failed ({exc}).",
                 )
 
-        host_verdict = await self._model_judged_verdict(
-            deliverable, events, cast(dict[str, Any], host_verdict)
-        )
-        inline_verdict = _latest_verify_verdict(
+        (
+            host_verdict,
+            typed_result,
+            browser_verification_unavailable,
+        ) = await _prepare_typed_host_verdict(
+            self,
+            deliverable,
             events,
-            _last_productive_seq(events),
-            target_url=None,
-            tool_name=self._active_verify_tool() or "verify_web_app",
+            cast(dict[str, Any], host_verdict),
         )
-        host_label = self._verdict_label(host_verdict)
-        inline_label = self._verdict_label(inline_verdict)
-        agreement = (
-            host_label == inline_label
-            if host_label is not None and inline_label is not None
-            else None
+        host_label = await _emit_host_verdict_audit(
+            self,
+            deliverable,
+            events,
+            host_verdict,
+            typed_result,
+            host_screenshot_path,
         )
-        detail = str(host_verdict.get("summary") or host_verdict.get("detail") or "")
-        startup_diagnostic = str(host_verdict.get("startup_diagnostic") or "").strip()
-        if startup_diagnostic:
-            startup_diagnostic = "".join(
-                char for char in startup_diagnostic if char in "\n\t" or ord(char) >= 32
-            )
-            startup_diagnostic = _STARTUP_DIAGNOSTIC_SECRET_RE.sub(
-                "<redacted>", startup_diagnostic
-            )[:1280]
-            detail = (
-                f"{detail}\nBrowser startup diagnostic: {startup_diagnostic}"
-                if detail
-                else f"Browser startup diagnostic: {startup_diagnostic}"
-            )
-
-        verifier_meta: dict[str, Any] = {
-            "requested_verification": deliverable.requested_verification
-        }
-        for key in _MODEL_VERIFIER_META_KEYS:
-            if key in host_verdict:
-                verifier_meta[key] = host_verdict[key]
-
-        await self._loop._emit(
-            VerifierShadowEvent(
-                artifact_path=deliverable.artifact_path,
-                artifact_kind=deliverable.artifact_kind,
-                inline_verdict=inline_label,
-                host_verdict=host_label,
-                agreement=agreement,
-                detail=detail or None,
-                meta=dict(verifier_meta),
-            )
-        )
-        verdict_event = await self._loop._emit(
-            VerifierVerdictEvent(
-                artifact_path=deliverable.artifact_path,
-                artifact_kind=deliverable.artifact_kind,
-                verified=host_verdict.get("passed") is True and host_label == "pass",
-                verdict=host_label,
-                detail=detail or None,
-                failures=self._verdict_failures(host_verdict),
-                screenshot_path=host_screenshot_path,
-                meta=dict(verifier_meta),
-            )
-        )
-        hook = getattr(self._loop, "_host_verifier_verdict_hook", None)
-        if hook is not None:
-            try:
-                await hook(cast(VerifierVerdictEvent, verdict_event))
-            except Exception:  # noqa: BLE001 — REL-1d canary bookkeeping is non-authoritative
-                _LOG.warning(
-                    "REL-1d host verifier canary hook failed for %s:%s",
-                    self._loop.conversation_id,
-                    deliverable.artifact_path,
-                    exc_info=True,
-                )
         if authoritative and deliverable.artifact_kind == "app":
             if host_verdict.get("passed") is True and host_label == "pass":
                 self._loop._browser_verify_refusals = 0
                 return Disp.FALLTHROUGH
             if host_label == "unavailable":
+                if typed_result is not None and any(
+                    result.required
+                    and result.status is VerificationClaimStatus.UNAVAILABLE
+                    and result.kind
+                    in {
+                        VerificationClaimKind.CONTRACT_SEMANTIC,
+                        VerificationClaimKind.VISUAL_SEMANTIC,
+                    }
+                    for result in typed_result.claim_results
+                ):
+                    return await self._host_verify_failure_disposition(deliverable, host_verdict)
+                if browser_verification_unavailable:
+                    return await _emit_browser_unavailable_release(self._loop)
                 # Missing host-verifier infrastructure is not proof the app is broken;
                 # fall through so the inline browser gate remains the enforcement path.
                 return Disp.FALLTHROUGH
@@ -1653,6 +2058,8 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         return Disp.FALLTHROUGH
 
     async def _browser_verify_delegated_to_host(self, step: AgentStep, events: list[Event]) -> bool:
+        if _appkit_scope_active(self._loop):
+            return False
         if not self._host_verify_authoritative():
             return False
         if getattr(self._loop, "_host_verifier", None) is None:
@@ -1666,7 +2073,26 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # inline browser gate as enforcement — otherwise unavailable would slip
         # through BOTH gates and an app could finish with no verification.
         verdict = _latest_host_verifier_verdict(events, _last_productive_seq(events))
-        return verdict in ("pass", "fail", "unverifiable")
+        if verdict in ("pass", "fail", "unverifiable"):
+            return True
+        if verdict == "unavailable":
+            latest_typed = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if isinstance(event, VerifierVerdictEvent)
+                    and (event.seq or 0) >= _last_productive_seq(events)
+                ),
+                None,
+            )
+            if latest_typed is not None and latest_typed.verification_result is not None:
+                return any(
+                    isinstance(event, StatusEvent)
+                    and event.detail == "unverified_release"
+                    and (event.seq or 0) > (latest_typed.seq or 0)
+                    for event in events
+                )
+        return False
 
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal
 from disco.core.appkit import BuildBrief
 from disco.core.context.artifact_projection import artifact_paths_from_events
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.verification import VerificationRequirementsDirective
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
@@ -193,6 +194,7 @@ class SendMessageBody(BaseModel):
     # AppKit EPIC B: advisory presence flag. The persisted brief is recomputed
     # server-side from content; client-supplied fields are never trusted.
     build_brief: BuildBrief | None = None
+    verification_requirements: VerificationRequirementsDirective | None = None
 
 
 class UpdateSettingsBody(BaseModel):

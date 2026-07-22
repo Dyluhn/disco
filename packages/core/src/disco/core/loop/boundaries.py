@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
 from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
 from ..state import ConversationState
+from ..verification import (
+    HostVerificationClaim,
+    PreviewSelectionIdentity,
+    VerifierReferenceImage,
+)
 from ..verify_medium import VerifierMediumHint
 from ..view import View
 
@@ -80,6 +85,24 @@ class HostVerificationDeliverable(BaseModel):
     artifact_kind: str = "files"
     deployment_url: str = ""
     requested_verification: bool = False
+    # Durable authority and freshness binding supplied by the host finish path.
+    # Historical/standalone callers may omit run identity, but product receipts
+    # preserve it whenever the Build runtime emitted the typed admission events.
+    run_intent_id: str | None = Field(default=None, min_length=1, max_length=160)
+    run_identity: str | None = Field(
+        default=None,
+        pattern=r"^run:sha256:[0-9a-f]{64}$",
+    )
+    agent_view_id: str | None = Field(default=None, min_length=1, max_length=128)
+    deliverable_event_id: str | None = Field(default=None, min_length=1, max_length=128)
+    workspace_revision: int = Field(default=0, ge=0)
+    workspace_generation: str = Field(default="", max_length=128)
+    workspace_epoch: int | None = Field(default=None, ge=1)
+    observed_after_seq: int = Field(default=0, ge=0)
+    required_claims: tuple[HostVerificationClaim, ...] = ()
+    verification_medium: Literal["web", "deck", "mobile", "game"] = "web"
+    preview_selection: PreviewSelectionIdentity | None = None
+    preview_binding_required: bool = False
 
 
 class VerifierScreenshot(BaseModel):
@@ -105,7 +128,9 @@ class VerifierContextSeed(BaseModel):
     deliverable_paths: list[str] = Field(default_factory=list)
     check_results: dict[str, Any] = Field(default_factory=dict)
     screenshot: VerifierScreenshot = Field(default_factory=VerifierScreenshot)
+    reference_images: tuple[VerifierReferenceImage, ...] = ()
     medium: VerifierMediumHint | None = None
+    claims: tuple[HostVerificationClaim, ...] = ()
 
 
 class TypedVerifierVerdict(BaseModel):

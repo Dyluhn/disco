@@ -21,6 +21,7 @@ from disco.core.context import ArtifactMemoryStore
 from disco.core.context.ledger import ArtifactRecord
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, NeverConfirm
+from disco.core.verification import structured_web_verification_result
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -90,7 +91,25 @@ class _HostVerifier:
         self.calls.append(deliverable)
         if self._delay_s:
             await asyncio.sleep(self._delay_s)
-        return self._verdict
+        verdict = dict(self._verdict)
+        verdict["artifact_identity"] = {
+            "conversation_id": deliverable.conversation_id,
+            "artifact_path": deliverable.artifact_path,
+            "artifact_kind": deliverable.artifact_kind,
+            "requested_url": deliverable.deployment_url,
+            "observed_url": str(verdict.get("url") or ""),
+            "preview_selection": (
+                deliverable.preview_selection.model_dump(mode="json")
+                if deliverable.preview_selection is not None
+                else None
+            ),
+            "preview_live_match": not deliverable.preview_binding_required,
+        }
+        verdict["verification_result"] = structured_web_verification_result(
+            deliverable=deliverable,
+            verdict=verdict,
+        ).model_dump(mode="json")
+        return verdict
 
 
 class _PathSandbox:

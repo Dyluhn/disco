@@ -40,6 +40,18 @@ from .build_platform_shadow import (
 BuildRoute = Literal["legacy", "platform"]
 
 
+def _record_verification_claims(record: Any | None) -> tuple[Any, ...]:
+    if record is None:
+        return ()
+    return tuple(
+        claim
+        for check in record.composition.target_plan.verifier.checks
+        if check.required
+        for claim in check.claims
+        if claim.required
+    )
+
+
 class BuildPlatformRuntime:
     """Per-runtime Platform route state, reconstructed from durable events."""
 
@@ -192,6 +204,7 @@ class BuildPlatformRuntime:
         digest: str | None = None
         run_identity: str | None = None
         authority: Literal["legacy", "build_platform_core"] = "legacy"
+        verification_claims: tuple[Any, ...] = ()
         if selected == "platform":
             record = self.route_records.get(conversation_id)
             if record is None or not isinstance(record.composition_digest, str):
@@ -209,6 +222,7 @@ class BuildPlatformRuntime:
                     run_intent_operation=intent.operation,
                 ),
             ).value
+            verification_claims = _record_verification_claims(record)
         await self._rt._store.append(
             conversation_id,
             BuildPlatformAdmissionEvent(
@@ -218,6 +232,7 @@ class BuildPlatformRuntime:
                 composition_authority=authority,
                 composition_digest=digest,
                 run_identity=run_identity,
+                verification_claims=verification_claims,
             ),
         )
 
@@ -286,6 +301,7 @@ class BuildPlatformRuntime:
         digest: str | None = None
         run_identity: str | None = None
         authority: Literal["legacy", "build_platform_core"] = "legacy"
+        verification_claims: tuple[Any, ...] = ()
         record: Any | None = None
         if route == "platform":
             record = prepared_record
@@ -306,6 +322,7 @@ class BuildPlatformRuntime:
                     run_intent_operation=intent.operation,
                 ),
             ).value
+            verification_claims = _record_verification_claims(record)
         replacement = BuildPlatformAdmissionEvent(
             route=route,
             profile_id=FREEFORM_PROFILE_ID.canonical,
@@ -315,6 +332,7 @@ class BuildPlatformRuntime:
             run_identity=run_identity,
             transition="appkit_ejection",
             supersedes_admission_id=existing.id,
+            verification_claims=verification_claims,
         )
         stored = await self._rt._store.append_many(
             conversation_id,

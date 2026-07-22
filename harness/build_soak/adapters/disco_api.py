@@ -1614,6 +1614,7 @@ class DiscoApiClient:
         appkit: bool = False,
         surface: str = "build",
         import_fixture: dict[str, Any] | None = None,
+        verification_requirements: dict[str, Any] | None = None,
     ) -> str:
         """POST /conversations then POST the user message (which the route appends
         AND kicks). Returns the conversation_id."""
@@ -1628,7 +1629,15 @@ class DiscoApiClient:
             self.last_conversation_id = cid
             await self.start_inspect_collection(cid)
             mstatus, _ = await self._t.post_json(
-                f"/conversations/{cid}/messages", {"content": prompt}
+                f"/conversations/{cid}/messages",
+                {
+                    "content": prompt,
+                    **(
+                        {"verification_requirements": verification_requirements}
+                        if verification_requirements is not None
+                        else {}
+                    ),
+                },
             )
             if mstatus >= 400:
                 raise RuntimeError(f"post_message failed: HTTP {mstatus}")
@@ -1660,6 +1669,8 @@ class DiscoApiClient:
         mbody: dict[str, Any] = {"content": prompt}
         if appkit:
             mbody["build_brief"] = {}
+        if verification_requirements is not None:
+            mbody["verification_requirements"] = verification_requirements
         mstatus, _ = await self._t.post_json(f"/conversations/{cid}/messages", mbody)
         if mstatus >= 400:
             raise RuntimeError(f"post_message failed: HTTP {mstatus}")

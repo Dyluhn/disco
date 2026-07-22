@@ -29,6 +29,12 @@ from .effects import (
     FinalWorkspaceSeal,
     RecoveryLeaseTransition,
 )
+from .verification import (
+    HostVerificationClaim,
+    HostVerificationResult,
+    VerificationClaimStatus,
+    VerificationRequirementsDirective,
+)
 
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
@@ -273,6 +279,17 @@ class MessageEvent(BaseEvent, LLMConvertible):
 
     kind: Literal[EventKind.MESSAGE] = EventKind.MESSAGE
     message: LLMMessage
+    # Optional complete user/scenario proof-requirement snapshot.  This can make
+    # completion stricter, but can never certify a result; only host-owned
+    # VerifierVerdictEvents carry receipts.  Reference pixels are kept behind the
+    # verifier boundary rather than injected into the driving model's view.
+    verification_requirements: VerificationRequirementsDirective | None = None
+
+    @model_validator(mode="after")
+    def _requirements_are_user_authority(self) -> MessageEvent:
+        if self.verification_requirements is not None and self.source is not EventSource.USER:
+            raise ValueError("verification requirements may be attached only to user events")
+        return self
 
     def to_llm_message(self) -> LLMMessage:
         return self.message
@@ -931,9 +948,16 @@ class BuildPlatformAdmissionEvent(BaseEvent):
     )
     transition: Literal["initial", "appkit_ejection"] = "initial"
     supersedes_admission_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # Exact target proof requirements resolved into this composition. Optional
+    # for backward-compatible legacy admissions; platform admissions persist it
+    # so restart/code drift cannot silently change the completion authority.
+    verification_claims: tuple[HostVerificationClaim, ...] = ()
 
     @model_validator(mode="after")
     def _route_identity_is_exact(self) -> BuildPlatformAdmissionEvent:
+        claim_ids = [claim.claim_id for claim in self.verification_claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("Build admission verification claim ids must be unique")
         if self.route == "platform":
             if self.composition_authority != "build_platform_core":
                 raise ValueError("Platform route requires Build Platform Core authority")
@@ -1241,6 +1265,23 @@ class VerifierVerdictEvent(BaseEvent):
     # Keep the event boundary bounded because verifier output is externally
     # derived and persists in the append-only event log.
     screenshot_path: str | None = Field(default=None, max_length=512)
+    verification_result: HostVerificationResult | None = None
+
+    @model_validator(mode="after")
+    def _typed_result_matches_event(self) -> VerifierVerdictEvent:
+        result = self.verification_result
+        if result is None:
+            return self
+        if result.artifact_path != self.artifact_path or result.artifact_kind != self.artifact_kind:
+            raise ValueError("typed verification result artifact does not match event")
+        typed_verified = result.status is VerificationClaimStatus.PASS
+        if self.verified is not typed_verified:
+            raise ValueError("verified flag does not match typed verification result")
+        if self.verdict != result.status.value:
+            raise ValueError("verdict label does not match typed verification result")
+        if (self.screenshot_path or "") != result.screenshot_path:
+            raise ValueError("screenshot provenance does not match typed verification result")
+        return self
 
 
 class VerifierShadowEvent(BaseEvent):
@@ -1428,6 +1469,25 @@ Event = Annotated[
     | ContextSummaryEvent,
     Field(discriminator="kind"),
 ]
+
+
+def active_verification_requirements_event(
+    events: Iterable[Event],
+) -> MessageEvent | None:
+    """Fold the latest causally valid complete user/scenario requirement snapshot."""
+
+    active: MessageEvent | None = None
+    for event in events:
+        if (
+            not isinstance(event, MessageEvent)
+            or event.source is not EventSource.USER
+            or event.verification_requirements is None
+        ):
+            continue
+        expected = active.id if active is not None else None
+        if event.verification_requirements.supersedes_event_id == expected:
+            active = event
+    return active
 
 
 def current_build_platform_admission(

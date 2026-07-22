@@ -114,6 +114,7 @@ from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
 from disco.core.release.spec import ReleaseIntent
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.verification import VerificationRequirementsDirective
 from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
 from disco.retrieval import DefaultCorpusService, DiskVectorStore
 from disco.retrieval.deep_research import (
@@ -4361,6 +4362,7 @@ class ConversationRuntime:
         *,
         context: str | None = None,
         build_brief: BuildBrief | None = None,
+        verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append a user turn (optional hidden context, optional steer) and
@@ -4396,6 +4398,7 @@ class ConversationRuntime:
                 text,
                 context=context,
                 build_brief=build_brief,
+                verification_requirements=verification_requirements,
                 steer=steer,
             )
         except BaseException:

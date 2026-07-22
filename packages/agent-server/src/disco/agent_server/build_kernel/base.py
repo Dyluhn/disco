@@ -30,6 +30,7 @@ from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 from disco.core import ConversationState, Event, MessageEvent
 from disco.core.appkit import BuildBrief
+from disco.core.verification import VerificationRequirementsDirective
 
 __all__ = [
     "BuildKernel",
@@ -79,6 +80,7 @@ class BuildKernel(Protocol):
         *,
         context: str | None = None,
         build_brief: BuildBrief | None = None,
+        verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append a user turn (optionally a context block, optionally a mid-run

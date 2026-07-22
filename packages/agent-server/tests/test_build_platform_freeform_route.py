@@ -153,6 +153,13 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
     assert admission.run_intent_id == intent.id
     assert admission.composition_digest is not None
     assert admission.run_identity is not None
+    assert {claim.kind.value for claim in admission.verification_claims} == {
+        "artifact_identity",
+        "http_ready",
+        "rendered_content",
+        "console_clean",
+        "network_clean",
+    }
 
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     restarted = ConversationRuntime(runtime._store)

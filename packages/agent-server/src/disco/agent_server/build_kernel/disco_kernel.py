@@ -31,8 +31,10 @@ from disco.core import (
     ConversationStatus,
     MessageEvent,
     StatusEvent,
+    active_verification_requirements_event,
 )
 from disco.core.appkit import BuildBrief
+from disco.core.verification import VerificationRequirementsDirective
 
 from ..build_messages import _build_brief_message, _context_message, _user_message
 from .base import KernelEvent
@@ -61,6 +63,7 @@ class DiscoKernel:
         *,
         context: str | None = None,
         build_brief: BuildBrief | None = None,
+        verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append the (optional hidden context +) user message, then kick — the
@@ -79,7 +82,23 @@ class DiscoKernel:
                     pending.append(_context_message(context))
                 if build_brief is not None:
                     pending.append(_build_brief_message(build_brief))
-                user_event = _user_message(text, steer=steer)
+                history = await self._rt._store.get_events(conversation_id)
+                latest_requirement_event = active_verification_requirements_event(history)
+                if verification_requirements is not None:
+                    expected_predecessor = (
+                        latest_requirement_event.id
+                        if latest_requirement_event is not None
+                        else None
+                    )
+                    if verification_requirements.supersedes_event_id != expected_predecessor:
+                        raise ValueError(
+                            "verification requirement snapshot must supersede the current snapshot"
+                        )
+                user_event = _user_message(
+                    text,
+                    steer=steer,
+                    verification_requirements=verification_requirements,
+                )
                 pending.append(user_event)
                 # USER and run-intent share one SQLite transaction: cancellation
                 # can leave neither or both, never a durable unmarked user turn.

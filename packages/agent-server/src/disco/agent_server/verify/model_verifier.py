@@ -40,7 +40,9 @@ _EMPTY_RESPONSE_RETRY_MAX_TOKENS = 8_192
 _SYSTEM_PROMPT = (
     "You are Disco's independent artifact verifier. You are not the builder. "
     "Judge only the bounded evidence provided: contract, deliverable paths, "
-    "deterministic check results, and screenshot evidence if attached. Do not "
+    "deterministic check results, the rendered-output screenshot, and any user "
+    "reference images attached. The first attached image is the rendered output; "
+    "later images are the ordered references described in the JSON. Do not "
     "invent facts from missing builder history. Return only JSON with keys: "
     "verified, verdict, detail, failures, next_action, failure_fingerprint. "
     "Allowed verdict values: pass, fail, degraded, unavailable, unverifiable."
@@ -63,6 +65,14 @@ def _json_payload(seed: VerifierContextSeed) -> dict[str, Any]:
         screenshot["image_attached"] = True
         screenshot["image_data_url"] = "[attached as message image]"
     payload["screenshot"] = screenshot
+    references: list[dict[str, Any]] = []
+    for raw_reference in payload.get("reference_images") or []:
+        reference = dict(raw_reference)
+        if reference.get("image_data_url"):
+            reference["image_attached"] = True
+            reference["image_data_url"] = "[attached as message image]"
+        references.append(reference)
+    payload["reference_images"] = references
     return payload
 
 
@@ -154,11 +164,20 @@ class ModelVerifier:
 
     async def judge(self, seed: VerifierContextSeed) -> TypedVerifierVerdict:
         payload = _json_payload(seed)
-        images = [seed.screenshot.image_data_url] if seed.screenshot.image_data_url else None
+        image_values = [seed.screenshot.image_data_url] if seed.screenshot.image_data_url else []
+        image_values.extend(
+            reference.image_data_url
+            for reference in seed.reference_images
+            if reference.image_data_url
+        )
+        images = image_values or None
+        requirements = {Requirement.JSON_MODE}
+        if images:
+            requirements.add(Requirement.VISION)
         req = CompletionRequest(
             profile=CapabilityProfile(
                 role=ModelRole.VERIFIER,
-                requirements=frozenset({Requirement.JSON_MODE}),
+                requirements=frozenset(requirements),
                 mode=OperatingMode.INTERACTIVE,
             ),
             messages=[

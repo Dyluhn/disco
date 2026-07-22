@@ -405,7 +405,7 @@ class BrowserTool:
                 "viewport_height": args.viewport_height,
                 # W6 V5: include b64 screenshot when vision is enabled (local
                 # driver OR escalation model configured), not just DRIVER_VISION.
-                "include_screenshot_b64": _vision_mode(),
+                "include_screenshot_b64": (ctx.browser_capture_screenshot_b64 or _vision_mode()),
                 # BF1: host-authored coherence metadata. None denotes the
                 # executor's initial epoch zero and is never an acknowledgement.
                 "workspace_epoch": ctx.browser_workspace_epoch,

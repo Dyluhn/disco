@@ -350,9 +350,7 @@ class DefaultLLMRouter:
         """
         profile = req.profile
 
-        override = (
-            context.model_override if profile.role == ModelRole.AGENT_DRIVER else None
-        )
+        override = context.model_override if profile.role == ModelRole.AGENT_DRIVER else None
         key = self._config.model_for(profile.role, override=override)
         if key is None:
             return None
@@ -373,9 +371,7 @@ class DefaultLLMRouter:
             return None
 
         try:
-            exec_req = self._inject_prompt(
-                self._attach_context_metadata(req, context), entry
-            )
+            exec_req = self._inject_prompt(self._attach_context_metadata(req, context), entry)
             return cast(RequestBudgetEstimate | None, preview_fn(exec_req, model=entry.model_id))
         except Exception:
             return None
@@ -472,7 +468,12 @@ class DefaultLLMRouter:
             except LLMTransientError:
                 if attempt >= max_attempts:
                     fallback = (
-                        None if used_fallback else self._role_fallback_target(req.profile.role)
+                        None
+                        if used_fallback
+                        else self._role_fallback_target(
+                            req.profile.role,
+                            requirements=self._effective_requirements(req),
+                        )
                     )
                     if fallback is not None:
                         provider, model_id = fallback
@@ -604,7 +605,12 @@ class DefaultLLMRouter:
                     raise
                 if attempt >= max_attempts:
                     fallback = (
-                        None if used_fallback else self._role_fallback_target(req.profile.role)
+                        None
+                        if used_fallback
+                        else self._role_fallback_target(
+                            req.profile.role,
+                            requirements=self._effective_requirements(req),
+                        )
                     )
                     if fallback is not None:
                         provider, model_id = fallback
@@ -631,9 +637,26 @@ class DefaultLLMRouter:
 
     # -- helpers --------------------------------------------------------------
 
-    def _role_fallback_target(self, role: ModelRole) -> tuple[ModelProvider, str] | None:
+    @staticmethod
+    def _effective_requirements(req: CompletionRequest) -> frozenset[Requirement]:
+        requirements = set(req.profile.requirements)
+        if any(getattr(message, "images", None) for message in req.messages):
+            requirements.add(Requirement.VISION)
+        return frozenset(requirements)
+
+    def _role_fallback_target(
+        self,
+        role: ModelRole,
+        *,
+        requirements: frozenset[Requirement] = frozenset(),
+    ) -> tuple[ModelProvider, str] | None:
         settings = self._config.role_fallback
         if role in DRIVER_ROLES or role not in FALLBACK_ELIGIBLE_ROLES:
+            return None
+        # The auxiliary fallback endpoint is configured as JSON/text-only.  It
+        # must never receive image-backed or otherwise capability-specific work;
+        # doing so could turn an unavailable visual claim into fabricated prose.
+        if not requirements.issubset({Requirement.JSON_MODE}):
             return None
         if not settings.enabled or not settings.model.strip():
             return None

@@ -18,13 +18,20 @@ import json
 
 from disco.core import EventSource, LLMMessage, MessageEvent
 from disco.core.appkit import BuildBrief
+from disco.core.verification import VerificationRequirementsDirective
 
 
-def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
+def _user_message(
+    content: str,
+    *,
+    steer: bool = False,
+    verification_requirements: VerificationRequirementsDirective | None = None,
+) -> MessageEvent:
     return MessageEvent(
         source=EventSource.USER,
         message=LLMMessage(role="user", content=content),
         meta={"steer": True} if steer else {},
+        verification_requirements=verification_requirements,
     )
 
 

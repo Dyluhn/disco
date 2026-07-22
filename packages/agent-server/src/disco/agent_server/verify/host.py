@@ -14,7 +14,12 @@ from typing import Any
 
 from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from disco.core.loop import HostVerificationDeliverable
+from disco.core.verification import (
+    VerificationClaimKind,
+    structured_web_verification_result,
+)
 from disco.tools.builtin.browser import BrowserTool
+from disco.tools.builtin.preview import PreviewStatusArgs, PreviewStatusTool
 from disco.tools.builtin.verify_app import (
     VerifyWebAppArgs,
     VerifyWebAppTool,
@@ -26,6 +31,10 @@ from disco.tools.builtin.verify_app import (
 from .probe import app_body_problem, collect_web_app_probe, compute_web_app_verdict
 
 _LOG = logging.getLogger(__name__)
+_GAME_INTERACTION_CLAIM_ID = "web.interaction:canvas-keyboard-smoke"
+_GAME_INTERACTION_EXPECTED = (
+    "host browser completed canvas click, Space, ArrowRight, and post-interaction capture"
+)
 
 
 class HostWebAppVerifier:
@@ -56,13 +65,40 @@ class HostWebAppVerifier:
                     agent_ctx = await ctx_builder(VerifyWebAppTool.definition)
                     # The lane is host-selected and fixed; it is not present in
                     # VerifyWebAppArgs or any model-facing tool schema.
-                    ctx = agent_ctx.model_copy(update={"browser_lane": "host_verifier"})
+                    capture_pixels = any(
+                        claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
+                        for claim in deliverable.required_claims
+                    )
+                    ctx = agent_ctx.model_copy(
+                        update={
+                            "browser_lane": "host_verifier",
+                            "browser_capture_screenshot_b64": capture_pixels,
+                        }
+                    )
+                    live_match = await self._preview_live_match(deliverable, ctx)
+                    if not live_match:
+                        return self._artifact_binding_failure(deliverable)
+                    selected = deliverable.preview_selection
+                    target_url = (
+                        selected.verification_target_url(deliverable.artifact_path)
+                        if selected is not None
+                        else deliverable.deployment_url or ""
+                    )
+                    if selected is not None and target_url is None:
+                        return self._artifact_binding_failure(deliverable)
                     outcome = await VerifyWebAppTool().run(
-                        VerifyWebAppArgs(url=deliverable.deployment_url or ""),
+                        VerifyWebAppArgs(
+                            url=target_url or "",
+                            medium=deliverable.verification_medium,
+                        ),
                         ctx,
                     )
                     if outcome.success and outcome.structured:
-                        return dict(outcome.structured)
+                        return self._with_typed_result(
+                            deliverable,
+                            dict(outcome.structured),
+                            preview_live_match=live_match,
+                        )
                     return self._unavailable_verdict(
                         deliverable,
                         outcome.error or outcome.content or "host verifier produced no verdict",
@@ -90,6 +126,69 @@ class HostWebAppVerifier:
             return await self._verify_via_client(deliverable)
 
         return self._unavailable_verdict(deliverable, "no host verifier context available")
+
+    @staticmethod
+    async def _preview_live_match(deliverable: HostVerificationDeliverable, ctx: Any) -> bool:
+        selected = deliverable.preview_selection
+        if selected is None:
+            return not deliverable.preview_binding_required
+        outcome = await PreviewStatusTool().run(
+            PreviewStatusArgs(name=selected.session_name),
+            ctx,
+        )
+        previews = (
+            outcome.structured.get("previews")
+            if outcome.success and isinstance(outcome.structured, dict)
+            else None
+        )
+        if not isinstance(previews, list) or len(previews) != 1:
+            return False
+        live = previews[0]
+        if not isinstance(live, dict):
+            return False
+        exact = {
+            "projection_id": selected.projection_id,
+            "name": selected.session_name,
+            "port": selected.port,
+            "url": selected.url or None,
+            "launch_kind": selected.launch_kind,
+            "intent_digest": selected.intent_digest,
+            "sandbox_instance_id": selected.sandbox_instance_id,
+            "sandbox_generation": selected.sandbox_generation,
+        }
+        return bool(
+            live.get("status") in {"running", "unavailable"}
+            and all(live.get(key) == value for key, value in exact.items())
+            and (
+                not deliverable.deployment_url
+                or selected.url.rstrip("/") == deliverable.deployment_url.rstrip("/")
+            )
+            and selected.contains_artifact(deliverable.artifact_path)
+        )
+
+    @classmethod
+    def _artifact_binding_failure(
+        cls,
+        deliverable: HostVerificationDeliverable,
+    ) -> dict[str, Any]:
+        verdict = dict(
+            verify_app_compute_verdict(
+                url=deliverable.deployment_url or "",
+                reachable=False,
+                http_status=0,
+                structured=None,
+                meaningful=False,
+            )
+        )
+        verdict["verdict"] = "fail"
+        verdict["passed"] = False
+        verdict["summary"] = "selected preview generation is absent, changed, or foreign"
+        verdict["failure_fingerprint"] = "preview_selection_mismatch"
+        return cls._with_typed_result(
+            deliverable,
+            verdict,
+            preview_live_match=False,
+        )
 
     async def _verify_via_client(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
         client = self._client
@@ -132,7 +231,79 @@ class HostWebAppVerifier:
             verdict["verdict"] = "fail"
             verdict["summary"] = problem
             verdict["next_action"] = "Serve a reachable, non-empty web app preview."
-        return verdict
+        return self._with_typed_result(
+            deliverable,
+            verdict,
+            preview_live_match=not deliverable.preview_binding_required,
+        )
+
+    @staticmethod
+    def _with_typed_result(
+        deliverable: HostVerificationDeliverable,
+        verdict: dict[str, Any],
+        *,
+        preview_live_match: bool | None = None,
+    ) -> dict[str, Any]:
+        out = dict(verdict)
+        if preview_live_match is None:
+            preview_live_match = not deliverable.preview_binding_required
+        game_interaction = out.get("game_interaction")
+        if deliverable.verification_medium == "game" and isinstance(game_interaction, dict):
+            steps = game_interaction.get("steps")
+            expected_profile = (
+                ("click", None),
+                ("press", "Space"),
+                ("press", "ArrowRight"),
+                ("screenshot", None),
+            )
+            exact_steps = bool(
+                isinstance(steps, list)
+                and len(steps) == len(expected_profile)
+                and all(
+                    isinstance(step, dict)
+                    and step.get("action") == action
+                    and (key is None or step.get("key") == key)
+                    and step.get("success") is True
+                    and not step.get("error")
+                    for step, (action, key) in zip(steps, expected_profile, strict=True)
+                )
+                and game_interaction.get("before_screenshot_path")
+                and game_interaction.get("after_screenshot_path")
+            )
+            interaction_claims: dict[str, Any] = {}
+            for claim in deliverable.required_claims:
+                if (
+                    claim.kind is VerificationClaimKind.INTERACTION
+                    and claim.claim_id == _GAME_INTERACTION_CLAIM_ID
+                    and claim.expected == _GAME_INTERACTION_EXPECTED
+                ):
+                    interaction_claims[claim.claim_id] = {
+                        "expected": claim.expected,
+                        "passed": exact_steps,
+                        "steps": steps if isinstance(steps, list) else [],
+                        "before_screenshot_path": game_interaction.get("before_screenshot_path"),
+                        "after_screenshot_path": game_interaction.get("after_screenshot_path"),
+                    }
+            if interaction_claims:
+                out["interaction_claims"] = interaction_claims
+        out["artifact_identity"] = {
+            "conversation_id": deliverable.conversation_id,
+            "artifact_path": deliverable.artifact_path,
+            "artifact_kind": deliverable.artifact_kind,
+            "requested_url": deliverable.deployment_url,
+            "observed_url": str(out.get("url") or ""),
+            "preview_selection": (
+                deliverable.preview_selection.model_dump(mode="json")
+                if deliverable.preview_selection is not None
+                else None
+            ),
+            "preview_live_match": preview_live_match,
+        }
+        out["verification_result"] = structured_web_verification_result(
+            deliverable=deliverable,
+            verdict=out,
+        ).model_dump(mode="json")
+        return out
 
     @staticmethod
     def _unavailable_verdict(
@@ -150,7 +321,11 @@ class HostWebAppVerifier:
         verdict["summary"] = f"host verifier unavailable: {detail}"
         verdict["next_action"] = ""
         verdict["failure_fingerprint"] = "host_verifier_unavailable"
-        return verdict
+        return HostWebAppVerifier._with_typed_result(
+            deliverable,
+            verdict,
+            preview_live_match=False if deliverable.preview_binding_required else True,
+        )
 
 
 __all__ = ["HostWebAppVerifier"]

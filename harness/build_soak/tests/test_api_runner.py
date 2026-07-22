@@ -401,6 +401,37 @@ async def test_import_fixture_uses_real_import_surface_before_kick(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_soak_adapter_posts_typed_verification_requirements(tmp_path):
+    transport = FakeTransport(tmp_path / "disco.db", states=["RUNNING"])
+    client = _client(transport, tmp_path)
+    requirements = {
+        "claims": [
+            {
+                "claim_id": "web.visual:reference",
+                "kind": "visual_semantic",
+                "expected": "match the governed reference",
+                "reference_image_index": None,
+            }
+        ],
+        "reference_images": [],
+        "supersedes_event_id": None,
+    }
+
+    await client.create_build_conversation(
+        "Build against the governed visual requirement.",
+        verification_requirements=requirements,
+    )
+
+    assert transport.posts[-1] == (
+        f"/conversations/{transport.cid}/messages",
+        {
+            "content": "Build against the governed visual requirement.",
+            "verification_requirements": requirements,
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_import_fixture_refuses_appkit_and_autonomous_shortcuts(tmp_path):
     client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
     fixture = {"filename": "sample.zip", "files": {"README.md": "seed"}}

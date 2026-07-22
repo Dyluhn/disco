@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 from disco.core import (
     ActionEvent,
     ConversationStatus,
     DeliverableEvent,
+    LLMMessage,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
@@ -27,6 +30,12 @@ from disco.core.loop import (
     host_verify_authoritative_enabled,
 )
 from disco.core.loop.finish.verify_gates import _bounded_model_verifier_cause
+from disco.core.verification import (
+    VerificationClaimKind,
+    VerificationRequestedClaim,
+    VerificationRequirementsDirective,
+    structured_web_verification_result,
+)
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -93,7 +102,25 @@ class _HostVerifier:
 
     async def verify(self, deliverable):
         self.calls.append(deliverable)
-        return self._verdict
+        verdict = dict(self._verdict)
+        verdict["artifact_identity"] = {
+            "conversation_id": deliverable.conversation_id,
+            "artifact_path": deliverable.artifact_path,
+            "artifact_kind": deliverable.artifact_kind,
+            "requested_url": deliverable.deployment_url,
+            "observed_url": str(verdict.get("url") or ""),
+            "preview_selection": (
+                deliverable.preview_selection.model_dump(mode="json")
+                if deliverable.preview_selection is not None
+                else None
+            ),
+            "preview_live_match": not deliverable.preview_binding_required,
+        }
+        verdict["verification_result"] = structured_web_verification_result(
+            deliverable=deliverable,
+            verdict=verdict,
+        ).model_dump(mode="json")
+        return verdict
 
 
 class _VerifierJudge:
@@ -431,7 +458,9 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
         "deliverable_paths",
         "check_results",
         "screenshot",
+        "reference_images",
         "medium",
+        "claims",
     }
     assert seed.contract["verify"]["finalizer"] == "ready_for_static_site_verification"
     assert seed.deliverable_paths == ["index.html"]
@@ -495,6 +524,85 @@ async def test_contractless_freeform_skips_model_judge_and_keeps_host_pass() -> 
 
 
 @pytest.mark.asyncio
+async def test_user_visual_reference_is_judged_with_output_and_reference_pixels() -> None:
+    output_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+    reference_png = output_png
+    host_verdict = _verdict(passed=True, fp="HOST_VISUAL")
+    host_verdict["screenshot_b64"] = base64.b64encode(output_png).decode("ascii")
+    host_verdict["screenshot_path"] = ".pmx/screenshots/visual-reference.png"
+    host = _HostVerifier(host_verdict)
+    judge = _VerifierJudge(
+        TypedVerifierVerdict(
+            verified=True,
+            verdict="pass",
+            detail="Rendered output satisfies the supplied visual reference.",
+            failure_fingerprint="visual-reference-pass",
+        )
+    )
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>reference build</h1>"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+        verifier_judge=judge,
+    )
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(
+                role="user",
+                content="Match this supplied visual reference.",
+                images=["data:image/png;base64," + base64.b64encode(reference_png).decode("ascii")],
+            ),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="web.visual:reference",
+                        kind=VerificationClaimKind.VISUAL_SEMANTIC,
+                        expected="match the supplied visual reference",
+                        reference_image_index=0,
+                    ),
+                ),
+                reference_images=(
+                    "data:image/png;base64," + base64.b64encode(reference_png).decode("ascii"),
+                ),
+            ),
+        )
+    )
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(judge.seeds) == 1
+    seed = judge.seeds[0]
+    assert seed.screenshot.image_data_url
+    assert len(seed.reference_images) == 1
+    assert seed.reference_images[0].image_data_url
+    assert len(seed.claims) == 1
+    assert seed.claims[0].kind.value == "visual_semantic"
+    events = await store.get_events("conv")
+    verdict = next(event for event in events if isinstance(event, VerifierVerdictEvent))
+    assert verdict.verified is True and verdict.verdict == "pass"
+    assert verdict.verification_result is not None
+    visual_result = next(
+        result
+        for result in verdict.verification_result.claim_results
+        if result.kind.value == "visual_semantic"
+    )
+    assert visual_result.capability_basis == "configured independent vision-capable verifier"
+
+
+@pytest.mark.asyncio
 async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_events() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     judge = _VerifierJudge(
@@ -536,12 +644,11 @@ async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_event
     events = await store.get_events("conv")
     verdict = next(event for event in events if isinstance(event, VerifierVerdictEvent))
     shadow = next(event for event in events if isinstance(event, VerifierShadowEvent))
-    # Deterministic host evidence remains authoritative and green, but the
-    # independent judge degradation can no longer disappear into that verdict.
-    assert verdict.verified is True and verdict.verdict == "pass"
+    # Generic runtime evidence cannot waive a registered semantic contract.
+    assert verdict.verified is False and verdict.verdict == "unavailable"
     for event in (verdict, shadow):
         assert event.meta["model_verifier_status"] == "unavailable"
-        assert event.meta["model_verifier_applied"] is False
+        assert event.meta["model_verifier_applied"] is True
         assert event.meta["model_verifier_cause"] == (
             "model verifier unavailable (JSONDecodeError: Expecting value at line 1 column 1)"
         )
@@ -587,7 +694,15 @@ async def test_contract_judge_unverifiable_is_not_browser_unavailable() -> None:
     assert len(judge.seeds) == 4
     events = await store.get_events("conv")
     verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
-    assert verdicts and all(event.verdict == "unverifiable" for event in verdicts)
+    assert verdicts and all(event.verdict == "unavailable" for event in verdicts)
+    assert all(
+        event.verification_result is not None
+        and any(
+            result.claim_id == "web.contract_semantic" and result.status.value == "unavailable"
+            for result in event.verification_result.claim_results
+        )
+        for event in verdicts
+    )
     env = _env_messages(events)
     assert any("Host verification did not pass" in message for message in env)
     assert any("WITHOUT a passing host verifier verdict" in message for message in env)
@@ -666,7 +781,13 @@ async def test_host_unverifiable_finishes_with_explicit_unverified_marker() -> N
     verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
     assert len(verdicts) == 1
     assert verdicts[0].verified is False
-    assert verdicts[0].verdict == "unverifiable"
+    assert verdicts[0].verdict == "unavailable"
+    assert verdicts[0].verification_result is not None
+    assert all(
+        result.status.value == "unavailable"
+        for result in verdicts[0].verification_result.claim_results
+        if result.required
+    )
     assert verdicts[0].detail is not None
     assert "Browser startup diagnostic: exit=1; <redacted> chromium launch failed" in (
         verdicts[0].detail

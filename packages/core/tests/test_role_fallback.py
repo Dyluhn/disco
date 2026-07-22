@@ -9,6 +9,7 @@ from disco.core.llm import (
     CompletionRequest,
     LLMTransientError,
     ModelRole,
+    Requirement,
 )
 from disco.core.llm.config import ROLE_FALLBACK_PROVIDER_KEY, RoleFallbackSettings
 from llm_fakes import FakeModelProvider, build_router, simple_config
@@ -64,6 +65,61 @@ async def test_driver_role_never_uses_role_fallback():
         await router.complete(_req(ModelRole.AGENT_DRIVER))
 
     assert primary.calls == 5
+    assert fallback.calls == 0
+
+
+async def test_vision_verifier_never_falls_back_to_json_only_auxiliary_model():
+    local = FakeModelProvider("ollama", raises=LLMTransientError("flaky"))
+    router, _sink, primary, fallback = _router_with_fallback(local=local)
+    req = _req(ModelRole.VERIFIER).model_copy(
+        update={
+            "profile": CapabilityProfile(
+                role=ModelRole.VERIFIER,
+                requirements=frozenset({Requirement.JSON_MODE, Requirement.VISION}),
+            )
+        }
+    )
+
+    with pytest.raises(LLMTransientError):
+        await router.complete(req)
+
+    assert primary.calls == 5
+    assert fallback.calls == 0
+
+
+async def test_image_payload_itself_blocks_json_only_role_fallback():
+    local = FakeModelProvider("ollama", raises=LLMTransientError("flaky"))
+    config = _fallback_config()
+    local_entry = config.models[config.default_model]
+    config = config.model_copy(
+        update={
+            "models": {
+                **config.models,
+                config.default_model: local_entry.model_copy(
+                    update={"capabilities": local_entry.capabilities | {Requirement.VISION}}
+                ),
+            }
+        }
+    )
+    fallback = FakeModelProvider("role_fallback", text="fallback-ok")
+    router, _sink, providers = build_router(config=config, local=local)
+    providers[ROLE_FALLBACK_PROVIDER_KEY] = fallback
+    req = _req(ModelRole.VERIFIER).model_copy(
+        update={
+            "messages": [
+                LLMMessage(
+                    role="user",
+                    content="inspect pixels",
+                    images=["data:image/png;base64,YQ=="],
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(LLMTransientError):
+        await router.complete(req)
+
+    assert local.calls == 5
     assert fallback.calls == 0
 
 

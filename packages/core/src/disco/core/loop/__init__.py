@@ -8,6 +8,15 @@ agnostic. Binds the event/state spine and the LLM router together.
 
 from __future__ import annotations
 
+from ..verification import (
+    HostVerificationClaim,
+    HostVerificationClaimResult,
+    HostVerificationResult,
+    VerificationClaimKind,
+    VerificationClaimStatus,
+    VerificationEvidenceModality,
+    VerifierReferenceImage,
+)
 from .agent import BuildAgent, ResearchAgent, RouterAgent
 from .boundaries import (
     Agent,
@@ -53,6 +62,9 @@ __all__ = [
     "ConfirmRisky",
     "ConfirmationPolicy",
     "HostVerificationDeliverable",
+    "HostVerificationClaim",
+    "HostVerificationClaimResult",
+    "HostVerificationResult",
     "HostVerifier",
     "host_verify_authoritative_enabled",
     "NeverConfirm",
@@ -74,6 +86,10 @@ __all__ = [
     "VerifierContextSeed",
     "VerifierJudge",
     "VerifierScreenshot",
+    "VerificationClaimKind",
+    "VerificationClaimStatus",
+    "VerificationEvidenceModality",
+    "VerifierReferenceImage",
     "recovery_lease_id",
     "reduce_progress",
 ]

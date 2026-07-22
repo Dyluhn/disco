@@ -167,6 +167,12 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     # Present ONLY when the browser layer captured it under vision (_vision_mode()).
     # Absent for a no-vision model — keep it absent so the verdict payload stays lean.
     screenshot_b64 = str(s.get("screenshot_b64", "") or "")
+    # Host verification consumes the rendered DOM/accessibility text directly.
+    # Keep it bounded: this is evidence for exact required-text claims, not a
+    # second unbounded page transcript.
+    rendered_text = text[:32_768]
+    raw_freshness = s.get("freshness")
+    freshness: dict[str, Any] = dict(raw_freshness) if isinstance(raw_freshness, dict) else {}
 
     return {
         "title": title,
@@ -179,6 +185,8 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
         "network_failures": network_failures,
         "screenshot_path": screenshot_path,
         "screenshot_b64": screenshot_b64,
+        "rendered_text": rendered_text,
+        "freshness": freshness,
         "failure_fingerprint": _failure_fingerprint(console_errors, network_failures),
     }
 
@@ -213,6 +221,8 @@ def compute_verdict(
     network_failures = probe["network_failures"]
     screenshot_path = str(probe["screenshot_path"])
     screenshot_b64 = str(probe["screenshot_b64"])
+    rendered_text = str(probe["rendered_text"])
+    freshness = dict(probe["freshness"])
     fingerprint = str(probe["failure_fingerprint"])
 
     http_ok = isinstance(http_status, int) and 200 <= http_status < 400
@@ -284,6 +294,8 @@ def compute_verdict(
         "console_warnings": console_warnings,
         "network_failures": network_failures,
         "screenshot_path": screenshot_path,
+        "rendered_text": rendered_text,
+        "freshness": freshness,
         "vision": {"used": False, "passed": None, "notes": []},
         "failure_fingerprint": fingerprint,
         "summary": summary,

@@ -30,6 +30,11 @@ from disco.agent_server.build_kernel import (
 from disco.agent_server.routes._common import _context_message, _user_message
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import Event, EventSource, SqliteEventStore, WorkspaceMutationEvent
+from disco.core.verification import (
+    VerificationClaimKind,
+    VerificationRequestedClaim,
+    VerificationRequirementsDirective,
+)
 
 CID = "conv-build-kernel-test"
 
@@ -233,6 +238,54 @@ async def test_disco_kernel_send_user_turn_no_context(store: SqliteEventStore) -
         for event in await store.get_events(CID)
     )
     rt.kick.assert_called_once_with(CID, claimed_user_seq=msgs[0].seq)
+
+
+async def test_verification_requirement_replacement_is_causal_and_atomic(
+    store: SqliteEventStore,
+) -> None:
+    rt = _fake_runtime(store)
+    first_directive = VerificationRequirementsDirective(
+        claims=(
+            VerificationRequestedClaim(
+                claim_id="web.visual:quality",
+                kind=VerificationClaimKind.VISUAL_SEMANTIC,
+                expected="no visible layout defects",
+            ),
+        ),
+    )
+    first = await rt._disco_kernel.send_user_turn(
+        CID,
+        "Require a visual quality review.",
+        verification_requirements=first_directive,
+    )
+
+    with pytest.raises(ValueError, match="must supersede the current snapshot"):
+        await rt._disco_kernel.send_user_turn(
+            CID,
+            "stale clear",
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(),
+                supersedes_event_id="evt-foreign",
+            ),
+        )
+
+    after_rejection = await store.get_events(CID)
+    assert not any(
+        getattr(event, "message", None) is not None and event.message.content == "stale clear"
+        for event in after_rejection
+    )
+    replacement = await rt._disco_kernel.send_user_turn(
+        CID,
+        "Replace the scenario proof snapshot.",
+        verification_requirements=VerificationRequirementsDirective(
+            claims=(),
+            supersedes_event_id=first.id,
+        ),
+    )
+
+    assert replacement.verification_requirements is not None
+    assert replacement.verification_requirements.supersedes_event_id == first.id
+    assert rt.kick.call_count == 2
 
 
 async def test_disco_kernel_turn_waits_for_host_workspace_fence(store: SqliteEventStore) -> None:

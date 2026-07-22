@@ -69,6 +69,7 @@ class AppKitVerifyExecutor(FakeExecutor):
             ]
         )
         self._verdicts = list(verdicts)
+        self.appkit_phase = "edit"
         self.appkit_calls = 0
         self.web_calls = 0
 
@@ -96,6 +97,8 @@ def _gate_loop(
     *,
     mode: OperatingMode = OperatingMode.LONG_HORIZON,
     autonomous: bool = False,
+    host_verifier=None,
+    host_authoritative: bool = False,
 ):
     store = SqliteEventStore(":memory:")
     loop = AgentLoop(
@@ -110,10 +113,20 @@ def _gate_loop(
         FakeSummarizer(),
         mode=mode,
         planning_tools=frozenset({"submit_plan"}),
-        host_verify_authoritative=False,
+        host_verifier=host_verifier,
+        host_verify_authoritative=host_authoritative,
         autonomous=autonomous,
     )
     return loop, store
+
+
+class _GenericPassingHostVerifier:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def verify(self, deliverable):  # noqa: ANN001
+        self.calls += 1
+        return {"passed": True, "verdict": "pass", "url": deliverable.deployment_url}
 
 
 def _statuses(events):
@@ -192,6 +205,31 @@ async def test_appkit_build_finishes_on_appkit_pass_verdict() -> None:
     assert execu.web_calls == 0
     assert ("FINISHED", None) in _statuses(events)
     assert not any("did not pass" in m for m in _env(events))
+
+
+@pytest.mark.asyncio
+async def test_generic_host_pass_cannot_waive_strict_appkit_verifier() -> None:
+    host = _GenericPassingHostVerifier()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(
+        agent,
+        execu,
+        host_verifier=host,
+        host_authoritative=True,
+    )
+
+    await loop.send_message("build me a lead-gen app")
+    await loop.run()
+
+    assert host.calls == 0
+    assert execu.appkit_calls >= 1
+    assert ("FINISHED", None) in _statuses(await store.get_events("conv"))
 
 
 @pytest.mark.asyncio

@@ -506,6 +506,9 @@ def test_tool_context_has_no_secret_field():
         "browser_workspace_epoch",
         "browser_generation",
         "browser_lane",
+        # Capability-aware host verifier pixel capture request. Boolean only;
+        # it never claims pixels were inspected and carries no model identity.
+        "browser_capture_screenshot_b64",
         # WO-C1: host-owned release-intent writer callable. Carries NO secret — the
         # runtime closure captures the store/config, and the tool passes only the
         # conversation id, owner id, and the NAMES-only ReleaseIntent (no values).

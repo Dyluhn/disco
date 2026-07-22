@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from disco.core.build_platform import (
     SYNTHETIC_CAPABILITIES,
     SYNTHETIC_PROFILE_ID,
@@ -101,6 +102,24 @@ def test_optional_executable_preview_blocks_alone_when_host_lacks_it() -> None:
     assert not composition.blocked("target")
     assert not composition.blocked("verify")
     assert not composition.blocked("package")
+
+
+def test_nonweb_target_verifier_rejects_corrupted_target_output(tmp_path: Path) -> None:
+    composition = resolve_synthetic_conformance()
+    (tmp_path / "fixture.txt").write_text("hello batch\n", encoding="utf-8")
+    host = _SyntheticHost(tmp_path)
+    for intent in composition.construction.intents:
+        host.execute(intent)
+    for intent in composition.target_plan.intents:
+        host.execute(intent)
+    (tmp_path / "job" / "result.txt").write_text("CORRUPTED\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError):
+        for check in composition.target_plan.verifier.checks:
+            host.execute(check.intent)
+
+    assert "job.verify_output" in host.executed
+    assert "job.package_bundle" not in host.executed
 
 
 def test_synthetic_registration_uses_public_registry_without_central_switch() -> None:

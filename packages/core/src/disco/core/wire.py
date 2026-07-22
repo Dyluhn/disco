@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from .appkit import BuildBrief
 from .events import Event
 from .state import ConversationState
+from .verification import VerificationRequirementsDirective
 
 
 class FileStreamFrame(BaseModel):
@@ -120,6 +121,9 @@ class WSClientFrame(BaseModel):
     # send_message (AppKit EPIC B): advisory presence flag. The server recomputes
     # and persists the hidden `<build_brief>` ENVIRONMENT message from content.
     build_brief: BuildBrief | None = None
+    # Optional complete proof-requirement snapshot. It can require more proof,
+    # never assert that proof exists. Reference pixels remain verifier-only.
+    verification_requirements: VerificationRequirementsDirective | None = None
     # selection_edit (P8): the typed ref of the clicked preview element (a SelectionRef
     # mirror — see core/selection_edit.py) and the user's verbatim change instruction.
     selection_ref: dict[str, Any] | None = None
