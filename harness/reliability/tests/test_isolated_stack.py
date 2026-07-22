@@ -5,11 +5,13 @@ import os
 from pathlib import Path
 
 import pytest
+from disco.core.auth import validated_canonical_preview_url
 from disco.core.llm import ConfigStore, default_config
 
 from harness.reliability.isolated_stack import (
     StackManager,
     _child_environment,
+    _child_environment_for_stack,
     _temporary_environment,
 )
 
@@ -133,6 +135,38 @@ def test_adjacent_isolated_agent_ports_get_non_overlapping_preview_ranges(
     assert second.env["DISCO_LOCAL_PREVIEW_PORT_START"] == "20016"
     assert first.env["DISCO_LOCAL_PREVIEW_BIND"] == ""
     assert second.env["DISCO_LOCAL_PREVIEW_BIND"] == ""
+
+    child = _child_environment_for_stack(
+        ["python", "-m", "harness.build_soak.run"],
+        first,
+        {
+            "DISCO_LOCAL_PREVIEW_PORT_START": "19120",
+            "DISCO_LOCAL_PREVIEW_PORT_COUNT": "32",
+            "DISCO_SECRET_KEY": "must-not-cross",
+        },
+    )
+    assert child["DISCO_LOCAL_PREVIEW_PORT_START"] == "20000"
+    assert child["DISCO_LOCAL_PREVIEW_PORT_COUNT"] == "16"
+    assert "DISCO_SECRET_KEY" not in child
+    bootstrap = "http://127.0.0.2:20000/__disco/preview-auth"
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "19120")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "32")
+    assert (
+        validated_canonical_preview_url(
+            "http://127.0.0.1:18000", "conv_a1b2c3d4proof", 8000, bootstrap
+        )
+        is None
+    )
+    with _temporary_environment(
+        child,
+        ("DISCO_LOCAL_PREVIEW_PORT_START", "DISCO_LOCAL_PREVIEW_PORT_COUNT"),
+    ):
+        assert (
+            validated_canonical_preview_url(
+                "http://127.0.0.1:18000", "conv_a1b2c3d4proof", 8000, bootstrap
+            )
+            == "http://127.0.0.2:20000/"
+        )
 
 
 def test_stack_close_removes_secret_artifacts_but_preserves_diagnostics(

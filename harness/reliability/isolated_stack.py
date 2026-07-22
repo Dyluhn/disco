@@ -343,6 +343,28 @@ class StackManager:
         temporary.replace(target)
 
 
+def _child_environment_for_stack(
+    command: list[str],
+    manager: StackManager,
+    source: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Give a suite the exact non-secret Preview topology its servers use.
+
+    The child validates server-minted canonical Preview URLs independently. It
+    must therefore receive the isolated listener block selected by the wrapper,
+    rather than inheriting a default or an ambient operator override.
+    """
+
+    environment = _child_environment(command, source)
+    environment.update(
+        {
+            "DISCO_LOCAL_PREVIEW_PORT_START": str(manager.local_preview_port_start),
+            "DISCO_LOCAL_PREVIEW_PORT_COUNT": str(manager.local_preview_port_count),
+        }
+    )
+    return environment
+
+
 class _ControlHandler(BaseHTTPRequestHandler):
     server_version = "DiscoReliabilityControl/1.0"
 
@@ -467,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
         control, control_url, token = _control_server(manager)
         thread = threading.Thread(target=control.serve_forever, daemon=True)
         thread.start()
-        child_env = _child_environment(command)
+        child_env = _child_environment_for_stack(command, manager)
         child_env.update(
             {
                 "DISCO_RELIABILITY_ISOLATED_STACK": "1",
