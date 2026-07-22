@@ -119,6 +119,27 @@ class SandboxRuntimeService:
             return self._rt._injected_sandbox
         return self._rt._build_sandbox_service_from_config(self._rt._config_store.load().sandbox)
 
+    def effective_backend_name(self) -> str:
+        """Return the concrete backend identity selected by Settings + deployment.
+
+        The persisted ``local`` position can intentionally resolve to the native
+        ``podman`` transport when ``DISCO_LOCAL_ENGINE=podman``.  Lifecycle
+        reconciliation must compare cached sessions with that effective identity,
+        not the raw Settings label, or every kick falsely treats a healthy Podman
+        session as stale and discards its workspace.
+        """
+
+        settings = self._rt._config_store.load().sandbox
+        cfg = effective_sandbox_config(settings)
+        # ProcessSandboxService allocates a dev workspace root in its constructor;
+        # its configured and concrete identities are already identical, so avoid
+        # constructing it for this read-only comparison. Container service
+        # construction is side-effect free and reuses the canonical mapper,
+        # including its local-Podman-socket alias.
+        if cfg.backend == "process":
+            return "process"
+        return service_from_config(cfg).name
+
     async def probe_active_sandbox(self) -> tuple[bool, str, str]:
         """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
         agent-server, because this is the process that actually runs sandboxes (it owns

@@ -3744,7 +3744,7 @@ class ConversationRuntime:
         if self._injected_sandbox is not None:
             return  # injected backend is authoritative; Settings backend is ignored
         try:
-            current = self._config_store.load().sandbox.backend
+            current = self._sandbox.effective_backend_name()
         except Exception:  # noqa: BLE001 — config unreadable ⇒ leave caches alone
             return
         task = self._tasks.get(conversation_id)
@@ -3783,7 +3783,7 @@ class ConversationRuntime:
         if self._injected_sandbox is not None:
             return 0
         try:
-            current = self._config_store.load().sandbox.backend
+            current = self._sandbox.effective_backend_name()
         except Exception:  # noqa: BLE001
             return 0
         reconciled = 0

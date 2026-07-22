@@ -14,6 +14,7 @@ import types
 
 from disco.agent_server import ConversationRuntime
 from disco.core import ConversationStatus, SqliteEventStore, StatusEvent
+from disco.core.llm import SandboxSettings
 from disco.tools.sandbox import SandboxConfig, SandboxUnavailableError
 
 
@@ -41,10 +42,8 @@ class _FakeSession:
 
 
 def _set_backend(rt: ConversationRuntime, backend: str) -> None:
-    """Pin the persisted sandbox backend the reconcile/preflight read."""
-    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
-        load=lambda: types.SimpleNamespace(sandbox=types.SimpleNamespace(backend=backend))
-    )
+    """Pin the effective backend identity the reconcile paths compare."""
+    rt._sandbox.effective_backend_name = lambda: backend  # type: ignore[method-assign]
 
 
 # ---- (a) first-use preflight ------------------------------------------------
@@ -221,6 +220,92 @@ async def test_evict_stale_backend_noop_when_backend_unchanged():
 
     rt._evict_stale_backend("c1")
     assert "c1" in rt._executors and "c1" in rt._loops and not sess.destroyed
+
+
+async def test_evict_stale_backend_uses_effective_local_podman_identity(monkeypatch):
+    """The self-host ``local`` position is implemented by native Podman.  Its live
+    session is not stale merely because the persisted UI label remains ``local``."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+        load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
+    )
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
+
+    session = _FakeSession("podman")
+    loop = object()
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=session)
+    rt._loops["c1"] = loop
+
+    rt._evict_stale_backend("c1")
+    await asyncio.sleep(0)
+
+    assert rt._executors["c1"]._sandbox is session
+    assert rt._loops["c1"] is loop
+    assert not session.destroyed
+
+
+async def test_evict_stale_backend_uses_effective_podman_socket_identity(monkeypatch):
+    """The canonical service mapper also selects native Podman from a persisted
+    local position whose Docker-compatible socket is visibly a Podman socket."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+        load=lambda: types.SimpleNamespace(
+            sandbox=SandboxSettings(
+                backend="local",
+                docker_socket="unix:///run/user/1000/podman/podman.sock",
+            )
+        )
+    )
+    monkeypatch.delenv("DISCO_LOCAL_ENGINE", raising=False)
+    monkeypatch.delenv("PMX_LOCAL_ENGINE", raising=False)
+
+    session = _FakeSession("podman")
+    loop = object()
+    rt._executors["c1"] = types.SimpleNamespace(_sandbox=session)
+    rt._loops["c1"] = loop
+
+    rt._evict_stale_backend("c1")
+    await asyncio.sleep(0)
+
+    assert rt._executors["c1"]._sandbox is session
+    assert rt._loops["c1"] is loop
+    assert not session.destroyed
+
+
+async def test_reconcile_preserves_effective_local_podman_identity(monkeypatch):
+    """Bulk reconciliation uses the same effective deployment identity as a kick."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+        load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
+    )
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
+
+    session = _FakeSession("podman")
+    rt._pending_sessions["c1"] = session
+
+    assert await rt.reconcile_sandbox_backend() == 0
+    assert rt._pending_sessions["c1"] is session
+    assert not session.destroyed
+
+
+async def test_reconcile_effective_engine_change_still_evicts(monkeypatch):
+    """A real deployment-engine change remains a stale-backend transition."""
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+        load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
+    )
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "docker")
+
+    stale = _FakeSession("podman")
+    rt._pending_sessions["c1"] = stale
+
+    assert await rt.reconcile_sandbox_backend() == 1
+    assert stale.destroyed
+    assert "c1" not in rt._pending_sessions
 
 
 # ---- W-48 P1-2: gate-parked convs are NOT evicted on a backend change ---------
