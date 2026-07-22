@@ -61,6 +61,24 @@ FREEFORM_LIFECYCLE_OPERATIONS = (
     "host.finish_after_verification",
 )
 
+# AppKit remains a governed product, not a constrained spelling of Freeform.
+# These inert intents describe the existing strict lifecycle while the semantic
+# tools, generator, verifier, revision store, and deployment mediator retain all
+# effect authority.
+APPKIT_LIFECYCLE_OPERATIONS = (
+    "host.plan_approval",
+    "appkit.scaffold_governed",
+    "appkit.mutate_semantic",
+    "appkit.govern_session_auth",
+    "appkit.govern_rbac",
+    "appkit.govern_persistence",
+    "host.commit_revision",
+    "host.recover_workspace",
+    "host.verify_appkit_strict",
+    "host.deploy_mediated",
+    "host.finish_after_verification",
+)
+
 
 def _capabilities(source: str) -> CapabilityLayer:
     return CapabilityLayer(source=source, allowed=BUILTIN_CAPABILITIES)
@@ -128,6 +146,48 @@ class _FreeformEngine(_BuiltinEngine):
                     ),
                 )
                 for operation in FREEFORM_LIFECYCLE_OPERATIONS
+            ),
+            requested_tools=self._requested_tools,
+            required_capabilities=frozenset({"workspace.read", "workspace.write"}),
+            policy=self._rules,
+        )
+
+
+class _AppKitEngine(_BuiltinEngine):
+    """Typed description of the current governed AppKit execution contract."""
+
+    _WRITE_OPERATIONS = frozenset(
+        {
+            "appkit.scaffold_governed",
+            "appkit.mutate_semantic",
+            "host.commit_revision",
+        }
+    )
+    _READ_OPERATIONS = frozenset(
+        {
+            "host.recover_workspace",
+            "host.verify_appkit_strict",
+            "host.deploy_mediated",
+        }
+    )
+
+    def plan(self, request: ConstructionRequest) -> ConstructionPlan:
+        return ConstructionPlan(
+            engine=self.id,
+            intents=tuple(
+                ComponentIntent(
+                    operation=operation,
+                    required_capabilities=(
+                        frozenset({"workspace.write"})
+                        if operation in self._WRITE_OPERATIONS
+                        else (
+                            frozenset({"workspace.read"})
+                            if operation in self._READ_OPERATIONS
+                            else frozenset()
+                        )
+                    ),
+                )
+                for operation in APPKIT_LIFECYCLE_OPERATIONS
             ),
             requested_tools=self._requested_tools,
             required_capabilities=frozenset({"workspace.read", "workspace.write"}),
@@ -259,7 +319,7 @@ def build_builtin_registry(
     )
     registry._register_engine(
         _spec(APPKIT_ENGINE_ID, ComponentKind.ENGINE, rules=APPKIT_RULES),
-        _BuiltinEngine(
+        _AppKitEngine(
             APPKIT_ENGINE_ID,
             requested_tools=appkit_tools,
             rules=APPKIT_RULES,

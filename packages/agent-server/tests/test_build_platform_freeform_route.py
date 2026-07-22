@@ -12,6 +12,7 @@ from disco.core import (
     StatusEvent,
     WorkspaceMutationEvent,
 )
+from disco.core.build_platform import APPKIT_PROFILE_ID
 from disco.core.llm import DefaultLLMRouter, OperatingMode
 from disco.core.loop import RouterAgent
 from disco.tools import AppKitToolExecutor, DefaultToolExecutor
@@ -85,7 +86,9 @@ def test_cutover_is_pinned_to_the_existing_loop_and_switch_is_new_run_only(monke
 
 def test_appkit_is_not_silently_routed_through_freeform_opt_in(monkeypatch) -> None:
     runtime, loop = _compose(monkeypatch, "strict", platform=True, appkit=True)
-    assert runtime._build_platform.route_records == {}
+    record = runtime._build_platform.route_records["strict"]
+    assert record.source == "appkit"
+    assert record.composition.profile.id == APPKIT_PROFILE_ID
     assert isinstance(loop.executor, AppKitToolExecutor)
 
 

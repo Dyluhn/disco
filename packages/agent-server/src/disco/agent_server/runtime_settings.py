@@ -593,16 +593,21 @@ class RuntimeSettings:
         self._rt._appkit_mode[conversation_id] = stored
 
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
-        """True when the conversation was created with appkit_mode=True AND the
-        deployment has AppKit enabled. This read is the single choke point every
-        executor-composition decision flows through, so the DISCO_APPKIT_ENABLED=0
-        kill switch gates HERE (not the setter): existing appkit conversations
-        degrade to normal free-form builds on their next loop composition, and
-        re-enabling the flag restores them — no stored state is touched."""
+        """Return immutable AppKit identity or fail closed when unavailable.
+
+        The deployment switch may block AppKit, but it may never turn a governed
+        conversation into Freeform. Re-enabling restores composition without
+        changing the stored identity.
+        """
         from disco.core.flags import appkit_enabled
 
         stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
-        return appkit_enabled() and stored is True
+        if stored is True and not appkit_enabled():
+            raise RuntimeError(
+                "AppKit is unavailable on this deployment (DISCO_APPKIT_ENABLED=0); "
+                "the governed conversation was not opened as Freeform"
+            )
+        return stored is True
 
     # ---- per-query research sources ---------------------------------------
 

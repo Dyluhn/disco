@@ -19,14 +19,18 @@ from disco.core import (
     latest_workspace_run_intent,
 )
 from disco.core.build_platform import (
+    APPKIT_PROFILE_ID,
     FREEFORM_PROFILE_ID,
+    ComponentId,
     CompositionDigest,
     RunAdmissionAnchor,
     derive_run_admission_identity,
 )
 
 from .build_platform_shadow import (
+    appkit_platform_route_enabled,
     freeform_platform_route_enabled,
+    select_appkit_platform_route,
     select_freeform_platform_route,
 )
 
@@ -41,6 +45,7 @@ class BuildPlatformRuntime:
         self.route_records: dict[str, Any] = {}
         self.route_pins: dict[str, BuildRoute] = {}
         self.selected_routes: dict[str, BuildRoute] = {}
+        self.selected_profiles: dict[str, ComponentId] = {}
 
     async def prepare_route_pin(self, conversation_id: str) -> None:
         if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
@@ -63,10 +68,12 @@ class BuildPlatformRuntime:
     ) -> None:
         if not eligible:
             self.selected_routes.pop(conversation_id, None)
+            self.selected_profiles.pop(conversation_id, None)
             return
         pinned = self.route_pins.get(conversation_id)
         platform = pinned == "platform" or (pinned is None and freeform_platform_route_enabled())
         self.selected_routes[conversation_id] = "platform" if platform else "legacy"
+        self.selected_profiles[conversation_id] = FREEFORM_PROFILE_ID
         if not platform:
             self.route_records.pop(conversation_id, None)
             return
@@ -78,11 +85,57 @@ class BuildPlatformRuntime:
             self._rt._executors.pop(conversation_id, None)
             self.route_records.pop(conversation_id, None)
             self.selected_routes.pop(conversation_id, None)
+            self.selected_profiles.pop(conversation_id, None)
             raise
+
+    def select_appkit(
+        self,
+        conversation_id: str,
+        *,
+        eligible: bool,
+        tool_specs: Iterable[Any],
+    ) -> None:
+        if not eligible:
+            self.selected_routes.pop(conversation_id, None)
+            self.selected_profiles.pop(conversation_id, None)
+            return
+        pinned = self.route_pins.get(conversation_id)
+        platform = pinned == "platform" or (pinned is None and appkit_platform_route_enabled())
+        self.selected_routes[conversation_id] = "platform" if platform else "legacy"
+        self.selected_profiles[conversation_id] = APPKIT_PROFILE_ID
+        if not platform:
+            self.route_records.pop(conversation_id, None)
+            return
+        try:
+            self.route_records[conversation_id] = select_appkit_platform_route(
+                tool_specs=tool_specs
+            )
+        except Exception:
+            self._rt._executors.pop(conversation_id, None)
+            self.route_records.pop(conversation_id, None)
+            self.selected_routes.pop(conversation_id, None)
+            self.selected_profiles.pop(conversation_id, None)
+            raise
+
+    def select_builtin(
+        self,
+        conversation_id: str,
+        *,
+        appkit: bool,
+        eligible: bool,
+        tool_specs: Iterable[Any],
+    ) -> None:
+        selector = self.select_appkit if appkit else self.select_freeform
+        selector(
+            conversation_id,
+            eligible=eligible,
+            tool_specs=tool_specs,
+        )
 
     async def record_route_locked(self, conversation_id: str) -> None:
         selected = self.selected_routes.get(conversation_id)
-        if selected is None:
+        profile = self.selected_profiles.get(conversation_id)
+        if selected is None or profile is None:
             return
         events = await self._rt._store.get_events(conversation_id)
         intent = latest_workspace_run_intent(events)
@@ -127,8 +180,8 @@ class BuildPlatformRuntime:
             None,
         )
         if existing is not None:
-            if existing.route != selected:
-                raise RuntimeError("run intent already has a different Build route admission")
+            if existing.route != selected or existing.profile_id != profile.canonical:
+                raise RuntimeError("run intent already has a different Build admission")
             return
 
         digest: str | None = None
@@ -138,6 +191,8 @@ class BuildPlatformRuntime:
             record = self.route_records.get(conversation_id)
             if record is None or not isinstance(record.composition_digest, str):
                 raise RuntimeError("Platform route has no valid composition record")
+            if record.composition.profile.id != profile:
+                raise RuntimeError("Platform route resolved a different Build profile")
             digest = record.composition_digest
             authority = "build_platform_core"
             run_identity = derive_run_admission_identity(
@@ -153,7 +208,7 @@ class BuildPlatformRuntime:
             conversation_id,
             BuildPlatformAdmissionEvent(
                 route=selected,
-                profile_id=FREEFORM_PROFILE_ID.canonical,
+                profile_id=profile.canonical,
                 run_intent_id=intent.id,
                 composition_authority=authority,
                 composition_digest=digest,

@@ -2372,10 +2372,10 @@ class ConversationRuntime:
                     "build-platform shadow observer failed; legacy authority is unchanged",
                     exc_info=True,
                 )
-        self._build_platform.select_freeform(
+        self._build_platform.select_builtin(
             conversation_id,
-            eligible=sealed_workflow_run is None
-            and not any((_art_mode, _appkit_mode, _workflow_router_mode)),
+            appkit=_appkit_mode,
+            eligible=sealed_workflow_run is None and not any((_art_mode, _workflow_router_mode)),
             tool_specs=executor.available_tools(),
         )
         if sealed_workflow_run is not None:

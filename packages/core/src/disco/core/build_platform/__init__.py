@@ -2,6 +2,7 @@
 
 from .builtin_profiles import (
     APPKIT_ENGINE_ID,
+    APPKIT_LIFECYCLE_OPERATIONS,
     APPKIT_PROFILE_ID,
     APPKIT_PROMPT_ID,
     BUILTIN_CAPABILITIES,
@@ -124,6 +125,7 @@ from .shadow import (
 
 __all__ = [
     "APPKIT_ENGINE_ID",
+    "APPKIT_LIFECYCLE_OPERATIONS",
     "APPKIT_PROFILE_ID",
     "APPKIT_PROMPT_ID",
     "BUILTIN_CAPABILITIES",

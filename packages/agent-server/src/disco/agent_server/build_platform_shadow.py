@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 _SHADOW_FLAG = "BUILD_PLATFORM_SHADOW"
 _FREEFORM_ROUTE_FLAG = "FREEFORM_PLATFORM_ROUTE"
+_APPKIT_ROUTE_FLAG = "APPKIT_PLATFORM_ROUTE"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSEY = frozenset({"0", "false", "no", "off", "disabled"})
 
 
 class BuildPlatformRouteError(RuntimeError):
@@ -33,14 +35,14 @@ class BuildPlatformRouteError(RuntimeError):
 class BuildPlatformRouteRecord(FrozenModel):
     """Inspectable new-run decision; legacy host code remains the effect bridge."""
 
-    source: Literal["freeform"] = "freeform"
+    source: Literal["freeform", "appkit"]
     active_route: Literal["platform"] = "platform"
     composition_authority: Literal["build_platform_core"] = "build_platform_core"
     execution_bridge: Literal["legacy_host"] = "legacy_host"
     composition_digest: str
     composition: BuildComposition
     comparisons: tuple[ShadowFieldComparison, ...]
-    rollback_switch: Literal["DISCO_FREEFORM_PLATFORM_ROUTE"] = "DISCO_FREEFORM_PLATFORM_ROUTE"
+    rollback_switch: Literal["DISCO_FREEFORM_PLATFORM_ROUTE", "DISCO_APPKIT_PLATFORM_ROUTE"]
 
 
 def build_platform_shadow_enabled() -> bool:
@@ -53,6 +55,13 @@ def freeform_platform_route_enabled() -> bool:
     """Immediate new-run cutover/rollback switch; default remains legacy."""
 
     return str(disco_env(_FREEFORM_ROUTE_FLAG) or "").strip().lower() in _TRUTHY
+
+
+def appkit_platform_route_enabled() -> bool:
+    """AppKit cutover defaults on; an explicit false value rolls new runs back."""
+
+    value = disco_env(_APPKIT_ROUTE_FLAG)
+    return value is None or str(value).strip().lower() not in _FALSEY
 
 
 def _tool_catalog(tool_specs: Iterable[Any]) -> tuple[ToolDescriptor, ...]:
@@ -146,7 +155,45 @@ def select_freeform_platform_route(
         )
         raise BuildPlatformRouteError(f"Freeform Platform composition is blocked: {blocks}")
     return BuildPlatformRouteRecord(
+        source="freeform",
         composition_digest=composition.digest.digest,
         composition=composition,
         comparisons=comparison.comparisons,
+        rollback_switch="DISCO_FREEFORM_PLATFORM_ROUTE",
+    )
+
+
+def select_appkit_platform_route(
+    *,
+    tool_specs: Iterable[Any],
+) -> BuildPlatformRouteRecord:
+    """Resolve the exact strict AppKit composition or fail before execution."""
+
+    catalog = _tool_catalog(tool_specs)
+    visible_tools = frozenset(tool.name for tool in catalog)
+    composition = resolve_builtin_composition(
+        appkit=True,
+        goal="admit existing governed AppKit execution",
+        tool_catalog=catalog,
+        visible_tools=visible_tools,
+    )
+    comparison = compare_observe_only(
+        expected_legacy_snapshot(appkit=True, visible_tools=visible_tools),
+        composition,
+    )
+    if not comparison.matches:
+        mismatches = ", ".join(item.field for item in comparison.comparisons if not item.matches)
+        detail = comparison.resolution_error or mismatches or "unknown mismatch"
+        raise BuildPlatformRouteError(f"AppKit Platform parity failed: {detail}")
+    if composition.blocked_operations:
+        blocks = ", ".join(
+            f"{block.operation}:{block.code}" for block in composition.blocked_operations
+        )
+        raise BuildPlatformRouteError(f"AppKit Platform composition is blocked: {blocks}")
+    return BuildPlatformRouteRecord(
+        source="appkit",
+        composition_digest=composition.digest.digest,
+        composition=composition,
+        comparisons=comparison.comparisons,
+        rollback_switch="DISCO_APPKIT_PLATFORM_ROUTE",
     )

@@ -23,10 +23,9 @@ def appkit_enabled() -> bool:
 
     OFF means: the ``app_*`` v2 mutators leave the default tool registry, the
     create route refuses ``appkit_mode`` requests (409, honest — never a silent
-    downgrade), the runtime never composes the strict ``AppKitToolExecutor``
-    (existing appkit conversations degrade to normal free-form builds; their
-    files are ordinary Vite apps), and the ``lead_form`` starter refuses with a
-    free-form alternative. Free-form Build, starter kits, contracts, and the
+    downgrade), and existing AppKit conversations fail closed instead of being
+    opened with a Freeform executor. The ``lead_form`` starter refuses with a
+    free-form alternative. Freeform Build, starter kits, contracts, and the
     legacy governed app surface (``app_set_tweak``/``app_snapshot_version``)
     are untouched.
     """
