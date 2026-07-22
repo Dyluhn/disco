@@ -196,11 +196,16 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
     assert snap is not None
 
     # (b) routing decisions were recorded — at least one per driver call, all on
-    # the assigned model via the deterministic "pinned" path
+    # the assigned model "m" via a deterministic config resolution: the settings
+    # assignment ("pinned") or the per-conversation model-pill override ("manual"
+    # — the AGENT_DRIVER sticky-model lock).  Both carry reason=="config"; a
+    # fallback / escalation / substitution would carry reason!="config"
+    # (routing.py RT2/RT4 + _resolve).
     routing = snap["routing_decisions"]
     assert len(routing) >= 2, snap
     assert all(d["chosen_model"] == "m" for d in routing)
-    assert all(d["path"] == "pinned" for d in routing)
+    assert all(d["reason"] == "config" for d in routing), routing
+    assert all(d["path"] in ("pinned", "manual") for d in routing), routing
     assert any(d["role"] == "agent_driver" for d in routing)
 
     # (c) agent.step spans were captured with measured fields (the loop attaches
