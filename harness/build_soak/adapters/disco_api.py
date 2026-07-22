@@ -52,6 +52,7 @@ import shlex
 import sqlite3
 import tempfile
 import time
+import urllib.parse
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -202,6 +203,8 @@ _BROWSER_EVIDENCE_MAX_FILES = 64
 _BROWSER_EVIDENCE_MAX_FILE_BYTES = 16 * 1024 * 1024
 _BROWSER_EVIDENCE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _BROWSER_EVIDENCE_TOOLS = frozenset({"browser", "verify_web_app", "verify_appkit_app"})
+_PREVIEW_RESET_BODY_RE = re.compile(r'\bbody:("(?:\\.|[^"\\])*")')
+_MAX_PREVIEW_HANDOFF_CHARS = 16 * 1024
 _SNAPSHOT_POLL_S = 0.5  # re-read cadence while a just-finished build's snapshot flushes
 # Consecutive identical reads required before a declared file with NO content-precise signal
 # (a partial mutator with no provable post-edit content — `present_unproven` — or no event
@@ -4124,6 +4127,22 @@ class HttpTransport:
                     # A malformed/hostile bootstrap must not reflect the one-use
                     # bearer into retained preview evidence.
                     return redeemed.status_code, "preview capability redemption failed", {}
+                if "cookies" in redeemed.headers.get("clear-site-data", "").lower():
+                    if tuple(preview_client.cookies.jar):
+                        return 502, "preview storage reset installed a cookie too early", {}
+                    handoff = _preview_storage_handoff(redeemed.text)
+                    if handoff is None:
+                        return 502, "invalid preview storage reset response", {}
+                    completed = await preview_client.post(
+                        bootstrap_url,
+                        data={"handoff": handoff},
+                        headers={"Origin": self.base_url},
+                    )
+                    if completed.status_code != 200:
+                        return completed.status_code, "preview storage handoff failed", {}
+                    completion = _safe_json(completed)
+                    if completion.get("target") != body["target_path"]:
+                        return 502, "invalid preview storage handoff response", {}
                 if any(cookie.name == SESSION_COOKIE for cookie in preview_client.cookies.jar):
                     return 502, "preview bootstrap crossed application session", {}
                 preview = await preview_client.get(isolated_url)
@@ -4159,6 +4178,28 @@ class HttpTransport:
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             r = await client.get(f"{self.base_url}/health")
             return r.status_code, _safe_json(r)
+
+
+def _preview_storage_handoff(document: str) -> str | None:
+    """Extract the body-only handoff from the product's locked reset document."""
+
+    match = _PREVIEW_RESET_BODY_RE.search(document)
+    if match is None:
+        return None
+    try:
+        encoded = json.loads(match.group(1))
+        parsed = urllib.parse.parse_qs(
+            encoded,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+        )
+    except (TypeError, ValueError):
+        return None
+    if set(parsed) != {"handoff"} or len(parsed["handoff"]) != 1:
+        return None
+    handoff = parsed["handoff"][0]
+    return handoff if 0 < len(handoff) <= _MAX_PREVIEW_HANDOFF_CHARS else None
 
 
 def _safe_json(response: Any) -> dict[str, Any]:

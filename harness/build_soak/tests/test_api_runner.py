@@ -4196,6 +4196,170 @@ async def test_http_transport_redeems_preview_capability_without_app_session():
 
 
 @pytest.mark.asyncio
+async def test_http_transport_completes_body_only_preview_storage_handoff():
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+    seen: list[tuple[str, bytes]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.content))
+        if request.url.path.endswith("/preview/capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
+                },
+            )
+        if request.url.path == bootstrap_path and request.content == b"intent=one-use-intent":
+            assert "cookie" not in request.headers
+            return httpx.Response(
+                200,
+                text=(
+                    '<script>fetch(location.pathname,{method:"POST",'
+                    'body:"handoff=storage-handoff-proof"})</script>'
+                ),
+                headers={"clear-site-data": '"cache", "cookies", "storage"'},
+            )
+        if request.url.path == bootstrap_path:
+            assert request.content == b"handoff=storage-handoff-proof"
+            assert "cookie" not in request.headers
+            return httpx.Response(
+                200,
+                json={"target": "/"},
+                headers={
+                    "set-cookie": (
+                        "disco_local_preview_19120=preview-proof; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                },
+            )
+        if request.url.path == "/":
+            cookie = request.headers.get("cookie", "")
+            assert "disco_local_preview_19120=preview-proof" in cookie
+            assert "disco_session" not in cookie
+            return httpx.Response(200, text="<h1>Build Smoke OK</h1>")
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
+    )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, _headers = await transport.fetch_isolated_preview(cid)
+
+    assert status == 200
+    assert body == "<h1>Build Smoke OK</h1>"
+    assert [path for path, _content in seen] == [
+        f"/conversations/{cid}/preview/capability",
+        bootstrap_path,
+        bootstrap_path,
+        "/",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("document", "headers", "expected"),
+    [
+        (
+            "<script>no body handoff</script>",
+            {"clear-site-data": '"cookies"'},
+            "invalid preview storage reset response",
+        ),
+        (
+            '<script>body:"handoff=proof"</script>',
+            {
+                "clear-site-data": '"cookies"',
+                "set-cookie": "disco_local_preview_19120=too-early; Path=/",
+            },
+            "preview storage reset installed a cookie too early",
+        ),
+    ],
+)
+async def test_http_transport_rejects_malformed_preview_storage_reset(document, headers, expected):
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.endswith("/preview/capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            return httpx.Response(200, text=document, headers=headers)
+        raise AssertionError("content loaded after malformed storage reset")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
+    )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, result_headers = await transport.fetch_isolated_preview(cid)
+
+    assert status == 502
+    assert body == expected
+    assert result_headers == {}
+    assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path]
+
+
+@pytest.mark.asyncio
+async def test_http_transport_does_not_reflect_failed_storage_handoff():
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+    handoff = "one-use-handoff-must-not-be-retained"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/preview/capability"):
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 8000,
+                    "transport": "canonical",
+                    "preview_authority": "committed:proof",
+                },
+            )
+        if request.content == b"intent=one-use-intent":
+            return httpx.Response(
+                200,
+                text=f'<script>body:"handoff={handoff}"</script>',
+                headers={"clear-site-data": '"cookies"'},
+            )
+        return httpx.Response(409, text=f"hostile reflection {handoff}")
+
+    transport = HttpTransport("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, headers = await transport.fetch_isolated_preview(cid)
+
+    assert status == 409
+    assert body == "preview storage handoff failed"
+    assert handoff not in body
+    assert headers == {}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bootstrap_url",
     [
