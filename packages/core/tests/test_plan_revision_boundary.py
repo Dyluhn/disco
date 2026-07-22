@@ -6,19 +6,28 @@ from pathlib import Path
 
 import pytest
 from disco.core import (
+    ActionEvent,
     ConversationStatus,
     DoDSpec,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     PlanEvent,
     PlanStep,
     PlanVerificationTransition,
     PlanVerifierFailure,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
+    ToolResult,
 )
-from disco.core.dod import FileExistsPredicate, predicate_fingerprint, predicate_fingerprints
+from disco.core.dod import (
+    CommandExitPredicate,
+    FileExistsPredicate,
+    predicate_fingerprint,
+    predicate_fingerprints,
+)
 from disco.core.loop import signals
 from disco.core.loop.control import Disp
 from disco.core.loop.plan_revisions import (
@@ -279,6 +288,182 @@ async def test_eight_to_zero_and_malformed_revisions_are_recoverably_blocked() -
     assert len([event for event in events if isinstance(event, PlanEvent)]) == 1
     assert any(
         isinstance(event, StatusEvent) and event.detail == "invalid_plan_done_conditions"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_failed_command_may_be_replaced_once_without_bypass_or_scope_loss() -> None:
+    """A durable failure can request approval before the two-failure bypass bar."""
+    loop, store = build_loop(ScriptedAgent([]), conversation_id="first-command-repair")
+    external = DoDSpec(predicates=[FileExistsPredicate(path="owner-required.txt")])
+    await store.set_dod_spec(loop.conversation_id, external, set_by="harness")
+    retained = FileExistsPredicate(path="artifact.txt")
+    failed = CommandExitPredicate(cmd="host-specific-check artifact.txt")
+    old = loop._plan_from_args(
+        {
+            "summary": "Initial contract",
+            "steps": [
+                {
+                    "title": "Build artifact",
+                    "done_condition": retained.model_dump(mode="json"),
+                },
+                {
+                    "title": "Verify artifact",
+                    "done_condition": failed.model_dump(mode="json"),
+                },
+            ],
+        },
+        await loop._events(),
+    )
+    await loop._emit(old)
+    await loop._emit(await loop._plan_approval_status(old, await loop._events()))
+
+    productive = ActionEvent(
+        thought="build it",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "touch artifact.txt"}),
+    )
+    await loop._emit(productive)
+    await loop._emit(
+        ObservationEvent(
+            action_id=productive.id,
+            tool_result=ToolResult(
+                call_id=productive.tool_call.call_id,
+                tool_name="shell",
+                success=True,
+                content="built",
+            ),
+        )
+    )
+    failure = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="plan_verification_failed",
+        plan_verifier_failure=PlanVerifierFailure(
+            plan_revision=old.revision,
+            plan_event_id=old.id,
+            predicate_fingerprints=predicate_fingerprints([retained, failed]),
+            failed_predicate_fingerprints=[predicate_fingerprint(failed)],
+            spec_fingerprint="sha256:spec",
+            failure_fingerprint="sha256:first-command-failure",
+            failure_kinds=["command"],
+            attempt_for_approved_plan=1,
+            approvals_with_same_predicates=1,
+            replan_allowed=True,
+        ),
+    )
+    await loop._emit(failure)
+
+    replacement = CommandExitPredicate(cmd="portable-check artifact.txt")
+    revised_args = {
+        "summary": "Use the portable verifier",
+        "steps": [
+            {
+                "title": "Build artifact",
+                "done_condition": retained.model_dump(mode="json"),
+            },
+            {
+                "title": "Verify artifact portably",
+                "done_condition": replacement.model_dump(mode="json"),
+            },
+        ],
+    }
+    assert (
+        await loop._meta.handle_propose_plan_update(
+            action_step("propose_plan_update", revised_args), await loop._events()
+        )
+        is Disp.HALT
+    )
+    await loop.approve_plan()
+
+    events = await loop._events()
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 2
+    transition = next(
+        event.plan_verification_transition
+        for event in reversed(events)
+        if isinstance(event, StatusEvent) and event.plan_verification_transition is not None
+    )
+    assert transition.reason == "approved_plan_revision"
+    assert transition.old_predicate_fingerprints == predicate_fingerprints([retained, failed])
+    assert transition.new_predicate_fingerprints == predicate_fingerprints([retained, replacement])
+    assert not signals.verifier_repair_execution_active(events)
+    assert await store.get_external_dod_spec(loop.conversation_id) == external
+
+
+@pytest.mark.asyncio
+async def test_first_failure_cannot_replace_an_unfailed_predicate_at_same_width() -> None:
+    loop, _store = build_loop(ScriptedAgent([]), conversation_id="scoped-command-repair")
+    retained = FileExistsPredicate(path="artifact.txt")
+    failed = CommandExitPredicate(cmd="bad-check artifact.txt")
+    old = loop._plan_from_args(
+        {
+            "summary": "Initial contract",
+            "steps": [
+                {"title": "Build", "done_condition": retained.model_dump(mode="json")},
+                {"title": "Verify", "done_condition": failed.model_dump(mode="json")},
+            ],
+        },
+        await loop._events(),
+    )
+    await loop._emit(old)
+    await loop._emit(await loop._plan_approval_status(old, await loop._events()))
+    productive = ActionEvent(
+        thought="build it",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "touch artifact.txt"}),
+    )
+    await loop._emit(productive)
+    await loop._emit(
+        ObservationEvent(
+            action_id=productive.id,
+            tool_result=ToolResult(
+                call_id=productive.tool_call.call_id,
+                tool_name="shell",
+                success=True,
+                content="built",
+            ),
+        )
+    )
+    await loop._emit(
+        StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail="plan_verification_failed",
+            plan_verifier_failure=PlanVerifierFailure(
+                plan_revision=old.revision,
+                plan_event_id=old.id,
+                predicate_fingerprints=predicate_fingerprints([retained, failed]),
+                failed_predicate_fingerprints=[predicate_fingerprint(failed)],
+                spec_fingerprint="sha256:spec",
+                failure_fingerprint="sha256:scoped-command-failure",
+                failure_kinds=["command"],
+                attempt_for_approved_plan=1,
+                approvals_with_same_predicates=1,
+                replan_allowed=True,
+            ),
+        )
+    )
+
+    unrelated = {
+        "summary": "Replace unrelated scope too",
+        "steps": [
+            {
+                "title": "Move artifact without an audited rename",
+                "done_condition": {"kind": "file_exists", "path": "other.txt"},
+            },
+            {
+                "title": "Portable verifier",
+                "done_condition": {"kind": "command", "cmd": "portable-check artifact.txt"},
+            },
+        ],
+    }
+    assert (
+        await loop._meta.handle_propose_plan_update(
+            action_step("propose_plan_update", unrelated), await loop._events()
+        )
+        is Disp.CONTINUE
+    )
+    events = await loop._events()
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 1
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "plan_predicate_weakening_blocked"
         for event in events
     )
 

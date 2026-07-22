@@ -8,6 +8,7 @@ and one causal-input boundary shared by both revision entry paths.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 from ..dod import (
@@ -18,6 +19,8 @@ from ..dod import (
     PlanPredicateDiff,
     idempotence_fingerprint,
     plan_predicate_diff,
+    predicate_fingerprint,
+    predicate_fingerprints,
 )
 from ..events import (
     ConversationStatus,
@@ -148,23 +151,28 @@ def _same_width_typed_replacement(events: list[Event], candidate: PlanEvent) -> 
     return bool(old) and len(old) == len(new)
 
 
-def _repair_has_prior_productive_action(events: list[Event]) -> bool:
+def _repair_has_prior_productive_action(
+    events: list[Event],
+    failure_event: StatusEvent | None = None,
+) -> bool:
     """Mirror the persisted repair classifier's productive-work prerequisite."""
     approved = signals.latest_approved_plan(events)
     if approved is None:
         return False
-    failure_seq = max(
-        (
-            event.seq or 0
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.plan_verifier_failure is not None
-            and event.plan_verifier_failure.plan_event_id == approved.id
-            and event.plan_verifier_failure.plan_revision == approved.revision
-            and event.plan_verifier_failure.attempt_for_approved_plan >= 2
-        ),
-        default=0,
-    )
+    failure_seq = (failure_event.seq or 0) if failure_event is not None else 0
+    if failure_event is None:
+        failure_seq = max(
+            (
+                event.seq or 0
+                for event in events
+                if isinstance(event, StatusEvent)
+                and event.plan_verifier_failure is not None
+                and event.plan_verifier_failure.plan_event_id == approved.id
+                and event.plan_verifier_failure.plan_revision == approved.revision
+                and event.plan_verifier_failure.attempt_for_approved_plan >= 2
+            ),
+            default=0,
+        )
     approval_seq = max(
         (
             event.seq or 0
@@ -183,9 +191,95 @@ def _repair_has_prior_productive_action(events: list[Event]) -> bool:
     )
 
 
+def _persisted_candidate_seq(events: list[Event], candidate: PlanEvent) -> int:
+    persisted = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, PlanEvent)
+            and event.id == candidate.id
+            and event.revision == candidate.revision
+        ),
+        None,
+    )
+    if persisted is not None:
+        return persisted.seq or 0
+    return max((event.seq or 0 for event in events), default=0) + 1
+
+
+def _latest_repairable_failure(events: list[Event], candidate: PlanEvent) -> StatusEvent | None:
+    """Return the causal plan-owned failure immediately authorizing a correction.
+
+    A single real verifier failure may justify proposing a changed typed verifier
+    for approval.  That proposal authority is intentionally weaker than the
+    twice-failed execution-bypass receipt in :func:`signals.plan_is_verifier_repair`.
+    """
+    approved = signals.latest_approved_plan(events)
+    if approved is None:
+        return None
+    candidate_seq = _persisted_candidate_seq(events, candidate)
+    approved_fingerprints = predicate_fingerprints(plan_predicates(approved))
+    failure_event = max(
+        (
+            event
+            for event in events
+            if isinstance(event, StatusEvent)
+            and event.plan_verifier_failure is not None
+            and (event.seq or 0) < candidate_seq
+            and event.plan_verifier_failure.plan_event_id == approved.id
+            and event.plan_verifier_failure.plan_revision == approved.revision
+            and event.plan_verifier_failure.predicate_fingerprints == approved_fingerprints
+            and event.plan_verifier_failure.replan_allowed
+        ),
+        key=lambda event: event.seq or 0,
+        default=None,
+    )
+    if failure_event is None:
+        return None
+    failure_seq = failure_event.seq or 0
+    if any(
+        isinstance(event, MessageEvent)
+        and event.source == EventSource.USER
+        and failure_seq < (event.seq or 0) < candidate_seq
+        for event in events
+    ):
+        return None
+    return failure_event
+
+
+def failed_verifier_replacement_allowed(events: list[Event], candidate: PlanEvent) -> bool:
+    """Allow one exact, failure-scoped typed replacement through approval.
+
+    Every unaffected predicate must remain byte-identical (or be an ordinary
+    audited file rename).  Each non-monotonic drop must be one of the exact
+    failed predicate fingerprints, and it must be replaced one-for-one by the
+    same predicate kind.  This lets a host-specific command or URL verifier be
+    corrected after its first durable failure without granting the stricter
+    twice-failed execution bypass or allowing an unrelated acceptance bar to
+    disappear.
+    """
+    failure_event = _latest_repairable_failure(events, candidate)
+    if failure_event is None or failure_event.plan_verifier_failure is None:
+        return False
+    diff = predicate_diff_for_revision(events, candidate)
+    if diff is None or not diff.dropped or diff.invalid_renames:
+        return False
+    failed = Counter(failure_event.plan_verifier_failure.failed_predicate_fingerprints)
+    dropped = Counter(predicate_fingerprint(predicate) for predicate in diff.dropped)
+    if dropped - failed:
+        return False
+    if len(diff.added) != len(diff.dropped):
+        return False
+    if Counter(predicate.kind for predicate in diff.added) != Counter(
+        predicate.kind for predicate in diff.dropped
+    ):
+        return False
+    return _repair_has_prior_productive_action(events, failure_event)
+
+
 def verifier_repair_replacement_allowed(events: list[Event], candidate: PlanEvent) -> bool:
     """Proposal-time form of the narrow, causal typed-repair escape."""
-    return (
+    return failed_verifier_replacement_allowed(events, candidate) or (
         signals.verifier_repair_planning_active(events)
         and _repair_has_prior_productive_action(events)
         and _same_width_typed_replacement(events, candidate)
@@ -216,6 +310,7 @@ def assert_plan_revision_approvable(events: list[Event], candidate: PlanEvent) -
     if (
         diff is None
         or diff.is_monotonic
+        or failed_verifier_replacement_allowed(events, candidate)
         or (
             _same_width_typed_replacement(events, candidate)
             and signals.plan_is_verifier_repair(events, candidate)
