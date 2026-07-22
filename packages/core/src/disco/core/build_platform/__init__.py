@@ -50,8 +50,18 @@ from .identity import (
     composition_digest,
     derive_run_admission_identity,
 )
+from .registry import BuildPlatformRegistry, ComponentSpec, ProfileChoice, RegistryError
+from .resolver import (
+    BuildComposition,
+    OperationBlock,
+    ResolutionError,
+    ResolutionInputs,
+    resolve_build_composition,
+)
 
 __all__ = [
+    "BuildComposition",
+    "BuildPlatformRegistry",
     "BuildProfile",
     "CapabilityDenial",
     "CapabilityLayer",
@@ -61,6 +71,7 @@ __all__ = [
     "ComponentIntent",
     "ComponentKind",
     "ComponentRequirement",
+    "ComponentSpec",
     "CompositionDigest",
     "ConstructionEngine",
     "ConstructionPlan",
@@ -74,6 +85,7 @@ __all__ = [
     "EntryDescriptor",
     "FrozenModel",
     "ModuleRef",
+    "OperationBlock",
     "PackageExporter",
     "PackagePlan",
     "PackageRequest",
@@ -83,9 +95,13 @@ __all__ = [
     "PolicyRule",
     "PreviewPlan",
     "PreviewPolicy",
+    "ProfileChoice",
     "ReadinessSignal",
     "RunAdmissionAnchor",
     "RunAdmissionIdentity",
+    "RegistryError",
+    "ResolutionError",
+    "ResolutionInputs",
     "SupportLevel",
     "TargetAdapter",
     "TargetPlan",
@@ -98,4 +114,5 @@ __all__ = [
     "VerifierVerdictKind",
     "composition_digest",
     "derive_run_admission_identity",
+    "resolve_build_composition",
 ]

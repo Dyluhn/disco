@@ -26,6 +26,7 @@ class FrozenModel(BaseModel):
 
 
 class ComponentKind(str, Enum):
+    PROFILE = "profile"
     ENGINE = "engine"
     TARGET = "target"
     VERIFIER = "verifier"
