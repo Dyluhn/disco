@@ -21,11 +21,13 @@ from disco.core.build_platform import (
     PolicyLayer,
     PolicyRule,
     PreviewPlan,
+    PromptContextInputs,
     RegistryError,
     ResolutionError,
     ResolutionInputs,
     TargetPlan,
     TargetRequest,
+    ToolDescriptor,
     VerifierCheck,
     VerifierPlan,
     resolve_build_composition,
@@ -58,7 +60,7 @@ class _Engine:
                     required_capabilities=frozenset({"workspace.write"}),
                 ),
             ),
-            requested_tools=frozenset({"file_edit", "shell"}),
+            requested_tools=frozenset({"file_edit"}),
         )
 
 
@@ -170,6 +172,16 @@ def _inputs(
         platform_policy=_policy("platform"),
         user_policy=user_policy or _policy("user"),
         requested_reference_categories=references,
+        prompt_context=PromptContextInputs(
+            tool_catalog=(
+                ToolDescriptor(
+                    name="file_edit",
+                    description="Edit a workspace file",
+                    required_capabilities=frozenset({"workspace.write"}),
+                ),
+            ),
+            host_visible_tools=frozenset({"file_edit"}),
+        ),
     )
 
 
@@ -183,6 +195,7 @@ def test_resolver_is_deterministic_and_inspectable() -> None:
     assert first.target == _Target.id
     assert first.target_plan.delivery.shape == "data.job_bundle"
     assert first.target_plan.preview.modality == "none"
+    assert [tool.name for tool in first.prompt_context.visible_tools] == ["file_edit"]
     assert first.blocked_operations == ()
 
 

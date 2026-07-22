@@ -362,3 +362,12 @@ class BuildProfile(FrozenModel):
     capabilities: CapabilityLayer
     policy: PolicyLayer
     requirements: CompatibilityRequirements = CompatibilityRequirements()
+
+    @model_validator(mode="after")
+    def _module_ids_are_unique(self) -> BuildProfile:
+        module_ids = [
+            module.component.canonical for module in self.prompt_modules + self.context_modules
+        ]
+        if len(module_ids) != len(set(module_ids)):
+            raise ValueError("profile module component IDs must be unique")
+        return self

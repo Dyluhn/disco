@@ -7,6 +7,12 @@ from typing import Literal
 
 from pydantic import Field
 
+from .compiler import (
+    CompositionCompileError,
+    PromptContextComposition,
+    PromptContextInputs,
+    compile_prompt_context,
+)
 from .contracts import (
     BuildProfile,
     CapabilityDenial,
@@ -52,6 +58,7 @@ class ResolutionInputs(FrozenModel):
     platform_policy: PolicyLayer
     user_policy: PolicyLayer
     requested_reference_categories: frozenset[str] = frozenset()
+    prompt_context: PromptContextInputs = PromptContextInputs()
 
 
 class BuildComposition(FrozenModel):
@@ -73,6 +80,7 @@ class BuildComposition(FrozenModel):
     required_runtime_capabilities: tuple[str, ...]
     effective_capabilities: EffectiveCapabilityPolicy
     effective_policy: EffectivePolicy
+    prompt_context: PromptContextComposition
     blocked_operations: tuple[OperationBlock, ...] = ()
 
     def blocked(self, operation: str) -> bool:
@@ -389,9 +397,29 @@ def resolve_build_composition(
     )
     effective_policy = _effective_policy(policy_layers)
 
+    try:
+        prompt_context = compile_prompt_context(
+            prompt_modules=profile.prompt_modules,
+            context_modules=profile.context_modules,
+            requested_tools=construction.requested_tools,
+            effective_capabilities=effective_capabilities,
+            effective_policy=effective_policy,
+            inputs=inputs.prompt_context,
+        )
+    except CompositionCompileError as exc:
+        raise ResolutionError(f"prompt/context compilation failed closed: {exc}") from exc
+
     operation_blocks = _registered_plan_component_blocks(registry, profile)
     operation_blocks.extend(_compatibility_blocks(registry, profile))
     operation_blocks.extend(_module_blocks(registry, profile))
+    for denial in prompt_context.denials:
+        operation_blocks.append(
+            OperationBlock(
+                operation=("construct" if denial.operation in {"construct", "tool"} else "context"),
+                code=denial.code,
+                detail=f"{denial.subject}: {denial.detail}",
+            )
+        )
     incompatible_references = (
         inputs.requested_reference_categories - profile.compatible_reference_categories
     )
@@ -447,5 +475,6 @@ def resolve_build_composition(
         required_runtime_capabilities=tuple(sorted(required)),
         effective_capabilities=effective_capabilities,
         effective_policy=effective_policy,
+        prompt_context=prompt_context,
         blocked_operations=normalized_blocks,
     )
