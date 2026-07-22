@@ -39,6 +39,7 @@ export interface ExportObs {
   requested: boolean;
   download_present: boolean;
   download_bytes: number;
+  workspace_match: boolean;
 }
 export interface CleanupObs {
   orphans: number;
@@ -79,7 +80,7 @@ export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = {
   preview: ["owner", "manual_port"],
   shown: ["artifact_shown", "preview_shown"],
   verification: ["ready_for_verification_called", "passed"],
-  export: ["requested", "download_present", "download_bytes"],
+  export: ["requested", "download_present", "download_bytes", "workspace_match"],
   cleanup: [
     "orphans",
     "workspace_released",

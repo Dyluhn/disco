@@ -26,7 +26,7 @@ _ORACLE_READS: dict[str, set[str]] = {
     "preview": {"owner", "manual_port"},
     "shown": {"artifact_shown", "preview_shown"},
     "verification": {"ready_for_verification_called", "passed"},
-    "export": {"requested", "download_present", "download_bytes"},
+    "export": {"requested", "download_present", "download_bytes", "workspace_match"},
     "cleanup": {
         "orphans",
         "workspace_released",
@@ -59,6 +59,7 @@ def test_export_download_fields_now_validated() -> None:
     # the specific P1A gap gpt-5.5 found: download_present/download_bytes are now typed
     assert _SLICE_FIELDS["export"]["download_present"] is bool
     assert _SLICE_FIELDS["export"]["download_bytes"] is int
+    assert _SLICE_FIELDS["export"]["workspace_match"] is bool
 
 
 def test_bool_download_bytes_now_fails_validation() -> None:

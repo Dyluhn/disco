@@ -46,6 +46,94 @@ class ContractOracle:
 
         missing: list[str] = []
 
+        lifecycle = scenario.get("lifecycle") or {}
+        if lifecycle:
+            allowed_lifecycle = {
+                "pause_resume_at",
+                "restart_after_terminal",
+                "restore_version",
+                "export_download",
+            }
+            if not isinstance(lifecycle, dict) or not set(lifecycle).issubset(allowed_lifecycle):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> lifecycle",
+                        facts={"reason": "lifecycle contains an unsupported action"},
+                    )
+                ]
+            if lifecycle.get("pause_resume_at") not in (None, "after_first_file_write"):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> lifecycle.pause_resume_at",
+                        facts={"reason": "only after_first_file_write is supported"},
+                    )
+                ]
+            if lifecycle.get("restore_version") not in (None, "oldest", "previous"):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> lifecycle.restore_version",
+                        facts={"reason": "restore_version must be oldest or previous"},
+                    )
+                ]
+            for field in ("restart_after_terminal", "export_download"):
+                if field in lifecycle and type(lifecycle[field]) is not bool:
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                            first_broken_link=f"scenario_contract -> lifecycle.{field}",
+                            facts={"reason": f"{field} must be boolean"},
+                        )
+                    ]
+        import_fixture = scenario.get("import_fixture")
+        if import_fixture is not None:
+            fixture_files = (
+                import_fixture.get("files") if isinstance(import_fixture, dict) else None
+            )
+            valid_fixture_files = isinstance(fixture_files, dict) and bool(fixture_files)
+            if valid_fixture_files:
+                for path, contents in fixture_files.items():
+                    generated = (
+                        isinstance(contents, dict)
+                        and set(contents) == {"line_template", "count"}
+                        and isinstance(contents.get("line_template"), str)
+                        and type(contents.get("count")) is int
+                        and 1 <= int(contents["count"]) <= 100_000
+                    )
+                    if not isinstance(path, str) or not path or not (
+                        isinstance(contents, str) or generated
+                    ):
+                        valid_fixture_files = False
+                        break
+            if (
+                not isinstance(import_fixture, dict)
+                or set(import_fixture) != {"filename", "files"}
+                or not isinstance(import_fixture.get("filename"), str)
+                or not str(import_fixture.get("filename")).endswith(".zip")
+                or not valid_fixture_files
+            ):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> import_fixture",
+                        facts={
+                            "reason": (
+                                "import_fixture must declare filename and text or bounded "
+                                "line_template/count files"
+                            )
+                        },
+                    )
+                ]
+        if (lifecycle or import_fixture is not None) and "product_evidence" not in present:
+            missing.append("product_evidence (scenario drives lifecycle/import actions)")
+
         # workspace truth requires a workspace manifest. ``exact_paths`` is an
         # opt-in closed product-file set; ordinary ``files`` assertions retain
         # their open-set semantics.
@@ -115,25 +203,48 @@ class ContractOracle:
         tool_scope_assert = assertions.get("tool_scope") or {}
         if tool_scope_assert:
             planning_disallows = tool_scope_assert.get("planning_disallows")
-            if (
-                not isinstance(planning_disallows, list)
-                or not planning_disallows
-                or not all(isinstance(name, str) and name for name in planning_disallows)
-                or len(set(planning_disallows)) != len(planning_disallows)
-            ):
+            execution_disallows = tool_scope_assert.get("execution_disallows")
+
+            def _valid_names(value: Any) -> bool:
+                return (
+                    isinstance(value, list)
+                    and bool(value)
+                    and all(isinstance(name, str) and name for name in value)
+                    and len(set(value)) == len(value)
+                )
+
+            if planning_disallows is None and execution_disallows is None:
                 return [
                     failing(
                         _ORACLE,
                         fc.SCENARIO_CONTRACT_UNSATISFIABLE,
-                        first_broken_link=("scenario_contract -> tool_scope.planning_disallows"),
+                        first_broken_link="scenario_contract -> tool_scope",
                         facts={
                             "reason": (
-                                "assertions.tool_scope.planning_disallows must be a "
-                                "non-empty unique list of tool names"
+                                "assertions.tool_scope must declare planning_disallows "
+                                "and/or execution_disallows"
                             )
                         },
                     )
                 ]
+            for field, value in (
+                ("planning_disallows", planning_disallows),
+                ("execution_disallows", execution_disallows),
+            ):
+                if value is not None and not _valid_names(value):
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                            first_broken_link=f"scenario_contract -> tool_scope.{field}",
+                            facts={
+                                "reason": (
+                                    f"assertions.tool_scope.{field} must be a non-empty "
+                                    "unique list of tool names"
+                                )
+                            },
+                        )
+                    ]
         if tool_scope_assert and "tool_scope" not in present:
             missing.append("tool_scope_capture (scenario asserts assertions.tool_scope)")
 
@@ -155,6 +266,29 @@ class ContractOracle:
                         facts={
                             "reason": (
                                 "assertions.browser_verification must contain only required: true"
+                            )
+                        },
+                    )
+                ]
+        context_pressure = assertions.get("context_pressure")
+        if context_pressure is not None:
+            if (
+                not isinstance(context_pressure, dict)
+                or not isinstance(context_pressure.get("path"), str)
+                or not context_pressure.get("path")
+                or type(context_pressure.get("min_distinct_offsets", 2)) is not int
+                or int(context_pressure.get("min_distinct_offsets", 2)) < 2
+                or type(context_pressure.get("require_compaction")) is not bool
+            ):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> context_pressure",
+                        facts={
+                            "reason": (
+                                "context_pressure requires path, min_distinct_offsets >= 2, "
+                                "and boolean require_compaction"
                             )
                         },
                     )

@@ -84,6 +84,7 @@ def _green_export_capture() -> dict:
         "requested": True,
         "download_present": True,
         "download_bytes": 2048,
+        "workspace_match": True,
     }
     cap["scenario_id"] = "export_smoke"
     return cap

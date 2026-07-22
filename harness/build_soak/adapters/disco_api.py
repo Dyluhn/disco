@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
@@ -51,6 +52,7 @@ import shlex
 import sqlite3
 import tempfile
 import time
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -575,6 +577,18 @@ class Transport(Protocol):
     async def get_json(self, path: str) -> tuple[int, dict[str, Any]]: ...
 
     async def get_text(self, path: str) -> tuple[int, str, dict[str, str]]: ...
+
+    async def post_file(
+        self,
+        path: str,
+        *,
+        field: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> tuple[int, dict[str, Any]]: ...
+
+    async def get_bytes(self, path: str) -> tuple[int, bytes, dict[str, str]]: ...
 
     async def fetch_isolated_preview(
         self, conversation_id: str
@@ -1294,6 +1308,11 @@ class DiscoApiClient:
         # drive_scenario raised before returning a CollectedRun (so an abandoned RUNNING
         # build can still be killed from run_once's finally). None until a create succeeds.
         self.last_conversation_id: str | None = None
+        # Scenario-owned product evidence captured through real public surfaces
+        # (import, pause/resume, restart, rollback, export). Reset for every run by
+        # run_once; unknown keys are intentionally forward-compatible in the
+        # product-evidence dossier.
+        self.scenario_evidence: dict[str, Any] = {}
         # Live soak observability. The terminal classifier remains authoritative,
         # but this sampler proves the model/tool trace was inspected while the
         # run was active and records the first persistently bad threshold crossing.
@@ -1594,11 +1613,27 @@ class DiscoApiClient:
         autonomous: bool = False,
         appkit: bool = False,
         surface: str = "build",
+        import_fixture: dict[str, Any] | None = None,
     ) -> str:
         """POST /conversations then POST the user message (which the route appends
         AND kicks). Returns the conversation_id."""
         if surface not in {"build", "agent"}:
             raise ValueError(f"unsupported soak conversation surface: {surface!r}")
+        if import_fixture is not None:
+            if surface != "build" or appkit:
+                raise ValueError("import fixtures are supported only for Freeform Build")
+            if autonomous:
+                raise ValueError("import fixtures must use the interactive approval path")
+            cid = await self._create_imported_conversation(import_fixture)
+            self.last_conversation_id = cid
+            await self.start_inspect_collection(cid)
+            mstatus, _ = await self._t.post_json(
+                f"/conversations/{cid}/messages", {"content": prompt}
+            )
+            if mstatus >= 400:
+                raise RuntimeError(f"post_message failed: HTTP {mstatus}")
+            return cid
+
         body: dict[str, Any] = {"surface": surface, "autonomous": autonomous}
         if appkit:
             # EPIC F strict AppKit mode — the phase-based allowlist build. The
@@ -1628,6 +1663,75 @@ class DiscoApiClient:
         mstatus, _ = await self._t.post_json(f"/conversations/{cid}/messages", mbody)
         if mstatus >= 400:
             raise RuntimeError(f"post_message failed: HTTP {mstatus}")
+        return cid
+
+    async def _create_imported_conversation(self, fixture: dict[str, Any]) -> str:
+        """Seed a real imported project through ``/api/projects/import``.
+
+        The fixture is deliberately small and data-only: a safe archive filename
+        plus a mapping of relative POSIX paths to UTF-8 text. The product endpoint
+        remains responsible for its own independent archive validation and project
+        provenance; the runner merely constructs the user-supplied zip bytes.
+        """
+        filename = fixture.get("filename")
+        files = fixture.get("files")
+        if not isinstance(filename, str) or not filename.endswith(".zip"):
+            raise ValueError("import_fixture.filename must be a .zip filename")
+        if not isinstance(files, dict) or not files:
+            raise ValueError("import_fixture.files must be a non-empty mapping")
+        archive = io.BytesIO()
+        total_bytes = 0
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for raw_path, text_spec in sorted(files.items()):
+                if not isinstance(raw_path, str) or not raw_path:
+                    raise ValueError("import_fixture file paths must be non-empty strings")
+                normalized = posixpath.normpath(raw_path.replace("\\", "/"))
+                if (
+                    normalized in {"", ".", ".."}
+                    or normalized.startswith("../")
+                    or posixpath.isabs(normalized)
+                    or normalized != raw_path.replace("\\", "/")
+                ):
+                    raise ValueError(f"unsafe import_fixture path: {raw_path!r}")
+                if isinstance(text_spec, str):
+                    text = text_spec
+                elif (
+                    isinstance(text_spec, dict)
+                    and set(text_spec) == {"line_template", "count"}
+                    and isinstance(text_spec.get("line_template"), str)
+                    and type(text_spec.get("count")) is int
+                    and 1 <= int(text_spec["count"]) <= 100_000
+                ):
+                    template = str(text_spec["line_template"])
+                    text = "".join(
+                        template.replace("{{row}}", str(row))
+                        for row in range(1, int(text_spec["count"]) + 1)
+                    )
+                else:
+                    raise ValueError(
+                        "import_fixture file contents must be UTF-8 text or a bounded "
+                        "line_template/count generator"
+                    )
+                encoded = text.encode("utf-8")
+                total_bytes += len(encoded)
+                bundle.writestr(normalized, encoded)
+        status, data = await self._t.post_file(
+            "/api/projects/import",
+            field="file",
+            filename=filename,
+            content=archive.getvalue(),
+            content_type="application/zip",
+        )
+        if status >= 400 or "conversation_id" not in data:
+            raise RuntimeError(f"import_project failed: HTTP {status} {data}")
+        cid = str(data["conversation_id"])
+        accepted = data.get("files") == len(files) and data.get("bytes") == total_bytes
+        self.scenario_evidence["import"] = {
+            "accepted": accepted,
+            "file_count": data.get("files"),
+            "bytes": data.get("bytes"),
+            "filename": filename,
+        }
         return cid
 
     async def approve_plan(self, conversation_id: str) -> None:
@@ -1709,6 +1813,45 @@ class DiscoApiClient:
         ``ValueError: invalid literal for int() ... 'RUNNING'`` the moment a build paused."""
         status, data = await self._t.post_json(f"/conversations/{conversation_id}/resume", {})
         return {"http_status": status, **(data if isinstance(data, dict) else {})}
+
+    async def pause(self, conversation_id: str) -> None:
+        """Request the real cooperative pause control over the product WebSocket."""
+        await self._t.ws_control(conversation_id, {"type": "pause"})
+
+    async def restore_workspace_version(
+        self, conversation_id: str, *, selector: str = "oldest"
+    ) -> dict[str, Any]:
+        """Restore a durable project version through the public history routes."""
+        status, data = await self._t.get_json(f"/conversations/{conversation_id}/versions")
+        versions = data.get("versions") if isinstance(data, dict) else None
+        if status >= 400 or not isinstance(versions, list) or not versions:
+            return {"ok": False, "http_status": status, "reason": "versions_unavailable"}
+        valid = [row for row in versions if isinstance(row, dict) and type(row.get("seq")) is int]
+        if not valid:
+            return {"ok": False, "http_status": status, "reason": "versions_malformed"}
+        if selector == "previous":
+            ordered = sorted(valid, key=lambda row: int(row["seq"]), reverse=True)
+            selected = ordered[1] if len(ordered) > 1 else ordered[0]
+        else:
+            selected = min(valid, key=lambda row: int(row["seq"]))
+        selected_seq = int(selected["seq"])
+        restore_status, result = await self._t.post_json(
+            f"/conversations/{conversation_id}/versions/{selected_seq}/restore", {}
+        )
+        return {
+            "ok": 200 <= restore_status < 300 and result.get("restored") == selected_seq,
+            "http_status": restore_status,
+            "selected_seq": selected_seq,
+            "restored": result.get("restored"),
+            "new_version": result.get("new_version"),
+            "tree_digest": result.get("tree_digest"),
+        }
+
+    async def download_project(self, conversation_id: str) -> tuple[int, bytes]:
+        status, content, _headers = await self._t.get_bytes(
+            f"/api/projects/{conversation_id}/download"
+        )
+        return status, content
 
     async def kill(self, conversation_id: str) -> dict[str, Any]:
         """KILL (force-terminate) a conversation the runner is DONE with — the hygiene
@@ -2340,6 +2483,29 @@ class DiscoApiClient:
         # No authoritative snapshot means no workspace truth. Never substitute
         # generated/served bytes for source evidence or cross the preview auth boundary.
         return manifest
+
+    async def workspace_snapshot_digest(
+        self, conversation_id: str, file_paths: list[str]
+    ) -> str | None:
+        """Return a deterministic digest of the authoritative committed snapshot.
+
+        Used by restart scenarios to prove that a full App/Agent process restart
+        reconstructed the same project authority before any new user turn.
+        """
+        manifest = await self.collect_workspace(conversation_id, file_paths)
+        entries: list[tuple[str, str, int]] = []
+        for path, item in sorted(manifest.items()):
+            if not isinstance(item, dict) or item.get("present") is not True:
+                continue
+            sha = item.get("sha256")
+            size = item.get("size")
+            if not isinstance(sha, str) or type(size) is not int:
+                return None
+            entries.append((str(path), sha, size))
+        if not entries:
+            return None
+        raw = json.dumps(entries, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
 
     def collect_browser_evidence(
         self,
@@ -3852,6 +4018,34 @@ class HttpTransport:
         ) as client:
             r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
             return r.status_code, r.text, dict(r.headers)
+
+    async def post_file(
+        self,
+        path: str,
+        *,
+        field: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> tuple[int, dict[str, Any]]:
+        await self._ensure_session()
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            r = await client.post(
+                f"{self.base_url}{path}",
+                files={field: (filename, content, content_type)},
+                headers=self._headers(unsafe=True),
+            )
+            return r.status_code, _safe_json(r)
+
+    async def get_bytes(self, path: str) -> tuple[int, bytes, dict[str, str]]:
+        await self._ensure_session()
+        async with httpx.AsyncClient(
+            timeout=self._timeout,
+            follow_redirects=True,
+            transport=self._transport,
+        ) as client:
+            r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
+            return r.status_code, r.content, dict(r.headers)
 
     async def fetch_isolated_preview(self, conversation_id: str) -> tuple[int, str, dict[str, str]]:
         """Mint/redeem a path capability without crossing the app session.

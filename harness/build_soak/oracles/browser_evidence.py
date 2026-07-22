@@ -15,7 +15,8 @@ product_evidence (the HARN-1b dossier, all keys optional):
                        "shown_to_user": bool, "url": str},
       "shown":        {"artifact_shown": bool, "preview_shown": bool},
       "verification": {"ready_for_verification_called": bool, "passed": bool},
-      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+      "export":       {"requested": bool, "download_present": bool, "download_bytes": int,
+                         "workspace_match": bool},
       "cleanup":      {"orphans": int, "workspace_released": bool, "scope"?: str,
                        "container_orphans"?: int, "volume_orphans"?: int,
                        "volume_scope"?: str},
@@ -229,7 +230,12 @@ class ExportDownloadOracle:
         if not ex.get("requested", False):
             return [skipping(self._NAME, reason="no export requested")]
         nbytes = _int(ex.get("download_bytes", 0))
-        if ex.get("download_present", False) is not True or nbytes is None or nbytes <= 0:
+        if (
+            ex.get("download_present", False) is not True
+            or nbytes is None
+            or nbytes <= 0
+            or ex.get("workspace_match") is not True
+        ):
             return [
                 failing(
                     self._NAME,
@@ -238,6 +244,7 @@ class ExportDownloadOracle:
                     facts={
                         "download_present": ex.get("download_present"),
                         "download_bytes": ex.get("download_bytes"),
+                        "workspace_match": ex.get("workspace_match"),
                     },
                 )
             ]

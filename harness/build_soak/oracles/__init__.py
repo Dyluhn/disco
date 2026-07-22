@@ -31,6 +31,7 @@ from .output_truth import OutputTruthOracle
 from .provider_ledger import ProviderLedgerOracle
 from .revision import RevisionOracle
 from .scenario_browser_verification import ScenarioBrowserVerificationOracle
+from .scenario_lifecycle import ContextPressureOracle, ScenarioLifecycleOracle
 from .schema import OracleResult, failing, passing, skipping
 from .targeted_edit import RewriteAvoidanceOracle, TargetedEditOracle
 from .thrash import ThrashOracle
@@ -53,6 +54,7 @@ __all__ = [
     "CleanupOracle",
     "CommentAnchorOracle",
     "ContractOracle",
+    "ContextPressureOracle",
     "EventChainOracle",
     "ExportDownloadOracle",
     "HarnessValidityOracle",
@@ -64,6 +66,7 @@ __all__ = [
     "ProviderLedgerOracle",
     "RevisionOracle",
     "ScenarioBrowserVerificationOracle",
+    "ScenarioLifecycleOracle",
     "RewriteAvoidanceOracle",
     "ScreenLabelOracle",
     "ShowToUserOracle",

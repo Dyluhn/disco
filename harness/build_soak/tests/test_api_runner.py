@@ -8,8 +8,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import io
 import json
 import sqlite3
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -232,6 +234,43 @@ class FakeTransport:
                 return 200, html, {}
         return 404, "", {}
 
+    async def post_file(
+        self,
+        path,
+        *,
+        field,
+        filename,
+        content,
+        content_type,
+    ):
+        self.posts.append(
+            (
+                path,
+                {
+                    "field": field,
+                    "filename": filename,
+                    "content_type": content_type,
+                    "bytes": len(content),
+                },
+            )
+        )
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            files = [name for name in archive.namelist() if not name.endswith("/")]
+            total = sum(len(archive.read(name)) for name in files)
+        return 200, {
+            "conversation_id": self.cid,
+            "files": len(files),
+            "bytes": total,
+            "title": filename.removesuffix(".zip"),
+        }
+
+    async def get_bytes(self, path):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            for rel, text in sorted(self.workspace.items()):
+                bundle.writestr(rel, text.encode("utf-8") if isinstance(text, str) else text)
+        return 200, archive.getvalue(), {"content-type": "application/zip"}
+
     async def fetch_isolated_preview(self, conversation_id):
         return 200, self.preview_html, {"cache-control": "private, no-store"}
 
@@ -301,6 +340,139 @@ def _client(transport, tmp_path, *, require_workspace_commit: bool = False):
         projects_root=str(projects_root),
         require_workspace_commit=require_workspace_commit,
     )
+
+
+@pytest.mark.asyncio
+async def test_import_fixture_uses_real_import_surface_before_kick(tmp_path):
+    transport = FakeTransport(tmp_path / "disco.db", states=["RUNNING"])
+    client = _client(transport, tmp_path)
+
+    cid = await client.create_build_conversation(
+        "Update the imported project.",
+        import_fixture={
+            "filename": "sample.zip",
+            "files": {"README.md": "seed", "src/app.js": "export const seed = 1;"},
+        },
+    )
+
+    assert cid == transport.cid
+    assert transport.posts[0][0] == "/api/projects/import"
+    assert transport.posts[1] == (
+        f"/conversations/{transport.cid}/messages",
+        {"content": "Update the imported project."},
+    )
+    assert client.scenario_evidence["import"] == {
+        "accepted": True,
+        "file_count": 2,
+        "bytes": len(b"seed") + len(b"export const seed = 1;"),
+        "filename": "sample.zip",
+    }
+
+
+@pytest.mark.asyncio
+async def test_import_fixture_refuses_appkit_and_autonomous_shortcuts(tmp_path):
+    client = _client(FakeTransport(tmp_path / "disco.db", states=["RUNNING"]), tmp_path)
+    fixture = {"filename": "sample.zip", "files": {"README.md": "seed"}}
+
+    with pytest.raises(ValueError, match="Freeform Build"):
+        await client.create_build_conversation("x", appkit=True, import_fixture=fixture)
+    with pytest.raises(ValueError, match="interactive approval"):
+        await client.create_build_conversation("x", autonomous=True, import_fixture=fixture)
+
+
+@pytest.mark.asyncio
+async def test_import_fixture_expands_bounded_line_generator(tmp_path):
+    transport = FakeTransport(tmp_path / "disco.db", states=["RUNNING"])
+    client = _client(transport, tmp_path)
+
+    await client.create_build_conversation(
+        "Inspect the catalog.",
+        import_fixture={
+            "filename": "catalog.zip",
+            "files": {
+                "catalog.txt": {
+                    "line_template": "seed=41 row={{row}}\n",
+                    "count": 3,
+                }
+            },
+        },
+    )
+
+    assert client.scenario_evidence["import"]["accepted"] is True
+    assert client.scenario_evidence["import"]["bytes"] == len(
+        b"seed=41 row=1\nseed=41 row=2\nseed=41 row=3\n"
+    )
+
+
+def test_task_seed_materialization_is_recursive_and_nonmutating() -> None:
+    source = {
+        "prompt": "build seed {{seed}}",
+        "followups": [{"text": "revise {{seed}}"}],
+        "import_fixture": {
+            "files": {"catalog.txt": {"line_template": "{{seed}}/{{row}}\n", "count": 2}}
+        },
+    }
+
+    materialized = _run_mod._materialize_task_seed(source, 701)
+
+    assert materialized["prompt"] == "build seed 701"
+    assert materialized["followups"][0]["text"] == "revise 701"
+    assert materialized["import_fixture"]["files"]["catalog.txt"]["line_template"] == (
+        "701/{{row}}\n"
+    )
+    assert source["prompt"] == "build seed {{seed}}"
+
+
+def test_export_archive_must_match_declared_workspace_bytes() -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("index.html", b"truth")
+    workspace = {
+        "index.html": {
+            "present": True,
+            "size": 5,
+            "sha256": hashlib.sha256(b"truth").hexdigest(),
+        }
+    }
+
+    ok, facts = _run_mod._export_matches_workspace(
+        archive.getvalue(), workspace, ["index.html"]
+    )
+    assert ok is True
+    assert facts["archive_file_count"] == 1
+
+    with zipfile.ZipFile(archive := io.BytesIO(), "w") as bundle:
+        bundle.writestr("index.html", b"stale")
+    ok, facts = _run_mod._export_matches_workspace(
+        archive.getvalue(), workspace, ["index.html"]
+    )
+    assert ok is False
+    assert facts["mismatched_paths"] == ["index.html"]
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_trigger_records_durable_control_result(tmp_path):
+    transport = FakeTransport(tmp_path / "disco.db", states=["PAUSED", "RUNNING"])
+    client = _client(transport, tmp_path)
+    timeline: list[str] = []
+
+    await _run_mod._pause_resume_at_trigger(
+        client, transport.cid, timeline, trigger_seq=7, timeout_s=2
+    )
+
+    assert transport.ws_frames == [{"type": "pause"}]
+    assert client.scenario_evidence["pause_resume"]["ok"] is True
+    assert "settled PAUSED then resumed" in timeline[-1]
+
+
+@pytest.mark.asyncio
+async def test_restart_requires_private_isolated_stack_control(monkeypatch):
+    monkeypatch.delenv("DISCO_RELIABILITY_STACK_CONTROL_URL", raising=False)
+    monkeypatch.delenv("DISCO_RELIABILITY_STACK_CONTROL_TOKEN", raising=False)
+    assert await _run_mod._restart_isolated_stack() == {
+        "ok": False,
+        "reason": "isolated_stack_control_unavailable",
+    }
 
 
 # ---- scenarios.yaml loads + shapes -----------------------------------------

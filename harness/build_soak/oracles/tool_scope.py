@@ -139,10 +139,12 @@ class ToolScopeOracle:
             required = bool(((scenario or {}).get("assertions") or {}).get("tool_scope"))
             assertion = ((scenario or {}).get("assertions") or {}).get("tool_scope") or {}
             disallowed = assertion.get("planning_disallows") if required else None
+            execution_disallowed = assertion.get("execution_disallows") if required else None
             scope_result = self._check_allowed(
                 tool_scope,
                 required=required,
                 planning_disallows=disallowed,
+                execution_disallows=execution_disallowed,
             )
             if scope_result is not None:
                 results.append(scope_result)
@@ -157,12 +159,17 @@ class ToolScopeOracle:
         *,
         required: bool,
         planning_disallows: Any,
+        execution_disallows: Any,
     ) -> OracleResult | None:
         """`tool_scope` is a list of captured per-turn scopes:
         {mode, allowed_tools: [name,...]}. While mode == "planning" no mutating
         tool may appear in allowed_tools (§11.7 — hidden-but-callable is unsafe)."""
         planning_turns = 0
+        execution_turns = 0
         disallowed = set(planning_disallows) if isinstance(planning_disallows, list) else set()
+        execution_denied = (
+            set(execution_disallows) if isinstance(execution_disallows, list) else set()
+        )
         for index, turn in enumerate(tool_scope):
             malformed = turn.get("__malformed__")
             mode = turn.get("mode")
@@ -208,6 +215,15 @@ class ToolScopeOracle:
                     facts={"offered_but_not_callable": sorted(set(offered) - set(allowed))},
                 )
             if mode != "planning":
+                execution_turns += 1
+                leaked_execution = [name for name in allowed if name in execution_denied]
+                if leaked_execution:
+                    return failing(
+                        _ORACLE,
+                        fc.TOOL_SCOPE_MISMATCH,
+                        first_broken_link="execution_tool_scope -> allowed_tools",
+                        facts={"leaked_tools": leaked_execution, "mode": mode},
+                    )
                 continue
             planning_turns += 1
             leaked = (
@@ -223,11 +239,22 @@ class ToolScopeOracle:
                     facts={"leaked_tools": leaked},
                 )
         if required and planning_turns == 0:
+            planning_required = isinstance(planning_disallows, list)
+            if not planning_required:
+                planning_turns = 0
+            else:
+                return failing(
+                    _ORACLE,
+                    fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                    first_broken_link="inspect_trace -> planning_tool_scope_capture",
+                    facts={"reason": "no planning turn captured"},
+                )
+        if required and isinstance(execution_disallows, list) and execution_turns == 0:
             return failing(
                 _ORACLE,
                 fc.SCENARIO_CONTRACT_UNSATISFIABLE,
-                first_broken_link="inspect_trace -> planning_tool_scope_capture",
-                facts={"reason": "no planning turn captured"},
+                first_broken_link="inspect_trace -> execution_tool_scope_capture",
+                facts={"reason": "no execution turn captured"},
             )
         return passing(
             _ORACLE,
@@ -235,5 +262,7 @@ class ToolScopeOracle:
                 "checked": "allowed_in_planning",
                 "planning_turn_count": planning_turns,
                 "planning_disallows": sorted(disallowed),
+                "execution_turn_count": execution_turns,
+                "execution_disallows": sorted(execution_denied),
             },
         )

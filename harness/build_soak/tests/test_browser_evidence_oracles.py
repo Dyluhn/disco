@@ -30,7 +30,12 @@ def _green_evidence() -> dict:
         },
         "shown": {"artifact_shown": True, "preview_shown": True},
         "verification": {"ready_for_verification_called": True, "passed": True},
-        "export": {"requested": True, "download_present": True, "download_bytes": 4096},
+        "export": {
+            "requested": True,
+            "download_present": True,
+            "download_bytes": 4096,
+            "workspace_match": True,
+        },
         "cleanup": {"orphans": 0, "workspace_released": True},
     }
 
@@ -120,6 +125,12 @@ def test_verification_bypassed_fails():
 def test_export_requested_but_no_download_fails():
     ev = _green_evidence()
     ev["export"] = {"requested": True, "download_present": False, "download_bytes": 0}
+    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+
+
+def test_export_bytes_not_matching_workspace_fails():
+    ev = _green_evidence()
+    ev["export"]["workspace_match"] = False
     assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
 
 

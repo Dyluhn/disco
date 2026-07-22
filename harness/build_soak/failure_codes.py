@@ -60,6 +60,7 @@ MODEL_TOLD_WRONG_MODE = "MODEL_TOLD_WRONG_MODE"
 STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
 PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
 ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
+CONTEXT_PRESSURE_NOT_OBSERVED = "CONTEXT_PRESSURE_NOT_OBSERVED"
 # CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
 # "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
 # placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
@@ -232,6 +233,7 @@ SEVERITY_BY_CODE: dict[str, str] = {
     STUCK_RUNNING_NO_EVENTS: P1,
     PREVIEW_TRUTH_MISMATCH: P1,
     ARTIFACT_TRUTH_MISMATCH: P1,
+    CONTEXT_PRESSURE_NOT_OBSERVED: P1,
     DESTRUCTIVE_ELISION: P1,
     NO_CLEAR_FAILURE_TO_USER: P1,
     OBSERVATION_WITHOUT_ACTION: P1,

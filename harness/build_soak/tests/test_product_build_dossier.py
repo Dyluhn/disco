@@ -154,7 +154,12 @@ def test_strict_scenario_missing_sidecar_is_invalid(tmp_path) -> None:
 # --- P10: the EXPORT-requiring scenario (export/handoff) ----------------------
 def _green_export_pe() -> dict:
     pe = _green_pe()
-    pe["export"] = {"requested": True, "download_present": True, "download_bytes": 2048}
+    pe["export"] = {
+        "requested": True,
+        "download_present": True,
+        "download_bytes": 2048,
+        "workspace_match": True,
+    }
     return pe
 
 

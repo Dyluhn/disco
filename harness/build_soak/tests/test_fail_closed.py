@@ -35,6 +35,31 @@ def _strip_volatile(c):
     return {k: v for k, v in c.items() if k not in ("run_id", "conversation_id")}
 
 
+def test_import_fixture_generator_is_bounded_by_contract() -> None:
+    scenario = {
+        "id": "generated-import",
+        "import_fixture": {
+            "filename": "catalog.zip",
+            "files": {
+                "catalog.txt": {
+                    "line_template": "row={{row}}\n",
+                    "count": 100_001,
+                }
+            },
+        },
+        "assertions": {},
+    }
+
+    result = classify(
+        clean_smoke_log(),
+        scenario=scenario,
+        product_evidence={"import": {"accepted": True}},
+    )
+
+    assert result["status"] == "INVALID_RUN"
+    assert result["code"] == "SCENARIO_CONTRACT_UNSATISFIABLE"
+
+
 # ---- P0 #1 — row-shape parity, and the 3 named failures CODED in row shape ----
 
 
@@ -383,6 +408,58 @@ def test_scenario_requires_tool_scope_present_and_leaked_fails():
     c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
     assert c["status"] == "FAIL"
     assert c["code"] == "WRITE_TOOL_ALLOWED_IN_PLANNING"
+
+
+def test_appkit_execution_scope_can_assert_raw_tools_are_not_callable():
+    scenario = {
+        "id": "appkit_strict_scope",
+        "assertions": {
+            "tool_scope": {
+                "execution_disallows": ["file_write", "file_edit", "shell", "code_exec"]
+            }
+        },
+    }
+    scope = {
+        "mode": "long_horizon",
+        "attempt": 1,
+        "complete": True,
+        "offered_tools": ["appkit_apply_patch", "verify_appkit_app"],
+        "allowed_tools": ["appkit_apply_patch", "verify_appkit_app"],
+        "offered_count": 2,
+        "allowed_count": 2,
+    }
+
+    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=[scope])
+
+    assert c["status"] == "PASS", c
+    result = next(
+        r
+        for r in c["oracle_results"]
+        if r["oracle"] == "ToolScopeOracle"
+        and "execution_turn_count" in r.get("facts", {})
+    )
+    assert result["facts"]["execution_turn_count"] == 1
+
+
+def test_appkit_execution_scope_raw_callable_tool_fails():
+    scenario = {
+        "id": "appkit_strict_scope_leak",
+        "assertions": {"tool_scope": {"execution_disallows": ["file_write", "shell"]}},
+    }
+    scope = {
+        "mode": "long_horizon",
+        "attempt": 1,
+        "complete": True,
+        "offered_tools": ["appkit_apply_patch"],
+        "allowed_tools": ["appkit_apply_patch", "file_write"],
+        "offered_count": 1,
+        "allowed_count": 2,
+    }
+
+    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=[scope])
+
+    assert c["status"] == "FAIL", c
+    assert c["code"] == "TOOL_SCOPE_MISMATCH"
 
 
 def _scope_trace(*scopes: dict) -> dict:

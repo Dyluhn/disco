@@ -29,6 +29,7 @@ from .evidence import EvidenceManifest, load_manifest, sha256_file, verify_evide
 from .oracles import (
     BROWSER_EVIDENCE_ORACLES,
     TARGETED_EDIT_ORACLES,
+    ContextPressureOracle,
     ContractOracle,
     EventChainOracle,
     HarnessValidityOracle,
@@ -36,6 +37,7 @@ from .oracles import (
     ProviderLedgerOracle,
     RevisionOracle,
     ScenarioBrowserVerificationOracle,
+    ScenarioLifecycleOracle,
     ThrashOracle,
     ToolScopeOracle,
 )
@@ -166,6 +168,8 @@ def classify(
         present.add("preview")
     if tool_scope is not None:
         present.add("tool_scope")
+    if product_evidence is not None:
+        present.add("product_evidence")
     verification_paths = _successful_browser_verification_paths(events)
     captured_browser_paths = set(browser_evidence_paths or set())
 
@@ -198,13 +202,24 @@ def classify(
         results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 7. output truth.
+        # 7. scenario-directed lifecycle and context-pressure actions.
+        results += ScenarioLifecycleOracle().check(
+            events,
+            scenario=scenario,
+            product_evidence=product_evidence,
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        results += ContextPressureOracle().check(events, scenario=scenario)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 8. output truth.
         results += OutputTruthOracle().check(
             events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 8. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+        # 9. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
         results += ProviderLedgerOracle().check(
             events,
             scenario=scenario,
@@ -213,7 +228,7 @@ def classify(
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 9. H191 scenario-owned browser-verification promise.  Zero passing
+        # 10. H191 scenario-owned browser-verification promise.  Zero passing
         # verifier observations is an adjudicable PRODUCT failure; a verifier that
         # did pass but whose referenced bytes are not locked is harness INVALID.
         results += ScenarioBrowserVerificationOracle().check(
@@ -223,7 +238,7 @@ def classify(
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 10. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # 11. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
         # slice, so a headless run (product_evidence is None) is unaffected; a product-
         # harness run enforces the real UI path.
         for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
@@ -232,7 +247,7 @@ def classify(
             if first_fail is not None:
                 break
     if first_fail is None:
-        # 11. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
+        # 12. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
         # product_evidence slice, so non-edit runs are unaffected; an edit-harness run
         # enforces targeted-edit + manual-preservation discipline. Producer = P1B-LIVE.
         for _oracle_cls in TARGETED_EDIT_ORACLES:

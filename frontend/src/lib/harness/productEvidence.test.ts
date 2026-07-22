@@ -15,7 +15,12 @@ function greenObservations(): ProductObservations {
     preview: { owner: "platform", manual_port: false },
     shown: { artifact_shown: true, preview_shown: true },
     verification: { ready_for_verification_called: true, passed: true },
-    export: { requested: true, download_present: true, download_bytes: 4096 },
+    export: {
+      requested: true,
+      download_present: true,
+      download_bytes: 4096,
+      workspace_match: true,
+    },
     cleanup: {
       orphans: 0,
       workspace_released: true,

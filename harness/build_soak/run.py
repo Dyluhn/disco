@@ -20,12 +20,17 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import hashlib
+import io
 import json
 import math
 import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import zipfile
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,6 +137,17 @@ def load_scenarios(path: str | Path = _SCENARIOS) -> dict[str, dict[str, Any]]:
 
     loaded = [merge(defaults, s) for s in scenarios if s.get("id")]
     return {str(s["id"]): s for s in loaded}
+
+
+def _materialize_task_seed(value: Any, seed: int) -> Any:
+    """Replace the frozen ``{{seed}}`` token throughout one scenario copy."""
+    if isinstance(value, str):
+        return value.replace("{{seed}}", str(seed))
+    if isinstance(value, list):
+        return [_materialize_task_seed(item, seed) for item in value]
+    if isinstance(value, dict):
+        return {key: _materialize_task_seed(item, seed) for key, item in value.items()}
+    return copy.deepcopy(value)
 
 
 def _driver_catalog_contains(payload: dict[str, Any], model: str) -> bool:
@@ -351,6 +367,7 @@ async def _inject_when_writing(
     cid: str,
     mid_run: list[dict[str, Any]],
     cancel_at: dict[str, Any] | None,
+    pause_at: dict[str, Any] | None,
     timeline: list[str],
     timeout_s: float,
     declared_seqs: list[int] | None = None,
@@ -365,7 +382,10 @@ async def _inject_when_writing(
     wants_cancel = (
         isinstance(cancel_at, dict) and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
     )
-    if not mid_run and not wants_cancel:
+    wants_pause = (
+        isinstance(pause_at, dict) and pause_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+    )
+    if not mid_run and not wants_cancel and not wants_pause:
         return
 
     seq = await client.wait_for_first_file_write(cid, timeout_s=timeout_s)
@@ -374,7 +394,12 @@ async def _inject_when_writing(
             timeline.append("mid-run steer skipped: run produced no file write to steer on")
         if wants_cancel:
             timeline.append("cancel_at skipped: run produced no file write to cancel on")
+        if wants_pause:
+            timeline.append("pause_at skipped: run produced no file write to pause on")
         return
+
+    if wants_pause:
+        await _pause_resume_at_trigger(client, cid, timeline, trigger_seq=seq, timeout_s=timeout_s)
 
     for f in mid_run:
         before_user_seq = client.latest_user_message_seq(cid)
@@ -399,6 +424,143 @@ async def _inject_when_writing(
             trigger_seq=seq,
             timeout_s=timeout_s,
         )
+
+
+async def _wait_for_status(
+    client: DiscoApiClient,
+    cid: str,
+    expected: str,
+    *,
+    timeout_s: float,
+) -> str:
+    deadline = time.monotonic() + timeout_s
+    last = ""
+    while time.monotonic() < deadline:
+        last = DiscoApiClient._status_of(await client.get_state(cid))
+        if last == expected:
+            return last
+        if last in TERMINAL_STATES:
+            return last
+        await asyncio.sleep(getattr(client, "_poll", 0.1))
+    return last
+
+
+async def _pause_resume_at_trigger(
+    client: DiscoApiClient,
+    cid: str,
+    timeline: list[str],
+    *,
+    trigger_seq: int,
+    timeout_s: float,
+) -> None:
+    await client.pause(cid)
+    paused = await _wait_for_status(client, cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0))
+    if paused != PAUSED_STATE:
+        client.scenario_evidence["pause_resume"] = {
+            "ok": False,
+            "trigger_seq": trigger_seq,
+            "pause_status": paused,
+        }
+        timeline.append(
+            f"pause_at after first write (seq={trigger_seq}) did not settle PAUSED "
+            f"(status={paused or 'unknown'})"
+        )
+        return
+    response = await client.resume(cid)
+    resumed = await client.wait_until_status_leaves(
+        cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0)
+    )
+    ok = 200 <= int(response.get("http_status", 0)) < 300 and resumed != PAUSED_STATE
+    client.scenario_evidence["pause_resume"] = {
+        "ok": ok,
+        "trigger_seq": trigger_seq,
+        "pause_status": paused,
+        "resume_status": resumed,
+        "resume_http_status": response.get("http_status"),
+    }
+    timeline.append(
+        f"pause_at after first write (seq={trigger_seq}) settled PAUSED then resumed "
+        f"to {resumed or 'unknown'} (http {response.get('http_status')})"
+    )
+
+
+async def _restart_isolated_stack() -> dict[str, Any]:
+    """Restart the disposable App+Agent pair through its private authenticated control."""
+    url = os.environ.get("DISCO_RELIABILITY_STACK_CONTROL_URL", "").rstrip("/")
+    token = os.environ.get("DISCO_RELIABILITY_STACK_CONTROL_TOKEN", "")
+    if not url or not token:
+        return {"ok": False, "reason": "isolated_stack_control_unavailable"}
+
+    def _post() -> tuple[int, dict[str, Any]]:
+        request = urllib.request.Request(
+            f"{url}/restart",
+            method="POST",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+                raw = response.read()
+                body = json.loads(raw) if raw else {}
+                return response.status, body if isinstance(body, dict) else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            with contextlib.suppress(ValueError, UnicodeDecodeError):
+                body = json.loads(raw)
+                if isinstance(body, dict):
+                    return exc.code, body
+            return exc.code, {}
+
+    try:
+        status, body = await asyncio.to_thread(_post)
+    except (OSError, TimeoutError, ValueError) as exc:
+        return {"ok": False, "reason": type(exc).__name__}
+    return {
+        "ok": 200 <= status < 300 and body.get("ok") is True,
+        "http_status": status,
+        "reason": body.get("reason"),
+    }
+
+
+def _export_matches_workspace(
+    archive_bytes: bytes,
+    workspace: dict[str, Any],
+    declared_paths: list[str],
+) -> tuple[bool, dict[str, Any]]:
+    """Compare required and overlapping archive entries with frozen workspace bytes."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+            names = [name for name in archive.namelist() if name and not name.endswith("/")]
+            if len(names) != len(set(names)):
+                return False, {"reason": "duplicate_archive_path"}
+            archive_shas = {
+                name: hashlib.sha256(archive.read(name)).hexdigest() for name in sorted(names)
+            }
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
+        return False, {"reason": "invalid_zip"}
+    required = [path for path in declared_paths if not path.startswith((".pmx/", ".disco/"))]
+    missing = sorted(path for path in required if path not in archive_shas)
+    mismatched: list[str] = []
+    for path, archive_sha in archive_shas.items():
+        item = workspace.get(path)
+        if isinstance(item, dict) and item.get("present") is True:
+            if item.get("sha256") != archive_sha:
+                mismatched.append(path)
+    for path in required:
+        item = workspace.get(path)
+        if (
+            isinstance(item, dict)
+            and item.get("present") is True
+            and path in archive_shas
+            and item.get("sha256") != archive_shas[path]
+            and path not in mismatched
+        ):
+            mismatched.append(path)
+    return not missing and not mismatched and bool(archive_shas), {
+        "archive_file_count": len(archive_shas),
+        "required_paths": required,
+        "missing_paths": missing,
+        "mismatched_paths": sorted(mismatched),
+    }
 
 
 async def _wait_for_cancel_idle(
@@ -486,6 +648,7 @@ async def _drive_to_terminal(
     autonomous: bool,
     mid_run: list[dict[str, Any]],
     cancel_at: dict[str, Any] | None = None,
+    pause_at: dict[str, Any] | None = None,
     timeline: list[str],
     inactivity_s: float,
     hard_cap_s: float,
@@ -512,13 +675,21 @@ async def _drive_to_terminal(
     hard-cap cutoff WHILE STILL PROGRESSING (PROGRESSING_TIMEOUT) is INCONCLUSIVE, not a
     product failure → raise InconclusiveRunError so the run records INVALID_RUN (§17)."""
     injector: asyncio.Task[None] | None = None
-    if mid_run or _is_cancel_after_first_write(cancel_at):
+    if (
+        mid_run
+        or _is_cancel_after_first_write(cancel_at)
+        or (
+            isinstance(pause_at, dict)
+            and pause_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+        )
+    ):
         injector = asyncio.create_task(
             _inject_when_writing(
                 client,
                 cid,
                 mid_run,
                 cancel_at,
+                pause_at,
                 timeline,
                 hard_cap_s,
                 declared_seqs=declared_followup_seqs,
@@ -714,12 +885,19 @@ async def drive_scenario(
     prompt = str(scenario["prompt"])
     appkit = bool(scenario.get("appkit"))
     surface = str(scenario.get("surface") or "build")
+    import_fixture = scenario.get("import_fixture")
+    if import_fixture is not None and not isinstance(import_fixture, dict):
+        raise ValueError("import_fixture must be an object")
+    lifecycle = scenario.get("lifecycle") or {}
+    if not isinstance(lifecycle, dict):
+        raise ValueError("lifecycle must be an object")
     cid = await client.create_build_conversation(
         prompt,
         model=model,
         autonomous=autonomous,
         appkit=appkit,
         surface=surface,
+        import_fixture=import_fixture,
     )
     timeline.append(
         f"created {surface} conversation {cid} (autonomous={autonomous}, appkit={appkit})"
@@ -750,6 +928,10 @@ async def drive_scenario(
 
     followups = scenario.get("followups") or []
     cancel_at = scenario.get("cancel_at") if isinstance(scenario.get("cancel_at"), dict) else None
+    pause_trigger = lifecycle.get("pause_resume_at")
+    pause_at = (
+        {"trigger": pause_trigger} if isinstance(pause_trigger, str) and pause_trigger else None
+    )
     mid_run = [f for f in followups if f.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE]
     after_terminal = [f for f in followups if f.get("trigger") != _TRIGGER_AFTER_FIRST_FILE_WRITE]
 
@@ -882,6 +1064,7 @@ async def drive_scenario(
             declared_followup_requires_revision=declared_followup_requires_revision,
             harness_injected_user_seqs=harness_injected_user_seqs,
             product_evidence={
+                **client.scenario_evidence,
                 "diagnostic_stop": {
                     "kind": "progressing_hard_cap",
                     "release_confirmed": release_confirmed,
@@ -898,7 +1081,7 @@ async def drive_scenario(
                     # attribution source so a parallel wave never falls back to
                     # counting other trials' live containers as this run's leaks.
                     "sandbox_instance_ids": _extract_sandbox_instance_ids(kill_response),
-                }
+                },
             },
             diagnostic_stop="progressing_hard_cap",
             diagnostic_stop_epoch=diagnostic_stop_epoch,
@@ -914,6 +1097,7 @@ async def drive_scenario(
             autonomous=autonomous,
             mid_run=mid_run,
             cancel_at=cancel_at,
+            pause_at=pause_at,
             timeline=timeline,
             inactivity_s=timeout_s,
             hard_cap_s=hard_cap_s,
@@ -955,6 +1139,48 @@ async def drive_scenario(
             timeline,
             trigger=_TRIGGER_AFTER_TERMINAL,
             timeout_s=hard_cap_s,
+        )
+
+    if initial_status in terminal_snapshot_states and lifecycle.get("restore_version"):
+        selector = str(lifecycle.get("restore_version") or "oldest")
+        restored = await client.restore_workspace_version(cid, selector=selector)
+        client.scenario_evidence["rollback"] = restored
+        timeline.append(
+            "restored workspace version after initial terminal: "
+            f"selector={selector}, ok={restored.get('ok')}, "
+            f"selected={restored.get('selected_seq')}, new={restored.get('new_version')}"
+        )
+
+    if initial_status in terminal_snapshot_states and lifecycle.get("restart_after_terminal"):
+        declared_paths = _declared_workspace_paths(scenario)
+        before_status = DiscoApiClient._status_of(await client.get_state(cid))
+        before_digest = await client.workspace_snapshot_digest(cid, declared_paths)
+        restarted = await _restart_isolated_stack()
+        after_status = ""
+        after_digest: str | None = None
+        if restarted.get("ok") is True:
+            with contextlib.suppress(Exception):
+                after_status = DiscoApiClient._status_of(await client.get_state(cid))
+                after_digest = await client.workspace_snapshot_digest(cid, declared_paths)
+        restart_ok = (
+            restarted.get("ok") is True
+            and before_status in terminal_snapshot_states
+            and after_status == before_status
+            and before_digest is not None
+            and after_digest == before_digest
+        )
+        client.scenario_evidence["restart"] = {
+            **restarted,
+            "ok": restart_ok,
+            "before_status": before_status,
+            "after_status": after_status,
+            "before_digest": before_digest,
+            "after_digest": after_digest,
+        }
+        timeline.append(
+            "restarted isolated App+Agent stack after initial terminal: "
+            f"ok={restart_ok}, status={before_status}->{after_status}, "
+            f"snapshot_same={before_digest is not None and after_digest == before_digest}"
         )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
@@ -1025,6 +1251,7 @@ async def drive_scenario(
                 cid,
                 autonomous=autonomous,
                 mid_run=[],
+                pause_at=None,
                 timeline=timeline,
                 inactivity_s=timeout_s,
                 hard_cap_s=hard_cap_s,
@@ -1212,7 +1439,28 @@ async def drive_scenario(
         f"collected {len(events)} events; workspace files={list(workspace)}; "
         f"browser evidence files={list(browser_evidence)}"
     )
-    nonterminal_product_evidence: dict[str, Any] = {}
+    scenario_product_evidence: dict[str, Any] = dict(client.scenario_evidence)
+    if terminal_snapshot_available and lifecycle.get("export_download"):
+        export_status, archive_bytes = await client.download_project(cid)
+        matches, export_facts = _export_matches_workspace(
+            archive_bytes,
+            workspace,
+            _declared_workspace_paths(scenario),
+        )
+        scenario_product_evidence["export"] = {
+            "requested": True,
+            "download_present": 200 <= export_status < 300 and bool(archive_bytes),
+            "download_bytes": len(archive_bytes),
+            "workspace_match": matches,
+            "http_status": export_status,
+            **export_facts,
+        }
+        timeline.append(
+            "downloaded project export after final terminal: "
+            f"http={export_status}, bytes={len(archive_bytes)}, workspace_match={matches}"
+        )
+
+    nonterminal_product_evidence: dict[str, Any] = dict(scenario_product_evidence)
     if nonterminal_without_snapshot:
         nonterminal_adjudication: dict[str, Any] = {
             "schema_version": 1,
@@ -1232,7 +1480,7 @@ async def drive_scenario(
                     "strict_monitor_confirmed": True,
                 }
             )
-        nonterminal_product_evidence = {"nonterminal_adjudication": nonterminal_adjudication}
+        nonterminal_product_evidence["nonterminal_adjudication"] = nonterminal_adjudication
     run = CollectedRun(
         conversation_id=cid,
         events=events,
@@ -1853,6 +2101,7 @@ async def _freeze_invalidation_evidence(
     repo_dirty: bool,
     kernel: str,
     started_at: str | None,
+    seed: int | None,
     conversation_id: str | None,
     invalidation_code: str,
     invalidation_reason: str,
@@ -1963,6 +2212,7 @@ async def _freeze_invalidation_evidence(
             repo_dirty=repo_dirty,
             kernel=kernel,
             started_at=started_at,
+            seed=seed,
             provider_ledger=provider_ledger,
         )
         freeze["dossier_written"] = True
@@ -2499,6 +2749,7 @@ async def run_once(
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
     require_inspect_trace: bool = False,
     parallel_workers: int = 1,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     # §9 pre-create infra gate (the ONLY infra source). No conversation exists yet, so a
@@ -2512,6 +2763,7 @@ async def run_once(
     # only ever kills the conversation THIS run created (the client is reused across a
     # batch of iterations).
     client.last_conversation_id = None
+    client.scenario_evidence = {}
     # [REL-5] pre-run orphan baseline. The scoped sandbox-id path does not need this, but older
     # servers that cannot expose ids still fall back to the serial-era global delta.
     baseline_containers = _live_disco_container_count()
@@ -2562,6 +2814,7 @@ async def run_once(
                     repo_dirty=repo_dirty,
                     kernel=kernel,
                     started_at=run_started_at,
+                    seed=seed,
                     provider_ledger=provider_ledger,
                 )
             hardcap_facts = exc.facts
@@ -2584,6 +2837,7 @@ async def run_once(
                     repo_dirty=repo_dirty,
                     kernel=kernel,
                     started_at=run_started_at,
+                    seed=seed,
                     conversation_id=hardcap_cid,
                     invalidation_code=fc.RUN_TIMEOUT_WHILE_PROGRESSING,
                     invalidation_reason=exc.reason,
@@ -2618,6 +2872,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 conversation_id=cid,
                 invalidation_code=fc.RUN_INTERRUPTED,
                 invalidation_reason=exc.reason,
@@ -2647,6 +2902,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 conversation_id=cid,
                 invalidation_code=fc.CANCEL_MISSED_WINDOW,
                 invalidation_reason=exc.reason,
@@ -2683,6 +2939,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 conversation_id=cid,
                 invalidation_code=fc.WORKSPACE_SNAPSHOT_NOT_READY,
                 invalidation_reason=exc.reason,
@@ -2712,6 +2969,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 conversation_id=cid,
                 invalidation_code=fc.MISSING_REQUIRED_EVIDENCE,
                 invalidation_reason=exc.reason,
@@ -2741,6 +2999,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 conversation_id=cid,
                 invalidation_code=fc.RUN_INTERRUPTED,
                 invalidation_reason=f"{type(exc).__name__}: {exc}",
@@ -2828,6 +3087,7 @@ async def run_once(
                     repo_dirty=repo_dirty,
                     kernel=kernel,
                     started_at=run_started_at,
+                    seed=seed,
                     provider_ledger=provider_ledger,
                 )
                 return _invalid_run_record(
@@ -2934,6 +3194,7 @@ async def run_once(
                 repo_dirty=repo_dirty,
                 kernel=kernel,
                 started_at=run_started_at,
+                seed=seed,
                 provider_ledger=provider_ledger,
             )
             return _invalid_run_record(
@@ -2987,6 +3248,7 @@ async def run_once(
             repo_dirty=repo_dirty,
             kernel=kernel,
             started_at=run_started_at,
+            seed=seed,
             provider_ledger=provider_ledger,
         )
         return classify_dossier(
@@ -2995,6 +3257,7 @@ async def run_once(
             run,
             autonomous=autonomous,
             commit=commit,
+            seed=seed,
             provider_ledger=provider_ledger,
         )
     finally:
@@ -3072,6 +3335,7 @@ def _run_batch_item(
         "code": classification.get("code"),
         "severity": classification.get("severity"),
         "conversation_id": classification.get("conversation_id"),
+        "seed": classification.get("seed"),
         "inspect": {
             "captured": bool(trace),
             "event_count": int(trace.get("event_count") or 0),
@@ -3291,7 +3555,8 @@ async def _amain(args: argparse.Namespace) -> int:
 
     async def run_iteration(index: int) -> dict[str, Any]:
         scenario_id = requested_scenarios[index % len(requested_scenarios)]
-        scenario = selected[scenario_id]
+        task_seed = args.seed_base + index
+        scenario = _materialize_task_seed(selected[scenario_id], task_seed)
         autonomous = bool(args.autonomous or scenario.get("autonomous"))
         require_inspect = bool(scenario.get("requires_inspect_trace", True))
         run_id = f"build_soak_{scenario_id}_{batch_stamp}_{index:03d}"
@@ -3320,6 +3585,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     hard_cap_s=args.hard_cap,
                     require_inspect_trace=require_inspect,
                     parallel_workers=resolved_workers,
+                    seed=task_seed,
                 )
         except TimeoutError as exc:
             classification = _infra_failure_record(
@@ -3371,6 +3637,7 @@ async def _amain(args: argparse.Namespace) -> int:
         "started_at": started_at,
         "finished_at": datetime.now(UTC).isoformat(),
         "iterations": args.iterations,
+        "seed_base": args.seed_base,
         "parallel": {
             "requested": requested_label,
             "resolved": resolved_workers,
@@ -3462,6 +3729,12 @@ def main(argv: list[str] | None = None) -> int:
         "not a product BUILD_DID_NOT_FINISH (Bug 15).",
     )
     p.add_argument("--scenarios", default=str(_SCENARIOS))
+    p.add_argument(
+        "--seed-base",
+        type=int,
+        default=0,
+        help="first deterministic task seed; each iteration increments it by one",
+    )
     p.add_argument(
         "--memory-reserve-gib",
         type=float,
