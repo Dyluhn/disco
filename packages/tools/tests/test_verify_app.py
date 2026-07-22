@@ -100,6 +100,7 @@ def test_verdict_vision_off_is_lean_and_carries_structured_claim_evidence():
         "url",
         "http_status",
         "title",
+        "document_content_type",
         "meaningful_content",
         "visible_text_chars",
         "elements_count",
@@ -197,6 +198,30 @@ async def test_run_short_rendered_heading_passes_with_semantic_evidence(monkeypa
     assert out.structured["passed"] is True
     assert out.structured["meaningful_content"] is True
     assert out.structured["visible_text_chars"] == len("Live Server Up")
+
+
+@pytest.mark.asyncio
+async def test_run_short_plain_text_document_passes_with_rendered_text_evidence(monkeypatch):
+    """A sparse text/plain response is a real rendered document, not a blank SPA."""
+
+    async def fake_browser_run(self, args, ctx):
+        return ToolOutcome(
+            success=True,
+            content="b",
+            structured=_structured(title="", text="Node Paused 400913", elements=[])
+            | {"document_content_type": "text/plain"},
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/"), _ctx(FakeSandbox("200"))
+    )
+
+    assert out.success is True
+    assert out.structured["passed"] is True
+    assert out.structured["meaningful_content"] is True
+    assert out.structured["document_content_type"] == "text/plain"
+    assert out.structured["rendered_text"] == "Node Paused 400913"
 
 
 def test_verdict_not_serving():

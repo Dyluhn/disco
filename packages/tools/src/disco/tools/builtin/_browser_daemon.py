@@ -153,6 +153,7 @@ class BrowserPageState:
         self.page = None
         self.console_logs = []
         self.network_fails = []
+        self.document_content_type = ""
         self.executor_generation = None
         self.synchronized_epoch = None
 
@@ -448,6 +449,29 @@ class BrowserState:
         self._add_response_for("agent", response)
 
     def _add_response_for(self, lane_name, response):
+        lane = self.lane(lane_name)
+        request = getattr(response, "request", None)
+        try:
+            is_main_document = (
+                request is not None
+                and request.resource_type == "document"
+                and (
+                    lane.page is None
+                    or getattr(lane.page, "main_frame", None) is None
+                    or request.frame == lane.page.main_frame
+                )
+            )
+        except Exception:
+            is_main_document = False
+        if is_main_document:
+            try:
+                headers = response.headers
+            except Exception:
+                headers = {}
+            raw_content_type = headers.get("content-type", "") if isinstance(headers, dict) else ""
+            lane.document_content_type = (
+                raw_content_type if isinstance(raw_content_type, str) else ""
+            )
         # B7: a response that *did* arrive but with an error status (4xx/5xx).
         status = response.status
         if status >= 400:
@@ -477,6 +501,9 @@ class BrowserState:
         lane.console_logs = []
         # B7: a fresh navigation starts a fresh network-failure ledger.
         lane.network_fails = []
+        # Main-document response metadata must be rebound by that fresh
+        # navigation; never carry a previous document's content type forward.
+        lane.document_content_type = ""
 
 
 state = BrowserState()
@@ -1037,6 +1064,9 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "text": text,
                 "appkit_sections": appkit_sections,
                 "canvas_count": canvas_count,
+                # Captured from the Playwright main-document Response event, not
+                # from page JavaScript (which can shadow document.contentType).
+                "document_content_type": lane.document_content_type,
                 "visible_semantic_elements": visible_semantic_elements,
                 "screenshot_path": screenshot_path,
                 "freshness": self._freshness(

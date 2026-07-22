@@ -2,6 +2,8 @@ import asyncio
 import os
 import pathlib
 import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -59,10 +61,20 @@ class _FakePageError:
 
 
 class _FakeRequest:
-    def __init__(self, method, url, failure=None):
+    def __init__(self, method, url, failure=None, *, resource_type=None, frame=None):
         self.method = method
         self.url = url
         self.failure = failure
+        self.resource_type = resource_type
+        self.frame = frame
+
+
+class _FakeResponse:
+    def __init__(self, request, *, status=200, headers=None):
+        self.request = request
+        self.status = status
+        self.url = request.url
+        self.headers = headers or {}
 
 
 def _fresh_state():
@@ -160,6 +172,51 @@ def test_daemon_clear_console_clears_network():
     state.clear_console()
     assert state.console_logs == []
     assert state.network_fails == []
+    assert state.lane("agent").document_content_type == ""
+
+
+def test_daemon_captures_only_main_document_response_content_type():
+    state = _fresh_state()
+    main_frame = object()
+    subframe = object()
+    state.page = MagicMock(main_frame=main_frame)
+
+    state._add_response(
+        _FakeResponse(
+            _FakeRequest(
+                "GET",
+                "http://localhost:8000/",
+                resource_type="document",
+                frame=main_frame,
+            ),
+            headers={"content-type": "text/plain; charset=utf-8"},
+        )
+    )
+    assert state.lane("agent").document_content_type == "text/plain; charset=utf-8"
+
+    state._add_response(
+        _FakeResponse(
+            _FakeRequest(
+                "GET",
+                "http://localhost:8000/frame",
+                resource_type="document",
+                frame=subframe,
+            ),
+            headers={"content-type": "text/html"},
+        )
+    )
+    state._add_response(
+        _FakeResponse(
+            _FakeRequest(
+                "GET",
+                "http://localhost:8000/app.js",
+                resource_type="script",
+                frame=main_frame,
+            ),
+            headers={"content-type": "text/javascript"},
+        )
+    )
+    assert state.lane("agent").document_content_type == "text/plain; charset=utf-8"
 
 
 def test_render_observation_surfaces_stack_source_network_and_logs():
@@ -265,15 +322,20 @@ class _FakePage:
     is empty for the first N reads then yields content.
     """
 
-    def __init__(self, body_texts, screenshot_path_target):
+    def __init__(self, body_texts, screenshot_path_target, document_content_type="text/html"):
         self._body_texts = list(body_texts)
         self._eval_call = 0
         self.url = "http://localhost:5173/"
         self._screenshot_target = screenshot_path_target
+        self.document_content_type = document_content_type
         self.waits = []  # records wait_for_timeout calls (retry sleeps)
 
     def goto(self, url, wait_until=None):
-        pass
+        # Simulate the main-document Response event that Playwright emits during
+        # navigation; production captures this before the observation is built.
+        import disco.tools.builtin._browser_daemon as daemon_mod
+
+        daemon_mod.state.lane("agent").document_content_type = self.document_content_type
 
     def wait_for_timeout(self, ms):
         self.waits.append(ms)
@@ -312,7 +374,6 @@ def _drive_capture(fake_page, elements_seq, action="navigate", params=None):
         return elems[idx]
 
     handler._get_elements = _fake_get_elements  # type: ignore[method-assign]
-
     p = {"action": action, "url": "http://localhost:5173/"}
     if params:
         p.update(params)
@@ -362,6 +423,100 @@ def test_capture_breaks_on_elements_only(tmp_path, monkeypatch):
     assert res["elements"] == ["1[:]<button>Go</button>"]
     # Content on the first read → no retry sleeps (only the navigate settle wait).
     assert daemon_mod.CAPTURE_RETRY_INTERVAL_MS not in fake_page.waits
+
+
+def test_capture_reports_browser_owned_document_content_type(tmp_path, monkeypatch):
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+
+    fake_page = _FakePage(
+        body_texts=["Node Paused 400913"],
+        screenshot_path_target=tmp_path,
+        document_content_type="text/plain",
+    )
+    res = _drive_capture(fake_page, [[]])
+
+    assert res["text"] == "Node Paused 400913"
+    assert res["document_content_type"] == "text/plain"
+
+
+@pytest.mark.integration
+def test_main_document_content_type_real_chromium_rejects_page_spoof():
+    """The meaningful-content MIME basis comes from the Response, not page JS."""
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.core.loop.finish import _browser_content_meaningful
+    from disco.tools.builtin.browser import _installed_chromium_executable
+    from playwright.sync_api import sync_playwright
+
+    executable = _installed_chromium_executable()
+    if executable is None:
+        pytest.skip("installed Chromium is required")
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib handler contract
+            if self.path == "/plain":
+                body = b"Node Paused 400913"
+                content_type = "text/plain; charset=utf-8"
+            else:
+                body = (
+                    b"<script>Object.defineProperty(document,'contentType',"
+                    b"{value:'text/plain'})</script><p>Loading</p>"
+                )
+                content_type = "text/html; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, executable_path=executable)
+            context = browser.new_context()
+            page = context.new_page()
+            browser_state = daemon_mod.BrowserState()
+            browser_state._bind_page("agent", page)  # noqa: SLF001 - response boundary under test
+            origin = f"http://127.0.0.1:{server.server_port}"
+
+            browser_state.clear_lane_diagnostics("agent")
+            page.goto(origin + "/plain", wait_until="load")
+            plain = {
+                "title": page.title(),
+                "text": page.evaluate(
+                    "() => (document.body.innerText || document.body.textContent || '').trim()"
+                ),
+                "elements": [],
+                "document_content_type": browser_state.lane("agent").document_content_type,
+            }
+            assert plain["document_content_type"] == "text/plain; charset=utf-8"
+            assert _browser_content_meaningful(plain)
+
+            browser_state.clear_lane_diagnostics("agent")
+            page.goto(origin + "/spoof", wait_until="load")
+            spoofed = {
+                "title": page.title(),
+                "text": page.evaluate(
+                    "() => (document.body.innerText || document.body.textContent || '').trim()"
+                ),
+                "elements": [],
+                "document_content_type": browser_state.lane("agent").document_content_type,
+            }
+            assert page.evaluate("document.contentType") == "text/plain"
+            assert spoofed["document_content_type"] == "text/html; charset=utf-8"
+            assert not _browser_content_meaningful(spoofed)
+            browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_capture_blank_page_returns_empty_after_bounded_cap(tmp_path, monkeypatch):
@@ -459,8 +614,7 @@ def test_visible_semantic_elements_real_chromium():
         '<h1><span style="opacity:0">Ghost</span></h1>': 0,
         '<h1><span style="visibility:hidden">Ghost</span></h1>': 0,
         (
-            '<h1><span style="display:block;width:1px;height:1px;'
-            'overflow:hidden">Ghost</span></h1>'
+            '<h1><span style="display:block;width:1px;height:1px;overflow:hidden">Ghost</span></h1>'
         ): 0,
         '<h1><span style="clip-path:inset(100%)">Ghost</span></h1>': 0,
         (

@@ -158,6 +158,8 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     network_failures = _critical_network_failures(network)
     title = str(s.get("title", "") or "")
     text = str(s.get("text", "") or "")
+    raw_content_type = s.get("document_content_type")
+    document_content_type = raw_content_type if isinstance(raw_content_type, str) else ""
     elements = s.get("elements", []) or []
     visible_text_chars = len(text.strip())
     elements_count = len(elements) if isinstance(elements, list) else 0
@@ -177,6 +179,7 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "title": title,
         "text": text,
+        "document_content_type": document_content_type,
         "visible_text_chars": visible_text_chars,
         "elements_count": elements_count,
         "canvas_count": canvas_count,
@@ -213,6 +216,7 @@ def compute_verdict(
     """
     probe = collect_web_app_probe(structured)
     title = str(probe["title"])
+    document_content_type = str(probe["document_content_type"])
     visible_text_chars = int(probe["visible_text_chars"])
     elements_count = int(probe["elements_count"])
     canvas_count = int(probe["canvas_count"])
@@ -286,6 +290,7 @@ def compute_verdict(
         "url": url,
         "http_status": http_status,
         "title": title,
+        "document_content_type": document_content_type,
         "meaningful_content": meaningful,
         "visible_text_chars": visible_text_chars,
         "elements_count": elements_count,

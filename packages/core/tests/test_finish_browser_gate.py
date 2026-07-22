@@ -542,6 +542,42 @@ def test_browser_content_meaningful_pure():
             "visible_semantic_elements": 1,
         }
     )
+    # A short text/plain response is the complete served document, and its
+    # browser-rendered text is meaningful without an invented HTML wrapper.
+    assert _browser_content_meaningful(
+        {
+            "title": "",
+            "text": "Node Paused 400913",
+            "elements": [],
+            "document_content_type": "text/plain",
+        }
+    )
+    # The sparse exception is exact: whitespace, malformed metadata, and short
+    # HTML placeholders remain unable to bless an empty application shell.
+    assert not _browser_content_meaningful(
+        {
+            "title": "",
+            "text": "   ",
+            "elements": [],
+            "document_content_type": "text/plain",
+        }
+    )
+    assert not _browser_content_meaningful(
+        {
+            "title": "",
+            "text": "Loading",
+            "elements": [],
+            "document_content_type": "text/html",
+        }
+    )
+    assert not _browser_content_meaningful(
+        {
+            "title": "",
+            "text": "Loading",
+            "elements": [],
+            "document_content_type": True,
+        }
+    )
     # Missing, zero, malformed, or boolean evidence must not bless an empty shell.
     for value in (0, -1, True, "1", None):
         assert not _browser_content_meaningful(
@@ -918,15 +954,13 @@ async def test_preview_start_triggers_verify_gate():
     verify_actions = [
         e
         for e in events
-        if isinstance(e, ActionEvent)
-        and e.tool_call
-        and e.tool_call.tool_name == "verify_web_app"
+        if isinstance(e, ActionEvent) and e.tool_call and e.tool_call.tool_name == "verify_web_app"
     ]
     assert verify_actions, "verify_web_app action must exist (gate-driven probe)"
     assert execu.verify_app_calls == 1, "the finish gate must drive exactly one verifier call"
-    assert all(
-        e.meta.get("verify_probe") for e in verify_actions
-    ), "all verify_web_app actions must be gate-owned (verify_probe)"
+    assert all(e.meta.get("verify_probe") for e in verify_actions), (
+        "all verify_web_app actions must be gate-owned (verify_probe)"
+    )
     # The gate-driven action precedes FINISHED
     for act in verify_actions:
         act_seq = getattr(act, "seq", None)

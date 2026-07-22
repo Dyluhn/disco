@@ -1447,21 +1447,45 @@ async def drive_scenario(
     nonterminal_without_snapshot = (
         inactive_without_terminal or confirmed_live_thrash_without_terminal
     )
-    terminal_snapshot_available = not nonterminal_without_snapshot
+    latest_frozen_status = (
+        str(latest_status_event.get("status")) if latest_status_event is not None else ""
+    )
+    failed_terminal_without_success_seal = frozen_work_terminal and latest_frozen_status in {
+        "ERROR",
+        "STUCK",
+    }
+    strict_snapshot_unavailable = (
+        nonterminal_without_snapshot or failed_terminal_without_success_seal
+    )
+    terminal_snapshot_available = not strict_snapshot_unavailable
     if terminal_snapshot_available:
         workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
     else:
+        failed_terminal = failed_terminal_without_success_seal
         workspace = {
             "files": {},
             "_capture": {
-                "status": "not_collected_nonterminal",
+                "status": (
+                    "not_collected_failed_terminal"
+                    if failed_terminal
+                    else "not_collected_nonterminal"
+                ),
                 "drive_status": drive_status,
-                "reason": "strict atomic workspace evidence requires a durable terminal",
+                "reason": (
+                    "strict final workspace seal exists only for successful completion"
+                    if failed_terminal
+                    else "strict atomic workspace evidence requires a durable terminal"
+                ),
             },
         }
         timeline.append(
-            "skipped strict workspace/browser byte capture for nonterminal drive status "
-            f"{drive_status}; preserving terminal adjudication"
+            "skipped strict workspace/browser byte capture for "
+            + (
+                f"failed terminal {latest_frozen_status}"
+                if failed_terminal
+                else f"nonterminal drive status {drive_status}"
+            )
+            + "; preserving product adjudication"
         )
     browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
     browser_collection_diagnostic: dict[str, Any] | None = None
@@ -1474,14 +1498,22 @@ async def drive_scenario(
         if referenced_paths:
             browser_collection_diagnostic = {
                 "schema_version": 1,
-                "kind": "browser_evidence_not_collected_nonterminal",
+                "kind": (
+                    "browser_evidence_not_collected_failed_terminal"
+                    if failed_terminal_without_success_seal
+                    else "browser_evidence_not_collected_nonterminal"
+                ),
                 "reason": "strict browser bytes require the unavailable terminal snapshot",
                 "facts": {"referenced_paths": referenced_paths},
                 "conversation_id": cid,
                 "preserved_for": (
-                    "confirmed_live_thrash_adjudication"
-                    if confirmed_live_thrash_without_terminal
-                    else "nonterminal_product_adjudication"
+                    "failed_terminal_product_adjudication"
+                    if failed_terminal_without_success_seal
+                    else (
+                        "confirmed_live_thrash_adjudication"
+                        if confirmed_live_thrash_without_terminal
+                        else "nonterminal_product_adjudication"
+                    )
                 ),
                 "admissible_as_browser_evidence": False,
             }

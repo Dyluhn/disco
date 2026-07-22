@@ -10232,6 +10232,44 @@ async def test_superseded_stuck_terminal_does_not_force_strict_snapshot(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_current_stuck_terminal_preserves_product_failure_without_finished_seal(
+    tmp_path, monkeypatch
+):
+    """A durable STUCK is a product outcome, not a snapshot-flush invalidation.
+
+    Strict workspace collection requires an exact FINISHED seal, so invoking it
+    for STUCK deterministically waits and masks the real failure as
+    WORKSPACE_SNAPSHOT_NOT_READY.
+    """
+    events = clean_smoke_log()
+    events[-1] = status(10, "STUCK", "verifier_no_progress")
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, events)
+    transport = FakeTransport(db, states=["STUCK"])
+    client = _client(transport, tmp_path, require_workspace_commit=True)
+
+    async def strict_workspace_must_not_run(*_args, **_kwargs):
+        raise AssertionError("STUCK has no successful final workspace seal")
+
+    monkeypatch.setattr(client, "collect_workspace", strict_workspace_must_not_run)
+    scenario = _smoke_scenario()
+    run = await drive_scenario(client, scenario, model="m", autonomous=False)
+
+    assert run.workspace_manifest["_capture"] == {
+        "drive_status": "STUCK",
+        "reason": "strict final workspace seal exists only for successful completion",
+        "status": "not_collected_failed_terminal",
+    }
+    base = assemble_dossier(
+        tmp_path / "out", "run_current_stuck", scenario, run, model="m", autonomous=False
+    )
+    classification = classify_dossier(base, scenario, run, autonomous=False)
+    assert classification["status"] == "FAIL", classification
+    assert classification["code"] == "TOOL_CALL_THRASH"
+    assert classification["first_broken_link"] == "model_turns -> bounded_stuck_valve"
+
+
+@pytest.mark.asyncio
 async def test_v4_bare_idle_after_late_finished_keeps_the_strict_path(tmp_path, monkeypatch):
     """Verifier V4: a resting/stop IDLE (any detail) is not product
     supersession — a genuine late FINISHED still routes to strict capture."""
