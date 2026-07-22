@@ -1,0 +1,70 @@
+"""Truthful environment ownership for the repository self-host Compose stack."""
+
+from pathlib import Path
+
+import yaml
+
+_REPO = Path(__file__).resolve().parents[3]
+
+
+def _compose() -> dict:
+    parsed = yaml.safe_load((_REPO / "compose.yaml").read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict)
+    return parsed
+
+
+def test_agent_server_receives_every_advertised_runtime_override() -> None:
+    environment = _compose()["services"]["agent-server"]["environment"]
+
+    assert environment["DISCO_BUILD_EGRESS"] == (
+        "${DISCO_BUILD_EGRESS:-${PMX_BUILD_EGRESS:-filtered}}"
+    )
+    assert environment["DISCO_DRIVER_VISION"] == ("${DISCO_DRIVER_VISION:-${PMX_DRIVER_VISION:-0}}")
+    assert environment["DISCO_EMBEDDER_URL"] == ("${DISCO_EMBEDDER_URL:-${PMX_EMBEDDER_URL:-}}")
+    assert environment["DISCO_RERANKER_URL"] == ("${DISCO_RERANKER_URL:-${PMX_RERANKER_URL:-}}")
+    assert environment["DISCO_NLI_URL"] == "${DISCO_NLI_URL:-${PMX_NLI_URL:-}}"
+
+
+def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
+    services = _compose()["services"]
+    app = services["app-server"]["environment"]
+    agent = services["agent-server"]["environment"]
+
+    assert agent["DISCO_INSPECT"] == "${DISCO_INSPECT:-0}"
+    for name in ("DISCO_LOG_LEVEL", "DISCO_LOG_JSON"):
+        assert name in app
+        assert name in agent
+    for name in (
+        "DISCO_OPENROUTER_API_KEY",
+        "DISCO_GEMMA_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "TAVILY_API_KEY",
+        "BRAVE_API_KEY",
+        "BRAVE_SEARCH_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "COMFYUI_API_KEY",
+        "OPENAI_IMAGE_API_KEY",
+        "OPENAI_TTS_API_KEY",
+    ):
+        assert name in app
+        assert name in agent
+
+
+def test_example_and_self_host_doc_name_the_effective_overrides() -> None:
+    example = (_REPO / ".env.example").read_text(encoding="utf-8")
+    docs = (_REPO / "docs" / "self-host.md").read_text(encoding="utf-8")
+
+    for name in (
+        "DISCO_BUILD_EGRESS",
+        "DISCO_DRIVER_VISION",
+        "DISCO_EMBEDDER_URL",
+        "DISCO_RERANKER_URL",
+        "DISCO_NLI_URL",
+        "DISCO_INSPECT",
+        "DISCO_LOG_LEVEL",
+        "DISCO_LOG_JSON",
+    ):
+        assert name in example
+        assert name in docs

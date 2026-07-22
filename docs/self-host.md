@@ -146,6 +146,28 @@ docker build \
   -f deploy/compose/Dockerfile.server .
 ```
 
+## Compose environment overrides
+
+Compose passes an override only to the service that consumes it. Blank remote
+encoder URLs keep the bundled local encoder tier; setting them has an effect when
+`DISCO_ENCODERS=remote` (or the equivalent Settings mode) is selected.
+
+| Override | Effective service | Omitted/default behavior |
+|---|---|---|
+| `DISCO_BUILD_EGRESS` | `agent-server` | `filtered`; registry allowlist proxy |
+| `DISCO_DRIVER_VISION` | `agent-server` | `0`; no driver-local vision claim |
+| `DISCO_EMBEDDER_URL` | `agent-server` | blank; bundled embedder |
+| `DISCO_RERANKER_URL` | `agent-server` | blank; bundled reranker |
+| `DISCO_NLI_URL` | `agent-server` | blank; bundled NLI verifier |
+| `DISCO_INSPECT` | `agent-server` | `0`; debug trace routes inert |
+| `DISCO_LOG_LEVEL` / `DISCO_LOG_JSON` | both Python servers | `INFO` / `0` |
+| provider/search/image/TTS key variables from `.env.example` | both Python servers | blank; imported only after the matching origin is approved |
+
+`DISCO_BUILD_EGRESS` accepts `filtered`, `public`, `sealed`, `open`, or `raw`;
+unknown values fail closed. `open` and `raw` are explicit weaker postures. The
+`DISCO_*` names take precedence, while the documented legacy `PMX_*` aliases
+remain accepted by Compose where one exists.
+
 ## Offline Asset Smoke
 
 This proves the baked encoder and TTS assets are used with networking disabled:

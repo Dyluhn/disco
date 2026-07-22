@@ -96,6 +96,11 @@ services:
       FASTEMBED_CACHE_PATH: /opt/disco-cache/fastembed
       DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-${PMX_ENCODER_TIER:-full}}"
       DISCO_ENCODERS: "${DISCO_ENCODERS:-${PMX_ENCODERS:-local}}"
+      # Remote encoder endpoints are read by the retrieval runtime in this
+      # service. Empty values preserve the bundled local encoder default.
+      DISCO_RERANKER_URL: "${DISCO_RERANKER_URL:-${PMX_RERANKER_URL:-}}"
+      DISCO_EMBEDDER_URL: "${DISCO_EMBEDDER_URL:-${PMX_EMBEDDER_URL:-}}"
+      DISCO_NLI_URL: "${DISCO_NLI_URL:-${PMX_NLI_URL:-}}"
       DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-${PMX_SECRET_KEY:-}}"
       # The agent-server enforces the SAME CORS/pairing origin allowlist as the
       # app-server, so it needs the public UI URL too — without it a LAN/tailnet
@@ -126,6 +131,10 @@ services:
       # JSON logs make model/tool thrash machine-readable in captured compose logs.
       DISCO_INSPECT: "${DISCO_INSPECT:-0}"
       DISCO_LOG_JSON: "${DISCO_LOG_JSON:-0}"
+      # Runtime policy toggles belong to the agent-server: it resolves model
+      # vision capability and constructs every Build sandbox egress posture.
+      DISCO_DRIVER_VISION: "${DISCO_DRIVER_VISION:-${PMX_DRIVER_VISION:-0}}"
+      DISCO_BUILD_EGRESS: "${DISCO_BUILD_EGRESS:-${PMX_BUILD_EGRESS:-filtered}}"
       # --- memory hygiene (OOM floor fix) ---------------------------------
       # Deep Research's bursty concurrent gather + in-process ONNX encoders
       # fragment the heap; the glibc allocator then strands freed pages mid-heap
