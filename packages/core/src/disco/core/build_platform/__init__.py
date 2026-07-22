@@ -94,7 +94,16 @@ from .identity import (
     composition_digest,
     derive_run_admission_identity,
 )
-from .registry import BuildPlatformRegistry, ComponentSpec, ProfileChoice, RegistryError
+from .registry import (
+    BuildPlatformRegistry,
+    ComponentSpec,
+    ConstructionEngineDefinition,
+    DeploymentConnectorDefinition,
+    PackageExporterDefinition,
+    ProfileChoice,
+    RegistryError,
+    TargetAdapterDefinition,
+)
 from .resolver import (
     BuildComposition,
     OperationBlock,
@@ -132,10 +141,12 @@ __all__ = [
     "ComponentSpec",
     "CompositionDigest",
     "ConstructionEngine",
+    "ConstructionEngineDefinition",
     "ConstructionPlan",
     "ConstructionRequest",
     "DeliveryIntent",
     "DeploymentConnector",
+    "DeploymentConnectorDefinition",
     "DeploymentPlan",
     "DeploymentRequest",
     "EffectiveCapabilityPolicy",
@@ -156,6 +167,7 @@ __all__ = [
     "OperationBlock",
     "ObserveOnlyShadowRecord",
     "PackageExporter",
+    "PackageExporterDefinition",
     "PackagePlan",
     "PackageRequest",
     "Parameter",
@@ -186,6 +198,7 @@ __all__ = [
     "SyntheticBatchJobExporter",
     "SyntheticFixtureEngine",
     "TargetAdapter",
+    "TargetAdapterDefinition",
     "TargetPlan",
     "TargetRequest",
     "ToolCapabilityBasis",

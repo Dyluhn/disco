@@ -24,7 +24,13 @@ from .contracts import (
     VerifierCheck,
     VerifierPlan,
 )
-from .registry import BuildPlatformRegistry, ComponentSpec
+from .registry import (
+    BuildPlatformRegistry,
+    ComponentSpec,
+    ConstructionEngineDefinition,
+    PackageExporterDefinition,
+    TargetAdapterDefinition,
+)
 from .resolver import BuildComposition, ResolutionInputs, resolve_build_composition
 
 SYNTHETIC_PROFILE_ID = ComponentId(namespace="synthetic", name="batchjob_profile", version="1")
@@ -142,17 +148,41 @@ def build_synthetic_registry() -> BuildPlatformRegistry:
     """Register the fixture through ordinary public APIs, not a central switch."""
 
     registry = BuildPlatformRegistry()
+    engine = SyntheticFixtureEngine()
+    engine_plan = engine.plan(
+        ConstructionRequest(
+            profile=SYNTHETIC_PROFILE_ID,
+            goal="synthetic conformance",
+        )
+    )
     registry.register_engine(
         _spec(SYNTHETIC_ENGINE_ID, ComponentKind.ENGINE),
-        SyntheticFixtureEngine(),
+        ConstructionEngineDefinition(id=SYNTHETIC_ENGINE_ID, plan=engine_plan),
+    )
+    target = SyntheticBatchJobAdapter()
+    target_plan = target.plan(
+        TargetRequest(
+            profile=SYNTHETIC_PROFILE_ID,
+            engine=SYNTHETIC_ENGINE_ID,
+            goal="synthetic conformance",
+        )
     )
     registry.register_target(
         _spec(SYNTHETIC_TARGET_ID, ComponentKind.TARGET),
-        SyntheticBatchJobAdapter(),
+        TargetAdapterDefinition(id=SYNTHETIC_TARGET_ID, plan=target_plan),
+    )
+    exporter = SyntheticBatchJobExporter()
+    exporter_plan = exporter.plan(
+        PackageRequest(
+            profile=SYNTHETIC_PROFILE_ID,
+            target=SYNTHETIC_TARGET_ID,
+            delivery=target_plan.delivery,
+            revision_ref="synthetic:unbound",
+        )
     )
     registry.register_exporter(
         _spec(SYNTHETIC_EXPORTER_ID, ComponentKind.EXPORTER),
-        SyntheticBatchJobExporter(),
+        PackageExporterDefinition(id=SYNTHETIC_EXPORTER_ID, plan=exporter_plan),
     )
     registry.register_component(_spec(SYNTHETIC_VERIFIER_ID, ComponentKind.VERIFIER))
     registry.register_component(_spec(SYNTHETIC_PREVIEW_ID, ComponentKind.PREVIEW))

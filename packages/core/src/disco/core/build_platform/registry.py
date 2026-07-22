@@ -12,11 +12,19 @@ from .contracts import (
     ComponentId,
     ComponentKind,
     ConstructionEngine,
+    ConstructionPlan,
+    ConstructionRequest,
     DeploymentConnector,
+    DeploymentPlan,
+    DeploymentRequest,
     FrozenModel,
     PackageExporter,
+    PackagePlan,
+    PackageRequest,
     PolicyLayer,
     TargetAdapter,
+    TargetPlan,
+    TargetRequest,
 )
 
 _PROTECTED_NAMESPACES = frozenset({"disco"})
@@ -39,10 +47,78 @@ class ProfileChoice(FrozenModel):
     label: str = Field(min_length=1, max_length=96)
 
 
+class ConstructionEngineDefinition(FrozenModel):
+    id: ComponentId
+    plan: ConstructionPlan
+
+
+class TargetAdapterDefinition(FrozenModel):
+    id: ComponentId
+    plan: TargetPlan
+
+
+class PackageExporterDefinition(FrozenModel):
+    id: ComponentId
+    plan: PackagePlan
+
+
+class DeploymentConnectorDefinition(FrozenModel):
+    id: ComponentId
+    plan: DeploymentPlan
+
+
 class _ComponentEntry[T]:
     def __init__(self, spec: ComponentSpec, implementation: T) -> None:
         self.spec = spec
         self.implementation = implementation
+
+
+class _DeclaredEngine:
+    def __init__(self, definition: ConstructionEngineDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def id(self) -> ComponentId:
+        return self._definition.id
+
+    def plan(self, request: ConstructionRequest) -> ConstructionPlan:
+        return self._definition.plan
+
+
+class _DeclaredTarget:
+    def __init__(self, definition: TargetAdapterDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def id(self) -> ComponentId:
+        return self._definition.id
+
+    def plan(self, request: TargetRequest) -> TargetPlan:
+        return self._definition.plan
+
+
+class _DeclaredExporter:
+    def __init__(self, definition: PackageExporterDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def id(self) -> ComponentId:
+        return self._definition.id
+
+    def plan(self, request: PackageRequest) -> PackagePlan:
+        return self._definition.plan
+
+
+class _DeclaredConnector:
+    def __init__(self, definition: DeploymentConnectorDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def id(self) -> ComponentId:
+        return self._definition.id
+
+    def plan(self, request: DeploymentRequest) -> DeploymentPlan:
+        return self._definition.plan
 
 
 class BuildPlatformRegistry:
@@ -86,28 +162,50 @@ class BuildPlatformRegistry:
             raise RegistryError("component spec and implementation IDs differ")
 
     def register_profile(self, profile: BuildProfile) -> None:
+        if type(profile) is not BuildProfile:
+            raise RegistryError("public profile registration requires exact frozen data")
         self._check_public_namespace(profile.id)
         self._register_profile(profile)
 
     def register_component(self, spec: ComponentSpec) -> None:
+        if type(spec) is not ComponentSpec:
+            raise RegistryError("public component registration requires exact frozen data")
         self._check_public_namespace(spec.id)
         self._register_component(spec)
 
-    def register_engine(self, spec: ComponentSpec, engine: ConstructionEngine) -> None:
+    def register_engine(
+        self, spec: ComponentSpec, definition: ConstructionEngineDefinition
+    ) -> None:
+        if type(spec) is not ComponentSpec or type(definition) is not ConstructionEngineDefinition:
+            raise RegistryError("public engine registration is data-only")
         self._check_public_namespace(spec.id)
-        self._register_engine(spec, engine)
+        if definition.plan.engine != definition.id:
+            raise RegistryError("engine definition plan identity differs from its ID")
+        self._register_engine(spec, _DeclaredEngine(definition))
 
-    def register_target(self, spec: ComponentSpec, target: TargetAdapter) -> None:
+    def register_target(self, spec: ComponentSpec, definition: TargetAdapterDefinition) -> None:
+        if type(spec) is not ComponentSpec or type(definition) is not TargetAdapterDefinition:
+            raise RegistryError("public target registration is data-only")
         self._check_public_namespace(spec.id)
-        self._register_target(spec, target)
+        if definition.plan.target != definition.id:
+            raise RegistryError("target definition plan identity differs from its ID")
+        self._register_target(spec, _DeclaredTarget(definition))
 
-    def register_exporter(self, spec: ComponentSpec, exporter: PackageExporter) -> None:
+    def register_exporter(self, spec: ComponentSpec, definition: PackageExporterDefinition) -> None:
+        if type(spec) is not ComponentSpec or type(definition) is not PackageExporterDefinition:
+            raise RegistryError("public exporter registration is data-only")
         self._check_public_namespace(spec.id)
-        self._register_exporter(spec, exporter)
+        self._register_exporter(spec, _DeclaredExporter(definition))
 
-    def register_connector(self, spec: ComponentSpec, connector: DeploymentConnector) -> None:
+    def register_connector(
+        self, spec: ComponentSpec, definition: DeploymentConnectorDefinition
+    ) -> None:
+        if type(spec) is not ComponentSpec or type(definition) is not DeploymentConnectorDefinition:
+            raise RegistryError("public connector registration is data-only")
         self._check_public_namespace(spec.id)
-        self._register_connector(spec, connector)
+        if definition.plan.connector != definition.id:
+            raise RegistryError("connector definition plan identity differs from its ID")
+        self._register_connector(spec, _DeclaredConnector(definition))
 
     # Host-owned built-in modules use these deliberately private registration
     # paths. User/plugin ingestion receives only the public, protected methods.

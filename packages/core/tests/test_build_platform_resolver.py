@@ -13,6 +13,7 @@ from disco.core.build_platform import (
     ComponentKind,
     ComponentRequirement,
     ComponentSpec,
+    ConstructionEngineDefinition,
     ConstructionPlan,
     ConstructionRequest,
     DeliveryIntent,
@@ -25,6 +26,7 @@ from disco.core.build_platform import (
     RegistryError,
     ResolutionError,
     ResolutionInputs,
+    TargetAdapterDefinition,
     TargetPlan,
     TargetRequest,
     ToolDescriptor,
@@ -141,14 +143,21 @@ def _registry(
 ) -> BuildPlatformRegistry:
     registry = BuildPlatformRegistry()
     engine = _WrongEngine() if wrong_engine else _Engine()
-    registry.register_engine(_spec(_Engine.id, ComponentKind.ENGINE), engine)
+    engine_plan = engine.plan(ConstructionRequest(profile=_id("batch"), goal="fixture"))
+    registry.register_engine(
+        _spec(_Engine.id, ComponentKind.ENGINE),
+        ConstructionEngineDefinition(id=_Engine.id, plan=engine_plan),
+    )
+    target_plan = _Target().plan(
+        TargetRequest(profile=_id("batch"), engine=_Engine.id, goal="fixture")
+    )
     registry.register_target(
         _spec(
             _Target.id,
             ComponentKind.TARGET,
             features=frozenset({"non_web"}),
         ),
-        _Target(),
+        TargetAdapterDefinition(id=_Target.id, plan=target_plan),
     )
     registry.register_component(_spec(_id("verifier"), ComponentKind.VERIFIER))
     registry.register_component(_spec(_id("preview"), ComponentKind.PREVIEW))
@@ -203,8 +212,12 @@ def test_protected_namespace_and_duplicate_ids_fail_closed() -> None:
     registry = BuildPlatformRegistry()
     protected_id = _id("engine", namespace="disco")
     protected = _spec(protected_id, ComponentKind.ENGINE)
+    definition = ConstructionEngineDefinition(
+        id=protected_id,
+        plan=ConstructionPlan(engine=protected_id),
+    )
     with pytest.raises(RegistryError, match="host-protected"):
-        registry.register_engine(protected, _Engine())
+        registry.register_engine(protected, definition)
     registry.register_component(_spec(_id("verifier"), ComponentKind.VERIFIER))
     with pytest.raises(RegistryError, match="duplicate"):
         registry.register_component(_spec(_id("verifier"), ComponentKind.VERIFIER))
@@ -216,8 +229,8 @@ def test_unknown_profile_never_falls_back() -> None:
 
 
 def test_component_plan_identity_mismatch_fails_closed() -> None:
-    with pytest.raises(ResolutionError, match="mismatched"):
-        resolve_build_composition(_registry(wrong_engine=True), _inputs())
+    with pytest.raises(RegistryError, match="plan identity"):
+        _registry(wrong_engine=True)
 
 
 def test_capability_is_intersection_and_blocks_only_dependent_operation() -> None:
