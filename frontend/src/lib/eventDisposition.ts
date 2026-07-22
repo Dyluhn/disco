@@ -37,6 +37,7 @@ export const KNOWN_EVENT_KINDS = [
   "workspace_version",
   "workspace_restored",
   "workspace_mutation",
+  "build_platform_admission",
   "error",
   "plan",
   "report",
@@ -83,6 +84,10 @@ export const EVENT_DISPOSITION: Record<
   workspace_mutation: {
     disposition: "suppressed",
     where: "Host-side workspace invalidation fence consumed by final-seal authority; not a chat turn.",
+  },
+  build_platform_admission: {
+    disposition: "suppressed",
+    where: "Durable Build route/composition admission identity. Internal execution authority, not a chat turn.",
   },
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
   plan: { disposition: "rendered", where: "PlanPanel (Build + Deep Research plan gate)." },

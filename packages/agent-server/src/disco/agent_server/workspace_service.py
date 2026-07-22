@@ -167,6 +167,7 @@ class WorkspaceCoordinator:
                                 raise WorkspaceRunSuperseded(
                                     "registered run intent changed before admission"
                                 )
+                        await self._rt._build_platform.record_route_locked(conversation_id)
                         await self.record_mutation_locked(
                             conversation_id,
                             "agent.run-claimed",

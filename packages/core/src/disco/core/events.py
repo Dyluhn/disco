@@ -56,6 +56,7 @@ class EventKind(str, Enum):
     WORKSPACE_VERSION = "workspace_version"
     WORKSPACE_RESTORED = "workspace_restored"
     WORKSPACE_MUTATION = "workspace_mutation"
+    BUILD_PLATFORM_ADMISSION = "build_platform_admission"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
@@ -899,6 +900,43 @@ class WorkspaceMutationEvent(BaseEvent):
         return normalized
 
 
+class BuildPlatformAdmissionEvent(BaseEvent):
+    """Durable route/composition identity for one Build run intent."""
+
+    kind: Literal[EventKind.BUILD_PLATFORM_ADMISSION] = EventKind.BUILD_PLATFORM_ADMISSION
+    source: EventSource = EventSource.SYSTEM
+    route: Literal["legacy", "platform"]
+    profile_id: str = Field(
+        pattern=r"^[a-z][a-z0-9_-]{0,62}\.[a-z][a-z0-9_-]{0,62}@[1-9][0-9]*(?:\.[0-9]+){0,2}$"
+    )
+    run_intent_id: str = Field(min_length=1, max_length=160)
+    composition_authority: Literal["legacy", "build_platform_core"]
+    execution_bridge: Literal["legacy_host"] = "legacy_host"
+    composition_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    run_identity: str | None = Field(
+        default=None,
+        pattern=r"^run:sha256:[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _route_identity_is_exact(self) -> BuildPlatformAdmissionEvent:
+        if self.route == "platform":
+            if self.composition_authority != "build_platform_core":
+                raise ValueError("Platform route requires Build Platform Core authority")
+            if self.composition_digest is None or self.run_identity is None:
+                raise ValueError("Platform route requires composition and run identities")
+        elif (
+            self.composition_authority != "legacy"
+            or self.composition_digest is not None
+            or self.run_identity is not None
+        ):
+            raise ValueError("legacy route cannot claim a Platform composition identity")
+        return self
+
+
 class PlanEvent(BaseEvent, LLMConvertible):
     """A structured plan the agent proposed (in PLANNING mode) and the human is
     asked to approve before any work runs. LLMConvertible so the committed plan
@@ -1320,6 +1358,7 @@ Event = Annotated[
     | WorkspaceVersionEvent
     | WorkspaceRestoredEvent
     | WorkspaceMutationEvent
+    | BuildPlatformAdmissionEvent
     | PlanEvent
     | ReportEvent
     | AlternativesEvent
@@ -1338,6 +1377,41 @@ Event = Annotated[
     | ContextSummaryEvent,
     Field(discriminator="kind"),
 ]
+
+
+def current_build_platform_admission(
+    events: Iterable[Event],
+) -> BuildPlatformAdmissionEvent | None:
+    """Fold the route pin for the current non-terminal Build segment.
+
+    PAUSED and user/approval gates retain the pin. A genuine terminal status
+    releases it, so a later run may apply the current rollout switch.
+    """
+
+    materialized = list(events)
+    latest: BuildPlatformAdmissionEvent | None = None
+    for event in materialized:
+        if isinstance(event, BuildPlatformAdmissionEvent) and (
+            latest is None or (event.seq or -1) > (latest.seq or -1)
+        ):
+            latest = event
+    if latest is None or type(latest.seq) is not int:
+        return None
+    terminal = {
+        ConversationStatus.FINISHED,
+        ConversationStatus.ERROR,
+        ConversationStatus.STUCK,
+        ConversationStatus.IDLE,
+    }
+    if any(
+        isinstance(event, StatusEvent)
+        and type(event.seq) is int
+        and event.seq > latest.seq
+        and event.status in terminal
+        for event in materialized
+    ):
+        return None
+    return latest
 
 
 def _workspace_run_intent_state(

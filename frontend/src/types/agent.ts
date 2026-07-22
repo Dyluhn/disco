@@ -126,6 +126,16 @@ export interface WorkspaceMutationEvent extends EventBase {
   run_intent_id?: string | null;
   run_protocol_version?: 1 | null;
 }
+export interface BuildPlatformAdmissionEvent extends EventBase {
+  kind: "build_platform_admission";
+  route: "legacy" | "platform";
+  profile_id: string;
+  run_intent_id: string;
+  composition_authority: "legacy" | "build_platform_core";
+  execution_bridge: "legacy_host";
+  composition_digest?: string | null;
+  run_identity?: string | null;
+}
 export interface PlanStep {
   title: string;
   detail?: string | null;
@@ -333,6 +343,7 @@ export type AgentEvent =
   | WorkspaceVersionEvent
   | WorkspaceRestoredEvent
   | WorkspaceMutationEvent
+  | BuildPlatformAdmissionEvent
   | PlanEvent
   | ReportEvent
   | AlternativesEvent

@@ -159,6 +159,7 @@ from disco.tools.sandbox import (
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
+from .build_platform_runtime import BuildPlatformRuntime
 from .build_platform_shadow import (
     build_platform_shadow_enabled,
     observe_legacy_build,
@@ -770,6 +771,7 @@ class ConversationRuntime:
         # Phase-3 Build Platform Core observer. Records are diagnostics only:
         # legacy loop/executor/preview/verifier/export/finish authority never reads them.
         self._build_platform_shadow_records: dict[str, Any] = {}
+        self._build_platform = BuildPlatformRuntime(self)
         # P3 — global last-selected driver model (single-value sidecar). Persisted
         # so a new conversation seeds from whatever the user picked last; falls back
         # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
@@ -2370,6 +2372,12 @@ class ConversationRuntime:
                     "build-platform shadow observer failed; legacy authority is unchanged",
                     exc_info=True,
                 )
+        self._build_platform.select_freeform(
+            conversation_id,
+            eligible=sealed_workflow_run is None
+            and not any((_art_mode, _appkit_mode, _workflow_router_mode)),
+            tool_specs=executor.available_tools(),
+        )
         if sealed_workflow_run is not None:
             assert _workflow_phase is not None
             assert _workflow_phase.compiled_run_scope is not None
@@ -2584,6 +2592,7 @@ class ConversationRuntime:
         self._evict_stale_backend(conversation_id)
 
         async def _resolve_loop() -> AgentLoop:
+            await self._build_platform.prepare_route_pin(conversation_id)
             snapshot = await self._resolve_driver_context(conversation_id)
             return self._loop_for_resolved(conversation_id, snapshot)
 
