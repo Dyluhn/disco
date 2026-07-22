@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from .builtin_inputs import BuiltinInputOwner
 from .compiler import (
     CompositionCompileError,
     PromptContextComposition,
@@ -59,6 +60,7 @@ class ResolutionInputs(FrozenModel):
     user_policy: PolicyLayer
     requested_reference_categories: frozenset[str] = frozenset()
     prompt_context: PromptContextInputs = PromptContextInputs()
+    builtin_input_owners: tuple[BuiltinInputOwner, ...] = ()
 
 
 class BuildComposition(FrozenModel):
@@ -81,6 +83,7 @@ class BuildComposition(FrozenModel):
     effective_capabilities: EffectiveCapabilityPolicy
     effective_policy: EffectivePolicy
     prompt_context: PromptContextComposition
+    builtin_input_owners: tuple[BuiltinInputOwner, ...] = ()
     blocked_operations: tuple[OperationBlock, ...] = ()
 
     def blocked(self, operation: str) -> bool:
@@ -477,5 +480,6 @@ def resolve_build_composition(
         effective_capabilities=effective_capabilities,
         effective_policy=effective_policy,
         prompt_context=prompt_context,
+        builtin_input_owners=inputs.builtin_input_owners,
         blocked_operations=normalized_blocks,
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .builtin_inputs import builtin_input_catalog
 from .compiler import ModuleBody, PromptContextInputs, ToolDescriptor
 from .contracts import (
     BuildProfile,
@@ -401,5 +402,6 @@ def resolve_builtin_composition(
                 tool_catalog=tool_catalog,
                 host_visible_tools=visible_tools,
             ),
+            builtin_input_owners=builtin_input_catalog().items,
         ),
     )

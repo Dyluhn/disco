@@ -1,5 +1,13 @@
 """Target-neutral Build Platform Core public contracts."""
 
+from .builtin_inputs import (
+    STARTER_SELECTION_PRECEDENCE,
+    BuiltinInputCatalog,
+    BuiltinInputCategory,
+    BuiltinInputMount,
+    BuiltinInputOwner,
+    builtin_input_catalog,
+)
 from .builtin_profiles import (
     APPKIT_ENGINE_ID,
     APPKIT_LIFECYCLE_OPERATIONS,
@@ -129,6 +137,10 @@ __all__ = [
     "APPKIT_PROFILE_ID",
     "APPKIT_PROMPT_ID",
     "BUILTIN_CAPABILITIES",
+    "BuiltinInputCatalog",
+    "BuiltinInputCategory",
+    "BuiltinInputMount",
+    "BuiltinInputOwner",
     "BuildComposition",
     "BuildPlatformRegistry",
     "BuildProfile",
@@ -194,6 +206,7 @@ __all__ = [
     "SYNTHETIC_PROFILE_ID",
     "SYNTHETIC_TARGET_ID",
     "SYNTHETIC_VERIFIER_ID",
+    "STARTER_SELECTION_PRECEDENCE",
     "ShadowFieldComparison",
     "RegistryError",
     "ResolutionError",
@@ -221,6 +234,7 @@ __all__ = [
     "build_builtin_registry",
     "build_synthetic_registry",
     "builtin_module_bodies",
+    "builtin_input_catalog",
     "compare_observe_only",
     "compile_prompt_context",
     "composition_digest",
