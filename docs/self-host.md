@@ -40,6 +40,73 @@ All durable application state lives in the `disco-data` volume. The default
 server image already contains the fastembed ONNX models and Kokoro TTS weights
 under `/opt/disco-cache`, so the `/data` volume does not hide them.
 
+## Backup and restore
+
+Use the repository lifecycle command rather than copying a live `disco.db` file.
+Backup briefly stops the two database writers, uses SQLite's backup API, archives
+the complete `disco-data` volume with per-entry SHA-256 checksums, then restarts
+only the writers that were running before the snapshot:
+
+```bash
+.venv/bin/python scripts/self_host_data.py backup \
+  --output "$HOME/disco-backup-$(date +%Y%m%d).tar.gz"
+```
+
+The archive includes the consistent SQLite database, its sidecar settings files,
+the generated `.secret_key`, encrypted `secrets.json`, origin approvals, projects,
+skills, generated audio/assets, and every other regular entry under `/data`.
+Transient SQLite `-wal`/`-shm` files are replaced by the consistent backup
+database. Rebuildable image assets under `/opt/disco-cache` are deliberately not
+included because they are baked into `disco-server`. Unsafe escaping symlinks and
+special device/socket files make backup fail instead of being silently omitted.
+
+Restore accepts only a checksummed v1 archive and only an empty `disco-data`
+volume. It rejects traversal, unsafe links, duplicate members, checksum drift,
+and a failed SQLite integrity check before promoting any restored entry:
+
+```bash
+.venv/bin/python scripts/self_host_data.py restore \
+  --archive "$HOME/disco-backup-20260721.tar.gz"
+```
+
+If the named volume does not exist, restore creates it; if it exists and contains
+anything, restore stops with no overwrite. After validation it starts the app,
+agent, and frontend services. Use `--engine docker` when Docker Compose owns the
+installation, and `--project-name NAME` if the original Compose project was not
+the default `disco`.
+
+## Upgrade and uninstall
+
+Upgrade is backup-first, then rebuilds with fresh base images and starts the
+stack:
+
+```bash
+.venv/bin/python scripts/self_host_data.py upgrade \
+  --backup "$HOME/disco-pre-upgrade-$(date +%Y%m%d).tar.gz"
+podman compose logs app-server agent-server
+podman compose exec agent-server disco-verify --quick
+```
+
+Application rollback is a source/image operation. Once a newer version has
+written a schema an older version may not understand, in-place rollback is not
+supported; restore the pre-upgrade archive into a new empty volume with the old
+source/image instead.
+
+Ordinary uninstall removes containers and the project network but retains and
+reports the exact named `disco-data` volume:
+
+```bash
+.venv/bin/python scripts/self_host_data.py uninstall
+```
+
+Deleting durable data is a separate, explicit operation. It reports the volume
+it removed and refuses any confirmation other than the exact phrase below:
+
+```bash
+.venv/bin/python scripts/self_host_data.py uninstall \
+  --destroy-data --confirm DELETE_DISCO_DATA
+```
+
 ### Scaling and preview redemption
 
 The supported Compose topology runs one `agent-server` against the single
@@ -100,14 +167,17 @@ podman compose up -d --build
 
 The compose default resolves the host socket from `$XDG_RUNTIME_DIR`, falling
 back to `/run/user/1000/podman/podman.sock`. Set `DISCO_SANDBOX_SOCKET` when your
-UID or socket location differs.
+UID or socket location differs. `DISCO_LOCAL_ENGINE=podman` is the default and
+keeps native Podman lifecycle/exec semantics even though the socket has the
+engine-neutral in-container name `/var/run/docker.sock`.
 
 Docker's root-owned socket grants root-equivalent control of the host. It is not
 selected automatically. A trusted single-user operator can explicitly accept
 that weaker host boundary (and ensure the sandbox image is built in that daemon):
 
 ```bash
-DISCO_SANDBOX_SOCKET=/var/run/docker.sock docker compose up -d --build
+DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
+  docker compose up -d --build
 ```
 
 gVisor remains an optional stronger tier for hosts where `runsc` is installed and

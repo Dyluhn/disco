@@ -92,6 +92,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-dejavu-core \
         libreoffice-impress \
         fonts-liberation \
+        podman \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 

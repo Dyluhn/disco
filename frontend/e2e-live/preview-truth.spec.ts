@@ -1,10 +1,4 @@
 import { expect, test } from "@playwright/test";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-
-// ESM module scope — no __dirname; derive it (frontend package is "type": "module").
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * BP-02 live acceptance (docs/workorders/BP-02, acceptance §4) — preview TRUTH.
@@ -19,10 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * Screenshots: preview-owner.png / preview-down.png / preview-restarted.png.
  */
 
-const SCREENSHOT_DIR = path.resolve(
-  __dirname,
-  "../../test-record/screenshots/bp-02",
-);
+const AGENT_API = (
+  process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000"
+).replace(/\/$/, "");
 
 const BUILD_PROMPT =
   "Create a static web page: write an index.html in the workspace root with the " +
@@ -40,13 +33,11 @@ async function approvePlan(page: import("@playwright/test").Page) {
 
 test("preview pane tells the truth about who serves :8000 (live)", async ({
   page,
-}) => {
+}, testInfo) => {
   const health = await page.request
-    .get("http://127.0.0.1:8000/health")
+    .get(`${AGENT_API}/health`)
     .catch(() => null);
   test.skip(!health || !health.ok(), "agent-server not running on :8000");
-
-  fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
   // The page stays on "/" for an inline build — capture the conversation id from
   // the UI's own API traffic so part 3 can poll the preview endpoint directly.
@@ -57,6 +48,10 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
   });
 
   await page.goto("/");
+  // A durable stack may legitimately resume its latest unfinished build on the
+  // index route. Exercise the product's New affordance so this journey always
+  // starts a distinct conversation without requiring an empty database.
+  await page.getByRole("link", { name: "New" }).click();
   await page.getByRole("radio", { name: "build" }).click();
 
   const input = page.getByPlaceholder(/describe what you want/i);
@@ -79,7 +74,7 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
       .getByText("BP02 preview truth"),
   ).toBeVisible({ timeout: 60_000 });
   await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, "preview-owner.png"),
+    path: testInfo.outputPath("preview-owner.png"),
     fullPage: true,
   });
 
@@ -95,7 +90,7 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
   // availability polls every 4s; the live pane falls back once the proxy is down.
   await expect(caption).toBeHidden({ timeout: 300_000 });
   await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, "preview-down.png"),
+    path: testInfo.outputPath("preview-down.png"),
     fullPage: true,
   });
 
@@ -114,7 +109,7 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
     .poll(
       async () => {
         const r = await page.request.get(
-          `http://127.0.0.1:8000/conversations/${cid}/state`,
+          `${AGENT_API}/conversations/${cid}/state`,
         );
         return ((await r.json()) as { execution_status?: string })
           .execution_status;
@@ -138,7 +133,7 @@ test("preview pane tells the truth about who serves :8000 (live)", async ({
       .getByText("BP02 preview truth"),
   ).toBeVisible({ timeout: 60_000 });
   await page.screenshot({
-    path: path.join(SCREENSHOT_DIR, "preview-restarted.png"),
+    path: testInfo.outputPath("preview-restarted.png"),
     fullPage: true,
   });
 });

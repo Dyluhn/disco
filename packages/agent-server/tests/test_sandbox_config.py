@@ -23,6 +23,8 @@ from disco.tools.sandbox import (
 
 
 def test_build_sandbox_service_maps_each_backend(monkeypatch):
+    monkeypatch.delenv("DISCO_LOCAL_ENGINE", raising=False)
+
     def built(backend: str):
         return build_sandbox_service(SandboxSettings(backend=backend))
 
@@ -36,6 +38,26 @@ def test_build_sandbox_service_maps_each_backend(monkeypatch):
     # connection detail flows into the built backend's config
     svc = build_sandbox_service(SandboxSettings(backend="local", image="custom:tag"))
     assert svc._cfg.image == "custom:tag"
+
+
+def test_compose_local_podman_identity_selects_native_transport(monkeypatch):
+    settings = SandboxSettings(
+        backend="local",
+        docker_socket="unix:///var/run/docker.sock",
+        podman_url="unix:///host-only/podman.sock",
+    )
+
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
+    service = build_sandbox_service(settings)
+    assert isinstance(service, PodmanSandboxService)
+    assert service._cfg.podman_url == "unix:///var/run/docker.sock"
+
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "docker")
+    assert isinstance(build_sandbox_service(settings), LocalSandboxService)
+
+    monkeypatch.setenv("DISCO_LOCAL_ENGINE", "unknown")
+    with pytest.raises(ValueError, match="expected docker or podman"):
+        build_sandbox_service(settings)
 
 
 def test_production_gate_refuses_process_backend_by_default(monkeypatch):

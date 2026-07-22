@@ -40,6 +40,7 @@ services:
       DISCO_DB: /data/disco.db
       DISCO_CONFIG: /data/disco-config.json
       DISCO_SECRETS: /data/secrets.json
+      DISCO_APPROVALS: /data/disco-approved-origins.json
       DISCO_SKILLS_DIR: /data/skills
       DISCO_UI_PORT: "${DISCO_UI_PORT:-${PMX_UI_PORT:-8088}}"
       DISCO_PUBLIC_UI_URL: "${DISCO_PUBLIC_UI_URL:-}"
@@ -90,6 +91,7 @@ services:
       DISCO_DB: /data/disco.db # ONE SQLite file, shared with app-server
       DISCO_CONFIG: /data/disco-config.json
       DISCO_SECRETS: /data/secrets.json
+      DISCO_APPROVALS: /data/disco-approved-origins.json
       DISCO_SKILLS_DIR: /data/skills
       DISCO_TTS_DIR: /opt/disco-cache/tts
       DISCO_PROJECTS_ROOT: /data/projects
@@ -155,6 +157,10 @@ services:
       # keeps today's behavior:
       #   DISCO_LOCAL_RUNTIME=runsc podman compose up -d
       DISCO_LOCAL_RUNTIME: "${DISCO_LOCAL_RUNTIME:-runc}"
+      # The socket target is intentionally engine-neutral. Preserve the host
+      # daemon identity so rootless Podman uses its native exec transport rather
+      # than the unreliable Docker-compat detached-exec endpoint.
+      DISCO_LOCAL_ENGINE: "${DISCO_LOCAL_ENGINE:-podman}"
       # Blank keeps the backend Settings-driven. Non-blank is an explicit operator
       # override; `process` additionally requires the dev-only opt-in below.
       DISCO_SANDBOX: "${DISCO_SANDBOX:-}"
@@ -168,6 +174,12 @@ services:
       # Docker's root-equivalent source must opt in with
       # DISCO_SANDBOX_SOCKET=/var/run/docker.sock.
       - "${DISCO_SANDBOX_SOCKET:-${PMX_SANDBOX_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock}}:/var/run/docker.sock"
+    # SELinux otherwise denies access to a rootless Podman socket even though
+    # the explicit bind mount is present. This service already holds authority
+    # over that daemon; disabling its container label does not broaden the
+    # selected socket's host permissions.
+    security_opt:
+      - label=disable
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -64,21 +64,39 @@ def effective_local_runtime(backend: str, runtime: str) -> str:
     return runtime
 
 
-def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
-    """Map the persisted SandboxSettings -> the concrete SandboxBackend — the ONE place
-    that knows the backend<->config mapping (settings drive the active backend). Podman is
-    real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
-    constructs but isn't live/verifiable here; completed at the Meta deployment."""
-    runtime = effective_local_runtime(settings.backend, settings.runtime)
-    cfg = SandboxConfig(
-        backend=settings.backend,
+def effective_sandbox_config(settings: SandboxSettings) -> SandboxConfig:
+    """Resolve the deployment's local daemon without losing its engine identity.
+
+    Compose mounts both Docker and rootless Podman at the conventional in-container
+    Docker-compatible path. The path therefore cannot identify the daemon, while
+    Podman's compatibility API cannot reliably keep detached execs alive. The
+    self-host deployment declares its local engine explicitly so a saved ``local``
+    selection can use the native Podman transport. Non-local Settings selections
+    remain authoritative.
+    """
+
+    engine = (disco_env("LOCAL_ENGINE", "") or "").strip().lower()
+    if engine not in ("", "docker", "podman"):
+        raise ValueError(f"DISCO_LOCAL_ENGINE={engine!r} is invalid; expected docker or podman")
+    backend = settings.backend
+    podman_url = settings.podman_url
+    if backend == "local" and engine == "podman":
+        backend = "podman"
+        podman_url = settings.docker_socket
+    return SandboxConfig(
+        backend=backend,
         docker_socket=settings.docker_socket,
-        podman_url=settings.podman_url,
-        runtime=runtime,
+        podman_url=podman_url,
+        runtime=effective_local_runtime(settings.backend, settings.runtime),
         image=settings.image,
         workspace_root=settings.workspace_root,
         preview_host=disco_env("PREVIEW_HOST", ""),
     )
+
+
+def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
+    """Map persisted settings and deployment identity to the concrete backend."""
+    cfg = effective_sandbox_config(settings)
     service = service_from_config(cfg)
     return preflight_build_sandbox_backend(service)
 
@@ -127,26 +145,21 @@ class SandboxRuntimeService:
         it is saved) — same environment + classifier as the active-backend probe.
         Returns (ok, status, detail). Never raises."""
         from disco.tools.sandbox import (
-            SandboxConfig,
             probe_sandbox_reachability,
             sandbox_endpoint_label,
-            service_from_config,
+        )
+        from disco.tools.sandbox import (
+            service_from_config as service_from_config_for_probe,
         )
 
-        endpoint = sandbox_endpoint_label(
-            settings.backend, settings.docker_socket, settings.podman_url
-        )
         try:
-            cfg = SandboxConfig(
-                backend=settings.backend,
-                docker_socket=settings.docker_socket,
-                podman_url=settings.podman_url,
-                runtime=effective_local_runtime(settings.backend, settings.runtime),
-                image=settings.image,
-                workspace_root=settings.workspace_root,
-            )
-            service = service_from_config(cfg)
+            cfg = effective_sandbox_config(settings)
+            endpoint = sandbox_endpoint_label(cfg.backend, cfg.docker_socket, cfg.podman_url)
+            service = service_from_config_for_probe(cfg)
         except Exception as exc:
+            endpoint = sandbox_endpoint_label(
+                settings.backend, settings.docker_socket, settings.podman_url
+            )
             return False, "error", f"{endpoint}: {exc}"
         return await probe_sandbox_reachability(service, endpoint)
 

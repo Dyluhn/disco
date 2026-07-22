@@ -28,9 +28,14 @@ def test_agent_server_receives_every_advertised_runtime_override() -> None:
 def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
     services = _compose()["services"]
     app = services["app-server"]["environment"]
-    agent = services["agent-server"]["environment"]
+    agent_service = services["agent-server"]
+    agent = agent_service["environment"]
 
     assert agent["DISCO_INSPECT"] == "${DISCO_INSPECT:-0}"
+    assert app["DISCO_APPROVALS"] == "/data/disco-approved-origins.json"
+    assert agent["DISCO_APPROVALS"] == "/data/disco-approved-origins.json"
+    assert agent_service["security_opt"] == ["label=disable"]
+    assert agent["DISCO_LOCAL_ENGINE"] == "${DISCO_LOCAL_ENGINE:-podman}"
     for name in ("DISCO_LOG_LEVEL", "DISCO_LOG_JSON"):
         assert name in app
         assert name in agent
