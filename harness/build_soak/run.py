@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -3435,6 +3436,33 @@ def _run_batch_item(
     }
 
 
+async def _run_stop_on_non_pass_cohorts(
+    iterations: int,
+    workers: int,
+    run_iteration: Callable[[int], Awaitable[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], int | None]:
+    """Admit bounded cohorts and stop before the next one after any non-PASS.
+
+    A semaphore alone limits concurrency but still queues every later task; as
+    soon as one slot frees, a later model call can start before the current
+    cohort's verdicts are known. Reliability admission is stricter: finish and
+    adjudicate the whole bounded cohort, then admit the next cohort only when
+    every result is PASS. Calls already in the failing cohort remain preserved
+    evidence but no later index is created.
+    """
+
+    if iterations <= 0 or workers <= 0:
+        raise ValueError("iterations and workers must be positive")
+    runs: list[dict[str, Any]] = []
+    for start in range(0, iterations, workers):
+        stop = min(start + workers, iterations)
+        cohort = await asyncio.gather(*(run_iteration(index) for index in range(start, stop)))
+        runs.extend(cohort)
+        if any(str(item.get("status")) != "PASS" for item in cohort):
+            return runs, stop - 1
+    return runs, None
+
+
 def _require_exact_provider(
     selected: dict[str, dict[str, Any]],
     *,
@@ -3690,8 +3718,15 @@ async def _amain(args: argparse.Namespace) -> int:
             classification=classification,
         )
 
-    runs = await asyncio.gather(*(run_iteration(i) for i in range(args.iterations)))
+    runs, stopped_after_cohort_index = await _run_stop_on_non_pass_cohorts(
+        args.iterations, resolved_workers, run_iteration
+    )
     runs = sorted(runs, key=lambda item: int(item["index"]))
+    if stopped_after_cohort_index is not None:
+        print(
+            "[build-soak] non-PASS in completed cohort; "
+            f"{args.iterations - len(runs)} later iteration(s) were not admitted"
+        )
     status_counts = Counter(str(item.get("status")) for item in runs)
     failure_counts = Counter(str(item.get("code")) for item in runs if item.get("code"))
     final_resources = read_host_resources(disk_path=batch_dir)
@@ -3712,6 +3747,13 @@ async def _amain(args: argparse.Namespace) -> int:
         "started_at": started_at,
         "finished_at": datetime.now(UTC).isoformat(),
         "iterations": args.iterations,
+        "admission": {
+            "mode": "bounded_cohorts_stop_on_non_pass",
+            "requested_iterations": args.iterations,
+            "admitted_iterations": len(runs),
+            "not_admitted_iterations": args.iterations - len(runs),
+            "stopped_after_cohort_index": stopped_after_cohort_index,
+        },
         "seed_base": args.seed_base,
         "parallel": {
             "requested": requested_label,

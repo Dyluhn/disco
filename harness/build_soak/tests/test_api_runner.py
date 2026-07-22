@@ -86,6 +86,36 @@ def test_driver_catalog_requires_exact_well_formed_model_key():
     assert _driver_catalog_contains({"models": {}}, "wanted") is False
 
 
+@pytest.mark.asyncio
+async def test_batch_admission_stops_before_cohort_after_non_pass() -> None:
+    admitted: list[int] = []
+
+    async def run_iteration(index: int) -> dict[str, Any]:
+        admitted.append(index)
+        return {"index": index, "status": "FAIL" if index == 4 else "PASS"}
+
+    runs, stopped_after = await _run_mod._run_stop_on_non_pass_cohorts(8, 3, run_iteration)
+
+    assert admitted == [0, 1, 2, 3, 4, 5]
+    assert [run["index"] for run in runs] == admitted
+    assert stopped_after == 5
+
+
+@pytest.mark.asyncio
+async def test_batch_admission_runs_every_cohort_when_all_pass() -> None:
+    admitted: list[int] = []
+
+    async def run_iteration(index: int) -> dict[str, Any]:
+        admitted.append(index)
+        return {"index": index, "status": "PASS"}
+
+    runs, stopped_after = await _run_mod._run_stop_on_non_pass_cohorts(5, 2, run_iteration)
+
+    assert admitted == [0, 1, 2, 3, 4]
+    assert [run["index"] for run in runs] == admitted
+    assert stopped_after is None
+
+
 def test_host_screenshot_strictness_is_scenario_scoped() -> None:
     assert _run_mod._browser_verification_required(_h191_strict_browser_scenario()) is True
     assert _run_mod._browser_verification_required({"assertions": {}}) is False
