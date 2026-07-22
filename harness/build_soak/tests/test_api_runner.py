@@ -2400,6 +2400,12 @@ def _strict_direct_browser_observation(
             "console": [],
             "network": [],
             "visible_semantic_elements": 1,
+            "freshness": {
+                "requested_epoch": 3,
+                "synchronized_epoch": 3,
+                "sync_performed": True,
+                "page_kind": "local_preview",
+            },
         }
     )
     return event
@@ -2411,6 +2417,8 @@ def _h191_direct_browser_events(
     selected_port: int = 8000,
     action_url: str | None = None,
     observed_url: str | None = None,
+    browser_action: str = "navigate",
+    omit_action_url: bool = False,
 ) -> list[dict[str, Any]]:
     events = clean_smoke_log()
     events[-2]["seq"] = 15
@@ -2418,6 +2426,9 @@ def _h191_direct_browser_events(
     events[-1]["seq"] = 16
     events[-1]["id"] = "evt_16"
     browser_url = action_url or f"http://localhost:{selected_port}/"
+    browser_args = {"action": browser_action}
+    if not omit_action_url:
+        browser_args["url"] = browser_url
     events[-2:-2] = [
         action(
             9,
@@ -2429,7 +2440,7 @@ def _h191_direct_browser_events(
         action(
             11,
             "browser",
-            args={"action": "navigate", "url": browser_url},
+            args=browser_args,
             action_id="act_11",
         ),
         _strict_direct_browser_observation(path, url=observed_url or browser_url),
@@ -2457,6 +2468,63 @@ def test_h191_strict_direct_browser_accepts_dynamic_selected_preview_port():
     )
 
     assert record["status"] == "PASS", record
+
+
+@pytest.mark.parametrize("omit_action_url", [False, True])
+def test_h191_synchronized_screenshot_with_locked_bytes_satisfies_contract(
+    omit_action_url,
+):
+    path = ".pmx/screenshots/browser.png"
+    record = classify(
+        _h191_direct_browser_events(
+            path,
+            browser_action="screenshot",
+            omit_action_url=omit_action_url,
+        ),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "PASS", record
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("requested_epoch", 2),
+        ("synchronized_epoch", True),
+        ("sync_performed", "yes"),
+        ("page_kind", "external"),
+    ],
+)
+def test_h191_screenshot_rejects_missing_or_stale_freshness(field, value):
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path, browser_action="screenshot")
+    events[-3]["tool_result"]["structured"]["freshness"][field] = value
+
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
+def test_h191_screenshot_rejects_absent_freshness_receipt():
+    path = ".pmx/screenshots/browser.png"
+    events = _h191_direct_browser_events(path, browser_action="screenshot")
+    del events[-3]["tool_result"]["structured"]["freshness"]
+
+    assert path not in _successful_browser_verification_paths(events)
+    record = classify(
+        events,
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
 
 
 @pytest.mark.parametrize(
@@ -2553,6 +2621,30 @@ def test_h191_direct_browser_rejects_wrong_or_mismatched_preview_target(
     assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
 
 
+@pytest.mark.parametrize(
+    ("action_url", "observed_url"),
+    [
+        ("http://localhost:7777/", "http://localhost:8000/"),
+        ("http://localhost:8000/", "http://localhost:9999/"),
+    ],
+)
+def test_h191_screenshot_rejects_wrong_or_mismatched_preview_target(action_url, observed_url):
+    path = ".pmx/screenshots/browser.png"
+    record = classify(
+        _h191_direct_browser_events(
+            path,
+            browser_action="screenshot",
+            action_url=action_url,
+            observed_url=observed_url,
+        ),
+        scenario=_h191_strict_browser_scenario(),
+        browser_evidence_paths={path},
+    )
+
+    assert record["status"] == "FAIL", record
+    assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
+
+
 def test_h191_direct_browser_rejects_missing_preview_start_evidence():
     path = ".pmx/screenshots/browser.png"
     events = _h191_direct_browser_events(path)
@@ -2608,13 +2700,16 @@ def test_h191_direct_browser_rejects_preview_stopped_before_navigation():
     assert record["code"] == "VERIFICATION_GATE_BYPASSED", record
 
 
+@pytest.mark.parametrize("browser_action", ["navigate", "screenshot"])
 @pytest.mark.parametrize(
     "mutation_tool",
     ["file_write", "safe_write_file", "file_str_replace", "exact_replace", "write_file"],
 )
-def test_h191_direct_browser_rejects_proof_stale_after_deliverable_mutation(mutation_tool):
+def test_h191_direct_browser_rejects_proof_stale_after_deliverable_mutation(
+    mutation_tool, browser_action
+):
     path = ".pmx/screenshots/browser.png"
-    events = _h191_direct_browser_events(path)
+    events = _h191_direct_browser_events(path, browser_action=browser_action)
     events[-2:-2] = [
         action(
             13,

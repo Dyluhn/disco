@@ -443,12 +443,39 @@ def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[
         if not isinstance(tool_call, dict) or tool_call.get("tool_name") != "browser":
             return False
         arguments = tool_call.get("arguments")
-        if not isinstance(arguments, dict) or arguments.get("action") != "navigate":
+        if not isinstance(arguments, dict):
             return False
-        action_port = local_url_port(arguments.get("url"))
+        action = arguments.get("action")
+        if action not in {"navigate", "screenshot"}:
+            return False
+        action_url = arguments.get("url")
+        action_port = local_url_port(action_url)
         observed_port = local_url_port(structured.get("url"))
-        if selected_port is None or action_port != selected_port or observed_port != selected_port:
+        if selected_port is None or observed_port != selected_port:
             return False
+        if action == "navigate" or (isinstance(action_url, str) and action_url):
+            if action_port != selected_port:
+                return False
+        if action == "screenshot":
+            # Screenshot observes the current page rather than always issuing a
+            # navigation. Admit it only with the browser daemon's current-workspace
+            # synchronization receipt; this preserves realistic final visual checks
+            # without accepting a stale pre-mutation page.
+            freshness = structured.get("freshness")
+            if not isinstance(freshness, dict):
+                return False
+            requested_epoch = freshness.get("requested_epoch")
+            synchronized_epoch = freshness.get("synchronized_epoch")
+            if (
+                not isinstance(requested_epoch, int)
+                or isinstance(requested_epoch, bool)
+                or not isinstance(synchronized_epoch, int)
+                or isinstance(synchronized_epoch, bool)
+                or requested_epoch != synchronized_epoch
+                or not isinstance(freshness.get("sync_performed"), bool)
+                or freshness.get("page_kind") != "local_preview"
+            ):
+                return False
         console = structured.get("console")
         network = structured.get("network")
         if not isinstance(console, list) or not all(

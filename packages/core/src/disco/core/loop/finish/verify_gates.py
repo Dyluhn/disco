@@ -754,10 +754,12 @@ class _HostVerifyGateMixin(_FinishGateProto):
         deliverable: HostVerificationDeliverable,
         events: list[Event],
         check_verdict: dict[str, Any],
+        *,
+        contract: dict[str, Any],
     ) -> VerifierContextSeed:
         deliverable_paths = await self._verifier_deliverable_paths(deliverable, events)
         return VerifierContextSeed(
-            contract=self._verifier_contract_payload(),
+            contract=contract,
             deliverable_paths=deliverable_paths,
             check_results=_bounded_verifier_check_results(check_verdict),
             screenshot=_screenshot_from_verdict(check_verdict),
@@ -809,7 +811,22 @@ class _HostVerifyGateMixin(_FinishGateProto):
         if host_label in {"unavailable", "unverifiable"}:
             return host_verdict
 
-        seed = await self._verifier_context_seed(deliverable, events, host_verdict)
+        # The model judge evaluates requirement compliance, not basic runtime
+        # reachability. Plain Freeform builds intentionally have no registered
+        # requirement contract/finalizer; asking the judge to assess an empty
+        # contract turns a deterministic host PASS into a spurious
+        # ``unverifiable`` result. Keep the host-owned browser verdict in that
+        # case. Contract-bound builds still receive the independent typed judge.
+        contract = self._verifier_contract_payload()
+        if not contract:
+            return host_verdict
+
+        seed = await self._verifier_context_seed(
+            deliverable,
+            events,
+            host_verdict,
+            contract=contract,
+        )
         try:
             raw_typed = await asyncio.wait_for(
                 judge.judge(seed),
@@ -1085,6 +1102,13 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 # fall through so the inline browser gate remains the enforcement path.
                 return Disp.FALLTHROUGH
             if host_label == "unverifiable":
+                if host_verdict.get("model_verifier_applied") is True:
+                    # A contract judge can find the requirement evidence
+                    # unverifiable even when the browser ran successfully. That
+                    # is a normal verification failure, not browser
+                    # infrastructure absence; retain the refusal/repair path and
+                    # never emit the misleading one-shot infrastructure release.
+                    return await self._host_verify_failure_disposition(deliverable, host_verdict)
                 # Browser infrastructure was explicitly unavailable. This is not a
                 # verified pass, but retrying the identical daemon launch in the inline
                 # gate contradicts the terminal browser_unavailable contract. Release

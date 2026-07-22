@@ -454,6 +454,47 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
 
 
 @pytest.mark.asyncio
+async def test_contractless_freeform_skips_model_judge_and_keeps_host_pass() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    judge = _VerifierJudge(
+        TypedVerifierVerdict(
+            verified=False,
+            verdict="unverifiable",
+            detail="Contract is empty; cannot verify deliverable requirements.",
+            failures=[{"kind": "contract", "message": "missing contract"}],
+            failure_fingerprint="contract_missing",
+        )
+    )
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step("Verified by the host browser."),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+        verifier_judge=judge,
+    )
+
+    await loop.send_message("build a flexible page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert judge.seeds == []
+    events = await store.get_events("conv")
+    verdict = next(event for event in events if isinstance(event, VerifierVerdictEvent))
+    assert verdict.verified is True and verdict.verdict == "pass"
+    assert verdict.meta.get("model_verifier_applied") is not True
+    assert ("RUNNING", "unverified_release") not in _statuses(events)
+    assert not any("WITHOUT browser-render verification" in m for m in _env_messages(events))
+
+
+@pytest.mark.asyncio
 async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_events() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     judge = _VerifierJudge(
@@ -486,6 +527,7 @@ async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_event
         _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
         host_verifier=host,
         verifier_judge=judge,
+        finish_alias="ready_for_static_site_verification",
     )
 
     await loop.send_message("build a page")
@@ -503,6 +545,53 @@ async def test_model_verifier_unavailable_fallback_is_visible_in_persisted_event
         assert event.meta["model_verifier_cause"] == (
             "model verifier unavailable (JSONDecodeError: Expecting value at line 1 column 1)"
         )
+
+
+@pytest.mark.asyncio
+async def test_contract_judge_unverifiable_is_not_browser_unavailable() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    judge = _VerifierJudge(
+        TypedVerifierVerdict(
+            verified=False,
+            verdict="unverifiable",
+            detail="Required contract evidence is missing.",
+            failures=[{"kind": "contract", "message": "missing evidence"}],
+            next_action="Provide evidence for the registered requirements.",
+            failure_fingerprint="contract_evidence_missing",
+        )
+    )
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        _VerifyExecutor(_verdict(passed=True, fp="INLINE")),
+        host_verifier=host,
+        verifier_judge=judge,
+        finish_alias="ready_for_static_site_verification",
+    )
+
+    await loop.send_message("build a contract-bound page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(judge.seeds) == 4
+    events = await store.get_events("conv")
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+    assert verdicts and all(event.verdict == "unverifiable" for event in verdicts)
+    env = _env_messages(events)
+    assert any("Host verification did not pass" in message for message in env)
+    assert any("WITHOUT a passing host verifier verdict" in message for message in env)
+    assert not any("browser infrastructure could not run" in message for message in env)
 
 
 @pytest.mark.asyncio
