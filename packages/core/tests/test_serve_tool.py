@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 from disco.core import (
     ActionEvent,
+    BuildPlatformAdmissionEvent,
     ConversationStatus,
     DeliverableEvent,
     MessageEvent,
@@ -15,10 +16,29 @@ from disco.core import (
 from disco.core.events import EventSource
 from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
 from disco.core.loop import NeverConfirm, RouterAgent
+from disco.core.verification import (
+    HostVerificationClaim,
+    VerificationClaimKind,
+    default_structured_web_claims,
+)
 from llm_fakes import simple_config
 from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
+_DIGEST = "sha256:" + "a" * 64
+_RUN_ID = "run:sha256:" + "b" * 64
+
+
+def _platform_admission(*, claims) -> BuildPlatformAdmissionEvent:
+    return BuildPlatformAdmissionEvent(
+        route="platform",
+        profile_id="disco.freeform_web@1",
+        run_intent_id="intent-test",
+        composition_authority="build_platform_core",
+        composition_digest=_DIGEST,
+        run_identity=_RUN_ID,
+        verification_claims=tuple(claims),
+    )
 
 
 def _environment_messages(events):
@@ -115,6 +135,87 @@ async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
         if "`kind` must be exactly `app` or `files`" in event.message.content
     ]
     assert len(invalid) == 1
+
+
+async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Site", "path": "index.html", "kind": "files"},
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Site", "path": "index.html", "kind": "app"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    await loop._emit(_platform_admission(claims=default_structured_web_claims()))
+
+    await loop.send_message("build a browser application")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [(event.artifact_kind, event.path) for event in deliverables] == [("app", "index.html")]
+    refusals = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_target_shape_refused"
+    ]
+    assert len(refusals) == 1
+    assert "mandatory structured-browser" in refusals[0].message.content
+
+
+async def test_governed_nonbrowser_target_keeps_files_handoff() -> None:
+    target_claim = HostVerificationClaim(
+        claim_id="target.report",
+        kind=VerificationClaimKind.TARGET_SPECIFIC,
+        expected="valid report artifact",
+        source_authority="target:report@1",
+    )
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Report", "path": "report.txt", "kind": "files"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    await loop._emit(_platform_admission(claims=(target_claim,)))
+
+    await loop.send_message("build a report")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(event, DeliverableEvent)
+        and event.artifact_kind == "files"
+        and event.path == "report.txt"
+        for event in events
+    )
+    assert not any(
+        event.meta.get("diagnostic") == "serve_target_shape_refused"
+        for event in _environment_messages(events)
+    )
 
 
 @pytest.mark.parametrize(

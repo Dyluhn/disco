@@ -42,8 +42,10 @@ from ..events import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    current_build_platform_admission,
 )
 from ..llm import OperatingMode
+from ..verification import requires_structured_browser_runtime
 from . import signals, view_render
 from .bootstrap import _detect_project_bootstrap
 from .boundaries import AgentStep
@@ -111,6 +113,13 @@ _SERVE_DUPLICATE_GUIDANCE = (
     "ignored. Do not serve it again. If verification and plan work are complete, "
     "call `finish` now; otherwise perform the remaining work, then call `finish`.\n"
     "</system-reminder>"
+)
+_SERVE_TARGET_SHAPE_DIAGNOSTIC = "serve_target_shape_refused"
+_SERVE_TARGET_SHAPE_GUIDANCE = (
+    "serve refused: the current target has mandatory structured-browser "
+    "verification claims, so its runnable entry must be handed off with "
+    '`kind: "app"`. `kind: "files"` is reserved for non-browser '
+    "artifacts and cannot become the terminal web preview."
 )
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
@@ -426,9 +435,30 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
             "entry file path.",
         )
 
-    duplicate = any(
-        isinstance(event, DeliverableEvent) and event.path == path and event.artifact_kind == kind
-        for event in events
+    admission = current_build_platform_admission(events)
+    if (
+        kind == "files"
+        and admission is not None
+        and requires_structured_browser_runtime(admission.verification_claims)
+    ):
+        loop._invisible_steps += 1
+        await loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_SERVE_TARGET_SHAPE_GUIDANCE),
+                meta={"diagnostic": _SERVE_TARGET_SHAPE_DIAGNOSTIC},
+            )
+        )
+        return await loop._post_noop_valve()
+
+    latest_handoff = next(
+        (event for event in reversed(events) if isinstance(event, DeliverableEvent)),
+        None,
+    )
+    duplicate = (
+        latest_handoff is not None
+        and latest_handoff.path == path
+        and latest_handoff.artifact_kind == kind
     )
     if duplicate:
         _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)

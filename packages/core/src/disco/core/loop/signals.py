@@ -78,7 +78,8 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         "extract",
         "server_status",
         # Preview lifecycle controls only change host observation state. They do
-        # not mutate the deliverable and must never invalidate verifier evidence.
+        # not mutate the deliverable or count as productive execution work;
+        # verification freshness tracks their authoritative state separately.
         "preview_start",
         "preview_status",
         "preview_logs",

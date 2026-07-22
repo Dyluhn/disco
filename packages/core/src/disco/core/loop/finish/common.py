@@ -45,6 +45,7 @@ from ...env import disco_env
 from ...events import (
     ActionEvent,
     AgentErrorEvent,
+    BuildPlatformAdmissionEvent,
     ConversationStatus,
     DeliverableEvent,
     Event,
@@ -350,6 +351,71 @@ def _last_productive_seq(events: list[Event]) -> int:
             ):
                 return ev.seq or 0
     return 0
+
+
+def _last_verification_authority_seq(events: list[Event]) -> int:
+    """Last event that can change which exact verification receipt is current.
+
+    Preview controls remain nonproductive for execution accounting, while a
+    causally paired successful start/stop still changes the browser authority.
+    Handoffs and user/admission requirements likewise change receipt identity
+    without pretending that they edited workspace bytes.
+    """
+
+    authority_seq = _last_productive_seq(events)
+    actions: dict[str, ActionEvent] = {}
+    active_preview_sessions: set[str] = set()
+    for event in events:
+        if isinstance(event, ActionEvent):
+            actions[event.id] = event
+        elif isinstance(event, ObservationEvent):
+            result = event.tool_result
+            if result.tool_name not in {"preview_start", "preview_stop"}:
+                continue
+            action = actions.get(event.action_id)
+            structured = result.structured
+            if (
+                action is None
+                or action.tool_call.tool_name != result.tool_name
+                or action.tool_call.call_id != result.call_id
+                or type(action.seq) is not int
+                or type(event.seq) is not int
+                or action.seq >= event.seq
+                or result.success is not True
+                or not isinstance(structured, dict)
+            ):
+                continue
+            if result.tool_name == "preview_start":
+                name = structured.get("name")
+                if (
+                    structured.get("status") not in {"running", "unavailable"}
+                    or not isinstance(name, str)
+                    or not name
+                ):
+                    continue
+                active_preview_sessions.add(name)
+                authority_seq = max(authority_seq, event.seq)
+                continue
+            stopped = structured.get("stopped")
+            if (
+                not isinstance(stopped, list)
+                or not all(isinstance(name, str) and name for name in stopped)
+                or not stopped
+            ):
+                continue
+            active_preview_sessions.difference_update(stopped)
+            authority_seq = max(authority_seq, event.seq)
+        elif isinstance(event, DeliverableEvent) and type(event.seq) is int:
+            authority_seq = max(authority_seq, event.seq)
+        elif isinstance(event, BuildPlatformAdmissionEvent) and type(event.seq) is int:
+            authority_seq = max(authority_seq, event.seq)
+        elif (
+            isinstance(event, MessageEvent)
+            and event.source is EventSource.USER
+            and type(event.seq) is int
+        ):
+            authority_seq = max(authority_seq, event.seq)
+    return authority_seq
 
 
 def _tc_components_installed(events: list[Event]) -> bool:
@@ -1065,6 +1131,17 @@ def _latest_host_verifier_verdict(events: list[Event], since_seq: int) -> str | 
             continue
         if isinstance(ev, VerifierVerdictEvent):
             return str(ev.verdict) if ev.verdict is not None else None
+    return None
+
+
+def _latest_host_verifier_event(events: list[Event], since_seq: int) -> VerifierVerdictEvent | None:
+    """Latest complete host-verifier event after the current authority boundary."""
+
+    for event in reversed(events):
+        if event.seq is None or event.seq <= since_seq:
+            continue
+        if isinstance(event, VerifierVerdictEvent):
+            return event
     return None
 
 

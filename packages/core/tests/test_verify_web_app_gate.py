@@ -133,6 +133,40 @@ class VerifyExecutor(FakeExecutor):
         return await super().execute(call)
 
 
+class _LifecycleVerifyExecutor(VerifyExecutor):
+    def __init__(
+        self,
+        verdicts,
+        *,
+        stop_success: bool = True,
+        start_status: str = "running",
+    ):
+        super().__init__(verdicts)
+        self._stop_success = stop_success
+        self._start_status = start_status
+
+    async def execute(self, call):
+        if call.tool_name == "preview_start":
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content=f"preview {self._start_status}",
+                structured={"status": self._start_status, "name": "web"},
+            )
+        if call.tool_name == "preview_stop":
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=self._stop_success,
+                content="preview stopped" if self._stop_success else "stop failed",
+                structured={"stopped": ["web"]} if self._stop_success else {},
+            )
+        return await super().execute(call)
+
+
 class _FakeExecResult:
     def __init__(self, stdout: str):
         self.stdout = stdout
@@ -389,6 +423,112 @@ async def test_preview_control_does_not_invalidate_cached_failed_verifier_marker
     events = await store.get_events("conv")
     assert execu.verify_calls == 1, "preview lifecycle must not invalidate cached verdict"
     assert_blocked_question_landing(events)
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+
+
+@pytest.mark.asyncio
+async def test_successful_preview_stop_invalidates_earlier_passing_verdict() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "ok"}),
+            action_step(tool="preview_start", args={}),
+            action_step(tool="verify_web_app", args={}),
+            action_step(tool="preview_stop", args={}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = _LifecycleVerifyExecutor(
+        [
+            _verdict(passed=True, fp="CLEAN"),
+            _verdict(passed=False, fp="STOPPED", summary="preview stopped"),
+        ]
+    )
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.verify_calls == 2
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    assert any("verify_web_app did not pass" in message for message in _env(events))
+
+
+@pytest.mark.asyncio
+async def test_failed_preview_stop_does_not_revoke_current_passing_verdict() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "ok"}),
+            action_step(tool="preview_start", args={}),
+            action_step(tool="verify_web_app", args={}),
+            action_step(tool="preview_stop", args={}),
+            finish_step(),
+        ]
+    )
+    execu = _LifecycleVerifyExecutor([_verdict(passed=True, fp="CLEAN")], stop_success=False)
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.verify_calls == 1
+    assert ("FINISHED", None) in _statuses(events)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_preview_selection_invalidates_earlier_passing_verdict() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "ok"}),
+            action_step(tool="verify_web_app", args={}),
+            action_step(tool="preview_start", args={}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = _LifecycleVerifyExecutor(
+        [
+            _verdict(passed=True, fp="CLEAN"),
+            _verdict(passed=False, fp="UNAVAILABLE", summary="preview unavailable"),
+        ],
+        start_status="unavailable",
+    )
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.verify_calls == 2
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+
+
+@pytest.mark.asyncio
+async def test_successful_stop_without_visible_start_invalidates_passing_verdict() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="file_write", args={"path": "index.html", "content": "ok"}),
+            action_step(tool="verify_web_app", args={}),
+            action_step(tool="preview_stop", args={}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = _LifecycleVerifyExecutor(
+        [
+            _verdict(passed=True, fp="CLEAN"),
+            _verdict(passed=False, fp="STOPPED", summary="preview stopped"),
+        ]
+    )
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a page")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.verify_calls == 2
     assert not any(status == "FINISHED" for status, _detail in _statuses(events))
 
 

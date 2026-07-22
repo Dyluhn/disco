@@ -84,6 +84,34 @@ class VerificationClaimKind(str, Enum):
     TARGET_SPECIFIC = "target_specific"
 
 
+_STRUCTURED_BROWSER_RUNTIME_CLAIM_KINDS = frozenset(
+    {
+        VerificationClaimKind.HTTP_READY,
+        VerificationClaimKind.RENDERED_CONTENT,
+        VerificationClaimKind.VISIBLE_TEXT,
+        VerificationClaimKind.CONSOLE_CLEAN,
+        VerificationClaimKind.NETWORK_CLEAN,
+        VerificationClaimKind.INTERACTION,
+        VerificationClaimKind.ROUTE,
+    }
+)
+
+
+def requires_structured_browser_runtime(
+    claims: tuple[HostVerificationClaim, ...] | list[HostVerificationClaim],
+) -> bool:
+    """Whether mandatory target claims require a runnable browser surface.
+
+    This is deliberately claim-driven. Artifact identity, target-specific
+    verification, and semantic/visual claims do not independently imply a web
+    runtime; ordinary web targets persist HTTP/render/console/network claims.
+    """
+
+    return any(
+        claim.required and claim.kind in _STRUCTURED_BROWSER_RUNTIME_CLAIM_KINDS for claim in claims
+    )
+
+
 class VerificationClaimStatus(str, Enum):
     PASS = "pass"
     FAIL = "fail"
@@ -989,6 +1017,7 @@ __all__ = [
     "VerificationRequirementsDirective",
     "apply_semantic_verifier_result",
     "default_structured_web_claims",
+    "requires_structured_browser_runtime",
     "structured_web_verification_result",
     "validated_image_data_url",
 ]

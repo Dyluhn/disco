@@ -7,7 +7,11 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from ...events import active_verification_requirements_event
-from ...verification import PreviewSelectionIdentity, validated_image_data_url
+from ...verification import (
+    PreviewSelectionIdentity,
+    requires_structured_browser_runtime,
+    validated_image_data_url,
+)
 from ...verify_medium import (
     VerifierMediumHint,
     detect_html_medium,
@@ -30,12 +34,13 @@ from .common import (
     _FinishGateProto,
     _is_web_deliverable,
     _last_productive_seq,
+    _last_verification_authority_seq,
     _latest_app_deliverable_event,
     _latest_browser_error,
     _latest_browser_screenshot,
     _latest_browser_structured,
     _latest_deliverable_event,
-    _latest_host_verifier_verdict,
+    _latest_host_verifier_event,
     _latest_verify_verdict,
     _missing_steps_all_verify,
     _nonbrowser_static_validation_passed,
@@ -142,6 +147,13 @@ def _host_verification_claims(
             )
         )
     return tuple(claims)
+
+
+def _governed_structured_browser_target(events: list[Event]) -> bool:
+    admission = current_build_platform_admission(events)
+    return bool(
+        admission is not None and requires_structured_browser_runtime(admission.verification_claims)
+    )
 
 
 def _user_verification_material(
@@ -281,6 +293,7 @@ def _bind_host_verification_authority(
     raw_epoch = getattr(executor, "_workspace_mutation_epoch", None)
     epoch = raw_epoch if isinstance(raw_epoch, int) and raw_epoch > 0 else None
     max_seq = max((event.seq or 0 for event in events), default=0)
+    authority_seq = _last_verification_authority_seq(events)
     handoff_selection = (
         _preview_selection_at(events, through_seq=handoff.seq)
         if handoff is not None and type(handoff.seq) is int
@@ -310,10 +323,10 @@ def _bind_host_verification_authority(
             "workspace_revision": _last_productive_seq(events),
             "workspace_generation": generation,
             "workspace_epoch": epoch,
-            "observed_after_seq": max_seq,
+            "observed_after_seq": authority_seq,
             "required_claims": (
                 _host_verification_claims(gate._verifier_contract_payload(), events)
-                if deliverable.artifact_kind == "app"
+                if deliverable.artifact_kind == "app" or _governed_structured_browser_target(events)
                 else ()
             ),
             "preview_selection": stable_selection,
@@ -414,7 +427,7 @@ async def _emit_host_verdict_audit(
 ) -> str | None:
     inline_verdict = _latest_verify_verdict(
         events,
-        _last_productive_seq(events),
+        _last_verification_authority_seq(events),
         target_url=None,
         tool_name=gate._active_verify_tool() or "verify_web_app",
     )
@@ -1001,9 +1014,19 @@ class _HostVerifyGateMixin(_FinishGateProto):
         directory path itself.
         """
 
-        manifest_deliverable = await self._host_verify_manifest_deliverable(
-            step, events, include_unverifiable=include_unverifiable
-        )
+        governed_browser_target = _governed_structured_browser_target(events)
+        current_handoff = _latest_deliverable_event(events)
+        manifest_deliverable = None
+        if not (
+            governed_browser_target
+            and current_handoff is not None
+            and current_handoff.artifact_kind == "app"
+        ):
+            manifest_deliverable = await self._host_verify_manifest_deliverable(
+                step,
+                events,
+                include_unverifiable=include_unverifiable and not governed_browser_target,
+            )
         if manifest_deliverable is not None:
             bound = _bind_host_verification_authority(self, manifest_deliverable, events)
             return await self._with_host_verification_profile(bound, events)
@@ -1678,7 +1701,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         naming) instead of reloading 25-40×. The 3-refusal release no longer
         silently converts repeated failed verification into 'done' — it finishes
         ONLY with an explicit blocked/incomplete summary."""
-        since_seq = _last_productive_seq(events)
+        since_seq = _last_verification_authority_seq(events)
         # P1-1: bind the accepted verdict to the CURRENT preview target. Detect the
         # live preview (same _PREVIEW_PORTS detection the tool uses) and accept only
         # a verdict whose url matches it; a stale / foreign-port (or url-less) PASS
@@ -2067,31 +2090,25 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         deliverable = await self._host_verify_deliverable(step, events)
         if deliverable is None or deliverable.artifact_kind != "app":
             return False
-        # Delegate only when the host verifier actually RAN on the current
-        # output (recorded pass/fail). An ``unavailable`` verdict (verifier
-        # infrastructure could not run) or no verdict at all must keep the
-        # inline browser gate as enforcement — otherwise unavailable would slip
-        # through BOTH gates and an app could finish with no verification.
-        verdict = _latest_host_verifier_verdict(events, _last_productive_seq(events))
-        if verdict in ("pass", "fail", "unverifiable"):
+        latest = _latest_host_verifier_event(events, _last_verification_authority_seq(events))
+        if latest is None or latest.verification_result is None:
+            return False
+        result = latest.verification_result
+        if (
+            latest.artifact_path != deliverable.artifact_path
+            or latest.artifact_kind != deliverable.artifact_kind
+            or not result.is_current_for(deliverable, observed_url=result.observed_url)
+        ):
+            return False
+        if latest.verdict in ("pass", "fail"):
             return True
-        if verdict == "unavailable":
-            latest_typed = next(
-                (
-                    event
-                    for event in reversed(events)
-                    if isinstance(event, VerifierVerdictEvent)
-                    and (event.seq or 0) >= _last_productive_seq(events)
-                ),
-                None,
+        if latest.verdict == "unavailable":
+            return any(
+                isinstance(event, StatusEvent)
+                and event.detail == "unverified_release"
+                and (event.seq or 0) > (latest.seq or 0)
+                for event in events
             )
-            if latest_typed is not None and latest_typed.verification_result is not None:
-                return any(
-                    isinstance(event, StatusEvent)
-                    and event.detail == "unverified_release"
-                    and (event.seq or 0) > (latest_typed.seq or 0)
-                    for event in events
-                )
         return False
 
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
@@ -2130,7 +2147,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
                 return Disp.FALLTHROUGH
             if verify_tool is not None:
                 return await self._gate_verify_web_app(events, verify_tool, step=step)
-            since_seq = _last_productive_seq(events)
+            since_seq = _last_verification_authority_seq(events)
             # The preview platform assigns a RANDOM port — there is NO fixed :8000
             # inside the sandbox (a curl there 404s). Resolve the live preview the
             # SAME backend-aware way the verify_web_app gate does and bind every
@@ -2489,6 +2506,30 @@ class _RenderVerifyGateMixin(_FinishGateProto):
         if disp is Disp.CONTINUE or disp is Disp.HALT:
             return disp
         events = await self._loop._events()
+
+        handoff = _latest_deliverable_event(events)
+        if (
+            _governed_structured_browser_target(events)
+            and handoff is not None
+            and handoff.artifact_kind != "app"
+        ):
+            self._loop._invisible_steps += 1
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "finish refused: the current target has mandatory "
+                            "structured-browser claims, but the latest handoff is "
+                            f"`{handoff.artifact_kind}`. Hand off the runnable entry "
+                            'with `serve` using `kind: "app"`, then verify and finish.'
+                        ),
+                    ),
+                    meta={"diagnostic": "finish_target_shape_refused"},
+                )
+            )
+            return await self._loop._post_noop_valve()
 
         if self._host_verify_authoritative():
             disp = await self.gate_host_verify(step, events)

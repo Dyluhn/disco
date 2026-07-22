@@ -15,12 +15,37 @@ from disco.core.verification import (
     VerificationRequirementsDirective,
     apply_semantic_verifier_result,
     default_structured_web_claims,
+    requires_structured_browser_runtime,
     structured_web_verification_result,
 )
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+def test_structured_browser_runtime_is_required_by_claims_not_artifact_names() -> None:
+    assert requires_structured_browser_runtime(default_structured_web_claims()) is True
+    assert (
+        requires_structured_browser_runtime(
+            [
+                HostVerificationClaim(
+                    claim_id="target.report",
+                    kind=VerificationClaimKind.TARGET_SPECIFIC,
+                    expected="valid report archive",
+                    source_authority="target:report@1",
+                ),
+                HostVerificationClaim(
+                    claim_id="target.optional_text",
+                    kind=VerificationClaimKind.VISIBLE_TEXT,
+                    required=False,
+                    expected="optional",
+                    source_authority="target:report@1",
+                ),
+            ]
+        )
+        is False
+    )
 
 
 def _claim(

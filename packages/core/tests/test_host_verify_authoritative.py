@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 
 import pytest
 from disco.core import (
     ActionEvent,
+    BuildPlatformAdmissionEvent,
     ConversationStatus,
     DeliverableEvent,
     LLMMessage,
@@ -34,6 +37,7 @@ from disco.core.verification import (
     VerificationClaimKind,
     VerificationRequestedClaim,
     VerificationRequirementsDirective,
+    default_structured_web_claims,
     structured_web_verification_result,
 )
 from loop_fakes import (
@@ -870,6 +874,155 @@ async def test_files_handoff_without_validator_records_unverifiable() -> None:
     assert verdicts[0].verified is False
     assert verdicts[0].verdict == "unverifiable"
     assert verdict_events == verdicts
+
+
+@pytest.mark.asyncio
+async def test_files_unverifiable_verdict_cannot_delegate_reconstructed_web_target() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            action_step(
+                tool="serve",
+                args={"title": "Site", "path": "index.html", "kind": "files"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    assert execu.verify_calls == 1
+    verdicts = [
+        event for event in await store.get_events("conv") if isinstance(event, VerifierVerdictEvent)
+    ]
+    assert len(verdicts) == 1
+    assert verdicts[0].artifact_kind == "files"
+    assert verdicts[0].verdict == "unverifiable"
+    assert verdicts[0].verification_result is None
+
+
+@pytest.mark.asyncio
+async def test_persisted_governed_files_handoff_must_be_replaced_by_app() -> None:
+    class _AcceptingPlatformHost(_HostVerifier):
+        async def verify(self, deliverable):
+            verdict = await super().verify(deliverable)
+            verdict["artifact_identity"]["preview_live_match"] = True
+            verdict["verification_result"] = structured_web_verification_result(
+                deliverable=deliverable,
+                verdict=verdict,
+            ).model_dump(mode="json")
+            return verdict
+
+    class _PlatformExecutor(_VerifyExecutor):
+        def __init__(self):
+            super().__init__(_verdict(passed=True, fp="INLINE"))
+            self._tools.append(
+                ToolSpec(name="preview_start", description="preview", parameters_schema={})
+            )
+
+        async def execute(self, call):
+            if call.tool_name != "preview_start":
+                return await super().execute(call)
+            self.calls.append(call)
+            intent = {"launch_kind": "static", "serve_dir": "."}
+            identity = {
+                "command": "python -m http.server 8000",
+                "exec_dir": ".",
+                "intent": intent,
+                "name": "web",
+                "port": 8000,
+            }
+            digest = hashlib.sha256(
+                json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content="preview running",
+                structured={
+                    **identity,
+                    "status": "running",
+                    "url": "http://127.0.0.1:8000/",
+                    "projection_id": "pv_" + "c" * 32,
+                    "sandbox_instance_id": "sandbox-test",
+                    "sandbox_generation": 1,
+                    "launch_kind": "static",
+                    "intent_digest": digest,
+                },
+            )
+
+    host = _AcceptingPlatformHost(_verdict(passed=True, fp="HOST"))
+    execu = _PlatformExecutor()
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            action_step(tool="preview_start", args={}),
+            action_step(
+                tool="serve",
+                args={"title": "Site", "path": "index.html", "kind": "app"},
+            ),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+    await loop._emit(
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.freeform_web@1",
+            run_intent_id="intent-test",
+            composition_authority="build_platform_core",
+            composition_digest="sha256:" + "a" * 64,
+            run_identity="run:sha256:" + "b" * 64,
+            verification_claims=default_structured_web_claims(),
+        )
+    )
+    await loop._emit(
+        DeliverableEvent(
+            title="stale files handoff",
+            path="index.html",
+            artifact_kind="files",
+        )
+    )
+
+    await loop.send_message("finish the governed web target")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    recorded = await store.get_events("conv")
+    assert len(host.calls) == 1, [
+        (event.verdict, event.detail, event.verification_result)
+        for event in recorded
+        if isinstance(event, VerifierVerdictEvent)
+    ]
+    assert host.calls[0].artifact_kind == "app"
+    assert execu.verify_calls == 0
+    events = recorded
+    assert (
+        sum(
+            isinstance(event, MessageEvent)
+            and event.meta.get("diagnostic") == "finish_target_shape_refused"
+            for event in events
+        )
+        == 1
+    )
+    latest_handoff = next(
+        event for event in reversed(events) if isinstance(event, DeliverableEvent)
+    )
+    assert latest_handoff.artifact_kind == "app"
 
 
 def test_authoritative_flag_default_on_and_explicit_off(monkeypatch: pytest.MonkeyPatch) -> None:
