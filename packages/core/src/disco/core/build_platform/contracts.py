@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import ClassVar, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -319,28 +319,32 @@ class DeploymentRequest(FrozenModel):
 
 @runtime_checkable
 class ConstructionEngine(Protocol):
-    id: ClassVar[ComponentId]
+    @property
+    def id(self) -> ComponentId: ...
 
     def plan(self, request: ConstructionRequest) -> ConstructionPlan: ...
 
 
 @runtime_checkable
 class TargetAdapter(Protocol):
-    id: ClassVar[ComponentId]
+    @property
+    def id(self) -> ComponentId: ...
 
     def plan(self, request: TargetRequest) -> TargetPlan: ...
 
 
 @runtime_checkable
 class PackageExporter(Protocol):
-    id: ClassVar[ComponentId]
+    @property
+    def id(self) -> ComponentId: ...
 
     def plan(self, request: PackageRequest) -> PackagePlan: ...
 
 
 @runtime_checkable
 class DeploymentConnector(Protocol):
-    id: ClassVar[ComponentId]
+    @property
+    def id(self) -> ComponentId: ...
 
     def plan(self, request: DeploymentRequest) -> DeploymentPlan: ...
 

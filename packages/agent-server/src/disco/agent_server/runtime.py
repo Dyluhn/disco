@@ -159,6 +159,10 @@ from disco.tools.sandbox import (
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
+from .build_platform_shadow import (
+    build_platform_shadow_enabled,
+    observe_legacy_build,
+)
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
 from .driver_context import (
@@ -763,6 +767,9 @@ class ConversationRuntime:
         self._build_audit_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
         self._toolscope_audits: dict[str, _ToolScopeAuditRecorder] = {}
         self._contract = BuildContractService(self)
+        # Phase-3 Build Platform Core observer. Records are diagnostics only:
+        # legacy loop/executor/preview/verifier/export/finish authority never reads them.
+        self._build_platform_shadow_records: dict[str, Any] = {}
         # P3 — global last-selected driver model (single-value sidecar). Persisted
         # so a new conversation seeds from whatever the user picked last; falls back
         # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
@@ -2350,6 +2357,19 @@ class ConversationRuntime:
         _set_alias = getattr(agent, "set_finish_alias", None)
         if callable(_set_alias):
             _set_alias(_finish_alias)
+        if build_platform_shadow_enabled() and sealed_workflow_run is None:
+            # Observe the exact already-composed legacy tool surface. This result
+            # is never fed back into executor, loop, routing, or finish setup.
+            try:
+                self._build_platform_shadow_records[conversation_id] = observe_legacy_build(
+                    appkit_mode=_appkit_mode,
+                    tool_specs=executor.available_tools(),
+                )
+            except Exception:
+                logger.warning(
+                    "build-platform shadow observer failed; legacy authority is unchanged",
+                    exc_info=True,
+                )
         if sealed_workflow_run is not None:
             assert _workflow_phase is not None
             assert _workflow_phase.compiled_run_scope is not None
