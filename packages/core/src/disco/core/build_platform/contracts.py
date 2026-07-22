@@ -192,6 +192,7 @@ class PreviewPlan(FrozenModel):
     modality: str = Field(min_length=1, max_length=96)
     entry: EntryDescriptor | None = None
     readiness: tuple[ReadinessSignal, ...] = ()
+    intents: tuple[ComponentIntent, ...] = ()
     required_capabilities: frozenset[str] = frozenset()
     policy: PreviewPolicy = PreviewPolicy()
 
@@ -294,6 +295,7 @@ class TargetRequest(FrozenModel):
 
 class TargetPlan(FrozenModel):
     target: ComponentId
+    intents: tuple[ComponentIntent, ...] = ()
     delivery: DeliveryIntent
     preview: PreviewPlan
     verifier: VerifierPlan

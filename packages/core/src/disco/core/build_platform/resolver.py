@@ -181,8 +181,9 @@ def _plan_requirements(
     return {
         "construct": construction.required_capabilities
         | _intent_capabilities(construction.intents),
-        "target": target.required_capabilities,
-        "preview": target.preview.required_capabilities,
+        "target": target.required_capabilities | _intent_capabilities(target.intents),
+        "preview": target.preview.required_capabilities
+        | _intent_capabilities(target.preview.intents),
         "verify": _intent_capabilities(check.intent for check in target.verifier.checks),
         "package": (
             _intent_capabilities(target.package.intents)
