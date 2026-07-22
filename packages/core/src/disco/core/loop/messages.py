@@ -19,6 +19,9 @@ constants used EXCLUSIVELY by the moved builders moved with them.
 
 from __future__ import annotations
 
+import json
+
+from ..dod import predicate_to_dict
 from ..events import ActionEvent, Event, EventSource, LLMMessage, MessageEvent
 from ..llm import LLMError
 from ..view import _latest_plan, effective_plan_progress
@@ -68,7 +71,10 @@ _REPLAN_FRAMING = (
     "  {instruction}\n\n"
     "Produce a REVISED plan that folds the new instruction into the steps above by "
     "CALLING the `submit_plan` tool with the FULL revised step list — e.g. "
-    'submit_plan(summary="…", steps=[…]). Keep the steps you have already completed '
+    'submit_plan(summary="…", steps=[{{"title":"…","done_condition":'
+    '{{"kind":"file_exists","path":"new/path","renamed_from":"old/path"}}}}]). '
+    "Retain every existing done_condition that still applies; use renamed_from only "
+    "when an existing file deliverable moves. Keep the steps you have already completed "
     "and add/adjust steps for the new instruction. Do NOT start editing files yet. A "
     "prose description of the plan does NOT register — ONLY a `submit_plan` tool call "
     "does; if you only describe it in text the build stays stuck in planning. The plan "
@@ -87,11 +93,10 @@ _REPLAN_DIGEST_TITLE_CAP = 200
 
 def _render_replan_plan_digest(plan: object) -> str:
     """Compact inline digest of the CURRENT plan for the re-plan framing — summary + the
-    FULL list of step titles — so the model revises the actual approved plan instead of
-    reconstructing it from a long post-build history (and narrating it in prose). Titles
-    only (no per-step detail/bodies — that's the real bloat lever). Only a pathological
-    plan (> `_REPLAN_DIGEST_MAX_STEPS`) is truncated, and then EXPLICITLY so the model
-    preserves the omitted steps."""
+    FULL list of step titles and typed predicates — so the model revises the actual
+    approved contract instead of reconstructing it from a long post-build history (and
+    narrating it in prose). Only a pathological plan (> `_REPLAN_DIGEST_MAX_STEPS`) is
+    truncated, and then EXPLICITLY so the model preserves the omitted steps."""
     steps = getattr(plan, "steps", None) or []
     rev = getattr(plan, "revision", 1)
     summary = (getattr(plan, "summary", "") or "(no summary)").strip()
@@ -99,6 +104,17 @@ def _render_replan_plan_digest(plan: object) -> str:
     for i, s in enumerate(steps[:_REPLAN_DIGEST_MAX_STEPS], start=1):
         title = (getattr(s, "title", "") or "").strip()[:_REPLAN_DIGEST_TITLE_CAP]
         lines.append(f"    {i}. {title}")
+        detail = (getattr(s, "detail", "") or "").strip()
+        if detail:
+            lines.append(f"       detail: {detail[:_REPLAN_DIGEST_TITLE_CAP]}")
+        predicate = getattr(s, "done_condition", None)
+        if predicate is not None:
+            rendered = json.dumps(
+                predicate_to_dict(predicate),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            lines.append(f"       done_condition: {rendered}")
     if len(steps) > _REPLAN_DIGEST_MAX_STEPS:
         lines.append(
             f"    … (+{len(steps) - _REPLAN_DIGEST_MAX_STEPS} more existing steps not "
@@ -348,6 +364,7 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "<!-- disco:escape-attempt=4 -->\n"
     "</system-reminder>",
 )
+
 
 def _stuck_escape_reminder(attempt_count: int) -> str:
     """Return the escape reminder for the given attempt count.

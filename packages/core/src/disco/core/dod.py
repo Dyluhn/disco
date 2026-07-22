@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -219,6 +220,111 @@ def predicate_fingerprint(predicate: DoDPredicate) -> str:
 def predicate_fingerprints(predicates: list[DoDPredicate]) -> list[str]:
     """Ordered predicate identities used by plan-approval audit records."""
     return [predicate_fingerprint(predicate) for predicate in predicates]
+
+
+def idempotence_fingerprint(predicate: DoDPredicate) -> str:
+    """Stable execution-contract identity with rename audit metadata removed.
+
+    ``renamed_from`` proves how one approved revision replaced another.  Once
+    that transition is approved it is audit history, not part of the ongoing
+    verifier contract.  Exact duplicate detection therefore ignores only that
+    field while causal retirement and approval transitions continue to use the
+    ordinary, rename-inclusive :func:`predicate_fingerprint`.
+    """
+    if isinstance(predicate, FileExistsPredicate) and predicate.renamed_from is not None:
+        predicate = predicate.model_copy(update={"renamed_from": None})
+    return predicate_fingerprint(predicate)
+
+
+@dataclass(frozen=True)
+class PlanPredicateDiff:
+    """Exact, ordered accounting for one plan-owned predicate transition."""
+
+    retained: tuple[DoDPredicate, ...]
+    renamed: tuple[tuple[FileExistsPredicate, FileExistsPredicate], ...]
+    added: tuple[DoDPredicate, ...]
+    dropped: tuple[DoDPredicate, ...]
+    invalid_renames: tuple[FileExistsPredicate, ...]
+
+    @property
+    def is_monotonic(self) -> bool:
+        return not self.dropped and not self.invalid_renames
+
+
+def plan_predicate_diff(
+    old: list[DoDPredicate],
+    new: list[DoDPredicate],
+) -> PlanPredicateDiff:
+    """Classify retain/rename/add/drop without fuzzy semantic matching.
+
+    File predicates retain identity by their evaluated path; ``renamed_from``
+    is transition audit metadata and may be consumed by a later identical
+    revision.  Other predicate kinds require exact Pydantic equality.  Each new
+    list item is matched at most once, so duplicates cannot manufacture a
+    retain or rename.
+    """
+    used_new: set[int] = set()
+    retained: list[DoDPredicate] = []
+    renamed: list[tuple[FileExistsPredicate, FileExistsPredicate]] = []
+    dropped: list[DoDPredicate] = []
+
+    for old_predicate in old:
+        retained_index = next(
+            (
+                index
+                for index, new_predicate in enumerate(new)
+                if index not in used_new
+                and (
+                    isinstance(old_predicate, FileExistsPredicate)
+                    and isinstance(new_predicate, FileExistsPredicate)
+                    and old_predicate.path == new_predicate.path
+                    or not isinstance(old_predicate, FileExistsPredicate)
+                    and old_predicate == new_predicate
+                )
+            ),
+            None,
+        )
+        if retained_index is not None:
+            used_new.add(retained_index)
+            retained.append(old_predicate)
+            continue
+        if isinstance(old_predicate, FileExistsPredicate):
+            renamed_index = next(
+                (
+                    index
+                    for index, new_predicate in enumerate(new)
+                    if index not in used_new
+                    and isinstance(new_predicate, FileExistsPredicate)
+                    and new_predicate.renamed_from == old_predicate.path
+                ),
+                None,
+            )
+            if renamed_index is not None:
+                replacement = new[renamed_index]
+                assert isinstance(replacement, FileExistsPredicate)
+                used_new.add(renamed_index)
+                renamed.append((old_predicate, replacement))
+                continue
+        dropped.append(old_predicate)
+
+    old_file_paths = {
+        predicate.path for predicate in old if isinstance(predicate, FileExistsPredicate)
+    }
+    invalid_renames = tuple(
+        predicate
+        for predicate in new
+        if isinstance(predicate, FileExistsPredicate)
+        and predicate.renamed_from is not None
+        and predicate.renamed_from not in old_file_paths
+    )
+    added = tuple(predicate for index, predicate in enumerate(new) if index not in used_new)
+    return PlanPredicateDiff(
+        retained=tuple(retained),
+        renamed=tuple(renamed),
+        added=added,
+        dropped=tuple(dropped),
+        invalid_renames=invalid_renames,
+    )
 
 
 def is_monotonic_extension(old: DoDSpec, new: DoDSpec) -> bool:

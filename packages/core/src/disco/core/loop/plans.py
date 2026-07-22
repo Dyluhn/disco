@@ -13,6 +13,7 @@ import ipaddress
 import logging
 import re
 import shlex
+from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -730,6 +731,31 @@ def validate_raw_plan_done_conditions(arguments: dict) -> list[str]:
                 "Correct it to one documented predicate object or omit it; it was "
                 "not silently discarded."
             )
+    return errors
+
+
+def validate_plan_conditions(
+    arguments: dict,
+    plan: PlanEvent,
+    strict_appkit_active_reader: Callable[[], bool] | None = None,
+) -> list[str]:
+    """Apply the identical raw, generic, and AppKit validators to every entry path.
+
+    Raw validation must run before callers trust the lenient plan parser: the
+    parser intentionally preserves display compatibility by dropping malformed
+    optional values, while approval is fail-closed and must never turn a
+    present malformed verifier into an implicit omission.
+    """
+    errors = validate_raw_plan_done_conditions(arguments)
+    errors.extend(validate_plan_done_conditions(plan))
+    if strict_appkit_active_reader is None:
+        return errors
+    try:
+        strict_appkit_active = strict_appkit_active_reader()
+    except Exception:  # fail closed when the shared lifecycle reader is unavailable
+        strict_appkit_active = True
+    if strict_appkit_active:
+        errors.extend(validate_appkit_plan_done_conditions(plan))
     return errors
 
 

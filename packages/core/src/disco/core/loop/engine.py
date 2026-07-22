@@ -106,12 +106,17 @@ from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for
     Observer,
 )
 from .plan_conditions import PlanStepConditions
+from .plan_revisions import (
+    PlanRevisionWeakeningError,
+    assert_plan_revision_approvable,
+    preflight_plan_revision,
+    reject_plan_weakening,
+    route_plan_approval_gate,
+)
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .plans import (
     Planner,
-    validate_appkit_plan_done_conditions,
-    validate_plan_done_conditions,
-    validate_raw_plan_done_conditions,
+    validate_plan_conditions,
 )
 from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
     _RECITATION_SENTINEL,
@@ -1409,21 +1414,7 @@ class AgentLoop:
 
     async def _route_plan_approval_gate(self, plan: PlanEvent) -> Disp:
         """Route a newly-emitted PlanEvent through the normal approval gate."""
-        if self._autonomous:
-            # No human to approve → auto-approve INLINE, emitting the
-            # exact same events approve_plan() would, so the event log
-            # is identical whether a human or the harness approved.
-            await self._emit(await self._plan_approval_status(plan, await self._events()))
-            self.mode = self._execution_mode
-            await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
-            return Disp.CONTINUE
-        await self._emit(
-            StatusEvent(
-                status=ConversationStatus.AWAITING_PLAN_APPROVAL,
-                detail=plan.id,
-            )
-        )
-        return Disp.HALT
+        return await route_plan_approval_gate(self, plan)
 
     def _harvest_prose_plan(self, events: list[Event]) -> PlanEvent | None:
         steps = signals.harvest_prose_plan_steps(events)
@@ -2518,6 +2509,7 @@ class AgentLoop:
         current PlanEvent after a restart. External DoD bytes are read only so a
         model approval can neither remove nor shadow them.
         """
+        assert_plan_revision_approvable(events, plan)
         old_plan = signals.latest_approved_plan(events)
         external = await self.store.get_external_dod_spec(self.conversation_id)
         reason = (
@@ -2578,7 +2570,11 @@ class AgentLoop:
                     StatusEvent(status=ConversationStatus.RUNNING, detail="stale_plan_approval")
                 )
                 return await self.get_state()
-            approval = await self._plan_approval_status(plan, events)
+            try:
+                approval = await self._plan_approval_status(plan, events)
+            except PlanRevisionWeakeningError as exc:
+                await reject_plan_weakening(self, plan, exc.diff)
+                return await self.get_state()
             await self._emit(approval.model_copy(update={"agent_view_id": plan.agent_view_id}))
             self.mode = self._execution_mode
             await self._seed_context_from_plan()
@@ -3059,15 +3055,11 @@ async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: l
     """Validate, persist, and route one structured plan submission."""
     loop._plan_explore_reads = 0
     plan = loop._plan_from_args(tool_call.arguments, events)
-    condition_errors = validate_raw_plan_done_conditions(tool_call.arguments)
-    condition_errors.extend(validate_plan_done_conditions(plan))
-    if loop._strict_appkit_active_reader is not None:
-        try:
-            strict_appkit_active = loop._strict_appkit_active_reader()
-        except Exception:  # fail closed when the shared lifecycle reader is unavailable
-            strict_appkit_active = True
-        if strict_appkit_active:
-            condition_errors.extend(validate_appkit_plan_done_conditions(plan))
+    condition_errors = validate_plan_conditions(
+        tool_call.arguments,
+        plan,
+        loop._strict_appkit_active_reader,
+    )
     if condition_errors:
         loop._planner.discard_plan_predicates(plan.revision)
         start_seq = signals.current_planning_segment_start_seq(events)
@@ -3207,6 +3199,10 @@ async def _handle_submitted_plan(loop: AgentLoop, tool_call: ToolCall, events: l
         await loop._emit(recovered)
         loop._plan_nudges = 0
         return await loop._route_plan_approval_gate(recovered)
+
+    revision_disposition = await preflight_plan_revision(loop, plan, events)
+    if revision_disposition is not None:
+        return revision_disposition
 
     await loop._emit(plan)
     if (

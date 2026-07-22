@@ -384,6 +384,102 @@ def approved_plan_verifier_repair_event(events: list[Event]) -> StatusEvent | No
     return approval if plan_is_verifier_repair(prefix, plan) else None
 
 
+def superseded_plan_owned_failure(events: list[Event]) -> frozenset[str]:
+    """Message ids for plan-owned verifier directives causally replaced by approval.
+
+    Audit events are never removed.  This signal only authorizes render-time
+    retirement when a later, valid approval transition binds the failed plan as
+    its old authority, contains every failed-set fingerprint in ``old_*``, and
+    contains none of them in ``new_*``.  Retained/additive predicates therefore
+    keep their failure visible, and external ``dod_unmet`` messages never enter
+    this classifier.
+    """
+    retired: set[str] = set()
+    failure_messages = {"plan_verifier_failed", "plan_verifier_replan_required"}
+    for message_index, message in enumerate(events):
+        if (
+            not isinstance(message, MessageEvent)
+            or message.source != EventSource.ENVIRONMENT
+            or message.meta.get("blocking") not in failure_messages
+        ):
+            continue
+        expected_failure_fingerprint = message.meta.get("failure_fingerprint")
+        failure_event = next(
+            (
+                event
+                for event in reversed(events[:message_index])
+                if isinstance(event, StatusEvent)
+                and event.plan_verifier_failure is not None
+                and (
+                    expected_failure_fingerprint is None
+                    or event.plan_verifier_failure.failure_fingerprint
+                    == expected_failure_fingerprint
+                )
+            ),
+            None,
+        )
+        if failure_event is None or failure_event.plan_verifier_failure is None:
+            continue
+        failure = failure_event.plan_verifier_failure
+        failure_fingerprints = set(failure.failed_predicate_fingerprints)
+        if not failure_fingerprints:
+            continue
+        failed_plan = next(
+            (
+                event
+                for event in events[:message_index]
+                if isinstance(event, PlanEvent)
+                and event.id == failure.plan_event_id
+                and event.revision == failure.plan_revision
+                and (event.seq or 0) < (failure_event.seq or 0)
+            ),
+            None,
+        )
+        if failed_plan is None or predicate_fingerprints(
+            [step.done_condition for step in failed_plan.steps if step.done_condition is not None]
+        ) != list(failure.predicate_fingerprints):
+            continue
+        for approval in events[message_index + 1 :]:
+            if (
+                not isinstance(approval, StatusEvent)
+                or approval.detail != "plan_approved"
+                or approval.plan_verification_transition is None
+            ):
+                continue
+            transition = approval.plan_verification_transition
+            if (
+                transition.old_plan_event_id != failure.plan_event_id
+                or transition.old_plan_revision != failure.plan_revision
+                or list(transition.old_predicate_fingerprints)
+                != list(failure.predicate_fingerprints)
+                or not failure_fingerprints.issubset(set(transition.old_predicate_fingerprints))
+                or not failure_fingerprints.isdisjoint(set(transition.new_predicate_fingerprints))
+            ):
+                continue
+            replacement = next(
+                (
+                    event
+                    for event in events
+                    if isinstance(event, PlanEvent)
+                    and event.id == transition.new_plan_event_id
+                    and event.revision == transition.new_plan_revision
+                    and (event.seq or 0) < (approval.seq or 0)
+                ),
+                None,
+            )
+            if replacement is None or predicate_fingerprints(
+                [
+                    step.done_condition
+                    for step in replacement.steps
+                    if step.done_condition is not None
+                ]
+            ) != list(transition.new_predicate_fingerprints):
+                continue
+            retired.add(message.id)
+            break
+    return frozenset(retired)
+
+
 def verifier_repair_planning_active(events: list[Event]) -> bool:
     """True while a twice-failed plan verifier has forced a no-user replan."""
 
@@ -1252,17 +1348,17 @@ def in_planning_for_revision(events: list[Event]) -> bool:
     still-"done" prior revision's checklist during a pending re-plan).
     """
     planning_seq: int | None = None
-    approved_seq: int | None = None
+    execution_seq: int | None = None
     for e in events:
         if isinstance(e, StatusEvent):
             if e.detail == "planning":
                 planning_seq = e.seq or 0
-            elif e.detail == "plan_approved":
-                approved_seq = e.seq or 0
+            elif e.detail in {"plan_approved", "plan_revision_idempotent"}:
+                execution_seq = e.seq or 0
     if planning_seq is None:
         return False  # never (re-)entered planning → no pending revision
     # planning was entered; pending iff it is the most recent of the two markers
-    return approved_seq is None or planning_seq > approved_seq
+    return execution_seq is None or planning_seq > execution_seq
 
 
 def effective_mode(
@@ -1280,14 +1376,14 @@ def effective_mode(
     while build loops still default to PLANNING.
     """
     planning_seq: int | None = None
-    approved_seq: int | None = None
+    execution_seq: int | None = None
     for event in events:
         if isinstance(event, StatusEvent):
             if event.detail == "planning":
                 planning_seq = event.seq or 0
-            elif event.detail == "plan_approved":
-                approved_seq = event.seq or 0
-    if approved_seq is not None and (planning_seq is None or approved_seq > planning_seq):
+            elif event.detail in {"plan_approved", "plan_revision_idempotent"}:
+                execution_seq = event.seq or 0
+    if execution_seq is not None and (planning_seq is None or execution_seq > planning_seq):
         return execution
     if planning_seq is not None:
         return planning

@@ -27,7 +27,6 @@ from disco.core.llm import OperatingMode
 from loop_fakes import (
     ScriptedAgent,
     action_step,
-    assert_blocked_question_landing,
     build_loop,
     finish_step,
 )
@@ -143,9 +142,9 @@ def _identical_steps_script():
     """Three propose_plan_update calls in autonomous mode, each with steps
     BYTE-IDENTICAL to the immediately-prior plan (only the summary changes).
     A weak model in autonomous mode can hammer this loop forever hoping a
-    human will approve — after one real action opens the revision affordance,
-    the loop must bound the workless revision streak (C8) by feeding the
-    existing bookkeeping-stuck valve when the streak hits the cap (3)."""
+    human will approve. After one real action makes the first revision causal,
+    later causeless duplicates must redirect to execution before the residual
+    bookkeeping cap."""
     return ScriptedAgent(
         [
             action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
@@ -236,12 +235,8 @@ def _changed_steps_script():
 
 
 @pytest.mark.asyncio
-async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
-    """C8 (T11): when the loop auto-approves a `propose_plan_update` in
-    autonomous mode and the proposed plan's steps are byte-identical to the
-    immediately-prior plan for >=3 consecutive times, the repeated re-proposal
-    MUST feed the existing bookkeeping breaker so the run explains and asks
-    rather than looping forever. The bookkeeping_only legacy detail is retained."""
+async def test_autonomous_propose_plan_update_redirects_repeat_identical_steps():
+    """Exact causeless repeats resume execution without new plans or approval."""
     from disco.core import SqliteEventStore as Store
 
     store = Store(":memory:")
@@ -254,13 +249,15 @@ async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
     state = await loop.run()
 
     events = await store.get_events(CID)
-    # The bound fired: the run halted, and with the same bookkeeping_only
-    # legacy detail the existing (c.3) valve emits. The model did NOT get to keep
-    # proposing the same plan forever.
-    # Two-flavor landing: AUTONOMOUS runs conclude terminally (STUCK carrying
-    # the explanation) — headless has nobody to answer an open question.
-    assert state.execution_status == ConversationStatus.STUCK
-    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only", flavor="terminal")
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 2
+    assert (
+        sum(
+            isinstance(event, StatusEvent) and event.detail == "plan_revision_idempotent"
+            for event in events
+        )
+        == 2
+    )
     nudges = [
         e
         for e in events
@@ -268,12 +265,12 @@ async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == "identical_plan_nudge"
     ]
-    assert len(nudges) == 1
-    # The AWAITING_PLAN_APPROVAL gate was never reached — autonomous was
-    # respected for the first revisions, then the cap fired.
+    assert nudges == []
+    # The AWAITING_PLAN_APPROVAL gate was never reached: the causal revision
+    # auto-approved and its duplicates redirected straight to execution.
     assert not _awaiting_plan(events), (
-        "autonomous run halted at AWAITING_PLAN_APPROVAL (should have been "
-        "halting via the bookkeeping valve instead)"
+        "autonomous run halted at AWAITING_PLAN_APPROVAL instead of redirecting "
+        "the duplicate execution contract"
     )
 
 

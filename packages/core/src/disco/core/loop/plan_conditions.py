@@ -22,6 +22,7 @@ from ..dod import (
     DoDPredicate,
     FileExistsPredicate,
     HTTPOkPredicate,
+    predicate_fingerprint,
 )
 from ..events import (
     ActionEvent,
@@ -470,6 +471,7 @@ class PlanStepConditions:
                     exc_info=True,
                 )
                 continue
+            step_predicate = latest_plan.steps[idx - 1].done_condition
             mark = context_mark_resolved(
                 start_seq,
                 end_seq,
@@ -482,6 +484,11 @@ class PlanStepConditions:
                     "meta": {
                         "plan_revision": latest_plan.revision,
                         "step_index": idx,
+                        "predicate_fingerprint": (
+                            predicate_fingerprint(step_predicate)
+                            if step_predicate is not None
+                            else None
+                        ),
                     },
                 }
             )

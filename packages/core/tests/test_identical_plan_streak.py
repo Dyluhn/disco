@@ -3,9 +3,8 @@ from __future__ import annotations
 from disco.core import ConversationStatus, EventSource, MessageEvent, PlanEvent, StatusEvent
 from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall, ToolSpec
 from disco.core.loop import BuildAgent, NeverConfirm
-from disco.core.loop.turn_control import _PROPOSE_PLAN_UPDATE_REPEAT_CAP
 from llm_fakes import simple_config
-from loop_fakes import FakeExecutor, SequenceProvider, assert_blocked_question_landing, build_loop
+from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
 _DIAGNOSTIC = "identical_plan_nudge"
@@ -72,14 +71,18 @@ async def _run_autonomous(script: list[dict]):
     return state, await store.get_events(CID), provider, executor
 
 
-async def test_identical_plan_update_warns_then_halts_on_workless_streak():
+async def test_identical_plan_update_redirects_before_workless_streak_cap():
     script = [
         _submit("one"),
         _file_edit(),
-        *[_revise("one") for _ in range(_PROPOSE_PLAN_UPDATE_REPEAT_CAP)],
+        _revise("one"),
+        _revise("one"),
+        _file_edit(),
+        _plan_step_done(),
+        _finish(),
     ]
 
-    state, events, provider, _executor = await _run_autonomous(script)
+    state, events, provider, executor = await _run_autonomous(script)
 
     nudges = [
         e
@@ -88,19 +91,30 @@ async def test_identical_plan_update_warns_then_halts_on_workless_streak():
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == _DIAGNOSTIC
     ]
-    assert len(nudges) == 1
-    assert "One more identical proposal will halt the run" in nudges[0].message.content
-    assert state.execution_status == ConversationStatus.STUCK
-    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only", flavor="terminal")
-    assert provider.calls >= 2 + _PROPOSE_PLAN_UPDATE_REPEAT_CAP
+    assert nudges == []
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 2
+    assert (
+        sum(
+            isinstance(event, StatusEvent) and event.detail == "plan_revision_idempotent"
+            for event in events
+        )
+        == 1
+    )
+    assert [call.tool_name for call in executor.calls if call.tool_name == "file_edit"] == [
+        "file_edit",
+        "file_edit",
+    ]
+    assert provider.calls >= len(script)
 
 
-async def test_identical_plan_update_streak_restarts_after_real_work():
+async def test_identical_plan_update_with_new_work_gates_then_next_duplicate_redirects():
     script = [
         _submit("one"),
         _file_edit(),
-        *[_revise("one") for _ in range(_PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1)],
+        _revise("one"),
         _file_edit(),
+        _revise("one"),
         _revise("one"),
         _file_edit(),
         _plan_step_done(),
@@ -116,7 +130,15 @@ async def test_identical_plan_update_streak_restarts_after_real_work():
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == _DIAGNOSTIC
     ]
-    assert len(nudges) == 1
+    assert nudges == []
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 3
+    assert (
+        sum(
+            isinstance(event, StatusEvent) and event.detail == "plan_revision_idempotent"
+            for event in events
+        )
+        == 1
+    )
     assert [call.tool_name for call in executor.calls if call.tool_name == "file_edit"] == [
         "file_edit",
         "file_edit",
@@ -129,9 +151,9 @@ async def test_different_plan_update_resets_identical_streak():
     script = [
         _submit("one"),
         _file_edit(),
-        *[_revise("one") for _ in range(_PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1)],
-        _revise("one", "two"),
-        _revise("one", "two"),
+        _revise("one"),
+        _revise("different"),
+        _revise("different"),
         _file_edit(),
         _plan_step_done(),
         _finish(),
@@ -146,7 +168,15 @@ async def test_different_plan_update_resets_identical_streak():
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == _DIAGNOSTIC
     ]
-    assert len(nudges) == 1
+    assert nudges == []
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 3
+    assert (
+        sum(
+            isinstance(event, StatusEvent) and event.detail == "plan_revision_idempotent"
+            for event in events
+        )
+        == 1
+    )
     assert state.execution_status != ConversationStatus.STUCK
 
 

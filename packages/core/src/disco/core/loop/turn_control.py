@@ -50,6 +50,11 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _DELEGATE_ACTION_PROFILE, _FANOUT_INPUT_MAX_CHARS
+from .plan_revisions import (
+    normalized_execution_contract,
+    preflight_plan_revision,
+    reject_invalid_revision_conditions,
+)
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .stuck import (
     F6_FILE_MUTATING_TOOLS,
@@ -113,10 +118,6 @@ _SERVE_DUPLICATE_GUIDANCE = (
 # and let the agent keep going. The frontend renders it as a distinct button;
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
-
-
-def _step_titles(plan: PlanEvent) -> list[str]:
-    return [step.title for step in plan.steps]
 
 
 def _prior_plan_and_productive_action_between(
@@ -2095,6 +2096,21 @@ class MetaToolHandlers:
     async def handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         new_plan = self._loop._plan_from_args(step.tool_call.arguments, events)
+        # Import lazily: plans.py imports the shared _CONTINUE_OPTION_ID from this
+        # module, so a module-level import would create a load-time cycle.
+        from .plans import validate_plan_conditions
+
+        condition_errors = validate_plan_conditions(
+            step.tool_call.arguments,
+            new_plan,
+            self._loop._strict_appkit_active_reader,
+        )
+        if condition_errors:
+            return await reject_invalid_revision_conditions(
+                self._loop,
+                new_plan,
+                condition_errors,
+            )
         if not new_plan.steps:
             # propose_plan_update is also intercepted before ordinary Pydantic tool
             # execution, so its provider-schema minItems constraint is advisory here.
@@ -2174,6 +2190,9 @@ class MetaToolHandlers:
                     detail="plan_steps_recovered_from_instruction",
                 )
             )
+        revision_disposition = await preflight_plan_revision(self._loop, new_plan, events)
+        if revision_disposition is not None:
+            return revision_disposition
         emitted_plan = await self._loop._emit(new_plan)
         if isinstance(emitted_plan, PlanEvent):
             new_plan = emitted_plan
@@ -2202,7 +2221,9 @@ class MetaToolHandlers:
             prior_plan, productive_between = _prior_plan_and_productive_action_between(
                 events_with_new_plan, new_plan
             )
-            if prior_plan is not None and _step_titles(prior_plan) == _step_titles(new_plan):
+            if prior_plan is not None and normalized_execution_contract(
+                prior_plan
+            ) == normalized_execution_contract(new_plan):
                 if productive_between:
                     self._loop._identical_plan_revisions = 1
                 else:

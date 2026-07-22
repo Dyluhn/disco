@@ -8,6 +8,7 @@ import hashlib
 import json
 from typing import cast
 
+from ...dod_evaluator import DoDPredicateResult
 from .common import *
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
@@ -87,6 +88,10 @@ _DICTATED_CONTENT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 class _DictatedContentInspectionIncomplete(RuntimeError):
     """The gate could not inspect the declared app scope completely and safely."""
+
+
+def _failed_predicate_fingerprints(results: list[DoDPredicateResult]) -> list[str]:
+    return [predicate_fingerprint(result.predicate) for result in results]
 
 
 def _dictated_content_inspection_cause(exc: BaseException) -> dict[str, str | int]:
@@ -223,10 +228,8 @@ class _ContentGateMixin(_FinishGateProto):
     async def _dictated_content_deliverable_paths(self, events: list[Event]) -> list[str]:
         """Primary deliverable files for dictated-content checking.
 
-        Sources are files named by Plan/DoD/contract declarations, explicit handoff
-        events, the existing web convention, and a strictly bounded resolved traversal
-        of an explicitly handed-off app root. Arbitrary workspace trees remain out of
-        scope.
+        Sources are declared files, handoffs, the web convention, and a bounded
+        traversal of an explicitly handed-off app root; arbitrary trees stay out.
         """
 
         paths: list[str] = []
@@ -887,6 +890,7 @@ class _ContentGateMixin(_FinishGateProto):
             plan_revision=plan.revision,
             plan_event_id=plan.id,
             predicate_fingerprints=predicate_fps,
+            failed_predicate_fingerprints=_failed_predicate_fingerprints(failed_results),
             spec_fingerprint=verdict.spec_fingerprint,
             failure_fingerprint=failure_fingerprint,
             failure_kinds=failure_kinds,

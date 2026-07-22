@@ -77,7 +77,7 @@ async def test_external_authority_survives_every_plan_revision_byte_for_byte(
     new = await _approve(
         loop,
         summary="replacement plan",
-        predicate=FileExistsPredicate(path="new-plan-only.txt"),
+        predicate=FileExistsPredicate(path="new-plan-only.txt", renamed_from="old-plan-only.txt"),
     )
 
     persisted = await store.get_external_dod_spec(loop.conversation_id)
@@ -86,7 +86,7 @@ async def test_external_authority_survives_every_plan_revision_byte_for_byte(
     current = signals.latest_approved_plan(events)
     assert current is not None and current.id == new.id
     assert [step.done_condition for step in current.steps] == [
-        FileExistsPredicate(path="new-plan-only.txt")
+        FileExistsPredicate(path="new-plan-only.txt", renamed_from="old-plan-only.txt")
     ]
     assert any(isinstance(event, PlanEvent) and event.id == old.id for event in events)
     latest_transition = next(
@@ -100,7 +100,7 @@ async def test_external_authority_survives_every_plan_revision_byte_for_byte(
         [FileExistsPredicate(path="old-plan-only.txt")]
     )
     assert latest_transition.new_predicate_fingerprints == predicate_fingerprints(
-        [FileExistsPredicate(path="new-plan-only.txt")]
+        [FileExistsPredicate(path="new-plan-only.txt", renamed_from="old-plan-only.txt")]
     )
     assert latest_transition.external_predicate_fingerprints == predicate_fingerprints(
         external.predicates
@@ -123,7 +123,7 @@ async def test_failed_replacement_approval_leaves_prior_plan_and_mode_unchanged(
             "steps": [
                 {
                     "title": "not approved",
-                    "done_condition": {"kind": "file_exists", "path": "unapproved.txt"},
+                    "done_condition": {"kind": "file_exists", "path": "approved.txt"},
                 }
             ],
         },
@@ -221,8 +221,10 @@ async def test_run_768_bad_verifier_fails_closed_but_replan_finishes(tmp_path: P
         )
     )
     old = await _approve(loop, summary="RUN-768 bad verifier", predicate=bad)
+    await _emit_successful_shell_receipt(loop, "python primes.py")
 
     started = time.monotonic()
+    assert await loop._finish_dod_gate_passed() is False
     assert await loop._finish_dod_gate_passed() is False
     assert time.monotonic() - started < 2.0
     events = await store.get_events(loop.conversation_id)
@@ -533,7 +535,7 @@ async def test_h567_user_revision_cannot_inherit_verifier_repair_bypass(tmp_path
     await _approve(
         loop,
         summary="Change product copy",
-        predicate=FileExistsPredicate(path="ready.txt"),
+        predicate=FileExistsPredicate(path="ready.txt", renamed_from="missing.txt"),
     )
 
     events = await store.get_events(loop.conversation_id)

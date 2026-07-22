@@ -1,4 +1,4 @@
-# SPEC: identical-plan-revision streak — reset on real work + warn before halt
+# SPEC: exact plan-revision idempotence with a residual autonomous streak guard
 
 ## The live failure (flags attempt 4, autonomous)
 
@@ -22,34 +22,34 @@ Two defects, proven in the event log of the failed run:
 
 ## Required behavior
 
-1. RESET ON WORK: when the new proposal's titles match the prior plan's,
-   count it as consecutive ONLY if no productive action occurred between the
-   prior PlanEvent and this one. Productive = any ActionEvent whose tool is
-   NOT bookkeeping (bookkeeping = think / update_plan_progress /
-   propose_plan_update / submit_plan — reuse the existing bookkeeping-tool set
-   if one is defined; do not invent a divergent list). If real work intervened,
-   the new identical proposal STARTS a new streak (counter = 1), not cap.
-   Derive the betweenness from the EVENT LOG (the two PlanEvents bound the
-   window); the in-memory counter may remain as the accumulator.
-2. WARN AT CAP-1: when the counter reaches cap-1, ALSO emit a persisted
-   environment MessageEvent (meta `diagnostic: "identical_plan_nudge"`)
-   alongside the approval:
-   "This revision is IDENTICAL to the already-approved plan — proposing it
-    again does nothing. The plan is current: continue executing its steps,
-    mark progress with update_plan_progress, or finish. One more identical
-    proposal will halt the run."
-3. The cap halt itself is unchanged (same shared blocked lander, same reason)
-   — it now fires only after the warning AND only on a genuinely workless
-   streak.
+1. Compare the ordered execution contract exactly: step title, detail, typed
+   predicate, and dependency position. Summary/context are presentation, and
+   `renamed_from` is normalized away only for duplicate comparison after an
+   audited rename.
+2. If that contract equals the currently approved plan and there is no newer
+   USER instruction, verifier failure, or successful productive action, treat
+   the proposal as idempotent in both interactive and autonomous modes and on
+   both revision entry paths. Emit no PlanEvent, revision increment, or approval
+   gate. Persist paired execution guidance naming the next incomplete step and
+   the full current typed contract.
+3. Any structural change or new causal evidence follows the normal one-gate
+   approval path. This decision reconstructs from durable events, not the
+   in-memory repeat counter.
+4. The autonomous repeat cap remains only as a residual defense for
+   non-idempotent churn. It is not the duplicate-plan correction. Its existing
+   warning and shared blocked-lander path remain unchanged.
 
 ## Tests (loop-level, scripted fake provider — extend the existing autonomous plan-update coverage)
 
-1. identical ×(cap-1) workless → warning diagnostic persisted once; one more
-   identical workless → STUCK(bookkeeping_only) (existing behavior preserved).
-2. identical ×(cap-1) → REAL WORK (a file_edit) → identical proposal again →
-   counter restarted (no STUCK, no warning yet); the run continues.
-3. DIFFERENT-steps proposal anywhere → counter resets (existing behavior).
-4. Interactive (non-autonomous) path byte-identical to today.
+1. A workless exact duplicate is redirected before the cap with no PlanEvent or
+   approval and execution continues.
+2. Successful productive work makes an otherwise-identical proposal a genuine
+   revision; its immediate causeless duplicate is redirected.
+3. A structurally different proposal gates once; its immediate duplicate is
+   redirected.
+4. A new interactive USER instruction is causal evidence, so an otherwise
+   identical proposal still reaches one approval gate.
+5. SQLite restart reconstructs the same no-op decision.
 
 ## Verification
 - PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests packages/agent-server/tests -q
@@ -57,4 +57,3 @@ Two defects, proven in the event log of the failed run:
 ## Constraints
 - Smallest coherent diff; the shared blocked-lander path is untouched.
 - Do NOT touch the running dev servers or the main checkout.
-- Commit on THIS branch (wt-planstreak) with --no-verify; FINDINGS-PLANSTREAK.md.

@@ -11,6 +11,7 @@ from disco.core import (
     ToolCall,
     ToolResult,
 )
+from disco.core.dod import FileExistsPredicate
 from disco.core.llm import OperatingMode
 from disco.core.loop import signals
 from loop_fakes import ScriptedAgent, action_step, build_loop
@@ -287,8 +288,21 @@ async def test_approved_revision_replaces_plan_predicates_instead_of_unioning(tm
         },
         events,
     )
-    # A replacement may remove the old plan-owned predicate; it does not union.
-    p2 = p2.model_copy(update={"steps": [p2.steps[1]]})
+    # A replacement does not union, but moving an approved deliverable is an
+    # explicit audited rename rather than a silent acceptance-bar drop.
+    p2 = p2.model_copy(
+        update={
+            "steps": [
+                p2.steps[1].model_copy(
+                    update={
+                        "done_condition": FileExistsPredicate(
+                            path="contact.html", renamed_from="index.html"
+                        )
+                    }
+                )
+            ]
+        }
+    )
     await loop._emit(p2)
     await loop._emit(await loop._plan_approval_status(p2, await store.get_events(CID)))
     events = await store.get_events(CID)

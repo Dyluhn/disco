@@ -41,6 +41,7 @@ from .events import (
     LLMMessage,
     ObservationEvent,
     PlanEvent,
+    StatusEvent,
     agent_view_consistent_events,
 )
 
@@ -247,8 +248,11 @@ def effective_plan_progress(
     verifying). Every completion/recap reader now flows through this one function so the
     valve, the tail recap, the recitation drift-gate, and resume all agree.
 
-    Resolution: only events AFTER the latest plan count (a re-plan starts a fresh
-    checklist). Marks/snapshots apply in event order — by `seq`, falling back to LIST
+    Resolution: only events AFTER the latest plan count directly.  A newly approved
+    replacement may carry a prior ``done`` mark only at the same index when the
+    complete frozen PlanStep contract is exactly unchanged; pending proposals and
+    changed title/detail/predicate contracts reset. Marks/snapshots apply in event
+    order — by `seq`, falling back to LIST
     POSITION when seqs are absent/zero (seqless fixtures) — and LATEST WINS, so a step can
     move done→active if a later event says so. A `plan_step` sets ONE index; an
     `update_plan_progress` applies the states it LISTS; indices a snapshot omits RETAIN
@@ -265,6 +269,38 @@ def effective_plan_progress(
     plan_seq = plan.seq or 0
     total = len(plan.steps)
     states: dict[int, str] = {}
+
+    # Deterministic completed-work carry is approval-bound, not chronology-bound.
+    # Reconstruct the predecessor from the durable transition and raw prefix so a
+    # restart or condensation makes the same decision.  Only exact, same-index
+    # frozen PlanStep equality carries completion; active/pending states and fuzzy
+    # title matches never cross a revision boundary.
+    approval = next(
+        (
+            event
+            for event in events[plan_pos + 1 :]
+            if isinstance(event, StatusEvent)
+            and event.detail == "plan_approved"
+            and event.plan_verification_transition is not None
+            and event.plan_verification_transition.new_plan_event_id == plan.id
+            and event.plan_verification_transition.new_plan_revision == plan.revision
+        ),
+        None,
+    )
+    if approval is not None and approval.plan_verification_transition is not None:
+        transition = approval.plan_verification_transition
+        prior_plan, prior_states = effective_plan_progress(events[:plan_pos])
+        if (
+            prior_plan is not None
+            and prior_plan.id == transition.old_plan_event_id
+            and prior_plan.revision == transition.old_plan_revision
+        ):
+            for index, (prior_step, current_step) in enumerate(
+                zip(prior_plan.steps, plan.steps, strict=False),
+                start=1,
+            ):
+                if prior_step == current_step and prior_states.get(index) == "done":
+                    states[index] = "done"
 
     def _set(idx_raw: object, state_raw: object) -> None:
         idx = int(idx_raw)  # type: ignore[arg-type]

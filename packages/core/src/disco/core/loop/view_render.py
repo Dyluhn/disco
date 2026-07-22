@@ -156,6 +156,15 @@ def _plan_execution_receipt(events: list[Event]) -> LLMMessage | None:
     if approval is None:
         return None
     approval_seq = approval.seq or 0
+    if any(
+        isinstance(event, StatusEvent)
+        and event.detail == "plan_revision_idempotent"
+        and (event.seq or 0) > approval_seq
+        for event in events
+    ):
+        # The paired idempotent-redirect MessageEvent is already the current
+        # execution handoff. Do not project a second copy from the older approval.
+        return None
     # A newer proposal is awaiting its own decision; do not describe the older
     # approval as the active handoff if a caller accidentally materializes a
     # view while that gate is parked.
@@ -212,9 +221,7 @@ def _retire_superseded_invalid_plan_feedback(
 
     if signals.latest_approved_plan(events) is None:
         return events, frozenset()
-    retirable_blockers = {_INVALID_PLAN_FEEDBACK}
-    if signals.approved_plan_verifier_repair_event(events) is not None:
-        retirable_blockers.update({_PLAN_VERIFIER_FAILED, _PLAN_VERIFIER_REPLAN_REQUIRED})
+    superseded_failures = signals.superseded_plan_owned_failure(events)
     approval_seq = max(
         (
             event.seq or 0
@@ -226,11 +233,16 @@ def _retire_superseded_invalid_plan_feedback(
     projected: list[Event] = []
     sentinels: set[str] = set()
     for event in events:
+        blocking = event.meta.get("blocking") if isinstance(event, MessageEvent) else None
+        retire_invalid = blocking == _INVALID_PLAN_FEEDBACK and (event.seq or 0) < approval_seq
+        retire_plan_failure = (
+            blocking in {_PLAN_VERIFIER_FAILED, _PLAN_VERIFIER_REPLAN_REQUIRED}
+            and event.id in superseded_failures
+        )
         if (
             isinstance(event, MessageEvent)
             and event.source is EventSource.ENVIRONMENT
-            and event.meta.get("blocking") in retirable_blockers
-            and (event.seq or 0) < approval_seq
+            and (retire_invalid or retire_plan_failure)
         ):
             sentinel = f"{_RETIRED_PLAN_FEEDBACK_PREFIX}{event.id}]]"
             sentinels.add(sentinel)

@@ -266,11 +266,48 @@ _PROPOSE_PLAN_UPDATE_DESCRIPTION = (
     "slots chronologically), and chooses to Approve, Refine, or implicitly "
     "reject by sending a different message. Provide a `summary` (one sentence "
     "describing what changed and why), an ordered list of `steps` (each with a "
-    "`title`), and an optional `context` markdown body explaining your "
-    "reasoning. Do NOT call this on every error — only when the current plan "
-    "is structurally wrong. Small course corrections inside a single step "
-    "should be handled with another tool call."
+    "`title` and optional typed `done_condition`), and an optional `context` "
+    "markdown body explaining your reasoning. Retain every approved condition "
+    "that is still required. To move a file deliverable, put `renamed_from` on "
+    "the replacement file_exists condition so the transition is explicit and "
+    "audited. Do NOT call this on every error — only when the current plan is "
+    "structurally wrong. Small course corrections inside a single step should "
+    "be handled with another tool call."
 )
+_PLAN_DONE_CONDITION_SCHEMA = {
+    "oneOf": [
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"const": "file_exists"},
+                "path": {"type": "string", "minLength": 1},
+                "renamed_from": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+            },
+            "required": ["kind", "path"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"const": "command"},
+                "cmd": {"type": "string", "minLength": 1},
+                "expect_exit": {"type": "integer"},
+            },
+            "required": ["kind", "cmd"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"const": "http_ok"},
+                "url": {"type": "string", "minLength": 1},
+                "expect_status": {"type": "integer"},
+            },
+            "required": ["kind", "url"],
+            "additionalProperties": False,
+        },
+    ]
+}
 _PROPOSE_PLAN_UPDATE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -286,6 +323,7 @@ _PROPOSE_PLAN_UPDATE_SCHEMA = {
                 "properties": {
                     "title": {"type": "string"},
                     "detail": {"type": "string"},
+                    "done_condition": _PLAN_DONE_CONDITION_SCHEMA,
                 },
                 "required": ["title"],
             },

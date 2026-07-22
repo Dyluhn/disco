@@ -11,6 +11,7 @@ without further coordination. Method *bodies* are implementation.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Iterable
@@ -21,7 +22,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
-from .dod import DoDPredicate
+from .dod import DoDPredicate, predicate_to_dict
 from .effects import (
     ActionProfile,
     EffectReceipt,
@@ -722,7 +723,12 @@ class PlanVerifierFailure(BaseModel):
 
     plan_revision: int
     plan_event_id: str
+    # The full approved set remains the authority/retry identity.  The failed
+    # subset is separate so render-time retirement can retire only a directive
+    # whose actual unmet predicates were causally replaced.  Empty preserves
+    # backward compatibility with pre-field durable events and fails closed.
     predicate_fingerprints: list[str]
+    failed_predicate_fingerprints: list[str] = Field(default_factory=list)
     spec_fingerprint: str
     failure_fingerprint: str
     failure_kinds: list[str]
@@ -911,7 +917,18 @@ class PlanEvent(BaseEvent, LLMConvertible):
     context: str = ""  # optional markdown rationale + exploration findings
 
     def to_llm_message(self) -> LLMMessage:
-        lines = [f"{i}. {s.title}" for i, s in enumerate(self.steps, start=1)]
+        lines: list[str] = []
+        for i, step in enumerate(self.steps, start=1):
+            lines.append(f"{i}. {step.title}")
+            if step.detail:
+                lines.append(f"   Detail: {step.detail}")
+            if step.done_condition is not None:
+                condition = json.dumps(
+                    predicate_to_dict(step.done_condition),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                lines.append(f"   Done condition: {condition}")
         body = "\n".join(lines)
         # Include the context so the executing agent has its own findings in-View
         # — same role Claude Code's plan-file markdown plays during execution.
