@@ -7,22 +7,12 @@ from collections.abc import Iterable
 from typing import Any
 
 from disco.core.build_platform import (
-    APPKIT_PROFILE_ID,
-    BUILTIN_CAPABILITIES,
-    FREEFORM_PROFILE_ID,
-    CapabilityLayer,
-    ModuleBody,
     ObserveOnlyShadowRecord,
-    PolicyLayer,
-    PromptContextInputs,
-    ResolutionInputs,
     ToolDescriptor,
-    build_builtin_registry,
-    builtin_module_bodies,
     compare_observe_only,
     expected_legacy_snapshot,
     failed_observe_only,
-    resolve_build_composition,
+    resolve_builtin_composition,
 )
 from disco.core.env import disco_env
 
@@ -65,38 +55,11 @@ def observe_legacy_build(
     try:
         catalog = _tool_catalog(tool_specs)
         visible_tools = frozenset(tool.name for tool in catalog)
-        registry = build_builtin_registry(
-            freeform_tools=(frozenset() if appkit_mode else visible_tools),
-            appkit_tools=(visible_tools if appkit_mode else frozenset()),
-        )
-        profile = APPKIT_PROFILE_ID if appkit_mode else FREEFORM_PROFILE_ID
-        selected_prompt = registry.profile(profile)
-        if selected_prompt is None or not selected_prompt.prompt_modules:
-            raise ValueError("built-in shadow profile is incomplete")
-        prompt_id = selected_prompt.prompt_modules[0].component
-        bodies = tuple(body for body in builtin_module_bodies() if body.component == prompt_id)
-        if len(bodies) != 1 or not isinstance(bodies[0], ModuleBody):
-            raise ValueError("built-in shadow prompt body is not unique")
-        layer = CapabilityLayer(
-            source="legacy-observer",
-            allowed=BUILTIN_CAPABILITIES,
-        )
-        composition = resolve_build_composition(
-            registry,
-            ResolutionInputs(
-                profile=profile,
-                goal="observe existing Build composition",
-                platform_capabilities=layer.model_copy(update={"source": "platform"}),
-                user_capabilities=layer.model_copy(update={"source": "user"}),
-                host_capabilities=layer.model_copy(update={"source": "host"}),
-                platform_policy=PolicyLayer(source="platform"),
-                user_policy=PolicyLayer(source="user"),
-                prompt_context=PromptContextInputs(
-                    module_bodies=bodies,
-                    tool_catalog=catalog,
-                    host_visible_tools=visible_tools,
-                ),
-            ),
+        composition = resolve_builtin_composition(
+            appkit=appkit_mode,
+            goal="observe existing Build composition",
+            tool_catalog=catalog,
+            visible_tools=visible_tools,
         )
         record = compare_observe_only(
             expected_legacy_snapshot(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .compiler import ModuleBody
+from .compiler import ModuleBody, PromptContextInputs, ToolDescriptor
 from .contracts import (
     BuildProfile,
     CapabilityLayer,
@@ -27,6 +27,7 @@ from .contracts import (
     VerifierPlan,
 )
 from .registry import BuildPlatformRegistry, ComponentSpec
+from .resolver import BuildComposition, ResolutionInputs, resolve_build_composition
 
 FREEFORM_PROFILE_ID = ComponentId(namespace="disco", name="freeform_web", version="1")
 APPKIT_PROFILE_ID = ComponentId(namespace="disco", name="appkit_web", version="1")
@@ -47,6 +48,17 @@ BUILTIN_CAPABILITIES = frozenset(
         "network.egress",
         "display.interactive",
     }
+)
+
+# These are descriptions of the existing host lifecycle, not executable hooks.
+# Keeping them in the Freeform engine plan makes the migration contract explicit
+# while the legacy AgentLoop/WorkspaceCoordinator retain every effect authority.
+FREEFORM_LIFECYCLE_OPERATIONS = (
+    "host.plan_approval",
+    "workspace.author",
+    "host.commit_revision",
+    "host.recover_workspace",
+    "host.finish_after_verification",
 )
 
 
@@ -100,6 +112,29 @@ class _BuiltinEngine:
         )
 
 
+class _FreeformEngine(_BuiltinEngine):
+    """Typed description of the current flexible Build execution contract."""
+
+    def plan(self, request: ConstructionRequest) -> ConstructionPlan:
+        return ConstructionPlan(
+            engine=self.id,
+            intents=tuple(
+                ComponentIntent(
+                    operation=operation,
+                    required_capabilities=(
+                        frozenset({"workspace.write"})
+                        if operation == "workspace.author"
+                        else frozenset()
+                    ),
+                )
+                for operation in FREEFORM_LIFECYCLE_OPERATIONS
+            ),
+            requested_tools=self._requested_tools,
+            required_capabilities=frozenset({"workspace.read", "workspace.write"}),
+            policy=self._rules,
+        )
+
+
 class _LegacyWebTarget:
     @property
     def id(self) -> ComponentId:
@@ -109,6 +144,16 @@ class _LegacyWebTarget:
         entry = EntryDescriptor(kind="deliverable_manifest", reference="active-deliverable")
         return TargetPlan(
             target=self.id,
+            intents=(
+                ComponentIntent(
+                    operation="host.detect_delivery",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+                ComponentIntent(
+                    operation="host.bind_revision",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+            ),
             delivery=DeliveryIntent(shape="web.legacy_deliverable", entry=entry),
             preview=PreviewPlan(modality="legacy_host", entry=entry),
             verifier=VerifierPlan(
@@ -206,7 +251,7 @@ def build_builtin_registry(
     registry = BuildPlatformRegistry()
     registry._register_engine(
         _spec(FREEFORM_ENGINE_ID, ComponentKind.ENGINE, rules=FREEFORM_RULES),
-        _BuiltinEngine(
+        _FreeformEngine(
             FREEFORM_ENGINE_ID,
             requested_tools=freeform_tools,
             rules=FREEFORM_RULES,
@@ -249,5 +294,52 @@ def builtin_module_bodies() -> tuple[ModuleBody, ...]:
         ModuleBody(
             component=APPKIT_PROMPT_ID,
             content="Preserve the existing strict AppKit governed driver composition.",
+        ),
+    )
+
+
+def resolve_builtin_composition(
+    *,
+    appkit: bool,
+    goal: str,
+    tool_catalog: tuple[ToolDescriptor, ...],
+    visible_tools: frozenset[str],
+    requested_reference_categories: frozenset[str] = frozenset(),
+) -> BuildComposition:
+    """Resolve one built-in profile from the exact legacy-visible tool surface.
+
+    This pure seam is shared by observe-only comparison and the Phase-4 new-run
+    admission path.  It cannot execute a tool or mutate runtime state.
+    """
+
+    registry = build_builtin_registry(
+        freeform_tools=(frozenset() if appkit else visible_tools),
+        appkit_tools=(visible_tools if appkit else frozenset()),
+    )
+    profile_id = APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID
+    profile = registry.profile(profile_id)
+    if profile is None or not profile.prompt_modules:
+        raise ValueError("built-in profile is incomplete")
+    prompt_id = profile.prompt_modules[0].component
+    bodies = tuple(body for body in builtin_module_bodies() if body.component == prompt_id)
+    if len(bodies) != 1 or not isinstance(bodies[0], ModuleBody):
+        raise ValueError("built-in prompt body is not unique")
+    layer = CapabilityLayer(source="built-in", allowed=BUILTIN_CAPABILITIES)
+    return resolve_build_composition(
+        registry,
+        ResolutionInputs(
+            profile=profile_id,
+            goal=goal,
+            platform_capabilities=layer.model_copy(update={"source": "platform"}),
+            user_capabilities=layer.model_copy(update={"source": "user"}),
+            host_capabilities=layer.model_copy(update={"source": "host"}),
+            platform_policy=PolicyLayer(source="platform"),
+            user_policy=PolicyLayer(source="user"),
+            requested_reference_categories=requested_reference_categories,
+            prompt_context=PromptContextInputs(
+                module_bodies=bodies,
+                tool_catalog=tool_catalog,
+                host_visible_tools=visible_tools,
+            ),
         ),
     )

@@ -6,6 +6,7 @@ from .builtin_profiles import (
     APPKIT_PROMPT_ID,
     BUILTIN_CAPABILITIES,
     FREEFORM_ENGINE_ID,
+    FREEFORM_LIFECYCLE_OPERATIONS,
     FREEFORM_PROFILE_ID,
     FREEFORM_PROMPT_ID,
     HOST_PREVIEW_ID,
@@ -14,6 +15,7 @@ from .builtin_profiles import (
     WEB_TARGET_ID,
     build_builtin_registry,
     builtin_module_bodies,
+    resolve_builtin_composition,
 )
 from .compiler import (
     CompositionCompileError,
@@ -154,6 +156,7 @@ __all__ = [
     "EntryDescriptor",
     "FrozenModel",
     "FREEFORM_ENGINE_ID",
+    "FREEFORM_LIFECYCLE_OPERATIONS",
     "FREEFORM_PROFILE_ID",
     "FREEFORM_PROMPT_ID",
     "HOST_PREVIEW_ID",
@@ -223,5 +226,6 @@ __all__ = [
     "expected_legacy_snapshot",
     "failed_observe_only",
     "resolve_build_composition",
+    "resolve_builtin_composition",
     "resolve_synthetic_conformance",
 ]
