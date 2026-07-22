@@ -436,17 +436,13 @@ def test_export_archive_must_match_declared_workspace_bytes() -> None:
         }
     }
 
-    ok, facts = _run_mod._export_matches_workspace(
-        archive.getvalue(), workspace, ["index.html"]
-    )
+    ok, facts = _run_mod._export_matches_workspace(archive.getvalue(), workspace, ["index.html"])
     assert ok is True
     assert facts["archive_file_count"] == 1
 
     with zipfile.ZipFile(archive := io.BytesIO(), "w") as bundle:
         bundle.writestr("index.html", b"stale")
-    ok, facts = _run_mod._export_matches_workspace(
-        archive.getvalue(), workspace, ["index.html"]
-    )
+    ok, facts = _run_mod._export_matches_workspace(archive.getvalue(), workspace, ["index.html"])
     assert ok is False
     assert facts["mismatched_paths"] == ["index.html"]
 
@@ -464,6 +460,66 @@ async def test_pause_resume_trigger_records_durable_control_result(tmp_path):
     assert transport.ws_frames == [{"type": "pause"}]
     assert client.scenario_evidence["pause_resume"]["ok"] is True
     assert "settled PAUSED then resumed" in timeline[-1]
+
+
+@pytest.mark.asyncio
+async def test_scenario_pause_owns_resume_during_driver_poll_race():
+    class RacingPauseClient:
+        def __init__(self) -> None:
+            self._poll = 0.0
+            self.scenario_evidence = {}
+            self.pause_sent = asyncio.Event()
+            self.driver_observed = asyncio.Event()
+            self.current = "RUNNING"
+            self.resume_calls = 0
+            self.poll_calls = 0
+
+        async def wait_for_first_file_write(self, _cid, *, timeout_s):
+            return 7
+
+        async def pause(self, _cid):
+            self.current = "PAUSED"
+            self.pause_sent.set()
+            await self.driver_observed.wait()
+
+        async def get_state(self, _cid):
+            return {"execution_status": self.current}
+
+        async def poll_until_terminal_or_gate(self, _cid, **_kwargs):
+            self.poll_calls += 1
+            if self.poll_calls == 1:
+                await self.pause_sent.wait()
+                self.driver_observed.set()
+                return "PAUSED"
+            return "FINISHED"
+
+        async def resume(self, _cid):
+            self.resume_calls += 1
+            self.current = "RUNNING"
+            return {"http_status": 200}
+
+        async def wait_until_status_leaves(self, _cid, expected, *, timeout_s):
+            assert expected == "PAUSED"
+            return self.current
+
+    client = RacingPauseClient()
+    timeline: list[str] = []
+
+    result = await _run_mod._drive_to_terminal(
+        client,
+        "conv-race",
+        autonomous=False,
+        mid_run=[],
+        pause_at={"trigger": "after_first_file_write"},
+        timeline=timeline,
+        inactivity_s=2,
+        hard_cap_s=2,
+    )
+
+    assert result == "FINISHED"
+    assert client.resume_calls == 1
+    assert client.scenario_evidence["pause_resume"]["ok"] is True
+    assert not any(line.startswith("resumed PAUSED run") for line in timeline)
 
 
 @pytest.mark.asyncio

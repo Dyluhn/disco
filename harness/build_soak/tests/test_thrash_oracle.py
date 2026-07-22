@@ -4,7 +4,7 @@ import pytest
 
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles.thrash import ThrashOracle
-from harness.build_soak.tests._eventlog import action, agent_error, observation, status
+from harness.build_soak.tests._eventlog import action, agent_error, msg, observation, status
 
 
 def _scenario(**overrides: int) -> dict:
@@ -751,6 +751,86 @@ def test_product_stuck_marker_is_classified_as_thrash(detail: str) -> None:
         scenario=_scenario(),
     )[0]
     assert result.code == fc.TOOL_CALL_THRASH
+
+
+def _superseded_blocked_status(seq: int, detail: str = "verifier_no_progress") -> dict:
+    event = status(seq, "STUCK", detail=detail)
+    event["meta"] = {
+        "blocked_landing": True,
+        "blocked_reason": detail,
+        "legacy_detail": detail,
+        "legacy_status": "STUCK",
+        "superseded_by_landing": True,
+    }
+    return event
+
+
+def _blocked_question_status(seq: int, detail: str = "verifier_no_progress") -> dict:
+    event = status(seq, "AWAITING_USER_QUESTION", detail=f"evt_q_{seq}")
+    event["meta"] = {
+        "blocked_landing": True,
+        "blocked_reason": detail,
+        "legacy_detail": detail,
+        "legacy_status": "STUCK",
+    }
+    return event
+
+
+def test_superseded_blocked_marker_with_user_recovery_is_not_terminal_thrash() -> None:
+    result = ThrashOracle().check(
+        [
+            _superseded_blocked_status(1),
+            _blocked_question_status(2),
+            msg(3, "user", "Use the conventional repair and continue."),
+            status(4, "RUNNING"),
+            status(5, "FINISHED"),
+        ],
+        scenario=_scenario(),
+    )[0]
+
+    assert result.passed
+    assert result.facts["recovered_blocked_marker_seqs"] == [1]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda events: events[0]["meta"].update(superseded_by_landing=False),
+        lambda events: events[0]["meta"].update(blocked_reason="different_reason"),
+        lambda events: events[1]["meta"].update(blocked_reason="different_reason"),
+        lambda events: events.insert(1, status(2, "RUNNING")),
+        lambda events: events.__setitem__(2, msg(3, "environment", "not a user answer")),
+        lambda events: events.pop(),
+    ),
+)
+def test_incomplete_blocked_landing_lineage_remains_thrash(mutate) -> None:
+    events = [
+        _superseded_blocked_status(1),
+        _blocked_question_status(2),
+        msg(3, "user", "continue"),
+        status(4, "FINISHED"),
+    ]
+    mutate(events)
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+
+
+def test_later_unsuperseded_stuck_marker_still_fails() -> None:
+    result = ThrashOracle().check(
+        [
+            _superseded_blocked_status(1),
+            _blocked_question_status(2),
+            msg(3, "user", "continue"),
+            status(4, "FINISHED"),
+            status(5, "STUCK", detail="repeated_noop"),
+        ],
+        scenario=_scenario(),
+    )[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.facts["terminal_markers"] == [{"seq": 5, "detail": "repeated_noop"}]
 
 
 def test_repeated_hidden_provider_repair_fails_from_inspect_trace() -> None:

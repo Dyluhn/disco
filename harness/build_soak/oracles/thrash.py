@@ -24,8 +24,10 @@ from .. import failure_codes as fc
 from ..events import (
     KIND_ACTION,
     KIND_AGENT_ERROR,
+    KIND_MESSAGE,
     KIND_OBSERVATION,
     KIND_STATUS,
+    SRC_USER,
     action_id_of,
     kind_of,
     seq_of,
@@ -135,6 +137,65 @@ def _detail_signature(error: str, detail: str) -> str:
     if not normalized or normalized == _normalized_error_text(error):
         return ""
     return "sha256:" + hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _recovered_blocked_marker(marker: dict[str, Any], events: list[dict[str, Any]]) -> bool:
+    """Whether a historical STUCK marker was explicitly superseded and recovered.
+
+    The product retains the legacy STUCK event for audit/counter continuity when
+    it lands a bounded failure at a user-question gate.  That marker is not the
+    run terminal only when its typed lineage is complete: exact metadata, the
+    immediately following status-owned blocked landing, a real user answer, and
+    a later clean terminal.  Malformed, autonomous, or unrecovered markers remain
+    thrash failures.
+    """
+
+    detail = str(marker.get("detail") or "")
+    meta = marker.get("meta")
+    if not isinstance(meta, dict) or not (
+        meta.get("blocked_landing") is True
+        and meta.get("superseded_by_landing") is True
+        and meta.get("blocked_reason") == detail
+        and meta.get("legacy_detail") == detail
+        and meta.get("legacy_status") == "STUCK"
+    ):
+        return False
+
+    marker_seq = seq_of(marker)
+    subsequent_statuses = [
+        event for event in events if seq_of(event) > marker_seq and kind_of(event) == KIND_STATUS
+    ]
+    if not subsequent_statuses:
+        return False
+    landing = subsequent_statuses[0]
+    landing_meta = landing.get("meta")
+    if not (
+        landing.get("status") == "AWAITING_USER_QUESTION"
+        and isinstance(landing_meta, dict)
+        and landing_meta.get("blocked_landing") is True
+        and landing_meta.get("blocked_reason") == detail
+        and landing_meta.get("legacy_detail") == detail
+        and landing_meta.get("legacy_status") == "STUCK"
+    ):
+        return False
+
+    landing_seq = seq_of(landing)
+    user_seqs = [
+        seq_of(event)
+        for event in events
+        if seq_of(event) > landing_seq
+        and kind_of(event) == KIND_MESSAGE
+        and event.get("source") == SRC_USER
+    ]
+    if not user_seqs:
+        return False
+    user_seq = user_seqs[0]
+    return any(
+        seq_of(event) > user_seq
+        and kind_of(event) == KIND_STATUS
+        and event.get("status") in {"FINISHED", "VERIFIED"}
+        for event in events
+    )
 
 
 def _failed_action_signature(action: dict[str, Any], error_signature: str) -> str:
@@ -668,12 +729,20 @@ class ThrashOracle:
 
         actions = [event for event in events if kind_of(event) == KIND_ACTION]
         outcomes = _action_outcomes(events)
-        terminal_markers = [
-            {"seq": seq_of(event), "detail": str(event.get("detail") or "")}
+        thrash_markers = [
+            event
             for event in events
             if kind_of(event) == KIND_STATUS
             and str(event.get("status")) == "STUCK"
             and str(event.get("detail") or "") in _THRASH_STUCK_DETAILS
+        ]
+        recovered_marker_seqs = [
+            seq_of(event) for event in thrash_markers if _recovered_blocked_marker(event, events)
+        ]
+        terminal_markers = [
+            {"seq": seq_of(event), "detail": str(event.get("detail") or "")}
+            for event in thrash_markers
+            if seq_of(event) not in recovered_marker_seqs
         ]
         if terminal_markers:
             return [
@@ -899,6 +968,7 @@ class ThrashOracle:
                     "largest_same_tool_error_group": max(failed_signatures.values(), default=0),
                     "model_repair_count": len(repairs),
                     "model_repair_counts": dict(repair_counts),
+                    "recovered_blocked_marker_seqs": recovered_marker_seqs,
                     "limits": limits,
                 },
             )

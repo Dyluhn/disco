@@ -359,6 +359,22 @@ class CancelMissedWindowError(Exception):
         self.facts = facts or {}
 
 
+class _PauseOwnership:
+    """Coordinate the scenario-owned pause with the generic PAUSED driver.
+
+    A lifecycle pause is issued from the background trigger watcher while the
+    main driver polls the same conversation.  The main driver must observe that
+    pause without consuming it as an actionless/user pause.  This state is local
+    to one drive, so parallel conversations cannot interfere with each other.
+    """
+
+    def __init__(self) -> None:
+        self.active = False
+        self.observed = False
+        self.consumed = False
+        self.settled = asyncio.Event()
+
+
 # ---- orchestration (acts as the user) ---------------------------------------
 
 
@@ -370,6 +386,7 @@ async def _inject_when_writing(
     pause_at: dict[str, Any] | None,
     timeline: list[str],
     timeout_s: float,
+    pause_ownership: _PauseOwnership | None = None,
     declared_seqs: list[int] | None = None,
     declared_requires: list[bool] | None = None,
 ) -> None:
@@ -399,7 +416,14 @@ async def _inject_when_writing(
         return
 
     if wants_pause:
-        await _pause_resume_at_trigger(client, cid, timeline, trigger_seq=seq, timeout_s=timeout_s)
+        await _pause_resume_at_trigger(
+            client,
+            cid,
+            timeline,
+            trigger_seq=seq,
+            timeout_s=timeout_s,
+            ownership=pause_ownership,
+        )
 
     for f in mid_run:
         before_user_seq = client.latest_user_message_seq(cid)
@@ -452,36 +476,47 @@ async def _pause_resume_at_trigger(
     *,
     trigger_seq: int,
     timeout_s: float,
+    ownership: _PauseOwnership | None = None,
 ) -> None:
-    await client.pause(cid)
-    paused = await _wait_for_status(client, cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0))
-    if paused != PAUSED_STATE:
+    if ownership is not None:
+        ownership.active = True
+        ownership.settled.clear()
+    try:
+        await client.pause(cid)
+        paused = await _wait_for_status(client, cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0))
+        if paused != PAUSED_STATE:
+            client.scenario_evidence["pause_resume"] = {
+                "ok": False,
+                "trigger_seq": trigger_seq,
+                "pause_status": paused,
+            }
+            timeline.append(
+                f"pause_at after first write (seq={trigger_seq}) did not settle PAUSED "
+                f"(status={paused or 'unknown'})"
+            )
+            return
+        if ownership is not None:
+            ownership.observed = True
+        response = await client.resume(cid)
+        resumed = await client.wait_until_status_leaves(
+            cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0)
+        )
+        ok = 200 <= int(response.get("http_status", 0)) < 300 and resumed != PAUSED_STATE
         client.scenario_evidence["pause_resume"] = {
-            "ok": False,
+            "ok": ok,
             "trigger_seq": trigger_seq,
             "pause_status": paused,
+            "resume_status": resumed,
+            "resume_http_status": response.get("http_status"),
         }
         timeline.append(
-            f"pause_at after first write (seq={trigger_seq}) did not settle PAUSED "
-            f"(status={paused or 'unknown'})"
+            f"pause_at after first write (seq={trigger_seq}) settled PAUSED then resumed "
+            f"to {resumed or 'unknown'} (http {response.get('http_status')})"
         )
-        return
-    response = await client.resume(cid)
-    resumed = await client.wait_until_status_leaves(
-        cid, PAUSED_STATE, timeout_s=min(timeout_s, 60.0)
-    )
-    ok = 200 <= int(response.get("http_status", 0)) < 300 and resumed != PAUSED_STATE
-    client.scenario_evidence["pause_resume"] = {
-        "ok": ok,
-        "trigger_seq": trigger_seq,
-        "pause_status": paused,
-        "resume_status": resumed,
-        "resume_http_status": response.get("http_status"),
-    }
-    timeline.append(
-        f"pause_at after first write (seq={trigger_seq}) settled PAUSED then resumed "
-        f"to {resumed or 'unknown'} (http {response.get('http_status')})"
-    )
+    finally:
+        if ownership is not None:
+            ownership.active = False
+            ownership.settled.set()
 
 
 async def _restart_isolated_stack() -> dict[str, Any]:
@@ -675,6 +710,7 @@ async def _drive_to_terminal(
     hard-cap cutoff WHILE STILL PROGRESSING (PROGRESSING_TIMEOUT) is INCONCLUSIVE, not a
     product failure → raise InconclusiveRunError so the run records INVALID_RUN (§17)."""
     injector: asyncio.Task[None] | None = None
+    pause_ownership = _PauseOwnership() if pause_at else None
     if (
         mid_run
         or _is_cancel_after_first_write(cancel_at)
@@ -692,6 +728,7 @@ async def _drive_to_terminal(
                 pause_at,
                 timeline,
                 hard_cap_s,
+                pause_ownership=pause_ownership,
                 declared_seqs=declared_followup_seqs,
                 declared_requires=declared_followup_requires_revision,
             )
@@ -742,6 +779,17 @@ async def _drive_to_terminal(
                     "was still actively progressing",
                     {"stage": "terminal_wait", "hard_cap_s": hard_cap_s},
                 )
+            if (
+                status != PAUSED_STATE
+                and pause_ownership is not None
+                and pause_ownership.observed
+                and not pause_ownership.active
+            ):
+                # The injector completed its whole pause/resume cycle between
+                # driver polls. Retire the ownership token on this first
+                # non-PAUSED observation so a later actionless PAUSE remains a
+                # generic user-resumable state.
+                pause_ownership.consumed = True
             if status == AWAITING_PLAN_APPROVAL and gates < _MAX_GATES:
                 gates += 1
                 await client.approve_plan(cid)
@@ -829,6 +877,26 @@ async def _drive_to_terminal(
                 # to record; the watermark check captures any injected user turn defensively.
                 _record_injected_user_turn(before_user_seq)
                 continue
+            if status == PAUSED_STATE and pause_ownership is not None:
+                if pause_ownership.active:
+                    try:
+                        await asyncio.wait_for(
+                            pause_ownership.settled.wait(), timeout=min(hard_cap_s, 125.0)
+                        )
+                    except TimeoutError:
+                        timeline.append(
+                            "scenario-owned pause did not settle within its bounded control "
+                            "window — releasing to honest classification"
+                        )
+                        return status
+                if pause_ownership.observed and not pause_ownership.consumed:
+                    pause_ownership.consumed = True
+                    if injector is not None and injector.done():
+                        injector.result()
+                    timeline.append(
+                        "scenario-owned PAUSED state was resumed by the lifecycle injector"
+                    )
+                    continue
             if status == PAUSED_STATE and resumes < _MAX_RESUMES:
                 # A cooperative / actionless PAUSE is RESUMABLE — the runner acts as the
                 # user who hits Resume. BOUNDED (≤ _MAX_RESUMES) so a build that just keeps
@@ -857,13 +925,20 @@ async def _drive_to_terminal(
                         )
                     if injector.done():
                         injector.result()
+            if injector is not None and injector.done():
+                injector.result()
             timeline.append(f"reached terminal/stop status: {status}")
             return status
     finally:
-        if injector is not None and not injector.done():
-            injector.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await injector
+        if injector is not None:
+            if not injector.done():
+                injector.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await injector
+            elif not injector.cancelled():
+                # Retrieve completed-task failures on every return path, not
+                # only the ordinary terminal path.
+                injector.result()
 
 
 async def drive_scenario(
