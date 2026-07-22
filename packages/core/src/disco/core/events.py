@@ -33,6 +33,14 @@ from .effects import (
 # Bump on a *breaking* change to any event shape. Adding an optional field with
 # a default is backward-compatible and does NOT require a bump (§4 rule 2).
 SCHEMA_VERSION = 1
+APPKIT_EJECTION_SOURCE_TRIGGER = "appkit-ejection-source"
+APPKIT_EJECTION_TARGET_TRIGGER = "appkit-ejection"
+APPKIT_EJECTION_LOST_GUARANTEES = (
+    "semantic-only AppKit mutation boundaries",
+    "deterministic AppKit regeneration and writable-zone protection",
+    "AppKit verifier and AppKit-verified revision status",
+    "AppKit-governed deployment guarantees",
+)
 
 
 class EventSource(str, Enum):
@@ -57,6 +65,7 @@ class EventKind(str, Enum):
     WORKSPACE_RESTORED = "workspace_restored"
     WORKSPACE_MUTATION = "workspace_mutation"
     BUILD_PLATFORM_ADMISSION = "build_platform_admission"
+    APPKIT_EJECTION = "appkit_ejection"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
@@ -920,6 +929,8 @@ class BuildPlatformAdmissionEvent(BaseEvent):
         default=None,
         pattern=r"^run:sha256:[0-9a-f]{64}$",
     )
+    transition: Literal["initial", "appkit_ejection"] = "initial"
+    supersedes_admission_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _route_identity_is_exact(self) -> BuildPlatformAdmissionEvent:
@@ -934,6 +945,45 @@ class BuildPlatformAdmissionEvent(BaseEvent):
             or self.run_identity is not None
         ):
             raise ValueError("legacy route cannot claim a Platform composition identity")
+        if self.transition == "appkit_ejection":
+            if self.profile_id != "disco.freeform_web@1" or self.supersedes_admission_id is None:
+                raise ValueError(
+                    "AppKit ejection must supersede an admission with the Freeform profile"
+                )
+        elif self.supersedes_admission_id is not None:
+            raise ValueError("an initial Build admission cannot supersede another admission")
+        return self
+
+
+class AppKitEjectionEvent(BaseEvent):
+    """A confirmed governed-to-Freeform revision boundary.
+
+    The immutable source revision remains available for history/preview. The
+    target revision is explicitly not AppKit-verified; later generic verification
+    may verify it as Freeform but can never retroactively restore AppKit guarantees.
+    """
+
+    kind: Literal[EventKind.APPKIT_EJECTION] = EventKind.APPKIT_EJECTION
+    source: EventSource = EventSource.SYSTEM
+    action_id: str = Field(min_length=1, max_length=128)
+    tool_call_id: str = Field(min_length=1, max_length=128)
+    source_profile_id: Literal["disco.appkit_web@1"] = "disco.appkit_web@1"
+    target_profile_id: Literal["disco.freeform_web@1"] = "disco.freeform_web@1"
+    source_version_seq: int = Field(ge=1)
+    source_tree_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ejected_version_seq: int = Field(ge=1)
+    ejected_tree_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    lost_guarantees: tuple[str, ...] = Field(min_length=1)
+    appkit_verified: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _revision_is_distinct_and_truthful(self) -> AppKitEjectionEvent:
+        if self.source_version_seq == self.ejected_version_seq:
+            raise ValueError("AppKit ejection must create a distinct workspace revision")
+        if self.source_tree_digest == self.ejected_tree_digest:
+            raise ValueError("AppKit ejection revision must record the profile-boundary change")
+        if self.lost_guarantees != APPKIT_EJECTION_LOST_GUARANTEES:
+            raise ValueError("AppKit ejection must disclose the complete lost-guarantee set")
         return self
 
 
@@ -1359,6 +1409,7 @@ Event = Annotated[
     | WorkspaceRestoredEvent
     | WorkspaceMutationEvent
     | BuildPlatformAdmissionEvent
+    | AppKitEjectionEvent
     | PlanEvent
     | ReportEvent
     | AlternativesEvent
@@ -1389,12 +1440,72 @@ def current_build_platform_admission(
     """
 
     materialized = list(events)
+    admissions = sorted(
+        (
+            event
+            for event in materialized
+            if isinstance(event, BuildPlatformAdmissionEvent) and type(event.seq) is int
+        ),
+        key=lambda event: event.seq or -1,
+    )
     latest: BuildPlatformAdmissionEvent | None = None
-    for event in materialized:
-        if isinstance(event, BuildPlatformAdmissionEvent) and (
-            latest is None or (event.seq or -1) > (latest.seq or -1)
+    for candidate in admissions:
+        assert isinstance(candidate.seq, int)
+        prior_for_intent = [
+            event
+            for event in admissions
+            if isinstance(event.seq, int)
+            and event.seq < candidate.seq
+            and event.run_intent_id == candidate.run_intent_id
+        ]
+        if candidate.transition == "initial":
+            if not prior_for_intent:
+                latest = candidate
+            continue
+        superseded = next(
+            (
+                event
+                for event in prior_for_intent
+                if event.id == candidate.supersedes_admission_id
+                and event.profile_id == "disco.appkit_web@1"
+            ),
+            None,
+        )
+        ejection = current_appkit_ejection(materialized)
+        ejection_action = next(
+            (
+                event
+                for event in materialized
+                if ejection is not None
+                and isinstance(event, ActionEvent)
+                and event.id == ejection.action_id
+            ),
+            None,
+        )
+        ejection_intent = max(
+            (
+                event
+                for event in materialized
+                if ejection_action is not None
+                and isinstance(ejection_action.seq, int)
+                and isinstance(event, WorkspaceMutationEvent)
+                and isinstance(event.seq, int)
+                and event.seq < ejection_action.seq
+                and event.operation.startswith("agent.run-intent.")
+            ),
+            key=lambda event: event.seq or -1,
+            default=None,
+        )
+        if (
+            superseded is not None
+            and isinstance(superseded.seq, int)
+            and ejection is not None
+            and isinstance(ejection.seq, int)
+            and ejection_intent is not None
+            and ejection_intent.id == candidate.run_intent_id
+            and superseded.seq < ejection.seq < candidate.seq
         ):
-            latest = event
+            latest = candidate
     if latest is None or type(latest.seq) is not int:
         return None
     terminal = {
@@ -1412,6 +1523,127 @@ def current_build_platform_admission(
     ):
         return None
     return latest
+
+
+def current_appkit_ejection(events: Iterable[Event]) -> AppKitEjectionEvent | None:
+    """Fold a fully confirmed and revision-bound AppKit ejection, if any."""
+
+    materialized = list(events)
+    candidates = sorted(
+        (
+            event
+            for event in materialized
+            if isinstance(event, AppKitEjectionEvent) and type(event.seq) is int
+        ),
+        key=lambda event: event.seq or -1,
+        reverse=True,
+    )
+    for ejection in candidates:
+        assert isinstance(ejection.seq, int)
+        action = next(
+            (
+                event
+                for event in materialized
+                if isinstance(event, ActionEvent)
+                and type(event.seq) is int
+                and event.seq < ejection.seq
+                and event.id == ejection.action_id
+                and event.agent_view_id == ejection.agent_view_id
+                and event.tool_call.call_id == ejection.tool_call_id
+                and event.tool_call.tool_name == "request_custom_build"
+            ),
+            None,
+        )
+        if action is None or not isinstance(action.seq, int):
+            continue
+        intent = max(
+            (
+                event
+                for event in materialized
+                if isinstance(event, WorkspaceMutationEvent)
+                and type(event.seq) is int
+                and event.seq < ejection.seq
+                and event.operation.startswith("agent.run-intent.")
+            ),
+            key=lambda event: event.seq or -1,
+            default=None,
+        )
+        admission = next(
+            (
+                event
+                for event in materialized
+                if intent is not None
+                and isinstance(intent.seq, int)
+                and isinstance(event, WorkspaceMutationEvent)
+                and type(event.seq) is int
+                and intent.seq < event.seq < action.seq
+                and event.operation == "agent.view-admitted"
+                and event.run_intent_id == intent.id
+                and event.agent_view_id == action.agent_view_id
+            ),
+            None,
+        )
+        if admission is None:
+            continue
+        waiting = next(
+            (
+                event
+                for event in materialized
+                if isinstance(event, StatusEvent)
+                and type(event.seq) is int
+                and action.seq < event.seq < ejection.seq
+                and event.status is ConversationStatus.WAITING_FOR_CONFIRMATION
+                and event.detail == action.id
+            ),
+            None,
+        )
+        resumed = next(
+            (
+                event
+                for event in materialized
+                if waiting is not None
+                and isinstance(event, StatusEvent)
+                and type(event.seq) is int
+                and isinstance(waiting.seq, int)
+                and waiting.seq < event.seq < ejection.seq
+                and event.status is ConversationStatus.RUNNING
+                and event.agent_view_id == action.agent_view_id
+            ),
+            None,
+        )
+        source = next(
+            (
+                event
+                for event in materialized
+                if isinstance(event, WorkspaceVersionEvent)
+                and type(event.seq) is int
+                and resumed is not None
+                and isinstance(resumed.seq, int)
+                and resumed.seq < event.seq < ejection.seq
+                and event.trigger == APPKIT_EJECTION_SOURCE_TRIGGER
+                and event.version_seq == ejection.source_version_seq
+                and event.tree_digest == ejection.source_tree_digest
+            ),
+            None,
+        )
+        target = next(
+            (
+                event
+                for event in materialized
+                if isinstance(event, WorkspaceVersionEvent)
+                and type(event.seq) is int
+                and source is not None
+                and isinstance(source.seq, int)
+                and source.seq < event.seq < ejection.seq
+                and event.trigger == APPKIT_EJECTION_TARGET_TRIGGER
+                and event.version_seq == ejection.ejected_version_seq
+                and event.tree_digest == ejection.ejected_tree_digest
+            ),
+            None,
+        )
+        if resumed is not None and source is not None and target is not None:
+            return ejection
+    return None
 
 
 def _workspace_run_intent_state(

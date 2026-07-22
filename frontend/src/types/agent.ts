@@ -135,6 +135,21 @@ export interface BuildPlatformAdmissionEvent extends EventBase {
   execution_bridge: "legacy_host";
   composition_digest?: string | null;
   run_identity?: string | null;
+  transition?: "initial" | "appkit_ejection";
+  supersedes_admission_id?: string | null;
+}
+export interface AppKitEjectionEvent extends EventBase {
+  kind: "appkit_ejection";
+  action_id: string;
+  tool_call_id: string;
+  source_profile_id: "disco.appkit_web@1";
+  target_profile_id: "disco.freeform_web@1";
+  source_version_seq: number;
+  source_tree_digest: string;
+  ejected_version_seq: number;
+  ejected_tree_digest: string;
+  lost_guarantees: string[];
+  appkit_verified: false;
 }
 export interface PlanStep {
   title: string;
@@ -344,6 +359,7 @@ export type AgentEvent =
   | WorkspaceRestoredEvent
   | WorkspaceMutationEvent
   | BuildPlatformAdmissionEvent
+  | AppKitEjectionEvent
   | PlanEvent
   | ReportEvent
   | AlternativesEvent

@@ -38,6 +38,7 @@ export const KNOWN_EVENT_KINDS = [
   "workspace_restored",
   "workspace_mutation",
   "build_platform_admission",
+  "appkit_ejection",
   "error",
   "plan",
   "report",
@@ -88,6 +89,10 @@ export const EVENT_DISPOSITION: Record<
   build_platform_admission: {
     disposition: "suppressed",
     where: "Durable Build route/composition admission identity. Internal execution authority, not a chat turn.",
+  },
+  appkit_ejection: {
+    disposition: "rendered",
+    where: "Build/Agent ActivityFeed explicit AppKit-to-Freeform revision and lost-guarantee marker.",
   },
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
   plan: { disposition: "rendered", where: "PlanPanel (Build + Deep Research plan gate)." },

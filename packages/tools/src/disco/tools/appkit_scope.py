@@ -34,21 +34,25 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
 
 from disco.core import (
-    ActionEvent,
+    APPKIT_EJECTION_LOST_GUARANTEES,
     Event,
-    ObservationEvent,
-    WorkspaceMutationEvent,
-    agent_view_consistent_events,
+    current_appkit_ejection,
 )
+from disco.core.build_platform import APPKIT_PROFILE_ID, FREEFORM_PROFILE_ID
 from disco.core.llm import OperatingMode
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .registry import ToolScope
 
 # The qualified name of the F3 escape-hatch tool. Kept here (not imported from the
 # builtin module) so the scope layer has no dependency on the tool implementation.
 REQUEST_CUSTOM_BUILD = "request_custom_build"
+APPKIT_EJECTION_PATH = ".disco/appkit_ejection.json"
+APPKIT_EJECTION_SOURCE_LABEL = "AppKit governed before ejection"
+APPKIT_EJECTION_TARGET_LABEL = "Freeform - AppKit ejected (not AppKit-verified)"
 
 # Read / probe tools available in EVERY strict AppKit phase. Pure observation —
 # never a durable change to the workspace or the outside world.
@@ -108,61 +112,51 @@ class AppKitPhaseState:
     phase: AppKitPhase = AppKitPhase.PLANNING
 
 
+class AppKitEjectionReceipt(BaseModel):
+    """Host-produced receipt attached to the confirmed ejection tool result."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_profile_id: str = APPKIT_PROFILE_ID.canonical
+    target_profile_id: str = FREEFORM_PROFILE_ID.canonical
+    source_version_seq: int = Field(ge=1)
+    source_tree_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ejected_version_seq: int = Field(ge=1)
+    ejected_tree_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_version_seq: int = Field(ge=1)
+    lost_guarantees: tuple[str, ...] = APPKIT_EJECTION_LOST_GUARANTEES
+    appkit_verified: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _exact_transition(self) -> AppKitEjectionReceipt:
+        if (
+            self.source_profile_id != APPKIT_PROFILE_ID.canonical
+            or self.target_profile_id != FREEFORM_PROFILE_ID.canonical
+        ):
+            raise ValueError("ejection receipt must transition AppKit to Freeform")
+        if (
+            self.source_version_seq == self.ejected_version_seq
+            or self.source_tree_digest == self.ejected_tree_digest
+            or self.preview_version_seq != self.ejected_version_seq
+        ):
+            raise ValueError("ejection receipt must bind a distinct previewable revision")
+        if self.lost_guarantees != APPKIT_EJECTION_LOST_GUARANTEES:
+            raise ValueError("ejection receipt must disclose the complete lost-guarantee set")
+        return self
+
+
 def fold_appkit_phase_evidence(events: Iterable[Event]) -> AppKitPhase | None:
     """Fold durable, generation-consistent authority for AppKit widening.
 
-    ``CUSTOM_BUILD`` is the only AppKit phase authorized by an event result. A
-    successful-looking observation is insufficient unless it is the persisted,
-    exact result for a persisted ``request_custom_build`` action in the same
-    admitted model view. Current PLANNING/BUILD truth deliberately does not come
-    from an old ``app_create`` observation; the executor derives it from the two
-    live, schema-validated workspace specs.
+    ``CUSTOM_BUILD`` is authorized only by the host's typed ejection event, exact
+    source/target workspace-version markers, and the persisted confirmed action
+    from the same admitted model view. A successful-looking tool observation is
+    insufficient. Current PLANNING/BUILD truth deliberately does not come from an
+    old ``app_create`` observation; the executor derives it from the two live,
+    schema-validated workspace specs.
     """
 
-    projected = agent_view_consistent_events(events)
-    last_seq = 0
-    for event in projected:
-        if type(event.seq) is not int or event.seq <= last_seq:
-            return None
-        last_seq = event.seq
-    current_view_id: str | None = None
-    actions: dict[str, ActionEvent] = {}
-    for event in projected:
-        if isinstance(event, WorkspaceMutationEvent):
-            if event.operation.startswith("agent.run-intent."):
-                current_view_id = None
-                actions.clear()
-            elif event.operation == "agent.view-admitted":
-                current_view_id = event.agent_view_id
-                actions.clear()
-            continue
-        if isinstance(event, ActionEvent):
-            if (
-                current_view_id is not None
-                and event.agent_view_id == current_view_id
-                and event.tool_call.tool_name == REQUEST_CUSTOM_BUILD
-            ):
-                actions[event.id] = event
-            continue
-        if (
-            not isinstance(event, ObservationEvent)
-            or current_view_id is None
-            or event.agent_view_id != current_view_id
-            or not event.tool_result.success
-        ):
-            continue
-        action = actions.get(event.action_id)
-        if action is None:
-            continue
-        result = event.tool_result
-        if (
-            event.agent_view_id == action.agent_view_id
-            and result.tool_name == REQUEST_CUSTOM_BUILD
-            and result.tool_name == action.tool_call.tool_name
-            and result.call_id == action.tool_call.call_id
-        ):
-            return AppKitPhase.CUSTOM_BUILD
-    return None
+    return AppKitPhase.CUSTOM_BUILD if current_appkit_ejection(events) is not None else None
 
 
 def _escape_hatch(autonomous: bool) -> frozenset[str]:

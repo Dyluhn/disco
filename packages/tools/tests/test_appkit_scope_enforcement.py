@@ -12,13 +12,18 @@ import re
 
 import pytest
 from disco.core import (
+    APPKIT_EJECTION_LOST_GUARANTEES,
+    APPKIT_EJECTION_SOURCE_TRIGGER,
+    APPKIT_EJECTION_TARGET_TRIGGER,
     ActionEvent,
+    AppKitEjectionEvent,
+    ConversationStatus,
     Event,
-    ObservationEvent,
     SecurityRisk,
+    StatusEvent,
     ToolCall,
-    ToolResult,
     WorkspaceMutationEvent,
+    WorkspaceVersionEvent,
 )
 from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
@@ -39,6 +44,7 @@ from disco.tools.appkit_scope import (
     APPKIT_MUTATORS,
     APPKIT_PROBES,
     APPKIT_READ_TOOLS,
+    AppKitEjectionReceipt,
     AppKitPhase,
     AppKitPhaseState,
     appkit_effective_scope,
@@ -75,6 +81,18 @@ _RAW_TOOLS = ("file_write", "shell", "code_exec", "exact_replace", "browser")
 # is registry ∩ allowed_tools, and a few AGENT_TOOLS names (deploy_preview) are
 # deferred / unregistered, so the normal Build callable set is this intersection.
 _REGISTERED_AGENT_TOOLS = AGENT_TOOLS & build_default_registry().names()
+_SOURCE_DIGEST = "a" * 64
+_TARGET_DIGEST = "b" * 64
+
+
+async def _fake_ejection(_call: ToolCall) -> AppKitEjectionReceipt:
+    return AppKitEjectionReceipt(
+        source_version_seq=1,
+        source_tree_digest=_SOURCE_DIGEST,
+        ejected_version_seq=2,
+        ejected_tree_digest=_TARGET_DIGEST,
+        preview_version_seq=2,
+    )
 
 
 def _appkit_registry() -> ToolRegistry:
@@ -95,6 +113,7 @@ def _appkit_exec(
     loop_mode: OperatingMode | None = OperatingMode.LONG_HORIZON,
     autonomous: bool = False,
     on_widen=None,
+    on_eject=_fake_ejection,
 ) -> tuple[AppKitToolExecutor, AppKitPhaseState]:
     state = AppKitPhaseState(phase=phase)
     base = agent_scope(model_policy=_STANDARD)
@@ -106,6 +125,7 @@ def _appkit_exec(
         autonomous=autonomous,
         mode_getter=lambda: loop_mode,
         on_widen=on_widen,
+        on_eject=on_eject,
         sandbox=FakeSandboxInstance(),
     )
     return ex, state
@@ -125,9 +145,10 @@ async def _scaffold(ex: AppKitToolExecutor, *, primitive_id: str = "lead_gen"):
 def _custom_build_events(
     *,
     action_call_id: str = "custom-call",
-    result_call_id: str | None = None,
-    result_tool_name: str = "request_custom_build",
-    observation_view_id: str = "view-1",
+    ejection_call_id: str | None = None,
+    ejection_view_id: str = "view-1",
+    source_marker_digest: str = _SOURCE_DIGEST,
+    target_marker_trigger: str = APPKIT_EJECTION_TARGET_TRIGGER,
 ) -> list[Event]:
     intent = WorkspaceMutationEvent(
         operation="agent.run-intent.user-message",
@@ -148,17 +169,39 @@ def _custom_build_events(
             arguments={"reason": "needs raw tools", "needed_capabilities": ["shell"]},
         ),
     ).model_copy(update={"seq": 3})
-    observation = ObservationEvent(
-        agent_view_id=observation_view_id,
-        action_id=action.id,
-        tool_result=ToolResult(
-            call_id=result_call_id or action_call_id,
-            tool_name=result_tool_name,
-            success=True,
-            content="custom build approved",
-        ),
+    waiting = StatusEvent(
+        status=ConversationStatus.WAITING_FOR_CONFIRMATION,
+        detail=action.id,
     ).model_copy(update={"seq": 4})
-    return [intent, admission, action, observation]
+    resumed = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 5})
+    source = WorkspaceVersionEvent(
+        version_seq=1,
+        tree_digest=source_marker_digest,
+        trigger=APPKIT_EJECTION_SOURCE_TRIGGER,
+    ).model_copy(update={"seq": 6})
+    mutation = WorkspaceMutationEvent(
+        operation="agent.appkit-ejection",
+        paths=(".disco/appkit_ejection.json",),
+    ).model_copy(update={"seq": 7})
+    target = WorkspaceVersionEvent(
+        version_seq=2,
+        tree_digest=_TARGET_DIGEST,
+        trigger=target_marker_trigger,
+    ).model_copy(update={"seq": 8})
+    ejection = AppKitEjectionEvent(
+        agent_view_id=ejection_view_id,
+        action_id=action.id,
+        tool_call_id=ejection_call_id or action_call_id,
+        source_version_seq=1,
+        source_tree_digest=_SOURCE_DIGEST,
+        ejected_version_seq=2,
+        ejected_tree_digest=_TARGET_DIGEST,
+        lost_guarantees=APPKIT_EJECTION_LOST_GUARANTEES,
+    ).model_copy(update={"seq": 9})
+    return [intent, admission, action, waiting, resumed, source, mutation, target, ejection]
 
 
 # ---- (c) planning phase (loop PLANNING) narrows the allowlist ----------------
@@ -365,8 +408,9 @@ async def test_confirmed_request_custom_build_widens_to_agent_scope():
         call("request_custom_build", reason="need raw shell", needed_capabilities=["shell"])
     )
     assert res.success is True
-    # Execution success alone is not durable authority (a crash can happen before
-    # its observation is persisted). The exact stored action/result pair widens.
+    assert res.structured is not None and "ejection" in res.structured
+    # Callback success alone is not the durable authority. The exact typed
+    # revision markers and ejection event widen on reconciliation.
     assert state.phase == AppKitPhase.BUILD
     await ex.prepare_for_events(_custom_build_events())
     assert state.phase == AppKitPhase.CUSTOM_BUILD
@@ -377,6 +421,19 @@ async def test_confirmed_request_custom_build_widens_to_agent_scope():
     # a raw call now actually resolves (not unknown_tool).
     res2 = await ex.execute(call("file_write", path="note.txt", content="hi"))
     assert not (res2.structured and res2.structured.get("kind") == "unknown_tool")
+
+
+async def test_request_custom_build_without_host_revision_service_fails_closed():
+    ex, state = _appkit_exec(phase=AppKitPhase.BUILD, on_eject=None)
+
+    result = await ex.execute(
+        call("request_custom_build", reason="need raw shell", needed_capabilities=["shell"])
+    )
+
+    assert result.success is False
+    assert "host revision service is unavailable" in result.error
+    assert state.phase is AppKitPhase.BUILD
+    assert "file_write" not in ex.callable_tool_names()
 
 
 # ---- (f) request_custom_build unavailable / refused in autonomous mode -------
@@ -430,19 +487,21 @@ async def test_mcp_delta_not_applied_in_strict_mode_until_widen():
 
 
 def test_custom_build_fold_rejects_mispairs_and_stale_view_results():
-    assert fold_appkit_phase_evidence(_custom_build_events(result_call_id="wrong")) is None
-    assert fold_appkit_phase_evidence(_custom_build_events(result_tool_name="app_create")) is None
+    assert fold_appkit_phase_evidence(_custom_build_events(ejection_call_id="wrong")) is None
+    assert fold_appkit_phase_evidence(_custom_build_events(ejection_view_id="other-view")) is None
+    assert fold_appkit_phase_evidence(_custom_build_events(source_marker_digest="c" * 64)) is None
     assert (
-        fold_appkit_phase_evidence(_custom_build_events(observation_view_id="other-view")) is None
+        fold_appkit_phase_evidence(_custom_build_events(target_marker_trigger="ordinary-turn"))
+        is None
     )
 
-    stale = _custom_build_events()[:-1]
+    stale = _custom_build_events()
     newer_intent = WorkspaceMutationEvent(
         operation="agent.run-intent.user-message",
         run_protocol_version=1,
-    ).model_copy(update={"seq": 4})
-    stale_observation = _custom_build_events()[-1].model_copy(update={"seq": 5})
-    assert fold_appkit_phase_evidence([*stale, newer_intent, stale_observation]) is None
+    ).model_copy(update={"seq": 9})
+    stale_ejection = stale[-1].model_copy(update={"seq": 10})
+    assert fold_appkit_phase_evidence([*stale[:-1], newer_intent, stale_ejection]) is None
 
     # Matching non-null strings are not authority without a typed admission.
     orphan_pair = _custom_build_events()[2:]
@@ -457,17 +516,17 @@ def test_custom_build_fold_rejects_mispairs_and_stale_view_results():
         run_protocol_version=1,
         run_intent_id=newer_intent.id,
         agent_view_id="view-1",
-    ).model_copy(update={"seq": 5})
-    reused_stale_observation = _custom_build_events()[-1].model_copy(update={"seq": 6})
+    ).model_copy(update={"seq": 10})
+    reused_stale_ejection = stale[-1].model_copy(update={"seq": 11})
     assert (
         fold_appkit_phase_evidence(
-            [*stale, newer_intent, reused_admission, reused_stale_observation]
+            [*stale[:-1], newer_intent, reused_admission, reused_stale_ejection]
         )
         is None
     )
 
 
-def test_custom_build_fold_requires_persisted_success_and_is_sticky_afterward():
+def test_custom_build_fold_requires_typed_ejection_and_is_sticky_afterward():
     crash_window = _custom_build_events()[:-1]
     assert fold_appkit_phase_evidence(crash_window) is None
 
@@ -475,7 +534,7 @@ def test_custom_build_fold_requires_persisted_success_and_is_sticky_afterward():
     newer_intent = WorkspaceMutationEvent(
         operation="agent.run-intent.user-message",
         run_protocol_version=1,
-    ).model_copy(update={"seq": 5})
+    ).model_copy(update={"seq": 10})
     assert fold_appkit_phase_evidence([*widened, newer_intent]) is AppKitPhase.CUSTOM_BUILD
 
 

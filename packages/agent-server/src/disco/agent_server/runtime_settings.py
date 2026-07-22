@@ -602,6 +602,8 @@ class RuntimeSettings:
         from disco.core.flags import appkit_enabled
 
         stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        if stored is True and self._rt._build_platform.appkit_ejected.get(conversation_id, False):
+            return False
         if stored is True and not appkit_enabled():
             raise RuntimeError(
                 "AppKit is unavailable on this deployment (DISCO_APPKIT_ENABLED=0); "

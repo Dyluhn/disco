@@ -1,9 +1,9 @@
 """AppKit EPIC F — `request_custom_build`, the gated escape hatch.
 
 Strict AppKit mode bars raw file/shell/code/browser tools. This in-process tool
-is only a control signal: after the human confirmation gate allows it, the
-AppKit executor observes the successful call and widens to the normal Build
-scope.
+is only a confirmed control request: the host must retain the governed revision,
+create and label a distinct Freeform revision, and persist the lost-guarantee
+transition before the AppKit executor may widen to the normal Build scope.
 """
 
 from __future__ import annotations
@@ -38,15 +38,22 @@ class RequestCustomBuildTool:
         name="request_custom_build",
         description=(
             "Escalate from the strict AppKit toolset to a full custom build with "
-            "raw file/shell/code access. Use only when the AppKit mutators cannot "
-            "express the change. Requires human confirmation and is unavailable "
-            "in autonomous runs."
+            "raw file/shell/code access. This permanently ejects the new revision "
+            "from AppKit: semantic-only mutation boundaries, deterministic regeneration, "
+            "writable-zone protection, AppKit verification status, and governed deployment "
+            "guarantees are lost. The prior governed revision remains available for preview. "
+            "Use only when AppKit mutators cannot express the change. Requires human "
+            "confirmation and is unavailable in autonomous runs."
         ),
         args_model=RequestCustomBuildArgs,
         base_risk=SecurityRisk.HIGH,
         runs_in="in_process",
         read_only=False,
-        behavior=declares(EffectCapability.RUN_CONTROL, planner_safe=False),
+        behavior=declares(
+            EffectCapability.RUN_CONTROL,
+            EffectCapability.WORKSPACE_MUTATE,
+            planner_safe=False,
+        ),
     )
 
     async def run(self, args: RequestCustomBuildArgs, ctx: ToolContext) -> ToolOutcome:
@@ -54,13 +61,14 @@ class RequestCustomBuildTool:
         return ToolOutcome(
             success=True,
             content=(
-                "Custom build approved; scope widened to the full toolset. "
+                "AppKit ejection requested; the host must commit the revision boundary "
+                "before scope can widen. "
                 f"Requested capabilities: {caps}. Reason: {args.reason}"
             ),
             structured={
                 "reason": args.reason,
                 "needed_capabilities": list(args.needed_capabilities),
-                "widened_to": "custom_build",
+                "requested_transition": "appkit_to_freeform",
             },
         )
 

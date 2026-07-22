@@ -753,6 +753,7 @@ class LifecycleManager:
         conversation_id: str,
         *,
         trigger: str,
+        version_label: str = "",
         seal_fence: tuple[int, int | None] | None = None,
         journal: dict[str, Any] | None = None,
     ) -> WorkspaceVersionEvent | None:
@@ -760,6 +761,7 @@ class LifecycleManager:
         return await self._persistence._do_capture_workspace(
             conversation_id,
             trigger=trigger,
+            version_label=version_label,
             seal_fence=seal_fence,
             journal=journal,
             snapshot_fn=snapshot_workspace,

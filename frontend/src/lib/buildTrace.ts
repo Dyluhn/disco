@@ -484,6 +484,15 @@ export function deriveActivity(
           attention: false,
         });
       }
+    } else if (e.kind === "appkit_ejection") {
+      out.push({
+        id: e.id,
+        kind: "system_warning",
+        label: `AppKit ejected to Freeform at v${e.ejected_version_seq}; governed v${e.source_version_seq} remains available`,
+        detail: `Not AppKit-verified. Lost guarantees: ${e.lost_guarantees.join("; ")}.`,
+        status: "done",
+        attention: true,
+      });
     } else if (e.kind === "workspace_restored") {
       out.push({
         id: e.id,

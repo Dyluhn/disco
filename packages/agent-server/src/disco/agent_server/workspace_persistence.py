@@ -45,6 +45,25 @@ from disco.tools.projects import (
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
 
 _LOG = logging.getLogger(__name__)
+
+
+def _cut_recovery_version(
+    store: ProjectStore,
+    conversation_id: str,
+    trigger: str,
+    label: str,
+) -> VersionRecord | None:
+    version = (
+        store.cut_version(conversation_id, label=label, trigger=trigger)
+        if label
+        else store.cut_version(conversation_id, trigger=trigger)
+    )
+    if version is not None:
+        return version
+    versions = store.list_versions(conversation_id)
+    return versions[0] if versions else None
+
+
 _FINALIZATION_JOURNAL = "finalization-v1.json"
 
 
@@ -715,6 +734,7 @@ class WorkspacePersistence:
         conversation_id: str,
         *,
         trigger: str,
+        version_label: str = "",
         seal_fence: tuple[int, int | None] | None = None,
         journal: dict[str, Any] | None = None,
         snapshot_fn: Callable[..., Any] | None,
@@ -817,10 +837,7 @@ class WorkspacePersistence:
                         host_mirror=host_mirror,
                     )
 
-                version = store.cut_version(conversation_id, trigger=trigger)
-                if version is None:
-                    versions = store.list_versions(conversation_id)
-                    version = versions[0] if versions else None
+                version = _cut_recovery_version(store, conversation_id, trigger, version_label)
                 if version is not None:
                     stored = await self._rt._store.append(
                         conversation_id,

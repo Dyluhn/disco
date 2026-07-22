@@ -94,6 +94,7 @@ from disco.core.llm import (
     RoutingDecision,
     SandboxSettings,
     SecretStore,
+    ToolSpec,
 )
 from disco.core.llm.config import RouterConfig
 from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
@@ -425,6 +426,60 @@ def _apply_mcp_scope(
         executor._scope = executor._scope.model_copy(
             update={"advertised_tools": executor._scope.advertised_tools | mcp_names}
         )
+
+
+def _freeform_ejection_tool_specs(
+    base_scope: ToolScope,
+    all_mcp_tools: list[ToolDef],
+    call_target: Any,
+    *,
+    max_active_schemas: int,
+) -> tuple[ToolSpec, ...]:
+    """Resolve the ordinary post-ejection catalog without widening the live executor."""
+
+    preview = DefaultToolExecutor(build_default_registry(), base_scope)
+    _apply_mcp_scope(
+        preview,
+        all_mcp_tools,
+        call_target,
+        max_active_schemas=max_active_schemas,
+    )
+    return tuple(preview.available_tools())
+
+
+def _mcp_composition_inputs(runtime: Any) -> tuple[list[ToolDef], int]:
+    """Snapshot one loop's MCP catalog and configured visibility ceiling."""
+
+    tools: list[ToolDef] = []
+    if runtime._mcp_pool is not None and runtime._mcp_pool.started:
+        tools.extend(runtime._mcp_pool.snapshot())
+    if runtime._mcp_http_tools:
+        tools.extend(runtime._mcp_http_tools.values())
+    config = runtime._config_store.load()
+    return tools, config.mcp.max_active_schemas if config.mcp else 20
+
+
+def _bind_ejection(
+    runtime: Any,
+    conversation_id: str,
+    executor: AppKitToolExecutor,
+    base_scope: ToolScope,
+    mcp_tools: list[ToolDef],
+    max_active_schemas: int,
+) -> None:
+    specs = _freeform_ejection_tool_specs(
+        base_scope,
+        mcp_tools,
+        runtime._mcp_call_target,
+        max_active_schemas=max_active_schemas,
+    )
+    executor.set_ejection_callback(
+        lambda call: runtime._build_platform.ejection.eject(
+            conversation_id,
+            call,
+            tool_specs=specs,
+        )
+    )
 
 
 def _build_appkit_registry() -> ToolRegistry:
@@ -2276,23 +2331,16 @@ class ConversationRuntime:
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
         # The snapshot is frozen per conversation — list_changed notifications do
         # NOT mutate this list.
-        all_mcp_tools: list[ToolDef] = []
-        if self._mcp_pool is not None and self._mcp_pool.started:
-            all_mcp_tools.extend(self._mcp_pool.snapshot())
-        if self._mcp_http_tools:
-            all_mcp_tools.extend(list(self._mcp_http_tools.values()))
-
+        all_mcp_tools, _mcp_max_schemas = _mcp_composition_inputs(self)
         if all_mcp_tools:
             # RP-05c: apply advertised/callable split. Over the cap, only
             # non-MCP tools + tool_search are advertised; all remain callable.
-            _mcp_cfg = self._config_store.load()
-            max_schemas = _mcp_cfg.mcp.max_active_schemas if _mcp_cfg.mcp else 20
             if _appkit_mode and isinstance(executor, AppKitToolExecutor):
                 # In strict AppKit mode, MCP names must not bypass the phase scope.
                 # Apply the whole delta only after request_custom_build widens to
                 # the normal Build scope.
                 executor.set_widen_callback(
-                    lambda ex=executor, tools=all_mcp_tools, ms=max_schemas: _apply_mcp_scope(
+                    lambda ex=executor, tools=all_mcp_tools, ms=_mcp_max_schemas: _apply_mcp_scope(
                         ex,
                         tools,
                         self._mcp_call_target,
@@ -2304,7 +2352,7 @@ class ConversationRuntime:
                     executor,
                     all_mcp_tools,
                     self._mcp_call_target,
-                    max_active_schemas=max_schemas,
+                    max_active_schemas=_mcp_max_schemas,
                 )
 
             # RP-05b §3: the retrieval-tier MCP providers are composed into the
@@ -2316,6 +2364,9 @@ class ConversationRuntime:
             # (the Build agent calls `search`/`extract`; Research bypasses the
             # broker). The cap-handler cache is invalidated when the providers are
             # (re)built so the composition picks up the live set.
+
+        if _appkit_mode and isinstance(executor, AppKitToolExecutor):
+            _bind_ejection(self, conversation_id, executor, _scope, all_mcp_tools, _mcp_max_schemas)
 
         if sealed_workflow_run is not None:
             assert _workflow_phase is not None

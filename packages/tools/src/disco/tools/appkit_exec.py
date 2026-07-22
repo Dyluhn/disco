@@ -20,10 +20,11 @@ Phase reconciliation happens through the generic executor preparation seam:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Unpack
 
 from disco.core import (
+    APPKIT_EJECTION_LOST_GUARANTEES,
     ActionEvent,
     AgentErrorEvent,
     Event,
@@ -43,6 +44,8 @@ from disco.core.llm import OperatingMode
 
 from .appkit_scope import (
     APPKIT_MUTATORS,
+    REQUEST_CUSTOM_BUILD,
+    AppKitEjectionReceipt,
     AppKitPhase,
     AppKitPhaseState,
     appkit_effective_scope,
@@ -65,6 +68,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         autonomous: bool,
         mode_getter: Callable[[], OperatingMode | None] | None = None,
         on_widen: Callable[[], None] | None = None,
+        on_eject: Callable[[ToolCall], Awaitable[AppKitEjectionReceipt]] | None = None,
         **kwargs: Unpack[ExecutorKwargs],
     ) -> None:
         self._appkit_phase = appkit_phase
@@ -76,6 +80,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         self._appkit_autonomous = autonomous
         self._appkit_mode_getter = mode_getter
         self._appkit_on_widen = on_widen
+        self._appkit_on_eject = on_eject
         self._appkit_base_primitive: str | None = None
         self._appkit_workspace_generation: tuple[int, int] | None = None
         self._appkit_custom_authorized = False
@@ -98,6 +103,14 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
             **kwargs,
         )
         self.set_widen_callback(on_widen)
+
+    def set_ejection_callback(
+        self,
+        on_eject: Callable[[ToolCall], Awaitable[AppKitEjectionReceipt]] | None,
+    ) -> None:
+        """Bind the host-owned immutable revision transition service."""
+
+        self._appkit_on_eject = on_eject
 
     def set_widen_callback(self, on_widen: Callable[[], None] | None) -> None:
         """Wire the deferred MCP-delta application (P0). Called by the runtime after
@@ -259,6 +272,39 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         if not result.success:
             return result
         name = call.tool_name
+        if name == REQUEST_CUSTOM_BUILD:
+            if self._appkit_on_eject is None:
+                return self._fail(
+                    call,
+                    "execution_error",
+                    "AppKit ejection was not completed: the host revision service is "
+                    "unavailable. Strict AppKit remains active.",
+                    action_profile=result.action_profile,
+                )
+            try:
+                receipt = await self._appkit_on_eject(call)
+            except Exception as exc:  # noqa: BLE001 - fail closed at the host boundary
+                return self._fail(
+                    call,
+                    "execution_error",
+                    f"AppKit ejection was not completed: {exc}. Strict AppKit remains active.",
+                    action_profile=result.action_profile,
+                )
+            lost = "; ".join(APPKIT_EJECTION_LOST_GUARANTEES)
+            return result.model_copy(
+                update={
+                    "content": (
+                        "AppKit ejected to Freeform. "
+                        f"Governed revision v{receipt.source_version_seq} was retained; "
+                        f"the new previewable Freeform revision is v{receipt.ejected_version_seq}. "
+                        f"This revision is not AppKit-verified. Lost guarantees: {lost}."
+                    ),
+                    "structured": {
+                        **(result.structured or {}),
+                        "ejection": receipt.model_dump(mode="json"),
+                    },
+                }
+            )
         phase = self._appkit_phase.phase
         if name == "app_create" and phase == AppKitPhase.PLANNING:
             # The scaffold + the two .disco specs now exist → unlock the build mutators.

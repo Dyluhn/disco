@@ -6,21 +6,41 @@ from unittest import mock
 
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
+    APPKIT_EJECTION_LOST_GUARANTEES,
+    APPKIT_EJECTION_SOURCE_TRIGGER,
+    APPKIT_EJECTION_TARGET_TRIGGER,
     ActionEvent,
-    ObservationEvent,
+    AppKitEjectionEvent,
+    ConversationStatus,
     SecurityRisk,
     SqliteEventStore,
+    StatusEvent,
     ToolCall,
-    ToolResult,
     WorkspaceMutationEvent,
+    WorkspaceVersionEvent,
 )
 from disco.core.llm import DefaultLLMRouter, ModelRole, OperatingMode
 from disco.core.loop import BlastRadiusConfirm, RouterAgent
 from disco.core.loop.driver import Driver
 from disco.core.security import RuleBasedAnalyzer
-from disco.tools import AGENT_TOOLS, AppKitPhase, AppKitToolExecutor, DefaultToolExecutor
+from disco.tools import (
+    AGENT_TOOLS,
+    AppKitPhase,
+    AppKitToolExecutor,
+    DefaultToolExecutor,
+    ToolDef,
+)
+from disco.tools.appkit_scope import (
+    AppKitEjectionReceipt,
+)
+from disco.tools.behavior import OPAQUE_MCP_BEHAVIOR
+from pydantic import BaseModel
 
 _EXECUTION_READS = {"file_list", "file_read", "search", "extract", "think"}
+
+
+class _McpArgs(BaseModel):
+    pass
 
 
 def _rt() -> ConversationRuntime:
@@ -211,6 +231,17 @@ async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> Non
         tool_name="request_custom_build",
         arguments={"reason": "need raw files", "needed_capabilities": ["file_write"]},
     )
+
+    async def fake_ejection(_call: ToolCall) -> AppKitEjectionReceipt:
+        return AppKitEjectionReceipt(
+            source_version_seq=1,
+            source_tree_digest="a" * 64,
+            ejected_version_seq=2,
+            ejected_tree_digest="b" * 64,
+            preview_version_seq=2,
+        )
+
+    loop.executor.set_ejection_callback(fake_ejection)
     widened = await loop.executor.execute(custom_call)
     assert widened.success
     assert "file_write" not in loop.executor.callable_tool_names()
@@ -228,17 +259,37 @@ async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> Non
         tool_call=custom_call,
         agent_view_id="view-1",
     ).model_copy(update={"seq": 3})
-    observation = ObservationEvent(
-        action_id=action.id,
-        agent_view_id="view-1",
-        tool_result=ToolResult(
-            call_id=custom_call.call_id,
-            tool_name=custom_call.tool_name,
-            success=True,
-            content="approved",
-        ),
+    waiting = StatusEvent(
+        status=ConversationStatus.WAITING_FOR_CONFIRMATION,
+        detail=action.id,
     ).model_copy(update={"seq": 4})
-    await loop.executor.prepare_for_events([intent, admission, action, observation])
+    resumed = StatusEvent(
+        status=ConversationStatus.RUNNING,
+        agent_view_id="view-1",
+    ).model_copy(update={"seq": 5})
+    source = WorkspaceVersionEvent(
+        version_seq=1,
+        tree_digest="a" * 64,
+        trigger=APPKIT_EJECTION_SOURCE_TRIGGER,
+    ).model_copy(update={"seq": 6})
+    target = WorkspaceVersionEvent(
+        version_seq=2,
+        tree_digest="b" * 64,
+        trigger=APPKIT_EJECTION_TARGET_TRIGGER,
+    ).model_copy(update={"seq": 7})
+    ejection = AppKitEjectionEvent(
+        agent_view_id="view-1",
+        action_id=action.id,
+        tool_call_id=custom_call.call_id,
+        source_version_seq=1,
+        source_tree_digest="a" * 64,
+        ejected_version_seq=2,
+        ejected_tree_digest="b" * 64,
+        lost_guarantees=APPKIT_EJECTION_LOST_GUARANTEES,
+    ).model_copy(update={"seq": 8})
+    await loop.executor.prepare_for_events(
+        [intent, admission, action, waiting, resumed, source, target, ejection]
+    )
     widened_offered, widened_allowed, widened_prompt = snapshot()
     assert "file_write" in loop.executor.callable_tool_names()
     assert "file_write" in widened_offered <= widened_allowed
@@ -255,13 +306,16 @@ def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
     rt = _rt()
     rt.set_appkit_mode("ak5", True)
 
-    class _FakeMcpDef:
-        name = "mcp_remote_search"
-        description = "remote mcp tool"
-
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
-    rt._mcp_http_tools = {"mcp_remote_search": _FakeMcpDef()}  # type: ignore[assignment]
+    mcp_def = ToolDef(
+        name="mcp_remote_search",
+        description="remote mcp tool",
+        args_model=_McpArgs,
+        runs_in="in_process",
+        behavior=OPAQUE_MCP_BEHAVIOR,
+    )
+    rt._mcp_http_tools = {"mcp_remote_search": mcp_def}
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._compose_build_loop("ak5", router, agent)
 

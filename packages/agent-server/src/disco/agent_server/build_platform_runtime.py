@@ -11,10 +11,12 @@ from collections.abc import Iterable
 from typing import Any, Literal
 
 from disco.core import (
+    AppKitEjectionEvent,
     BuildPlatformAdmissionEvent,
     ConversationStatus,
     StatusEvent,
     WorkspaceMutationEvent,
+    current_appkit_ejection,
     current_build_platform_admission,
     latest_workspace_run_intent,
 )
@@ -27,6 +29,7 @@ from disco.core.build_platform import (
     derive_run_admission_identity,
 )
 
+from .appkit_ejection import AppKitEjectionService
 from .build_platform_shadow import (
     appkit_platform_route_enabled,
     freeform_platform_route_enabled,
@@ -46,14 +49,16 @@ class BuildPlatformRuntime:
         self.route_pins: dict[str, BuildRoute] = {}
         self.selected_routes: dict[str, BuildRoute] = {}
         self.selected_profiles: dict[str, ComponentId] = {}
+        self.appkit_ejected: dict[str, bool] = {}
+        self.ejection = AppKitEjectionService(runtime)
 
     async def prepare_route_pin(self, conversation_id: str) -> None:
         if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
             self.route_pins.pop(conversation_id, None)
             return
-        admission = current_build_platform_admission(
-            await self._rt._store.get_events(conversation_id)
-        )
+        events = await self._rt._store.get_events(conversation_id)
+        self.appkit_ejected[conversation_id] = current_appkit_ejection(events) is not None
+        admission = current_build_platform_admission(events)
         if admission is None:
             self.route_pins.pop(conversation_id, None)
         else:
@@ -215,3 +220,115 @@ class BuildPlatformRuntime:
                 run_identity=run_identity,
             ),
         )
+
+    async def prepare_appkit_ejection_locked(
+        self,
+        conversation_id: str,
+        *,
+        tool_specs: Iterable[Any],
+    ) -> Any | None:
+        """Resolve the replacement composition before any revision is published."""
+
+        if not self._rt.workspace_lock(conversation_id).locked():
+            raise RuntimeError("AppKit ejection requires the workspace fence")
+        events = await self._rt._store.get_events(conversation_id)
+        intent = latest_workspace_run_intent(events)
+        if intent is None or type(intent.seq) is not int:
+            raise RuntimeError("AppKit ejection has no admitted Build run intent")
+        existing = next(
+            (
+                event
+                for event in reversed(events)
+                if isinstance(event, BuildPlatformAdmissionEvent)
+                and event.run_intent_id == intent.id
+            ),
+            None,
+        )
+        if existing is None or existing.profile_id != APPKIT_PROFILE_ID.canonical:
+            raise RuntimeError("AppKit ejection requires the current AppKit admission")
+        if existing.route == "legacy":
+            return None
+        record = select_freeform_platform_route(tool_specs=tool_specs)
+        if record.composition.profile.id != FREEFORM_PROFILE_ID:
+            raise RuntimeError("ejection resolved a non-Freeform composition")
+        if not isinstance(record.composition_digest, str):
+            raise RuntimeError("ejection composition has no valid digest")
+        return record
+
+    async def transition_appkit_ejection_locked(
+        self,
+        conversation_id: str,
+        ejection: AppKitEjectionEvent,
+        *,
+        prepared_record: Any | None,
+    ) -> AppKitEjectionEvent:
+        """Atomically supersede the AppKit admission at the revision boundary."""
+
+        if not self._rt.workspace_lock(conversation_id).locked():
+            raise RuntimeError("AppKit ejection requires the workspace fence")
+        events = await self._rt._store.get_events(conversation_id)
+        intent = latest_workspace_run_intent(events)
+        if intent is None or type(intent.seq) is not int:
+            raise RuntimeError("AppKit ejection has no admitted Build run intent")
+        existing = next(
+            (
+                event
+                for event in reversed(events)
+                if isinstance(event, BuildPlatformAdmissionEvent)
+                and event.run_intent_id == intent.id
+            ),
+            None,
+        )
+        if existing is None or existing.profile_id != APPKIT_PROFILE_ID.canonical:
+            raise RuntimeError("AppKit ejection requires the current AppKit admission")
+
+        route = existing.route
+        digest: str | None = None
+        run_identity: str | None = None
+        authority: Literal["legacy", "build_platform_core"] = "legacy"
+        record: Any | None = None
+        if route == "platform":
+            record = prepared_record
+            if record is None:
+                raise RuntimeError("Platform ejection has no prepared composition")
+            if record.composition.profile.id != FREEFORM_PROFILE_ID:
+                raise RuntimeError("ejection resolved a non-Freeform composition")
+            digest = record.composition_digest
+            if not isinstance(digest, str):
+                raise RuntimeError("ejection composition has no valid digest")
+            authority = "build_platform_core"
+            run_identity = derive_run_admission_identity(
+                CompositionDigest(digest=digest),
+                RunAdmissionAnchor(
+                    conversation_id=conversation_id,
+                    run_intent_event_id=intent.id,
+                    run_intent_seq=intent.seq,
+                    run_intent_operation=intent.operation,
+                ),
+            ).value
+        replacement = BuildPlatformAdmissionEvent(
+            route=route,
+            profile_id=FREEFORM_PROFILE_ID.canonical,
+            run_intent_id=intent.id,
+            composition_authority=authority,
+            composition_digest=digest,
+            run_identity=run_identity,
+            transition="appkit_ejection",
+            supersedes_admission_id=existing.id,
+        )
+        stored = await self._rt._store.append_many(
+            conversation_id,
+            [ejection, replacement],
+        )
+        stored_ejection = stored[0]
+        if not isinstance(stored_ejection, AppKitEjectionEvent):
+            raise RuntimeError("event store returned a malformed AppKit ejection")
+        self.route_pins[conversation_id] = route
+        self.selected_routes[conversation_id] = route
+        self.selected_profiles[conversation_id] = FREEFORM_PROFILE_ID
+        if record is None:
+            self.route_records.pop(conversation_id, None)
+        else:
+            self.route_records[conversation_id] = record
+        self.appkit_ejected[conversation_id] = True
+        return stored_ejection

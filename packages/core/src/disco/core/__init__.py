@@ -53,12 +53,16 @@ from .effects import (
 )
 from .equality import event_content_eq
 from .events import (
+    APPKIT_EJECTION_LOST_GUARANTEES,
+    APPKIT_EJECTION_SOURCE_TRIGGER,
+    APPKIT_EJECTION_TARGET_TRIGGER,
     SCHEMA_VERSION,
     ActionEvent,
     AgentErrorEvent,
     AgentViewProjection,
     AlternativeOption,
     AlternativesEvent,
+    AppKitEjectionEvent,
     BaseEvent,
     BuildPlatformAdmissionEvent,
     ClarifyEvent,
@@ -99,6 +103,7 @@ from .events import (
     WorkspaceRestoredEvent,
     WorkspaceVersionEvent,
     agent_view_consistent_events,
+    current_appkit_ejection,
     current_build_platform_admission,
     current_workspace_agent_view_id,
     current_workspace_agent_view_seq,
@@ -127,6 +132,9 @@ from .view import (
 from .wire import FileStreamFrame, WSClientFrame, WSServerFrame
 
 __all__ = [
+    "APPKIT_EJECTION_LOST_GUARANTEES",
+    "APPKIT_EJECTION_SOURCE_TRIGGER",
+    "APPKIT_EJECTION_TARGET_TRIGGER",
     "SCHEMA_VERSION",
     "ActionProfile",
     "ActionEvent",
@@ -134,6 +142,7 @@ __all__ = [
     "AgentErrorEvent",
     "AlternativeOption",
     "AlternativesEvent",
+    "AppKitEjectionEvent",
     "BaseEvent",
     "ClarifyEvent",
     "ClarifyQuestionItem",
@@ -225,6 +234,7 @@ __all__ = [
     "WorkspaceVersionEvent",
     "agent_view_consistent_events",
     "current_build_platform_admission",
+    "current_appkit_ejection",
     "current_workspace_agent_view_id",
     "current_workspace_agent_view_seq",
     "WorkspaceRestoredEvent",

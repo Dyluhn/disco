@@ -521,6 +521,35 @@ describe("F2: deriveActivity — deliverable events become file download cards",
   });
 });
 
+describe("P4-E: deriveActivity — AppKit ejection is explicit", () => {
+  it("shows the retained governed revision, new Freeform revision, and lost guarantees", () => {
+    const events: AgentEvent[] = [
+      {
+        kind: "appkit_ejection",
+        id: "eject-1",
+        source: "system",
+        action_id: "action-1",
+        tool_call_id: "call-1",
+        source_profile_id: "disco.appkit_web@1",
+        target_profile_id: "disco.freeform_web@1",
+        source_version_seq: 4,
+        source_tree_digest: "a".repeat(64),
+        ejected_version_seq: 5,
+        ejected_tree_digest: "b".repeat(64),
+        lost_guarantees: ["semantic-only mutation boundaries", "AppKit verifier status"],
+        appkit_verified: false,
+      },
+    ];
+
+    const item = deriveActivity(events, null, "RUNNING").find((entry) => entry.id === "eject-1");
+    expect(item?.kind).toBe("system_warning");
+    expect(item?.label).toContain("Freeform at v5");
+    expect(item?.label).toContain("governed v4");
+    expect(item?.detail).toContain("Not AppKit-verified");
+    expect(item?.detail).toContain("semantic-only mutation boundaries");
+  });
+});
+
 // runthru-v2 (#3): the declarative capable-model progress derivation.
 function planEvent(revision: number, nSteps: number): AgentEvent {
   return {

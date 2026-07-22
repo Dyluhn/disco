@@ -74,6 +74,7 @@ APPKIT_LIFECYCLE_OPERATIONS = (
     "appkit.govern_rbac",
     "appkit.govern_persistence",
     "host.commit_revision",
+    "host.eject_to_freeform_revision",
     "host.recover_workspace",
     "host.verify_appkit_strict",
     "host.deploy_mediated",
@@ -162,6 +163,7 @@ class _AppKitEngine(_BuiltinEngine):
             "appkit.scaffold_governed",
             "appkit.mutate_semantic",
             "host.commit_revision",
+            "host.eject_to_freeform_revision",
         }
     )
     _READ_OPERATIONS = frozenset(
