@@ -491,22 +491,23 @@ def _preview_verification_url(
     return f"{base}/{encoded}"
 
 
+def _has_workspace_mutation_capability(event_or_result: dict[str, Any]) -> bool:
+    profile = event_or_result.get("action_profile")
+    capabilities = profile.get("capabilities") if isinstance(profile, dict) else None
+    if isinstance(capabilities, list) and "workspace.mutate" in capabilities:
+        return True
+    receipts = event_or_result.get("effect_receipts")
+    return any(
+        isinstance(receipt, dict) and receipt.get("capability") == "workspace.mutate"
+        for receipt in receipts or []
+    )
+
+
 def _authority_change_between(
     events: list[dict[str, Any]],
     after_seq: int,
     through_seq: int,
 ) -> bool:
-    def may_mutate(event: dict[str, Any]) -> bool:
-        profile = event.get("action_profile")
-        capabilities = profile.get("capabilities") if isinstance(profile, dict) else None
-        if isinstance(capabilities, list) and "workspace.mutate" in capabilities:
-            return True
-        receipts = event.get("effect_receipts")
-        return any(
-            isinstance(receipt, dict) and receipt.get("capability") == "workspace.mutate"
-            for receipt in receipts or []
-        )
-
     for event in events:
         seq = _seq(event)
         if not after_seq < seq < through_seq:
@@ -521,13 +522,16 @@ def _authority_change_between(
             call = event.get("tool_call")
             if (
                 isinstance(call, dict)
-                and (call.get("tool_name") in _MUTATING_TOOLS or may_mutate(event))
+                and (
+                    call.get("tool_name") in _MUTATING_TOOLS
+                    or _has_workspace_mutation_capability(event)
+                )
                 and action_executed(events, str(event.get("id") or ""))
             ):
                 return True
         if event.get("kind") == "observation":
             result = event.get("tool_result")
-            if isinstance(result, dict) and may_mutate(result):
+            if isinstance(result, dict) and _has_workspace_mutation_capability(result):
                 return True
             if (
                 isinstance(result, dict)
@@ -535,7 +539,7 @@ def _authority_change_between(
                 and result.get("tool_name") in {"preview_start", "preview_stop"}
             ):
                 return True
-        if event.get("kind") == "agent_error" and may_mutate(event):
+        if event.get("kind") == "agent_error" and _has_workspace_mutation_capability(event):
             return True
         if event.get("kind") in {"deliverable", "build_platform_admission"}:
             return True
@@ -600,6 +604,8 @@ def _last_authority_seq(
             result = event.get("tool_result")
             action = actions.get(str(event.get("action_id") or ""))
             call = action.get("tool_call") if isinstance(action, dict) else None
+            if isinstance(result, dict) and _has_workspace_mutation_capability(result):
+                authority = max(authority, seq)
             if (
                 isinstance(result, dict)
                 and result.get("success") is True
@@ -609,6 +615,8 @@ def _last_authority_seq(
                 and call.get("call_id") == result.get("call_id")
             ):
                 authority = max(authority, seq)
+        elif event.get("kind") == "agent_error" and _has_workspace_mutation_capability(event):
+            authority = max(authority, seq)
     return authority
 
 

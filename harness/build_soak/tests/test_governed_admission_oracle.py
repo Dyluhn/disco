@@ -531,6 +531,48 @@ def test_mutation_after_observed_authority_rejects_stale_receipt() -> None:
     assert _result(events).failed
 
 
+def test_receipt_after_mutation_capable_observation_uses_observation_authority() -> None:
+    events = _segment()
+    started = next(event for event in events if event.get("kind") == "verifier_started")
+    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
+    terminal = events[-1]
+    started["seq"] = 11
+    started["workspace_revision"] = 9
+    started["observed_after_seq"] = 10
+    verdict["seq"] = 12
+    terminal["seq"] = 13
+    events[events.index(started) : events.index(started)] = [
+        {
+            "kind": "action",
+            "source": "agent",
+            "seq": 9,
+            "id": "evt_capability_shell",
+            "tool_call": {
+                "tool_name": "shell",
+                "call_id": "capability-shell",
+                "arguments": {"command": "inspect-artifact"},
+            },
+        },
+        {
+            "kind": "observation",
+            "source": "environment",
+            "seq": 10,
+            "id": "evt_capability_shell_result",
+            "action_id": "evt_capability_shell",
+            "tool_result": {
+                "tool_name": "shell",
+                "call_id": "capability-shell",
+                "success": True,
+                "action_profile": {"capabilities": ["workspace.mutate"]},
+                "effect_receipts": [],
+            },
+        },
+    ]
+    _replace_receipt(events, workspace_revision=9, observed_after_seq=10)
+
+    assert _result(events).passed
+
+
 def test_mutation_after_pass_rejects_stale_receipt() -> None:
     events = _segment()
     events[-1]["seq"] = 13

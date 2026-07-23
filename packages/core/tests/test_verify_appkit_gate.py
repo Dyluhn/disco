@@ -462,12 +462,12 @@ async def test_platform_appkit_strict_pass_materializes_exact_target_handoff() -
 
 @pytest.mark.asyncio
 async def test_direct_strict_pass_before_finish_is_reverified_under_typed_start() -> None:
-    contract = _appkit_contract()
+    contract = _appkit_contract(with_web=True)
+    host = _StructuredPassingHostVerifier()
     agent = ScriptedAgent(
         [
             action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
-            action_step(tool="verify_appkit_app", args={}),
-            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
             action_step(tool="verify_appkit_app", args={}),
             finish_step(),
         ]
@@ -479,7 +479,7 @@ async def test_direct_strict_pass_before_finish_is_reverified_under_typed_start(
             _appkit_verdict(passed=True, fp="GATE_PASS"),
         ]
     )
-    loop, store = _gate_loop(agent, execu)
+    loop, store = _gate_loop(agent, execu, host_verifier=host)
     await loop._emit(_appkit_admission(contract))
     await loop.send_message("build and verify the lead-gen app")
 
@@ -490,10 +490,31 @@ async def test_direct_strict_pass_before_finish_is_reverified_under_typed_start(
 
     assert state.execution_status is ConversationStatus.FINISHED
     assert execu.appkit_calls == 3
-    assert len(starts) == len(verdicts) == 1
-    assert verdicts[0].requested_by_event_id == starts[0].id
-    assert verdicts[0].verification_result is not None
-    assert verdicts[0].verification_result.passed
+    assert len(host.calls) == 1
+    assert len(starts) == len(verdicts) == 3
+    strict_start = next(start for start in reversed(starts) if start.check_id == "appkit_strict")
+    strict_verdict = next(
+        verdict
+        for verdict in reversed(verdicts)
+        if verdict.verification_result is not None
+        and verdict.verification_result.receipt_kind == "disco.appkit_strict@1"
+    )
+    assert strict_verdict.requested_by_event_id == strict_start.id
+    assert strict_verdict.verification_result is not None
+    assert strict_verdict.verification_result.passed
+    strict_actions = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call.tool_name == "verify_appkit_app"
+    ]
+    strict_observations = [
+        event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.action_id == strict_actions[-1].id
+    ]
+    assert (strict_start.seq or 0) < (strict_actions[-1].seq or 0)
+    assert (strict_actions[-1].seq or 0) < (strict_observations[-1].seq or 0)
+    assert (strict_observations[-1].seq or 0) < (strict_verdict.seq or 0)
 
 
 @pytest.mark.asyncio

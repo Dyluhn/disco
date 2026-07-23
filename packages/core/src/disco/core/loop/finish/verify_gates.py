@@ -290,10 +290,17 @@ def _latest_matching_appkit_start(
     events: list[Event],
     contract: AdmittedVerificationContract,
 ) -> VerifierStartedEvent | None:
-    required = tuple(check for check in contract.checks if check.required)
-    if len(required) != 1:
+    strict_checks = tuple(
+        check
+        for check in contract.checks
+        if check.required
+        and check.issuer_id == "disco.appkit_strict_verifier@1"
+        and check.receipt_kind == "disco.appkit_strict@1"
+        and check.operation == "host.verify_appkit_strict"
+    )
+    if len(strict_checks) != 1:
         return None
-    check = required[0]
+    check = strict_checks[0]
     return next(
         (
             event
