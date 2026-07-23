@@ -22,19 +22,25 @@ from typing import Any, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
+    ActionEvent,
     ConversationStatus,
     DeliverableEvent,
     EventSource,
     FinalWorkspaceSeal,
+    ObservationEvent,
     ResourceKey,
     StatusEvent,
     WorkspaceMutationEvent,
     WorkspaceVersionEvent,
+    agent_view_consistent_events,
+    current_appkit_ejection,
     current_workspace_agent_view_id,
     derive_final_workspace_fence,
+    event_matches_current_workspace_view,
     workspace_terminal_matches_current_run,
 )
 from disco.core.context.artifact_projection import manifest_shadow_enabled
+from disco.tools import APPKIT_MUTATORS
 from disco.tools.projects import (
     ProjectStore,
     StorageStatus,
@@ -937,17 +943,27 @@ class WorkspacePersistence:
         a missing index.html, an existing app-deliverable, or any read/append failure
         is a silent no-op (the snapshot itself already succeeded)."""
         try:
-            index = self._find_snapshot_index(snapshot_dir)
-            if index is None:
-                return
             existing = await self._rt._store.get_events(conversation_id)
-            if any(isinstance(e, DeliverableEvent) for e in existing):
-                # This fallback exists only for builds that never called serve.
-                # Any explicit handoff wins, including a downloadable HTML file;
-                # silently inventing a conflicting app can select a stale root.
-                return  # codex P1b: idempotency read goes through the store
-            rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
-            path = rel_dir if rel_dir and rel_dir != "." else "."
+            if any(
+                isinstance(event, DeliverableEvent)
+                and event.artifact_kind == "app"
+                and event_matches_current_workspace_view(existing, event)
+                for event in existing
+            ):
+                return  # idempotency read goes through the durable store
+            path = self._trusted_verified_app_entry(existing, snapshot_dir)
+            if path is None:
+                if any(isinstance(event, DeliverableEvent) for event in existing):
+                    # A non-app handoff cannot identify the runnable application.
+                    # Preserve it without guessing a competing root. Strict AppKit
+                    # is the exception above: its paired host verifier supplies the
+                    # exact built entry even when the run also attached files.
+                    return
+                index = self._find_snapshot_index(snapshot_dir)
+                if index is None:
+                    return
+                rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
+                path = rel_dir if rel_dir and rel_dir != "." else "."
             await self._rt._store.append(
                 conversation_id,
                 DeliverableEvent(
@@ -961,6 +977,64 @@ class WorkspacePersistence:
             )
         except Exception:  # noqa: BLE001 — synthetic card is a convenience, never crash snapshot
             _LOG.debug("synthetic app-deliverable skipped for %s", conversation_id, exc_info=True)
+
+    @staticmethod
+    def _trusted_verified_app_entry(events: list[Any], snapshot_dir: Path) -> str | None:
+        """Latest paired host verifier's exact built entry, if present in the snapshot."""
+
+        projected = agent_view_consistent_events(events)
+        if current_appkit_ejection(projected) is not None:
+            return None
+        actions = {event.id: event for event in projected if isinstance(event, ActionEvent)}
+        # Terminal finalization records this exact internal-manifest fold after
+        # AppKit verification. It does not change the verified application entry;
+        # every other workspace mutation continues to make the receipt stale.
+        last_mutation_seq = max(
+            (
+                event.seq or -1
+                for event in projected
+                if (
+                    isinstance(event, WorkspaceMutationEvent)
+                    and event.operation != "agent.artifact-manifest-fold"
+                )
+                or (
+                    isinstance(event, ObservationEvent)
+                    and event.tool_result.success is True
+                    and (action := actions.get(event.action_id or "")) is not None
+                    and action.tool_call.tool_name in APPKIT_MUTATORS
+                )
+            ),
+            default=-1,
+        )
+        candidates: list[tuple[int, str]] = []
+        for event in projected:
+            if not isinstance(event, ObservationEvent):
+                continue
+            result = event.tool_result
+            action = actions.get(event.action_id or "")
+            structured = result.structured
+            if (
+                action is None
+                or result.tool_name != "verify_appkit_app"
+                or action.tool_call.tool_name != result.tool_name
+                or result.call_id != action.tool_call.call_id
+                or result.success is not True
+                or (event.seq or -1) <= last_mutation_seq
+                or not isinstance(structured, dict)
+                or structured.get("passed") is not True
+            ):
+                continue
+            entry = structured.get("canonical_entry_path")
+            if not isinstance(entry, str) or not entry or "\\" in entry or "\x00" in entry:
+                continue
+            rel = Path(entry)
+            if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
+                continue
+            target = snapshot_dir.joinpath(*rel.parts)
+            if target.is_symlink() or not target.is_file():
+                continue
+            candidates.append((event.seq or -1, rel.as_posix()))
+        return max(candidates)[1] if candidates else None
 
     @staticmethod
     def _find_snapshot_index(snapshot_dir: Path) -> Path | None:

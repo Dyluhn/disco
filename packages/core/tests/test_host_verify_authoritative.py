@@ -911,7 +911,10 @@ async def test_files_unverifiable_verdict_cannot_delegate_reconstructed_web_targ
 
 
 @pytest.mark.asyncio
-async def test_persisted_governed_files_handoff_must_be_replaced_by_app() -> None:
+@pytest.mark.parametrize("initial_handoff", [None, "files"])
+async def test_governed_missing_or_files_handoff_must_be_replaced_by_app(
+    initial_handoff: str | None,
+) -> None:
     class _AcceptingPlatformHost(_HostVerifier):
         async def verify(self, deliverable):
             verdict = await super().verify(deliverable)
@@ -990,16 +993,25 @@ async def test_persisted_governed_files_handoff_must_be_replaced_by_app() -> Non
             verification_claims=default_structured_web_claims(),
         )
     )
-    await loop._emit(
-        DeliverableEvent(
-            title="stale files handoff",
-            path="index.html",
-            artifact_kind="files",
+    if initial_handoff is not None:
+        await loop._emit(
+            DeliverableEvent(
+                title="stale files handoff",
+                path="index.html",
+                artifact_kind="files",
+            )
         )
-    )
 
     await loop.send_message("finish the governed web target")
     state = await loop.run()
+    await store.append(
+        "conv",
+        DeliverableEvent(
+            title="Source attachment",
+            path="report.txt",
+            artifact_kind="files",
+        ),
+    )
 
     assert state.execution_status == ConversationStatus.FINISHED
     recorded = await store.get_events("conv")
@@ -1022,7 +1034,13 @@ async def test_persisted_governed_files_handoff_must_be_replaced_by_app() -> Non
     latest_handoff = next(
         event for event in reversed(events) if isinstance(event, DeliverableEvent)
     )
-    assert latest_handoff.artifact_kind == "app"
+    latest_app_handoff = next(
+        event
+        for event in reversed(events)
+        if isinstance(event, DeliverableEvent) and event.artifact_kind == "app"
+    )
+    assert latest_handoff.artifact_kind == "files"
+    assert latest_app_handoff.path == "index.html"
 
 
 def test_authoritative_flag_default_on_and_explicit_off(monkeypatch: pytest.MonkeyPatch) -> None:

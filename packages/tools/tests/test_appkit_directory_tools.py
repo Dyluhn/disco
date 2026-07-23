@@ -13,6 +13,7 @@ Covers, against in-memory sandboxes:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from disco.core.appkit import (
@@ -191,6 +192,27 @@ class _ExecRes:
 class _FakeSandbox:
     def __init__(self, files: dict[str, bytes]):
         self._files = dict(files)
+        runtime = {
+            "name": "appkit-live-vite",
+            "status": "running",
+            "port": 9134,
+            "projection_id": "pv_" + "a" * 32,
+            "intent": {
+                "serve_dir": None,
+                "command": None,
+                "framework": "vite",
+                "cwd": None,
+                "launch_kind": "framework",
+            },
+            "launch_kind": "framework",
+        }
+        session = SimpleNamespace(
+            name="appkit-live-vite",
+            port=9134,
+            status=SimpleNamespace(value="running"),
+            to_dict=lambda: runtime,
+        )
+        self._preview_manager = SimpleNamespace(canonical_session=lambda: session)
 
     async def file_exists(self, path: str) -> bool:
         return path in self._files
@@ -238,6 +260,10 @@ class _FakeSandbox:
                     }
                 )
             )
+        if cmd == "npm run build":
+            self._files["dist/index.html"] = (
+                b'<script type="module" src="/assets/index-dir1234.js"></script>'
+            )
         return _ExecRes("200")
 
 
@@ -283,6 +309,7 @@ def _directory_tree() -> dict[str, bytes]:
     tree = {p: c.encode("utf-8") for p, c in generate(app, design).items()}
     tree[APPSPEC_RELPATH] = serialize_app_spec(app).encode("utf-8")
     tree[DESIGNSPEC_RELPATH] = serialize_design_spec(design).encode("utf-8")
+    assert "package-lock.json" in tree
     return tree
 
 

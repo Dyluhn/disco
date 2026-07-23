@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest import mock
 
-from disco.agent_server.runtime import ConversationRuntime
+from disco.agent_server.runtime import (
+    APPKIT_LIVE_PREVIEW_NAME,
+    ConversationRuntime,
+    _sync_appkit_live_preview,
+)
 from disco.core import (
     APPKIT_EJECTION_LOST_GUARANTEES,
     APPKIT_EJECTION_SOURCE_TRIGGER,
@@ -63,6 +68,64 @@ def test_appkit_mode_builds_appkit_executor() -> None:
     rt = _rt()
     loop = _loop_for(rt, "ak1", appkit_mode=True)
     assert isinstance(loop.executor, AppKitToolExecutor)
+    assert loop.executor._appkit_on_preview_sync is not None
+    assert loop.executor._sandbox._auto_preview_disabled is True
+
+
+async def test_appkit_preview_keeps_dependency_failure_when_stale_vite_starts() -> None:
+    preview = SimpleNamespace(status=SimpleNamespace(value="running"), update_error=None)
+
+    class _Manager:
+        @staticmethod
+        def canonical_lifecycle_session():
+            return None
+
+        @staticmethod
+        async def start(**kwargs):  # noqa: ANN003
+            assert kwargs == {
+                "framework": "vite",
+                "name": APPKIT_LIVE_PREVIEW_NAME,
+                "supervise": True,
+            }
+            return preview
+
+    class _Session:
+        _preview_manager = _Manager()
+
+        @staticmethod
+        async def read_file(path: str) -> bytes:
+            if path == "package.json":
+                return b'{"dependencies":{"new-package":"1.0.0"}}'
+            if path == ".disco/appkit-vite-package.sha256":
+                return b"stale-package-digest\n"
+            raise AssertionError(path)
+
+        @staticmethod
+        async def list_dir(path: str):
+            assert path == "node_modules"
+            return []
+
+        @staticmethod
+        async def file_exists(path: str) -> bool:
+            assert path == "package-lock.json"
+            return True
+
+        @staticmethod
+        async def exec_shell(command: str, *, timeout_s: float):
+            assert command == "npm ci --no-audit --no-fund"
+            assert timeout_s == 300
+            return SimpleNamespace(
+                exit_code=1,
+                timed_out=False,
+                stderr="dependency refresh failed",
+                stdout="",
+            )
+
+    await _sync_appkit_live_preview(_Session())  # type: ignore[arg-type]
+
+    assert preview.update_error == (
+        "AppKit preview dependency setup failed: dependency refresh failed"
+    )
 
 
 def test_appkit_done_condition_profile_tracks_custom_build_widening() -> None:

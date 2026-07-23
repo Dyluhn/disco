@@ -403,9 +403,9 @@ async def test_ignored_static_directive_does_not_bypass_external_dod():
     assert ignored[0].meta.get("verify_kind") == "static"
 
 
-def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
-    """The generated command genuinely passes against a live server and fails when
-    nothing serves — run it as a real subprocess against a threaded http.server."""
+def test_app_verify_command_accepts_short_nonempty_body_and_rejects_blank_or_down(tmp_path):
+    """The generic readiness predicate accepts a valid sparse response without an
+    arbitrary length floor, while whitespace-only and unreachable responses fail."""
     import http.server
     import socket
     import subprocess
@@ -423,9 +423,12 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
         pytest.skip(f"local socket binding unavailable in this sandbox: {exc}")
 
     class _H(http.server.BaseHTTPRequestHandler):
+        body = b"Node Paused 401013"
+
         def do_GET(self):  # noqa: N802
-            body = b"<html><body>hello from the app</body></html>"
+            body = self.body
             self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -442,6 +445,13 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
         )
         assert ok.returncode == 0, ok.stderr.decode()
         assert b"OK" in ok.stdout
+
+        _H.body = b"  \n"
+        blank = subprocess.run(
+            _app_verify_command(f"http://127.0.0.1:{port}/"), shell=True, capture_output=True
+        )
+        assert blank.returncode != 0
+        assert b"empty body" in blank.stderr
     finally:
         srv.shutdown()
         srv.server_close()

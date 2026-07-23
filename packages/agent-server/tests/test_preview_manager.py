@@ -17,8 +17,13 @@ from disco.agent_server.preview_manager import (
     PreviewManager,
     PreviewReloadStrategy,
     PreviewStatus,
+    preview_requires_node_dependencies,
 )
-from disco.agent_server.preview_projection import ActiveLivePreviewProjection
+from disco.agent_server.preview_projection import (
+    ActiveLivePreviewProjection,
+    SealedPreviewRuntimeContract,
+)
+from disco.agent_server.preview_service import PreviewService
 
 _PORT_RE = re.compile(r"(?:http\.server\s+|--port[= ]|-p[= ]|PORT=)(\d+)")
 
@@ -124,6 +129,217 @@ def test_start_has_no_port_parameter() -> None:
     assert "port" not in params
 
 
+@pytest.mark.parametrize(
+    ("command", "framework", "expected"),
+    (
+        (None, "vite", True),
+        (None, "node", True),
+        ("npm run dev", None, True),
+        ("NODE_ENV=production node server.js", None, True),
+        ("python3 server.py", None, False),
+        (None, "static", False),
+    ),
+)
+def test_node_dependency_lifecycle_comes_from_typed_preview_intent(
+    command: str | None,
+    framework: str | None,
+    expected: bool,
+) -> None:
+    assert preview_requires_node_dependencies(command=command, framework=framework) is expected
+
+
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_uses_the_single_immutable_lockfile() -> None:
+    class _DependencySession:
+        def __init__(self) -> None:
+            self.files = {
+                "package.json": b'{"dependencies":{"vite":"1.0.0"}}',
+                "package-lock.json": b"{}",
+            }
+            self.commands: list[str] = []
+
+        async def read_file(self, path: str) -> bytes:
+            return self.files[path]
+
+        async def file_exists(self, path: str) -> bool:
+            return path in self.files
+
+        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
+            self.commands.append(command)
+            self.files["node_modules"] = b"directory-marker"
+            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
+
+    session = _DependencySession()
+    contract = SimpleNamespace(command=None, framework="vite", cwd=None)
+
+    dependency_dir = await PreviewService._prepare_sealed_node_dependencies(session, contract)
+
+    assert dependency_dir == "node_modules"
+    assert session.commands == ["npm ci --no-audit --no-fund"]
+
+
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_refuses_unlocked_graph() -> None:
+    class _UnlockedSession:
+        async def read_file(self, path: str) -> bytes:
+            assert path == "package.json"
+            return b'{"devDependencies":{"vite":"latest"}}'
+
+        async def file_exists(self, path: str) -> bool:
+            return False
+
+    with pytest.raises(RuntimeError, match="exactly one supported immutable lockfile"):
+        await PreviewService._prepare_sealed_node_dependencies(
+            _UnlockedSession(),
+            SimpleNamespace(command=None, framework="vite", cwd=None),
+        )
+
+
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_honors_workspace_relative_cwd() -> None:
+    class _DependencySession:
+        def __init__(self) -> None:
+            self.files = {
+                "web/package.json": b'{"devDependencies":{"vite":"1.0.0"}}',
+                "web/package-lock.json": b"{}",
+            }
+            self.commands: list[str] = []
+
+        async def read_file(self, path: str) -> bytes:
+            return self.files[path]
+
+        async def file_exists(self, path: str) -> bool:
+            return path in self.files
+
+        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
+            self.commands.append(command)
+            self.files["web/node_modules"] = b"directory-marker"
+            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
+
+    session = _DependencySession()
+    dependency_dir = await PreviewService._prepare_sealed_node_dependencies(
+        session,
+        SimpleNamespace(command=None, framework="vite", cwd="/workspace/web"),
+    )
+
+    assert dependency_dir == "web/node_modules"
+    assert session.commands == ["npm --prefix ./web ci --no-audit --no-fund"]
+
+
+def _sealed_contract_with_cwd(cwd: str | None) -> SealedPreviewRuntimeContract:
+    projection = ActiveLivePreviewProjection(
+        projection_id="pv_" + "a" * 32,
+        session_name="sealed-web",
+        port=3000,
+        launch_kind="custom",
+        intent_digest="b" * 64,
+        sandbox_instance_id="sbx-recorded",
+        sandbox_generation=1,
+        source_action_id="evt-action",
+        source_action_seq=1,
+        source_observation_id="evt-observation",
+        source_observation_seq=2,
+    )
+    return SealedPreviewRuntimeContract(
+        contract_id="sealed-preview:" + "c" * 64,
+        conversation_id="conv-sealed",
+        version_seq=3,
+        tree_digest="d" * 64,
+        terminal_seq=4,
+        app_entry="index.html",
+        projection=projection,
+        session_name="sealed-web",
+        serve_dir=None,
+        command="python3 server.py",
+        framework=None,
+        cwd=cwd,
+    )
+
+
+def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
+    normalized = PreviewService._normalized_sealed_runtime_contract(
+        _sealed_contract_with_cwd("/workspace/web")
+    )
+    assert normalized.cwd == "./web"
+    assert normalized.command == "python3 server.py"
+
+    with pytest.raises(RuntimeError, match="inside /workspace"):
+        PreviewService._normalized_sealed_runtime_contract(_sealed_contract_with_cwd("/etc"))
+
+
+@pytest.mark.parametrize("cwd", ("/etc", "../web", "web/../../escape", " web"))
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_rejects_cwd_outside_workspace(cwd: str) -> None:
+    class _NeverReadSession:
+        async def read_file(self, path: str) -> bytes:
+            raise AssertionError(f"unsafe cwd reached workspace read: {path}")
+
+    with pytest.raises(RuntimeError, match="workspace|POSIX"):
+        await PreviewService._prepare_sealed_node_dependencies(
+            _NeverReadSession(),
+            SimpleNamespace(command=None, framework="vite", cwd=cwd),
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_install_restore_removes_script_mutations_but_keeps_dependencies() -> None:
+    sealed = (
+        ("web/package.json", b'{"scripts":{"postinstall":"mutate"}}'),
+        ("web/package-lock.json", b"sealed-lock"),
+        ("web/src/main.ts", b"sealed-source"),
+    )
+
+    class _LifecycleMutationSession:
+        def __init__(self) -> None:
+            self.files = {
+                "web/package.json": b"mutated-by-lifecycle-script",
+                "web/package-lock.json": b"sealed-lock",
+                "web/src/main.ts": b"mutated-by-lifecycle-script",
+                "web/generated-foreign.js": b"foreign",
+                "web/node_modules/vite/package.json": b"installed",
+                "root-foreign.txt": b"foreign",
+            }
+            self.staged: dict[str, bytes] = {}
+
+        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
+            if "mv -- web/node_modules .disco-preview-dependencies-" in command:
+                self.staged = {
+                    path.removeprefix("web/node_modules/"): data
+                    for path, data in self.files.items()
+                    if path.startswith("web/node_modules/")
+                }
+                self.files.clear()
+            elif command.startswith("mkdir -p -- web"):
+                self.files.update(
+                    {f"web/node_modules/{path}": data for path, data in self.staged.items()}
+                )
+                self.staged.clear()
+            else:  # pragma: no cover - command drift should fail loudly
+                raise AssertionError(command)
+            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
+
+        async def write_file(self, path: str, data: bytes) -> None:
+            self.files[path] = data
+
+        async def read_file(self, path: str) -> bytes:
+            return self.files[path]
+
+    session = _LifecycleMutationSession()
+    await PreviewService._replace_with_sealed_workspace(
+        session,
+        sealed,
+        dependency_dir="web/node_modules",
+        contract_id="sealed-preview:" + "a" * 64,
+    )
+
+    assert session.files == {
+        "web/package.json": b'{"scripts":{"postinstall":"mutate"}}',
+        "web/package-lock.json": b"sealed-lock",
+        "web/src/main.ts": b"sealed-source",
+        "web/node_modules/vite/package.json": b"installed",
+    }
+
+
 @pytest.mark.asyncio
 async def test_port_is_platform_allocated_not_model_supplied() -> None:
     """_allocate_port is THE single place a port is chosen — verify it draws from the
@@ -172,6 +388,115 @@ async def test_two_previews_get_distinct_ports_without_model_choosing() -> None:
     assert {a.port, b.port} == {3000, 5173}
     # neither call supplied a port; the platform handed out both
     assert a.url and b.url and a.url != b.url
+
+
+@pytest.mark.asyncio
+async def test_restart_canonical_reuses_exact_stored_intent() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    original = await mgr.start(command="node server.js", name="preview", supervise=False)
+    original_intent = dict(original.intent)
+    original_projection = original.projection_id
+
+    assert await mgr.stop("preview") == ["preview"]
+    restarted = await mgr.restart_canonical()
+
+    assert restarted is not None
+    assert restarted.status is PreviewStatus.RUNNING
+    assert restarted.intent == original_intent
+    assert restarted.projection_id != original_projection
+    assert sandbox.sessions.exec_calls[-1][1] == restarted.command
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [PreviewStatus.STARTING, PreviewStatus.RESTARTING])
+async def test_restart_canonical_recovers_dead_transitional_process(
+    state: PreviewStatus,
+) -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    session = await mgr.start(command="node server.js", name="preview", supervise=False)
+    sandbox.sessions.crash(session.name)
+    session.status = state
+    before = len(sandbox.sessions.exec_calls)
+
+    restarted = await mgr.restart_canonical()
+
+    assert restarted is session
+    assert restarted.status is PreviewStatus.RUNNING
+    assert len(sandbox.sessions.exec_calls) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_restart_canonical_without_accepted_intent_fails_closed() -> None:
+    mgr = _mgr(_FakeSandbox(), port_pool=[3000])
+    assert await mgr.restart_canonical() is None
+
+
+@pytest.mark.asyncio
+async def test_sealed_restore_revalidates_raw_intent_and_binds_fresh_generation() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    expected_intent = {
+        "serve_dir": None,
+        "command": "python3 server.py",
+        "framework": None,
+        "cwd": None,
+        "launch_kind": "custom",
+    }
+    contract = SimpleNamespace(
+        contract_id="sealed-preview:" + "a" * 64,
+        start_kwargs=lambda: {
+            "serve_dir": None,
+            "command": "python3 server.py",
+            "framework": None,
+            "cwd": None,
+            "name": "web",
+            "supervise": True,
+        },
+        intent=lambda: expected_intent,
+    )
+
+    restored = await mgr.restore_sealed(contract)
+
+    assert restored is not None and restored.status is PreviewStatus.RUNNING
+    assert restored.port == 3000
+    assert restored.intent == expected_intent
+    assert sandbox.sessions.exec_calls == [("web", "PORT=3000 python3 server.py", "/workspace")]
+    assert await mgr.resolve_sealed_contract(contract) is restored
+    await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_binding_fails_closed_after_intent_or_sandbox_identity_changes() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+    expected_intent = {
+        "serve_dir": None,
+        "command": "python3 server.py",
+        "framework": None,
+        "cwd": None,
+        "launch_kind": "custom",
+    }
+    contract = SimpleNamespace(
+        contract_id="sealed-preview:" + "b" * 64,
+        start_kwargs=lambda: {
+            "command": "python3 server.py",
+            "name": "web",
+            "supervise": True,
+        },
+        intent=lambda: expected_intent,
+    )
+    restored = await mgr.restore_sealed(contract)
+    assert restored is not None
+
+    restored.intent = {**expected_intent, "command": "python3 other.py"}
+    assert await mgr.resolve_sealed_contract(contract) is None
+    restored.intent = expected_intent
+    sandbox.id = "sbx-foreign-generation"
+    sandbox.generation = 2
+    assert await mgr.resolve_sealed_contract(contract) is None
+    await mgr.aclose()
 
 
 # --------------------------------------------------------------------------- lifecycle

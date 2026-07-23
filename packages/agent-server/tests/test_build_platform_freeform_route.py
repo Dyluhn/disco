@@ -69,6 +69,8 @@ def test_freeform_opt_in_selects_platform_with_exact_legacy_execution_bridge(mon
     assert _loop_contract(platform_loop) == _loop_contract(legacy_loop)
     assert isinstance(platform_loop.executor, DefaultToolExecutor)
     assert platform_loop.mode is OperatingMode.PLANNING
+    assert platform_loop.executor._sandbox._auto_preview_disabled is True
+    assert legacy_loop.executor._sandbox._auto_preview_disabled is True
     assert legacy_runtime._build_platform.route_records == {}
 
 

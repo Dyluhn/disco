@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from types import SimpleNamespace
 
 import pytest
 from disco.core.appkit.hello_primitive import HelloSpec, apply_hello_spec
@@ -106,6 +107,27 @@ class _VerifySandbox:
 
     def __init__(self, files: dict[str, bytes]):
         self._files = dict(files)
+        runtime = {
+            "name": "appkit-live-vite",
+            "status": "running",
+            "port": 9134,
+            "projection_id": "pv_" + "a" * 32,
+            "intent": {
+                "serve_dir": None,
+                "command": None,
+                "framework": "vite",
+                "cwd": None,
+                "launch_kind": "framework",
+            },
+            "launch_kind": "framework",
+        }
+        session = SimpleNamespace(
+            name="appkit-live-vite",
+            port=9134,
+            status=SimpleNamespace(value="running"),
+            to_dict=lambda: runtime,
+        )
+        self._preview_manager = SimpleNamespace(canonical_session=lambda: session)
 
     async def file_exists(self, path: str) -> bool:
         return path in self._files
@@ -145,6 +167,10 @@ class _VerifySandbox:
                         "body": '<script type="module" src="/assets/index-a3.js"></script>',
                     }
                 )
+            )
+        if cmd == "npm run build":
+            self._files["dist/index.html"] = (
+                b'<script type="module" src="/assets/index-a3.js"></script>'
             )
         return _ExecRes("200")
 

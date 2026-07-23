@@ -359,6 +359,22 @@ async def test_canonical_live_proxy_preserves_real_http_and_rejects_stale_author
         assert posted.status_code == 201
         assert posted.json()["body"] == "real interaction"
 
+        # Canonical live HTTP keeps full application routing, but it never hands
+        # workspace-secret or structurally ambiguous paths to a server that may
+        # have been launched at the workspace root.
+        ordinary_hidden_route = await client.get("/.well-known/app", headers={"Cookie": cookie})
+        assert ordinary_hidden_route.status_code == 200
+        for unsafe_path in (
+            "/.env",
+            "/nested/../.env",
+            "/%2e%2e/.env",
+            "/%252e%252e/.env",
+            "/assets%2f..%2f.env",
+        ):
+            refused = await client.get(unsafe_path, headers={"Cookie": cookie})
+            assert refused.status_code == 404
+            assert refused.text == "preview path not found"
+
         current["authority"] = "live:" + "b" * 64
         stale = await client.get("/", headers={"Cookie": cookie})
         assert stale.status_code == 409
@@ -901,6 +917,7 @@ def test_canonical_redirect_rewrites_only_the_exact_managed_upstream_origin() ->
         "scheme": "http",
         "headers": [(b"host", b"127.0.0.2:19120")],
     }
+
     def rewrite(value: str) -> str:
         return _rewrite_canonical_upstream_location(
             value,

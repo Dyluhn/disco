@@ -63,9 +63,15 @@ from ..preview_bootstrap import (
     preview_redemption_content_type,
 )
 from ..preview_inject import inject_element_mention_picker, inject_selection_agent
+from ..preview_paths import (
+    safe_capability_target_path as _safe_capability_target_path,
+)
+from ..preview_paths import (
+    safe_preview_path as _safe_preview_path,
+)
 from ..preview_projection import (
-    ActiveLivePreviewProjection,
-    derive_active_live_preview_projection,
+    SealedPreviewRuntimeContract,
+    derive_sealed_preview_runtime_contract,
 )
 from ..runtime import ConversationRuntime
 from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
@@ -84,43 +90,6 @@ class PreviewCapabilityBody(BaseModel):
     target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
     transport: Literal["host", "path", "path_live", "canonical"] = "host"
     workspace_version: int | None = Field(default=None, ge=1)
-
-
-_ENCODED_PREVIEW_STRUCTURAL = re.compile(r"%([0-9a-fA-F]{2})")
-
-
-def _safe_capability_target_path(raw: str) -> str | None:
-    """Reject URL encodings browsers may reinterpret as path structure."""
-
-    matched_escapes = set(_ENCODED_PREVIEW_STRUCTURAL.finditer(raw))
-    for match in matched_escapes:
-        if chr(int(match.group(1), 16)) in {".", "/", "\\", "\x00", "%"}:
-            return None
-    # A stray '%' is browser-dependent and cannot be signed canonically.
-    without_escapes = _ENCODED_PREVIEW_STRUCTURAL.sub("", raw)
-    if "%" in without_escapes:
-        return None
-    return _safe_preview_path(raw, allow_leading_slash=True)
-
-
-def _safe_preview_path(raw: str, *, allow_leading_slash: bool) -> str | None:
-    """Normalize one URL/workspace path without ever decoding it a second time.
-
-    Starlette has already percent-decoded the route parameter.  A second unquote
-    here would turn a harmless literal ``%2e%2e`` filename into traversal.  Empty
-    and redundant slash components are allowed so ``preview-app//assets/x`` and
-    ``preview-app/assets/x`` address the same file; dot-dot, backslashes, NULs,
-    and an absolute manifest entry fail closed.
-    """
-    value = raw.strip()
-    if "\x00" in value or "\\" in value:
-        return None
-    if not allow_leading_slash and value.startswith("/"):
-        return None
-    parts = [part for part in PurePosixPath(value.strip("/")).parts if part not in {"", "."}]
-    if any(part == ".." for part in parts):
-        return None
-    return "/".join(parts)
 
 
 def _snapshot_request_path(ws, requested_path: str, entry_path: str | None):  # noqa: ANN001
@@ -487,26 +456,32 @@ async def _serve_active_finished_projection(
     runtime: ConversationRuntime,
     conversation_id: str,
     rel_path: str,
-    projection: ActiveLivePreviewProjection,
+    contract: SealedPreviewRuntimeContract,
     *,
     capability_port: int | None,
     inject_selection: bool = False,
 ) -> Response | None:
-    """Proxy only the exact already-running generation proven before FINISHED."""
+    """Proxy the original generation or its exact host-bound sealed restore."""
 
-    if capability_port is not None and capability_port != projection.port:
+    resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
+    if resolver is None:
         return None
-    resolver = getattr(runtime, "resolve_active_preview_projection", None)
-    if resolver is None or not await resolver(conversation_id, projection):
+    resolved = await resolver(conversation_id, contract)
+    if not isinstance(resolved, dict):
         return None
-    # Deliberately do not call wake_for_preview: teardown/recreate/restart revokes
-    # this bounded active-live projection instead of re-executing persisted code.
-    upstream = runtime.port_upstream(conversation_id, projection.port)
+    port = resolved.get("port")
+    if type(port) is not int or port not in USER_PORTS or port == NOVNC_PORT:
+        return None
+    if capability_port is not None and capability_port != port:
+        return None
+    # GET remains passive: only the authenticated restart action may reconstruct a
+    # sealed runtime. This path resolves a manager generation already proven live.
+    upstream = runtime.port_upstream(conversation_id, port)
     if upstream is None:
         return await _fetch_inside_response(
             runtime,
             conversation_id,
-            projection.port,
+            port,
             rel_path,
             inject_selection=inject_selection,
         )
@@ -517,7 +492,7 @@ async def _serve_active_finished_projection(
         return await _fetch_inside_response(
             runtime,
             conversation_id,
-            projection.port,
+            port,
             rel_path,
             inject_selection=inject_selection,
         )
@@ -797,6 +772,25 @@ def _preview_authority_label(kind: str, *parts: object) -> str:
     return f"{kind}:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
 
 
+def _sealed_runtime_contract(
+    events: list[Event],
+    conversation_id: str,
+    committed,  # noqa: ANN001 - CommittedWorkspaceView stays internal to persistence
+    entry: str,
+) -> SealedPreviewRuntimeContract | None:
+    seal = committed.event.final_seal
+    if seal is None:
+        return None
+    return derive_sealed_preview_runtime_contract(
+        events,
+        terminal_seq=seal.terminal_seq,
+        conversation_id=conversation_id,
+        version_seq=committed.event.version_seq,
+        tree_digest=committed.event.tree_digest,
+        app_entry=entry,
+    )
+
+
 async def _canonical_preview_authority(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -849,25 +843,29 @@ async def _canonical_preview_authority(
         )
         if entry is None:
             return None
-        seal = committed.event.final_seal
-        projection = (
-            derive_active_live_preview_projection(events, terminal_seq=seal.terminal_seq)
-            if seal is not None
-            else None
-        )
-        if projection is not None:
-            if selected_port != projection.port:
+        contract = _sealed_runtime_contract(events, conversation_id, committed, entry)
+        if contract is not None:
+            resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
+            resolved = await resolver(conversation_id, contract) if resolver is not None else None
+            if not isinstance(resolved, dict):
                 return None
-            resolver = getattr(runtime, "resolve_active_preview_projection", None)
-            if resolver is None or not await resolver(conversation_id, projection):
+            runtime_port = resolved.get("port")
+            generation = resolved.get("projection_id")
+            if (
+                type(runtime_port) is not int
+                or runtime_port != selected_port
+                or not isinstance(generation, str)
+                or not generation.startswith("pv_")
+            ):
                 return None
             return _preview_authority_label(
-                "sealed-live",
+                "sealed-runtime",
                 conversation_id,
                 committed.event.version_seq,
                 committed.event.tree_digest,
-                projection.projection_id,
-                projection.port,
+                contract.contract_id,
+                generation,
+                runtime_port,
                 entry,
             )
         return _preview_authority_label(
@@ -1106,6 +1104,14 @@ async def _preview_capability_response(
             if runtime is not None
             else PREVIEW_PORT
         )
+        if selected_port is None and body.transport == "canonical" and runtime is not None:
+            # Capability mint is an authenticated POST and therefore an explicit
+            # recovery boundary. It may restore one sealed managed runtime; the
+            # subsequent authority check still binds the fresh generation.
+            ensure = getattr(runtime, "ensure_preview", None)
+            if ensure is not None:
+                await ensure(conversation_id)
+                selected_port = _canonical_preview_port(runtime, conversation_id)
         if (
             selected_port is None
             and body.transport in {"path", "canonical"}
@@ -1619,20 +1625,19 @@ async def _finished_preview_response(
         version=committed_version,
         marker_seq=committed.event.seq,
     )
-    seal = committed.event.final_seal
-    projection = (
-        derive_active_live_preview_projection(events, terminal_seq=seal.terminal_seq)
-        if seal is not None
+    contract = (
+        _sealed_runtime_contract(events, conversation_id, committed, entry_path)
+        if entry_path is not None
         else None
     )
-    if projection is not None:
+    if contract is not None:
         query = _forwarded_preview_query(request)
         active_path = f"{safe_path}?{query}" if query else safe_path
         active = await _serve_active_finished_projection(
             runtime,
             conversation_id,
             active_path,
-            projection,
+            contract,
             capability_port=(preview_cap.port if preview_cap is not None else None),
             inject_selection=preview_cap is not None,
         )
@@ -1669,7 +1674,6 @@ async def _active_preview_response(
     preview_cap: PreviewCapability | None,
     owner_id: str,
 ) -> Response:
-    entry_path = _selected_app_entry(events, version=None)
     target_port = (
         preview_cap.port
         if preview_cap is not None
@@ -1696,14 +1700,11 @@ async def _active_preview_response(
             else None
         )
         if served is None:
-            served = _serve_static_from_snapshot(
-                runtime,
-                conversation_id,
-                safe_path,
-                version=None,
-                entry_path=entry_path,
-                inject_selection=preview_cap is not None,
-            )
+            # An active owned build has one application authority: its managed
+            # runtime.  Mutable workspace bytes are not a substitute for a down
+            # Vite/Next/Node process (and may be raw source or a stale scaffold).
+            # Keep immutable static serving for FINISHED/historical routes only.
+            served = None
         return served or Response("preview not available", status_code=503, media_type="text/plain")
     assert target_port is not None
     try:
@@ -1902,25 +1903,27 @@ def _register_preview_app_websocket_routes(
             except WorkspaceCommitUnavailable:
                 await _close_ws(websocket, 1008, "preview not available")
                 return
-            seal = committed.event.final_seal
-            projection = (
-                derive_active_live_preview_projection(
-                    events,
-                    terminal_seq=seal.terminal_seq,
-                )
-                if seal is not None
+            entry = _selected_app_entry(
+                events,
+                version=committed.event.version_seq,
+                marker_seq=committed.event.seq,
+            )
+            contract = (
+                _sealed_runtime_contract(events, conversation_id, committed, entry)
+                if entry is not None
                 else None
             )
-            resolver = getattr(runtime, "resolve_active_preview_projection", None)
-            if (
-                projection is None
-                or target_port != projection.port
-                or resolver is None
-                or not await resolver(conversation_id, projection)
-            ):
+            resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
+            resolved = (
+                await resolver(conversation_id, contract)
+                if resolver is not None and contract is not None
+                else None
+            )
+            runtime_port = resolved.get("port") if isinstance(resolved, dict) else None
+            if contract is None or type(runtime_port) is not int or target_port != runtime_port:
                 await _close_ws(websocket, 1008, "preview not available")
                 return
-            upstream = runtime.port_upstream(conversation_id, projection.port)
+            upstream = runtime.port_upstream(conversation_id, runtime_port)
             if upstream is None:
                 await _close_ws(websocket, 1008, "preview not available")
                 return

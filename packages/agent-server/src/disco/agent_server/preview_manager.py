@@ -80,6 +80,34 @@ _FRAMEWORK_COMMANDS: dict[str, str] = {
 # custom commands have no such platform-guaranteed contract, so clients reload them
 # when relevant workspace bytes change.
 _HMR_FRAMEWORKS = frozenset({"vite", "next", "nextjs", "react", "cra", "astro", "svelte"})
+_NODE_RUNTIME_FRAMEWORKS = frozenset(_FRAMEWORK_COMMANDS) - {"static", "http"}
+_NODE_RUNTIME_COMMANDS = frozenset({"node", "npm", "npx", "pnpm", "yarn"})
+
+
+def preview_requires_node_dependencies(*, command: str | None, framework: str | None) -> bool:
+    """Whether a sealed raw intent needs its immutable Node dependency graph.
+
+    This consumes only the already-validated PreviewStart intent. It does not
+    guess from model names, filenames, or a scenario: configured Node framework
+    adapters and explicit Node package executables share the same lifecycle.
+    """
+
+    normalized = (framework or "").strip().lower()
+    if normalized in _NODE_RUNTIME_FRAMEWORKS:
+        return True
+    if not command:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    while tokens and "=" in tokens[0] and not tokens[0].startswith(("/", "./")):
+        key, _value = tokens[0].split("=", 1)
+        if not key.replace("_", "a").isalnum():
+            break
+        tokens.pop(0)
+    return bool(tokens and tokens[0].rsplit("/", 1)[-1] in _NODE_RUNTIME_COMMANDS)
+
 
 # Port flags a model might bake into a raw `command`. These are handled on the SHLEX'D
 # ARGV TOKENS (see `_classify_port_flag` / `_scrub_port_flag_tokens`), NOT by a regex on
@@ -242,6 +270,10 @@ class PreviewSession:
     url: str | None = None
     restart_count: int = 0
     detail: str = ""
+    # A content/dependency refresh may fail while the prior healthy frame remains
+    # useful. Keep that failure distinct from process health so status polling
+    # cannot erase it merely because the old process still answers HTTP.
+    update_error: str | None = None
     _supervise: bool = field(default=True, repr=False)
     # Automatic restart is armed only after this launch generation has served
     # successfully. An initial startup failure, or a failed explicit repair, must not
@@ -287,6 +319,7 @@ class PreviewSession:
             "sandbox_generation": self.sandbox_generation,
             "restart_count": self.restart_count,
             "detail": self.detail,
+            "update_error": self.update_error,
         }
 
 
@@ -330,6 +363,9 @@ class PreviewManager:
         self._supervisor: asyncio.Task[None] | None = None
         self._closed = False
         self._auto_preview_coordinated = False  # P1 #2: legacy auto-preview stood down once
+        # Host-only bindings from an immutable final workspace contract to the
+        # freshly revalidated runtime session serving those exact bytes.
+        self._sealed_contracts: dict[str, tuple[str, dict[str, Any]]] = {}
 
     # ---- platform-owned port allocation ------------------------------------
 
@@ -1167,7 +1203,7 @@ class PreviewManager:
             require_success=self._requires_successful_root(session),
         ):
             await self._confirm_and_mark_running(session)
-        elif session.status is PreviewStatus.RUNNING:
+        elif session.status not in {PreviewStatus.CRASHED, PreviewStatus.STOPPED}:
             if await self._session_alive(session.name):
                 session.detail = "running; health probe momentarily unanswered"
             else:
@@ -1187,6 +1223,155 @@ class PreviewManager:
             for session in targets:
                 await self._refresh(session)
             return targets
+
+    async def restart_canonical(self) -> PreviewSession | None:
+        """Recover the selected managed preview from its exact accepted intent.
+
+        The UI restart path must never fall back to ``SandboxSession.ensure_preview``:
+        that legacy helper serves a guessed workspace directory and is not the runtime
+        the user was viewing.  This method reuses only an intent already accepted by
+        :meth:`start`; absent or malformed state fails closed.
+        """
+
+        async with self._lock:
+            target: PreviewSession | None = None
+            for name in reversed(self._selection_order):
+                candidate = self._sessions.get(name)
+                if candidate is not None:
+                    target = candidate
+                    break
+            if target is None and self._sessions:
+                target = next(reversed(self._sessions.values()))
+            if target is None or not isinstance(target.intent, dict):
+                return None
+
+            values = {
+                key: target.intent.get(key) for key in ("serve_dir", "command", "framework", "cwd")
+            }
+            if any(value is not None and not isinstance(value, str) for value in values.values()):
+                return None
+            serve_dir = values["serve_dir"]
+            command = values["command"]
+            framework = values["framework"]
+            cwd = values["cwd"]
+            supervise = target._supervise
+            if not (serve_dir or command or framework):
+                return None
+
+            if target.status is PreviewStatus.STOPPED:
+                port = await self._allocate_port(reclaim_name=target.name)
+                resolved = self._resolve_command(
+                    port,
+                    serve_dir=serve_dir,
+                    command=command,
+                    framework=framework,
+                )
+                exec_dir = await self._launch_workspace(cwd)
+                target = PreviewSession(
+                    name=target.name,
+                    port=port,
+                    command=resolved,
+                    exec_dir=exec_dir,
+                    intent=dict(target.intent),
+                    _supervise=supervise,
+                )
+                self._sessions[target.name] = target
+                await self._launch(target)
+            else:
+                await self._refresh(target)
+                if target.status is PreviewStatus.CRASHED:
+                    resolved = self._resolve_command(
+                        target.port,
+                        serve_dir=serve_dir,
+                        command=command,
+                        framework=framework,
+                    )
+                    exec_dir = await self._launch_workspace(cwd)
+                    await self._recover_explicit(
+                        target,
+                        command=resolved,
+                        exec_dir=exec_dir,
+                        intent=dict(target.intent),
+                    )
+            self._record_explicit_selection(target)
+
+        if target._supervise:
+            self._ensure_supervisor()
+        return target
+
+    async def restore_sealed(self, contract: Any) -> PreviewSession | None:
+        """Revalidate and launch one host-derived sealed runtime contract.
+
+        The contract supplies only raw PreviewStart intent.  ``start`` performs
+        the normal command grammar, port allocation, cwd resolution, health, and
+        ownership checks; persisted resolved commands and ports are never run.
+        """
+
+        contract_id = getattr(contract, "contract_id", None)
+        start_kwargs = getattr(contract, "start_kwargs", None)
+        expected_intent_fn = getattr(contract, "intent", None)
+        if (
+            not isinstance(contract_id, str)
+            or not contract_id.startswith("sealed-preview:")
+            or not callable(start_kwargs)
+            or not callable(expected_intent_fn)
+        ):
+            return None
+        try:
+            kwargs = start_kwargs()
+            expected_intent = expected_intent_fn()
+        except Exception:  # noqa: BLE001 - malformed persisted authority fails closed
+            return None
+        if not isinstance(kwargs, dict) or not isinstance(expected_intent, dict):
+            return None
+        session = await self.start(**kwargs)
+        if not self._is_servable(session) or session.intent != expected_intent:
+            return None
+        self._sealed_contracts[contract_id] = (session.name, dict(expected_intent))
+        return session
+
+    async def resolve_sealed_contract(self, contract: Any) -> PreviewSession | None:
+        """Resolve only a current healthy session host-bound to ``contract``."""
+
+        contract_id = getattr(contract, "contract_id", None)
+        if not isinstance(contract_id, str):
+            return None
+        async with self._lock:
+            binding = self._sealed_contracts.get(contract_id)
+            if binding is None:
+                return None
+            name, expected_intent = binding
+            session = self._sessions.get(name)
+            if (
+                session is None
+                or session.status is PreviewStatus.STOPPED
+                or session.intent != expected_intent
+            ):
+                return None
+            expected_sandbox = (
+                getattr(session, "sandbox_instance_id", None),
+                getattr(session, "sandbox_generation", None),
+            )
+            current_sandbox = (
+                getattr(self._sandbox, "id", None),
+                getattr(self._sandbox, "generation", None),
+            )
+            if expected_sandbox != current_sandbox:
+                return None
+            if not await self._probe_health(
+                session.port,
+                require_success=self._requires_successful_root(session),
+            ):
+                return None
+            if await self._verify_owns_port(session) is False:
+                return None
+            if (
+                getattr(self._sandbox, "id", None),
+                getattr(self._sandbox, "generation", None),
+            ) != expected_sandbox:
+                return None
+            await self._confirm_and_mark_running(session)
+            return session
 
     async def resolve_active_projection(self, projection: Any) -> PreviewSession | None:
         """Match one exact live projection without restart, repair, or allocation."""

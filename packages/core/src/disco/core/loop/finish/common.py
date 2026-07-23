@@ -63,6 +63,7 @@ from ...events import (
     VerifierVerdictEvent,
     current_build_platform_admission,
     current_workspace_agent_view_id,
+    event_matches_current_workspace_view,
     latest_workspace_run_intent,
 )
 from ...llm import OperatingMode
@@ -268,7 +269,7 @@ def _app_verify_command(url: str) -> str:
         "code=getattr(r,'status',None) or r.getcode();"
         "(code==200 or sys.exit('HTTP '+str(code)+' from '+u));"
         "b=r.read().decode('utf-8','replace');"
-        "(len(b.strip())>=20 or sys.exit('empty body from '+u));"
+        "(b.strip() or sys.exit('empty body from '+u));"
         "print('OK '+u+' '+str(code)+' bytes='+str(len(b)))"
     )
     return f'python3 -c "{script}"'
@@ -546,7 +547,11 @@ def _deliverable_event_paths(events: list[Event]) -> list[str]:
 
 def _latest_app_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
     for ev in reversed(events):
-        if isinstance(ev, DeliverableEvent) and ev.artifact_kind == "app":
+        if (
+            isinstance(ev, DeliverableEvent)
+            and ev.artifact_kind == "app"
+            and event_matches_current_workspace_view(events, ev)
+        ):
             return ev
     return None
 

@@ -24,6 +24,7 @@ from disco.agent_server.preview_inject import (
     inject_element_mention_picker,
     inject_selection_agent,
 )
+from disco.agent_server.preview_paths import safe_capability_target_path
 from disco.core.auth import (
     ISOLATED_PATH_PREVIEW_PREFIX,
     LOCAL_PREVIEW_COOKIE_PREFIX,
@@ -41,6 +42,7 @@ from disco.core.auth import (
     local_preview_gateway_ports,
     preview_ttl_s,
 )
+from disco.tools.projects import is_runtime_secret_path
 from disco.tools.sandbox._container import PREVIEW_PORT
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from websockets.typing import Subprotocol
@@ -661,6 +663,26 @@ class HostPreviewProxyMiddleware:
                             "type": "websocket.close",
                             "code": 1008,
                             "reason": "preview generation changed",
+                        }
+                    )
+                return
+            safe_path = safe_capability_target_path(path)
+            if safe_path is None or is_runtime_secret_path(safe_path):
+                if scope["type"] == "http":
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 404,
+                            "headers": [(b"content-type", b"text/plain")],
+                        }
+                    )
+                    await send({"type": "http.response.body", "body": b"preview path not found"})
+                else:
+                    await send(
+                        {
+                            "type": "websocket.close",
+                            "code": 1008,
+                            "reason": "preview path not found",
                         }
                     )
                 return

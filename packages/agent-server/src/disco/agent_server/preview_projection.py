@@ -1,19 +1,23 @@
-"""Pure provenance for a managed dynamic preview that crosses ``FINISHED``.
+"""Pure provenance for managed dynamic previews that cross ``FINISHED``.
 
-This is deliberately an *active-live* projection, not a replay recipe.  It
-authorizes only the exact PreviewManager generation that was already running
-and health-proven before the terminal event.  It contains no executable command
-and cannot wake, recreate, or install anything after that generation disappears.
+``ActiveLivePreviewProjection`` remains the identity of the exact generation
+that was health-proven before FINISHED.  ``SealedPreviewRuntimeContract`` is a
+separate, stricter replay authority: it binds the raw accepted launch intent to
+the final immutable workspace seal.  Restores revalidate that intent through
+PreviewManager and never replay a resolved command, port, or mutable mirror.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from disco.core import ActionEvent, Event, ObservationEvent, StatusEvent
 from disco.core.events import ConversationStatus
+from disco.tools.builtin.preview import PreviewStartArgs
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
 from .preview_manager import preview_projection_digest
@@ -34,23 +38,78 @@ class ActiveLivePreviewProjection:
     source_action_seq: int
     source_observation_id: str
     source_observation_seq: int
+    source_tool_name: str = "preview_start"
+
+
+@dataclass(frozen=True)
+class SealedPreviewRuntimeContract:
+    """Typed raw launch intent bound to one final immutable app workspace."""
+
+    contract_id: str
+    conversation_id: str
+    version_seq: int
+    tree_digest: str
+    terminal_seq: int
+    app_entry: str
+    projection: ActiveLivePreviewProjection
+    session_name: str
+    serve_dir: str | None
+    command: str | None
+    framework: str | None
+    cwd: str | None
+
+    def start_kwargs(self) -> dict[str, Any]:
+        return {
+            "serve_dir": self.serve_dir,
+            "command": self.command,
+            "framework": self.framework,
+            "cwd": self.cwd,
+            "name": self.session_name,
+            "supervise": True,
+        }
+
+    def intent(self) -> dict[str, Any]:
+        return {
+            "serve_dir": self.serve_dir,
+            "command": self.command,
+            "framework": self.framework,
+            "cwd": self.cwd,
+            "launch_kind": self.projection.launch_kind,
+        }
+
+
+def _runtime_payload_from_pair(
+    action: ActionEvent,
+    observation: ObservationEvent,
+) -> tuple[str, dict[str, Any]] | None:
+    result = observation.tool_result
+    structured = result.structured
+    if (
+        result.success is not True
+        or result.call_id != action.tool_call.call_id
+        or observation.action_id != action.id
+        or result.tool_name != action.tool_call.tool_name
+        or not isinstance(structured, dict)
+    ):
+        return None
+    if result.tool_name == "preview_start":
+        return result.tool_name, structured
+    if result.tool_name == "verify_appkit_app" and structured.get("passed") is True:
+        runtime = structured.get("preview_runtime")
+        if isinstance(runtime, dict):
+            return result.tool_name, runtime
+    return None
 
 
 def _projection_from_pair(
     action: ActionEvent,
     observation: ObservationEvent,
 ) -> ActiveLivePreviewProjection | None:
-    result = observation.tool_result
-    structured = result.structured
-    if (
-        result.tool_name != "preview_start"
-        or result.success is not True
-        or result.call_id != action.tool_call.call_id
-        or action.tool_call.tool_name != "preview_start"
-        or observation.action_id != action.id
-        or not isinstance(structured, dict)
-        or structured.get("status") not in {"running", "unavailable"}
-    ):
+    paired = _runtime_payload_from_pair(action, observation)
+    if paired is None:
+        return None
+    source_tool_name, structured = paired
+    if structured.get("status") not in {"running", "unavailable"}:
         return None
 
     projection_id = structured.get("projection_id")
@@ -117,6 +176,7 @@ def _projection_from_pair(
         source_action_seq=action.seq,
         source_observation_id=observation.id,
         source_observation_seq=observation.seq,
+        source_tool_name=source_tool_name,
     )
 
 
@@ -159,11 +219,17 @@ def derive_active_live_preview_projection(
         if not isinstance(event, ObservationEvent):
             continue
         result = event.tool_result
-        if result.tool_name == "preview_start":
+        if result.tool_name in {"preview_start", "verify_appkit_app"}:
             action = actions.get(event.action_id or "")
             if result.success is not True:
                 continue
-            structured = result.structured
+            outer = result.structured
+            if result.tool_name == "verify_appkit_app":
+                if not isinstance(outer, dict) or outer.get("passed") is not True:
+                    continue
+                structured = outer.get("preview_runtime")
+            else:
+                structured = outer
             if (
                 action is None
                 or not isinstance(structured, dict)
@@ -200,6 +266,119 @@ def derive_active_live_preview_projection(
     return selected
 
 
+def derive_sealed_preview_runtime_contract(
+    events: Sequence[Event],
+    *,
+    terminal_seq: int,
+    conversation_id: str,
+    version_seq: int,
+    tree_digest: str,
+    app_entry: str,
+) -> SealedPreviewRuntimeContract | None:
+    """Bind the selected dynamic intent to the exact final workspace seal.
+
+    Model-authored ``preview_start`` arguments are validated with the public tool
+    schema and must exactly match the host observation's normalized intent.  A
+    strict AppKit verifier may supply the same host-owned runtime payload after
+    verifying the canonical manager.  Only raw intent is retained; the resolved
+    command, original port, and original cwd are provenance, never replay input.
+    """
+
+    if (
+        not conversation_id
+        or type(version_seq) is not int
+        or version_seq < 1
+        or len(tree_digest) != 64
+        or any(char not in "0123456789abcdef" for char in tree_digest)
+        or type(terminal_seq) is not int
+        or terminal_seq < 1
+        or not app_entry
+    ):
+        return None
+    projection = derive_active_live_preview_projection(events, terminal_seq=terminal_seq)
+    if projection is None:
+        return None
+    actions = {
+        event.id: event
+        for event in events
+        if isinstance(event, ActionEvent) and event.id == projection.source_action_id
+    }
+    observations = {
+        event.id: event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.id == projection.source_observation_id
+    }
+    action = actions.get(projection.source_action_id)
+    observation = observations.get(projection.source_observation_id)
+    if action is None or observation is None:
+        return None
+    paired = _runtime_payload_from_pair(action, observation)
+    if paired is None:
+        return None
+    source_tool_name, payload = paired
+    intent = payload.get("intent")
+    if not isinstance(intent, dict):
+        return None
+    values = {key: intent.get(key) for key in ("serve_dir", "command", "framework", "cwd")}
+    if any(value is not None and not isinstance(value, str) for value in values.values()):
+        return None
+    if not (values["serve_dir"] or values["command"] or values["framework"]):
+        return None
+    expected_intent = {
+        **values,
+        "launch_kind": projection.launch_kind,
+    }
+    if intent != expected_intent:
+        return None
+    if source_tool_name == "preview_start":
+        try:
+            args = PreviewStartArgs.model_validate(action.tool_call.arguments)
+        except ValueError:
+            return None
+        action_intent = {
+            "serve_dir": args.serve_dir,
+            "command": args.command,
+            "framework": args.framework,
+            "cwd": args.cwd,
+        }
+        if action_intent != values or (
+            args.name is not None and args.name != projection.session_name
+        ):
+            return None
+    elif source_tool_name != "verify_appkit_app":
+        return None
+
+    material = {
+        "app_entry": app_entry,
+        "conversation_id": conversation_id,
+        "intent": expected_intent,
+        "projection_id": projection.projection_id,
+        "session_name": projection.session_name,
+        "source_action_id": projection.source_action_id,
+        "source_observation_id": projection.source_observation_id,
+        "terminal_seq": terminal_seq,
+        "tree_digest": tree_digest,
+        "version_seq": version_seq,
+    }
+    digest = hashlib.sha256(
+        json.dumps(material, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+    return SealedPreviewRuntimeContract(
+        contract_id=f"sealed-preview:{digest}",
+        conversation_id=conversation_id,
+        version_seq=version_seq,
+        tree_digest=tree_digest,
+        terminal_seq=terminal_seq,
+        app_entry=app_entry,
+        projection=projection,
+        session_name=projection.session_name,
+        serve_dir=values["serve_dir"],
+        command=values["command"],
+        framework=values["framework"],
+        cwd=values["cwd"],
+    )
+
+
 def projection_identity(projection: ActiveLivePreviewProjection) -> tuple[Any, ...]:
     """The fields a live PreviewManager must match exactly."""
 
@@ -216,6 +395,8 @@ def projection_identity(projection: ActiveLivePreviewProjection) -> tuple[Any, .
 
 __all__ = [
     "ActiveLivePreviewProjection",
+    "SealedPreviewRuntimeContract",
     "derive_active_live_preview_projection",
+    "derive_sealed_preview_runtime_contract",
     "projection_identity",
 ]

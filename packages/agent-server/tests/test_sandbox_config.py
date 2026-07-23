@@ -189,6 +189,26 @@ async def test_preview_is_backend_aware_and_honest():
         assert bare["available"] is False
         assert rt.preview_upstream("bare") is None
 
+    # An owned Build session with no managed launch has no canonical port. It must
+    # remain in the honest Preparing state instead of guessing the retired auto-preview.
+    owned = _FakeSession("local", None)
+    owned._auto_preview_disabled = True
+    rt.set_surface("owned", "build")
+    rt._executors["owned"] = _FakeExecutor(owned)
+    with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
+        preparing = await rt.preview("owned")
+    assert rt.preview_target_port("owned") is None
+    assert rt.preview_upstream("owned") is None
+    assert preparing["available"] is False
+    assert preparing["reason"] == (
+        "Preparing preview: waiting for the platform-managed runtime to start."
+    )
+
+    # The same build remains manager-only after teardown/suspension, when there is no
+    # live session flag to consult. Surface authority still forbids a guessed :8000.
+    rt._executors.pop("owned")
+    assert rt.preview_target_port("owned") is None
+
 
 @pytest.mark.asyncio
 async def test_multi_port_upstream_resolution():
@@ -227,6 +247,7 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
         intent={"framework": "vite", "launch_kind": "framework"},
         projection_id="pv_generation_1",
         status=PreviewStatus.RUNNING,
+        update_error="dependency refresh failed",
     )
     session._preview_manager = SimpleNamespace(
         canonical_port=lambda: 5173,
@@ -259,6 +280,7 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
     assert preview["generation"] == "pv_generation_1"
     assert preview["launch_kind"] == "framework"
     assert preview["reload_strategy"] == "hmr"
+    assert preview["update_error"] == "dependency refresh failed"
 
 
 @pytest.mark.asyncio
@@ -409,13 +431,12 @@ async def test_port_proxy_route_auth_and_defense():
 
 
 @pytest.mark.asyncio
-async def test_ensure_preview_rematerializes_after_clean_finish_teardown():
-    """BP-02 §E7 + the G safe-leak fix: a clean FINISH tears the sandbox down, but
-    'Restart preview' must NOT become a dead affordance — with a snapshot on disk it
-    re-materializes through the resume path (loop_for → rehydrate → ensure_preview)."""
+async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
+    """Non-Build compatibility may still rehydrate the legacy static viewer."""
     from disco.tools.projects.store import StorageStatus
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt.set_surface("fin", "research")
 
     session = _FakeSession("local", None)
     session.preview_started = False
@@ -465,6 +486,50 @@ async def test_ensure_preview_rematerializes_after_clean_finish_teardown():
     assert await rt.ensure_preview("fin") is True
     assert calls == ["loop_for", "rehydrate"]
     assert session.preview_started is True
+
+
+@pytest.mark.asyncio
+async def test_restart_preview_uses_managed_intent_and_never_legacy_static() -> None:
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt.set_surface("managed-restart", "build")
+    session = _FakeSession("local", None)
+    legacy_calls = 0
+
+    async def _legacy() -> bool:
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return True
+
+    session.ensure_preview = _legacy
+    restarted = SimpleNamespace(status=PreviewStatus.RUNNING)
+    from unittest.mock import AsyncMock
+
+    manager = SimpleNamespace(restart_canonical=AsyncMock(return_value=restarted))
+    session._preview_manager = manager
+    rt._executors["managed-restart"] = _FakeExecutor(session)
+
+    assert await rt.ensure_preview("managed-restart") is True
+    manager.restart_canonical.assert_awaited_once_with()
+    assert legacy_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_build_restart_without_managed_intent_never_fabricates_static_preview() -> None:
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt.set_surface("no-intent", "build")
+    session = _FakeSession("local", None)
+    legacy_calls = 0
+
+    async def _legacy() -> bool:
+        nonlocal legacy_calls
+        legacy_calls += 1
+        return True
+
+    session.ensure_preview = _legacy
+    rt._executors["no-intent"] = _FakeExecutor(session)
+
+    assert await rt.ensure_preview("no-intent") is False
+    assert legacy_calls == 0
 
 
 def test_sandbox_settings_round_trip_on_disk(tmp_path):

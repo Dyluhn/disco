@@ -18,12 +18,27 @@ delegator on `ConversationRuntime` because routes call each on the runtime
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import logging
+import posixpath
+import shlex
+from dataclasses import replace
 from typing import Any
 
-from disco.core import DEFAULT_OWNER_ID
+from disco.core import DEFAULT_OWNER_ID, ConversationStatus, DeliverableEvent
 from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
+
+from .preview_manager import PreviewManager, preview_requires_node_dependencies
+from .preview_projection import (
+    SealedPreviewRuntimeContract,
+    derive_sealed_preview_runtime_contract,
+)
+from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
+
+_LOG = logging.getLogger(__name__)
 
 
 class PreviewService:
@@ -66,6 +81,7 @@ class PreviewService:
             "generation": None,
             "launch_kind": None,
             "reload_strategy": None,
+            "update_error": None,
         }
 
     @classmethod
@@ -94,6 +110,9 @@ class PreviewService:
             "generation": generation if isinstance(generation, str) else None,
             "launch_kind": launch_kind if isinstance(launch_kind, str) else None,
             "reload_strategy": (reload_strategy if reload_strategy in {"hmr", "reload"} else None),
+            "update_error": (
+                data.get("update_error") if isinstance(data.get("update_error"), str) else None
+            ),
         }
         detail = data.get("detail")
         return metadata, detail if isinstance(detail, str) else ""
@@ -130,6 +149,14 @@ class PreviewService:
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
+            # Owned Build sessions reserve Preview for PreviewManager from their first
+            # sandbox use.  Do not guess the legacy :8000 target before a managed launch;
+            # that would expose a second lifecycle authority and tell the user a runtime
+            # exists when the honest state is still "Preparing preview".
+            if self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES or getattr(
+                session, "_auto_preview_disabled", False
+            ):
+                return None
             return PREVIEW_PORT
         try:
             port = manager.canonical_port()
@@ -167,6 +194,286 @@ class PreviewService:
             return await manager.resolve_active_projection(projection) is not None
         except Exception:  # noqa: BLE001 — a stale/malformed generation fails closed
             return False
+
+    async def resolve_finished_preview_runtime(
+        self,
+        conversation_id: str,
+        contract: SealedPreviewRuntimeContract,
+    ) -> dict[str, Any] | None:
+        """Resolve the exact original generation or its host-bound sealed restore."""
+
+        executor = self._rt._executors.get(conversation_id)
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        manager = getattr(session, "_preview_manager", None) if session is not None else None
+        if manager is None:
+            return None
+        try:
+            resolved = await manager.resolve_active_projection(contract.projection)
+            if resolved is None:
+                resolved = await manager.resolve_sealed_contract(contract)
+            data = resolved.to_dict() if resolved is not None else None
+        except Exception:  # noqa: BLE001 - stale or malformed authority fails closed
+            return None
+        if not isinstance(data, dict) or data.get("status") not in {"running", "unavailable"}:
+            return None
+        return data
+
+    @staticmethod
+    def _selected_finished_app_entry(events: list[Any], marker_seq: int) -> str | None:
+        selected: str | None = None
+        for event in events:
+            if type(getattr(event, "seq", None)) is int and event.seq > marker_seq:
+                break
+            if isinstance(event, DeliverableEvent) and event.artifact_kind == "app":
+                selected = event.path
+        return selected
+
+    def _sealed_runtime_contract(
+        self,
+        conversation_id: str,
+        events: list[Any],
+        committed: Any,
+    ) -> SealedPreviewRuntimeContract | None:
+        seal = committed.event.final_seal
+        if seal is None or committed.event.seq is None:
+            return None
+        entry = self._selected_finished_app_entry(events, committed.event.seq)
+        if entry is None:
+            return None
+        return derive_sealed_preview_runtime_contract(
+            events,
+            terminal_seq=seal.terminal_seq,
+            conversation_id=conversation_id,
+            version_seq=committed.event.version_seq,
+            tree_digest=committed.event.tree_digest,
+            app_entry=entry,
+        )
+
+    @staticmethod
+    def _sealed_workspace_cwd(cwd: str | None) -> str:
+        """Return a jailed workspace-relative cwd for dependency restoration.
+
+        PreviewManager launches the retained raw intent, while dependency setup
+        addresses files through the sandbox file API.  Normalize the two accepted
+        workspace spellings to one relative path and fail closed on anything that
+        could name a different filesystem location.
+        """
+
+        if cwd is None or cwd in {"", ".", "/workspace", "/workspace/"}:
+            return ""
+        if cwd != cwd.strip() or "\x00" in cwd or "\\" in cwd:
+            raise RuntimeError("sealed Preview cwd must be a clean POSIX workspace path")
+        if cwd.startswith("/workspace/"):
+            relative = cwd.removeprefix("/workspace/")
+        elif cwd.startswith("/"):
+            raise RuntimeError("sealed Preview cwd must remain inside /workspace")
+        else:
+            relative = cwd
+        parts = tuple(part for part in relative.split("/") if part not in {"", "."})
+        if not parts or any(part == ".." for part in parts):
+            if parts:
+                raise RuntimeError("sealed Preview cwd must remain inside /workspace")
+            return ""
+        return "/".join(parts)
+
+    @staticmethod
+    def _sealed_path(cwd: str, name: str) -> str:
+        return posixpath.join(cwd, name) if cwd else name
+
+    @classmethod
+    def _normalized_sealed_runtime_contract(
+        cls,
+        contract: SealedPreviewRuntimeContract,
+    ) -> SealedPreviewRuntimeContract:
+        """Canonicalize every sealed launch cwd before any runtime dispatch.
+
+        Dependency-free Python/static/custom servers must cross the same cwd jail
+        as Node runtimes.  A relative ``./`` spelling also keeps a dash-leading
+        directory unambiguously path-shaped for tmux and package-manager CLIs.
+        """
+
+        relative_cwd = cls._sealed_workspace_cwd(contract.cwd)
+        return replace(contract, cwd=f"./{relative_cwd}" if relative_cwd else None)
+
+    @staticmethod
+    async def _prepare_sealed_node_dependencies(
+        session: Any,
+        contract: SealedPreviewRuntimeContract,
+    ) -> str | None:
+        """Restore a Node runtime from an immutable, lockfile-owned graph."""
+
+        if not preview_requires_node_dependencies(
+            command=contract.command,
+            framework=contract.framework,
+        ):
+            return None
+        cwd = PreviewService._sealed_workspace_cwd(contract.cwd)
+        package_path = PreviewService._sealed_path(cwd, "package.json")
+        try:
+            package = json.loads((await session.read_file(package_path)).decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError("sealed Node Preview is missing a valid package.json") from exc
+        if not isinstance(package, dict):
+            raise RuntimeError("sealed Node Preview package.json must be an object")
+        dependency_sections = (
+            package.get("dependencies"),
+            package.get("devDependencies"),
+            package.get("optionalDependencies"),
+        )
+        needs_install = any(
+            isinstance(section, dict) and bool(section) for section in dependency_sections
+        )
+        if not needs_install:
+            return None
+        cli_cwd = f"./{cwd}" if cwd else ""
+        npm_prefix = f" --prefix {shlex.quote(cli_cwd)}" if cli_cwd else ""
+        pnpm_dir = f" --dir {shlex.quote(cli_cwd)}" if cli_cwd else ""
+        yarn_cwd = f" --cwd {shlex.quote(cli_cwd)}" if cli_cwd else ""
+        lock_commands = (
+            ("package-lock.json", f"npm{npm_prefix} ci --no-audit --no-fund"),
+            ("npm-shrinkwrap.json", f"npm{npm_prefix} ci --no-audit --no-fund"),
+            ("pnpm-lock.yaml", f"corepack pnpm{pnpm_dir} install --frozen-lockfile"),
+            ("yarn.lock", f"corepack yarn{yarn_cwd} install --immutable"),
+        )
+        available = [
+            (PreviewService._sealed_path(cwd, path), command)
+            for path, command in lock_commands
+            if await session.file_exists(PreviewService._sealed_path(cwd, path))
+        ]
+        if len(available) != 1:
+            found = ", ".join(path for path, _command in available) or "none"
+            raise RuntimeError(
+                "sealed Node Preview requires exactly one supported immutable lockfile "
+                f"(found: {found})"
+            )
+        lock_path, command = available[0]
+        installed = await session.exec_shell(command, timeout_s=300)
+        if getattr(installed, "exit_code", 1) != 0 or bool(getattr(installed, "timed_out", False)):
+            detail = str(
+                getattr(installed, "stderr", "")
+                or getattr(installed, "stdout", "")
+                or "dependency installation failed"
+            ).strip()
+            raise RuntimeError(
+                f"sealed Node Preview dependency restore from {lock_path} failed: {detail[-1200:]}"
+            )
+        dependency_dir = PreviewService._sealed_path(cwd, "node_modules")
+        if not await session.file_exists(dependency_dir):
+            raise RuntimeError(
+                "sealed Node Preview dependency restore did not produce node_modules; "
+                "this package-manager layout is not yet supported for sealed replay"
+            )
+        return dependency_dir
+
+    @staticmethod
+    async def _replace_with_sealed_workspace(
+        session: Any,
+        files: tuple[tuple[str, bytes], ...],
+        *,
+        dependency_dir: str | None = None,
+        contract_id: str | None = None,
+    ) -> None:
+        """Replace the mutable workspace with exact sealed bytes.
+
+        When dependency installation has run, retain only its ``node_modules``
+        subtree.  Lifecycle scripts may have edited source files or created other
+        files, so everything else is removed and re-materialized from the verified
+        immutable version before launch.
+        """
+
+        staged_dependency: str | None = None
+        if dependency_dir is not None:
+            normalized_dependency = dependency_dir.strip("/")
+            if not normalized_dependency or normalized_dependency.endswith("/.."):
+                raise RuntimeError("sealed Preview dependency directory is invalid")
+            dependency_prefix = normalized_dependency + "/"
+            if any(
+                path == normalized_dependency or path.startswith(dependency_prefix)
+                for path, _data in files
+            ):
+                raise RuntimeError("sealed workspace must not contain generated node_modules")
+            if not contract_id:
+                raise RuntimeError("sealed Preview dependency preservation requires authority")
+            suffix = hashlib.sha256(contract_id.encode("utf-8")).hexdigest()[:24]
+            staged_dependency = f".disco-preview-dependencies-{suffix}"
+            staged_prefix = staged_dependency + "/"
+            if any(
+                path == staged_dependency or path.startswith(staged_prefix) for path, _data in files
+            ):
+                raise RuntimeError("sealed workspace collides with dependency staging path")
+            dep_arg = shlex.quote(normalized_dependency)
+            stage_arg = shlex.quote(staged_dependency)
+            preserve = await session.exec_shell(
+                " && ".join(
+                    (
+                        f"test -d {dep_arg}",
+                        f"test ! -L {dep_arg}",
+                        f"test ! -e {stage_arg}",
+                        f"mv -- {dep_arg} {stage_arg}",
+                        "find . -mindepth 1 -maxdepth 1 "
+                        f"! -name {stage_arg} -exec rm -rf -- {{}} +",
+                    )
+                ),
+                timeout_s=30,
+            )
+            if getattr(preserve, "exit_code", 1) != 0 or bool(
+                getattr(preserve, "timed_out", False)
+            ):
+                detail = str(
+                    getattr(preserve, "stderr", "")
+                    or getattr(preserve, "stdout", "")
+                    or "dependency preservation failed"
+                ).strip()
+                raise RuntimeError(f"sealed Preview dependency preservation failed: {detail[:500]}")
+        else:
+            clear = await session.exec_shell(
+                "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+                timeout_s=30,
+            )
+            if getattr(clear, "exit_code", 1) != 0 or bool(getattr(clear, "timed_out", False)):
+                detail = str(
+                    getattr(clear, "stderr", "")
+                    or getattr(clear, "stdout", "")
+                    or "workspace clear failed"
+                ).strip()
+                raise RuntimeError(f"sealed Preview workspace clear failed: {detail[:500]}")
+
+        for path, data in files:
+            await session.write_file(path, data)
+
+        if staged_dependency is not None:
+            dependency_parent = posixpath.dirname(dependency_dir or "")
+            parent_arg = shlex.quote(dependency_parent or ".")
+            dep_arg = shlex.quote(dependency_dir or "")
+            stage_arg = shlex.quote(staged_dependency)
+            restore = await session.exec_shell(
+                " && ".join(
+                    (
+                        f"mkdir -p -- {parent_arg}",
+                        f"test ! -e {dep_arg}",
+                        f"mv -- {stage_arg} {dep_arg}",
+                    )
+                ),
+                timeout_s=30,
+            )
+            if getattr(restore, "exit_code", 1) != 0 or bool(getattr(restore, "timed_out", False)):
+                detail = str(
+                    getattr(restore, "stderr", "")
+                    or getattr(restore, "stdout", "")
+                    or "dependency restore failed"
+                ).strip()
+                raise RuntimeError(f"sealed Preview dependency restore failed: {detail[:500]}")
+
+        for path, data in files:
+            if await session.read_file(path) != data:
+                raise RuntimeError(f"sealed Preview read-back changed: {path}")
+
+    @staticmethod
+    def _restore_succeeded(restored: Any) -> bool:
+        return getattr(getattr(restored, "status", None), "value", None) in {
+            "running",
+            "unavailable",
+        }
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Generalized upstream resolution for any curated USER port (BP-10).
@@ -307,9 +614,16 @@ class PreviewService:
                 **metadata,
             }
         if target_port is None:
+            preparing_reason = (
+                "Preparing preview: waiting for the platform-managed runtime to start."
+                if manager is None
+                and self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES
+                else None
+            )
             return {
                 "available": False,
                 "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                or preparing_reason
                 or "No health-verified managed preview is currently available.",
                 "owner": None,
                 "ports": ports_payload,
@@ -348,23 +662,147 @@ class PreviewService:
         rehydrate the snapshot, then start the preview — the user explicitly asked to
         see the artifact again, and that's exactly what the snapshot is for."""
         executor = self._rt._executors.get(conversation_id)
-        if executor is None:
-            store = self._rt._project_store_now()
+        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        manager = getattr(session, "_preview_manager", None) if session is not None else None
+        store = self._rt._project_store_now()
+
+        # Preserve the legacy static artifact viewer for non-Build surfaces. It is
+        # deliberately outside canonical Build Preview and cannot mint managed
+        # runtime verification authority.
+        if (
+            executor is None
+            and self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+        ):
             if store is None or store.status() != StorageStatus.OK:
                 return False
             try:
                 record = store.get(conversation_id)
-            except Exception:  # noqa: BLE001 — manifest unreadable: nothing to revive
+            except Exception:  # noqa: BLE001 - corrupt legacy snapshot stays unavailable
                 return False
             if record is None or record.files_missing:
-                return False  # never had a build snapshot (e.g. research) — no preview
-            self._rt._loop_for(conversation_id)  # registers a fresh executor + lazy sandbox
+                return False
+            self._rt._loop_for(conversation_id)
             await self._rt._maybe_rehydrate(conversation_id)
             executor = self._rt._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            return False
+            session = getattr(executor, "_sandbox", None) if executor is not None else None
+            if session is None:
+                return False
+            try:
+                return await session.ensure_preview()
+            except Exception:  # noqa: BLE001
+                return False
+
+        # A nonterminal managed runtime can be repaired from its in-memory accepted
+        # intent. FINISHED restores require the stronger immutable contract below.
         try:
-            return await session.ensure_preview()
-        except Exception:  # noqa: BLE001
+            events = await self._rt._store.get_events(conversation_id)
+            state = await self._rt._store.get_state(conversation_id)
+        except Exception:  # noqa: BLE001 - missing durable authority cannot launch code
             return False
+        finished = state.execution_status is ConversationStatus.FINISHED
+        if store is None or store.status() != StorageStatus.OK:
+            if manager is None or finished:
+                return False
+            try:
+                restarted = await manager.restart_canonical()
+                return self._restore_succeeded(restarted)
+            except Exception:  # noqa: BLE001
+                return False
+        try:
+            committed = resolve_committed_workspace(events, store, conversation_id)
+        except WorkspaceCommitUnavailable:
+            if finished:
+                return False
+            if manager is not None:
+                try:
+                    restarted = await manager.restart_canonical()
+                    return self._restore_succeeded(restarted)
+                except Exception:  # noqa: BLE001
+                    return False
+            if (
+                session is not None
+                and self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+            ):
+                try:
+                    return await session.ensure_preview()
+                except Exception:  # noqa: BLE001
+                    return False
+            return False
+
+        contract = self._sealed_runtime_contract(conversation_id, events, committed)
+        if contract is None:
+            return False
+
+        # Explicit user restart is the only replay boundary. Serialize it with all
+        # workspace writers, consume bytes from the freshly verified immutable
+        # version (never the mutable project mirror), and re-prove the seal before
+        # executing the raw typed intent.
+        lock = self._rt.workspace_lock(conversation_id)
+        async with lock, self._rt._workspace.interprocess_mutation_fence(conversation_id):
+            try:
+                with store.open_verified_version(
+                    conversation_id, committed.event.version_seq
+                ) as verified:
+                    files = tuple(
+                        (entry.path, verified.read_bytes(entry.path)) for entry in verified.files
+                    )
+                if executor is None:
+                    self._rt._loop_for(conversation_id)
+                    executor = self._rt._executors.get(conversation_id)
+                session = getattr(executor, "_sandbox", None) if executor is not None else None
+                if session is None:
+                    return False
+                manager = getattr(session, "_preview_manager", None)
+                if manager is not None:
+                    await manager.stop(None)
+                if manager is None or bool(getattr(manager, "_closed", False)):
+                    manager = PreviewManager(session)
+                    session._preview_manager = manager
+                await self._replace_with_sealed_workspace(session, files)
+                if getattr(self._rt, "_rehydrated", None) is None:
+                    self._rt._rehydrated = set()
+                self._rt._rehydrated.add(conversation_id)
+
+                current_events = await self._rt._store.get_events(conversation_id)
+                current_committed = resolve_committed_workspace(
+                    current_events, store, conversation_id
+                )
+                current_contract = self._sealed_runtime_contract(
+                    conversation_id, current_events, current_committed
+                )
+                if current_contract is None or current_contract.contract_id != contract.contract_id:
+                    return False
+
+                launch_contract = self._normalized_sealed_runtime_contract(current_contract)
+                dependency_dir = await self._prepare_sealed_node_dependencies(
+                    session, launch_contract
+                )
+                if dependency_dir is not None:
+                    await self._replace_with_sealed_workspace(
+                        session,
+                        files,
+                        dependency_dir=dependency_dir,
+                        contract_id=current_contract.contract_id,
+                    )
+                manager = getattr(session, "_preview_manager", None)
+                if manager is None:
+                    manager = PreviewManager(session)
+                    session._preview_manager = manager
+                restored = await manager.restore_sealed(launch_contract)
+                status = getattr(getattr(restored, "status", None), "value", None)
+                if not self._restore_succeeded(restored):
+                    _LOG.warning(
+                        "sealed Preview restore unavailable for %s: status=%s detail=%s",
+                        conversation_id,
+                        status,
+                        getattr(restored, "detail", ""),
+                    )
+                    return False
+                return True
+            except Exception:  # noqa: BLE001 - any authority/rehydration failure stays unavailable
+                _LOG.warning(
+                    "sealed Preview restore failed for %s",
+                    conversation_id,
+                    exc_info=True,
+                )
+                return False

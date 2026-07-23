@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from disco.core import (
     ActionEvent,
+    BuildPlatformAdmissionEvent,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
@@ -16,6 +17,7 @@ from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, NeverConfirm
 from disco.core.loop.finish import FinishGate, _latest_verify_verdict
+from disco.core.verification import default_structured_web_claims
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -197,6 +199,17 @@ async def test_appkit_build_finishes_on_appkit_pass_verdict() -> None:
     )
     execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
     loop, store = _gate_loop(agent, execu)
+    await loop._emit(
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.appkit_web@1",
+            run_intent_id="intent-appkit",
+            composition_authority="build_platform_core",
+            composition_digest="sha256:" + "a" * 64,
+            run_identity="run:sha256:" + "b" * 64,
+            verification_claims=default_structured_web_claims(),
+        )
+    )
     await loop.send_message("build me a lead-gen app")
     await loop.run()
 

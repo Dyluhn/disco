@@ -123,6 +123,43 @@ async def test_destroy_cancels_inflight_preview_task():
 
 
 @pytest.mark.asyncio
+async def test_legacy_auto_preview_can_be_disabled_before_first_sandbox_use():
+    """Owned Build sessions reserve Preview lifecycle authority for PreviewManager.
+
+    Creating the sandbox must not expose an unmanaged ``preview`` shell session, and
+    recreation must retain the same no-legacy-preview posture.
+    """
+
+    session = SandboxSession(
+        _FakeSvc(),
+        conversation_id="conv-managed-preview",
+        legacy_auto_preview=False,
+    )
+    called = False
+
+    async def _unexpected_preview(port: int = 8000) -> bool:
+        nonlocal called
+        called = True
+        return True
+
+    session.ensure_preview = _unexpected_preview  # type: ignore[method-assign]
+    await session._ensure()
+    await asyncio.sleep(0)
+
+    assert session._preview_task is None
+    assert called is False
+    assert session._auto_preview_disabled is True
+
+    first = session._instance
+    assert first is not None
+    await session._recreate(first)
+    await asyncio.sleep(0)
+    assert session._preview_task is None
+    assert called is False
+    await session.destroy()
+
+
+@pytest.mark.asyncio
 async def test_destroy_closes_cached_preview_manager():
     """P2 #4: a started PreviewManager cached on the session (`_preview_manager`, set by
     the preview_* tools) runs a supervisor task that sleeps forever. `destroy()` must

@@ -141,8 +141,9 @@ _PACKAGE_RELPATH = "package.json"
 _WORKER_RELPATH = "worker/index.ts"
 _COMPONENTS_DIR = "src/components"
 _VITE_CONFIG_RELPATH = "vite.config.ts"
-_VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
+APPKIT_VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
 _VITE_BUILD_TIMEOUT_S = 300
+APPKIT_LIVE_PREVIEW_NAME = "appkit-live-vite"
 _BUILT_PREVIEW_NAME = "appkit-built-vite"
 _VITE_PREVIEW_COMMAND = "npx vite preview --host 0.0.0.0 --port {port} --strictPort"
 # Where app_add_primitive persists applied-primitive provenance records (keep in
@@ -196,6 +197,7 @@ class _PreparedPreview:
     url: str
     stop_name: str | None = None
     failure_evidence: str | None = None
+    runtime: dict[str, Any] | None = None
 
 
 def _is_vite_app_tree(package_json: str | None, has_vite_config: bool) -> bool:
@@ -239,6 +241,12 @@ def _served_preview_uses_built_bundle(index_html: str) -> bool | None:
     if _BUILT_VITE_BUNDLE_RE.search(index_html):
         return True
     return None
+
+
+def _served_preview_is_vite_dev(index_html: str) -> bool:
+    """Recognize Vite's real development transform, not a raw source server."""
+
+    return "/@vite/client" in index_html and _served_preview_uses_built_bundle(index_html) is False
 
 
 def _tail(text: str, *, limit: int = 2000) -> str:
@@ -432,6 +440,7 @@ class VerifyAppKitAppTool:
             # Vite SPAs need a platform-owned compiled preview: the model has no shell in
             # strict AppKit mode, but the browser checks must hit built JS, not /src/*.tsx.
             prepared = await self._prepare_vite_preview_for_browser_checks(ctx, args.url)
+            retain_prepared_runtime = False
             try:
                 if prepared.failure_evidence is not None:
                     embedded = {
@@ -449,13 +458,22 @@ class VerifyAppKitAppTool:
                     embedded, route_check, section_check = await self._browser_checks(
                         ctx, app, prepared.url
                     )
+                    retain_prepared_runtime = bool(
+                        embedded
+                        and embedded.get("passed") is True
+                        and route_check["passed"]
+                        and section_check["passed"]
+                    )
             finally:
-                if prepared.stop_name is not None:
+                if prepared.stop_name is not None and not retain_prepared_runtime:
                     await self._stop_prepared_preview(ctx, prepared.stop_name)
             checks.append(route_check)
             checks.append(section_check)
 
             verdict = build_verdict(checks, embedded)
+            if verdict["passed"] and prepared.runtime is not None:
+                verdict["preview_runtime"] = prepared.runtime
+                verdict["canonical_entry_path"] = "dist/index.html"
             return ToolOutcome(success=True, content=_render(verdict), structured=verdict)
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
             return fail_outcome(f"verify_appkit_app error: {e}")
@@ -762,42 +780,71 @@ class VerifyAppKitAppTool:
         return _check("design_lint_clean", False, st.get("summary", "design slop found."))
 
     async def _prepare_vite_preview_for_browser_checks(
-        self, ctx: ToolContext, requested_url: str
+        self, ctx: ToolContext, _requested_url: str
     ) -> _PreparedPreview:
-        """If this is a Vite SPA and the current preview is source-served, build it
-        and serve the compiled app through the platform PreviewManager.
+        """Use the real managed Vite runtime, or build a managed runtime if absent.
 
-        Only a preview whose index clearly references a built ``/assets/*.js`` bundle
-        is accepted as already prepared. A missing, failing, source-served, or opaque
-        probe is not proof of a built app, so the platform builds and starts a compiled
-        preview before the browser checks.
+        A Vite development response is accepted only when it carries Vite's
+        ``/@vite/client`` transform; a raw static server exposing ``/src/*.tsx`` is
+        still rejected. A missing, failing, raw-source, or opaque probe triggers a
+        platform build and managed compiled preview before browser checks.
         """
         assert ctx.sandbox is not None
         package_json = await self._read_text(ctx, _PACKAGE_RELPATH)
         if not _is_vite_app_tree(package_json, await ctx.sandbox.file_exists(_VITE_CONFIG_RELPATH)):
-            return _PreparedPreview(url=(requested_url or "").strip())
+            return _PreparedPreview(url=(_requested_url or "").strip())
 
-        vtool = VerifyWebAppTool()
-        base = (requested_url or "").strip() or await vtool._detect_preview_url(ctx)
-        base = base.rstrip("/") if base else ""
-        should_build = not base
-        if base:
-            probe = await self._fetch_preview_index(ctx, base)
-            if probe is None or probe.error:
-                should_build = True
-            else:
-                built = _served_preview_uses_built_bundle(probe.body)
-                if built is True:
-                    return _PreparedPreview(url=base)
-                should_build = True
-
-        if not should_build:
-            return _PreparedPreview(url=base)
-
+        managed = self._canonical_managed_vite_preview(ctx)
         build = await self._ensure_vite_platform_build(ctx, package_json or "")
         if not build.ok:
-            return _PreparedPreview(url=base, failure_evidence=build.evidence)
+            return _PreparedPreview(
+                url=managed.url if managed is not None else "",
+                failure_evidence=build.evidence,
+                runtime=managed.runtime if managed is not None else None,
+            )
+        if managed is not None:
+            probe = await self._fetch_preview_index(ctx, managed.url)
+            if (
+                probe is None
+                or probe.error
+                or not (
+                    _served_preview_is_vite_dev(probe.body)
+                    or _served_preview_uses_built_bundle(probe.body) is True
+                )
+            ):
+                evidence = (
+                    probe.error
+                    if probe is not None and probe.error
+                    else "canonical managed Vite runtime did not serve a recognizable Vite page"
+                )
+                return _PreparedPreview(
+                    url=managed.url,
+                    failure_evidence=evidence,
+                    runtime=managed.runtime,
+                )
+            return managed
         return await self._start_built_vite_preview(ctx)
+
+    @staticmethod
+    def _canonical_managed_vite_preview(ctx: ToolContext) -> _PreparedPreview | None:
+        """Return the one host-owned AppKit manager selection, ignoring caller URLs."""
+
+        manager = getattr(ctx.sandbox, "_preview_manager", None)
+        session = manager.canonical_session() if manager is not None else None
+        if session is None:
+            return None
+        if getattr(session, "name", None) not in {
+            APPKIT_LIVE_PREVIEW_NAME,
+            _BUILT_PREVIEW_NAME,
+        }:
+            return None
+        port = getattr(session, "port", None)
+        if type(port) is not int:
+            return None
+        data = session.to_dict()
+        if not isinstance(data, dict) or data.get("status") not in {"running", "unavailable"}:
+            return None
+        return _PreparedPreview(url=f"http://127.0.0.1:{port}/", runtime=data)
 
     async def _fetch_preview_index(self, ctx: ToolContext, base_url: str) -> _PreviewProbe | None:
         """Fetch the current preview's root from inside the sandbox.
@@ -848,7 +895,7 @@ class VerifyAppKitAppTool:
         assert ctx.sandbox is not None
         package_sha = hashlib.sha256(package_json.encode("utf-8")).hexdigest()
         node_modules_exists = await self._sandbox_dir_exists(ctx, "node_modules")
-        marker = (await self._read_text(ctx, _VITE_PACKAGE_SHA_RELPATH) or "").strip()
+        marker = (await self._read_text(ctx, APPKIT_VITE_PACKAGE_SHA_RELPATH) or "").strip()
         need_ci = not (node_modules_exists and marker == package_sha)
         started = time.monotonic()
 
@@ -876,7 +923,7 @@ class VerifyAppKitAppTool:
                 return _BuildResult(False, _exec_failure_evidence(install_cmd, ci))
             try:
                 await ctx.sandbox.write_file(
-                    _VITE_PACKAGE_SHA_RELPATH, (package_sha + "\n").encode("utf-8")
+                    APPKIT_VITE_PACKAGE_SHA_RELPATH, (package_sha + "\n").encode("utf-8")
                 )
             except Exception:  # noqa: BLE001 — cache marker failure must not hide build evidence
                 pass
@@ -889,6 +936,11 @@ class VerifyAppKitAppTool:
             return _BuildResult(False, f"platform Vite build could not run `npm run build`: {exc}")
         if getattr(build, "exit_code", 1) != 0 or bool(getattr(build, "timed_out", False)):
             return _BuildResult(False, _exec_failure_evidence("npm run build", build))
+        if not await self._sandbox_file_exists(ctx, "dist/index.html"):
+            return _BuildResult(
+                False,
+                "platform Vite build reported success but did not produce dist/index.html",
+            )
         return _BuildResult(True)
 
     async def _start_built_vite_preview(self, ctx: ToolContext) -> _PreparedPreview:
@@ -901,7 +953,7 @@ class VerifyAppKitAppTool:
             session = await mgr.start(
                 command=_VITE_PREVIEW_COMMAND,
                 name=_BUILT_PREVIEW_NAME,
-                supervise=False,
+                supervise=True,
             )
         except Exception as exc:  # noqa: BLE001 — route/section fail loudly
             return _PreparedPreview(
@@ -927,6 +979,7 @@ class VerifyAppKitAppTool:
         return _PreparedPreview(
             url=f"http://127.0.0.1:{port}/",
             stop_name=_BUILT_PREVIEW_NAME,
+            runtime=(session.to_dict() if callable(getattr(session, "to_dict", None)) else None),
         )
 
     async def _stop_prepared_preview(self, ctx: ToolContext, name: str) -> None:

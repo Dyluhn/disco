@@ -272,6 +272,8 @@ export function PreviewPane({
     [files, selectedAppPath],
   );
   const hasWorkspaceVersion = events.some((event) => event.kind === "workspace_version");
+  const hasFinishedCommittedApp =
+    status === "FINISHED" && Boolean(appDeliverable && hasWorkspaceVersion);
   const webSignal = Boolean(appDeliverable || artifactSrcDoc || data?.available);
   const ownsCanonicalPreview = Boolean(cid && !untrusted && webSignal);
 
@@ -411,7 +413,10 @@ export function PreviewPane({
     if (!cid) return;
     setRestarting(true);
     try {
-      if (!data?.available || data.status === "crashed" || data.status === "stopped") {
+      if (
+        !hasFinishedCommittedApp &&
+        (!data?.available || data.status === "crashed" || data.status === "stopped")
+      ) {
         await restartPreview(cid);
       }
       await queryClient.invalidateQueries({ queryKey: ["build-preview", cid] });
@@ -419,7 +424,7 @@ export function PreviewPane({
     } finally {
       setRestarting(false);
     }
-  }, [cid, data?.available, data?.status, queryClient]);
+  }, [cid, data?.available, data?.status, hasFinishedCommittedApp, queryClient]);
 
   function selectVersion(seq: number | null) {
     setSelectedVersionSeq(seq);
@@ -563,7 +568,7 @@ export function PreviewPane({
     );
   }
 
-  const committedStatic = status === "FINISHED" && Boolean(appDeliverable && hasWorkspaceVersion);
+  const committedStatic = hasFinishedCommittedApp;
   const runtimeUnavailable =
     selectedVersionSeq === null && !committedStatic && data != null && !data.available;
   const visibleFailure =
@@ -623,6 +628,14 @@ export function PreviewPane({
         </div>
       </div>
       {RestoreNotice}
+      {selectedVersionSeq === null && data?.update_error && (
+        <div
+          role="alert"
+          className="shrink-0 border-b border-warn/30 bg-warn/10 px-body py-hair font-ui text-[0.72rem] text-warn"
+        >
+          Preview is showing the last healthy frame while the platform retries: {data.update_error}
+        </div>
+      )}
       {displayedVersionSeq !== null && (
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-warn/30 bg-warn/10 px-body py-hair">
           <span className="font-ui text-[0.78rem] text-warn">

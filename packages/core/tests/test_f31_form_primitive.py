@@ -89,7 +89,10 @@ def _folded_tree() -> tuple[AppSpec, dict[str, str]]:
 
 _GOLDEN_HASHES = {
     "lead_gen": "e43ba2d918404a98e0963b227e1d53ab45d7de0c12cd1c914fc51476a8d3755d",
-    "directory": "300fb2487a86fee8f2d47ce8fc5a4426010e43584e565744f3b76813df75bebb",
+    # Canonical Preview requires the same reviewed lockfile already emitted by
+    # every other generated Vite shape; the directory tree is intentionally
+    # re-pinned after closing that generator omission.
+    "directory": "9af968c24fcd4c0ca5100c2f07e157c9897a58a0a3a95a8d4c167cabeedf8299",
     "records": "243337de655694182ef2c6af2e4648081586ef07a1a0462d0421c2050789054b",
     # WO-F4.1 hardens the shared auth CSRF comparison from host-only to exact
     # scheme+host+port origin equality; that intentional byte change is re-pinned.
@@ -114,6 +117,22 @@ def _default_tree_hash(prim_id: str) -> str:
 @pytest.mark.parametrize("prim_id", ["lead_gen", "directory", "records", "hello"])
 def test_existing_primitive_output_byte_identical(prim_id: str):
     assert _default_tree_hash(prim_id) == _GOLDEN_HASHES[prim_id]
+
+
+def test_directory_lock_root_matches_generated_package_manifest() -> None:
+    prim = get_primitive("directory")
+    assert prim is not None
+    app = prim.prepare_app_spec(prim.default_app_spec("Snapshot App", _RECIPE))
+    tree = generate(app, _DESIGN)
+    package = json.loads(tree["package.json"])
+    lock = json.loads(tree["package-lock.json"])
+    root = lock["packages"][""]
+
+    assert lock["name"] == package["name"]
+    assert root["name"] == package["name"]
+    assert root["version"] == package["version"]
+    assert root.get("dependencies", {}) == package.get("dependencies", {})
+    assert root.get("devDependencies", {}) == package.get("devDependencies", {})
 
 
 def test_records_auth_output_byte_identical():

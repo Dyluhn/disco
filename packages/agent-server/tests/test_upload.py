@@ -414,15 +414,34 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     cid = "conv_adoption_test"
+    rt.set_surface(cid, "build")
 
     with mock.patch.object(rt, "_sandbox_service_now"):
         session = rt.upload_session(cid)
         assert cid in rt._pending_sessions
+        assert session._auto_preview_disabled is True
 
         loop = rt._compose_build_loop(cid, router, agent)
 
     assert loop.executor._sandbox is session
     assert cid not in rt._pending_sessions
+
+
+def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None:
+    """Research uploads are not silently migrated onto the owned Build lifecycle."""
+
+    from unittest import mock
+
+    from disco.agent_server.runtime import ConversationRuntime
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    cid = "conv_research_upload"
+    rt.set_surface(cid, "research")
+
+    with mock.patch.object(rt, "_sandbox_service_now"):
+        session = rt.upload_session(cid)
+
+    assert session._auto_preview_disabled is False
 
 
 @pytest.mark.asyncio

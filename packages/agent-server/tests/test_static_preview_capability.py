@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import re
+import socket
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from disco.agent_server import ConversationRuntime
 from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router, websocket_session
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
+from disco.agent_server.preview_manager import preview_projection_digest
 from disco.agent_server.routes.preview import (
     _canonical_preview_authority,
     _path_preview_bootstrap_url,
@@ -18,12 +22,16 @@ from disco.agent_server.routes.preview import (
     make_preview_router,
 )
 from disco.core import (
+    ActionEvent,
     ConversationStatus,
     DeliverableEvent,
     FinalWorkspaceSeal,
+    ObservationEvent,
     ResourceKey,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
+    ToolResult,
     WorkspaceVersionEvent,
 )
 from disco.core.auth import (
@@ -36,6 +44,8 @@ from disco.core.auth import (
     path_preview_cookie_name,
     path_preview_host_label,
 )
+from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
+from disco.tools import ProcessSandboxService
 from disco.tools.projects import ProjectStore
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
@@ -44,6 +54,34 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 _TOSSED_MARKER_COOKIE = "disco_path_preview_isolated"
 
 pytestmark = pytest.mark.integration
+
+
+class _NoNetworkProvider:
+    name = "sealed-preview-test"
+
+    async def complete(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("the sealed Preview lifecycle must not call a model")
+
+    async def stream_complete(self, *_args: Any, **_kwargs: Any):
+        raise AssertionError("the sealed Preview lifecycle must not call a model")
+        yield  # pragma: no cover - keeps this an async iterator
+
+    def supports(self, *_args: Any, **_kwargs: Any) -> bool:
+        return True
+
+
+def _runtime_router() -> DefaultLLMRouter:
+    config = RouterConfig(
+        models={
+            "sealed": ModelEntry(
+                model_id="sealed",
+                provider="sealed-preview-test",
+                context_window=8192,
+            )
+        },
+        default_model="sealed",
+    )
+    return DefaultLLMRouter(config, {"sealed-preview-test": _NoNetworkProvider()})
 
 
 class _StaticRuntime:
@@ -65,6 +103,21 @@ class _StaticRuntime:
     ) -> None:
         del owner_id
         return None
+
+
+class _SealedProjectionRuntime(_StaticRuntime):
+    """Passive pre-restart authority for an exact recorded managed generation."""
+
+    def __init__(self, project_store: ProjectStore, projection: dict[str, object]) -> None:
+        super().__init__(project_store, target_port=cast(int, projection["port"]))
+        self._projection = projection
+
+    async def resolve_finished_preview_runtime(
+        self,
+        _conversation_id: str,
+        _contract: object,
+    ) -> dict[str, object]:
+        return dict(self._projection)
 
 
 def _app(
@@ -476,6 +529,293 @@ async def test_committed_static_snapshot_survives_stopped_managed_preview(
     )
     assert live.status_code == 409
     assert live.json()["detail"]["reason"] == "preview_unavailable"
+
+
+async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh runtime replays typed intent over exact sealed bytes, never the mirror."""
+
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "sealed-dynamic-preview-secret")
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "19640")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "4")
+    monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
+
+    free_ports: list[int] = []
+    for candidate in (3000, 8080, 5000, 4321):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", candidate))
+            free_ports.append(candidate)
+        except OSError:
+            continue
+        finally:
+            probe.close()
+    assert free_ports, "no curated process-preview port is available"
+    selected_port = free_ports[0]
+    monkeypatch.setattr(
+        "disco.agent_server.preview_manager._default_port_pool",
+        lambda _sandbox: list(free_ports),
+    )
+
+    cid = "conv_a1b2c3d4sealed"
+    store = SqliteEventStore(tmp_path / "sealed-preview.sqlite3")
+    projects = ProjectStore(str(tmp_path / "projects"))
+    restarted: ConversationRuntime | None = None
+    store.create_conversation(cid, owner_id="owner-a", surface="build")
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+
+    try:
+        workspace = projects.path_for(cid)
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "index.html").write_bytes(
+            b"<!doctype html><h1>SEALED DYNAMIC BYTES</h1><script src='asset.js'></script>"
+        )
+        (workspace / "asset.js").write_bytes(b"document.body.dataset.sealed='yes';")
+        projects.write_manifest(
+            cid,
+            title="Sealed dynamic application",
+            owner_id="owner-a",
+            created_at="2026-07-22T00:00:00+00:00",
+            file_count=2,
+            total_bytes=128,
+        )
+        raw_command = "python3 -m http.server {port}"
+        resolved_command = f"python3 -m http.server {selected_port}"
+        intent = {
+            "serve_dir": None,
+            "command": raw_command,
+            "framework": None,
+            "cwd": None,
+            "launch_kind": "custom",
+        }
+        intent_digest = preview_projection_digest(
+            name="sealed-web",
+            port=selected_port,
+            command=resolved_command,
+            exec_dir="/workspace",
+            intent=intent,
+        )
+        assert intent_digest is not None
+        start_action = await store.append(
+            cid,
+            ActionEvent(
+                thought="start the managed application",
+                tool_call=ToolCall(
+                    call_id="sealed-preview-start",
+                    tool_name="preview_start",
+                    arguments={"name": "sealed-web", "command": raw_command},
+                ),
+            ),
+        )
+        original_projection = "pv_" + "a" * 32
+        original_sandbox = "sbx_recorded_generation"
+        projection: dict[str, object] = {
+            "status": "running",
+            "name": "sealed-web",
+            "port": selected_port,
+            "launch_kind": "custom",
+            "projection_id": original_projection,
+            "intent_digest": intent_digest,
+            "sandbox_instance_id": original_sandbox,
+            "sandbox_generation": 1,
+            "command": resolved_command,
+            "exec_dir": "/workspace",
+            "intent": intent,
+        }
+        start_observation = await store.append(
+            cid,
+            ObservationEvent(
+                action_id=start_action.id,
+                tool_result=ToolResult(
+                    call_id="sealed-preview-start",
+                    tool_name="preview_start",
+                    success=True,
+                    content="preview running",
+                    structured=projection,
+                ),
+            ),
+        )
+        await store.append(
+            cid,
+            DeliverableEvent(
+                title="Sealed dynamic application",
+                path="index.html",
+                artifact_kind="app",
+            ),
+        )
+        terminal = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+        assert terminal.seq is not None and start_observation.seq is not None
+        version = projects.cut_verified_version(cid, trigger="finish", pin=True)
+        assert version is not None
+        version_event = await store.append(
+            cid,
+            WorkspaceVersionEvent(
+                version_seq=version.seq,
+                tree_digest=version.tree_digest,
+                trigger="finish",
+                final_seal=FinalWorkspaceSeal(
+                    scope=ResourceKey(namespace="workspace.tree", identifier=cid),
+                    terminal_seq=terminal.seq,
+                    latest_effect_seq=start_observation.seq,
+                    version_seq=version.seq,
+                    tree_digest=version.tree_digest,
+                    file_count=version.file_count,
+                    total_bytes=version.total_bytes,
+                ),
+            ),
+        )
+        recorded_runtime = _SealedProjectionRuntime(projects, projection)
+        original_app = _app(store, recorded_runtime, live_upstream=None)
+        with TestClient(
+            original_app,
+            base_url="http://127.0.0.1:18240",
+        ) as owner:
+            csrf = _install_owner_session(owner, "owner-a")
+            old_mint_response = owner.post(
+                f"/conversations/{cid}/preview/capability",
+                headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+                json={"target_path": "/", "transport": "canonical"},
+            )
+        assert old_mint_response.status_code == 200
+        old_mint = old_mint_response.json()
+        assert old_mint["preview_authority"].startswith("sealed-runtime:")
+        old_origin = urlsplit(old_mint["bootstrap_url"])
+        assert old_origin.port is not None
+        old_cookie_name = local_preview_cookie_name(old_origin.port)
+        with TestClient(
+            original_app,
+            base_url=f"{old_origin.scheme}://{old_origin.netloc}",
+        ) as original_preview:
+            assert (
+                _redeem(
+                    original_preview,
+                    old_mint["bootstrap_url"],
+                    old_mint["bootstrap_intent"],
+                ).status_code
+                == 200
+            )
+            old_cookie = original_preview.cookies.get(old_cookie_name)
+        assert old_cookie is not None
+
+        mutable_mirror = projects.path_for(cid)
+        (mutable_mirror / "index.html").write_text("<h1>MUTATED MIRROR</h1>")
+        (mutable_mirror / "foreign.txt").write_text("must not enter sealed restore")
+
+        restarted = ConversationRuntime(
+            store,
+            router=_runtime_router(),
+            sandbox_service=ProcessSandboxService(str(tmp_path / "sandbox-restarted")),
+        )
+        restarted._project_store_now = MagicMock(return_value=projects)
+        restarted.set_surface(cid, "build")
+        # Reuse a live sandbox carrying a foreign top-level file. Sealed restart
+        # must clear the workspace before restoring the verified version, not
+        # merely overlay immutable files onto whatever happens to be present.
+        restarted._loop_for(cid)
+        reused_session = restarted._executors[cid]._sandbox
+        await reused_session.write_file("foreign-runtime.txt", b"must be removed")
+        assert await reused_session.file_exists("foreign-runtime.txt")
+        capability_app = _app(store, cast(Any, restarted), live_upstream=None)
+        with TestClient(capability_app, base_url="http://127.0.0.1:18240") as owner:
+            csrf = _install_owner_session(owner, "owner-a")
+            new_mint_response = owner.post(
+                f"/conversations/{cid}/preview/capability",
+                headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+                json={"target_path": "/", "transport": "canonical"},
+            )
+        assert new_mint_response.status_code == 200, new_mint_response.text
+        new_mint = new_mint_response.json()
+        assert new_mint["preview_authority"] != old_mint["preview_authority"]
+
+        restored_executor = restarted._executors[cid]
+        restored_sandbox = restored_executor._sandbox
+        assert not await restored_sandbox.file_exists("foreign-runtime.txt")
+        restored_manager = restored_sandbox._preview_manager
+        restored_session = restored_manager.canonical_lifecycle_session()
+        assert restored_session is not None
+        assert restored_session.projection_id != original_projection
+        assert restored_session.sandbox_instance_id != original_sandbox
+        restored_projection = restored_session.projection_id
+        restored_upstream = restarted.port_upstream(cid, restored_session.port)
+        assert restored_upstream is not None
+        proxy_app = _app(store, cast(Any, restarted), live_upstream=restored_upstream)
+
+        current_origin = urlsplit(new_mint["bootstrap_url"])
+        with TestClient(
+            proxy_app,
+            base_url=f"{current_origin.scheme}://{current_origin.netloc}",
+        ) as current_preview:
+            current_reset, current_redemption = _redeem_steps(
+                current_preview,
+                new_mint["bootstrap_url"],
+                new_mint["bootstrap_intent"],
+            )
+            assert current_redemption.status_code == 200, (
+                current_reset.status_code if current_reset is not None else None,
+                current_reset.text if current_reset is not None else None,
+                current_redemption.status_code,
+                current_redemption.text,
+            )
+            page = current_preview.get("/")
+            asset = current_preview.get("/asset.js")
+        assert page.status_code == 200
+        assert "SEALED DYNAMIC BYTES" in page.text
+        assert "MUTATED MIRROR" not in page.text
+        assert asset.content == b"document.body.dataset.sealed='yes';"
+
+        with TestClient(
+            proxy_app,
+            base_url=f"{old_origin.scheme}://{old_origin.netloc}",
+        ) as stale_preview:
+            stale = stale_preview.get(
+                "/",
+                headers={"Cookie": f"{old_cookie_name}={old_cookie}"},
+            )
+        assert stale.status_code in {403, 404, 409}
+        assert stale.text in {
+            "preview capability required",
+            "preview generation changed",
+            "preview origin expired",
+        }
+
+        with TestClient(capability_app, base_url="http://127.0.0.1:18240") as owner:
+            csrf = _install_owner_session(owner, "owner-a")
+            historical_mint_response = owner.post(
+                f"/conversations/{cid}/preview/capability",
+                headers={"Origin": "http://127.0.0.1:18240", CSRF_HEADER: csrf},
+                json={
+                    "target_path": "/",
+                    "transport": "canonical",
+                    "workspace_version": version_event.version_seq,
+                },
+            )
+        assert historical_mint_response.status_code == 200, historical_mint_response.text
+        historical_mint = historical_mint_response.json()
+        historical_origin = urlsplit(historical_mint["bootstrap_url"])
+        with TestClient(
+            proxy_app,
+            base_url=f"{historical_origin.scheme}://{historical_origin.netloc}",
+        ) as historical_preview:
+            assert (
+                _redeem(
+                    historical_preview,
+                    historical_mint["bootstrap_url"],
+                    historical_mint["bootstrap_intent"],
+                ).status_code
+                == 200
+            )
+            historical_page = historical_preview.get("/")
+        assert historical_page.status_code == 200
+        assert "SEALED DYNAMIC BYTES" in historical_page.text
+        assert "MUTATED MIRROR" not in historical_page.text
+        assert restored_manager.canonical_lifecycle_session().projection_id == restored_projection
+    finally:
+        if restarted is not None:
+            await restarted._teardown_sandbox(cid)
+        store.close()
 
 
 async def test_canonical_loopback_serves_committed_and_historical_bytes_read_only(

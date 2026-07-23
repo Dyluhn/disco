@@ -127,6 +127,20 @@ afterEach(() => {
 });
 
 describe("PreviewPane — canonical refresh policy", () => {
+  it("keeps the last healthy frame visible with a host-owned refresh warning", async () => {
+    useBuildPreviewMock.mockReturnValue({
+      data: { ...HMR, update_error: "dependency refresh failed" },
+    });
+
+    renderPane("RUNNING", []);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/showing the last healthy frame.*dependency refresh failed/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
   it("debounces a plain/static file rewrite into one canonical remint", async () => {
     const initial = [fileWrite("index.html", "<h1>one</h1>")];
     const { rerender } = renderPane("RUNNING", initial);

@@ -114,6 +114,7 @@ def _appkit_exec(
     autonomous: bool = False,
     on_widen=None,
     on_eject=_fake_ejection,
+    on_preview_sync=None,
 ) -> tuple[AppKitToolExecutor, AppKitPhaseState]:
     state = AppKitPhaseState(phase=phase)
     base = agent_scope(model_policy=_STANDARD)
@@ -126,6 +127,7 @@ def _appkit_exec(
         mode_getter=lambda: loop_mode,
         on_widen=on_widen,
         on_eject=on_eject,
+        on_preview_sync=on_preview_sync,
         sandbox=FakeSandboxInstance(),
     )
     return ex, state
@@ -140,6 +142,36 @@ async def _scaffold(ex: AppKitToolExecutor, *, primitive_id: str = "lead_gen"):
             brief="Acme",
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_successful_semantic_mutation_syncs_host_preview_once() -> None:
+    calls = 0
+
+    async def sync_preview() -> None:
+        nonlocal calls
+        calls += 1
+
+    ex, _state = _appkit_exec(on_preview_sync=sync_preview)
+    result = await _scaffold(ex)
+
+    assert result.success is True
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refused_semantic_mutation_does_not_sync_host_preview() -> None:
+    calls = 0
+
+    async def sync_preview() -> None:
+        nonlocal calls
+        calls += 1
+
+    ex, _state = _appkit_exec(on_preview_sync=sync_preview)
+    result = await ex.execute(call("app_create", recipe_id="does-not-exist"))
+
+    assert result.success is False
+    assert calls == 0
 
 
 def _custom_build_events(

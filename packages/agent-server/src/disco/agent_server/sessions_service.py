@@ -49,6 +49,9 @@ class SessionsService:
                 ),
                 conversation_id=conversation_id,
                 on_recreate=lambda: self._rt._rehydrate_after_recreate(conversation_id),
+                legacy_auto_preview=(
+                    self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+                ),
             )
         return self._rt._pending_sessions[conversation_id]
 

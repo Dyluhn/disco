@@ -7,6 +7,7 @@ from disco.agent_server.preview_manager import preview_projection_digest
 from disco.agent_server.preview_projection import (
     ActiveLivePreviewProjection,
     derive_active_live_preview_projection,
+    derive_sealed_preview_runtime_contract,
 )
 from disco.core import (
     ActionEvent,
@@ -187,3 +188,114 @@ def test_previous_finished_revision_cannot_authorize_the_current_revision() -> N
     events = _sequenced((action, observation, finished))
 
     assert derive_active_live_preview_projection(events, terminal_seq=4) is None
+
+
+def test_sealed_contract_retains_only_raw_validated_start_intent() -> None:
+    action, observation = _start_pair()
+    events = _sequenced((action, observation))
+
+    contract = derive_sealed_preview_runtime_contract(
+        events,
+        terminal_seq=3,
+        conversation_id="conv_exact",
+        version_seq=4,
+        tree_digest="b" * 64,
+        app_entry="index.html",
+    )
+
+    assert contract is not None
+    assert contract.command == "python3 server.py"
+    assert contract.session_name == _NAME
+    assert contract.start_kwargs()["command"] == "python3 server.py"
+    assert _COMMAND not in contract.start_kwargs().values()
+    assert contract.contract_id.startswith("sealed-preview:")
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        {"name": _NAME, "command": "python3 other.py"},
+        {"name": _NAME, "command": "python3 server.py", "port": 8000},
+    ),
+)
+def test_sealed_contract_rejects_action_observation_intent_disagreement(
+    arguments: dict[str, object],
+) -> None:
+    action, observation = _start_pair()
+    action = action.model_copy(
+        update={"tool_call": action.tool_call.model_copy(update={"arguments": arguments})}
+    )
+    events = _sequenced((action, observation.model_copy(update={"action_id": action.id})))
+
+    assert (
+        derive_sealed_preview_runtime_contract(
+            events,
+            terminal_seq=3,
+            conversation_id="conv_exact",
+            version_seq=4,
+            tree_digest="b" * 64,
+            app_entry="index.html",
+        )
+        is None
+    )
+
+
+def test_passing_appkit_verifier_can_attest_the_same_managed_vite_runtime() -> None:
+    intent = {
+        "serve_dir": None,
+        "command": None,
+        "framework": "vite",
+        "cwd": None,
+        "launch_kind": "framework",
+    }
+    command = "npm run dev -- --port 8000 --host 0.0.0.0"
+    digest = preview_projection_digest(
+        name="appkit-live-vite",
+        port=8000,
+        command=command,
+        exec_dir="/workspace",
+        intent=intent,
+    )
+    action = ActionEvent(
+        thought="verify the strict AppKit runtime",
+        tool_call=ToolCall(call_id="verify-appkit", tool_name="verify_appkit_app", arguments={}),
+    )
+    observation = ObservationEvent(
+        action_id=action.id,
+        tool_result=ToolResult(
+            call_id="verify-appkit",
+            tool_name="verify_appkit_app",
+            success=True,
+            content="pass",
+            structured={
+                "passed": True,
+                "preview_runtime": {
+                    "status": "running",
+                    "name": "appkit-live-vite",
+                    "port": 8000,
+                    "launch_kind": "framework",
+                    "projection_id": "pv_" + "c" * 32,
+                    "intent_digest": digest,
+                    "sandbox_instance_id": "sbx-appkit",
+                    "sandbox_generation": 2,
+                    "command": command,
+                    "exec_dir": "/workspace",
+                    "intent": intent,
+                },
+            },
+        ),
+    )
+    events = _sequenced((action, observation))
+
+    contract = derive_sealed_preview_runtime_contract(
+        events,
+        terminal_seq=3,
+        conversation_id="conv_appkit",
+        version_seq=5,
+        tree_digest="d" * 64,
+        app_entry="dist/index.html",
+    )
+
+    assert contract is not None
+    assert contract.projection.source_tool_name == "verify_appkit_app"
+    assert contract.framework == "vite"

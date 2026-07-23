@@ -1507,11 +1507,14 @@ except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - package def
     raise RuntimeError("AppKit dependency lock template is unavailable") from exc
 
 
-def _emit_package_lock_json(app: AppSpec) -> str:
+def _emit_package_lock_json(app: AppSpec, *, package_json: str | None = None) -> str:
     """Emit the repository-pinned AppKit dependency graph for ``npm ci``.
 
     Only the root package identity varies per generated application; all
-    resolved package versions and integrity hashes are checked-in data.
+    resolved package versions and integrity hashes are checked-in data.  A
+    specialized generated manifest may additionally narrow the root dependency
+    sets; npm requires those root declarations to agree exactly with
+    ``package.json`` even though the reviewed transitive graph remains shared.
     """
     lock = json.loads(json.dumps(_LOCK_TEMPLATE))
     name = _slug(app.name)
@@ -1520,6 +1523,21 @@ def _emit_package_lock_json(app: AppSpec) -> str:
     root = lock["packages"].get("")
     if not isinstance(root, dict):
         raise RuntimeError("AppKit dependency lock template has no root package")
+    if package_json is not None:
+        try:
+            package = json.loads(package_json)
+        except json.JSONDecodeError as exc:  # pragma: no cover - generator defect
+            raise RuntimeError("generated AppKit package manifest is invalid") from exc
+        if not isinstance(package, dict):  # pragma: no cover - generator defect
+            raise RuntimeError("generated AppKit package manifest is invalid")
+        for field in ("dependencies", "devDependencies"):
+            value = package.get(field)
+            if value is None:
+                root.pop(field, None)
+            elif isinstance(value, dict):
+                root[field] = value
+            else:  # pragma: no cover - generator defect
+                raise RuntimeError(f"generated AppKit package manifest has invalid {field}")
     lock["name"] = name
     root["name"] = name
     return json.dumps(lock, indent=2, ensure_ascii=False) + "\n"
@@ -2469,9 +2487,11 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
     from .blog_primitive import emit_app_tsx_with_blog_routes, emit_blog_files, has_blog
 
     names = _component_names(app_spec)
+    package_json = _emit_directory_package_json(app_spec)
     files: dict[str, str] = {
         "index.html": _emit_index_html(app_spec, design_spec),
-        "package.json": _emit_directory_package_json(app_spec),
+        "package.json": package_json,
+        "package-lock.json": _emit_package_lock_json(app_spec, package_json=package_json),
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),
         "wrangler.toml": _emit_directory_wrangler_toml(app_spec),

@@ -901,6 +901,7 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
             conversation_id: str = "conv",
             on_recreate: Callable[[], Awaitable[None]] | None = None,
             kernel_idle_timeout_s: float | None = None,
+            legacy_auto_preview: bool = True,
         ) -> None:
             super().__init__(
                 service,
@@ -909,6 +910,7 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
                 conversation_id=conversation_id,
                 on_recreate=on_recreate,
                 kernel_idle_timeout_s=kernel_idle_timeout_s,
+                legacy_auto_preview=legacy_auto_preview,
             )
             self.destroy_calls = 0
             RecordingSandboxSession.instances.append(self)

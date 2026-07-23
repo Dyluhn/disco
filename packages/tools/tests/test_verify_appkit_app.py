@@ -38,6 +38,7 @@ from disco.tools.builtin.verify_appkit_app import (
     VerifyAppKitAppTool,
     WorkerAuthVerdict,
     _is_vite_app_tree,
+    _served_preview_is_vite_dev,
     _served_preview_uses_built_bundle,
     inspect_lead_form,
     inspect_submit_support,
@@ -121,6 +122,11 @@ class FakeSandbox:
                     }
                 )
             )
+        if cmd == "npm run build":
+            self._files["dist/index.html"] = (
+                b'<script type="module" src="/assets/index-test.js"></script>'
+            )
+            return _ExecRes("built")
         # the verify_web_app http probe (python3 -c ...) → server up
         return _ExecRes("200")
 
@@ -157,6 +163,9 @@ class BuildTrackingSandbox(FakeSandbox):
                 res = _ExecRes("", exit_code=1)
                 res.stderr = "vite build failed\nsrc/App.tsx: boom"
                 return res
+            self._files["dist/index.html"] = (
+                b'<script type="module" src="/assets/index-test.js"></script>'
+            )
             return _ExecRes("built")
         return await super().exec_shell(cmd, timeout_s=timeout_s)
 
@@ -167,28 +176,58 @@ class _PreviewStatus:
 
 
 class BuiltPreviewManager:
-    def __init__(self, *, port: int = 9134):
+    def __init__(self, *, port: int = 9134, prestarted: bool = False):
         self.port = port
         self.starts: list[dict] = []
         self.stops: list[str] = []
+        self.session = None
+        if prestarted:
+            self.session = self._session(name="appkit-live-vite")
 
-    async def start(self, **kwargs):
-        self.starts.append(kwargs)
+    def _session(self, *, name: str):
+        port = self.port
+        intent = {
+            "serve_dir": None,
+            "command": None,
+            "framework": "vite",
+            "cwd": None,
+            "launch_kind": "framework",
+        }
         return type(
             "PreviewSession",
             (),
             {
+                "name": name,
                 "status": _PreviewStatus("running"),
-                "port": self.port,
+                "port": port,
                 "detail": "",
+                "intent": intent,
+                "to_dict": lambda _self: {
+                    "name": name,
+                    "status": "running",
+                    "port": port,
+                    "projection_id": "pv_" + "a" * 32,
+                    "intent": intent,
+                    "launch_kind": "framework",
+                },
             },
         )()
+
+    async def start(self, **kwargs):
+        self.starts.append(kwargs)
+        self.session = self._session(name=kwargs.get("name") or "preview")
+        return self.session
+
+    def canonical_session(self):
+        return self.session
 
     async def stop(self, name: str):
         self.stops.append(name)
 
 
-def _ctx(sandbox) -> ToolContext:
+def _ctx(sandbox, *, managed: bool = True) -> ToolContext:
+    if managed and getattr(sandbox, "_preview_manager", None) is None:
+        sandbox._preview_manager = BuiltPreviewManager(prestarted=True)
     return ToolContext(
         sandbox=sandbox,
         workspace_path="/workspace",
@@ -408,6 +447,11 @@ def test_served_preview_detection_distinguishes_source_from_built_vite():
         is True
     )
     assert _served_preview_uses_built_bundle("<h1>not vite</h1>") is None
+    assert _served_preview_is_vite_dev(
+        '<script type="module" src="/@vite/client"></script>'
+        '<script type="module" src="/src/main.tsx"></script>'
+    )
+    assert not _served_preview_is_vite_dev('<script type="module" src="/src/main.tsx"></script>')
 
 
 @pytest.mark.asyncio
@@ -449,6 +493,37 @@ async def test_vite_build_failure_fails_route_and_section_with_stderr(stub_brows
 
 
 @pytest.mark.asyncio
+async def test_managed_vite_dev_preview_is_verified_without_compiled_surrogate(stub_browser):
+    tree, _ = _build_tree()
+    sandbox = BuildTrackingSandbox(
+        tree,
+        served_index=(
+            '<script type="module" src="/@vite/client"></script>'
+            '<script type="module" src="/src/main.tsx"></script>'
+        ),
+    )
+    manager = BuiltPreviewManager(port=9134)
+    await manager.start(framework="vite", name="appkit-live-vite", supervise=True)
+    manager.starts.clear()
+    sandbox._preview_manager = manager
+
+    out = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(sandbox)
+    )
+
+    assert out.success and out.structured is not None
+    assert out.structured["passed"] is True
+    assert out.structured["preview_runtime"]["port"] == 9134
+    assert out.structured["canonical_entry_path"] == "dist/index.html"
+    assert "npm ci --no-audit --no-fund" in sandbox.commands
+    assert "npm run build" in sandbox.commands
+    assert manager.starts == []
+    assert manager.stops == []
+    assert stub_browser["urls"]
+    assert all("127.0.0.1:9134" in url for url in stub_browser["urls"])
+
+
+@pytest.mark.asyncio
 async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, stub_browser):
     tree, _ = _build_tree()
     sandbox = BuildTrackingSandbox(
@@ -459,7 +534,7 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
     monkeypatch.setattr(preview_mod, "_manager", lambda ctx: manager)
 
     out = await VerifyAppKitAppTool().run(
-        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(sandbox)
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(sandbox, managed=False)
     )
 
     assert out.success and out.structured is not None
@@ -470,10 +545,11 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
         {
             "command": _VITE_PREVIEW_COMMAND,
             "name": "appkit-built-vite",
-            "supervise": False,
+            "supervise": True,
         }
     ]
-    assert manager.stops == ["appkit-built-vite"]
+    assert manager.stops == []
+    assert out.structured["preview_runtime"]["port"] == 9134
     assert stub_browser["urls"]
     assert all(
         url == "http://127.0.0.1:9134" or url.startswith("http://127.0.0.1:9134/")

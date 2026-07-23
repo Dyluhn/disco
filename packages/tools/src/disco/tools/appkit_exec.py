@@ -69,6 +69,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         mode_getter: Callable[[], OperatingMode | None] | None = None,
         on_widen: Callable[[], None] | None = None,
         on_eject: Callable[[ToolCall], Awaitable[AppKitEjectionReceipt]] | None = None,
+        on_preview_sync: Callable[[], Awaitable[None]] | None = None,
         **kwargs: Unpack[ExecutorKwargs],
     ) -> None:
         self._appkit_phase = appkit_phase
@@ -81,6 +82,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         self._appkit_mode_getter = mode_getter
         self._appkit_on_widen = on_widen
         self._appkit_on_eject = on_eject
+        self._appkit_on_preview_sync = on_preview_sync
         self._appkit_base_primitive: str | None = None
         self._appkit_workspace_generation: tuple[int, int] | None = None
         self._appkit_custom_authorized = False
@@ -313,4 +315,9 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
             if isinstance(base_primitive, str):
                 self._appkit_base_primitive = base_primitive
             self._appkit_phase.phase = AppKitPhase.BUILD
+        if name in APPKIT_MUTATORS and self._appkit_on_preview_sync is not None:
+            # Preview lifecycle is host-owned.  AppKit mutators regenerate a real
+            # Vite tree, so the runtime ensures its one managed dev server after a
+            # successful mutation; the model never gains preview/process tools.
+            await self._appkit_on_preview_sync()
         return result

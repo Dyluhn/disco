@@ -75,6 +75,7 @@ class SandboxSession:
         conversation_id: str = "conv",
         on_recreate: Callable[[], Awaitable[None]] | None = None,
         kernel_idle_timeout_s: float | None = None,
+        legacy_auto_preview: bool = True,
     ) -> None:
         self._service = service
         self._spec = spec or SandboxSpec()
@@ -111,14 +112,20 @@ class SandboxSession:
         self._kernel_idle_timeout_s = kernel_idle_timeout_s
         self.spec = self._spec
         self._instance: SandboxInstance | None = None
+        # Agent-server attaches its host-owned PreviewManager here.  Keep the
+        # slot explicit (and untyped across the package boundary) so lifecycle
+        # teardown does not depend on a dynamically invented attribute.
+        self._preview_manager: Any | None = None
         self._closed = False
         self._generation = 0  # bumped on every (re)create — telemetry + tests
         self._lock = asyncio.Lock()
         self._preview_task: asyncio.Task[None] | None = None  # tracked so destroy() can cancel
-        # EPIC F (P1 #2): once the platform PreviewManager owns previews for this
-        # session, the legacy fire-and-forget static auto-preview stands down (so the
-        # two can't both claim a curated port). Set by `disable_auto_preview()`.
-        self._auto_preview_disabled = False
+        # EPIC F (P1 #2): owned Build runtimes set ``legacy_auto_preview=False`` so
+        # PreviewManager is the only preview lifecycle authority from the first sandbox
+        # use.  The default remains available to lower-level/legacy SandboxSession
+        # callers that explicitly depend on the old convenience server.  Once disabled,
+        # a recreation must never resurrect the fire-and-forget static server.
+        self._auto_preview_disabled = not legacy_auto_preview
 
         from .shell_sessions import ShellSessionManager
 

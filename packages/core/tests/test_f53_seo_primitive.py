@@ -284,7 +284,7 @@ def test_robots_allows_all_and_points_at_sitemap(prim_id: str) -> None:
 # within that baseline, `seo=None` must continue to add no SEO artifact or byte.
 _BASELINE_TREE_SHA256 = {
     LEAD_GEN_PRIMITIVE_ID: "e1f862734f1ac6b4dbd0e5b6df3bfdb2154ffa7ef5a5ee6d154e807e9967ec49",
-    DIRECTORY_PRIMITIVE_ID: "1c1d3d177ea1c0eb1f51c87a50259eb16d9e64b601d3ff18106e00287eae5c93",
+    DIRECTORY_PRIMITIVE_ID: "456714e7b00744cc4a4ffb9ef7bf2e9b3d3413d626eff7eb4e933e184a9ac086",
     RECORDS_PRIMITIVE_ID: "e72679355eb29b9dc9a668f69a5065e82a8a0811d135f8d64f48241a69c1a38a",
     HELLO_PRIMITIVE_ID: "e8f75cbf9483e4f3b7b1af8e3b963d621e22394ac0a72a20f4428c633e0699db",
 }

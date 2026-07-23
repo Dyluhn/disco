@@ -287,7 +287,11 @@ def _bind_host_verification_authority(
 ) -> HostVerificationDeliverable:
     admission = current_build_platform_admission(events)
     intent = latest_workspace_run_intent(events)
-    handoff = _latest_deliverable_event(events)
+    handoff = (
+        _latest_app_deliverable_event(events)
+        if deliverable.artifact_kind == "app"
+        else _latest_deliverable_event(events)
+    )
     executor = getattr(gate._loop, "executor", None)
     generation = str(getattr(executor, "_browser_generation", "") or "")
     raw_epoch = getattr(executor, "_workspace_mutation_epoch", None)
@@ -1015,7 +1019,11 @@ class _HostVerifyGateMixin(_FinishGateProto):
         """
 
         governed_browser_target = _governed_structured_browser_target(events)
-        current_handoff = _latest_deliverable_event(events)
+        current_handoff = (
+            _latest_app_deliverable_event(events)
+            if governed_browser_target
+            else _latest_deliverable_event(events)
+        )
         manifest_deliverable = None
         if not (
             governed_browser_target
@@ -1032,7 +1040,13 @@ class _HostVerifyGateMixin(_FinishGateProto):
             return await self._with_host_verification_profile(bound, events)
 
         app_event = _latest_app_deliverable_event(events)
-        any_event = _latest_deliverable_event(events) if include_unverifiable else app_event
+        if governed_browser_target and app_event is None:
+            return None
+        any_event = (
+            _latest_deliverable_event(events)
+            if include_unverifiable and not governed_browser_target
+            else app_event
+        )
         if any_event is None and not _is_web_deliverable(events):
             return None
         if any_event is not None and any_event.artifact_kind != "app":
@@ -2507,11 +2521,11 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             return disp
         events = await self._loop._events()
 
-        handoff = _latest_deliverable_event(events)
+        handoff = _latest_app_deliverable_event(events)
         if (
             _governed_structured_browser_target(events)
-            and handoff is not None
-            and handoff.artifact_kind != "app"
+            and not _appkit_scope_active(self._loop)
+            and handoff is None
         ):
             self._loop._invisible_steps += 1
             await self._loop._emit(
@@ -2521,8 +2535,8 @@ class _RenderVerifyGateMixin(_FinishGateProto):
                         role="user",
                         content=(
                             "finish refused: the current target has mandatory "
-                            "structured-browser claims, but the latest handoff is "
-                            f"`{handoff.artifact_kind}`. Hand off the runnable entry "
+                            "structured-browser claims, but there is no app handoff. "
+                            "Hand off the runnable entry "
                             'with `serve` using `kind: "app"`, then verify and finish.'
                         ),
                     ),

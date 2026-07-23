@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -143,6 +144,10 @@ from disco.tools import (
     build_default_registry,
     workflow_effective_scope,
 )
+from disco.tools.builtin.verify_appkit_app import (
+    APPKIT_LIVE_PREVIEW_NAME,
+    APPKIT_VITE_PACKAGE_SHA_RELPATH,
+)
 from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore, workflow_router_tools
 
 # MCP client pool (RP-05 rung A) — built once at start, snapshotted per conversation.
@@ -175,6 +180,7 @@ from .driver_context import (
 )
 from .lifecycle import _GATE_STATES, LifecycleManager
 from .mcp_manager import McpManager
+from .preview_manager import PreviewManager
 from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
@@ -499,6 +505,92 @@ def _build_appkit_registry() -> ToolRegistry:
     ):
         registry.register(tool_cls())
     return registry
+
+
+async def _sync_appkit_live_preview(session: SandboxSession) -> None:
+    """Keep strict AppKit on one real, platform-managed Vite development server.
+
+    ``app_create`` and every later semantic mutation regenerate the Vite source
+    tree.  Dependency installation and preview lifecycle are platform work: the
+    strict driving model never receives shell or preview controls.  Repeated calls
+    are cheap (exact package digest + live manager start are idempotent), while a
+    dependency/start failure remains visible as the managed lifecycle's CRASHED
+    state rather than falling back to raw source bytes.
+    """
+
+    manager = getattr(session, "_preview_manager", None)
+    if manager is None:
+        manager = PreviewManager(session)
+        session._preview_manager = manager
+
+    install_failure = ""
+    package_changed = False
+    dependencies_refreshed = False
+    try:
+        package_bytes = await session.read_file("package.json")
+        package_digest = hashlib.sha256(package_bytes).hexdigest()
+        try:
+            await session.list_dir("node_modules")
+            has_modules = True
+        except Exception:  # noqa: BLE001 - absence is the expected first-run state
+            has_modules = False
+        try:
+            marker = (await session.read_file(APPKIT_VITE_PACKAGE_SHA_RELPATH)).decode().strip()
+        except Exception:  # noqa: BLE001 - missing cache marker requires npm ci
+            marker = ""
+        package_changed = marker != package_digest
+        if not has_modules or marker != package_digest:
+            if not await session.file_exists("package-lock.json"):
+                install_failure = "AppKit preview requires its generated package-lock.json."
+            else:
+                installed = await session.exec_shell(
+                    "npm ci --no-audit --no-fund",
+                    timeout_s=300,
+                )
+                if getattr(installed, "exit_code", 1) != 0 or bool(
+                    getattr(installed, "timed_out", False)
+                ):
+                    detail = str(
+                        getattr(installed, "stderr", "")
+                        or getattr(installed, "stdout", "")
+                        or "npm ci failed"
+                    ).strip()
+                    install_failure = f"AppKit preview dependency setup failed: {detail[-1200:]}"
+                else:
+                    dependencies_refreshed = True
+                    await session.write_file(
+                        APPKIT_VITE_PACKAGE_SHA_RELPATH,
+                        (package_digest + "\n").encode(),
+                    )
+    except Exception as exc:  # noqa: BLE001 - lifecycle must remain visible, not break mutation
+        install_failure = f"AppKit preview preparation failed: {exc}"
+
+    try:
+        current = manager.canonical_lifecycle_session()
+        if (
+            install_failure
+            and current is not None
+            and getattr(getattr(current, "status", None), "value", "") in {"running", "unavailable"}
+        ):
+            # Preserve the user's last valid interactive frame. The lifecycle
+            # detail records why the newest dependency graph is not yet active.
+            current.update_error = install_failure
+            return
+        if package_changed and dependencies_refreshed and current is not None:
+            # Vite HMR handles content/design writes. A dependency graph change
+            # is the narrower process boundary that genuinely needs re-exec.
+            await manager.stop(current.name)
+        preview = await manager.start(
+            framework="vite",
+            name=APPKIT_LIVE_PREVIEW_NAME,
+            supervise=True,
+        )
+        # A stale/partial dependency tree can still let Vite answer health after
+        # ``npm ci`` failed. Keep that update failure visible even when the old
+        # runtime reaches RUNNING; health is not proof the requested graph landed.
+        preview.update_error = install_failure or None
+    except Exception:  # noqa: BLE001 - the manager/status endpoint reports honest unavailability
+        logger.warning("AppKit managed preview could not start", exc_info=True)
 
 
 _LOG = logging.getLogger(__name__)
@@ -2181,6 +2273,9 @@ class ConversationRuntime:
                 # Mid-run death (transport drop / OOM): restore the last snapshot
                 # into the fresh instance before the agent retries (bp-13 §2).
                 on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
+                # Canonical Preview owns launch/port/health/restart/cleanup. Do not
+                # expose the legacy unmanaged static shell session to the driver.
+                legacy_auto_preview=False,
             )
         # Order C: resolve the policy ONCE — anchored_edit + tier/assist both come
         # from _effective_policy, eliminating the former separate caps-resolution path
@@ -2279,6 +2374,9 @@ class ConversationRuntime:
                 # point, fail closed to PLANNING, which is also the loop's initial mode.
                 mode_getter=lambda cid=conversation_id: (
                     self._loops[cid].mode if cid in self._loops else OperatingMode.PLANNING
+                ),
+                on_preview_sync=lambda active_session=session: _sync_appkit_live_preview(
+                    active_session
                 ),
                 **_common_exec_kwargs,
             )
@@ -4230,6 +4328,16 @@ class ConversationRuntime:
         projection: Any,
     ) -> bool:
         return await self._preview.resolve_active_preview_projection(conversation_id, projection)
+
+    async def resolve_finished_preview_runtime(
+        self,
+        conversation_id: str,
+        contract: Any,
+    ) -> dict[str, Any] | None:
+        return await self._preview.resolve_finished_preview_runtime(conversation_id, contract)
+
+    async def _sync_appkit_preview(self, session: SandboxSession) -> None:
+        await _sync_appkit_live_preview(session)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         return self._preview.port_upstream(conversation_id, port)

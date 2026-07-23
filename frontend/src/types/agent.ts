@@ -506,6 +506,8 @@ export interface PreviewInfo {
   launch_kind?: "static" | "framework" | "custom" | string;
   /** Whether workspace changes are applied by the runtime or need a frame reload. */
   reload_strategy?: "hmr" | "reload";
+  /** Latest host-owned refresh failure while the prior healthy frame remains visible. */
+  update_error?: string | null;
   /** Canonical platform-selected runtime port; clients never choose it. */
   port?: number | null;
   owner?: {
