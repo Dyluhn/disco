@@ -97,6 +97,13 @@ def _terminal_segment(
             for event in events
             if event.get("kind") == "status"
             and event.get("status") in _WORK_TERMINALS
+            # Workspace restore/export host operations seal an inactive
+            # conversation by committing a FINISHED status with host_revision
+            # detail. That is durable workspace history, not a completed Build
+            # run. Treating it as a work terminal creates an empty "successful"
+            # segment between the prior build and a failed recovery attempt,
+            # masking the product failure as missing Platform admission.
+            and not str(event.get("detail") or "").startswith("host_revision:")
             and _seq(event) >= 0
         ),
         key=_seq,

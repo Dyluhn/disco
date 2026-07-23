@@ -139,10 +139,18 @@ _APPLICATION_TITLE_DECLARATION_RE = re.compile(
     r"(?:titled|named|called)\s+(?:exactly\s+)?$",
     re.IGNORECASE,
 )
+_BUILT_TARGET_TITLE_DECLARATION_RE = re.compile(
+    r"\b(?:build|create|make)\s+"
+    # Keep this direct-object syntax exact. A relationship clause means the
+    # title belongs to a nested component, not to the application target.
+    r"(?!(?:[^.!?]{0,160})\b(?:with|containing|including|having|whose|where)\b)"
+    r"[^.!?]{1,160}\b(?:titled|named|called)\s+(?:exactly\s+)?$",
+    re.IGNORECASE,
+)
 _APPLICATION_TITLE_REPLACEMENT_RE = re.compile(
     r"(?:"
     r"\b(?:change|set|update)\s+(?:the\s+)?"
-    r"(?:app(?:lication)?|site)\s+(?:title|name)\s+(?:to|as)"
+    r"(?:(?:app(?:lication)?|site)\s+)?(?:title|name)\s+(?:to|as)"
     r"|\brename\s+(?:the\s+)?(?:app(?:lication)?|site)\s+(?:to|as)"
     r")\s+(?:exactly\s+)?$",
     re.IGNORECASE,
@@ -252,7 +260,9 @@ def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | N
     sentence = re.split(r"[.!?]", prefix)[-1]
     if _APPLICATION_TITLE_REPLACEMENT_RE.search(sentence):
         return "application.title", True
-    if _APPLICATION_TITLE_DECLARATION_RE.search(sentence):
+    if _APPLICATION_TITLE_DECLARATION_RE.search(
+        sentence
+    ) or _BUILT_TARGET_TITLE_DECLARATION_RE.search(sentence):
         return "application.title", False
     return None, False
 

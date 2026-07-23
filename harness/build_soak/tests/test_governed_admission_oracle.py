@@ -466,6 +466,36 @@ def test_current_web_segment_with_exact_receipt_passes() -> None:
     assert _result(_segment()).passed
 
 
+def test_host_revision_seal_is_not_a_completed_work_terminal() -> None:
+    events = _segment()
+    terminal_seq = max(event["seq"] for event in events)
+    events.extend(
+        [
+            {
+                "kind": "status",
+                "source": "system",
+                "seq": terminal_seq + 1,
+                "id": "evt_restore_seal",
+                "status": "FINISHED",
+                "detail": "host_revision:version.restore",
+            },
+            {
+                "kind": "status",
+                "source": "system",
+                "seq": terminal_seq + 2,
+                "id": "evt_failed_recovery",
+                "status": "STUCK",
+                "detail": "verify_no_progress:fixture",
+            },
+        ]
+    )
+
+    # The governed oracle audits completed work. The later restore seal cannot
+    # manufacture an empty completed-work segment and mask the recovery failure
+    # as a missing-admission P0; output truth owns the STUCK adjudication.
+    assert _result(events).passed
+
+
 def test_preview_oracle_normalizes_only_the_sandbox_workspace_root() -> None:
     def identity(serve_dir: str) -> dict[str, Any] | None:
         intent = {"launch_kind": "static", "serve_dir": serve_dir}

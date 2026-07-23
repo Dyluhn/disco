@@ -304,6 +304,34 @@ def test_explicit_application_title_change_replaces_only_same_exact_slot():
     assert dictated_content_conditions_from_events(list(events)) == conditions
 
 
+def test_direct_target_title_and_bare_title_change_share_identity_slot():
+    initial = _user(
+        'Build a strict AppKit tracker titled exactly "AppKit Rollback".',
+        1,
+    )
+    replacement = _user(
+        "Recover through semantic capabilities, set the title to exactly "
+        '"AppKit Recovered", and verify.',
+        4,
+    )
+    events = [
+        initial,
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        replacement,
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (2, "AppKit Recovered"),
+    ]
+    assert conditions[0].requirement_slot == "application.title"
+    assert conditions[0].supersedes_source_event_id == initial.id
+
+
 def test_additive_content_does_not_replace_application_title():
     events = [
         _user('Build an app titled exactly "Alpha".', 1),
@@ -353,6 +381,8 @@ def test_ambiguous_application_title_history_fails_closed_on_replacement():
         'Build an app with a hero titled "Launch".',
         'Build a site with a CTA named "Launch".',
         'Build an application where the first card is called "Launch".',
+        'Build a dashboard with a card titled exactly "Launch".',
+        'Create a tracker containing a panel named "Launch".',
     ],
 )
 def test_component_copy_is_not_misclassified_as_application_title(initial):
