@@ -127,9 +127,22 @@ async def test_appkit_platform_admission_is_durable_and_rollback_is_new_run_only
             "disco.appkit_strict@1",
             "disco.appkit_strict_verifier@1",
             "host.verify_appkit_strict",
-        )
+        ),
+        (
+            "web_functional",
+            "disco.web_functional@1",
+            "disco.host_web_verifier@1",
+            "host.verify_deliverable",
+        ),
     ]
-    assert [claim.claim_id for claim in contract.required_claims] == ["appkit.strict_contract"]
+    assert [claim.claim_id for claim in contract.required_claims] == [
+        "appkit.strict_contract",
+        "web.artifact_identity",
+        "web.http_ready",
+        "web.rendered_content",
+        "web.console_clean",
+        "web.network_clean",
+    ]
 
     monkeypatch.setenv("DISCO_APPKIT_PLATFORM_ROUTE", "0")
     restarted = ConversationRuntime(runtime._store)

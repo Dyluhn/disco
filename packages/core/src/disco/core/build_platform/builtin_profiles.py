@@ -213,56 +213,60 @@ class _LegacyWebTarget:
     def plan(self, request: TargetRequest) -> TargetPlan:
         entry = EntryDescriptor(kind="deliverable_manifest", reference="active-deliverable")
         appkit = request.engine == APPKIT_ENGINE_ID
-        check = (
-            VerifierCheck(
-                check_id="appkit_strict",
-                issuer=APPKIT_VERIFIER_ID,
-                receipt_kind="disco.appkit_strict@1",
-                required_execution_modality="appkit_strict_runtime",
-                required_artifact_identity_scheme="sha256-tree-manifest-v1",
-                intent=ComponentIntent(
-                    operation="host.verify_appkit_strict",
-                    required_capabilities=frozenset({"workspace.read"}),
-                ),
-                accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
-                claims=(
-                    HostVerificationClaim(
-                        claim_id="appkit.strict_contract",
-                        kind=VerificationClaimKind.TARGET_SPECIFIC,
-                        expected=(
-                            "canonical AppKit entry passes the complete strict target verifier"
+        web_check = VerifierCheck(
+            check_id="web_functional",
+            issuer=HOST_VERIFIER_ID,
+            receipt_kind="disco.web_functional@1",
+            required_execution_modality="managed_preview",
+            delegated_issuers=(MODEL_VERIFIER_ID,),
+            intent=ComponentIntent(
+                operation="host.verify_deliverable",
+                required_capabilities=frozenset({"workspace.read"}),
+            ),
+            accepted_claim_kinds=frozenset(
+                {
+                    VerificationClaimKind.ARTIFACT_IDENTITY,
+                    VerificationClaimKind.HTTP_READY,
+                    VerificationClaimKind.RENDERED_CONTENT,
+                    VerificationClaimKind.VISIBLE_TEXT,
+                    VerificationClaimKind.CONSOLE_CLEAN,
+                    VerificationClaimKind.NETWORK_CLEAN,
+                    VerificationClaimKind.INTERACTION,
+                    VerificationClaimKind.ROUTE,
+                    VerificationClaimKind.CONTRACT_SEMANTIC,
+                    VerificationClaimKind.VISUAL_SEMANTIC,
+                }
+            ),
+            claims=default_structured_web_claims(),
+        )
+        checks = (
+            (
+                VerifierCheck(
+                    check_id="appkit_strict",
+                    issuer=APPKIT_VERIFIER_ID,
+                    receipt_kind="disco.appkit_strict@1",
+                    required_execution_modality="appkit_strict_runtime",
+                    required_artifact_identity_scheme="sha256-tree-manifest-v1",
+                    intent=ComponentIntent(
+                        operation="host.verify_appkit_strict",
+                        required_capabilities=frozenset({"workspace.read"}),
+                    ),
+                    accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+                    claims=(
+                        HostVerificationClaim(
+                            claim_id="appkit.strict_contract",
+                            kind=VerificationClaimKind.TARGET_SPECIFIC,
+                            expected=(
+                                "canonical AppKit entry passes the complete strict target verifier"
+                            ),
+                            source_authority="target.appkit.strict_floor@1",
                         ),
-                        source_authority="target.appkit.strict_floor@1",
                     ),
                 ),
+                web_check,
             )
             if appkit
-            else VerifierCheck(
-                check_id="web_functional",
-                issuer=HOST_VERIFIER_ID,
-                receipt_kind="disco.web_functional@1",
-                required_execution_modality="managed_preview",
-                delegated_issuers=(MODEL_VERIFIER_ID,),
-                intent=ComponentIntent(
-                    operation="host.verify_deliverable",
-                    required_capabilities=frozenset({"workspace.read"}),
-                ),
-                accepted_claim_kinds=frozenset(
-                    {
-                        VerificationClaimKind.ARTIFACT_IDENTITY,
-                        VerificationClaimKind.HTTP_READY,
-                        VerificationClaimKind.RENDERED_CONTENT,
-                        VerificationClaimKind.VISIBLE_TEXT,
-                        VerificationClaimKind.CONSOLE_CLEAN,
-                        VerificationClaimKind.NETWORK_CLEAN,
-                        VerificationClaimKind.INTERACTION,
-                        VerificationClaimKind.ROUTE,
-                        VerificationClaimKind.CONTRACT_SEMANTIC,
-                        VerificationClaimKind.VISUAL_SEMANTIC,
-                    }
-                ),
-                claims=default_structured_web_claims(),
-            )
+            else (web_check,)
         )
         return TargetPlan(
             target=self.id,
@@ -282,7 +286,7 @@ class _LegacyWebTarget:
                 mode="interactive",
             ),
             preview=PreviewPlan(modality="legacy_host", entry=entry),
-            verifier=VerifierPlan(checks=(check,)),
+            verifier=VerifierPlan(checks=checks),
             package=PackagePlan(
                 package_shape="web.legacy_archive",
                 intents=(

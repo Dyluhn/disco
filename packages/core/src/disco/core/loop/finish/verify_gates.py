@@ -224,36 +224,20 @@ def _strict_appkit_contract(
     )
 
 
-def _strict_appkit_external_requirement_error(
-    gate: Any,
-    contract: AdmittedVerificationContract,
-    events: list[Event],
-) -> str | None:
-    """AppKit's legacy strict adapter cannot silently consume extra claims."""
-
-    target_claim_ids = {claim.claim_id for check in contract.checks for claim in check.claims}
-    all_claims = _host_verification_claims(gate._verifier_contract_payload(), events)
-    external = tuple(
-        claim for claim in all_claims if claim.required and claim.claim_id not in target_claim_ids
-    )
-    if not external:
-        return None
-    return (
-        "the current strict AppKit adapter cannot verify these additional mandatory "
-        "claims: " + ", ".join(sorted(claim.claim_id for claim in external))
-    )
-
-
 def _strict_appkit_compatibility_error(
     contract: AdmittedVerificationContract,
 ) -> str | None:
-    required_checks = tuple(check for check in contract.checks if check.required)
-    if len(required_checks) != 1:
-        return (
-            "the strict AppKit compatibility adapter requires exactly one admitted "
-            "check; additional required checks need their own typed host adapters"
-        )
-    check = required_checks[0]
+    strict_checks = tuple(
+        check
+        for check in contract.checks
+        if check.required
+        and check.issuer_id == "disco.appkit_strict_verifier@1"
+        and check.receipt_kind == "disco.appkit_strict@1"
+        and check.operation == "host.verify_appkit_strict"
+    )
+    if len(strict_checks) != 1:
+        return "the strict AppKit compatibility adapter requires exactly one admitted strict check"
+    check = strict_checks[0]
     required_claim_ids = tuple(claim.claim_id for claim in check.claims if claim.required)
     if required_claim_ids != ("appkit.strict_contract",):
         return (
@@ -437,6 +421,36 @@ def _preview_selection_at(
         if not isinstance(event, ObservationEvent):
             continue
         result = event.tool_result
+        if result.tool_name == "verify_appkit_app" and result.success is True:
+            action = actions.get(event.action_id or "")
+            structured = result.structured
+            runtime = structured.get("preview_runtime") if isinstance(structured, dict) else None
+            if (
+                action is None
+                or action.tool_call.tool_name != "verify_appkit_app"
+                or result.call_id != action.tool_call.call_id
+                or event.action_id != action.id
+                or not isinstance(structured, dict)
+                or structured.get("passed") is not True
+                or not isinstance(runtime, dict)
+                or runtime.get("status") not in {"running", "unavailable"}
+                or type(action.seq) is not int
+                or type(event.seq) is not int
+            ):
+                active.clear()
+                continue
+            identity = PreviewSelectionIdentity.from_structured(
+                action_id=action.id,
+                action_seq=action.seq,
+                observation_id=event.id,
+                observation_seq=event.seq,
+                structured=runtime,
+            )
+            if identity is None:
+                active.clear()
+                continue
+            active[identity.session_name] = (event.seq, identity)
+            continue
         if result.tool_name == "preview_start" and result.success is True:
             action = actions.get(event.action_id or "")
             structured = result.structured
@@ -828,10 +842,17 @@ async def _prepare_appkit_typed_authority(
 ) -> tuple[VerifierStartedEvent, HostVerificationDeliverable] | None:
     """Bind AppKit's current target and emit START before strict verification."""
 
-    required_checks = tuple(check for check in contract.checks if check.required)
-    if len(required_checks) != 1:
+    strict_checks = tuple(
+        check
+        for check in contract.checks
+        if check.required
+        and check.issuer_id == "disco.appkit_strict_verifier@1"
+        and check.receipt_kind == "disco.appkit_strict@1"
+        and check.operation == "host.verify_appkit_strict"
+    )
+    if len(strict_checks) != 1:
         return None
-    check = required_checks[0]
+    check = strict_checks[0]
     preflight = getattr(gate._loop.executor, "verification_preflight", None)
     if preflight is None:
         return None
@@ -880,24 +901,22 @@ async def _prepare_appkit_typed_authority(
             "deliverable_event_id": current.id,
             "artifact_path": current.path,
             "artifact_kind": current.artifact_kind,
+            "required_claims": check.claims,
+            "verification_check": check,
             "execution_identity": execution_identity,
             "preview_selection": None,
             "preview_binding_required": False,
         }
     )
-    deliverables, ownership_error = await gate._governed_check_deliverables(base, events)
-    if ownership_error is not None or len(deliverables) != 1:
-        return None
-    deliverable = deliverables[0]
     if (
-        deliverable.verification_check != check
+        base.verification_check != check
         or check.issuer_id != "disco.appkit_strict_verifier@1"
         or check.receipt_kind != "disco.appkit_strict@1"
         or check.operation != "host.verify_appkit_strict"
     ):
         return None
-    started = await _emit_verifier_started_event(gate._loop, deliverable)
-    return started, deliverable
+    started = await _emit_verifier_started_event(gate._loop, base)
+    return started, base
 
 
 async def _record_appkit_typed_verdict(
@@ -1050,6 +1069,14 @@ def _recorded_appkit_typed_status(
     events: list[Event],
     started: VerifierStartedEvent,
 ) -> VerificationClaimStatus | None:
+    result = _recorded_appkit_typed_result(events, started)
+    return result.status if result is not None else None
+
+
+def _recorded_appkit_typed_result(
+    events: list[Event],
+    started: VerifierStartedEvent,
+) -> HostVerificationResult | None:
     verdict = next(
         (
             event
@@ -1058,11 +1085,7 @@ def _recorded_appkit_typed_status(
         ),
         None,
     )
-    return (
-        verdict.verification_result.status
-        if verdict is not None and verdict.verification_result is not None
-        else None
-    )
+    return verdict.verification_result if verdict is not None else None
 
 
 async def _appkit_typed_gate_disposition(
@@ -2246,6 +2269,8 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
         self,
         deliverable: HostVerificationDeliverable,
         events: list[Event],
+        *,
+        skip_check_ids: frozenset[str] = frozenset(),
     ) -> tuple[tuple[HostVerificationDeliverable, ...], str | None]:
         contract = deliverable.verification_contract
         if contract is None:
@@ -2274,9 +2299,14 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
                         assigned[checks[0].check_id].append(claim)
                 continue
             assigned[owners[0].check_id].append(claim)
+        for check_id in skip_check_ids:
+            if assigned.get(check_id):
+                errors.append(f"preverified check {check_id!r} cannot absorb new external claims")
         out: list[HostVerificationDeliverable] = []
         host_verifier = getattr(self._loop, "_host_verifier", None)
         for check in checks:
+            if check.check_id in skip_check_ids:
+                continue
             item = deliverable.model_copy(
                 update={
                     "verification_check": check,
@@ -2399,14 +2429,17 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
         )
         return host_verdict, typed_result, browser_unavailable, host_label
 
-    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+    async def gate_host_verify(
+        self,
+        step: AgentStep,
+        events: list[Event],
+        *,
+        preverified: tuple[tuple[HostVerificationDeliverable, HostVerificationResult], ...] = (),
+    ) -> Disp:
         """Run every admitted verifier check; legacy web remains a compatibility path."""
 
         contract = _governed_verification_contract(events)
-        # AppKit's existing strict verifier remains the active compatibility
-        # adapter until its typed receipt dual-write lands. Its newly admitted
-        # check identity prevents a generic web receipt from substituting.
-        if _strict_appkit_contract(contract):
+        if _strict_appkit_contract(contract) and not preverified:
             return Disp.FALLTHROUGH
 
         governed_target = _governed_verification_required(events)
@@ -2419,11 +2452,29 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
         )
         if deliverable is None:
             return Disp.FALLTHROUGH
-        deliverables, ownership_error = await self._governed_check_deliverables(deliverable, events)
-        if not deliverables:
+        valid_preverified = tuple(
+            (item, receipt)
+            for item, receipt in preverified
+            if item.verification_check is not None
+            and receipt.passed
+            and receipt.is_current_authority_for(item, observed_url=receipt.observed_url)
+        )
+        skip_check_ids = frozenset(
+            item.verification_check.check_id
+            for item, _receipt in valid_preverified
+            if item.verification_check is not None
+        )
+        deliverables, ownership_error = await self._governed_check_deliverables(
+            deliverable,
+            events,
+            skip_check_ids=skip_check_ids,
+        )
+        if not deliverables and not valid_preverified:
             return Disp.FALLTHROUGH
 
-        accepted_receipts: list[HostVerificationResult] = []
+        all_deliverables = [item for item, _receipt in valid_preverified]
+        all_deliverables.extend(deliverables)
+        accepted_receipts = [receipt for _item, receipt in valid_preverified]
         for index, check_deliverable in enumerate(deliverables):
             (
                 host_verdict,
@@ -2499,7 +2550,7 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
                 return await self._host_verify_failure_disposition(check_deliverable, host_verdict)
         if governed_target:
             coverage = aggregate_verification_receipts(
-                deliverables=deliverables,
+                deliverables=tuple(all_deliverables),
                 receipts=tuple(accepted_receipts),
             )
             if not coverage.passed:
@@ -3533,13 +3584,6 @@ class _RenderVerifyGateMixin(_FinishGateProto):
                     failure_key=f"appkit:unsupported_contract:{compatibility_error}",
                     guidance=compatibility_error,
                 )
-            external_error = _strict_appkit_external_requirement_error(self, contract, events)
-            if external_error is not None:
-                return await host_gate._governed_contract_refusal(
-                    events,
-                    failure_key=f"appkit:external_claims:{external_error}",
-                    guidance=external_error,
-                )
             if self._active_verify_tool() != "verify_appkit_app":
                 return await host_gate._governed_contract_refusal(
                     events,
@@ -3613,6 +3657,34 @@ class _RenderVerifyGateMixin(_FinishGateProto):
                 step,
                 events,
                 appkit_prepared=appkit_prepared,
+            )
+            if disp is Disp.CONTINUE or disp is Disp.HALT:
+                return disp
+            events = await self._loop._events()
+            appkit_result = (
+                _recorded_appkit_typed_result(events, appkit_prepared[0])
+                if appkit_prepared is not None
+                else None
+            )
+            if appkit_prepared is None or appkit_result is None or not appkit_result.passed:
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key="appkit:typed_receipt_unavailable",
+                    guidance=(
+                        "the strict AppKit verifier passed, but its result could not "
+                        "be bound to the current typed target authority."
+                    ),
+                )
+            verified_appkit_deliverable = appkit_prepared[1].model_copy(
+                update={
+                    "artifact_identity": appkit_result.artifact_identity,
+                    "observed_after_seq": appkit_result.observed_after_seq,
+                }
+            )
+            disp = await host_gate.gate_host_verify(
+                step,
+                events,
+                preverified=((verified_appkit_deliverable, appkit_result),),
             )
         elif self._host_verify_authoritative() or _governed_verification_required(events):
             disp = await self.gate_host_verify(step, events)

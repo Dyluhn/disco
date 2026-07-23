@@ -716,11 +716,21 @@ class GovernedAdmissionOracle:
                 "verification_contract -> receipt_kind",
                 "admission omitted a required target verifier receipt kind",
             )
-        expected_execution_modality = policy.get("required_execution_modality")
-        if any(
-            check.get("required_execution_modality") != expected_execution_modality
-            for check in required_checks
-        ):
+        expected_execution_modalities = policy.get("required_execution_modalities")
+        actual_execution_modalities = {
+            check.get("required_execution_modality") for check in required_checks
+        }
+        if isinstance(expected_execution_modalities, list):
+            modality_mismatch = not all(
+                isinstance(modality, str) and modality for modality in expected_execution_modalities
+            ) or actual_execution_modalities != set(expected_execution_modalities)
+        else:
+            expected_execution_modality = policy.get("required_execution_modality")
+            modality_mismatch = any(
+                check.get("required_execution_modality") != expected_execution_modality
+                for check in required_checks
+            )
+        if modality_mismatch:
             return _fail(
                 "verification_contract -> execution_modality",
                 "admission omitted or changed the required target execution modality",

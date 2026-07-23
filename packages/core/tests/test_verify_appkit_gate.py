@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 from disco.core import (
     ActionEvent,
@@ -31,6 +34,7 @@ from disco.core.verification import (
     VerificationRequestedClaim,
     VerificationRequirementsDirective,
     default_structured_web_claims,
+    structured_web_verification_result,
 )
 from loop_fakes import (
     FakeAnalyzer,
@@ -40,6 +44,35 @@ from loop_fakes import (
     action_step,
     finish_step,
 )
+
+
+def _appkit_preview_runtime() -> dict:
+    intent = {
+        "command": None,
+        "cwd": None,
+        "framework": "vite",
+        "launch_kind": "framework",
+        "serve_dir": None,
+    }
+    payload = {
+        "command": "npm run dev -- --port 8000 --host 0.0.0.0",
+        "exec_dir": "/workspace",
+        "intent": intent,
+        "name": "appkit-live-vite",
+        "port": 8000,
+    }
+    return {
+        **payload,
+        "status": "running",
+        "projection_id": "pv_" + "a" * 32,
+        "sandbox_instance_id": "sandbox-appkit",
+        "sandbox_generation": 3,
+        "url": "http://preview.appkit.test/",
+        "launch_kind": "framework",
+        "intent_digest": hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
 
 
 def _appkit_verdict(*, passed: bool, fp: str) -> dict:
@@ -58,13 +91,7 @@ def _appkit_verdict(*, passed: bool, fp: str) -> dict:
         "checks": [{"name": "worker_contract", "passed": passed, "evidence": "x"}],
         "verify_web_app": {"url": "http://127.0.0.1:8000/"},
         "canonical_entry_path": "dist/index.html",
-        "preview_runtime": {
-            "status": "running",
-            "projection_id": "pv_appkit_fixture",
-            "sandbox_instance_id": "sandbox-appkit",
-            "sandbox_generation": 3,
-            "url": "http://preview.appkit.test/",
-        },
+        "preview_runtime": _appkit_preview_runtime(),
         "artifact_identity": {
             "scheme": "sha256-tree-manifest-v1",
             "digest": "sha256:" + "c" * 64,
@@ -74,7 +101,7 @@ def _appkit_verdict(*, passed: bool, fp: str) -> dict:
     }
 
 
-def _appkit_contract() -> AdmittedVerificationContract:
+def _appkit_contract(*, with_web: bool = False) -> AdmittedVerificationContract:
     strict = VerificationCheckContract(
         check_id="appkit_strict",
         receipt_kind="disco.appkit_strict@1",
@@ -92,6 +119,32 @@ def _appkit_contract() -> AdmittedVerificationContract:
             ),
         ),
     )
+    checks = [strict]
+    if with_web:
+        checks.append(
+            VerificationCheckContract(
+                check_id="web_functional",
+                receipt_kind="disco.web_functional@1",
+                issuer_id="disco.host_web_verifier@1",
+                operation="host.verify_deliverable",
+                required_execution_modality="managed_preview",
+                accepted_claim_kinds=frozenset(
+                    {
+                        VerificationClaimKind.ARTIFACT_IDENTITY,
+                        VerificationClaimKind.HTTP_READY,
+                        VerificationClaimKind.RENDERED_CONTENT,
+                        VerificationClaimKind.VISIBLE_TEXT,
+                        VerificationClaimKind.CONSOLE_CLEAN,
+                        VerificationClaimKind.NETWORK_CLEAN,
+                        VerificationClaimKind.INTERACTION,
+                        VerificationClaimKind.ROUTE,
+                        VerificationClaimKind.CONTRACT_SEMANTIC,
+                        VerificationClaimKind.VISUAL_SEMANTIC,
+                    }
+                ),
+                claims=default_structured_web_claims(),
+            )
+        )
     return AdmittedVerificationContract(
         target_id="disco.legacy_web@1",
         verifier_id="disco.appkit_strict_verifier@1",
@@ -102,7 +155,7 @@ def _appkit_contract() -> AdmittedVerificationContract:
             entry_reference="active-deliverable",
         ),
         preview_modality="legacy_host",
-        checks=(strict,),
+        checks=tuple(checks),
     )
 
 
@@ -175,7 +228,7 @@ class AppKitVerifyExecutor(FakeExecutor):
             "artifact_kind": "app",
             "execution_identity": {
                 "modality": "appkit_strict_runtime",
-                "instance_id": "pv_appkit_fixture",
+                "instance_id": "pv_" + "a" * 32,
                 "generation": "sandbox-appkit:3",
                 "locator": "http://preview.appkit.test/",
             },
@@ -218,6 +271,50 @@ class _GenericPassingHostVerifier:
     async def verify(self, deliverable):  # noqa: ANN001
         self.calls += 1
         return {"passed": True, "verdict": "pass", "url": deliverable.deployment_url}
+
+
+class _StructuredPassingHostVerifier:
+    def __init__(self, *, rendered_text: str = "AppKit is ready") -> None:
+        self.calls = []
+        self.rendered_text = rendered_text
+
+    async def verify(self, deliverable):  # noqa: ANN001
+        self.calls.append(deliverable)
+        assert deliverable.verification_check is not None
+        assert deliverable.verification_check.check_id == "web_functional"
+        assert deliverable.preview_selection is not None
+        url = deliverable.preview_selection.verification_target_url(deliverable.artifact_path)
+        assert url is not None
+        verdict = {
+            "passed": True,
+            "verdict": "pass",
+            "url": url,
+            "http_status": 200,
+            "meaningful_content": True,
+            "rendered_text": self.rendered_text,
+            "console_errors": [],
+            "network_failures": [],
+            "artifact_identity": {"preview_live_match": True},
+            "freshness": {
+                "executor_generation": deliverable.workspace_generation,
+                "synchronized_epoch": deliverable.workspace_epoch,
+            },
+            "summary": "structured AppKit Preview passed",
+        }
+        verdict["artifact_identity"] = {
+            "conversation_id": deliverable.conversation_id,
+            "artifact_path": deliverable.artifact_path,
+            "artifact_kind": deliverable.artifact_kind,
+            "requested_url": deliverable.deployment_url,
+            "observed_url": url,
+            "preview_selection": deliverable.preview_selection.model_dump(mode="json"),
+            "preview_live_match": True,
+        }
+        verdict["verification_result"] = structured_web_verification_result(
+            deliverable=deliverable,
+            verdict=verdict,
+        ).model_dump(mode="json")
+        return verdict
 
 
 def _statuses(events):
@@ -573,7 +670,8 @@ async def test_platform_appkit_raw_pass_with_wrong_seal_scheme_cannot_finish() -
 
 @pytest.mark.asyncio
 async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
-    contract = _appkit_contract()
+    contract = _appkit_contract(with_web=True)
+    host = _StructuredPassingHostVerifier(rendered_text="Account ready")
     agent = ScriptedAgent(
         [
             action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
@@ -582,7 +680,7 @@ async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
         ]
     )
     execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
-    loop, store = _gate_loop(agent, execu)
+    loop, store = _gate_loop(agent, execu, host_verifier=host)
     await loop._emit(_appkit_admission(contract))
     await loop._emit(
         MessageEvent(
@@ -604,10 +702,15 @@ async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
     state = await loop.run()
     events = await store.get_events("conv")
 
-    assert state.execution_status is not ConversationStatus.FINISHED
-    assert execu.appkit_calls == 0
-    assert any(status == "STUCK" for status, _detail in _statuses(events))
-    assert any("additional mandatory claims" in message for message in _env(events))
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
+    assert len(host.calls) == 1
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+    assert {
+        event.verification_result.receipt_kind
+        for event in verdicts
+        if event.verification_result is not None and event.verification_result.passed
+    } == {"disco.appkit_strict@1", "disco.web_functional@1"}
 
 
 @pytest.mark.asyncio
@@ -646,7 +749,7 @@ async def test_platform_appkit_rejects_unimplemented_second_required_check() -> 
     events = await store.get_events("conv")
 
     assert state.execution_status is not ConversationStatus.FINISHED
-    assert execu.appkit_calls == 0
+    assert execu.appkit_calls >= 1
     assert any(status == "STUCK" for status, _detail in _statuses(events))
 
 

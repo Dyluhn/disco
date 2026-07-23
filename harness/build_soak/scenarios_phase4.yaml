@@ -441,9 +441,15 @@ scenarios:
         route: platform
         composition_authority: build_platform_core
         delivery_mode: interactive
-        required_receipt_kinds: [disco.appkit_strict@1]
-        required_claim_kinds: {target_specific: 1}
-        required_execution_modality: appkit_strict_runtime
+        required_receipt_kinds: [disco.appkit_strict@1, disco.web_functional@1]
+        required_claim_kinds:
+          target_specific: 1
+          artifact_identity: 1
+          http_ready: 1
+          rendered_content: 1
+          console_clean: 1
+          network_clean: 1
+        required_execution_modalities: [appkit_strict_runtime, managed_preview]
         require_agent_view_binding: true
         require_workspace_epoch: true
       tool_scope:
@@ -474,9 +480,15 @@ scenarios:
         route: platform
         composition_authority: build_platform_core
         delivery_mode: interactive
-        required_receipt_kinds: [disco.appkit_strict@1]
-        required_claim_kinds: {target_specific: 1}
-        required_execution_modality: appkit_strict_runtime
+        required_receipt_kinds: [disco.appkit_strict@1, disco.web_functional@1]
+        required_claim_kinds:
+          target_specific: 1
+          artifact_identity: 1
+          http_ready: 1
+          rendered_content: 1
+          console_clean: 1
+          network_clean: 1
+        required_execution_modalities: [appkit_strict_runtime, managed_preview]
         require_agent_view_binding: true
         require_workspace_epoch: true
       tool_scope:
@@ -512,9 +524,15 @@ scenarios:
         route: platform
         composition_authority: build_platform_core
         delivery_mode: interactive
-        required_receipt_kinds: [disco.appkit_strict@1]
-        required_claim_kinds: {target_specific: 1}
-        required_execution_modality: appkit_strict_runtime
+        required_receipt_kinds: [disco.appkit_strict@1, disco.web_functional@1]
+        required_claim_kinds:
+          target_specific: 1
+          artifact_identity: 1
+          http_ready: 1
+          rendered_content: 1
+          console_clean: 1
+          network_clean: 1
+        required_execution_modalities: [appkit_strict_runtime, managed_preview]
         require_agent_view_binding: true
         require_workspace_epoch: true
       tool_scope:
@@ -544,9 +562,15 @@ scenarios:
         route: platform
         composition_authority: build_platform_core
         delivery_mode: interactive
-        required_receipt_kinds: [disco.appkit_strict@1]
-        required_claim_kinds: {target_specific: 1}
-        required_execution_modality: appkit_strict_runtime
+        required_receipt_kinds: [disco.appkit_strict@1, disco.web_functional@1]
+        required_claim_kinds:
+          target_specific: 1
+          artifact_identity: 1
+          http_ready: 1
+          rendered_content: 1
+          console_clean: 1
+          network_clean: 1
+        required_execution_modalities: [appkit_strict_runtime, managed_preview]
         require_agent_view_binding: true
         require_workspace_epoch: true
       tool_scope:
@@ -579,9 +603,15 @@ scenarios:
         route: platform
         composition_authority: build_platform_core
         delivery_mode: interactive
-        required_receipt_kinds: [disco.appkit_strict@1]
-        required_claim_kinds: {target_specific: 1}
-        required_execution_modality: appkit_strict_runtime
+        required_receipt_kinds: [disco.appkit_strict@1, disco.web_functional@1]
+        required_claim_kinds:
+          target_specific: 1
+          artifact_identity: 1
+          http_ready: 1
+          rendered_content: 1
+          console_clean: 1
+          network_clean: 1
+        required_execution_modalities: [appkit_strict_runtime, managed_preview]
         require_agent_view_binding: true
         require_workspace_epoch: true
       tool_scope:

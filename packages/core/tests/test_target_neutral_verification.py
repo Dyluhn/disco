@@ -26,6 +26,7 @@ from disco.core.verification import (
     AdmittedVerificationContract,
     HostVerificationClaim,
     HostVerificationClaimResult,
+    PreviewSelectionIdentity,
     VerificationArtifactIdentity,
     VerificationCheckContract,
     VerificationClaimKind,
@@ -184,6 +185,45 @@ def test_multiple_native_checks_aggregate_without_browser_or_html() -> None:
     assert "browser" not in serialized
     assert "html" not in serialized
     assert "http" not in serialized
+
+
+def test_multi_adapter_checks_share_generation_not_modality_or_verification_order() -> None:
+    launch = _check("launch", _claim("native.launch", "bundle launches"))
+    interaction = _check(
+        "interaction",
+        _claim("native.interaction", "primary action changes target state"),
+    ).model_copy(update={"required_execution_modality": "accessibility_driver"})
+    contract = _contract((launch, interaction))
+    launch_delivery = _deliverable(contract, launch)
+    interaction_delivery = _deliverable(contract, interaction).model_copy(
+        update={
+            "observed_after_seq": 29,
+            "execution_identity": VerificationExecutionIdentity(
+                modality="accessibility_driver",
+                instance_id="sim-device-1",
+                generation="boot-7",
+                locator="dev.disco.fixture",
+            ),
+        }
+    )
+    receipts = tuple(
+        target_verification_result(
+            deliverable=deliverable,
+            claim_results=(_pass_result(deliverable),),
+            verifier_id=deliverable.verification_check.issuer_id,  # type: ignore[union-attr]
+            tool_id=deliverable.verification_check.operation,  # type: ignore[union-attr]
+            reason="pass",
+        )
+        for deliverable in (launch_delivery, interaction_delivery)
+    )
+
+    coverage = aggregate_verification_receipts(
+        deliverables=(launch_delivery, interaction_delivery),
+        receipts=receipts,
+    )
+
+    assert coverage.passed
+    assert coverage.missing_claim_ids == ()
 
 
 def test_output_producing_target_pass_requires_exact_artifact_identity() -> None:
@@ -392,6 +432,58 @@ def test_contract_digest_canonicalizes_semantically_unordered_fields() -> None:
             ).encode()
         ).hexdigest()
     )
+
+
+def test_preview_selection_normalizes_only_the_sandbox_workspace_root() -> None:
+    def structured(serve_dir: str) -> dict[str, object]:
+        intent = {"launch_kind": "static", "serve_dir": serve_dir}
+        payload = {
+            "command": "python3 -m http.server 8000 -d /workspace",
+            "exec_dir": "/workspace",
+            "intent": intent,
+            "name": "site",
+            "port": 8000,
+        }
+        return {
+            **payload,
+            "url": "http://preview.test",
+            "projection_id": "pv_" + "a" * 32,
+            "sandbox_instance_id": "sandbox-1",
+            "sandbox_generation": 1,
+            "launch_kind": "static",
+            "intent_digest": hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        }
+
+    root = PreviewSelectionIdentity.from_structured(
+        action_id="evt_action",
+        action_seq=7,
+        observation_id="evt_observation",
+        observation_seq=8,
+        structured=structured("/workspace/"),
+    )
+    nested = PreviewSelectionIdentity.from_structured(
+        action_id="evt_action",
+        action_seq=7,
+        observation_id="evt_observation",
+        observation_seq=8,
+        structured=structured("/workspace/site"),
+    )
+    foreign = PreviewSelectionIdentity.from_structured(
+        action_id="evt_action",
+        action_seq=7,
+        observation_id="evt_observation",
+        observation_seq=8,
+        structured=structured("/workspace/../srv/site"),
+    )
+
+    assert root is not None and root.static_serve_dir == "."
+    assert root.contains_artifact("index.html")
+    assert nested is not None and nested.static_serve_dir == "site"
+    assert nested.contains_artifact("site/index.html")
+    assert not nested.contains_artifact("index.html")
+    assert foreign is None
 
 
 def test_pre_field_builtin_web_contract_replays_with_authoritative_modality() -> None:

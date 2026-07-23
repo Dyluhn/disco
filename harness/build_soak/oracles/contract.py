@@ -56,6 +56,7 @@ class ContractOracle:
                 "required_receipt_kinds",
                 "required_claim_kinds",
                 "required_execution_modality",
+                "required_execution_modalities",
                 "require_agent_view_binding",
                 "require_workspace_epoch",
             }
@@ -82,8 +83,24 @@ class ContractOracle:
                     isinstance(kind, str) and bool(kind) and type(count) is int and count > 0
                     for kind, count in governed["required_claim_kinds"].items()
                 )
-                and isinstance(governed.get("required_execution_modality"), str)
-                and bool(governed["required_execution_modality"])
+                and (
+                    (
+                        isinstance(governed.get("required_execution_modality"), str)
+                        and bool(governed["required_execution_modality"])
+                        and "required_execution_modalities" not in governed
+                    )
+                    or (
+                        "required_execution_modality" not in governed
+                        and isinstance(governed.get("required_execution_modalities"), list)
+                        and bool(governed["required_execution_modalities"])
+                        and all(
+                            isinstance(modality, str) and bool(modality)
+                            for modality in governed["required_execution_modalities"]
+                        )
+                        and len(set(governed["required_execution_modalities"]))
+                        == len(governed["required_execution_modalities"])
+                    )
+                )
                 and type(governed.get("require_agent_view_binding", True)) is bool
                 and type(governed.get("require_workspace_epoch", False)) is bool
             )

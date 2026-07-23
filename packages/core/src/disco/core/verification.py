@@ -614,6 +614,17 @@ class PreviewSelectionIdentity(BaseModel):
         ).hexdigest()
         if structured.get("intent_digest") != digest:
             return None
+        static_serve_dir: str | None = None
+        if launch_kind == "static":
+            normalized_serve_dir = posixpath.normpath(str(intent.get("serve_dir") or "."))
+            if normalized_serve_dir == "/workspace":
+                static_serve_dir = "."
+            elif normalized_serve_dir.startswith("/workspace/"):
+                static_serve_dir = normalized_serve_dir.removeprefix("/workspace/")
+            elif not normalized_serve_dir.startswith("/"):
+                static_serve_dir = normalized_serve_dir
+            else:
+                return None
         try:
             return cls(
                 projection_id=projection_id,
@@ -624,9 +635,7 @@ class PreviewSelectionIdentity(BaseModel):
                 intent_digest=digest,
                 sandbox_instance_id=sandbox_instance_id,
                 sandbox_generation=sandbox_generation,
-                static_serve_dir=(
-                    str(intent.get("serve_dir") or ".") if launch_kind == "static" else None
-                ),
+                static_serve_dir=static_serve_dir,
                 source_action_id=action_id,
                 source_action_seq=action_seq,
                 source_observation_id=observation_id,
@@ -980,15 +989,13 @@ def aggregate_verification_receipts(
                 "workspace_revision": getattr(deliverable, "workspace_revision", None),
                 "workspace_generation": getattr(deliverable, "workspace_generation", None),
                 "workspace_epoch": getattr(deliverable, "workspace_epoch", None),
-                "observed_after_seq": getattr(deliverable, "observed_after_seq", None),
                 "execution_identity": (
-                    identity.model_dump(mode="json")
+                    {
+                        "instance_id": identity.instance_id,
+                        "generation": identity.generation,
+                        "locator": identity.locator,
+                    }
                     if (identity := getattr(deliverable, "execution_identity", None)) is not None
-                    else None
-                ),
-                "preview_selection": (
-                    selection.model_dump(mode="json")
-                    if (selection := getattr(deliverable, "preview_selection", None)) is not None
                     else None
                 ),
                 "contract_digest": (

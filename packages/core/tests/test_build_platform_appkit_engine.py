@@ -46,6 +46,17 @@ def test_appkit_has_a_distinct_strict_engine_and_governed_lifecycle() -> None:
     )
     assert composition.construction.requested_tools == tools
     assert frozenset(tool.name for tool in composition.prompt_context.visible_tools) == tools
+    assert tuple(
+        (
+            check.check_id,
+            check.receipt_kind,
+            check.required_execution_modality,
+        )
+        for check in composition.target_plan.verifier.checks
+    ) == (
+        ("appkit_strict", "disco.appkit_strict@1", "appkit_strict_runtime"),
+        ("web_functional", "disco.web_functional@1", "managed_preview"),
+    )
 
     rules = {rule.key: rule.decision for rule in composition.effective_policy.rules}
     assert rules["mutation.raw_files"] is PolicyDecision.DENY

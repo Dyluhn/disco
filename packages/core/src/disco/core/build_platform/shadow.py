@@ -81,7 +81,10 @@ def expected_legacy_snapshot(
         visible_tools=tuple(sorted(visible_tools)),
         preview=f"{HOST_PREVIEW_ID.canonical}|modality=legacy_host",
         verifier=(
-            f"{APPKIT_VERIFIER_ID.canonical}|check=host.verify_appkit_strict"
+            (
+                f"{APPKIT_VERIFIER_ID.canonical}|check="
+                "host.verify_appkit_strict,host.verify_deliverable"
+            )
             if appkit
             else f"{HOST_VERIFIER_ID.canonical}|check=host.verify_deliverable"
         ),
