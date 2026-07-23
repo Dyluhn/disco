@@ -347,6 +347,53 @@ def test_interactive_contract_rejects_workspace_only_execution_modality() -> Non
         _contract((check,))
 
 
+def test_contract_digest_canonicalizes_semantically_unordered_fields() -> None:
+    check = _check("launch", _claim("native.launch", "bundle launches")).model_copy(
+        update={
+            "delegated_issuer_ids": frozenset(
+                {"native.secondary_verifier@1", "native.primary_verifier@1"}
+            ),
+            "accepted_claim_kinds": frozenset(
+                {
+                    VerificationClaimKind.TARGET_SPECIFIC,
+                    VerificationClaimKind.ARTIFACT_IDENTITY,
+                }
+            ),
+        }
+    )
+    first = _contract((check,))
+    raw = first.model_dump(mode="json")
+    raw["checks"][0]["delegated_issuer_ids"] = list(
+        reversed(raw["checks"][0]["delegated_issuer_ids"])
+    )
+    raw["checks"][0]["accepted_claim_kinds"] = list(
+        reversed(raw["checks"][0]["accepted_claim_kinds"])
+    )
+    second = AdmittedVerificationContract.model_validate(raw)
+    serialized = second.model_dump(mode="json")
+
+    assert first.digest == second.digest
+    assert serialized["checks"][0]["delegated_issuer_ids"] == [
+        "native.primary_verifier@1",
+        "native.secondary_verifier@1",
+    ]
+    assert serialized["checks"][0]["accepted_claim_kinds"] == [
+        "artifact_identity",
+        "target_specific",
+    ]
+    assert second.digest == (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                serialized,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    )
+
+
 def test_pre_field_builtin_web_contract_replays_with_authoritative_modality() -> None:
     claim = HostVerificationClaim(
         claim_id="web.http_ready",

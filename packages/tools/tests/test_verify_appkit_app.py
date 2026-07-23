@@ -188,6 +188,15 @@ class MutatingSealSandbox(FakeSandbox):
         return await super().read_file(path)
 
 
+class FileListingSandbox(FakeSandbox):
+    """Match container `ls` behavior: listing a file succeeds with its path."""
+
+    async def list_dir(self, rel: str) -> list[str]:
+        if rel in self._files:
+            return [f"/workspace/{rel}"]
+        return await super().list_dir(rel)
+
+
 class _PreviewStatus:
     def __init__(self, value: str):
         self.value = value
@@ -640,6 +649,19 @@ async def test_output_changed_during_seal_fails_without_artifact_identity(stub_b
     sealed = _checks_by_name(out.structured)["sealed_output_identity"]
     assert sealed["passed"] is False
     assert "changed while sealing" in sealed["evidence"]
+
+
+@pytest.mark.asyncio
+async def test_output_seal_classifies_files_without_assuming_list_dir_raises(stub_browser):
+    tree, _ = _build_tree()
+    out = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"),
+        _ctx(FileListingSandbox(tree)),
+    )
+
+    assert out.success and out.structured is not None
+    assert out.structured["passed"] is True, out.structured["summary"]
+    assert out.structured["artifact_identity"]["entry_reference"] == "dist/index.html"
 
 
 @pytest.mark.asyncio

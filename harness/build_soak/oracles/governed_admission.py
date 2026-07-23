@@ -301,6 +301,35 @@ def _artifact_identity_is_exact(
     )
 
 
+def _event_matches_run_intent(
+    segment: list[dict[str, Any]],
+    event: dict[str, Any],
+    run_intent: dict[str, Any],
+) -> bool:
+    """Mirror core's durable same-intent output authority for raw soak events."""
+
+    event_seq = _seq(event)
+    intent_seq = _seq(run_intent)
+    if event_seq <= intent_seq or not event.get("agent_view_id"):
+        return False
+    producing_admission = max(
+        (
+            candidate
+            for candidate in segment
+            if candidate.get("kind") == "workspace_mutation"
+            and candidate.get("operation") == "agent.view-admitted"
+            and candidate.get("run_intent_id") == run_intent.get("id")
+            and intent_seq < _seq(candidate) < event_seq
+        ),
+        key=_seq,
+        default=None,
+    )
+    return bool(
+        producing_admission is not None
+        and producing_admission.get("agent_view_id") == event.get("agent_view_id")
+    )
+
+
 def _preview_identity_from_pair(
     action: dict[str, Any],
     observation: dict[str, Any],
@@ -724,7 +753,9 @@ class GovernedAdmissionOracle:
             (
                 event
                 for event in reversed(segment)
-                if event.get("kind") == "deliverable" and _seq(event) > _seq(admission)
+                if event.get("kind") == "deliverable"
+                and _seq(event) > _seq(admission)
+                and _event_matches_run_intent(segment, event, run_intent)
             ),
             None,
         )
@@ -733,7 +764,6 @@ class GovernedAdmissionOracle:
             or deliverable.get("target_id") != contract.get("target_id")
             or deliverable.get("delivery_contract") != delivery
             or deliverable.get("verification_contract_digest") != contract_digest
-            or (current_view_id is not None and deliverable.get("agent_view_id") != current_view_id)
         ):
             return _fail(
                 "verification_contract -> deliverable",
@@ -783,9 +813,7 @@ class GovernedAdmissionOracle:
             covered_external.update(actual_claims & external_required)
             delegated = set(check.get("delegated_issuer_ids") or [])
             allowed_claim_issuers = {check.get("issuer_id"), *delegated}
-            required_artifact_identity_scheme = check.get(
-                "required_artifact_identity_scheme"
-            )
+            required_artifact_identity_scheme = check.get("required_artifact_identity_scheme")
             requires_artifact_identity = bool(
                 isinstance(required_artifact_identity_scheme, str)
                 and required_artifact_identity_scheme

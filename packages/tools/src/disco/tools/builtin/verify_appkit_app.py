@@ -223,8 +223,10 @@ async def _sealed_appkit_output_identity(
         for name in entries:
             child = f"{directory}/{name}"
             try:
-                await sandbox.list_dir(child)
-            except Exception:
+                regular_file = bool(await sandbox.file_exists(child))
+            except Exception as exc:  # noqa: BLE001 — an unclassifiable entry is unsealable
+                return None, f"cannot classify verifier output {child!r}: {exc}"
+            if regular_file:
                 size_probe = await sandbox.exec_shell(
                     f"wc -c < {shlex.quote(child)}",
                     timeout_s=10,
@@ -255,6 +257,11 @@ async def _sealed_appkit_output_identity(
                 )
                 if len(manifest) > _SEALED_OUTPUT_MAX_FILES:
                     return None, "verifier output exceeds the bounded file-count seal budget"
+                continue
+            try:
+                await sandbox.list_dir(child)
+            except Exception as exc:  # noqa: BLE001 — symlinks/special entries fail closed
+                return None, f"verifier output contains an unsupported entry {child!r}: {exc}"
             else:
                 pending.append(child)
     if not manifest or not any(item["path"] == APPKIT_CANONICAL_ENTRY_RELPATH for item in manifest):

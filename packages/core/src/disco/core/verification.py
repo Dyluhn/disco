@@ -22,7 +22,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 from .effects import ResourceKey, ResourceRevision, VerificationReceipt
 
@@ -264,6 +264,17 @@ class VerificationCheckContract(BaseModel):
     required: bool = True
     accepted_claim_kinds: frozenset[VerificationClaimKind] = frozenset()
     claims: tuple[HostVerificationClaim, ...] = ()
+
+    @field_serializer("delegated_issuer_ids", "accepted_claim_kinds")
+    def _serialize_unordered_contract_fields(
+        self,
+        value: frozenset[str] | frozenset[VerificationClaimKind],
+    ) -> list[str]:
+        """Keep durable contract bytes stable across independent host objects."""
+
+        return sorted(
+            item.value if isinstance(item, VerificationClaimKind) else item for item in value
+        )
 
     @model_validator(mode="before")
     @classmethod

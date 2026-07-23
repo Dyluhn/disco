@@ -689,6 +689,31 @@ def test_foreign_agent_view_is_rejected_even_when_receipt_is_self_anchored() -> 
     assert _result(events).failed
 
 
+def test_same_intent_handoff_survives_a_later_verifier_view() -> None:
+    events = _segment()
+    started = next(event for event in events if event.get("kind") == "verifier_started")
+    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
+    terminal = next(event for event in events if event.get("kind") == "status")
+    started["seq"] = 10
+    started["agent_view_id"] = "view-later"
+    verdict["seq"] = 11
+    terminal["seq"] = 12
+    events.append(
+        {
+            "kind": "workspace_mutation",
+            "source": "system",
+            "seq": 9,
+            "id": "evt_view_later",
+            "operation": "agent.view-admitted",
+            "run_intent_id": "evt_intent_0",
+            "agent_view_id": "view-later",
+        }
+    )
+    _replace_receipt(events, agent_view_id="view-later")
+
+    assert _result(events).passed
+
+
 def test_foreign_observed_url_is_rejected_even_when_receipt_is_self_anchored() -> None:
     events = _segment()
     _replace_receipt(events, observed_url="http://127.0.0.1:9999/")
