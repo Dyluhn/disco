@@ -478,6 +478,7 @@ def _preview_selection_is_current(
     selection: dict[str, Any],
     events: list[dict[str, Any]],
     *,
+    deliverable_seq: int,
     verdict_seq: int,
 ) -> bool:
     source_action = next(
@@ -505,7 +506,6 @@ def _preview_selection_is_current(
         if isinstance(source_action, dict) and isinstance(source_observation, dict)
         else None
     )
-    current = _active_preview_selection(events, through_seq=verdict_seq - 1)
     operational_fields = (
         "projection_id",
         "session_name",
@@ -516,12 +516,21 @@ def _preview_selection_is_current(
         "sandbox_generation",
         "url",
     )
+    handoff = _active_preview_selection(events, through_seq=deliverable_seq)
+    current = _active_preview_selection(events, through_seq=verdict_seq - 1)
+    selected = (
+        current
+        if handoff is None
+        else handoff
+        if isinstance(current, dict)
+        and tuple(handoff.get(field) for field in operational_fields)
+        == tuple(current.get(field) for field in operational_fields)
+        else None
+    )
     return (
         reconstructed == selection
-        and isinstance(current, dict)
+        and selection == selected
         and selection.get("source_observation_seq", verdict_seq) < verdict_seq
-        and tuple(selection.get(field) for field in operational_fields)
-        == tuple(current.get(field) for field in operational_fields)
     )
 
 
@@ -1081,6 +1090,7 @@ class GovernedAdmissionOracle:
                     or not _preview_selection_is_current(
                         selection,
                         segment,
+                        deliverable_seq=_seq(deliverable),
                         verdict_seq=_seq(verdict),
                     )
                     or not isinstance(execution, dict)

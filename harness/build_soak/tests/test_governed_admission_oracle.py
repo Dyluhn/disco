@@ -545,16 +545,11 @@ def _use_appkit_owned_preview(events: list[dict[str, Any]], *, passed: bool = Tr
     }
 
 
-def test_current_appkit_owned_preview_with_exact_receipt_passes() -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
-
-    assert _result(events).passed
-
-
-def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
+def _repeat_appkit_preview(
+    events: list[dict[str, Any]],
+    *,
+    same_operational_identity: bool = True,
+) -> dict[str, Any]:
     first_action = next(
         event
         for event in events
@@ -576,6 +571,12 @@ def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None
         action_id=repeated_action["id"],
     )
     repeated_observation["tool_result"]["call_id"] = "call-appkit-preview-retry"
+    if not same_operational_identity:
+        repeated_observation["tool_result"]["structured"]["preview_runtime"]["projection_id"] = (
+            "pv_" + "f" * 32
+        )
+    identity = _preview_identity_from_pair(repeated_action, repeated_observation)
+    assert identity is not None
     verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
     terminal = events[-1]
     verdict["seq"] = 12
@@ -584,8 +585,46 @@ def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None
         repeated_action,
         repeated_observation,
     ]
+    return identity
+
+
+def test_current_appkit_owned_preview_with_exact_receipt_passes() -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
 
     assert _result(events).passed
+
+
+def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
+    _repeat_appkit_preview(events)
+
+    assert _result(events).passed
+
+
+@pytest.mark.parametrize("same_operational_identity", (True, False))
+def test_appkit_preview_receipt_cannot_replace_handoff_provenance(
+    same_operational_identity: bool,
+) -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
+    repeated = _repeat_appkit_preview(
+        events,
+        same_operational_identity=same_operational_identity,
+    )
+    started = next(event for event in events if event.get("kind") == "verifier_started")
+    started["preview_selection"] = repeated
+    execution = dict(started["execution_identity"])
+    execution["instance_id"] = repeated["projection_id"]
+    started["execution_identity"] = execution
+    _replace_receipt(
+        events,
+        preview_selection=PreviewSelectionIdentity.model_validate(repeated),
+        execution_identity=VerificationExecutionIdentity.model_validate(execution),
+    )
+
+    assert _result(events).failed
 
 
 def test_composed_checks_share_execution_generation_but_retain_distinct_modalities() -> None:
