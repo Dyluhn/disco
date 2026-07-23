@@ -480,6 +480,13 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
             "build or write the intended entry file first, then serve that file.",
         )
     else:
+        # A first, distinct handoff is real control-plane progress: it resolves
+        # the missing/incorrect delivery shape even though `serve` is a virtual
+        # tool with no ActionEvent. Clear prior log-invisible refusal debt here.
+        # The DeliverableEvent itself still counts in consecutive_noops, so
+        # distinct serve spam remains capped at three and duplicate spam remains
+        # capped after two duplicates.
+        loop._invisible_steps = 0
         await loop._emit(
             DeliverableEvent(
                 source=EventSource.AGENT,

@@ -412,6 +412,10 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
         ]
     )
     loop, store = await _approved_plan_loop(agent)
+    # Model the preceding missing-app finish refusal from the live recovery
+    # path. The first valid handoff clears that invisible debt; two later
+    # duplicates still reach the cap and halt.
+    loop._invisible_steps = 1
 
     state = await loop.run()
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
