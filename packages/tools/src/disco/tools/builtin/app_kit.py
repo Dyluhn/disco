@@ -11,8 +11,9 @@ generated tree:
 * `app_add_section`     — insert a validated Section (unique id, a real catalog
                           variant of its kind) into a page, re-save the spec, and
                           regenerate only the affected files.
-* `app_update_content`  — patch a Section's bounded `content`, re-save, regenerate
-                          only the touched files.
+* `app_update_content`  — patch the app's display identity and/or a Section's
+                          bounded `content`, re-save, regenerate only the touched
+                          files.
 * `app_set_design`      — swap the DesignSpec (a recipe, or a raw spec only if the
                           regenerated output passes design_lint), re-save, and
                           regenerate the design/CSS files.
@@ -775,27 +776,61 @@ class ContentUpdate(BaseModel):
 
 
 class AppUpdateContentArgs(BaseModel):
-    page_id: str = Field(description="The page that holds the section.")
-    section_id: str = Field(description="The section whose content to patch.")
-    updates: ContentUpdate = Field(
-        description="Content slots to set/merge: heading, subheading, body, cta_label, "
-        "items (a list of strings), success_message. Unknown keys are rejected."
+    model_config = ConfigDict(extra="forbid")
+
+    app_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description=(
+            "Optional authoritative application display name. This updates AppSpec.name; "
+            "it is application identity, not section copy."
+        ),
     )
+    page_id: str | None = Field(
+        default=None,
+        description="The page that holds the section. Required with section updates.",
+    )
+    section_id: str | None = Field(
+        default=None,
+        description="The section whose content to patch. Required with section updates.",
+    )
+    updates: ContentUpdate | None = Field(
+        default=None,
+        description="Optional content slots to set/merge: heading, subheading, body, "
+        "cta_label, items (a list of strings), success_message. Unknown keys are "
+        "rejected. page_id and section_id are required when this is present.",
+    )
+
+    @model_validator(mode="after")
+    def _complete_section_selector(self) -> AppUpdateContentArgs:
+        section_fields = (self.page_id, self.section_id, self.updates)
+        if any(value is not None for value in section_fields) and any(
+            value is None for value in section_fields
+        ):
+            raise ValueError(
+                "page_id, section_id, and updates must be provided together for a "
+                "section content update"
+            )
+        if self.app_name is None and self.updates is None:
+            raise ValueError("set app_name and/or provide a complete section content update")
+        return self
 
 
 class AppUpdateContentTool:
-    """[CONTRACT] Patch a section's bounded `content` in the AppSpec and regenerate
-    only the touched files. The updates are merged onto the existing content and
-    re-validated (bounded slots, no unknown keys) before regeneration."""
+    """[CONTRACT] Patch application identity and/or bounded section content in the
+    AppSpec and regenerate only the touched files. Section updates are merged onto
+    the existing content and all changes are re-validated before regeneration."""
 
     definition = ToolDef(
         name="app_update_content",
         description=(
-            "Patch a section's content (heading/subheading/body/cta_label/items/"
-            "success_message) in the current app's spec. Updates are merged onto the "
-            "existing content and validated (bounded length, no unknown keys). Re-saves "
-            ".disco/appspec.json and regenerates only the touched files. Content lives in "
-            "the spec, never hand-edited in the generated tree."
+            "Update the current app's authoritative display identity (`app_name`) and/or "
+            "patch one section's content (heading/subheading/body/cta_label/items/"
+            "success_message). Section updates require page_id + section_id + updates. "
+            "Every change is validated in AppSpec, then .disco/appspec.json is re-saved "
+            "and only touched generated files are regenerated. Identity and content live "
+            "in the spec, never in hand-edited generated files."
         ),
         args_model=AppUpdateContentArgs,
         needs=_FS,
@@ -811,47 +846,66 @@ class AppUpdateContentTool:
             design = await _load_design_spec(ctx)
 
             data = app.model_dump(mode="json")
-            page = next((p for p in data["pages"] if p["id"] == args.page_id), None)
-            if page is None:
-                raise _AppKitError(f"no page with id {args.page_id!r}")
-            sec = next((s for s in page["sections"] if s["id"] == args.section_id), None)
-            if sec is None:
-                raise _AppKitError(f"no section {args.section_id!r} on page {args.page_id!r}")
-            updates = args.updates.model_dump(mode="json", exclude_unset=True)
-            if not updates:
-                raise _AppKitError(
-                    "no updates provided — set at least one of "
-                    "heading/subheading/body/cta_label/items/success_message"
+            identity_changed = args.app_name is not None and args.app_name != app.name
+            if args.app_name is not None:
+                data["name"] = args.app_name
+
+            section_changed = False
+            existing: dict[str, Any] | None = None
+            if args.updates is not None:
+                assert args.page_id is not None
+                assert args.section_id is not None
+                page = next((p for p in data["pages"] if p["id"] == args.page_id), None)
+                if page is None:
+                    raise _AppKitError(f"no page with id {args.page_id!r}")
+                sec = next(
+                    (s for s in page["sections"] if s["id"] == args.section_id),
+                    None,
                 )
-            existing = sec.get("content") or {}
-            merged = {**existing, **updates}
-            if merged == existing:
+                if sec is None:
+                    raise _AppKitError(f"no section {args.section_id!r} on page {args.page_id!r}")
+                updates = args.updates.model_dump(mode="json", exclude_unset=True)
+                if not updates and not identity_changed:
+                    raise _AppKitError(
+                        "no updates provided — set app_name and/or at least one of "
+                        "heading/subheading/body/cta_label/items/success_message"
+                    )
+                raw_existing = sec.get("content")
+                existing = (
+                    {str(key): value for key, value in raw_existing.items()}
+                    if isinstance(raw_existing, dict)
+                    else {}
+                )
+                merged = {**existing, **updates}
+                section_changed = merged != existing
+                if section_changed:
+                    try:
+                        # Validate bounded content in isolation for a precise error.
+                        _ = SectionContent.model_validate(merged)
+                    except Exception as exc:  # noqa: BLE001
+                        raise _AppKitError(f"invalid content update: {exc}") from exc
+                    sec["content"] = merged
+
+            if not identity_changed and not section_changed:
                 # RC-M convention (live-caught 2026-07-03): a semantic no-op MUST
-                # refuse with ground truth, not report success with "0 file(s)" —
-                # the model cannot tell the edit didn't take and repeats it into
-                # the stuck breaker. Carry the current values so the refusal is
-                # self-recovering.
+                # refuse with ground truth, not report success with "0 file(s)".
                 import json as _json
 
-                raise _AppKitError(
-                    f"no-op: section {args.section_id!r} already has exactly these "
-                    f"values — nothing changed. Current content: "
-                    f"{_json.dumps(existing, ensure_ascii=False)[:600]}. Send a "
-                    "DIFFERENT value for a slot (heading/subheading/body/cta_label/"
-                    "items/success_message) or target another section — or, if this is "
-                    "already the state you wanted, the content is COMPLETE: move on to "
-                    "the next step (verify/finish) instead of retrying this edit."
+                current = (
+                    f" Current content: {_json.dumps(existing, ensure_ascii=False)[:600]}."
+                    if existing is not None
+                    else ""
                 )
-            try:
-                # Validate the bounded content in isolation for a precise error.
-                _ = SectionContent.model_validate(merged)
-            except Exception as exc:  # noqa: BLE001
-                raise _AppKitError(f"invalid content update: {exc}") from exc
-            sec["content"] = merged
+                raise _AppKitError(
+                    "no-op: AppSpec already has exactly the requested values — nothing "
+                    f"changed. Current app_name: {app.name!r}.{current} Send a DIFFERENT "
+                    "app_name or section value, target another section, or move on to "
+                    "verify/finish if this is already the intended state."
+                )
             try:
                 new_app = AppSpec.model_validate(data)
             except Exception as exc:  # noqa: BLE001
-                raise _AppKitError(f"the content update made the spec invalid: {exc}") from exc
+                raise _AppKitError(f"the semantic update made the spec invalid: {exc}") from exc
 
             tree = generate(new_app, design)
             await _lint_gate(tree, design, ctx)
@@ -863,13 +917,22 @@ class AppUpdateContentTool:
             if isinstance(committed, ToolOutcome):
                 return committed
             touched = _changed_generated(committed, tree)
+            changes = []
+            if identity_changed:
+                changes.append(f"application name to {new_app.name!r}")
+            if section_changed:
+                changes.append(f"section {args.section_id!r} on page {args.page_id!r}")
             return ToolOutcome(
                 success=True,
                 content=(
-                    f"app_update_content: patched '{args.section_id}' on page "
-                    f"'{args.page_id}' — updated {len(touched)} file(s)."
+                    f"app_update_content: updated {' and '.join(changes)} — "
+                    f"updated {len(touched)} file(s)."
                 ),
-                structured={"files_written": touched, "spec": APPSPEC_RELPATH},
+                structured={
+                    "files_written": touched,
+                    "spec": APPSPEC_RELPATH,
+                    "application_name": new_app.name,
+                },
                 artifacts=list(committed.changed_paths),
                 effect_receipts=committed.receipts,
             )

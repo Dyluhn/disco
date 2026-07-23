@@ -1188,21 +1188,48 @@ async def _appkit_typed_gate_disposition(
         verdict.get("passed") is not True or status is VerificationClaimStatus.PASS
     ):
         return None
-    return await gate._governed_contract_refusal(
-        await gate._loop._events(),
-        failure_key=(
+    current_events = await gate._loop._events()
+    typed_result = _recorded_appkit_typed_result(current_events, prepared[0])
+    required_non_pass = (
+        next(
+            (
+                result
+                for result in typed_result.claim_results
+                if result.required and result.status is not VerificationClaimStatus.PASS
+            ),
+            None,
+        )
+        if typed_result is not None
+        else None
+    )
+    if required_non_pass is not None:
+        failure_key = (
+            f"{tool_name}:typed_claim:{required_non_pass.claim_id}:"
+            f"{required_non_pass.status.value}:{required_non_pass.reason}"
+        )
+        guidance = (
+            f"mandatory typed claim {required_non_pass.claim_id!r} returned "
+            f"{required_non_pass.status.value.upper()}: {required_non_pass.reason}. "
+            "Correct the authoritative target state for this claim, then verify again."
+        )
+    else:
+        failure_key = (
             f"{tool_name}:unavailable"
             if verdict is None
             else f"{tool_name}:typed_result_unavailable"
-        ),
-        guidance=(
+        )
+        guidance = (
             f"{tool_name} did not return a usable strict target verdict. Repair "
             "the target verifier/runtime; unavailable verification cannot release "
             "this governed build."
             if verdict is None
             else "the strict target verifier reported PASS, but its result did not "
             "bind the current started runtime and immutable artifact."
-        ),
+        )
+    return await gate._governed_contract_refusal(
+        current_events,
+        failure_key=failure_key,
+        guidance=guidance,
     )
 
 

@@ -908,6 +908,13 @@ async def test_platform_appkit_application_identity_uses_appspec_not_visible_cop
     )
     assert first_identity.status.value == "fail"
     assert first_identity.reason == "authoritative AppSpec name is 'Old title'"
+    first_guidance = next(
+        message
+        for message in _env(events)
+        if "mandatory typed claim 'application.title:revised'" in message
+    )
+    assert "authoritative AppSpec name is 'Old title'" in first_guidance
+    assert "did not bind the current started runtime" not in first_guidance
 
 
 @pytest.mark.asyncio

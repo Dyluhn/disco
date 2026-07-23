@@ -19,10 +19,11 @@ hand-draw repeated scaffolds — use the `lead_form` starter and the app structu
 
 ## Allowed tools
 app_create (scaffold the app + .disco/appspec.json + index.html), and the semantic edit
-tools — app_update_content / app_add_section / app_remove_section / app_reorder_section /
-app_set_design / app_set_tweak / app_snapshot_version — which edit the AppSpec and
-re-render. preview_* (platform-owned preview), ready_for_app_verification. Raw file_write
-is repair-only, not for normal edits.
+tools — app_update_content (authoritative application name and bounded section copy) /
+app_add_section / app_remove_section / app_reorder_section / app_set_design /
+app_set_tweak / app_snapshot_version — which edit the AppSpec and re-render. preview_*
+(platform-owned preview), ready_for_app_verification. Raw file_write is repair-only,
+not for normal edits.
 
 ## Forbidden tools
 No fake testimonials, logos, or stats. No manual port/server. No raw whole-app rewrite

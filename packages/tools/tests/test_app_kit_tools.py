@@ -372,12 +372,15 @@ def test_app_add_section_advertises_typed_section_schema():
 
 def test_app_update_content_advertises_typed_items_array_schema():
     schema = AppUpdateContentTool.definition.args_model.model_json_schema()
-    ref = schema["properties"]["updates"]["$ref"]
+    ref = next(
+        branch["$ref"] for branch in schema["properties"]["updates"]["anyOf"] if "$ref" in branch
+    )
     update_schema = schema["$defs"][ref.rsplit("/", 1)[-1]]
 
     assert update_schema["additionalProperties"] is False
     assert _schema_allows_string_array(update_schema["properties"]["items"])
     assert "success_message" in update_schema["properties"]
+    assert schema["properties"]["app_name"]["anyOf"][0]["maxLength"] == 200
 
 
 async def test_app_update_content_touches_only_content_and_spec():
@@ -406,6 +409,81 @@ async def test_app_update_content_touches_only_content_and_spec():
     )
     # the new copy is in content.ts
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
+
+
+async def test_app_update_content_changes_authoritative_identity_without_section_selector():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(app_name="Revised Application"),
+        _ctx(sbx),
+    )
+
+    assert out.success, out.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
+    assert spec["name"] == "Revised Application"
+    assert out.structured["application_name"] == "Revised Application"
+    assert APPSPEC_RELPATH in out.artifacts
+    assert "Revised Application" in sbx._fs["index.html"].decode("utf-8")
+
+
+async def test_app_update_content_changes_identity_and_copy_atomically():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            app_name="Revised Application",
+            page_id="home",
+            section_id="hero",
+            updates={"heading": "Revised heading"},
+        ),
+        _ctx(sbx),
+    )
+
+    assert out.success, out.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
+    assert spec["name"] == "Revised Application"
+    assert spec["pages"][0]["sections"][0]["content"]["heading"] == "Revised heading"
+    assert "Revised heading" in sbx._fs["src/generated/content.ts"].decode("utf-8")
+
+
+async def test_app_update_content_invalid_copy_cannot_partially_change_identity():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+    before = dict(sbx._fs)
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            app_name="Must Not Partially Land",
+            page_id="home",
+            section_id="hero",
+            updates={"heading": "x" * 401},
+        ),
+        _ctx(sbx),
+    )
+
+    assert not out.success
+    assert out.error == "app_update_content_refused"
+    assert "invalid content update" in out.content
+    assert sbx._fs == before
+
+
+async def test_app_update_content_refuses_identity_noop_with_ground_truth():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+    current = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))["name"]
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(app_name=current),
+        _ctx(sbx),
+    )
+
+    assert not out.success
+    assert out.error == "app_update_content_refused"
+    assert "no-op" in out.content
+    assert repr(current) in out.content
 
 
 async def test_appkit_unreadable_planned_file_refuses_before_any_write():
@@ -552,7 +630,7 @@ async def test_app_update_content_refuses_empty_updates():
     assert not out.success
     assert out.error == "app_update_content_refused"
     assert (
-        out.content == "no updates provided — set at least one of "
+        out.content == "no updates provided — set app_name and/or at least one of "
         "heading/subheading/body/cta_label/items/success_message"
     )
 
@@ -609,6 +687,11 @@ async def test_app_set_design_refuses_identical_design_noop():
 def test_app_update_content_rejects_unknown_slot():
     with pytest.raises(ValueError, match="bogus"):
         AppUpdateContentArgs(page_id="home", section_id="hero", updates={"bogus": "x"})
+
+
+def test_app_update_content_requires_complete_section_selector():
+    with pytest.raises(ValueError, match="must be provided together"):
+        AppUpdateContentArgs(section_id="hero", updates={"heading": "x"})
 
 
 # ---- app_set_design -----------------------------------------------------------
