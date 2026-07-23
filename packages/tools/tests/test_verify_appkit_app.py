@@ -629,6 +629,7 @@ async def test_known_good_passes_all_checks(stub_browser):
     assert v["artifact_identity"]["scheme"] == "sha256-tree-manifest-v1"
     assert v["artifact_identity"]["entry_reference"] == "dist/index.html"
     assert v["artifact_identity"]["digest"].startswith("sha256:")
+    assert v["application_title"] == "Acme Leads"
     assert all(c["passed"] for c in v["checks"])
     # W-45 compatible: embedded verify_web_app verdict + top-level url/fingerprint
     assert "verify_web_app" in v and v["url"]

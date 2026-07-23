@@ -51,6 +51,19 @@ def test_structured_browser_runtime_is_required_by_claims_not_artifact_names() -
         )
         is False
     )
+    assert (
+        requires_structured_browser_runtime(
+            [
+                HostVerificationClaim(
+                    claim_id="application.title",
+                    kind=VerificationClaimKind.APPLICATION_IDENTITY,
+                    expected="Native Notes",
+                    source_authority="target:application_model@1",
+                )
+            ]
+        )
+        is False
+    )
 
 
 def _claim(

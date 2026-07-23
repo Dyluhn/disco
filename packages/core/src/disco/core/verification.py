@@ -74,6 +74,7 @@ def validated_image_data_url(value: str) -> tuple[str, str] | None:
 
 class VerificationClaimKind(str, Enum):
     ARTIFACT_IDENTITY = "artifact_identity"
+    APPLICATION_IDENTITY = "application_identity"
     HTTP_READY = "http_ready"
     RENDERED_CONTENT = "rendered_content"
     VISIBLE_TEXT = "visible_text"
@@ -217,6 +218,7 @@ class HostVerificationClaim(BaseModel):
                 VerificationClaimKind.VISIBLE_TEXT,
                 VerificationClaimKind.INTERACTION,
                 VerificationClaimKind.ROUTE,
+                VerificationClaimKind.APPLICATION_IDENTITY,
                 VerificationClaimKind.CONTRACT_SEMANTIC,
                 VerificationClaimKind.VISUAL_SEMANTIC,
                 VerificationClaimKind.TARGET_SPECIFIC,

@@ -138,18 +138,39 @@ def _host_verification_claims(
         else default_structured_web_claims()
     )
     accepted = check.accepted_claim_kinds if check is not None else frozenset(VerificationClaimKind)
-    for condition in dictated_content_conditions_from_events(events):
-        if VerificationClaimKind.VISIBLE_TEXT not in accepted:
-            continue
-        digest = hashlib.sha256(condition.literal.encode("utf-8")).hexdigest()[:24]
-        claims.append(
-            HostVerificationClaim(
-                claim_id=f"web.visible_text:{digest}",
-                kind=VerificationClaimKind.VISIBLE_TEXT,
-                expected=condition.literal,
-                source_authority=f"user_event:{condition.source_event_id}",
-            )
+    contract_accepted = (
+        frozenset(
+            kind
+            for contract_check in admission.verification_contract.checks
+            for kind in contract_check.accepted_claim_kinds
         )
+        if check is None and admission is not None and admission.verification_contract is not None
+        else accepted
+    )
+    for condition in dictated_content_conditions_from_events(events):
+        digest = hashlib.sha256(condition.literal.encode("utf-8")).hexdigest()[:24]
+        if (
+            condition.requirement_slot == "application.title"
+            and VerificationClaimKind.APPLICATION_IDENTITY in accepted
+            and VerificationClaimKind.APPLICATION_IDENTITY in contract_accepted
+        ):
+            claims.append(
+                HostVerificationClaim(
+                    claim_id=f"application.title:{digest}",
+                    kind=VerificationClaimKind.APPLICATION_IDENTITY,
+                    expected=condition.literal,
+                    source_authority=f"user_event:{condition.source_event_id}",
+                )
+            )
+        if VerificationClaimKind.VISIBLE_TEXT in accepted:
+            claims.append(
+                HostVerificationClaim(
+                    claim_id=f"web.visible_text:{digest}",
+                    kind=VerificationClaimKind.VISIBLE_TEXT,
+                    expected=condition.literal,
+                    source_authority=f"user_event:{condition.source_event_id}",
+                )
+            )
     requested_claims, _ = _user_verification_material(events)
     claims.extend(claim for claim in requested_claims if claim.kind in accepted)
     if (
@@ -883,10 +904,28 @@ async def _prepare_appkit_typed_authority(
     if artifact_path is None or execution_identity.modality != check.required_execution_modality:
         return None
     current = _latest_deliverable_event(events)
+    max_seq = max((event.seq or 0 for event in events), default=0)
+    current_seq = current.seq if current is not None and type(current.seq) is int else None
+    handoff_selection = (
+        _preview_selection_at(events, through_seq=current_seq) if current_seq is not None else None
+    )
+    latest_selection = _preview_selection_at(events, through_seq=max_seq)
+    preview_authority_changed = (
+        current is not None and (handoff_selection is None) != (latest_selection is None)
+    ) or (
+        handoff_selection is not None
+        and latest_selection is not None
+        and handoff_selection.operational_identity != latest_selection.operational_identity
+    )
+    handoff_precedes_productive_work = current_seq is None or current_seq < _last_productive_seq(
+        events
+    )
     if (
         current is None
         or not _handoff_matches_verification_contract(current, contract)
         or current.path != artifact_path
+        or handoff_precedes_productive_work
+        or preview_authority_changed
     ):
         emitted = await gate._loop._emit(
             DeliverableEvent(
@@ -912,7 +951,11 @@ async def _prepare_appkit_typed_authority(
             "deliverable_event_id": current.id,
             "artifact_path": current.path,
             "artifact_kind": current.artifact_kind,
-            "required_claims": check.claims,
+            "required_claims": _host_verification_claims(
+                gate._verifier_contract_payload(),
+                events,
+                check=check,
+            ),
             "verification_check": check,
             "execution_identity": execution_identity,
             "preview_selection": None,
@@ -988,7 +1031,7 @@ async def _record_appkit_typed_verdict(
                 "or artifact producer authority"
             )
     unavailable = outcome is None or isinstance(outcome, AgentErrorEvent) or bool(binding_error)
-    status = (
+    base_status = (
         VerificationClaimStatus.PASS
         if raw_passed and not binding_error
         else VerificationClaimStatus.UNAVAILABLE
@@ -1019,7 +1062,8 @@ async def _record_appkit_typed_verdict(
         )
     )
     evidence_event_id = outcome.id if outcome is not None else started.id
-    claim_results = tuple(
+    raw_application_title = raw.get("application_title")
+    claim_results: tuple[HostVerificationClaimResult, ...] = tuple(
         HostVerificationClaimResult(
             claim_id=claim.claim_id,
             kind=claim.kind,
@@ -1027,8 +1071,29 @@ async def _record_appkit_typed_verdict(
             expected=claim.expected,
             source_authority=claim.source_authority,
             reference_image_sha256=claim.reference_image_sha256,
-            status=status,
-            reason=reason,
+            status=(
+                VerificationClaimStatus.UNAVAILABLE
+                if base_status is VerificationClaimStatus.UNAVAILABLE
+                or (
+                    claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
+                    and not isinstance(raw_application_title, str)
+                )
+                else VerificationClaimStatus.PASS
+                if claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
+                and isinstance(raw_application_title, str)
+                and raw_application_title == claim.expected
+                else VerificationClaimStatus.FAIL
+                if claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
+                else base_status
+            ),
+            reason=(
+                f"authoritative AppSpec name is {raw_application_title!r}"
+                if claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
+                and isinstance(raw_application_title, str)
+                else "strict AppKit verifier omitted authoritative application identity"
+                if claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
+                else reason
+            ),
             verifier_id=check.issuer_id,
             capability_basis="configured strict AppKit target verifier",
             evidence_modalities=(VerificationEvidenceModality.TARGET_SPECIFIC,),
@@ -1039,16 +1104,25 @@ async def _record_appkit_typed_verdict(
         )
         for claim in bound_deliverable.required_claims
     )
+    result_reason = next(
+        (
+            result.reason
+            for result in claim_results
+            if result.required and result.status is not VerificationClaimStatus.PASS
+        ),
+        reason,
+    )
     screenshot_path = _bounded_host_verdict_screenshot_path(raw.get("screenshot_path"))
     typed_result = target_verification_result(
         deliverable=bound_deliverable,
         claim_results=claim_results,
         verifier_id=check.issuer_id,
         tool_id=check.operation,
-        reason=reason,
+        reason=result_reason,
         observed_url=url,
         screenshot_path=screenshot_path or "",
     )
+    status = typed_result.status
     coverage = aggregate_verification_receipts(
         deliverables=(bound_deliverable,),
         receipts=(typed_result,),
@@ -2282,6 +2356,7 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
         events: list[Event],
         *,
         skip_check_ids: frozenset[str] = frozenset(),
+        preverified_claim_ids: dict[str, frozenset[str]] | None = None,
     ) -> tuple[tuple[HostVerificationDeliverable, ...], str | None]:
         contract = deliverable.verification_contract
         if contract is None:
@@ -2311,7 +2386,15 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
                 continue
             assigned[owners[0].check_id].append(claim)
         for check_id in skip_check_ids:
-            if assigned.get(check_id):
+            covered = (
+                preverified_claim_ids.get(check_id, frozenset())
+                if preverified_claim_ids is not None
+                else frozenset()
+            )
+            uncovered = [
+                claim for claim in assigned.get(check_id, ()) if claim.claim_id not in covered
+            ]
+            if uncovered:
                 errors.append(f"preverified check {check_id!r} cannot absorb new external claims")
         out: list[HostVerificationDeliverable] = []
         host_verifier = getattr(self._loop, "_host_verifier", None)
@@ -2479,7 +2562,23 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
             deliverable,
             events,
             skip_check_ids=skip_check_ids,
+            preverified_claim_ids={
+                item.verification_check.check_id: frozenset(
+                    claim.claim_id for claim in item.required_claims
+                )
+                for item, _receipt in valid_preverified
+                if item.verification_check is not None
+            },
         )
+        if ownership_error is not None and not deliverables:
+            return await self._governed_contract_refusal(
+                events,
+                failure_key=f"target:claim_ownership:{ownership_error}",
+                guidance=(
+                    f"{ownership_error}. The admitted verifier set cannot honestly "
+                    "cover the current mandatory requirement set."
+                ),
+            )
         if not deliverables and not valid_preverified:
             return Disp.FALLTHROUGH
 

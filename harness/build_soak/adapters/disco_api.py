@@ -3195,6 +3195,34 @@ def _referenced_screenshot_paths(
             "browser screenshot references could not be read from the durable event log",
             {"error": str(exc)},
         ) from exc
+    # A version restore starts a new workspace-evidence generation. The immutable
+    # event log deliberately retains older browser receipts, but their `.pmx`
+    # screenshot paths name bytes in the superseded workspace tree. Resolve only
+    # references from the current generation against the current ProjectStore
+    # snapshot. Using the restore *mutation* as the fence (rather than the later
+    # success marker) also prevents pre-restore proof from surviving a partial or
+    # failed restore.
+    restore_fence = max(
+        (
+            event["seq"]
+            for event in normalized
+            if (
+                (
+                    event.get("kind") == "workspace_mutation"
+                    and event.get("operation") == "version.restore"
+                )
+                or event.get("kind") == "workspace_restored"
+            )
+            and type(event.get("seq")) is int
+        ),
+        default=0,
+    )
+    if restore_fence:
+        normalized = [
+            event
+            for event in normalized
+            if type(event.get("seq")) is int and event["seq"] > restore_fence
+        ]
     for event in normalized:
         if event.get("kind") == "verifier_verdict":
             if event.get("verified") is not True or event.get("verdict") != "pass":

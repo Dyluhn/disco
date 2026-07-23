@@ -2012,6 +2012,27 @@ def _host_verifier_verdict(
     }
 
 
+def _workspace_restore_event(*, seq: int, restored_marker: bool = False) -> dict[str, Any]:
+    if restored_marker:
+        return {
+            "id": f"evt_{seq}",
+            "seq": seq,
+            "kind": "workspace_restored",
+            "source": "user",
+            "version_seq": 1,
+            "tree_digest": "0" * 64,
+            "label": "",
+        }
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "workspace_mutation",
+        "source": "system",
+        "operation": "version.restore",
+        "paths": ["."],
+    }
+
+
 def test_h190_referenced_browser_screenshot_is_retained_byte_identical_and_locked(tmp_path):
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"
@@ -2223,6 +2244,81 @@ def test_h190_passing_host_verdict_screenshot_is_retained_and_hash_locked(tmp_pa
     replayed = classify_run_folder(base)
     assert replayed["status"] == "INVALID_RUN"
     assert replayed["code"] == "EVIDENCE_HASH_MISMATCH"
+
+
+def test_h190_restore_collects_only_current_workspace_generation(tmp_path):
+    projects = tmp_path / "projects"
+    current_rel = ".pmx/screenshots/current.png"
+    current_bytes = b"\x89PNG\r\n\x1a\ncurrent-generation"
+    workspace_dir = _plant_snapshot(
+        projects,
+        _CID,
+        {"index.html": "<h1>current</h1>"},
+    )
+    current_path = workspace_dir / current_rel
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    current_path.write_bytes(current_bytes)
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=str(projects),
+    )
+    workspace = client._read_snapshot_manifest(_CID, ["index.html"], workspace_dir)
+    events = [
+        _browser_screenshot_observation(".pmx/screenshots/historical.png", seq=10),
+        _workspace_restore_event(seq=11),
+        _workspace_restore_event(seq=12, restored_marker=True),
+        _browser_screenshot_observation(current_rel, seq=13),
+    ]
+
+    assert client.collect_browser_evidence(_CID, events, workspace) == {current_rel: current_bytes}
+
+
+def test_h190_restore_does_not_hide_missing_current_screenshot(tmp_path):
+    client = DiscoApiClient(
+        FakeTransport(tmp_path / "disco.db", states=["FINISHED"], workspace={}),
+        db_path=str(tmp_path / "disco.db"),
+        projects_root=None,
+    )
+    events = [
+        _browser_screenshot_observation(".pmx/screenshots/historical.png", seq=10),
+        _workspace_restore_event(seq=11),
+        _browser_screenshot_observation(".pmx/screenshots/missing-current.png", seq=12),
+    ]
+
+    with pytest.raises(BrowserEvidenceCollectionError, match="no authoritative workspace snapshot"):
+        client.collect_browser_evidence(_CID, events, {})
+
+
+def test_h191_restore_invalidates_old_proof_and_admits_only_fresh_host_verdict():
+    old_path = ".pmx/screenshots/old.png"
+    new_path = ".pmx/screenshots/new.png"
+    restored_without_new_proof = [
+        _host_verifier_verdict(old_path, seq=10),
+        _workspace_restore_event(seq=11),
+    ]
+    restored_with_new_proof = [
+        *restored_without_new_proof,
+        _host_verifier_verdict(new_path, seq=12),
+    ]
+
+    assert _successful_browser_verification_paths(restored_without_new_proof) == set()
+    assert _successful_browser_verification_paths(restored_with_new_proof) == {new_path}
+
+
+def test_h191_latest_of_multiple_restores_is_the_only_evidence_generation():
+    first_path = ".pmx/screenshots/first.png"
+    middle_path = ".pmx/screenshots/middle.png"
+    current_path = ".pmx/screenshots/current.png"
+    events = [
+        _host_verifier_verdict(first_path, seq=10),
+        _workspace_restore_event(seq=11),
+        _host_verifier_verdict(middle_path, seq=12),
+        _workspace_restore_event(seq=13),
+        _host_verifier_verdict(current_path, seq=14),
+    ]
+
+    assert _successful_browser_verification_paths(events) == {current_path}
 
 
 @pytest.mark.parametrize("path", [None, 7, "", "../outside.png", ".pmx/screenshots/x.PNG"])

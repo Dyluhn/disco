@@ -251,7 +251,12 @@ class _LegacyWebTarget:
                         operation="host.verify_appkit_strict",
                         required_capabilities=frozenset({"workspace.read"}),
                     ),
-                    accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+                    accepted_claim_kinds=frozenset(
+                        {
+                            VerificationClaimKind.APPLICATION_IDENTITY,
+                            VerificationClaimKind.TARGET_SPECIFIC,
+                        }
+                    ),
                     claims=(
                         HostVerificationClaim(
                             claim_id="appkit.strict_contract",

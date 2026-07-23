@@ -276,6 +276,106 @@ def test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths():
     ]
 
 
+def test_explicit_application_title_change_replaces_only_same_exact_slot():
+    initial = _user(
+        'Build an app titled exactly "Alpha" with CTA text "Keep me".',
+        1,
+    )
+    replacement = _user('Change the app title to exactly "Beta".', 4)
+    events = [
+        initial,
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        replacement,
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (1, "Keep me"),
+        (2, "Beta"),
+    ]
+    title = conditions[-1]
+    assert title.requirement_slot == "application.title"
+    assert title.supersedes_source_event_id == initial.id
+    # Durable replay derives the same current requirement authority.
+    assert dictated_content_conditions_from_events(list(events)) == conditions
+
+
+def test_additive_content_does_not_replace_application_title():
+    events = [
+        _user('Build an app titled exactly "Alpha".', 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user('Add a heading exactly "Beta".', 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (1, "Alpha"),
+        (2, "Beta"),
+    ]
+    assert conditions[-1].supersedes_source_event_id is None
+
+
+def test_ambiguous_application_title_history_fails_closed_on_replacement():
+    events = [
+        _user(
+            'Build an app titled exactly "Alpha" and a site titled exactly "Gamma".',
+            1,
+        ),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user('Change the app title to exactly "Beta".', 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (1, "Alpha"),
+        (1, "Gamma"),
+        (2, "Beta"),
+    ]
+    assert conditions[-1].supersedes_source_event_id is None
+
+
+@pytest.mark.parametrize(
+    "initial",
+    [
+        'Build an app with a button called "Launch".',
+        'Build an app with a hero titled "Launch".',
+        'Build a site with a CTA named "Launch".',
+        'Build an application where the first card is called "Launch".',
+    ],
+)
+def test_component_copy_is_not_misclassified_as_application_title(initial):
+    events = [
+        _user(initial, 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user('Change the app title to exactly "Beta".', 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (1, "Launch"),
+        (2, "Beta"),
+    ]
+    assert conditions[0].requirement_slot is None
+    assert conditions[1].requirement_slot == "application.title"
+    assert conditions[1].supersedes_source_event_id is None
+
+
 def test_serve_argument_literals_are_metadata_not_dictated_content():
     text = (
         'Build a hero with heading "Launch Day". Then call the\nserve tool exactly once '

@@ -90,6 +90,7 @@ def _appkit_verdict(*, passed: bool, fp: str) -> dict:
         "screenshot_path": "shot.png",
         "checks": [{"name": "worker_contract", "passed": passed, "evidence": "x"}],
         "verify_web_app": {"url": "http://127.0.0.1:8000/"},
+        "application_title": "Acme Leads",
         "canonical_entry_path": "dist/index.html",
         "preview_runtime": _appkit_preview_runtime(),
         "artifact_identity": {
@@ -109,7 +110,12 @@ def _appkit_contract(*, with_web: bool = False) -> AdmittedVerificationContract:
         operation="host.verify_appkit_strict",
         required_execution_modality="appkit_strict_runtime",
         required_artifact_identity_scheme="sha256-tree-manifest-v1",
-        accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+        accepted_claim_kinds=frozenset(
+            {
+                VerificationClaimKind.APPLICATION_IDENTITY,
+                VerificationClaimKind.TARGET_SPECIFIC,
+            }
+        ),
         claims=(
             HostVerificationClaim(
                 claim_id="appkit.strict_contract",
@@ -319,6 +325,18 @@ class _StructuredPassingHostVerifier:
         return verdict
 
 
+class _SequencedStructuredHostVerifier(_StructuredPassingHostVerifier):
+    def __init__(self, rendered_texts: list[str]) -> None:
+        super().__init__()
+        self._rendered_texts = rendered_texts
+
+    async def verify(self, deliverable):  # noqa: ANN001
+        self.rendered_text = self._rendered_texts[
+            min(len(self.calls), len(self._rendered_texts) - 1)
+        ]
+        return await super().verify(deliverable)
+
+
 def _statuses(events):
     return [(e.status.value, e.detail) for e in events if isinstance(e, StatusEvent)]
 
@@ -517,6 +535,64 @@ async def test_direct_strict_pass_before_finish_is_reverified_under_typed_start(
     assert (strict_start.seq or 0) < (strict_actions[-1].seq or 0)
     assert (strict_actions[-1].seq or 0) < (strict_observations[-1].seq or 0)
     assert (strict_observations[-1].seq or 0) < (strict_verdict.seq or 0)
+
+
+@pytest.mark.asyncio
+async def test_appkit_productive_repair_refreshes_exact_handoff_before_composed_checks() -> None:
+    contract = _appkit_contract(with_web=True)
+    host = _SequencedStructuredHostVerifier(["wrong title", "Final title"])
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            action_step(
+                tool="app_create",
+                args={"recipe_id": "editorial-ledger", "overwrite": True},
+            ),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu, host_verifier=host)
+    await loop._emit(_appkit_admission(contract))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Build the app with the governed title."),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="app.title",
+                        kind=VerificationClaimKind.VISIBLE_TEXT,
+                        expected="Final title",
+                    ),
+                )
+            ),
+        )
+    )
+    await loop.send_message("Build the app.")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    handoffs = [event for event in events if isinstance(event, DeliverableEvent)]
+    create_actions = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call.tool_name == "app_create"
+    ]
+    second_create_observation = next(
+        event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.action_id == create_actions[-1].id
+    )
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert len(host.calls) == 2
+    assert len(handoffs) == 2
+    assert (handoffs[0].seq or 0) < (second_create_observation.seq or 0)
+    assert (second_create_observation.seq or 0) < (handoffs[-1].seq or 0)
+    assert host.calls[-1].deliverable_event_id == handoffs[-1].id
+    assert host.calls[-1].preview_selection is not None
 
 
 @pytest.mark.asyncio
@@ -734,6 +810,104 @@ async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
         for event in verdicts
         if event.verification_result is not None and event.verification_result.passed
     } == {"disco.appkit_strict@1", "disco.web_functional@1"}
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_strict_only_cannot_release_unowned_required_claim() -> None:
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="The app must show Account ready."),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="appkit.visible_text:account_ready",
+                        kind=VerificationClaimKind.VISIBLE_TEXT,
+                        expected="Account ready",
+                    ),
+                )
+            ),
+        )
+    )
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert any(status == "STUCK" for status, _detail in _statuses(events))
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    assert any("has 0 admitted verifier owners" in message for message in _env(events))
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_application_identity_uses_appspec_not_visible_copy() -> None:
+    contract = _appkit_contract()
+    mismatched = _appkit_verdict(passed=True, fp="CLEAN")
+    mismatched["application_title"] = "Old title"
+    exact = _appkit_verdict(passed=True, fp="CLEAN")
+    exact["application_title"] = "Revised title"
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            action_step(
+                tool="app_create",
+                args={"recipe_id": "editorial-ledger", "overwrite": True},
+            ),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([mismatched, exact])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Set the application title."),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="application.title:revised",
+                        kind=VerificationClaimKind.APPLICATION_IDENTITY,
+                        expected="Revised title",
+                    ),
+                )
+            ),
+        )
+    )
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    typed = [
+        event.verification_result
+        for event in events
+        if isinstance(event, VerifierVerdictEvent) and event.verification_result is not None
+    ]
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert len(typed) == 2
+    assert typed[0].status.value == "fail"
+    assert typed[1].status.value == "pass"
+    first_identity = next(
+        result
+        for result in typed[0].claim_results
+        if result.kind is VerificationClaimKind.APPLICATION_IDENTITY
+    )
+    assert first_identity.status.value == "fail"
+    assert first_identity.reason == "authoritative AppSpec name is 'Old title'"
 
 
 @pytest.mark.asyncio

@@ -61,6 +61,16 @@ class DictatedContentCondition:
     literal: str
     source_event_id: str
     source_seq: int | None = None
+    requirement_slot: str | None = None
+    supersedes_source_event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _DictatedContentLiteral:
+    literal: str
+    quote_start: int
+    requirement_slot: str | None
+    replaces_slot: bool
 
 
 # (?<!\w) blocks apostrophe-contractions from OPENING a match ("don't ... 'X'"
@@ -119,6 +129,24 @@ _SERVE_METADATA_PREFIX_RE = re.compile(
 _DIAGNOSTIC_PROTOCOL_HEADER_RE = re.compile(r"(?im)^\s*DIAGNOSTIC\s+PROTOCOL\b")
 _DIAGNOSTIC_PROTOCOL_TASK_RE = re.compile(r"(?im)^\s*TASK\s*:")
 _DIAGNOSTIC_PROTOCOL_LITERAL_RE = re.compile(r"^(?:PREDICT|OBSERVED)\s*:", re.IGNORECASE)
+# Exact application-title wording is a stable requirement identity across web,
+# native, desktop, and future target shapes. Keep this deliberately narrow:
+# arbitrary headings/labels may be repeated, while one explicit application
+# title/name replacement can causally retire the prior value for that same slot.
+_APPLICATION_TITLE_DECLARATION_RE = re.compile(
+    r"\b(?:app(?:lication)?|site)\s+"
+    r"(?:(?:is|should\s+be|must\s+be)\s+)?"
+    r"(?:titled|named|called)\s+(?:exactly\s+)?$",
+    re.IGNORECASE,
+)
+_APPLICATION_TITLE_REPLACEMENT_RE = re.compile(
+    r"(?:"
+    r"\b(?:change|set|update)\s+(?:the\s+)?"
+    r"(?:app(?:lication)?|site)\s+(?:title|name)\s+(?:to|as)"
+    r"|\brename\s+(?:the\s+)?(?:app(?:lication)?|site)\s+(?:to|as)"
+    r")\s+(?:exactly\s+)?$",
+    re.IGNORECASE,
+)
 
 
 def _has_unspaced_slash(text: str) -> bool:
@@ -211,16 +239,28 @@ def _is_diagnostic_protocol_metadata_literal(
     return task is not None and quote_start < task.start()
 
 
-def extract_dictated_content_literals(text: str) -> list[str]:
-    """Extract quoted user-authored content literals from a build instruction.
+def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | None, bool]:
+    """Return one exact requirement slot plus whether this syntax replaces it.
 
-    Only single/double quoted strings 2..80 chars are considered. Shell-looking
-    snippets and path-looking strings are skipped so quoted commands like
-    "npm run build" or paths like "src/app.js" do not become content floors.
-    De-duplicates per message while preserving first occurrence order.
+    This is syntactic, not fuzzy semantic matching. Only a high-confidence
+    application/site title declaration gets a stable slot, and only explicit
+    change/set/update/rename syntax gets replacement authority.
     """
 
-    out: list[str] = []
+    prefix = text[max(0, quote_start - 320) : quote_start]
+    # A prior sentence cannot supply the field identity for this literal.
+    sentence = re.split(r"[.!?]", prefix)[-1]
+    if _APPLICATION_TITLE_REPLACEMENT_RE.search(sentence):
+        return "application.title", True
+    if _APPLICATION_TITLE_DECLARATION_RE.search(sentence):
+        return "application.title", False
+    return None, False
+
+
+def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
+    """Extract bounded literal records with exact replacement metadata."""
+
+    out: list[_DictatedContentLiteral] = []
     seen: set[str] = set()
     for mt in _QUOTED_LITERAL_RE.finditer(text or ""):
         literal = mt.group(1) if mt.group(1) is not None else mt.group(2)
@@ -234,8 +274,28 @@ def extract_dictated_content_literals(text: str) -> list[str]:
         if literal in seen:
             continue
         seen.add(literal)
-        out.append(literal)
+        slot, replaces = _dictated_content_literal_slot(text, mt.start())
+        out.append(
+            _DictatedContentLiteral(
+                literal=literal,
+                quote_start=mt.start(),
+                requirement_slot=slot,
+                replaces_slot=replaces,
+            )
+        )
     return out
+
+
+def extract_dictated_content_literals(text: str) -> list[str]:
+    """Extract quoted user-authored content literals from a build instruction.
+
+    Only single/double quoted strings 2..80 chars are considered. Shell-looking
+    snippets and path-looking strings are skipped so quoted commands like
+    "npm run build" or paths like "src/app.js" do not become content floors.
+    De-duplicates per message while preserving first occurrence order.
+    """
+
+    return [candidate.literal for candidate in _dictated_content_literals(text)]
 
 
 def _scoped_edit_user_messages(events: list[Event]) -> list[MessageEvent]:
@@ -314,17 +374,45 @@ def dictated_content_conditions_from_events(
             content = user.message.content or ""
             if is_scoped_edit_directive(content):
                 continue
-            for literal in extract_dictated_content_literals(content):
+            candidates = _dictated_content_literals(content)
+            replacement_counts: dict[str, int] = {}
+            for candidate in candidates:
+                if candidate.replaces_slot and candidate.requirement_slot is not None:
+                    replacement_counts[candidate.requirement_slot] = (
+                        replacement_counts.get(candidate.requirement_slot, 0) + 1
+                    )
+            for candidate in candidates:
+                literal = candidate.literal
                 key = (plan.revision, literal)
                 if key in seen:
                     continue
                 seen.add(key)
+                supersedes_source_event_id: str | None = None
+                if (
+                    candidate.replaces_slot
+                    and candidate.requirement_slot is not None
+                    and replacement_counts.get(candidate.requirement_slot) == 1
+                ):
+                    prior = [
+                        (index, condition)
+                        for index, condition in enumerate(out)
+                        if condition.requirement_slot == candidate.requirement_slot
+                    ]
+                    # Ambiguous prior authority fails closed: retain every old
+                    # condition and add the new one rather than guessing which
+                    # requirement the user meant to replace.
+                    if len(prior) == 1:
+                        prior_index, prior_condition = prior[0]
+                        supersedes_source_event_id = prior_condition.source_event_id
+                        out.pop(prior_index)
                 out.append(
                     DictatedContentCondition(
                         revision=plan.revision,
                         literal=literal,
                         source_event_id=user.id,
                         source_seq=user.seq,
+                        requirement_slot=candidate.requirement_slot,
+                        supersedes_source_event_id=supersedes_source_event_id,
                     )
                 )
         prev_plan_idx = plan_idx

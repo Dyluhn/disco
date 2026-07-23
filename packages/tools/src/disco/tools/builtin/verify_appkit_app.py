@@ -565,6 +565,11 @@ class VerifyAppKitAppTool:
                     )
                 )
             verdict = build_verdict(checks, embedded)
+            if app is not None:
+                # Target-owned semantic identity. This is intentionally separate
+                # from browser-visible text so non-web target adapters can issue
+                # the same claim from their own authoritative application model.
+                verdict["application_title"] = app.name
             if verdict["passed"] and prepared.runtime is not None and artifact_identity is not None:
                 verdict["preview_runtime"] = prepared.runtime
                 verdict["canonical_entry_path"] = APPKIT_CANONICAL_ENTRY_RELPATH

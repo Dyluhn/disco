@@ -364,6 +364,33 @@ def _successful_browser_verification_paths(events: list[dict[str, Any]]) -> set[
     H190 capture. Host ``verifier_verdict`` events are accepted only with exact
     verified/pass fields and one admissible top-level screenshot path.
     """
+    # A restore changes the exact workspace generation being adjudicated. Older
+    # receipts remain in the audit log but cannot prove the restored tree, and
+    # their product-owned screenshot bytes need not exist in the current
+    # ProjectStore snapshot. Fence on the mutation itself so even a partial
+    # restore invalidates earlier proof.
+    restore_fence = max(
+        (
+            event["seq"]
+            for event in events
+            if (
+                (
+                    event.get("kind") == "workspace_mutation"
+                    and event.get("operation") == "version.restore"
+                )
+                or event.get("kind") == "workspace_restored"
+            )
+            and type(event.get("seq")) is int
+        ),
+        default=0,
+    )
+    if restore_fence:
+        events = [
+            event
+            for event in events
+            if type(event.get("seq")) is int and event["seq"] > restore_fence
+        ]
+
     paths: set[str] = set()
     actions_by_id: dict[str, dict[str, Any]] = {}
     active_previews: dict[str, tuple[int, int]] = {}
