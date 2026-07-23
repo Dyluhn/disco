@@ -343,6 +343,37 @@ def test_gvisor_lane_can_preserve_seeded_sandbox(monkeypatch, tmp_path: Path) ->
     assert manifest["sandbox_backend"] == "gvisor"
 
 
+def test_stack_pins_requested_default_before_server_start(monkeypatch, tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[3]
+    seed = tmp_path / "seed-config.json"
+    seeded = default_config().model_copy(update={"assignments": {}})
+    ConfigStore(seed).save(seeded)
+    monkeypatch.setenv("DISCO_RELIABILITY_SEED_SECRET_KEY", "x" * 64)
+
+    manager = StackManager(
+        repo=repo,
+        root=tmp_path / "stack-model",
+        agent_port=18000,
+        app_port=18800,
+        ui_port=5274,
+        seed_config=seed,
+        seed_secrets=None,
+        seed_approvals=None,
+        default_model="driver-minimax",
+    )
+
+    with _temporary_environment(
+        manager.env,
+        ("DISCO_CONFIG", "DISCO_SECRETS", "DISCO_APPROVALS", "DISCO_SECRET_KEY"),
+    ):
+        persisted = ConfigStore(manager.config_path).load()
+    assert persisted.default_model == "driver-minimax"
+    assert persisted.assignments == {}
+    manager._write_manifest()
+    manifest = json.loads((manager.root / "stack.json").read_text(encoding="utf-8"))
+    assert manifest["default_model"] == "driver-minimax"
+
+
 def test_build_lane_can_select_namespaced_podman_without_process_fallback(
     monkeypatch, tmp_path: Path
 ) -> None:

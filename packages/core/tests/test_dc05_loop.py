@@ -15,6 +15,8 @@ from disco.core import (
 from disco.core.effects import EffectCapability
 from disco.core.llm import LLMTransientError, OperatingMode
 from disco.core.loop import signals
+from disco.core.loop.control import Disp
+from disco.core.loop.turn_control import Valve
 from loop_fakes import (
     ScriptedAgent,
     action_step,
@@ -24,6 +26,29 @@ from loop_fakes import (
 )
 
 CID = "conv"
+
+
+@pytest.mark.asyncio
+async def test_post_noop_valve_is_reentrant_safe() -> None:
+    class _Loop:
+        _invisible_steps = 0
+
+        async def _events(self):
+            return []
+
+    valve = Valve(_Loop())
+    calls = 0
+
+    async def nested_refusal(_events, _noops):
+        nonlocal calls
+        calls += 1
+        assert await valve.post_noop_valve() is Disp.CONTINUE
+        return False
+
+    valve.actionless_valve = nested_refusal
+
+    assert await valve.post_noop_valve() is Disp.CONTINUE
+    assert calls == 1
 
 
 def noop_step(thought="just talking"):

@@ -99,6 +99,7 @@ class StackManager:
         preserve_seed_sandbox: bool = False,
         sandbox_backend: str | None = None,
         local_preview_port_start: int | None = None,
+        default_model: str | None = None,
     ) -> None:
         if preserve_seed_sandbox and sandbox_backend is not None:
             raise ValueError("preserve_seed_sandbox and sandbox_backend are mutually exclusive")
@@ -122,6 +123,7 @@ class StackManager:
         if preview_start < 1_024 or preview_start + self.local_preview_port_count - 1 > 65_535:
             raise ValueError("local Preview listener range is outside user ports")
         self.local_preview_port_start = preview_start
+        self.default_model = default_model
         self.python = repo / ".venv" / "bin" / "python3"
         self.agent: subprocess.Popen[bytes] | None = None
         self.app: subprocess.Popen[bytes] | None = None
@@ -237,6 +239,8 @@ class StackManager:
         ):
             store = ConfigStore(self.config_path)
             config = store.load()
+            if self.default_model is not None:
+                config = store.save_assignments(self.default_model, config.assignments)
             sandbox = config.sandbox
             if not self.preserve_seed_sandbox:
                 selected_backend = self.sandbox_backend or "process"
@@ -336,6 +340,7 @@ class StackManager:
             "sandbox_backend": self.effective_sandbox_backend,
             "local_preview_port_start": self.local_preview_port_start,
             "local_preview_port_count": self.local_preview_port_count,
+            "default_model": self.default_model,
         }
         target = self.root / "stack.json"
         temporary = target.with_suffix(".json.tmp")
@@ -440,6 +445,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ui-port", type=int, default=5274)
     parser.add_argument("--local-preview-port-start", type=int)
     parser.add_argument(
+        "--default-model",
+        help=(
+            "pin the disposable stack's configured default before startup so "
+            "host auxiliary calls and the child runner share one frozen model"
+        ),
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         help="ignore seed config/secrets variables and start from generated defaults",
@@ -481,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         preserve_seed_sandbox=args.preserve_seed_sandbox,
         sandbox_backend=args.sandbox_backend,
         local_preview_port_start=args.local_preview_port_start,
+        default_model=args.default_model,
     )
     control: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None

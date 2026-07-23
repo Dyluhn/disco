@@ -617,6 +617,7 @@ def _canonical_deployment_url(raw: str) -> str:
 class Valve:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+        self._post_noop_active = False
 
     def _blocked_meta(
         self,
@@ -1178,11 +1179,22 @@ class Valve:
         execution-nudge / no-op / ask-fresh-session). Re-polls the event log,
         adds the invisible-step counter, and halts the run if the actionless
         valve trips. Byte-identical to the 4-line tail it replaces."""
-        events = await self._loop._events()
-        noops = signals.consecutive_noops(events) + self._loop._invisible_steps
-        if await self.actionless_valve(events, noops):
-            return Disp.HALT
-        return Disp.CONTINUE
+        # A completion-shaped actionless trip routes through the normal finish
+        # gates. A gate refusal can itself call this tail. Treat that nested call
+        # as already accounted by the outer valve; otherwise a missing handoff
+        # recursively re-enters until RecursionError instead of returning one
+        # actionable refusal to the model.
+        if self._post_noop_active:
+            return Disp.CONTINUE
+        self._post_noop_active = True
+        try:
+            events = await self._loop._events()
+            noops = signals.consecutive_noops(events) + self._loop._invisible_steps
+            if await self.actionless_valve(events, noops):
+                return Disp.HALT
+            return Disp.CONTINUE
+        finally:
+            self._post_noop_active = False
 
     async def refuse_fresh_session(self, step: AgentStep, msg: str) -> Disp:
         """Shared fresh-session refusal: a virtual tool (remember / serve / ask /
