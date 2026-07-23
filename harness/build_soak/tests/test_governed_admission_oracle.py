@@ -29,6 +29,7 @@ from harness.build_soak.oracles.contract import ContractOracle
 from harness.build_soak.oracles.governed_admission import (
     GovernedAdmissionOracle,
     _preview_identity_from_pair,
+    _shared_execution_authority,
 )
 from harness.build_soak.run import load_scenarios
 
@@ -520,6 +521,121 @@ def test_preview_oracle_normalizes_only_the_sandbox_workspace_root() -> None:
     assert identity("/srv/site") is None
     assert identity("../site") is None
     assert identity("site/../../outside") is None
+
+
+def _use_appkit_owned_preview(events: list[dict[str, Any]], *, passed: bool = True) -> None:
+    action = next(
+        event
+        for event in events
+        if event.get("kind") == "action"
+        and event.get("tool_call", {}).get("tool_name") == "preview_start"
+    )
+    observation = next(
+        event
+        for event in events
+        if event.get("kind") == "observation" and event.get("action_id") == action.get("id")
+    )
+    action["tool_call"]["tool_name"] = "verify_appkit_app"
+    result = observation["tool_result"]
+    runtime = result["structured"]
+    result["tool_name"] = "verify_appkit_app"
+    result["structured"] = {
+        "passed": passed,
+        "preview_runtime": runtime,
+    }
+
+
+def test_current_appkit_owned_preview_with_exact_receipt_passes() -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
+
+    assert _result(events).passed
+
+
+def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
+    first_action = next(
+        event
+        for event in events
+        if event.get("kind") == "action"
+        and event.get("tool_call", {}).get("tool_name") == "verify_appkit_app"
+    )
+    first_observation = next(
+        event
+        for event in events
+        if event.get("kind") == "observation" and event.get("action_id") == first_action.get("id")
+    )
+    repeated_action = json.loads(json.dumps(first_action))
+    repeated_observation = json.loads(json.dumps(first_observation))
+    repeated_action.update(seq=10, id="evt_appkit_preview_retry")
+    repeated_action["tool_call"]["call_id"] = "call-appkit-preview-retry"
+    repeated_observation.update(
+        seq=11,
+        id="evt_appkit_preview_retry_result",
+        action_id=repeated_action["id"],
+    )
+    repeated_observation["tool_result"]["call_id"] = "call-appkit-preview-retry"
+    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
+    terminal = events[-1]
+    verdict["seq"] = 12
+    terminal["seq"] = 13
+    events[events.index(verdict) : events.index(verdict)] = [
+        repeated_action,
+        repeated_observation,
+    ]
+
+    assert _result(events).passed
+
+
+def test_composed_checks_share_execution_generation_but_retain_distinct_modalities() -> None:
+    strict = {
+        "modality": "appkit_strict_runtime",
+        "instance_id": "pv_same",
+        "generation": "sandbox-1:1",
+        "locator": "http://preview.test",
+    }
+    functional = {
+        **strict,
+        "modality": "managed_preview",
+    }
+
+    assert _shared_execution_authority(strict) == _shared_execution_authority(functional)
+    for field, foreign in (
+        ("instance_id", "pv_foreign"),
+        ("generation", "sandbox-1:2"),
+        ("locator", "http://foreign.test"),
+    ):
+        changed = {**functional, field: foreign}
+        assert _shared_execution_authority(strict) != _shared_execution_authority(changed)
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    ("failed_verifier", "missing_runtime", "call_mismatch"),
+)
+def test_appkit_owned_preview_requires_exact_successful_source_pair(corrupt: str) -> None:
+    events = _segment()
+    _use_appkit_owned_preview(events)
+    action = next(
+        event
+        for event in events
+        if event.get("kind") == "action"
+        and event.get("tool_call", {}).get("tool_name") == "verify_appkit_app"
+    )
+    observation = next(
+        event
+        for event in events
+        if event.get("kind") == "observation" and event.get("action_id") == action.get("id")
+    )
+    if corrupt == "failed_verifier":
+        observation["tool_result"]["structured"]["passed"] = False
+    elif corrupt == "missing_runtime":
+        observation["tool_result"]["structured"].pop("preview_runtime")
+    else:
+        observation["tool_result"]["call_id"] = "foreign-call"
+
+    assert _result(events).failed
 
 
 def test_target_specific_nonweb_policy_needs_no_preview() -> None:

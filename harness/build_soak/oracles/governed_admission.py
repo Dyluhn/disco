@@ -336,18 +336,27 @@ def _preview_identity_from_pair(
 ) -> dict[str, Any] | None:
     call = action.get("tool_call")
     result = observation.get("tool_result")
-    structured = result.get("structured") if isinstance(result, dict) else None
+    tool_name = call.get("tool_name") if isinstance(call, dict) else None
+    outer = result.get("structured") if isinstance(result, dict) else None
     if (
         not isinstance(call, dict)
-        or call.get("tool_name") != "preview_start"
+        or tool_name not in {"preview_start", "verify_appkit_app"}
         or not isinstance(result, dict)
-        or result.get("tool_name") != "preview_start"
+        or result.get("tool_name") != tool_name
         or result.get("success") is not True
         or observation.get("action_id") != action.get("id")
         or result.get("call_id") != call.get("call_id")
-        or not isinstance(structured, dict)
-        or structured.get("status") not in {"running", "unavailable"}
     ):
+        return None
+    structured = outer
+    if tool_name == "verify_appkit_app":
+        if not isinstance(outer, dict) or outer.get("passed") is not True:
+            return None
+        structured = outer.get("preview_runtime")
+    if not isinstance(structured, dict) or structured.get("status") not in {
+        "running",
+        "unavailable",
+    }:
         return None
     intent = structured.get("intent")
     command = structured.get("command")
@@ -434,7 +443,7 @@ def _active_preview_selection(
         result = event.get("tool_result")
         if not isinstance(result, dict) or result.get("success") is not True:
             continue
-        if result.get("tool_name") == "preview_start":
+        if result.get("tool_name") in {"preview_start", "verify_appkit_app"}:
             action = actions.get(str(event.get("action_id") or ""))
             identity = (
                 _preview_identity_from_pair(action, event) if isinstance(action, dict) else None
@@ -471,14 +480,48 @@ def _preview_selection_is_current(
     *,
     verdict_seq: int,
 ) -> bool:
+    source_action = next(
+        (
+            event
+            for event in events
+            if event.get("kind") == "action"
+            and event.get("id") == selection.get("source_action_id")
+            and _seq(event) == selection.get("source_action_seq")
+        ),
+        None,
+    )
+    source_observation = next(
+        (
+            event
+            for event in events
+            if event.get("kind") == "observation"
+            and event.get("id") == selection.get("source_observation_id")
+            and _seq(event) == selection.get("source_observation_seq")
+        ),
+        None,
+    )
+    reconstructed = (
+        _preview_identity_from_pair(source_action, source_observation)
+        if isinstance(source_action, dict) and isinstance(source_observation, dict)
+        else None
+    )
+    current = _active_preview_selection(events, through_seq=verdict_seq - 1)
+    operational_fields = (
+        "projection_id",
+        "session_name",
+        "port",
+        "launch_kind",
+        "intent_digest",
+        "sandbox_instance_id",
+        "sandbox_generation",
+        "url",
+    )
     return (
-        _seq(
-            {
-                "seq": selection.get("source_observation_seq"),
-            }
-        )
-        < verdict_seq
-        and _active_preview_selection(events, through_seq=verdict_seq - 1) == selection
+        reconstructed == selection
+        and isinstance(current, dict)
+        and selection.get("source_observation_seq", verdict_seq) < verdict_seq
+        and tuple(selection.get(field) for field in operational_fields)
+        == tuple(current.get(field) for field in operational_fields)
     )
 
 
@@ -502,6 +545,16 @@ def _preview_verification_url(
         return f"{base}/"
     encoded = "/".join(quote(part, safe="") for part in relative.split("/"))
     return f"{base}/{encoded}"
+
+
+def _shared_execution_authority(execution: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """Identity shared by target checks after each check validates its modality."""
+
+    return (
+        execution.get("instance_id"),
+        execution.get("generation"),
+        execution.get("locator"),
+    )
 
 
 def _has_workspace_mutation_capability(event_or_result: dict[str, Any]) -> bool:
@@ -806,7 +859,7 @@ class GovernedAdmissionOracle:
         # directive from an earlier segment.
         external_required = set(_active_external_claims(events, through_seq=final_seq))
         covered_external: set[tuple[object, ...]] = set()
-        execution_authorities: set[str] = set()
+        execution_authorities: set[tuple[Any, Any, Any]] = set()
         for check in required_checks:
             verdict = next(
                 (
@@ -1015,7 +1068,7 @@ class GovernedAdmissionOracle:
                     "receipt lacks the required target execution binding",
                     check_id=check.get("check_id"),
                 )
-            execution_authorities.add(json.dumps(execution, sort_keys=True, separators=(",", ":")))
+            execution_authorities.add(_shared_execution_authority(execution))
             if expected_modality == "managed_preview":
                 selection = receipt.get("preview_selection")
                 expected_url = (
