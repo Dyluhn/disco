@@ -518,6 +518,8 @@ def test_preview_oracle_normalizes_only_the_sandbox_workspace_root() -> None:
     assert nested is not None and nested["static_serve_dir"] == "site"
     assert identity("/workspace/../srv/site") is None
     assert identity("/srv/site") is None
+    assert identity("../site") is None
+    assert identity("site/../../outside") is None
 
 
 def test_target_specific_nonweb_policy_needs_no_preview() -> None:

@@ -390,7 +390,11 @@ def _preview_identity_from_pair(
             static_serve_dir = "."
         elif normalized_serve_dir.startswith("/workspace/"):
             static_serve_dir = normalized_serve_dir.removeprefix("/workspace/")
-        elif not normalized_serve_dir.startswith("/"):
+        elif (
+            not normalized_serve_dir.startswith("/")
+            and normalized_serve_dir != ".."
+            and not normalized_serve_dir.startswith("../")
+        ):
             static_serve_dir = normalized_serve_dir
         else:
             return None
