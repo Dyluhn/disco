@@ -175,7 +175,7 @@ async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
         if event.meta.get("diagnostic") == "serve_target_shape_refused"
     ]
     assert len(refusals) == 1
-    assert "mandatory structured-browser" in refusals[0].message.content
+    assert "target-owned delivery contract" in refusals[0].message.content
 
 
 async def test_governed_nonbrowser_target_keeps_files_handoff() -> None:

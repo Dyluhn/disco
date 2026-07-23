@@ -23,6 +23,7 @@ from typing import Any, cast
 from disco.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
+    BuildPlatformAdmissionEvent,
     ConversationStatus,
     DeliverableEvent,
     EventSource,
@@ -944,13 +945,37 @@ class WorkspacePersistence:
         is a silent no-op (the snapshot itself already succeeded)."""
         try:
             existing = await self._rt._store.get_events(conversation_id)
+            latest_admission = next(
+                (
+                    event
+                    for event in reversed(existing)
+                    if isinstance(event, BuildPlatformAdmissionEvent)
+                ),
+                None,
+            )
+            governed_contract = (
+                latest_admission.verification_contract if latest_admission is not None else None
+            )
             if any(
                 isinstance(event, DeliverableEvent)
                 and event.artifact_kind == "app"
                 and event_matches_current_workspace_view(existing, event)
+                and (
+                    governed_contract is None
+                    or (
+                        event.target_id == governed_contract.target_id
+                        and event.delivery_contract == governed_contract.delivery
+                        and event.verification_contract_digest == governed_contract.digest
+                    )
+                )
                 for event in existing
             ):
                 return  # idempotency read goes through the durable store
+            if governed_contract is not None:
+                # Governed completion establishes its exact target handoff before
+                # the terminal.  Post-terminal synthesis must never invent or
+                # "upgrade" missing run authority after the admission has released.
+                return
             path = self._trusted_verified_app_entry(existing, snapshot_dir)
             if path is None:
                 if any(isinstance(event, DeliverableEvent) for event in existing):

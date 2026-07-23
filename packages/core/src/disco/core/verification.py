@@ -24,6 +24,8 @@ from urllib.parse import quote
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .effects import ResourceKey, ResourceRevision, VerificationReceipt
+
 _MAX_VERIFIER_IMAGE_BYTES = 20_000_000
 _MAX_VERIFIER_IMAGE_PIXELS = 50_000_000
 _IMAGE_FORMAT_MEDIA_TYPES = {
@@ -118,6 +120,64 @@ class VerificationClaimStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+class VerificationParameter(BaseModel):
+    """One opaque scalar retained from a target-owned entry descriptor."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(min_length=1, max_length=96, pattern=r"^[a-z][a-z0-9_.-]*$")
+    value: str | int | float | bool | None
+
+
+class VerificationDeliveryContract(BaseModel):
+    """Target-owned delivery identity with no transport or filename semantics."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    shape: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$",
+    )
+    mode: Literal["interactive", "artifact"] = "artifact"
+    entry_kind: str = Field(min_length=1, max_length=96)
+    entry_reference: str = Field(min_length=1, max_length=2048)
+    entry_parameters: tuple[VerificationParameter, ...] = ()
+
+    @model_validator(mode="after")
+    def _parameters_are_unique(self) -> VerificationDeliveryContract:
+        names = [parameter.name for parameter in self.entry_parameters]
+        if len(names) != len(set(names)):
+            raise ValueError("delivery entry parameter names must be unique")
+        return self
+
+
+class VerificationExecutionIdentity(BaseModel):
+    """Opaque host-observed runtime/artifact instance bound to a receipt."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    modality: str = Field(min_length=1, max_length=96)
+    instance_id: str = Field(min_length=1, max_length=256)
+    generation: str = Field(min_length=1, max_length=256)
+    locator: str = Field(default="", max_length=2048)
+
+
+class VerificationArtifactIdentity(BaseModel):
+    """Immutable target-owned identity of the exact artifact closure inspected."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    scheme: str = Field(
+        min_length=3,
+        max_length=96,
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+    )
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    entry_reference: str = Field(min_length=1, max_length=2048)
+    producer_id: str = Field(min_length=1, max_length=160)
+
+
 class VerificationEvidenceModality(str, Enum):
     ARTIFACT_BINDING = "artifact_binding"
     HTTP = "http"
@@ -172,6 +232,132 @@ class HostVerificationClaim(BaseModel):
         return self
 
 
+class VerificationCheckContract(BaseModel):
+    """One admitted verifier operation and the exact claims it owns."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    check_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_.:-]*$",
+    )
+    receipt_kind: str = Field(
+        min_length=3,
+        max_length=160,
+        pattern=r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+@[1-9][0-9]*(?:\.[0-9]+){0,2}$",
+    )
+    issuer_id: str = Field(min_length=1, max_length=160)
+    operation: str = Field(min_length=1, max_length=128)
+    required_execution_modality: str = Field(
+        default="workspace_artifact",
+        min_length=1,
+        max_length=96,
+    )
+    required_artifact_identity_scheme: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=96,
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+    )
+    delegated_issuer_ids: frozenset[str] = frozenset()
+    required: bool = True
+    accepted_claim_kinds: frozenset[VerificationClaimKind] = frozenset()
+    claims: tuple[HostVerificationClaim, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_builtin_execution_modality(cls, value: Any) -> Any:
+        """Read pre-field durable built-in contracts without guessing target names."""
+
+        if not isinstance(value, dict) or "required_execution_modality" in value:
+            return value
+        migrated = dict(value)
+        receipt_kind = migrated.get("receipt_kind")
+        if receipt_kind == "disco.web_functional@1":
+            migrated["required_execution_modality"] = "managed_preview"
+        elif receipt_kind == "disco.appkit_strict@1":
+            migrated["required_execution_modality"] = "appkit_strict_runtime"
+        return migrated
+
+    @model_validator(mode="after")
+    def _claim_contract_is_exact(self) -> VerificationCheckContract:
+        ids = [claim.claim_id for claim in self.claims]
+        if len(ids) != len(set(ids)):
+            raise ValueError("verification check claim ids must be unique")
+        if self.accepted_claim_kinds and any(
+            claim.kind not in self.accepted_claim_kinds for claim in self.claims
+        ):
+            raise ValueError("verification check contains an unsupported claim kind")
+        if self.required and not any(claim.required for claim in self.claims):
+            raise ValueError("required verification check needs a mandatory claim")
+        return self
+
+
+class AdmittedVerificationContract(BaseModel):
+    """Durable target-neutral completion policy for one resolved Build run.
+
+    This is a pure snapshot of the resolved target/verifier plan.  It contains
+    no executable handle; the host dispatcher remains the sole authority that
+    may run a named operation or mint a receipt.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1, 2, 3] = 3
+    target_id: str = Field(min_length=1, max_length=160)
+    verifier_id: str = Field(min_length=1, max_length=160)
+    delivery: VerificationDeliveryContract
+    preview_modality: str = Field(min_length=1, max_length=96)
+    checks: tuple[VerificationCheckContract, ...]
+    required: bool = True
+    unavailable: Literal["block", "degrade"] = "block"
+    unverified_finish: Literal["block", "allow_without_verified_label"] = "block"
+
+    @model_validator(mode="after")
+    def _checks_are_complete_and_unique(self) -> AdmittedVerificationContract:
+        check_ids = [check.check_id for check in self.checks]
+        if len(check_ids) != len(set(check_ids)):
+            raise ValueError("admitted verification check ids must be unique")
+        claim_ids = [claim.claim_id for check in self.checks for claim in check.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise ValueError("admitted verification claim ids must be unique across checks")
+        if self.required and not any(check.required for check in self.checks):
+            raise ValueError("required verification contract needs a required check")
+        if self.delivery.mode == "interactive" and any(
+            check.required and check.required_execution_modality == "workspace_artifact"
+            for check in self.checks
+        ):
+            raise ValueError("interactive verification checks require an explicit runtime modality")
+        return self
+
+    @property
+    def required_claims(self) -> tuple[HostVerificationClaim, ...]:
+        return tuple(
+            claim
+            for check in self.checks
+            if check.required
+            for claim in check.claims
+            if claim.required
+        )
+
+    @property
+    def digest(self) -> str:
+        payload = self.model_dump(mode="json")
+        if self.schema_version == 1:
+            # Version 1 predated explicit execution modalities. Replaying those
+            # durable built-in contracts migrates their runtime requirement in
+            # memory, but linked historical handoffs/receipts must retain the
+            # canonical digest of the bytes that were originally admitted.
+            for check in payload["checks"]:
+                check.pop("required_execution_modality", None)
+        if self.schema_version < 3:
+            for check in payload["checks"]:
+                check.pop("required_artifact_identity_scheme", None)
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        return f"sha256:{hashlib.sha256(encoded.encode()).hexdigest()}"
+
+
 class HostVerificationClaimResult(BaseModel):
     """The exact evidence-supported result for one requirement."""
 
@@ -192,6 +378,21 @@ class HostVerificationClaimResult(BaseModel):
     capability_basis: str = Field(min_length=1, max_length=240)
     evidence_modalities: tuple[VerificationEvidenceModality, ...] = ()
     evidence_refs: tuple[str, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def _visual_pass_has_real_vision_authority(self) -> HostVerificationClaimResult:
+        if (
+            self.kind is VerificationClaimKind.VISUAL_SEMANTIC
+            and self.status is VerificationClaimStatus.PASS
+            and (
+                VerificationEvidenceModality.SCREENSHOT_PIXELS not in self.evidence_modalities
+                or "vision" not in self.capability_basis.casefold()
+            )
+        ):
+            raise ValueError(
+                "visual-semantic PASS requires a vision-capable pixel-inspection receipt"
+            )
+        return self
 
 
 class VerifierReferenceImage(BaseModel):
@@ -436,6 +637,21 @@ class HostVerificationResult(BaseModel):
         default=None,
         pattern=r"^run:sha256:[0-9a-f]{64}$",
     )
+    target_id: str = Field(default="", max_length=160)
+    delivery_shape: str = Field(default="", max_length=160)
+    delivery_entry_reference: str = Field(default="", max_length=2048)
+    verification_contract_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    check_id: str = Field(default="", max_length=128)
+    receipt_kind: str = Field(default="", max_length=160)
+    issuer_id: str = Field(default="", max_length=160)
+    operation: str = Field(default="", max_length=128)
+    delegated_issuer_ids: frozenset[str] = frozenset()
+    execution_identity: VerificationExecutionIdentity | None = None
+    artifact_identity: VerificationArtifactIdentity | None = None
+    effect_receipt: VerificationReceipt | None = None
     agent_view_id: str | None = Field(default=None, min_length=1, max_length=128)
     deliverable_event_id: str | None = Field(default=None, min_length=1, max_length=128)
     artifact_path: str = Field(min_length=1, max_length=512)
@@ -479,6 +695,24 @@ class HostVerificationResult(BaseModel):
             raise ValueError("verification cannot precede the workspace revision it covers")
         if self.screenshot_sha256 is not None and not self.screenshot_path:
             raise ValueError("screenshot digest requires a screenshot path")
+        if self.effect_receipt is not None:
+            effect = self.effect_receipt
+            if effect.verifier_id != self.verifier_id:
+                raise ValueError("effect receipt verifier does not match result")
+            if effect.passed is not (self.status is VerificationClaimStatus.PASS):
+                raise ValueError("effect receipt pass state does not match result")
+            if effect.subject.digest != _result_authority_digest(self):
+                raise ValueError("effect receipt subject does not match result authority")
+            if effect.requirement_fingerprint != _result_requirement_fingerprint(self):
+                raise ValueError("effect receipt requirement does not match result claims")
+        if self.verification_contract_digest is not None and self.passed:
+            if self.verifier_id != self.issuer_id or self.tool_id != self.operation:
+                raise ValueError("governed PASS must be issued by the admitted verifier operation")
+            allowed_claim_issuers = {self.issuer_id, *self.delegated_issuer_ids}
+            if any(
+                result.verifier_id not in allowed_claim_issuers for result in self.claim_results
+            ):
+                raise ValueError("governed PASS claim comes from an unadmitted evidence issuer")
         return self
 
     @property
@@ -510,15 +744,39 @@ class HostVerificationResult(BaseModel):
         }
         return expected == actual
 
-    def is_current_for(self, deliverable: Any, *, observed_url: str) -> bool:
-        """Exact authority comparison; no fuzzy or name-derived matching."""
+    def is_current_authority_for(self, deliverable: Any, *, observed_url: str) -> bool:
+        """Compare execution authority independently of one receipt's claim subset."""
 
-        claims = deliverable.required_claims or default_structured_web_claims()
+        contract = getattr(deliverable, "verification_contract", None)
+        check = getattr(deliverable, "verification_check", None)
+        expected_contract_digest = contract.digest if contract is not None else None
+        expected_target_id = contract.target_id if contract is not None else ""
+        expected_delivery_shape = contract.delivery.shape if contract is not None else ""
+        expected_delivery_entry = contract.delivery.entry_reference if contract is not None else ""
+        expected_check_id = check.check_id if check is not None else ""
+        expected_receipt_kind = check.receipt_kind if check is not None else ""
+        expected_issuer_id = check.issuer_id if check is not None else ""
         return bool(
-            self.covers(claims)
+            (expected_contract_digest is None or self.effect_receipt is not None)
             and self.conversation_id == deliverable.conversation_id
             and self.run_intent_id == deliverable.run_intent_id
             and self.run_identity == deliverable.run_identity
+            and self.target_id == expected_target_id
+            and self.delivery_shape == expected_delivery_shape
+            and self.delivery_entry_reference == expected_delivery_entry
+            and self.verification_contract_digest == expected_contract_digest
+            and self.check_id == expected_check_id
+            and self.receipt_kind == expected_receipt_kind
+            and self.issuer_id == expected_issuer_id
+            and self.operation == (check.operation if check is not None else "")
+            and (
+                check is None
+                or (self.verifier_id == expected_issuer_id and self.tool_id == check.operation)
+            )
+            and self.delegated_issuer_ids
+            == (check.delegated_issuer_ids if check is not None else frozenset())
+            and self.execution_identity == getattr(deliverable, "execution_identity", None)
+            and self.artifact_identity == getattr(deliverable, "artifact_identity", None)
             and self.agent_view_id == deliverable.agent_view_id
             and self.deliverable_event_id == deliverable.deliverable_event_id
             and self.artifact_path == deliverable.artifact_path
@@ -541,6 +799,244 @@ class HostVerificationResult(BaseModel):
             and self.observed_after_seq == deliverable.observed_after_seq
             and self.observed_url == observed_url
         )
+
+    def is_current_for(self, deliverable: Any, *, observed_url: str) -> bool:
+        """Exact authority and claim comparison; no fuzzy or name-derived matching."""
+
+        claims = deliverable.required_claims or default_structured_web_claims()
+        return self.covers(claims) and self.is_current_authority_for(
+            deliverable, observed_url=observed_url
+        )
+
+
+def _canonical_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=str,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _result_authority_payload(result: HostVerificationResult) -> dict[str, Any]:
+    return {
+        "conversation_id": result.conversation_id,
+        "run_intent_id": result.run_intent_id,
+        "run_identity": result.run_identity,
+        "target_id": result.target_id,
+        "delivery_shape": result.delivery_shape,
+        "delivery_entry_reference": result.delivery_entry_reference,
+        "verification_contract_digest": result.verification_contract_digest,
+        "check_id": result.check_id,
+        "receipt_kind": result.receipt_kind,
+        "issuer_id": result.issuer_id,
+        "operation": result.operation,
+        "delegated_issuer_ids": sorted(result.delegated_issuer_ids),
+        "execution_identity": (
+            result.execution_identity.model_dump(mode="json")
+            if result.execution_identity is not None
+            else None
+        ),
+        "artifact_identity": (
+            result.artifact_identity.model_dump(mode="json")
+            if result.artifact_identity is not None
+            else None
+        ),
+        "agent_view_id": result.agent_view_id,
+        "deliverable_event_id": result.deliverable_event_id,
+        "artifact_path": result.artifact_path,
+        "artifact_kind": result.artifact_kind,
+        "observed_url": result.observed_url,
+        "preview_selection": (
+            result.preview_selection.model_dump(mode="json")
+            if result.preview_selection is not None
+            else None
+        ),
+        "workspace_revision": result.workspace_revision,
+        "workspace_generation": result.workspace_generation,
+        "workspace_epoch": result.workspace_epoch,
+        "observed_after_seq": result.observed_after_seq,
+    }
+
+
+def _result_authority_digest(result: HostVerificationResult) -> str:
+    return _canonical_digest(_result_authority_payload(result))
+
+
+def _result_requirement_fingerprint(result: HostVerificationResult) -> str:
+    return _canonical_digest(
+        {
+            "verification_contract_digest": result.verification_contract_digest,
+            "check_id": result.check_id,
+            "receipt_kind": result.receipt_kind,
+            "issuer_id": result.issuer_id,
+            "operation": result.operation,
+            "delegated_issuer_ids": sorted(result.delegated_issuer_ids),
+            "claims": [
+                {
+                    "claim_id": claim.claim_id,
+                    "kind": claim.kind.value,
+                    "required": claim.required,
+                    "expected": claim.expected,
+                    "source_authority": claim.source_authority,
+                    "reference_image_sha256": claim.reference_image_sha256,
+                }
+                for claim in result.claim_results
+            ],
+        }
+    )
+
+
+def with_verification_effect_receipt(
+    result: HostVerificationResult,
+) -> HostVerificationResult:
+    """Anchor a governed high-level result to the existing effect receipt root."""
+
+    if result.verification_contract_digest is None:
+        return result
+    failed_payload = {
+        "status": result.status.value,
+        "reason": result.reason,
+        "claim_statuses": [(claim.claim_id, claim.status.value) for claim in result.claim_results],
+    }
+    receipt = VerificationReceipt(
+        verifier_id=result.verifier_id,
+        subject=ResourceRevision(
+            resource=ResourceKey(
+                namespace="verification.subject",
+                identifier=f"{result.target_id}:{result.check_id}",
+            ),
+            digest=_result_authority_digest(result),
+        ),
+        requirement_fingerprint=_result_requirement_fingerprint(result),
+        passed=result.status is VerificationClaimStatus.PASS,
+        failure_fingerprint=(
+            None
+            if result.status is VerificationClaimStatus.PASS
+            else _canonical_digest(failed_payload)
+        ),
+    )
+    return result.model_copy(update={"effect_receipt": receipt})
+
+
+class VerificationCoverage(BaseModel):
+    """Pure aggregate of the latest current result for every required claim."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: VerificationClaimStatus
+    claim_results: tuple[HostVerificationClaimResult, ...]
+    missing_claim_ids: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return self.status is VerificationClaimStatus.PASS
+
+
+def aggregate_verification_receipts(
+    *,
+    deliverables: tuple[Any, ...],
+    receipts: tuple[HostVerificationResult, ...],
+) -> VerificationCoverage:
+    """Evaluate ordered trusted receipts across target-owned verifier checks.
+
+    Each deliverable is one admitted check with its exact authority and claim
+    subset. Receipts are chronological; a later current result for the same
+    exact claim replaces an earlier result. Foreign, stale, or cross-check
+    receipts contribute no coverage.
+    """
+
+    required: dict[tuple[str, str], HostVerificationClaim] = {}
+    for deliverable in deliverables:
+        check = getattr(deliverable, "verification_check", None)
+        check_id = check.check_id if check is not None else ""
+        for claim in deliverable.required_claims:
+            if claim.required:
+                required[(check_id, claim.claim_id)] = claim
+
+    shared_authorities = {
+        _canonical_digest(
+            {
+                "conversation_id": getattr(deliverable, "conversation_id", None),
+                "run_intent_id": getattr(deliverable, "run_intent_id", None),
+                "run_identity": getattr(deliverable, "run_identity", None),
+                "agent_view_id": getattr(deliverable, "agent_view_id", None),
+                "deliverable_event_id": getattr(deliverable, "deliverable_event_id", None),
+                "artifact_path": getattr(deliverable, "artifact_path", None),
+                "artifact_kind": getattr(deliverable, "artifact_kind", None),
+                "workspace_revision": getattr(deliverable, "workspace_revision", None),
+                "workspace_generation": getattr(deliverable, "workspace_generation", None),
+                "workspace_epoch": getattr(deliverable, "workspace_epoch", None),
+                "observed_after_seq": getattr(deliverable, "observed_after_seq", None),
+                "execution_identity": (
+                    identity.model_dump(mode="json")
+                    if (identity := getattr(deliverable, "execution_identity", None)) is not None
+                    else None
+                ),
+                "preview_selection": (
+                    selection.model_dump(mode="json")
+                    if (selection := getattr(deliverable, "preview_selection", None)) is not None
+                    else None
+                ),
+                "contract_digest": (
+                    contract.digest
+                    if (contract := getattr(deliverable, "verification_contract", None)) is not None
+                    else None
+                ),
+            }
+        )
+        for deliverable in deliverables
+    }
+    if len(shared_authorities) > 1:
+        return VerificationCoverage(
+            status=VerificationClaimStatus.UNAVAILABLE,
+            claim_results=(),
+            missing_claim_ids=tuple(claim.claim_id for claim in required.values()),
+        )
+
+    selected: dict[tuple[str, str], HostVerificationClaimResult] = {}
+    for deliverable in deliverables:
+        check = getattr(deliverable, "verification_check", None)
+        check_id = check.check_id if check is not None else ""
+        for receipt in receipts:
+            if not receipt.is_current_authority_for(
+                deliverable,
+                observed_url=receipt.observed_url,
+            ):
+                continue
+            by_id = {result.claim_id: result for result in receipt.claim_results}
+            for claim in deliverable.required_claims:
+                result = by_id.get(claim.claim_id)
+                if result is None:
+                    continue
+                exact = (
+                    result.claim_id == claim.claim_id
+                    and result.kind is claim.kind
+                    and result.required is claim.required
+                    and result.expected == claim.expected
+                    and result.source_authority == claim.source_authority
+                    and result.reference_image_sha256 == claim.reference_image_sha256
+                )
+                if exact:
+                    selected[(check_id, claim.claim_id)] = result
+
+    missing = tuple(claim.claim_id for key, claim in required.items() if key not in selected)
+    ordered_results = tuple(selected[key] for key in required if key in selected)
+    status = (
+        VerificationClaimStatus.FAIL
+        if any(result.status is VerificationClaimStatus.FAIL for result in ordered_results)
+        else VerificationClaimStatus.UNAVAILABLE
+        if missing
+        or any(result.status is VerificationClaimStatus.UNAVAILABLE for result in ordered_results)
+        else VerificationClaimStatus.PASS
+    )
+    return VerificationCoverage(
+        status=status,
+        claim_results=ordered_results,
+        missing_claim_ids=missing,
+    )
 
 
 def default_structured_web_claims() -> tuple[HostVerificationClaim, ...]:
@@ -587,6 +1083,252 @@ def _result(
         evidence_modalities=modalities,
         evidence_refs=refs,
     )
+
+
+def _target_binding_fields(deliverable: Any) -> dict[str, Any]:
+    contract = getattr(deliverable, "verification_contract", None)
+    check = getattr(deliverable, "verification_check", None)
+    return {
+        "target_id": contract.target_id if contract is not None else "",
+        "delivery_shape": contract.delivery.shape if contract is not None else "",
+        "delivery_entry_reference": (
+            contract.delivery.entry_reference if contract is not None else ""
+        ),
+        "verification_contract_digest": contract.digest if contract is not None else None,
+        "check_id": check.check_id if check is not None else "",
+        "receipt_kind": check.receipt_kind if check is not None else "",
+        "issuer_id": check.issuer_id if check is not None else "",
+        "operation": check.operation if check is not None else "",
+        "delegated_issuer_ids": (check.delegated_issuer_ids if check is not None else frozenset()),
+        "execution_identity": getattr(deliverable, "execution_identity", None),
+        "artifact_identity": getattr(deliverable, "artifact_identity", None),
+    }
+
+
+def preview_binding_failure_result(
+    *,
+    deliverable: Any,
+    observed_url: str,
+    reason: str = "selected preview generation is absent, changed, or foreign",
+    verifier_id: str = "host.preview_binding@1",
+    tool_id: str = "host.preview_binding_preflight@1",
+) -> HostVerificationResult:
+    """Build an exact, host-owned receipt for a failed Preview preflight.
+
+    Preview binding is checked before a browser is allowed to inspect the page.
+    The receipt therefore proves one negative fact only: the requested artifact
+    was not bound to the selected live Preview generation.  It is structurally
+    incapable of returning PASS.  Claims that would require HTTP/browser
+    evidence remain UNAVAILABLE instead of being inferred from empty lists.
+
+    Authority is copied from the host-built deliverable, not from browser
+    freshness and never from model prose.  The normal exact ``is_current_for``
+    comparator consequently applies without relaxing PASS freshness rules.
+    """
+
+    claims = deliverable.required_claims or default_structured_web_claims()
+    refs = tuple(
+        ref
+        for ref in (
+            f"artifact:{deliverable.artifact_path}",
+            f"url:{observed_url}" if observed_url else "",
+            (
+                f"preview:{deliverable.preview_selection.projection_id}"
+                if deliverable.preview_selection is not None
+                else ""
+            ),
+        )
+        if ref
+    )
+    results = tuple(
+        _result(
+            claim,
+            (
+                VerificationClaimStatus.FAIL
+                if claim.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+                else VerificationClaimStatus.UNAVAILABLE
+            ),
+            (
+                reason
+                if claim.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+                else "claim was not evaluated because canonical Preview binding failed"
+            ),
+            verifier_id=verifier_id,
+            basis="deterministic host Preview-binding preflight",
+            modalities=(
+                (VerificationEvidenceModality.ARTIFACT_BINDING,)
+                if claim.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+                else ()
+            ),
+            refs=refs,
+        )
+        for claim in claims
+    )
+    status = (
+        VerificationClaimStatus.FAIL
+        if any(
+            result.required and result.status is VerificationClaimStatus.FAIL for result in results
+        )
+        else VerificationClaimStatus.UNAVAILABLE
+    )
+    overall_reason = next(
+        result.reason for result in results if result.required and result.status is status
+    )
+    receipt = HostVerificationResult(
+        conversation_id=deliverable.conversation_id,
+        run_intent_id=deliverable.run_intent_id,
+        run_identity=deliverable.run_identity,
+        **_target_binding_fields(deliverable),
+        agent_view_id=deliverable.agent_view_id,
+        deliverable_event_id=deliverable.deliverable_event_id,
+        artifact_path=deliverable.artifact_path,
+        artifact_kind=deliverable.artifact_kind,
+        observed_url=observed_url,
+        preview_selection=deliverable.preview_selection,
+        workspace_revision=deliverable.workspace_revision,
+        workspace_generation=deliverable.workspace_generation,
+        workspace_epoch=deliverable.workspace_epoch,
+        observed_after_seq=deliverable.observed_after_seq,
+        verifier_id=verifier_id,
+        tool_id=tool_id,
+        status=status,
+        reason=overall_reason,
+        claim_results=results,
+    )
+    return with_verification_effect_receipt(receipt)
+
+
+def unavailable_verification_result(
+    *,
+    deliverable: Any,
+    reason: str,
+    verifier_id: str = "host.verifier_dispatcher@1",
+    tool_id: str = "host.verifier_dispatcher@1",
+) -> HostVerificationResult:
+    """Mint an exact non-authorizing receipt when no target verifier can run."""
+
+    claims = deliverable.required_claims
+    if not claims:
+        raise ValueError("unavailable verification receipt needs exact required claims")
+    results = tuple(
+        _result(
+            claim,
+            VerificationClaimStatus.UNAVAILABLE,
+            reason,
+            verifier_id=verifier_id,
+            basis="host verifier dispatcher capability registry",
+        )
+        for claim in claims
+    )
+    receipt = HostVerificationResult(
+        conversation_id=deliverable.conversation_id,
+        run_intent_id=deliverable.run_intent_id,
+        run_identity=deliverable.run_identity,
+        **_target_binding_fields(deliverable),
+        agent_view_id=deliverable.agent_view_id,
+        deliverable_event_id=deliverable.deliverable_event_id,
+        artifact_path=deliverable.artifact_path,
+        artifact_kind=deliverable.artifact_kind,
+        observed_url="",
+        preview_selection=deliverable.preview_selection,
+        workspace_revision=deliverable.workspace_revision,
+        workspace_generation=deliverable.workspace_generation,
+        workspace_epoch=deliverable.workspace_epoch,
+        observed_after_seq=deliverable.observed_after_seq,
+        verifier_id=verifier_id,
+        tool_id=tool_id,
+        status=VerificationClaimStatus.UNAVAILABLE,
+        reason=reason,
+        claim_results=results,
+    )
+    return with_verification_effect_receipt(receipt)
+
+
+def target_verification_result(
+    *,
+    deliverable: Any,
+    claim_results: tuple[HostVerificationClaimResult, ...],
+    verifier_id: str,
+    tool_id: str,
+    reason: str,
+    observed_url: str = "",
+    screenshot_path: str = "",
+    screenshot_sha256: str | None = None,
+) -> HostVerificationResult:
+    """Build a target-neutral host result from adapter-owned exact evidence."""
+
+    check = getattr(deliverable, "verification_check", None)
+    if check is not None and (verifier_id != check.issuer_id or tool_id != check.operation):
+        raise ValueError("target verifier issuer/operation differs from the admitted check")
+    expected = {
+        (
+            claim.claim_id,
+            claim.kind,
+            claim.required,
+            claim.expected,
+            claim.source_authority,
+            claim.reference_image_sha256,
+        )
+        for claim in deliverable.required_claims
+    }
+    actual = {
+        (
+            result.claim_id,
+            result.kind,
+            result.required,
+            result.expected,
+            result.source_authority,
+            result.reference_image_sha256,
+        )
+        for result in claim_results
+    }
+    if expected != actual:
+        raise ValueError("target verifier results do not match the admitted check claims")
+    required = tuple(result for result in claim_results if result.required)
+    status = (
+        VerificationClaimStatus.FAIL
+        if any(result.status is VerificationClaimStatus.FAIL for result in required)
+        else VerificationClaimStatus.UNAVAILABLE
+        if any(result.status is VerificationClaimStatus.UNAVAILABLE for result in required)
+        else VerificationClaimStatus.PASS
+    )
+    if (
+        status is VerificationClaimStatus.PASS
+        and check is not None
+        and check.required_artifact_identity_scheme is not None
+    ):
+        artifact_identity = getattr(deliverable, "artifact_identity", None)
+        if (
+            artifact_identity is None
+            or artifact_identity.scheme != check.required_artifact_identity_scheme
+        ):
+            raise ValueError(
+                "admitted verifier PASS requires the exact immutable artifact identity scheme"
+            )
+    receipt = HostVerificationResult(
+        conversation_id=deliverable.conversation_id,
+        run_intent_id=deliverable.run_intent_id,
+        run_identity=deliverable.run_identity,
+        **_target_binding_fields(deliverable),
+        agent_view_id=deliverable.agent_view_id,
+        deliverable_event_id=deliverable.deliverable_event_id,
+        artifact_path=deliverable.artifact_path,
+        artifact_kind=deliverable.artifact_kind,
+        observed_url=observed_url,
+        preview_selection=deliverable.preview_selection,
+        workspace_revision=deliverable.workspace_revision,
+        workspace_generation=deliverable.workspace_generation,
+        workspace_epoch=deliverable.workspace_epoch,
+        observed_after_seq=deliverable.observed_after_seq,
+        verifier_id=verifier_id,
+        tool_id=tool_id,
+        status=status,
+        reason=reason,
+        claim_results=claim_results,
+        screenshot_path=screenshot_path,
+        screenshot_sha256=screenshot_sha256,
+    )
+    return with_verification_effect_receipt(receipt)
 
 
 @dataclass(frozen=True)
@@ -791,8 +1533,8 @@ def structured_web_verification_result(
     *,
     deliverable: Any,
     verdict: dict[str, Any],
-    verifier_id: str = "host.verify_web_app@1",
-    tool_id: str = "verify_web_app@1",
+    verifier_id: str | None = None,
+    tool_id: str | None = None,
 ) -> HostVerificationResult:
     """Convert trusted structured browser output into exact claim results.
 
@@ -801,6 +1543,11 @@ def structured_web_verification_result(
     until a separate vision-capable verifier explicitly judges the pixels.
     """
 
+    check = getattr(deliverable, "verification_check", None)
+    resolved_verifier_id = verifier_id or (
+        check.issuer_id if check is not None else "host.verify_web_app@1"
+    )
+    resolved_tool_id = tool_id or (check.operation if check is not None else "verify_web_app@1")
     label = str(verdict.get("verdict") or "").lower()
     infrastructure_unavailable = label in {"unavailable", "unverifiable"}
     deterministic_pass = verdict.get("passed") is True and label == "pass"
@@ -834,7 +1581,7 @@ def structured_web_verification_result(
     evidence = _StructuredWebEvidence(
         deliverable=deliverable,
         verdict=verdict,
-        verifier_id=verifier_id,
+        verifier_id=resolved_verifier_id,
         basis=basis,
         refs=refs,
         deterministic_pass=deterministic_pass,
@@ -853,7 +1600,7 @@ def structured_web_verification_result(
                     claim,
                     VerificationClaimStatus.UNAVAILABLE,
                     str(verdict.get("summary") or "structured browser verification unavailable"),
-                    verifier_id=verifier_id,
+                    verifier_id=resolved_verifier_id,
                     basis=basis,
                     refs=refs,
                 )
@@ -895,10 +1642,11 @@ def structured_web_verification_result(
         and raw_workspace_epoch > 0
         else None
     )
-    return HostVerificationResult(
+    receipt = HostVerificationResult(
         conversation_id=deliverable.conversation_id,
         run_intent_id=deliverable.run_intent_id,
         run_identity=deliverable.run_identity,
+        **_target_binding_fields(deliverable),
         agent_view_id=deliverable.agent_view_id,
         deliverable_event_id=deliverable.deliverable_event_id,
         artifact_path=deliverable.artifact_path,
@@ -909,14 +1657,15 @@ def structured_web_verification_result(
         workspace_generation=str(freshness.get("executor_generation") or ""),
         workspace_epoch=workspace_epoch,
         observed_after_seq=deliverable.observed_after_seq,
-        verifier_id=verifier_id,
-        tool_id=tool_id,
+        verifier_id=resolved_verifier_id,
+        tool_id=resolved_tool_id,
         status=status,
         reason=reason,
         claim_results=tuple(results),
         screenshot_path=screenshot_path,
         screenshot_sha256=screenshot_sha256,
     )
+    return with_verification_effect_receipt(receipt)
 
 
 def apply_semantic_verifier_result(
@@ -999,25 +1748,42 @@ def apply_semantic_verifier_result(
         if overall is VerificationClaimStatus.PASS
         else next(item.reason for item in updated if item.required and item.status is overall)
     )
-    return receipt.model_copy(
-        update={"status": overall, "reason": reason, "claim_results": tuple(updated)}
+    updated_receipt = receipt.model_copy(
+        update={
+            "status": overall,
+            "reason": reason,
+            "claim_results": tuple(updated),
+            "effect_receipt": None,
+        }
     )
+    return with_verification_effect_receipt(updated_receipt)
 
 
 __all__ = [
+    "AdmittedVerificationContract",
     "HostVerificationClaim",
     "HostVerificationClaimResult",
     "HostVerificationResult",
     "PreviewSelectionIdentity",
     "VerifierReferenceImage",
+    "VerificationCheckContract",
     "VerificationClaimKind",
     "VerificationClaimStatus",
+    "VerificationCoverage",
+    "VerificationDeliveryContract",
     "VerificationEvidenceModality",
+    "VerificationExecutionIdentity",
+    "VerificationParameter",
     "VerificationRequestedClaim",
     "VerificationRequirementsDirective",
+    "aggregate_verification_receipts",
     "apply_semantic_verifier_result",
     "default_structured_web_claims",
+    "preview_binding_failure_result",
     "requires_structured_browser_runtime",
     "structured_web_verification_result",
+    "target_verification_result",
+    "unavailable_verification_result",
     "validated_image_data_url",
+    "with_verification_effect_receipt",
 ]

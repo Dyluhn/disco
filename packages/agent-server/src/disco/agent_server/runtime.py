@@ -192,6 +192,7 @@ from .share_service import ShareService
 from .space_store import JsonSpaceStore
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
+from .verify.dispatcher import HostVerifierDispatcher
 from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
 from .workflow_events import handle_workflow_tool_event
@@ -2503,7 +2504,17 @@ class ConversationRuntime:
         # (plain builds have no resolved contract, so gating injection on the
         # finalizer alias would starve the shadow exactly like the REL-2a dead
         # hook). The alias still separately drives requested_verification.
-        host_verifier = HostWebAppVerifier(executor)
+        web_verifier = HostWebAppVerifier(executor)
+        host_verifier = HostVerifierDispatcher(
+            {
+                (
+                    "disco.host_web_verifier@1",
+                    "disco.web_functional@1",
+                    "host.verify_deliverable",
+                ): web_verifier,
+            },
+            legacy_adapter=web_verifier,
+        )
         verifier_judge = ModelVerifier(router, conversation_id=conversation_id)
         host_verify_canary_hook = self._host_verify_canary_hook_for(conversation_id)
         _set_alias = getattr(agent, "set_finish_alias", None)

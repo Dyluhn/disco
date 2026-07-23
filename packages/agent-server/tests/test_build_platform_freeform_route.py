@@ -162,6 +162,19 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
         "console_clean",
         "network_clean",
     }
+    contract = admission.verification_contract
+    assert contract is not None
+    assert contract.target_id == "disco.legacy_web@1"
+    assert contract.delivery.mode == "interactive"
+    assert contract.delivery.shape == "web.legacy_deliverable"
+    assert [(check.check_id, check.receipt_kind, check.issuer_id) for check in contract.checks] == [
+        (
+            "web_functional",
+            "disco.web_functional@1",
+            "disco.host_web_verifier@1",
+        )
+    ]
+    assert contract.required_claims == admission.verification_claims
 
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     restarted = ConversationRuntime(runtime._store)
@@ -175,6 +188,12 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
             mock.MagicMock(spec=RouterAgent),
         )
     assert restarted._build_platform.route_records["durable"].active_route == "platform"
+    replayed = [
+        event
+        for event in await restarted._store.get_events("durable")
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ][0]
+    assert replayed.verification_contract == contract
 
 
 @pytest.mark.asyncio

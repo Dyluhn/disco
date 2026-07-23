@@ -70,7 +70,7 @@ def _clock_executor(*tools: _ClockTool) -> DefaultToolExecutor:
 
 
 @pytest.mark.asyncio
-async def test_epoch_advances_only_after_successful_capability_profile() -> None:
+async def test_epoch_advances_after_any_executed_mutation_capability_profile() -> None:
     reader = _ClockTool("write_in_name_only", set())
     failed = _ClockTool("failed_mutator", {EffectCapability.WORKSPACE_MUTATE}, succeeds=False)
     shell_shaped = _ClockTool("opaque_command", {EffectCapability.WORKSPACE_MUTATE})
@@ -80,17 +80,17 @@ async def test_epoch_advances_only_after_successful_capability_profile() -> None
     generation = (await executor._build_context(reader.definition)).browser_generation
     await executor.execute(ToolCall(tool_name=reader.definition.name, arguments={}))
     await executor.execute(ToolCall(tool_name=failed.definition.name, arguments={}))
-    still_clean = await executor._build_context(reader.definition)
-    assert still_clean.browser_workspace_epoch is None
+    after_failed_mutator = await executor._build_context(reader.definition)
+    assert after_failed_mutator.browser_workspace_epoch == 1
 
     await executor.execute(ToolCall(tool_name=shell_shaped.definition.name, arguments={}))
     after_one = await executor._build_context(reader.definition)
-    assert after_one.browser_workspace_epoch == 1
+    assert after_one.browser_workspace_epoch == 2
     assert after_one.browser_generation == generation
     assert after_one.browser_lane == "agent"
 
     await executor.execute(ToolCall(tool_name=differently_named.definition.name, arguments={}))
-    assert (await executor._build_context(reader.definition)).browser_workspace_epoch == 2
+    assert (await executor._build_context(reader.definition)).browser_workspace_epoch == 3
 
 
 @pytest.mark.parametrize("value", [True, False, 0, -1, 1.0, "1"])

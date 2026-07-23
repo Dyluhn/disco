@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Literal, cast
 
 from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from disco.core.loop import HostVerificationDeliverable
 from disco.core.verification import (
     VerificationClaimKind,
+    preview_binding_failure_result,
     structured_web_verification_result,
 )
 from disco.tools.builtin.browser import BrowserTool
@@ -57,6 +58,17 @@ class HostWebAppVerifier:
         self._browser_lane_lock = asyncio.Lock()
 
     async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
+        check = deliverable.verification_check
+        if check is not None and (
+            check.issuer_id != "disco.host_web_verifier@1"
+            or check.receipt_kind != "disco.web_functional@1"
+            or check.operation != "host.verify_deliverable"
+        ):
+            return self._unavailable_verdict(
+                deliverable,
+                "no registered host verifier adapter owns the admitted "
+                f"{check.receipt_kind} check from {check.issuer_id}",
+            )
         ctx_builder: Any = getattr(self._executor, "_build_context", None)
         if ctx_builder is not None:
             async with self._browser_lane_lock:
@@ -89,7 +101,13 @@ class HostWebAppVerifier:
                     outcome = await VerifyWebAppTool().run(
                         VerifyWebAppArgs(
                             url=target_url or "",
-                            medium=deliverable.verification_medium,
+                            medium=cast(
+                                Literal["web", "deck", "mobile", "game"],
+                                deliverable.verification_medium
+                                if deliverable.verification_medium
+                                in {"web", "deck", "mobile", "game"}
+                                else "web",
+                            ),
                         ),
                         ctx,
                     )
@@ -184,11 +202,30 @@ class HostWebAppVerifier:
         verdict["passed"] = False
         verdict["summary"] = "selected preview generation is absent, changed, or foreign"
         verdict["failure_fingerprint"] = "preview_selection_mismatch"
-        return cls._with_typed_result(
-            deliverable,
-            verdict,
-            preview_live_match=False,
-        )
+        verdict["artifact_identity"] = {
+            "conversation_id": deliverable.conversation_id,
+            "artifact_path": deliverable.artifact_path,
+            "artifact_kind": deliverable.artifact_kind,
+            "requested_url": deliverable.deployment_url,
+            "observed_url": str(verdict.get("url") or ""),
+            "preview_selection": (
+                deliverable.preview_selection.model_dump(mode="json")
+                if deliverable.preview_selection is not None
+                else None
+            ),
+            "preview_live_match": False,
+        }
+        verdict["verification_result"] = preview_binding_failure_result(
+            deliverable=deliverable,
+            observed_url=str(verdict.get("url") or ""),
+            reason=str(verdict["summary"]),
+            tool_id=(
+                "preview_status@1"
+                if deliverable.preview_selection is not None
+                else "host.preview_binding_preflight@1"
+            ),
+        ).model_dump(mode="json")
+        return verdict
 
     async def _verify_via_client(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
         client = self._client

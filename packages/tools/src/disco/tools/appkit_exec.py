@@ -43,6 +43,7 @@ from disco.core.appkit import (
 from disco.core.llm import OperatingMode
 
 from .appkit_scope import (
+    APPKIT_CANONICAL_ENTRY_RELPATH,
     APPKIT_MUTATORS,
     REQUEST_CUSTOM_BUILD,
     AppKitEjectionReceipt,
@@ -266,6 +267,50 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
     @_appkit_widened.setter
     def _appkit_widened(self, value: ToolScope) -> None:
         self._scope = value
+
+    async def verification_preflight(self, operation: str) -> dict[str, object] | None:
+        """Return the current strict target authority before its verifier runs."""
+
+        if operation != "host.verify_appkit_strict":
+            return None
+        manager = getattr(self._sandbox, "_preview_manager", None)
+        if manager is None:
+            return None
+        try:
+            await manager.status()
+            session = manager.canonical_session()
+            runtime = session.to_dict() if session is not None else None
+        except Exception:  # noqa: BLE001 — unavailable preflight fails closed upstream
+            return None
+        if not isinstance(runtime, dict) or runtime.get("status") not in {
+            "running",
+            "unavailable",
+        }:
+            return None
+        projection_id = runtime.get("projection_id")
+        sandbox_instance_id = runtime.get("sandbox_instance_id")
+        sandbox_generation = runtime.get("sandbox_generation")
+        url = runtime.get("url")
+        if (
+            not isinstance(projection_id, str)
+            or not projection_id
+            or not isinstance(sandbox_instance_id, str)
+            or not sandbox_instance_id
+            or type(sandbox_generation) is not int
+            or not isinstance(url, str)
+            or not url
+        ):
+            return None
+        return {
+            "artifact_path": APPKIT_CANONICAL_ENTRY_RELPATH,
+            "artifact_kind": "app",
+            "execution_identity": {
+                "modality": "appkit_strict_runtime",
+                "instance_id": projection_id,
+                "generation": f"{sandbox_instance_id}:{sandbox_generation}",
+                "locator": url,
+            },
+        }
 
     # ---- immediate post-call cache (durable reconciliation owns authority) ----
 

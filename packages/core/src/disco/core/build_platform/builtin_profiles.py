@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from ..verification import default_structured_web_claims
+from ..verification import (
+    HostVerificationClaim,
+    VerificationClaimKind,
+    default_structured_web_claims,
+)
 from .builtin_inputs import builtin_input_catalog
 from .compiler import ModuleBody, PromptContextInputs, ToolDescriptor
 from .contracts import (
@@ -37,6 +41,8 @@ FREEFORM_ENGINE_ID = ComponentId(namespace="disco", name="freeform", version="1"
 APPKIT_ENGINE_ID = ComponentId(namespace="disco", name="appkit", version="1")
 WEB_TARGET_ID = ComponentId(namespace="disco", name="legacy_web", version="1")
 HOST_VERIFIER_ID = ComponentId(namespace="disco", name="host_web_verifier", version="1")
+APPKIT_VERIFIER_ID = ComponentId(namespace="disco", name="appkit_strict_verifier", version="1")
+MODEL_VERIFIER_ID = ComponentId(namespace="model_role", name="verifier", version="1")
 HOST_PREVIEW_ID = ComponentId(namespace="disco", name="host_preview", version="1")
 LEGACY_EXPORTER_ID = ComponentId(namespace="disco", name="legacy_exporter", version="1")
 FREEFORM_PROMPT_ID = ComponentId(namespace="disco", name="freeform_prompt", version="1")
@@ -206,6 +212,58 @@ class _LegacyWebTarget:
 
     def plan(self, request: TargetRequest) -> TargetPlan:
         entry = EntryDescriptor(kind="deliverable_manifest", reference="active-deliverable")
+        appkit = request.engine == APPKIT_ENGINE_ID
+        check = (
+            VerifierCheck(
+                check_id="appkit_strict",
+                issuer=APPKIT_VERIFIER_ID,
+                receipt_kind="disco.appkit_strict@1",
+                required_execution_modality="appkit_strict_runtime",
+                required_artifact_identity_scheme="sha256-tree-manifest-v1",
+                intent=ComponentIntent(
+                    operation="host.verify_appkit_strict",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+                accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+                claims=(
+                    HostVerificationClaim(
+                        claim_id="appkit.strict_contract",
+                        kind=VerificationClaimKind.TARGET_SPECIFIC,
+                        expected=(
+                            "canonical AppKit entry passes the complete strict target verifier"
+                        ),
+                        source_authority="target.appkit.strict_floor@1",
+                    ),
+                ),
+            )
+            if appkit
+            else VerifierCheck(
+                check_id="web_functional",
+                issuer=HOST_VERIFIER_ID,
+                receipt_kind="disco.web_functional@1",
+                required_execution_modality="managed_preview",
+                delegated_issuers=(MODEL_VERIFIER_ID,),
+                intent=ComponentIntent(
+                    operation="host.verify_deliverable",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+                accepted_claim_kinds=frozenset(
+                    {
+                        VerificationClaimKind.ARTIFACT_IDENTITY,
+                        VerificationClaimKind.HTTP_READY,
+                        VerificationClaimKind.RENDERED_CONTENT,
+                        VerificationClaimKind.VISIBLE_TEXT,
+                        VerificationClaimKind.CONSOLE_CLEAN,
+                        VerificationClaimKind.NETWORK_CLEAN,
+                        VerificationClaimKind.INTERACTION,
+                        VerificationClaimKind.ROUTE,
+                        VerificationClaimKind.CONTRACT_SEMANTIC,
+                        VerificationClaimKind.VISUAL_SEMANTIC,
+                    }
+                ),
+                claims=default_structured_web_claims(),
+            )
+        )
         return TargetPlan(
             target=self.id,
             intents=(
@@ -218,20 +276,13 @@ class _LegacyWebTarget:
                     required_capabilities=frozenset({"workspace.read"}),
                 ),
             ),
-            delivery=DeliveryIntent(shape="web.legacy_deliverable", entry=entry),
-            preview=PreviewPlan(modality="legacy_host", entry=entry),
-            verifier=VerifierPlan(
-                checks=(
-                    VerifierCheck(
-                        check_id="host_verifier",
-                        intent=ComponentIntent(
-                            operation="host.verify_deliverable",
-                            required_capabilities=frozenset({"workspace.read"}),
-                        ),
-                        claims=default_structured_web_claims(),
-                    ),
-                )
+            delivery=DeliveryIntent(
+                shape="web.legacy_deliverable",
+                entry=entry,
+                mode="interactive",
             ),
+            preview=PreviewPlan(modality="legacy_host", entry=entry),
+            verifier=VerifierPlan(checks=(check,)),
             package=PackagePlan(
                 package_shape="web.legacy_archive",
                 intents=(
@@ -288,7 +339,7 @@ def _profile(*, appkit: bool) -> BuildProfile:
         label="AppKit" if appkit else "Freeform",
         engine=engine_id,
         target=WEB_TARGET_ID,
-        verifier=HOST_VERIFIER_ID,
+        verifier=APPKIT_VERIFIER_ID if appkit else HOST_VERIFIER_ID,
         preview=HOST_PREVIEW_ID,
         exporter=LEGACY_EXPORTER_ID,
         prompt_modules=(
@@ -340,6 +391,7 @@ def build_builtin_registry(
     )
     for component in (
         _spec(HOST_VERIFIER_ID, ComponentKind.VERIFIER),
+        _spec(APPKIT_VERIFIER_ID, ComponentKind.VERIFIER),
         _spec(HOST_PREVIEW_ID, ComponentKind.PREVIEW),
         _spec(FREEFORM_PROMPT_ID, ComponentKind.PROMPT_MODULE),
         _spec(APPKIT_PROMPT_ID, ComponentKind.PROMPT_MODULE),

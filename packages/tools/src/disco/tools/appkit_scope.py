@@ -50,6 +50,7 @@ from .registry import ToolScope
 # The qualified name of the F3 escape-hatch tool. Kept here (not imported from the
 # builtin module) so the scope layer has no dependency on the tool implementation.
 REQUEST_CUSTOM_BUILD = "request_custom_build"
+APPKIT_CANONICAL_ENTRY_RELPATH = "dist/index.html"
 APPKIT_EJECTION_PATH = ".disco/appkit_ejection.json"
 APPKIT_EJECTION_SOURCE_LABEL = "AppKit governed before ejection"
 APPKIT_EJECTION_TARGET_LABEL = "Freeform - AppKit ejected (not AppKit-verified)"

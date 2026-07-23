@@ -14,7 +14,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..verification import HostVerificationClaim
+from ..verification import HostVerificationClaim, VerificationClaimKind
 
 _ID_PART = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 _VERSION = re.compile(r"^[1-9][0-9]*(?:\.[0-9]+){0,2}$")
@@ -171,6 +171,7 @@ class EntryDescriptor(FrozenModel):
 class DeliveryIntent(FrozenModel):
     shape: str
     entry: EntryDescriptor
+    mode: Literal["interactive", "artifact"] = "artifact"
 
     @field_validator("shape")
     @classmethod
@@ -217,7 +218,37 @@ class VerifierCheck(FrozenModel):
     check_id: str = Field(min_length=1, max_length=128)
     intent: ComponentIntent
     required: bool = True
+    issuer: ComponentId | None = None
+    receipt_kind: str = Field(
+        default="disco.verification@1",
+        pattern=r"^[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+@[1-9][0-9]*(?:\.[0-9]+){0,2}$",
+    )
+    required_execution_modality: str = Field(
+        default="workspace_artifact",
+        min_length=1,
+        max_length=96,
+    )
+    required_artifact_identity_scheme: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=96,
+        pattern=r"^[a-z][a-z0-9_.-]*$",
+    )
+    delegated_issuers: tuple[ComponentId, ...] = ()
+    accepted_claim_kinds: frozenset[VerificationClaimKind] = frozenset()
     claims: tuple[HostVerificationClaim, ...] = ()
+
+    @model_validator(mode="after")
+    def _accepted_kinds_cover_claims(self) -> VerifierCheck:
+        if len(self.delegated_issuers) != len(
+            set(issuer.canonical for issuer in self.delegated_issuers)
+        ):
+            raise ValueError("verifier check delegated issuers must be unique")
+        if self.accepted_claim_kinds and any(
+            claim.kind not in self.accepted_claim_kinds for claim in self.claims
+        ):
+            raise ValueError("verifier check contains a claim kind it does not accept")
+        return self
 
 
 class VerifierPolicy(FrozenModel):

@@ -129,6 +129,7 @@ from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ..appkit_scope import APPKIT_CANONICAL_ENTRY_RELPATH
 from ..behavior import declares
 from ._outcomes import fail_outcome
 from .browser import BrowserArgs, BrowserTool
@@ -143,6 +144,9 @@ _COMPONENTS_DIR = "src/components"
 _VITE_CONFIG_RELPATH = "vite.config.ts"
 APPKIT_VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
 _VITE_BUILD_TIMEOUT_S = 300
+_SEALED_OUTPUT_MAX_FILES = 1024
+_SEALED_OUTPUT_MAX_FILE_BYTES = 16 * 1024 * 1024
+_SEALED_OUTPUT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 APPKIT_LIVE_PREVIEW_NAME = "appkit-live-vite"
 _BUILT_PREVIEW_NAME = "appkit-built-vite"
 _VITE_PREVIEW_COMMAND = "npx vite preview --host 0.0.0.0 --port {port} --strictPort"
@@ -198,6 +202,79 @@ class _PreparedPreview:
     stop_name: str | None = None
     failure_evidence: str | None = None
     runtime: dict[str, Any] | None = None
+
+
+async def _sealed_appkit_output_identity(
+    ctx: ToolContext,
+) -> tuple[dict[str, str] | None, str]:
+    """Hash the exact bounded ``dist`` closure produced by the strict verifier."""
+
+    assert ctx.sandbox is not None
+    sandbox = ctx.sandbox
+    pending = ["dist"]
+    manifest: list[dict[str, object]] = []
+    total_bytes = 0
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(await sandbox.list_dir(directory))
+        except Exception as exc:  # noqa: BLE001 — an unreadable output is unsealable
+            return None, f"cannot enumerate verifier output {directory!r}: {exc}"
+        for name in entries:
+            child = f"{directory}/{name}"
+            try:
+                await sandbox.list_dir(child)
+            except Exception:
+                size_probe = await sandbox.exec_shell(
+                    f"wc -c < {shlex.quote(child)}",
+                    timeout_s=10,
+                )
+                try:
+                    size = int(str(getattr(size_probe, "stdout", "") or "").strip())
+                except ValueError:
+                    return None, f"cannot bound verifier output file {child!r}"
+                if (
+                    size < 0
+                    or size > _SEALED_OUTPUT_MAX_FILE_BYTES
+                    or total_bytes + size > _SEALED_OUTPUT_MAX_TOTAL_BYTES
+                ):
+                    return None, f"verifier output exceeds the bounded seal budget at {child!r}"
+                try:
+                    data = await sandbox.read_file(child)
+                except Exception as exc:  # noqa: BLE001 — incomplete output fails closed
+                    return None, f"cannot read verifier output file {child!r}: {exc}"
+                if len(data) != size:
+                    return None, f"verifier output changed while sealing {child!r}"
+                total_bytes += size
+                manifest.append(
+                    {
+                        "path": child,
+                        "size": size,
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+                if len(manifest) > _SEALED_OUTPUT_MAX_FILES:
+                    return None, "verifier output exceeds the bounded file-count seal budget"
+            else:
+                pending.append(child)
+    if not manifest or not any(item["path"] == APPKIT_CANONICAL_ENTRY_RELPATH for item in manifest):
+        return None, "verifier output has no canonical AppKit entry"
+    encoded = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    return (
+        {
+            "scheme": "sha256-tree-manifest-v1",
+            "digest": f"sha256:{digest}",
+            "entry_reference": APPKIT_CANONICAL_ENTRY_RELPATH,
+            "producer_id": "disco.appkit_strict_verifier@1",
+        },
+        f"sealed {len(manifest)} files ({total_bytes} bytes) as sha256:{digest}",
+    )
 
 
 def _is_vite_app_tree(package_json: str | None, has_vite_config: bool) -> bool:
@@ -470,10 +547,21 @@ class VerifyAppKitAppTool:
             checks.append(route_check)
             checks.append(section_check)
 
+            artifact_identity: dict[str, str] | None = None
+            if retain_prepared_runtime and prepared.runtime is not None:
+                artifact_identity, seal_evidence = await _sealed_appkit_output_identity(ctx)
+                checks.append(
+                    _check(
+                        "sealed_output_identity",
+                        artifact_identity is not None,
+                        seal_evidence,
+                    )
+                )
             verdict = build_verdict(checks, embedded)
-            if verdict["passed"] and prepared.runtime is not None:
+            if verdict["passed"] and prepared.runtime is not None and artifact_identity is not None:
                 verdict["preview_runtime"] = prepared.runtime
-                verdict["canonical_entry_path"] = "dist/index.html"
+                verdict["canonical_entry_path"] = APPKIT_CANONICAL_ENTRY_RELPATH
+                verdict["artifact_identity"] = artifact_identity
             return ToolOutcome(success=True, content=_render(verdict), structured=verdict)
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
             return fail_outcome(f"verify_appkit_app error: {e}")

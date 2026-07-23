@@ -170,6 +170,24 @@ class BuildTrackingSandbox(FakeSandbox):
         return await super().exec_shell(cmd, timeout_s=timeout_s)
 
 
+class MutatingSealSandbox(FakeSandbox):
+    def __init__(self, files: dict[str, bytes]):
+        super().__init__(files)
+        self._mutate_sealed_file = False
+
+    async def exec_shell(self, cmd: str, timeout_s=None):
+        result = await super().exec_shell(cmd, timeout_s=timeout_s)
+        if cmd.startswith("wc -c <") and "dist/" in cmd:
+            self._mutate_sealed_file = True
+        return result
+
+    async def read_file(self, path: str) -> bytes:
+        if self._mutate_sealed_file and path.startswith("dist/"):
+            self._mutate_sealed_file = False
+            self._files[path] = self._files[path] + b"\nchanged-during-seal"
+        return await super().read_file(path)
+
+
 class _PreviewStatus:
     def __init__(self, value: str):
         self.value = value
@@ -596,12 +614,32 @@ async def test_known_good_passes_all_checks(stub_browser):
         "local_api_roundtrip",
         "cloudflare_export_ready",
         "route_coverage",
+        "sealed_output_identity",
         "section_coverage",
     }
+    assert v["artifact_identity"]["scheme"] == "sha256-tree-manifest-v1"
+    assert v["artifact_identity"]["entry_reference"] == "dist/index.html"
+    assert v["artifact_identity"]["digest"].startswith("sha256:")
     assert all(c["passed"] for c in v["checks"])
     # W-45 compatible: embedded verify_web_app verdict + top-level url/fingerprint
     assert "verify_web_app" in v and v["url"]
     assert v["failure_fingerprint"]
+
+
+@pytest.mark.asyncio
+async def test_output_changed_during_seal_fails_without_artifact_identity(stub_browser):
+    tree, _ = _build_tree()
+    out = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"),
+        _ctx(MutatingSealSandbox(tree)),
+    )
+
+    assert out.success and out.structured is not None
+    assert out.structured["passed"] is False
+    assert "artifact_identity" not in out.structured
+    sealed = _checks_by_name(out.structured)["sealed_output_identity"]
+    assert sealed["passed"] is False
+    assert "changed while sealing" in sealed["evidence"]
 
 
 @pytest.mark.asyncio

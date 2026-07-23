@@ -87,6 +87,10 @@ ARTIFACT_NOT_SHOWN_TO_USER = "ARTIFACT_NOT_SHOWN_TO_USER"  # file exists but UI 
 VERIFICATION_GATE_BYPASSED = (
     "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
 )
+GOVERNED_ADMISSION_BYPASSED = (
+    "GOVERNED_ADMISSION_BYPASSED"  # Phase-4 governed scenario ran legacy route or
+    # finished without a current platform admission and typed PASS receipt
+)
 EXPORT_DOWNLOAD_MISSING = "EXPORT_DOWNLOAD_MISSING"  # export claimed but no real download
 WORKSPACE_NOT_CLEANED = "WORKSPACE_NOT_CLEANED"  # orphan container/sandbox/preview after terminal
 NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
@@ -214,6 +218,7 @@ SEVERITY_BY_CODE: dict[str, str] = {
     PREVIEW_OWNERSHIP_VIOLATION: P0,
     ARTIFACT_NOT_SHOWN_TO_USER: P0,
     VERIFICATION_GATE_BYPASSED: P0,
+    GOVERNED_ADMISSION_BYPASSED: P0,
     EXPORT_DOWNLOAD_MISSING: P0,
     WORKSPACE_NOT_CLEANED: P0,
     # P8D targeted/manual-edit discipline

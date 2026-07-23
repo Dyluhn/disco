@@ -22,8 +22,12 @@ from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
 from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
 from ..state import ConversationState
 from ..verification import (
+    AdmittedVerificationContract,
     HostVerificationClaim,
     PreviewSelectionIdentity,
+    VerificationArtifactIdentity,
+    VerificationCheckContract,
+    VerificationExecutionIdentity,
     VerifierReferenceImage,
 )
 from ..verify_medium import VerifierMediumHint
@@ -100,7 +104,11 @@ class HostVerificationDeliverable(BaseModel):
     workspace_epoch: int | None = Field(default=None, ge=1)
     observed_after_seq: int = Field(default=0, ge=0)
     required_claims: tuple[HostVerificationClaim, ...] = ()
-    verification_medium: Literal["web", "deck", "mobile", "game"] = "web"
+    verification_contract: AdmittedVerificationContract | None = None
+    verification_check: VerificationCheckContract | None = None
+    execution_identity: VerificationExecutionIdentity | None = None
+    artifact_identity: VerificationArtifactIdentity | None = None
+    verification_medium: str = Field(default="target", min_length=1, max_length=96)
     preview_selection: PreviewSelectionIdentity | None = None
     preview_binding_required: bool = False
 
@@ -148,11 +156,12 @@ class TypedVerifierVerdict(BaseModel):
 
 @runtime_checkable
 class HostVerifier(Protocol):
-    """REL-1c host-owned verifier seam.
+    """Host-owned target verifier dispatcher seam.
 
-    Implementations return a verdict-shaped dictionary compatible with
-    verify_web_app/compute_verdict. The loop treats it as audit-only shadow
-    telemetry in REL-1c.
+    The admitted check's exact issuer/receipt kind/operation are carried on the
+    deliverable. Implementations must return an unavailable result when no
+    registered adapter owns that check; they may never silently substitute a
+    browser or another target's verifier.
     """
 
     async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]: ...

@@ -6,18 +6,32 @@ import pytest
 from disco.core import (
     ActionEvent,
     BuildPlatformAdmissionEvent,
+    ConversationStatus,
+    DeliverableEvent,
+    LLMMessage,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
     SqliteEventStore,
     StatusEvent,
     ToolResult,
+    VerifierStartedEvent,
+    VerifierVerdictEvent,
 )
 from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, NeverConfirm
 from disco.core.loop.finish import FinishGate, _latest_verify_verdict
-from disco.core.verification import default_structured_web_claims
+from disco.core.verification import (
+    AdmittedVerificationContract,
+    HostVerificationClaim,
+    VerificationCheckContract,
+    VerificationClaimKind,
+    VerificationDeliveryContract,
+    VerificationRequestedClaim,
+    VerificationRequirementsDirective,
+    default_structured_web_claims,
+)
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -43,7 +57,68 @@ def _appkit_verdict(*, passed: bool, fp: str) -> dict:
         "screenshot_path": "shot.png",
         "checks": [{"name": "worker_contract", "passed": passed, "evidence": "x"}],
         "verify_web_app": {"url": "http://127.0.0.1:8000/"},
+        "canonical_entry_path": "dist/index.html",
+        "preview_runtime": {
+            "status": "running",
+            "projection_id": "pv_appkit_fixture",
+            "sandbox_instance_id": "sandbox-appkit",
+            "sandbox_generation": 3,
+            "url": "http://preview.appkit.test/",
+        },
+        "artifact_identity": {
+            "scheme": "sha256-tree-manifest-v1",
+            "digest": "sha256:" + "c" * 64,
+            "entry_reference": "dist/index.html",
+            "producer_id": "disco.appkit_strict_verifier@1",
+        },
     }
+
+
+def _appkit_contract() -> AdmittedVerificationContract:
+    strict = VerificationCheckContract(
+        check_id="appkit_strict",
+        receipt_kind="disco.appkit_strict@1",
+        issuer_id="disco.appkit_strict_verifier@1",
+        operation="host.verify_appkit_strict",
+        required_execution_modality="appkit_strict_runtime",
+        required_artifact_identity_scheme="sha256-tree-manifest-v1",
+        accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+        claims=(
+            HostVerificationClaim(
+                claim_id="appkit.strict_contract",
+                kind=VerificationClaimKind.TARGET_SPECIFIC,
+                expected="canonical AppKit entry passes the complete strict target verifier",
+                source_authority="target.appkit.strict_floor@1",
+            ),
+        ),
+    )
+    return AdmittedVerificationContract(
+        target_id="disco.legacy_web@1",
+        verifier_id="disco.appkit_strict_verifier@1",
+        delivery=VerificationDeliveryContract(
+            shape="web.legacy_deliverable",
+            mode="interactive",
+            entry_kind="deliverable_manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="legacy_host",
+        checks=(strict,),
+    )
+
+
+def _appkit_admission(
+    contract: AdmittedVerificationContract,
+) -> BuildPlatformAdmissionEvent:
+    return BuildPlatformAdmissionEvent(
+        route="platform",
+        profile_id="disco.appkit_web@1",
+        run_intent_id="intent-appkit",
+        composition_authority="build_platform_core",
+        composition_digest="sha256:" + "a" * 64,
+        run_identity="run:sha256:" + "b" * 64,
+        verification_claims=contract.required_claims,
+        verification_contract=contract,
+    )
 
 
 def _appkit_primitive_fail_verdict() -> dict:
@@ -84,13 +159,27 @@ class AppKitVerifyExecutor(FakeExecutor):
             return ToolResult(
                 call_id=call.call_id,
                 tool_name="verify_appkit_app",
-                success=True,
+                success=verdict.get("tool_success", True),
                 content=f"APPKIT {verdict['verdict']}",
                 structured=verdict,
             )
         if call.tool_name == "verify_web_app":
             self.web_calls += 1
         return await super().execute(call)
+
+    async def verification_preflight(self, operation: str) -> dict[str, object] | None:
+        if operation != "host.verify_appkit_strict":
+            return None
+        return {
+            "artifact_path": "dist/index.html",
+            "artifact_kind": "app",
+            "execution_identity": {
+                "modality": "appkit_strict_runtime",
+                "instance_id": "pv_appkit_fixture",
+                "generation": "sandbox-appkit:3",
+                "locator": "http://preview.appkit.test/",
+            },
+        }
 
 
 def _gate_loop(
@@ -218,6 +307,383 @@ async def test_appkit_build_finishes_on_appkit_pass_verdict() -> None:
     assert execu.web_calls == 0
     assert ("FINISHED", None) in _statuses(events)
     assert not any("did not pass" in m for m in _env(events))
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_strict_pass_materializes_exact_target_handoff() -> None:
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    handoffs = [event for event in events if isinstance(event, DeliverableEvent)]
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
+    assert handoffs
+    assert handoffs[-1].source is EventSource.SYSTEM
+    assert handoffs[-1].path == "dist/index.html"
+    assert handoffs[-1].target_id == contract.target_id
+    assert handoffs[-1].verification_contract_digest == contract.digest
+    assert not any(detail == "noop_limit" for _status, detail in _statuses(events))
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+    starts = [event for event in events if isinstance(event, VerifierStartedEvent)]
+    assert len(starts) == 1
+    assert len(verdicts) == 1
+    verify_action = next(
+        event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call.tool_name == "verify_appkit_app"
+    )
+    verify_observation = next(
+        event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.action_id == verify_action.id
+    )
+    assert (handoffs[-1].seq or 0) < (starts[0].seq or 0)
+    assert (starts[0].seq or 0) < (verify_action.seq or 0)
+    assert (verify_action.seq or 0) < (verify_observation.seq or 0)
+    assert (verify_observation.seq or 0) < (verdicts[0].seq or 0)
+    assert verdicts[0].requested_by_event_id == starts[0].id
+    assert verdicts[0].verification_result is not None
+    assert verdicts[0].verification_result.passed
+    assert verdicts[0].verification_result.receipt_kind == "disco.appkit_strict@1"
+    assert verdicts[0].verification_result.execution_identity is not None
+    assert verdicts[0].verification_result.execution_identity.modality == "appkit_strict_runtime"
+    assert verdicts[0].verification_result.artifact_identity is not None
+    assert verdicts[0].verification_result.artifact_identity.entry_reference == "dist/index.html"
+
+
+@pytest.mark.asyncio
+async def test_direct_strict_pass_before_finish_is_reverified_under_typed_start() -> None:
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            action_step(tool="verify_appkit_app", args={}),
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            action_step(tool="verify_appkit_app", args={}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor(
+        [
+            _appkit_verdict(passed=False, fp="REPAIR"),
+            _appkit_verdict(passed=True, fp="DIRECT_PASS"),
+            _appkit_verdict(passed=True, fp="GATE_PASS"),
+        ]
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build and verify the lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    starts = [event for event in events if isinstance(event, VerifierStartedEvent)]
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 3
+    assert len(starts) == len(verdicts) == 1
+    assert verdicts[0].requested_by_event_id == starts[0].id
+    assert verdicts[0].verification_result is not None
+    assert verdicts[0].verification_result.passed
+
+
+@pytest.mark.asyncio
+async def test_strict_admitted_contract_survives_executor_phase_signal_change() -> None:
+    """Durable target authority, not a transient tool-surface phase, selects the gate."""
+
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    execu.appkit_phase = None
+    loop, _store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
+    assert execu.web_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_unavailable_verifier_never_releases_unverified() -> None:
+    contract = _appkit_contract()
+    unavailable = _appkit_verdict(passed=False, fp="UNAVAILABLE")
+    unavailable["tool_success"] = False
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([unavailable])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert any(status == "STUCK" for status, _detail in _statuses(events))
+    assert not any(detail == "unverified_release" for _status, detail in _statuses(events))
+    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    starts = [event for event in events if isinstance(event, VerifierStartedEvent)]
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+    assert len(starts) == len(verdicts)
+    assert len(starts) >= 2
+    assert all(
+        verdict.requested_by_event_id == start.id
+        for start, verdict in zip(starts, verdicts, strict=True)
+    )
+    assert all(
+        verdict.verification_result is not None
+        and verdict.verification_result.status.value == "unavailable"
+        for verdict in verdicts
+    )
+    stuck = next(
+        event
+        for event in reversed(events)
+        if isinstance(event, StatusEvent) and event.status is ConversationStatus.STUCK
+    )
+    assert (verdicts[-1].seq or 0) < (stuck.seq or 0)
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_failures_pair_every_typed_start_with_fail_verdict() -> None:
+    contract = _appkit_contract()
+    failed = _appkit_verdict(passed=False, fp="STRICT_FAIL")
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([failed])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    starts = [event for event in events if isinstance(event, VerifierStartedEvent)]
+    verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert len(starts) == len(verdicts)
+    assert len(starts) >= 2
+    assert all(
+        verdict.requested_by_event_id == start.id
+        for start, verdict in zip(starts, verdicts, strict=True)
+    )
+    assert all(
+        verdict.verification_result is not None
+        and verdict.verification_result.status.value == "fail"
+        for verdict in verdicts
+    )
+    stuck = next(
+        event
+        for event in reversed(events)
+        if isinstance(event, StatusEvent) and event.status is ConversationStatus.STUCK
+    )
+    assert (verdicts[-1].seq or 0) < (stuck.seq or 0)
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_raw_pass_without_artifact_seal_cannot_finish() -> None:
+    contract = _appkit_contract()
+    unsealed = _appkit_verdict(passed=True, fp="UNSEALED")
+    unsealed.pop("artifact_identity")
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([unsealed])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    typed = [
+        event.verification_result
+        for event in events
+        if isinstance(event, VerifierVerdictEvent) and event.verification_result is not None
+    ]
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert typed
+    assert all(result.status.value == "unavailable" for result in typed)
+    assert any("immutable artifact identity" in result.reason for result in typed)
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_raw_pass_with_wrong_seal_scheme_cannot_finish() -> None:
+    contract = _appkit_contract()
+    wrong_scheme = _appkit_verdict(passed=True, fp="WRONG-SCHEME")
+    wrong_scheme["artifact_identity"]["scheme"] = "opaque-unverified"
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([wrong_scheme])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+    typed = [
+        event.verification_result
+        for event in events
+        if isinstance(event, VerifierVerdictEvent) and event.verification_result is not None
+    ]
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert typed
+    assert all(result.status.value == "unavailable" for result in typed)
+    assert any("artifact producer authority" in result.reason for result in typed)
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="The app must show Account ready."),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="appkit.visible_text:account_ready",
+                        kind=VerificationClaimKind.VISIBLE_TEXT,
+                        expected="Account ready",
+                    ),
+                )
+            ),
+        )
+    )
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert execu.appkit_calls == 0
+    assert any(status == "STUCK" for status, _detail in _statuses(events))
+    assert any("additional mandatory claims" in message for message in _env(events))
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_rejects_unimplemented_second_required_check() -> None:
+    base = _appkit_contract()
+    extra = VerificationCheckContract(
+        check_id="device_policy",
+        receipt_kind="synthetic.device_policy@1",
+        issuer_id="synthetic.device_policy_verifier@1",
+        operation="host.verify_device_policy",
+        required_execution_modality="device_runtime",
+        accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+        claims=(
+            HostVerificationClaim(
+                claim_id="appkit.device_policy",
+                kind=VerificationClaimKind.TARGET_SPECIFIC,
+                expected="device policy passes",
+                source_authority="target.appkit.device_policy@1",
+            ),
+        ),
+    )
+    contract = base.model_copy(update={"checks": (*base.checks, extra)})
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert execu.appkit_calls == 0
+    assert any(status == "STUCK" for status, _detail in _statuses(events))
+
+
+@pytest.mark.asyncio
+async def test_platform_appkit_optional_unowned_claim_does_not_block_required_floor() -> None:
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Optionally note Account ready."),
+            verification_requirements=VerificationRequirementsDirective(
+                claims=(
+                    VerificationRequestedClaim(
+                        claim_id="appkit.optional_text:account_ready",
+                        kind=VerificationClaimKind.VISIBLE_TEXT,
+                        required=False,
+                        expected="Account ready",
+                    ),
+                )
+            ),
+        )
+    )
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
 
 
 @pytest.mark.asyncio

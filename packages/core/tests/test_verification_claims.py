@@ -7,14 +7,19 @@ from disco.core.events import EventSource, LLMMessage, MessageEvent
 from disco.core.loop import HostVerificationDeliverable
 from disco.core.loop.finish.verify_gates import _user_verification_material
 from disco.core.verification import (
+    AdmittedVerificationContract,
     HostVerificationClaim,
+    HostVerificationResult,
+    VerificationCheckContract,
     VerificationClaimKind,
     VerificationClaimStatus,
+    VerificationDeliveryContract,
     VerificationEvidenceModality,
     VerificationRequestedClaim,
     VerificationRequirementsDirective,
     apply_semantic_verifier_result,
     default_structured_web_claims,
+    preview_binding_failure_result,
     requires_structured_browser_runtime,
     structured_web_verification_result,
 )
@@ -204,8 +209,34 @@ def test_independent_image_backed_verifier_can_satisfy_visual_claim() -> None:
         "matches the supplied reference image",
     )
     pixels = base64.b64encode(_PNG).decode("ascii")
+    base = _deliverable(visual)
+    check = VerificationCheckContract(
+        check_id="web_functional",
+        receipt_kind="disco.web_functional@1",
+        issuer_id="disco.host_web_verifier@1",
+        operation="host.verify_deliverable",
+        required_execution_modality="managed_preview",
+        delegated_issuer_ids=frozenset({"model_role.verifier@1"}),
+        accepted_claim_kinds=frozenset(claim.kind for claim in base.required_claims),
+        claims=base.required_claims,
+    )
+    contract = AdmittedVerificationContract(
+        target_id="disco.legacy_web@1",
+        verifier_id=check.issuer_id,
+        delivery=VerificationDeliveryContract(
+            shape="web.legacy_deliverable",
+            mode="interactive",
+            entry_kind="manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="legacy_host",
+        checks=(check,),
+    )
+    deliverable = base.model_copy(
+        update={"verification_contract": contract, "verification_check": check}
+    )
     receipt = structured_web_verification_result(
-        deliverable=_deliverable(visual),
+        deliverable=deliverable,
         verdict=_verdict(screenshot_b64=pixels),
     )
     judged = apply_semantic_verifier_result(
@@ -216,6 +247,9 @@ def test_independent_image_backed_verifier_can_satisfy_visual_claim() -> None:
     )
 
     assert judged.passed
+    round_tripped = HostVerificationResult.model_validate(judged.model_dump(mode="json"))
+    assert round_tripped.effect_receipt is not None
+    assert round_tripped.effect_receipt.passed is True
     visual_result = next(result for result in judged.claim_results if result.kind is visual.kind)
     assert visual_result.verifier_id == "model_role.verifier@1"
     assert visual_result.evidence_modalities == (VerificationEvidenceModality.SCREENSHOT_PIXELS,)
@@ -479,6 +513,40 @@ def test_forged_served_artifact_binding_never_counts() -> None:
     )
 
     assert receipt.status is VerificationClaimStatus.FAIL
+
+
+def test_preview_binding_preflight_is_current_but_can_never_pass() -> None:
+    deliverable = _deliverable()
+    receipt = preview_binding_failure_result(
+        deliverable=deliverable,
+        observed_url=deliverable.deployment_url,
+    )
+
+    assert receipt.is_current_for(deliverable, observed_url=deliverable.deployment_url)
+    assert receipt.status is VerificationClaimStatus.FAIL
+    artifact = next(
+        result
+        for result in receipt.claim_results
+        if result.kind is VerificationClaimKind.ARTIFACT_IDENTITY
+    )
+    assert artifact.status is VerificationClaimStatus.FAIL
+    assert artifact.evidence_modalities == (VerificationEvidenceModality.ARTIFACT_BINDING,)
+    assert all(
+        result.status is VerificationClaimStatus.UNAVAILABLE
+        for result in receipt.claim_results
+        if result.kind is not VerificationClaimKind.ARTIFACT_IDENTITY
+    )
+
+
+def test_browser_pass_without_authenticated_freshness_is_not_current() -> None:
+    deliverable = _deliverable()
+    receipt = structured_web_verification_result(
+        deliverable=deliverable,
+        verdict=_verdict(freshness={}),
+    )
+
+    assert receipt.status is VerificationClaimStatus.PASS
+    assert not receipt.is_current_for(deliverable, observed_url=deliverable.deployment_url)
 
 
 @pytest.mark.parametrize(

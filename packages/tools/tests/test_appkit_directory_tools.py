@@ -328,6 +328,7 @@ async def test_directory_verify_passes_directory_check_set(stub_browser):
         "cloudflare_export_ready",
         "route_coverage",
         "section_coverage",
+        "sealed_output_identity",
     }
     # no lead-gen-only checks leaked into the directory verdict
     assert "worker_contract" not in names

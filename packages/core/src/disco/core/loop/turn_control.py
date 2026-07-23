@@ -117,10 +117,10 @@ _SERVE_DUPLICATE_GUIDANCE = (
 )
 _SERVE_TARGET_SHAPE_DIAGNOSTIC = "serve_target_shape_refused"
 _SERVE_TARGET_SHAPE_GUIDANCE = (
-    "serve refused: the current target has mandatory structured-browser "
-    "verification claims, so its runnable entry must be handed off with "
-    '`kind: "app"`. `kind: "files"` is reserved for non-browser '
-    "artifacts and cannot become the terminal web preview."
+    "serve refused: this handoff kind does not match the current target-owned "
+    "delivery contract. Hand off the exact admitted entry using the requested "
+    "interactive app or artifact-files shape; attachments cannot replace the "
+    "canonical target handoff."
 )
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
@@ -437,11 +437,18 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
         )
 
     admission = current_build_platform_admission(events)
-    if (
-        kind == "files"
-        and admission is not None
+    admitted_contract = admission.verification_contract if admission is not None else None
+    expected_kind = (
+        "app"
+        if admitted_contract is not None and admitted_contract.delivery.mode == "interactive"
+        else "files"
+        if admitted_contract is not None
+        else "app"
+        if admission is not None
         and requires_structured_browser_runtime(admission.verification_claims)
-    ):
+        else None
+    )
+    if expected_kind is not None and kind != expected_kind:
         loop._invisible_steps += 1
         await loop._emit(
             MessageEvent(
@@ -461,6 +468,8 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
         and event_matches_current_workspace_intent(events, latest_handoff)
         and latest_handoff.path == path
         and latest_handoff.artifact_kind == kind
+        and latest_handoff.verification_contract_digest
+        == (admitted_contract.digest if admitted_contract is not None else None)
     )
     if duplicate:
         _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
@@ -496,6 +505,13 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
                 path=path,
                 artifact_kind=kind,  # type: ignore[arg-type]
                 deployment_url=url,
+                target_id=admitted_contract.target_id if admitted_contract is not None else "",
+                delivery_contract=(
+                    admitted_contract.delivery if admitted_contract is not None else None
+                ),
+                verification_contract_digest=(
+                    admitted_contract.digest if admitted_contract is not None else None
+                ),
             )
         )
         await loop._emit(

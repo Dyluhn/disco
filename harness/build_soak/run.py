@@ -130,7 +130,12 @@ def load_scenarios(path: str | Path = _SCENARIOS) -> dict[str, dict[str, Any]]:
     def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         out = copy.deepcopy(base)
         for key, value in override.items():
-            if isinstance(value, dict) and isinstance(out.get(key), dict):
+            # A governed verification policy is one exact admission contract,
+            # not a bag of defaults. Inheriting web claim floors into an AppKit
+            # or future device policy would silently ask the wrong verifier.
+            if key == "governed_verification":
+                out[key] = copy.deepcopy(value)
+            elif isinstance(value, dict) and isinstance(out.get(key), dict):
                 out[key] = merge(out[key], value)
             else:
                 out[key] = copy.deepcopy(value)

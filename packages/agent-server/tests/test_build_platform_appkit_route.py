@@ -116,6 +116,20 @@ async def test_appkit_platform_admission_is_durable_and_rollback_is_new_run_only
     assert admissions[0].route == "platform"
     assert admissions[0].profile_id == APPKIT_PROFILE_ID.canonical
     assert admissions[0].run_intent_id == intent.id
+    contract = admissions[0].verification_contract
+    assert contract is not None
+    assert [
+        (check.check_id, check.receipt_kind, check.issuer_id, check.operation)
+        for check in contract.checks
+    ] == [
+        (
+            "appkit_strict",
+            "disco.appkit_strict@1",
+            "disco.appkit_strict_verifier@1",
+            "host.verify_appkit_strict",
+        )
+    ]
+    assert [claim.claim_id for claim in contract.required_claims] == ["appkit.strict_contract"]
 
     monkeypatch.setenv("DISCO_APPKIT_PLATFORM_ROUTE", "0")
     restarted = ConversationRuntime(runtime._store)
@@ -129,3 +143,9 @@ async def test_appkit_platform_admission_is_durable_and_rollback_is_new_run_only
         )
     assert restarted._build_platform.selected_routes["durable-appkit"] == "platform"
     assert restarted._build_platform.route_records["durable-appkit"].source == "appkit"
+    replayed = [
+        event
+        for event in await restarted._store.get_events("durable-appkit")
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ][0]
+    assert replayed.verification_contract == contract

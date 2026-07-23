@@ -32,6 +32,7 @@ from .oracles import (
     ContextPressureOracle,
     ContractOracle,
     EventChainOracle,
+    GovernedAdmissionOracle,
     HarnessValidityOracle,
     OutputTruthOracle,
     ProviderLedgerOracle,
@@ -187,6 +188,16 @@ def classify(
     if first_fail is None:
         # 3. event chain.
         results += EventChainOracle().check(events, scenario=scenario)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 3a. governed admission — Phase-4 governed Freeform scenarios must have
+        # platform admission with claims and a typed PASS receipt. Inline browser
+        # evidence cannot substitute for governed completion authority.
+        results += GovernedAdmissionOracle().check(
+            events,
+            scenario=scenario,
+            conversation_id=conversation_id,
+        )
         first_fail = _first_fail(results)
     if first_fail is None:
         # 4. tool scope.

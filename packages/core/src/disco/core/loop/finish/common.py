@@ -41,6 +41,7 @@ from ...contract.export_render import (
 )
 from ...dod import DoDSpec, FileExistsPredicate, predicate_fingerprint, predicate_fingerprints
 from ...dod_evaluator import DoDEvaluator, HttpProbeResult
+from ...effects import EffectCapability
 from ...env import disco_env
 from ...events import (
     ActionEvent,
@@ -365,6 +366,22 @@ def _last_verification_authority_seq(events: list[Event]) -> int:
     """
 
     authority_seq = _last_productive_seq(events)
+
+    def mutation_capability(event: ObservationEvent | AgentErrorEvent) -> bool:
+        if isinstance(event, ObservationEvent):
+            profile = event.tool_result.action_profile
+            receipts = event.tool_result.effect_receipts
+        else:
+            profile = event.action_profile
+            receipts = event.effect_receipts
+        return bool(
+            (profile is not None and EffectCapability.WORKSPACE_MUTATE in profile.capabilities)
+            or any(
+                getattr(receipt, "capability", None) is EffectCapability.WORKSPACE_MUTATE
+                for receipt in receipts
+            )
+        )
+
     actions: dict[str, ActionEvent] = {}
     active_preview_sessions: set[str] = set()
     for event in events:
@@ -372,6 +389,8 @@ def _last_verification_authority_seq(events: list[Event]) -> int:
             actions[event.id] = event
         elif isinstance(event, ObservationEvent):
             result = event.tool_result
+            if mutation_capability(event) and type(event.seq) is int:
+                authority_seq = max(authority_seq, event.seq)
             if result.tool_name not in {"preview_start", "preview_stop"}:
                 continue
             action = actions.get(event.action_id)
@@ -407,6 +426,9 @@ def _last_verification_authority_seq(events: list[Event]) -> int:
                 continue
             active_preview_sessions.difference_update(stopped)
             authority_seq = max(authority_seq, event.seq)
+        elif isinstance(event, AgentErrorEvent):
+            if mutation_capability(event) and type(event.seq) is int:
+                authority_seq = max(authority_seq, event.seq)
         elif isinstance(event, DeliverableEvent) and type(event.seq) is int:
             authority_seq = max(authority_seq, event.seq)
         elif isinstance(event, BuildPlatformAdmissionEvent) and type(event.seq) is int:
@@ -558,7 +580,7 @@ def _latest_app_deliverable_event(events: list[Event]) -> DeliverableEvent | Non
 
 def _latest_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
     for ev in reversed(events):
-        if isinstance(ev, DeliverableEvent):
+        if isinstance(ev, DeliverableEvent) and event_matches_current_workspace_intent(events, ev):
             return ev
     return None
 
@@ -1241,7 +1263,15 @@ class _FinishGateProto:
 
         async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp: ...
 
-        async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp: ...
+        async def gate_browser_verify(
+            self,
+            step: AgentStep,
+            events: list[Event],
+            *,
+            appkit_prepared: (
+                tuple[VerifierStartedEvent, HostVerificationDeliverable] | None
+            ) = None,
+        ) -> Disp: ...
 
         async def gate_export_render(self, step: AgentStep, events: list[Event]) -> Disp: ...
 

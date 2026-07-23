@@ -14,8 +14,10 @@ from disco.agent_server.verify.host import HostWebAppVerifier
 from disco.core.loop import HostVerificationDeliverable
 from disco.core.verification import (
     HostVerificationClaim,
+    HostVerificationResult,
     PreviewSelectionIdentity,
     VerificationClaimKind,
+    VerificationClaimStatus,
     default_structured_web_claims,
 )
 from disco.tools import ToolContext, ToolOutcome
@@ -172,7 +174,19 @@ async def test_changed_live_preview_projection_fails_before_browser_probe(
 ) -> None:
     selection = _preview_selection()
     deliverable = _deliverable().model_copy(
-        update={"preview_selection": selection, "preview_binding_required": True}
+        update={
+            "run_intent_id": "intent-a",
+            "run_identity": "run:sha256:" + "a" * 64,
+            "agent_view_id": "view-a",
+            "deliverable_event_id": "evt-deliverable-a",
+            "workspace_revision": 7,
+            "workspace_generation": "a" * 32,
+            "workspace_epoch": 4,
+            "observed_after_seq": 12,
+            "preview_selection": selection,
+            "preview_binding_required": True,
+            "required_claims": default_structured_web_claims(),
+        }
     )
     browser_calls = 0
 
@@ -204,12 +218,68 @@ async def test_changed_live_preview_projection_fails_before_browser_probe(
 
     assert browser_calls == 0
     assert verdict["verdict"] == "fail"
+    receipt = HostVerificationResult.model_validate(verdict["verification_result"])
+    assert receipt.is_current_for(deliverable, observed_url=str(verdict["url"]))
+    assert receipt.tool_id == "preview_status@1"
     artifact = next(
         claim
-        for claim in verdict["verification_result"]["claim_results"]
-        if claim["kind"] == "artifact_identity"
+        for claim in receipt.claim_results
+        if claim.kind is VerificationClaimKind.ARTIFACT_IDENTITY
     )
-    assert artifact["status"] == "fail"
+    assert artifact.status is VerificationClaimStatus.FAIL
+    assert all(
+        claim.status is VerificationClaimStatus.UNAVAILABLE
+        for claim in receipt.claim_results
+        if claim.kind is not VerificationClaimKind.ARTIFACT_IDENTITY
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_required_preview_produces_current_typed_binding_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deliverable = _deliverable().model_copy(
+        update={
+            "run_intent_id": "intent-a",
+            "run_identity": "run:sha256:" + "a" * 64,
+            "agent_view_id": "view-a",
+            "deliverable_event_id": "evt-deliverable-a",
+            "workspace_revision": 7,
+            "workspace_generation": "a" * 32,
+            "workspace_epoch": 4,
+            "observed_after_seq": 12,
+            "preview_binding_required": True,
+            "required_claims": default_structured_web_claims(),
+        }
+    )
+    browser_calls = 0
+
+    async def verify_run(self, args, ctx):  # noqa: ANN001
+        nonlocal browser_calls
+        del self, args, ctx
+        browser_calls += 1
+        raise AssertionError("missing Preview authority must fail before browser probe")
+
+    async def close_lane(self, ctx):  # noqa: ANN001
+        del self, ctx
+        return True
+
+    monkeypatch.setattr(VerifyWebAppTool, "run", verify_run)
+    monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", close_lane)
+
+    verdict = await HostWebAppVerifier(_Executor()).verify(deliverable)
+
+    assert browser_calls == 0
+    assert verdict["failure_fingerprint"] == "preview_selection_mismatch"
+    receipt = HostVerificationResult.model_validate(verdict["verification_result"])
+    assert receipt.is_current_for(deliverable, observed_url=str(verdict["url"]))
+    assert receipt.tool_id == "host.preview_binding_preflight@1"
+    assert receipt.status is VerificationClaimStatus.FAIL
+    assert all(
+        claim.status is VerificationClaimStatus.UNAVAILABLE
+        for claim in receipt.claim_results
+        if claim.kind is not VerificationClaimKind.ARTIFACT_IDENTITY
+    )
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..verification import HostVerificationClaim, VerificationClaimKind
 from .compiler import PromptContextInputs
 from .contracts import (
     BuildProfile,
@@ -107,9 +108,20 @@ class SyntheticBatchJobAdapter:
                 checks=(
                     VerifierCheck(
                         check_id="output_contract",
+                        issuer=SYNTHETIC_VERIFIER_ID,
+                        receipt_kind="synthetic.batchjob_output@1",
                         intent=ComponentIntent(
                             operation="job.verify_output",
                             required_capabilities=frozenset({"workspace.read"}),
+                        ),
+                        accepted_claim_kinds=frozenset({VerificationClaimKind.TARGET_SPECIFIC}),
+                        claims=(
+                            HostVerificationClaim(
+                                claim_id="batchjob.output_contract",
+                                kind=VerificationClaimKind.TARGET_SPECIFIC,
+                                expected="output bytes equal the declared uppercase transform",
+                                source_authority="target.synthetic_batchjob@1",
+                            ),
                         ),
                     ),
                 )

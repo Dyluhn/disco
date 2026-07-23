@@ -850,6 +850,7 @@ class DefaultToolExecutor:
             )
         except TimeoutError:
             timeout_s = tool.definition.timeout_s or self._default_timeout_s
+            self._advance_workspace_mutation_epoch(persisted_profile)
             return self._fail(
                 call,
                 "timeout",
@@ -857,6 +858,7 @@ class DefaultToolExecutor:
                 action_profile=persisted_profile,
             )
         except CapabilityDenied as e:
+            self._advance_workspace_mutation_epoch(persisted_profile)
             return self._fail(
                 call,
                 "denied",
@@ -864,6 +866,7 @@ class DefaultToolExecutor:
                 action_profile=persisted_profile,
             )
         except SandboxError as e:
+            self._advance_workspace_mutation_epoch(persisted_profile)
             return self._fail(
                 call,
                 "sandbox_error",
@@ -871,6 +874,7 @@ class DefaultToolExecutor:
                 action_profile=persisted_profile,
             )
         except Exception as e:  # noqa: BLE001 — the tool's own failure is an observation
+            self._advance_workspace_mutation_epoch(persisted_profile)
             return self._fail(
                 call,
                 "execution_error",
@@ -886,17 +890,13 @@ class DefaultToolExecutor:
             except Exception:  # noqa: BLE001 — tracking is advisory, never fatal
                 pass
 
-        # BF1: advance exactly once after a successful invocation whose trusted
-        # persisted capability profile says it may have mutated the workspace.
+        # BF1: advance exactly once after an invocation whose trusted persisted
+        # capability profile says it may have mutated the workspace.
         # This intentionally does not inspect tool names, arguments, command
-        # strings, receipts, frameworks, or paths.  A failed invocation retains
-        # its profile as evidence but cannot dirty the browser epoch.
-        if (
-            outcome.success
-            and persisted_profile is not None
-            and EffectCapability.WORKSPACE_MUTATE in persisted_profile.capabilities
-        ):
-            self._workspace_mutation_epoch += 1
+        # strings, receipts, frameworks, or paths. A reported failure can follow
+        # a partial mutation, so it invalidates old verification without earning
+        # productive-work credit.
+        self._advance_workspace_mutation_epoch(persisted_profile)
 
         return ToolResult(
             call_id=call.call_id,
@@ -1054,6 +1054,13 @@ class DefaultToolExecutor:
             error=message,
             action_profile=action_profile,
         )
+
+    def _advance_workspace_mutation_epoch(
+        self,
+        profile: ActionProfile | None,
+    ) -> None:
+        if profile is not None and EffectCapability.WORKSPACE_MUTATE in profile.capabilities:
+            self._workspace_mutation_epoch += 1
 
     def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:
         return f"unknown or out-of-scope tool {tool_name!r}; available: {available}"

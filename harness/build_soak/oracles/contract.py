@@ -46,6 +46,62 @@ class ContractOracle:
 
         missing: list[str] = []
 
+        governed = assertions.get("governed_verification")
+        if governed is not None:
+            allowed_governed = {
+                "required",
+                "route",
+                "composition_authority",
+                "delivery_mode",
+                "required_receipt_kinds",
+                "required_claim_kinds",
+                "required_execution_modality",
+                "require_agent_view_binding",
+                "require_workspace_epoch",
+            }
+            valid = (
+                isinstance(governed, dict)
+                and set(governed) <= allowed_governed
+                and governed.get("required") is True
+                and isinstance(governed.get("route"), str)
+                and bool(governed["route"])
+                and isinstance(governed.get("composition_authority"), str)
+                and bool(governed["composition_authority"])
+                and governed.get("delivery_mode") in {"interactive", "artifact"}
+                and isinstance(governed.get("required_receipt_kinds"), list)
+                and bool(governed["required_receipt_kinds"])
+                and all(
+                    isinstance(kind, str) and bool(kind)
+                    for kind in governed["required_receipt_kinds"]
+                )
+                and len(set(governed["required_receipt_kinds"]))
+                == len(governed["required_receipt_kinds"])
+                and isinstance(governed.get("required_claim_kinds"), dict)
+                and bool(governed["required_claim_kinds"])
+                and all(
+                    isinstance(kind, str) and bool(kind) and type(count) is int and count > 0
+                    for kind, count in governed["required_claim_kinds"].items()
+                )
+                and isinstance(governed.get("required_execution_modality"), str)
+                and bool(governed["required_execution_modality"])
+                and type(governed.get("require_agent_view_binding", True)) is bool
+                and type(governed.get("require_workspace_epoch", False)) is bool
+            )
+            if not valid:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                        first_broken_link="scenario_contract -> governed_verification",
+                        facts={
+                            "reason": (
+                                "governed_verification must declare an exact typed "
+                                "target/receipt/claim/execution policy"
+                            )
+                        },
+                    )
+                ]
+
         lifecycle = scenario.get("lifecycle") or {}
         if lifecycle:
             allowed_lifecycle = {
@@ -106,8 +162,10 @@ class ContractOracle:
                         and type(contents.get("count")) is int
                         and 1 <= int(contents["count"]) <= 100_000
                     )
-                    if not isinstance(path, str) or not path or not (
-                        isinstance(contents, str) or generated
+                    if (
+                        not isinstance(path, str)
+                        or not path
+                        or not (isinstance(contents, str) or generated)
                     ):
                         valid_fixture_files = False
                         break

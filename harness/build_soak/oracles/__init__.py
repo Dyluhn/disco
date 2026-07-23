@@ -21,6 +21,7 @@ from .browser_evidence import (
 )
 from .contract import ContractOracle
 from .event_chain import EventChainOracle
+from .governed_admission import GovernedAdmissionOracle
 from .harness_validity import HarnessValidityOracle
 from .manual_edit_preservation import (
     CommentAnchorOracle,
@@ -57,6 +58,7 @@ __all__ = [
     "ContextPressureOracle",
     "EventChainOracle",
     "ExportDownloadOracle",
+    "GovernedAdmissionOracle",
     "HarnessValidityOracle",
     "LifecycleOracle",
     "ManualEditPreservationOracle",

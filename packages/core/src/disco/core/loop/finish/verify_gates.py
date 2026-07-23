@@ -8,8 +8,18 @@ from typing import cast
 
 from ...events import active_verification_requirements_event
 from ...verification import (
+    AdmittedVerificationContract,
+    HostVerificationClaimResult,
     PreviewSelectionIdentity,
+    VerificationArtifactIdentity,
+    VerificationCheckContract,
+    VerificationClaimStatus,
+    VerificationEvidenceModality,
+    VerificationExecutionIdentity,
+    aggregate_verification_receipts,
     requires_structured_browser_runtime,
+    target_verification_result,
+    unavailable_verification_result,
     validated_image_data_url,
 )
 from ...verify_medium import (
@@ -116,14 +126,21 @@ def _bounded_host_verdict_screenshot_path(value: object) -> str | None:
 def _host_verification_claims(
     contract: dict[str, Any],
     events: list[Event],
+    *,
+    check: VerificationCheckContract | None = None,
 ) -> tuple[HostVerificationClaim, ...]:
     admission = current_build_platform_admission(events)
     claims = list(
-        admission.verification_claims
+        check.claims
+        if check is not None
+        else admission.verification_claims
         if admission is not None and admission.verification_claims
         else default_structured_web_claims()
     )
+    accepted = check.accepted_claim_kinds if check is not None else frozenset(VerificationClaimKind)
     for condition in dictated_content_conditions_from_events(events):
+        if VerificationClaimKind.VISIBLE_TEXT not in accepted:
+            continue
         digest = hashlib.sha256(condition.literal.encode("utf-8")).hexdigest()[:24]
         claims.append(
             HostVerificationClaim(
@@ -134,8 +151,8 @@ def _host_verification_claims(
             )
         )
     requested_claims, _ = _user_verification_material(events)
-    claims.extend(requested_claims)
-    if contract:
+    claims.extend(claim for claim in requested_claims if claim.kind in accepted)
+    if contract and VerificationClaimKind.CONTRACT_SEMANTIC in accepted:
         claims.append(
             HostVerificationClaim(
                 claim_id="web.contract_semantic",
@@ -151,8 +168,189 @@ def _host_verification_claims(
 
 def _governed_structured_browser_target(events: list[Event]) -> bool:
     admission = current_build_platform_admission(events)
+    contract = admission.verification_contract if admission is not None else None
+    if contract is not None:
+        return any(
+            check.required and check.receipt_kind == "disco.web_functional@1"
+            for check in contract.checks
+        )
     return bool(
         admission is not None and requires_structured_browser_runtime(admission.verification_claims)
+    )
+
+
+def _governed_verification_contract(
+    events: list[Event],
+) -> AdmittedVerificationContract | None:
+    admission = current_build_platform_admission(events)
+    if (
+        admission is None
+        or admission.route != "platform"
+        or admission.composition_authority != "build_platform_core"
+    ):
+        return None
+    return admission.verification_contract
+
+
+def _governed_verification_required(events: list[Event]) -> bool:
+    contract = _governed_verification_contract(events)
+    if contract is not None:
+        return bool(
+            contract.required
+            and contract.unverified_finish == "block"
+            and any(check.required for check in contract.checks)
+        )
+    admission = current_build_platform_admission(events)
+    return bool(
+        admission is not None
+        and admission.route == "platform"
+        and admission.composition_authority == "build_platform_core"
+        and requires_structured_browser_runtime(admission.verification_claims)
+    )
+
+
+def _strict_appkit_contract(
+    contract: AdmittedVerificationContract | None,
+) -> bool:
+    return bool(
+        contract is not None
+        and any(
+            check.required
+            and check.issuer_id == "disco.appkit_strict_verifier@1"
+            and check.receipt_kind == "disco.appkit_strict@1"
+            and check.operation == "host.verify_appkit_strict"
+            for check in contract.checks
+        )
+    )
+
+
+def _strict_appkit_external_requirement_error(
+    gate: Any,
+    contract: AdmittedVerificationContract,
+    events: list[Event],
+) -> str | None:
+    """AppKit's legacy strict adapter cannot silently consume extra claims."""
+
+    target_claim_ids = {claim.claim_id for check in contract.checks for claim in check.claims}
+    all_claims = _host_verification_claims(gate._verifier_contract_payload(), events)
+    external = tuple(
+        claim for claim in all_claims if claim.required and claim.claim_id not in target_claim_ids
+    )
+    if not external:
+        return None
+    return (
+        "the current strict AppKit adapter cannot verify these additional mandatory "
+        "claims: " + ", ".join(sorted(claim.claim_id for claim in external))
+    )
+
+
+def _strict_appkit_compatibility_error(
+    contract: AdmittedVerificationContract,
+) -> str | None:
+    required_checks = tuple(check for check in contract.checks if check.required)
+    if len(required_checks) != 1:
+        return (
+            "the strict AppKit compatibility adapter requires exactly one admitted "
+            "check; additional required checks need their own typed host adapters"
+        )
+    check = required_checks[0]
+    required_claim_ids = tuple(claim.claim_id for claim in check.claims if claim.required)
+    if required_claim_ids != ("appkit.strict_contract",):
+        return (
+            "the strict AppKit compatibility adapter only certifies its exact "
+            "appkit.strict_contract aggregate"
+        )
+    return None
+
+
+def _handoff_matches_verification_contract(
+    handoff: DeliverableEvent,
+    contract: AdmittedVerificationContract,
+) -> bool:
+    expected_kind = "app" if contract.delivery.mode == "interactive" else "files"
+    return bool(
+        handoff.artifact_kind == expected_kind
+        and handoff.target_id == contract.target_id
+        and handoff.delivery_contract == contract.delivery
+        and handoff.verification_contract_digest == contract.digest
+    )
+
+
+def _latest_appkit_verification_outcome(
+    events: list[Event],
+    started: VerifierStartedEvent,
+) -> ObservationEvent | AgentErrorEvent | None:
+    """Return the latest exact strict-tool outcome causally after ``started``."""
+
+    actions = {event.id: event for event in events if isinstance(event, ActionEvent)}
+    for event in reversed(events):
+        if type(event.seq) is not int or type(started.seq) is not int or event.seq <= started.seq:
+            continue
+        if not isinstance(event, (ObservationEvent, AgentErrorEvent)):
+            continue
+        action = actions.get(event.action_id or "")
+        if action is None or action.tool_call.tool_name != "verify_appkit_app":
+            continue
+        if isinstance(event, ObservationEvent):
+            result = event.tool_result
+            if (
+                result.tool_name != "verify_appkit_app"
+                or result.call_id != action.tool_call.call_id
+            ):
+                continue
+        return event
+    return None
+
+
+def _latest_matching_appkit_start(
+    events: list[Event],
+    contract: AdmittedVerificationContract,
+) -> VerifierStartedEvent | None:
+    required = tuple(check for check in contract.checks if check.required)
+    if len(required) != 1:
+        return None
+    check = required[0]
+    return next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, VerifierStartedEvent)
+            and event.verification_contract_digest == contract.digest
+            and event.target_id == contract.target_id
+            and event.check_id == check.check_id
+            and event.receipt_kind == check.receipt_kind
+            and event.issuer_id == check.issuer_id
+            and event.operation == check.operation
+        ),
+        None,
+    )
+
+
+def _appkit_runtime_identity(raw: object) -> VerificationExecutionIdentity | None:
+    if not isinstance(raw, dict) or raw.get("status") not in {
+        "running",
+        "unavailable",
+    }:
+        return None
+    projection_id = raw.get("projection_id")
+    sandbox_instance_id = raw.get("sandbox_instance_id")
+    sandbox_generation = raw.get("sandbox_generation")
+    url = raw.get("url")
+    if (
+        not isinstance(projection_id, str)
+        or not projection_id
+        or not isinstance(sandbox_instance_id, str)
+        or not sandbox_instance_id
+        or type(sandbox_generation) is not int
+        or not isinstance(url, str)
+        or not url
+    ):
+        return None
+    return VerificationExecutionIdentity(
+        modality="appkit_strict_runtime",
+        instance_id=projection_id,
+        generation=f"{sandbox_instance_id}:{sandbox_generation}",
+        locator=url,
     )
 
 
@@ -312,6 +510,42 @@ def _bind_host_verification_authority(
         and handoff_selection.operational_identity == current_selection.operational_identity
         else None
     )
+    contract = (
+        admission.verification_contract
+        if admission is not None and admission.route == "platform"
+        else None
+    )
+    required_checks = (
+        tuple(check for check in contract.checks if check.required) if contract is not None else ()
+    )
+    selected_check = required_checks[0] if len(required_checks) == 1 else None
+    uses_managed_web_runtime = bool(
+        contract is None
+        or any(
+            check.required and check.required_execution_modality == "managed_preview"
+            for check in required_checks
+        )
+    )
+    selected_preview = stable_selection if uses_managed_web_runtime else None
+    execution_identity = (
+        VerificationExecutionIdentity(
+            modality="managed_preview",
+            instance_id=selected_preview.projection_id,
+            generation=(
+                f"{selected_preview.sandbox_instance_id}:{selected_preview.sandbox_generation}"
+            ),
+            locator=selected_preview.url,
+        )
+        if selected_preview is not None
+        else VerificationExecutionIdentity(
+            modality="workspace_artifact",
+            instance_id=handoff.id if handoff is not None else deliverable.artifact_path,
+            generation=f"{_last_productive_seq(events)}:{generation or 'none'}:{epoch or 0}",
+            locator=deliverable.artifact_path,
+        )
+        if contract is not None
+        else None
+    )
     return deliverable.model_copy(
         update={
             "run_intent_id": (
@@ -329,13 +563,23 @@ def _bind_host_verification_authority(
             "workspace_epoch": epoch,
             "observed_after_seq": authority_seq,
             "required_claims": (
-                _host_verification_claims(gate._verifier_contract_payload(), events)
-                if deliverable.artifact_kind == "app" or _governed_structured_browser_target(events)
+                _host_verification_claims(
+                    gate._verifier_contract_payload(),
+                    events,
+                    check=selected_check,
+                )
+                if contract is not None
+                or deliverable.artifact_kind == "app"
+                or _governed_structured_browser_target(events)
                 else ()
             ),
-            "preview_selection": stable_selection,
+            "verification_contract": contract,
+            "verification_check": selected_check,
+            "execution_identity": execution_identity,
+            "preview_selection": selected_preview,
             "preview_binding_required": (
-                deliverable.artifact_kind == "app"
+                uses_managed_web_runtime
+                and deliverable.artifact_kind == "app"
                 and (
                     admission is not None
                     or handoff_selection is not None
@@ -352,10 +596,8 @@ def _typed_host_result(
 ) -> HostVerificationResult | None:
     raw = verdict.get("verification_result")
     try:
-        result = (
-            raw
-            if isinstance(raw, HostVerificationResult)
-            else HostVerificationResult.model_validate(raw)
+        result = HostVerificationResult.model_validate(
+            raw.model_dump(mode="json") if isinstance(raw, HostVerificationResult) else raw
         )
     except Exception:
         return None
@@ -367,6 +609,79 @@ def _typed_host_result(
         )
         else None
     )
+
+
+async def _emit_verifier_started_event(
+    loop: Any,
+    deliverable: HostVerificationDeliverable,
+) -> VerifierStartedEvent:
+    emitted = await loop._emit(
+        VerifierStartedEvent(
+            artifact_path=deliverable.artifact_path,
+            artifact_kind=deliverable.artifact_kind,
+            requested_by_event_id=None,
+            target_id=(
+                deliverable.verification_contract.target_id
+                if deliverable.verification_contract is not None
+                else ""
+            ),
+            run_intent_id=deliverable.run_intent_id,
+            run_identity=deliverable.run_identity,
+            delivery_shape=(
+                deliverable.verification_contract.delivery.shape
+                if deliverable.verification_contract is not None
+                else ""
+            ),
+            delivery_entry_reference=(
+                deliverable.verification_contract.delivery.entry_reference
+                if deliverable.verification_contract is not None
+                else ""
+            ),
+            check_id=(
+                deliverable.verification_check.check_id
+                if deliverable.verification_check is not None
+                else ""
+            ),
+            receipt_kind=(
+                deliverable.verification_check.receipt_kind
+                if deliverable.verification_check is not None
+                else ""
+            ),
+            issuer_id=(
+                deliverable.verification_check.issuer_id
+                if deliverable.verification_check is not None
+                else ""
+            ),
+            operation=(
+                deliverable.verification_check.operation
+                if deliverable.verification_check is not None
+                else ""
+            ),
+            delegated_issuer_ids=(
+                deliverable.verification_check.delegated_issuer_ids
+                if deliverable.verification_check is not None
+                else frozenset()
+            ),
+            verification_contract_digest=(
+                deliverable.verification_contract.digest
+                if deliverable.verification_contract is not None
+                else None
+            ),
+            deliverable_event_id=deliverable.deliverable_event_id,
+            execution_identity=deliverable.execution_identity,
+            artifact_identity=deliverable.artifact_identity,
+            preview_selection=deliverable.preview_selection,
+            workspace_revision=deliverable.workspace_revision,
+            workspace_generation=deliverable.workspace_generation,
+            workspace_epoch=deliverable.workspace_epoch,
+            observed_after_seq=deliverable.observed_after_seq,
+            agent_view_id=deliverable.agent_view_id,
+            meta={"requested_verification": deliverable.requested_verification},
+        )
+    )
+    if not isinstance(emitted, VerifierStartedEvent):
+        raise TypeError("verifier start event did not retain its typed authority")
+    return emitted
 
 
 async def _prepare_typed_host_verdict(
@@ -384,12 +699,11 @@ async def _prepare_typed_host_verdict(
             and host_verdict.get("model_verifier_applied") is not True
         )
     )
-    typed_result = (
-        _typed_host_result(host_verdict, deliverable)
-        if deliverable.artifact_kind == "app"
-        else None
+    typed_required = (
+        deliverable.verification_contract is not None or deliverable.artifact_kind == "app"
     )
-    if deliverable.artifact_kind == "app" and typed_result is None:
+    typed_result = _typed_host_result(host_verdict, deliverable) if typed_required else None
+    if typed_required and typed_result is None:
         host_verdict = gate._host_unavailable_verdict(
             deliverable,
             "verification could not run: host verifier omitted or mismatched "
@@ -428,6 +742,8 @@ async def _emit_host_verdict_audit(
     host_verdict: dict[str, Any],
     typed_result: HostVerificationResult | None,
     host_screenshot_path: str | None,
+    *,
+    verifier_started_event_id: str,
 ) -> str | None:
     inline_verdict = _latest_verify_verdict(
         events,
@@ -480,6 +796,13 @@ async def _emit_host_verdict_audit(
             failures=gate._verdict_failures(host_verdict),
             screenshot_path=host_screenshot_path,
             verification_result=typed_result,
+            target_id=typed_result.target_id if typed_result is not None else "",
+            check_id=typed_result.check_id if typed_result is not None else "",
+            receipt_kind=typed_result.receipt_kind if typed_result is not None else "",
+            verification_contract_digest=(
+                typed_result.verification_contract_digest if typed_result is not None else None
+            ),
+            requested_by_event_id=verifier_started_event_id,
             meta=dict(verifier_meta),
         )
     )
@@ -495,6 +818,325 @@ async def _emit_host_verdict_audit(
                 exc_info=True,
             )
     return host_label
+
+
+async def _prepare_appkit_typed_authority(
+    gate: Any,
+    step: AgentStep,
+    events: list[Event],
+    contract: AdmittedVerificationContract,
+) -> tuple[VerifierStartedEvent, HostVerificationDeliverable] | None:
+    """Bind AppKit's current target and emit START before strict verification."""
+
+    required_checks = tuple(check for check in contract.checks if check.required)
+    if len(required_checks) != 1:
+        return None
+    check = required_checks[0]
+    preflight = getattr(gate._loop.executor, "verification_preflight", None)
+    if preflight is None:
+        return None
+    try:
+        raw = await preflight(check.operation)
+    except Exception:  # noqa: BLE001 — adapter preflight is fail-closed
+        return None
+    if not isinstance(raw, dict) or raw.get("artifact_kind") != "app":
+        return None
+    artifact_path = _safe_deliverable_file_path(str(raw.get("artifact_path") or ""))
+    try:
+        execution_identity = VerificationExecutionIdentity.model_validate(
+            raw.get("execution_identity")
+        )
+    except Exception:
+        return None
+    if artifact_path is None or execution_identity.modality != check.required_execution_modality:
+        return None
+    current = _latest_deliverable_event(events)
+    if (
+        current is None
+        or not _handoff_matches_verification_contract(current, contract)
+        or current.path != artifact_path
+    ):
+        emitted = await gate._loop._emit(
+            DeliverableEvent(
+                source=EventSource.SYSTEM,
+                agent_view_id=current_workspace_agent_view_id(events),
+                title="AppKit app",
+                path=artifact_path,
+                artifact_kind="app",
+                target_id=contract.target_id,
+                delivery_contract=contract.delivery,
+                verification_contract_digest=contract.digest,
+            )
+        )
+        if not isinstance(emitted, DeliverableEvent):
+            return None
+        current = emitted
+        events = await gate._loop._events()
+    base = await gate._host_verify_deliverable(step, events, include_unverifiable=True)
+    if base is None:
+        return None
+    base = base.model_copy(
+        update={
+            "deliverable_event_id": current.id,
+            "artifact_path": current.path,
+            "artifact_kind": current.artifact_kind,
+            "execution_identity": execution_identity,
+            "preview_selection": None,
+            "preview_binding_required": False,
+        }
+    )
+    deliverables, ownership_error = await gate._governed_check_deliverables(base, events)
+    if ownership_error is not None or len(deliverables) != 1:
+        return None
+    deliverable = deliverables[0]
+    if (
+        deliverable.verification_check != check
+        or check.issuer_id != "disco.appkit_strict_verifier@1"
+        or check.receipt_kind != "disco.appkit_strict@1"
+        or check.operation != "host.verify_appkit_strict"
+    ):
+        return None
+    started = await _emit_verifier_started_event(gate._loop, deliverable)
+    return started, deliverable
+
+
+async def _record_appkit_typed_verdict(
+    gate: Any,
+    events: list[Event],
+    prepared: tuple[VerifierStartedEvent, HostVerificationDeliverable],
+) -> VerificationClaimStatus | None:
+    """Pair every AppKit START with an exact typed terminal verifier status."""
+
+    started, deliverable = prepared
+    outcome = _latest_appkit_verification_outcome(events, started)
+    raw = (
+        outcome.tool_result.structured
+        if isinstance(outcome, ObservationEvent)
+        and isinstance(outcome.tool_result.structured, dict)
+        else {}
+    )
+    check = deliverable.verification_check
+    if check is None:
+        return None
+    raw_passed = bool(
+        isinstance(outcome, ObservationEvent)
+        and outcome.tool_result.success
+        and raw.get("passed") is True
+    )
+    raw_entry = _safe_deliverable_file_path(str(raw.get("canonical_entry_path") or ""))
+    runtime_identity = (
+        _appkit_runtime_identity(raw.get("preview_runtime"))
+        if isinstance(outcome, ObservationEvent)
+        else None
+    )
+    artifact_identity: VerificationArtifactIdentity | None = None
+    binding_error = ""
+    if raw_passed:
+        try:
+            artifact_identity = VerificationArtifactIdentity.model_validate(
+                raw.get("artifact_identity")
+            )
+        except Exception:
+            binding_error = "strict AppKit PASS omitted a valid immutable artifact identity"
+        if not binding_error and (
+            artifact_identity is None
+            or raw_entry != deliverable.artifact_path
+            or type(started.seq) is not int
+            or not isinstance(outcome, ObservationEvent)
+            or type(outcome.seq) is not int
+            or outcome.seq <= started.seq
+            or runtime_identity != deliverable.execution_identity
+            or artifact_identity.entry_reference != deliverable.artifact_path
+            or artifact_identity.producer_id != check.issuer_id
+            or (
+                check.required_artifact_identity_scheme is not None
+                and artifact_identity.scheme != check.required_artifact_identity_scheme
+            )
+        ):
+            binding_error = (
+                "strict AppKit PASS did not match the started runtime, canonical entry, "
+                "or artifact producer authority"
+            )
+    unavailable = outcome is None or isinstance(outcome, AgentErrorEvent) or bool(binding_error)
+    status = (
+        VerificationClaimStatus.PASS
+        if raw_passed and not binding_error
+        else VerificationClaimStatus.UNAVAILABLE
+        if unavailable
+        else VerificationClaimStatus.FAIL
+    )
+    observed_after_seq = (
+        outcome.seq
+        if outcome is not None and type(outcome.seq) is int
+        else started.seq
+        if type(started.seq) is int
+        else deliverable.observed_after_seq
+    )
+    bound_deliverable = deliverable.model_copy(
+        update={
+            "artifact_identity": artifact_identity,
+            "observed_after_seq": observed_after_seq,
+        }
+    )
+    url = str(raw.get("url") or "")
+    reason = str(
+        binding_error
+        or raw.get("summary")
+        or (
+            outcome.error
+            if isinstance(outcome, AgentErrorEvent)
+            else "strict AppKit verifier did not produce a usable result"
+        )
+    )
+    evidence_event_id = outcome.id if outcome is not None else started.id
+    claim_results = tuple(
+        HostVerificationClaimResult(
+            claim_id=claim.claim_id,
+            kind=claim.kind,
+            required=claim.required,
+            expected=claim.expected,
+            source_authority=claim.source_authority,
+            reference_image_sha256=claim.reference_image_sha256,
+            status=status,
+            reason=reason,
+            verifier_id=check.issuer_id,
+            capability_basis="configured strict AppKit target verifier",
+            evidence_modalities=(VerificationEvidenceModality.TARGET_SPECIFIC,),
+            evidence_refs=(
+                f"event:{evidence_event_id}",
+                f"artifact:{deliverable.artifact_path}",
+            ),
+        )
+        for claim in bound_deliverable.required_claims
+    )
+    screenshot_path = _bounded_host_verdict_screenshot_path(raw.get("screenshot_path"))
+    typed_result = target_verification_result(
+        deliverable=bound_deliverable,
+        claim_results=claim_results,
+        verifier_id=check.issuer_id,
+        tool_id=check.operation,
+        reason=reason,
+        observed_url=url,
+        screenshot_path=screenshot_path or "",
+    )
+    coverage = aggregate_verification_receipts(
+        deliverables=(bound_deliverable,),
+        receipts=(typed_result,),
+    )
+    if status is VerificationClaimStatus.PASS and not coverage.passed:
+        return None
+    host_verdict = dict(raw)
+    host_verdict.update(
+        {
+            "passed": status is VerificationClaimStatus.PASS,
+            "verdict": status.value,
+            "url": url,
+            "summary": typed_result.reason,
+        }
+    )
+    await _emit_host_verdict_audit(
+        gate,
+        bound_deliverable,
+        events,
+        host_verdict,
+        typed_result,
+        screenshot_path,
+        verifier_started_event_id=started.id,
+    )
+    return status
+
+
+def _recorded_appkit_typed_status(
+    events: list[Event],
+    started: VerifierStartedEvent,
+) -> VerificationClaimStatus | None:
+    verdict = next(
+        (
+            event
+            for event in reversed(events)
+            if isinstance(event, VerifierVerdictEvent) and event.requested_by_event_id == started.id
+        ),
+        None,
+    )
+    return (
+        verdict.verification_result.status
+        if verdict is not None and verdict.verification_result is not None
+        else None
+    )
+
+
+async def _appkit_typed_gate_disposition(
+    gate: Any,
+    *,
+    events: list[Event],
+    verdict: dict[str, Any] | None,
+    tool_name: str,
+    prepared: tuple[VerifierStartedEvent, HostVerificationDeliverable] | None,
+) -> Disp | None:
+    if prepared is None:
+        return None
+    status = await _record_appkit_typed_verdict(gate, events, prepared)
+    if verdict is not None and (
+        verdict.get("passed") is not True or status is VerificationClaimStatus.PASS
+    ):
+        return None
+    return await gate._governed_contract_refusal(
+        await gate._loop._events(),
+        failure_key=(
+            f"{tool_name}:unavailable"
+            if verdict is None
+            else f"{tool_name}:typed_result_unavailable"
+        ),
+        guidance=(
+            f"{tool_name} did not return a usable strict target verdict. Repair "
+            "the target verifier/runtime; unavailable verification cannot release "
+            "this governed build."
+            if verdict is None
+            else "the strict target verifier reported PASS, but its result did not "
+            "bind the current started runtime and immutable artifact."
+        ),
+    )
+
+
+async def _finish_verification_medium(
+    gate: Any,
+    step: AgentStep | None,
+    events: list[Event],
+) -> str:
+    if step is None:
+        return "web"
+    try:
+        deliverable = await gate._host_verify_deliverable(step, events)
+        if deliverable is None:
+            return "web"
+        paths = await gate._verifier_deliverable_paths(deliverable, events)
+        hint = await gate._verifier_medium_hint(paths)
+        return hint.kind if hint is not None else "web"
+    except Exception:
+        return "web"
+
+
+def _verification_failure_details(
+    verdict: dict[str, Any],
+    tool_name: str,
+) -> tuple[str, str, str, str, str]:
+    fp = str(verdict.get("failure_fingerprint") or "")
+    summary = str(verdict.get("summary") or f"{tool_name} did not pass")
+    next_action = str(verdict.get("next_action") or "")
+    screenshot = str(verdict.get("screenshot_path") or "")
+    errors = verdict.get("console_errors") or []
+    network_failures = verdict.get("network_failures") or []
+    if errors:
+        first = errors[0]
+        where = f" @ {first.get('source')}" if first.get("source") else ""
+        first_error = f"{first.get('text', '')}{where}"
+    elif network_failures:
+        first = network_failures[0]
+        marker = first.get("status") or first.get("failure") or "failed"
+        first_error = f"{first.get('method', 'GET')} {first.get('url', '')} -> {marker}"
+    else:
+        first_error = ""
+    return fp, summary, next_action, screenshot, first_error
 
 
 class _WorkflowPathParams(dict[str, object]):
@@ -866,7 +1508,7 @@ async def _judge_semantic_claims(
     return out
 
 
-class _HostVerifyGateMixin(_FinishGateProto):
+class _HostVerifyBaseMixin(_FinishGateProto):
     async def _host_artifact_file_exists(self, path: str) -> bool | None:
         sbx = getattr(self._loop.executor, "sandbox", None)
         file_exists: Any = getattr(sbx, "file_exists", None)
@@ -1018,33 +1660,31 @@ class _HostVerifyGateMixin(_FinishGateProto):
         directory path itself.
         """
 
-        governed_browser_target = _governed_structured_browser_target(events)
+        governed_target = _governed_verification_required(events)
         current_handoff = (
-            _latest_app_deliverable_event(events)
-            if governed_browser_target
+            _latest_deliverable_event(events)
+            if governed_target
             else _latest_deliverable_event(events)
         )
         manifest_deliverable = None
-        if not (
-            governed_browser_target
-            and current_handoff is not None
-            and current_handoff.artifact_kind == "app"
-        ):
+        if not (governed_target and current_handoff is not None):
             manifest_deliverable = await self._host_verify_manifest_deliverable(
                 step,
                 events,
-                include_unverifiable=include_unverifiable and not governed_browser_target,
+                include_unverifiable=include_unverifiable and not governed_target,
             )
         if manifest_deliverable is not None:
             bound = _bind_host_verification_authority(self, manifest_deliverable, events)
             return await self._with_host_verification_profile(bound, events)
 
         app_event = _latest_app_deliverable_event(events)
-        if governed_browser_target and app_event is None:
+        if governed_target and current_handoff is None:
             return None
         any_event = (
-            _latest_deliverable_event(events)
-            if include_unverifiable and not governed_browser_target
+            current_handoff
+            if governed_target
+            else _latest_deliverable_event(events)
+            if include_unverifiable
             else app_event
         )
         if any_event is None and not _is_web_deliverable(events):
@@ -1076,6 +1716,11 @@ class _HostVerifyGateMixin(_FinishGateProto):
     ) -> HostVerificationDeliverable:
         """Lower deterministic target-medium evidence into exact host claims."""
 
+        check = deliverable.verification_check
+        contract = deliverable.verification_contract
+        governed_web = bool(check is not None and check.receipt_kind == "disco.web_functional@1")
+        if contract is not None and not governed_web:
+            return deliverable.model_copy(update={"verification_medium": contract.preview_modality})
         # Medium selection belongs to the selected artifact only. Historical
         # handoffs/plan paths are useful bounded context for a semantic judge,
         # but reading them here can classify a stale app (or traverse an alias)
@@ -1084,8 +1729,10 @@ class _HostVerifyGateMixin(_FinishGateProto):
         hint = await self._verifier_medium_hint(paths)
         medium = hint.kind if hint is not None else "web"
         claims = list(deliverable.required_claims)
-        if medium == "game" and not any(
-            claim.claim_id == _GAME_INTERACTION_CLAIM_ID for claim in claims
+        if (
+            medium == "game"
+            and (check is None or VerificationClaimKind.INTERACTION in check.accepted_claim_kinds)
+            and not any(claim.claim_id == _GAME_INTERACTION_CLAIM_ID for claim in claims)
         ):
             claims.append(
                 HostVerificationClaim(
@@ -1132,10 +1779,10 @@ class _HostVerifyGateMixin(_FinishGateProto):
     def _host_unavailable_verdict(
         deliverable: HostVerificationDeliverable, detail: str
     ) -> dict[str, object]:
-        return {
+        verdict: dict[str, object] = {
             "passed": False,
             "verdict": "unavailable",
-            "url": deliverable.deployment_url,
+            "url": "",
             "http_status": 0,
             "summary": detail,
             "next_action": "",
@@ -1143,6 +1790,16 @@ class _HostVerifyGateMixin(_FinishGateProto):
             "network_failures": [],
             "failure_fingerprint": "host_verifier_unavailable",
         }
+        if (
+            deliverable.verification_contract is not None
+            and deliverable.verification_check is not None
+            and deliverable.required_claims
+        ):
+            verdict["verification_result"] = unavailable_verification_result(
+                deliverable=deliverable,
+                reason=detail,
+            ).model_dump(mode="json")
+        return verdict
 
     @staticmethod
     def _host_unverifiable_verdict(
@@ -1177,7 +1834,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             if isinstance(n0, dict):
                 marker = n0.get("status") or n0.get("failure") or "failed"
                 return f"{n0.get('method', 'GET')} {n0.get('url', '')} -> {marker}".strip()
-        failures = _HostVerifyGateMixin._verdict_failures(verdict)
+        failures = _HostVerifyBaseMixin._verdict_failures(verdict)
         if failures:
             message = failures[0].get("message")
             if message:
@@ -1364,6 +2021,8 @@ class _HostVerifyGateMixin(_FinishGateProto):
     ) -> dict[str, Any]:
         return await _judge_semantic_claims(self, deliverable, events, host_verdict)
 
+
+class _HostVerifyGateMixin(_HostVerifyBaseMixin):
     async def _host_verify_failure_disposition(
         self, deliverable: HostVerificationDeliverable, verdict: dict
     ) -> Disp:
@@ -1420,54 +2079,274 @@ class _HostVerifyGateMixin(_FinishGateProto):
         self._loop._browser_verify_refusals = 0
         return Disp.FALLTHROUGH
 
-    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
-        """REL-1c/1e — run the host verifier and emit audit telemetry.
+    async def _governed_non_pass_disposition(
+        self,
+        deliverable: HostVerificationDeliverable,
+        verdict: dict,
+        typed_result: HostVerificationResult | None,
+        events: list[Event],
+    ) -> Disp:
+        """Refuse governed completion without a current, complete typed PASS.
 
-        Authoritative (the default since 2026-07-03): a real host ``fail`` on an
-        app deliverable refuses the finish (bounded by the 3-refusal release
-        valve); ``unavailable`` (verifier infrastructure could not run) degrades
-        to FALLTHROUGH so the inline browser gate stays the enforcement path on
-        browserless installs; non-app/no-validator handoffs record an honest
-        ``unverifiable`` verdict without claiming verification. With
-        DISCO_HOST_VERIFY_AUTHORITATIVE explicitly off (REL-1c shadow posture)
-        this gate is FALLTHROUGH-only telemetry, preserving the inline
-        self-verify/browser gate as sole enforcement.
+        Recovery is progress-sensitive rather than retry-counted.  The first
+        failure returns exact guidance and stamps its stable fingerprint.  The
+        same failure repeated with no intervening authority change lands STUCK;
+        any productive mutation, Preview lifecycle change, handoff, admission,
+        or new user instruction moves the authority floor past that marker and
+        permits another honest verification attempt.
         """
-
-        # AppKit's nine-check target verifier is a strict floor.  A generic web
-        # receipt may never run first and delegate around verify_appkit_app.
-        if getattr(getattr(self._loop, "executor", None), "appkit_phase", None) is not None:
-            return Disp.FALLTHROUGH
-
-        authoritative = self._host_verify_authoritative()
-        host_verifier = getattr(self._loop, "_host_verifier", None)
-        if host_verifier is None and not authoritative:
-            return Disp.FALLTHROUGH
-
-        deliverable = await self._host_verify_deliverable(
-            step, events, include_unverifiable=authoritative
+        host_label = self._verdict_label(verdict) or "fail"
+        summary = str(
+            verdict.get("summary")
+            or verdict.get("detail")
+            or "host verifier did not produce a current typed PASS receipt"
         )
-        if deliverable is None:
-            return Disp.FALLTHROUGH
+        next_action = str(verdict.get("next_action") or "")
+        first_failure = self._verdict_first_failure(verdict)
+        failed_claim = (
+            next(
+                (
+                    result
+                    for result in typed_result.claim_results
+                    if result.required and result.status is VerificationClaimStatus.FAIL
+                ),
+                None,
+            )
+            if typed_result is not None
+            else None
+        )
+        unavailable_claim = (
+            next(
+                (
+                    result
+                    for result in typed_result.claim_results
+                    if result.required and result.status is VerificationClaimStatus.UNAVAILABLE
+                ),
+                None,
+            )
+            if typed_result is not None
+            else None
+        )
+        if typed_result is None:
+            guidance = (
+                "no current, complete typed receipt certifies the mandatory "
+                "structured-browser claims. Start a managed preview with "
+                "`preview_start` for the app entry, then finish again — the "
+                "host verifier will bind to the canonical Preview generation "
+                "and produce a complete typed receipt."
+            )
+        elif failed_claim is not None:
+            guidance = (
+                f"the typed host receipt reported a FAIL ({failed_claim.reason})."
+                + (f" next_action: {next_action}" if next_action else "")
+                + " Fix the failed claim, then finish again."
+            )
+        else:
+            claim_detail = unavailable_claim.reason if unavailable_claim is not None else summary
+            guidance = (
+                f"the host verifier returned {host_label} ({claim_detail})."
+                + (f" next_action: {next_action}" if next_action else "")
+                + " Start a managed preview with `preview_start` or fix the "
+                "surfaced issue, then finish again."
+            )
 
-        await self._loop._emit(
-            VerifierStartedEvent(
-                artifact_path=deliverable.artifact_path,
-                artifact_kind=deliverable.artifact_kind,
-                requested_by_event_id=None,
-                meta={"requested_verification": deliverable.requested_verification},
+        await self._record_verifier_failure_to_context(
+            message=(first_failure or summary), rel_path=None
+        )
+        raw_fingerprint = str(
+            verdict.get("failure_fingerprint")
+            or (
+                typed_result.reason
+                if typed_result is not None
+                else "missing_or_mismatched_typed_receipt"
             )
         )
+        fingerprint = "host:" + hashlib.sha256(raw_fingerprint.encode()).hexdigest()[:24]
+        authority_seq = _last_verification_authority_seq(events)
+        if _prior_verify_marker_fp(events, authority_seq) == fingerprint:
+            await self._loop._land_blocked(
+                reason=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+                guidance=(
+                    "Host verification repeated the same governed failure with no "
+                    f"productive authority change. {guidance}"
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+            )
+            return Disp.HALT
 
-        if deliverable.artifact_kind != "app":
-            host_screenshot_path = None
-            if not authoritative:
-                return Disp.FALLTHROUGH
+        payload = (
+            "<system-reminder>\n"
+            f"Host verification did not pass for {deliverable.artifact_kind} "
+            f"artifact {deliverable.artifact_path!r} ({host_label}). {guidance}\n"
+            "The task is NOT complete until a current, complete typed PASS "
+            "receipt covering every required claim exists.\n"
+            "</system-reminder>"
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=payload),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+            )
+        )
+        return Disp.CONTINUE
+
+    async def _governed_contract_refusal(
+        self,
+        events: list[Event],
+        *,
+        failure_key: str,
+        guidance: str,
+    ) -> Disp:
+        """Progress-sensitive fail-closed refusal without a retry release cap."""
+
+        fingerprint = "host:" + hashlib.sha256(failure_key.encode()).hexdigest()[:24]
+        authority_seq = _last_verification_authority_seq(events)
+        if _prior_verify_marker_fp(events, authority_seq) == fingerprint:
+            await self._loop._land_blocked(
+                reason=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+                guidance=(
+                    "Target verification repeated the same governed failure with no "
+                    f"productive authority change. {guidance}"
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+            )
+            return Disp.HALT
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        f"Target verification did not pass. {guidance}\n"
+                        "The task is NOT complete until every admitted mandatory "
+                        "claim has a current trusted result.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
+            )
+        )
+        return Disp.CONTINUE
+
+    async def _governed_check_deliverables(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+    ) -> tuple[tuple[HostVerificationDeliverable, ...], str | None]:
+        contract = deliverable.verification_contract
+        if contract is None:
+            return (deliverable,), None
+        checks = tuple(check for check in contract.checks if check.required)
+        target_claims = {claim.claim_id: claim for check in checks for claim in check.claims}
+        target_claim_ids = set(target_claims)
+        all_claims = _host_verification_claims(self._verifier_contract_payload(), events)
+        external = tuple(claim for claim in all_claims if claim.claim_id not in target_claim_ids)
+        assigned: dict[str, list[HostVerificationClaim]] = {check.check_id: [] for check in checks}
+        errors: list[str] = []
+        for claim in all_claims:
+            target = target_claims.get(claim.claim_id)
+            if target is not None and claim != target:
+                errors.append(
+                    f"external claim {claim.claim_id!r} conflicts with the target contract"
+                )
+        for claim in external:
+            owners = tuple(check for check in checks if claim.kind in check.accepted_claim_kinds)
+            if len(owners) != 1:
+                if claim.required:
+                    errors.append(
+                        f"claim {claim.claim_id!r} has {len(owners)} admitted verifier owners"
+                    )
+                    if checks:
+                        assigned[checks[0].check_id].append(claim)
+                continue
+            assigned[owners[0].check_id].append(claim)
+        out: list[HostVerificationDeliverable] = []
+        host_verifier = getattr(self._loop, "_host_verifier", None)
+        for check in checks:
+            item = deliverable.model_copy(
+                update={
+                    "verification_check": check,
+                    "required_claims": (
+                        *check.claims,
+                        *assigned[check.check_id],
+                    ),
+                }
+            )
+            item = await self._with_host_verification_profile(item, events)
+            binder = getattr(host_verifier, "bind_execution", None)
+            if binder is not None:
+                try:
+                    bound = await binder(item)
+                    if not isinstance(bound, HostVerificationDeliverable):
+                        raise TypeError("execution binder returned an invalid deliverable")
+                    original = item.model_dump(mode="json", exclude={"execution_identity"})
+                    candidate = bound.model_dump(mode="json", exclude={"execution_identity"})
+                    if original != candidate:
+                        raise ValueError("execution binder changed non-execution authority")
+                    item = bound
+                except Exception as exc:  # noqa: BLE001 — fail closed as unavailable
+                    errors.append(f"target execution binding failed for {check.check_id!r}: {exc}")
+            if (
+                item.execution_identity is None
+                or item.execution_identity.modality != check.required_execution_modality
+            ):
+                errors.append(
+                    f"target execution for {check.check_id!r} requires modality "
+                    f"{check.required_execution_modality!r}"
+                )
+            out.append(item)
+        execution_authorities = {
+            json.dumps(
+                item.execution_identity.model_dump(mode="json")
+                if item.execution_identity is not None
+                else None,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for item in out
+        }
+        if len(execution_authorities) > 1:
+            errors.append(
+                "required verifier checks resolved different target execution generations"
+            )
+        return tuple(out), "; ".join(errors) or None
+
+    async def _run_host_verifier_check(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+        *,
+        host_verifier: Any,
+        authoritative: bool,
+        governed_target: bool,
+        forced_unavailable: str | None = None,
+    ) -> tuple[dict[str, Any], HostVerificationResult | None, bool, str | None]:
+        started = await _emit_verifier_started_event(self._loop, deliverable)
+        host_screenshot_path: str | None = None
+        if forced_unavailable is not None:
+            host_verdict = self._host_unavailable_verdict(deliverable, forced_unavailable)
+        elif deliverable.artifact_kind != "app" and not governed_target:
             host_verdict = self._host_unverifiable_verdict(deliverable)
         elif host_verifier is None:
-            return Disp.FALLTHROUGH
+            host_verdict = self._host_unavailable_verdict(
+                deliverable,
+                "verification could not run: no host verifier is configured.",
+            )
         else:
-            host_screenshot_path = None
             try:
                 raw_host_verdict = await asyncio.wait_for(
                     host_verifier.verify(deliverable),
@@ -1492,9 +2371,9 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     deliverable,
                     "verification could not run: host verifier timed out.",
                 )
-            except Exception as exc:  # noqa: BLE001 — shadow verifier never crashes finish flow
+            except Exception as exc:  # noqa: BLE001 — verifier failure stays typed
                 _LOG.warning(
-                    "REL-1c host verifier failed for %s:%s",
+                    "host verifier failed for %s:%s",
                     self._loop.conversation_id,
                     deliverable.artifact_path,
                     exc_info=True,
@@ -1503,12 +2382,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
                     deliverable,
                     f"verification could not run: host verifier failed ({exc}).",
                 )
-
-        (
-            host_verdict,
-            typed_result,
-            browser_verification_unavailable,
-        ) = await _prepare_typed_host_verdict(
+        host_verdict, typed_result, browser_unavailable = await _prepare_typed_host_verdict(
             self,
             deliverable,
             events,
@@ -1521,64 +2395,132 @@ class _HostVerifyGateMixin(_FinishGateProto):
             host_verdict,
             typed_result,
             host_screenshot_path,
+            verifier_started_event_id=started.id,
         )
-        if authoritative and deliverable.artifact_kind == "app":
-            if host_verdict.get("passed") is True and host_label == "pass":
-                self._loop._browser_verify_refusals = 0
-                return Disp.FALLTHROUGH
-            if host_label == "unavailable":
-                if typed_result is not None and any(
-                    result.required
-                    and result.status is VerificationClaimStatus.UNAVAILABLE
-                    and result.kind
-                    in {
-                        VerificationClaimKind.CONTRACT_SEMANTIC,
-                        VerificationClaimKind.VISUAL_SEMANTIC,
-                    }
-                    for result in typed_result.claim_results
-                ):
-                    return await self._host_verify_failure_disposition(deliverable, host_verdict)
-                if browser_verification_unavailable:
-                    return await _emit_browser_unavailable_release(self._loop)
-                # Missing host-verifier infrastructure is not proof the app is broken;
-                # fall through so the inline browser gate remains the enforcement path.
-                return Disp.FALLTHROUGH
-            if host_label == "unverifiable":
-                if host_verdict.get("model_verifier_applied") is True:
-                    # A contract judge can find the requirement evidence
-                    # unverifiable even when the browser ran successfully. That
-                    # is a normal verification failure, not browser
-                    # infrastructure absence; retain the refusal/repair path and
-                    # never emit the misleading one-shot infrastructure release.
-                    return await self._host_verify_failure_disposition(deliverable, host_verdict)
-                # Browser infrastructure was explicitly unavailable. This is not a
-                # verified pass, but retrying the identical daemon launch in the inline
-                # gate contradicts the terminal browser_unavailable contract. Release
-                # once with a durable incomplete marker that UIs/harnesses can classify.
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.RUNNING,
-                        detail="unverified_release",
+        return host_verdict, typed_result, browser_unavailable, host_label
+
+    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+        """Run every admitted verifier check; legacy web remains a compatibility path."""
+
+        contract = _governed_verification_contract(events)
+        # AppKit's existing strict verifier remains the active compatibility
+        # adapter until its typed receipt dual-write lands. Its newly admitted
+        # check identity prevents a generic web receipt from substituting.
+        if _strict_appkit_contract(contract):
+            return Disp.FALLTHROUGH
+
+        governed_target = _governed_verification_required(events)
+        authoritative = self._host_verify_authoritative() or governed_target
+        host_verifier = getattr(self._loop, "_host_verifier", None)
+        if host_verifier is None and not authoritative:
+            return Disp.FALLTHROUGH
+        deliverable = await self._host_verify_deliverable(
+            step, events, include_unverifiable=authoritative
+        )
+        if deliverable is None:
+            return Disp.FALLTHROUGH
+        deliverables, ownership_error = await self._governed_check_deliverables(deliverable, events)
+        if not deliverables:
+            return Disp.FALLTHROUGH
+
+        accepted_receipts: list[HostVerificationResult] = []
+        for index, check_deliverable in enumerate(deliverables):
+            (
+                host_verdict,
+                typed_result,
+                browser_unavailable,
+                host_label,
+            ) = await self._run_host_verifier_check(
+                check_deliverable,
+                events,
+                host_verifier=host_verifier,
+                authoritative=authoritative,
+                governed_target=governed_target,
+                forced_unavailable=ownership_error if index == 0 else None,
+            )
+            if authoritative and (check_deliverable.artifact_kind == "app" or governed_target):
+                if host_verdict.get("passed") is True and host_label == "pass":
+                    if typed_result is not None:
+                        accepted_receipts.append(typed_result)
+                    self._loop._browser_verify_refusals = 0
+                    continue
+                if governed_target:
+                    return await self._governed_non_pass_disposition(
+                        check_deliverable,
+                        host_verdict,
+                        typed_result,
+                        events,
                     )
-                )
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "⚠ Finished WITHOUT browser-render verification — the "
-                                "host verifier reported the app UNVERIFIABLE because its "
-                                "browser infrastructure could not run. The deliverable is "
-                                "UNVERIFIED and may be INCOMPLETE; do not report it as a "
-                                "verified pass."
+                if host_label == "unavailable":
+                    if typed_result is not None and any(
+                        result.required
+                        and result.status is VerificationClaimStatus.UNAVAILABLE
+                        and result.kind
+                        in {
+                            VerificationClaimKind.CONTRACT_SEMANTIC,
+                            VerificationClaimKind.VISUAL_SEMANTIC,
+                        }
+                        for result in typed_result.claim_results
+                    ):
+                        return await self._host_verify_failure_disposition(
+                            check_deliverable, host_verdict
+                        )
+                    if browser_unavailable:
+                        return await _emit_browser_unavailable_release(self._loop)
+                    return Disp.FALLTHROUGH
+                if host_label == "unverifiable":
+                    if host_verdict.get("model_verifier_applied") is True:
+                        return await self._host_verify_failure_disposition(
+                            check_deliverable, host_verdict
+                        )
+                    await self._loop._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail="unverified_release",
+                        )
+                    )
+                    await self._loop._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user",
+                                content=(
+                                    "⚠ Finished WITHOUT browser-render verification — "
+                                    "the host verifier reported the app UNVERIFIABLE "
+                                    "because its browser infrastructure could not run. "
+                                    "The deliverable is UNVERIFIED and may be INCOMPLETE; "
+                                    "do not report it as a verified pass."
+                                ),
                             ),
-                        ),
+                        )
                     )
+                    self._loop._browser_verify_refusals = 0
+                    return Disp.FALLTHROUGH
+                return await self._host_verify_failure_disposition(check_deliverable, host_verdict)
+        if governed_target:
+            coverage = aggregate_verification_receipts(
+                deliverables=deliverables,
+                receipts=tuple(accepted_receipts),
+            )
+            if not coverage.passed:
+                return await self._governed_contract_refusal(
+                    events,
+                    failure_key=(
+                        "target:incomplete_aggregate:" + ",".join(coverage.missing_claim_ids)
+                    ),
+                    guidance=(
+                        "the target verifier set did not cover every mandatory claim "
+                        "on one current execution generation."
+                    ),
                 )
-                self._loop._browser_verify_refusals = 0
-                return Disp.FALLTHROUGH
-            return await self._host_verify_failure_disposition(deliverable, host_verdict)
+            current_events = await self._loop._events()
+            current_contract = _governed_verification_contract(current_events)
+            current_handoff = _latest_deliverable_event(current_events)
+            cast(Any, self._loop)._governed_host_pass_key = (
+                current_contract.digest if current_contract is not None else "",
+                current_handoff.id if current_handoff is not None else "",
+                _last_verification_authority_seq(current_events),
+            )
         return Disp.FALLTHROUGH
 
 
@@ -1698,42 +2640,37 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         tool_name: str = "verify_web_app",
         *,
         step: AgentStep | None = None,
+        appkit_prepared: (tuple[VerifierStartedEvent, HostVerificationDeliverable] | None) = None,
     ) -> Disp:
-        """W-45 — the verdict-consuming finish gate (the loop-killer).
-
-        Replaces `_browser_verified()` as the PRIMARY completion check for web
+        """W-45 — verdict-consuming finish gate replacing `_browser_verified()` for web
         builds with "the latest structured verifier verdict since the last productive
-        edit". If none exists when the agent calls finish, the gate DRIVES
-        the verifier itself (ONE call). pass → finish; fail → emit the verdict's
-        summary + first concrete error + screenshot + next_action and CONTINUE.
+        edit". At finish it drives once: pass → finish; fail → surface the verdict's
+        evidence and next action, then CONTINUE.
 
         LOOP BREAKER: the verdict is cached by `_last_productive_seq` — a browser/
         navigate/verify probe is NOT a productive edit, so re-verifying without an
         edit reads the SAME cached verdict (no real re-run). When the SAME
         `failure_fingerprint` recurs without a productive edit that changes the
-        served output, the gate marks the run STUCK/no_progress (W-31 detail
-        naming) instead of reloading 25-40×. The 3-refusal release no longer
+        served output, the gate marks the run STUCK instead of reloading 25-40×.
+        The 3-refusal release no longer
         silently converts repeated failed verification into 'done' — it finishes
         ONLY with an explicit blocked/incomplete summary."""
+        contract = _governed_verification_contract(events)
+        governed_appkit = bool(
+            _strict_appkit_contract(contract) and _governed_verification_required(events)
+        )
         since_seq = _last_verification_authority_seq(events)
+        if governed_appkit and contract is not None:
+            started = _latest_matching_appkit_start(events, contract)
+            if started is not None and type(started.seq) is int:
+                since_seq = max(since_seq, started.seq)
         # P1-1: bind the accepted verdict to the CURRENT preview target. Detect the
         # live preview (same _PREVIEW_PORTS detection the tool uses) and accept only
         # a verdict whose url matches it; a stale / foreign-port (or url-less) PASS
         # must NOT satisfy the gate — it drives a fresh verify against the real
         # preview instead. target_url=None (preview undetectable) disables binding.
         target_url = await self._detect_preview_url()
-        medium = "web"
-        if step is not None:
-            try:
-                deliverable = await self._host_verify_deliverable(step, events)
-                if deliverable is not None:
-                    host_verifier = cast(_HostVerifyGateMixin, self)
-                    paths = await host_verifier._verifier_deliverable_paths(deliverable, events)
-                    hint = await host_verifier._verifier_medium_hint(paths)
-                    if hint is not None:
-                        medium = hint.kind
-            except Exception:
-                medium = "web"
+        medium = await _finish_verification_medium(self, step, events)
         verdict = _latest_verify_verdict(events, since_seq, target_url, tool_name)
         if verdict is None:
             # No fresh verdict bound to the current preview — the agent may have
@@ -1756,7 +2693,38 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             # PASS verdict (W-32: route completion THROUGH the gate). Refuse-and-
             # continue (bounded), then an EXPLICIT unverified release at the cap;
             # never a silent done, never a fall-back to the legacy browser gate.
+            if governed_appkit:
+                host_gate = cast(_HostVerifyGateMixin, self)
+                typed_disp = await _appkit_typed_gate_disposition(
+                    host_gate,
+                    events=await self._loop._events(),
+                    verdict=None,
+                    tool_name=tool_name,
+                    prepared=appkit_prepared,
+                )
+                if typed_disp is not None:
+                    return typed_disp
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key=f"{tool_name}:unavailable",
+                    guidance=(
+                        f"{tool_name} did not return a usable strict target verdict. "
+                        "Repair the target verifier/runtime; unavailable verification "
+                        "cannot release this governed build."
+                    ),
+                )
             return await self._verifier_unavailable_disposition(tool_name)
+
+        if governed_appkit:
+            typed_disp = await _appkit_typed_gate_disposition(
+                cast(_HostVerifyGateMixin, self),
+                events=await self._loop._events(),
+                verdict=verdict,
+                tool_name=tool_name,
+                prepared=appkit_prepared,
+            )
+            if typed_disp is not None:
+                return typed_disp
 
         if verdict.get("passed") is True:
             self._loop._browser_verify_refusals = 0  # clean pass → reset the streak
@@ -1787,21 +2755,9 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             return honest
 
         # FAIL / DEGRADED. Build the concrete next-step payload from the verdict.
-        fp = str(verdict.get("failure_fingerprint") or "")
-        summary = str(verdict.get("summary") or f"{tool_name} did not pass")
-        next_action = str(verdict.get("next_action") or "")
-        screenshot = str(verdict.get("screenshot_path") or "")
-        errs = verdict.get("console_errors") or []
-        nets = verdict.get("network_failures") or []
-        first_error = ""
-        if errs:
-            e0 = errs[0]
-            where = f" @ {e0.get('source')}" if e0.get("source") else ""
-            first_error = f"{e0.get('text', '')}{where}"
-        elif nets:
-            n0 = nets[0]
-            marker = n0.get("status") or n0.get("failure") or "failed"
-            first_error = f"{n0.get('method', 'GET')} {n0.get('url', '')} -> {marker}"
+        fp, summary, next_action, screenshot, first_error = _verification_failure_details(
+            verdict, tool_name
+        )
 
         # CXT-7: record the failure to durable context (.disco/context/verifier_failures.json),
         # best-effort — NEVER alters the gate verdict/flow. CXT-4's assembler surfaces these
@@ -1828,7 +2784,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             )
             return Disp.HALT
 
-        if self._loop._browser_verify_refusals < 3:
+        if governed_appkit or self._loop._browser_verify_refusals < 3:
             self._loop._browser_verify_refusals += 1
             payload = (
                 f"{tool_name} did not pass ({verdict.get('verdict')}). {summary}\n"
@@ -2095,14 +3051,26 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         return Disp.FALLTHROUGH
 
     async def _browser_verify_delegated_to_host(self, step: AgentStep, events: list[Event]) -> bool:
-        if _appkit_scope_active(self._loop):
+        contract = _governed_verification_contract(events)
+        if _strict_appkit_contract(contract):
             return False
-        if not self._host_verify_authoritative():
+        governed = _governed_verification_required(events)
+        if not (self._host_verify_authoritative() or governed):
             return False
         if getattr(self._loop, "_host_verifier", None) is None:
             return False
         deliverable = await self._host_verify_deliverable(step, events)
-        if deliverable is None or deliverable.artifact_kind != "app":
+        if deliverable is None:
+            return False
+        if contract is not None:
+            handoff = _latest_deliverable_event(events)
+            expected_key = (
+                contract.digest,
+                handoff.id if handoff is not None else "",
+                _last_verification_authority_seq(events),
+            )
+            return getattr(self._loop, "_governed_host_pass_key", None) == expected_key
+        if deliverable.artifact_kind != "app":
             return False
         latest = _latest_host_verifier_event(events, _last_verification_authority_seq(events))
         if latest is None or latest.verification_result is None:
@@ -2125,7 +3093,13 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             )
         return False
 
-    async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+    async def gate_browser_verify(
+        self,
+        step: AgentStep,
+        events: list[Event],
+        *,
+        appkit_prepared: (tuple[VerifierStartedEvent, HostVerificationDeliverable] | None) = None,
+    ) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
         # until a clean browser observation (zero console errors) exists
         # since the last state-changing edit.
@@ -2135,8 +3109,12 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # app_create the phase allowlist hides verify_appkit_app, and a finish
         # in that window must still be gated (a zero-work appkit FINISH slipped
         # through here, live 2026-07-03).
-        is_appkit = verify_tool == "verify_appkit_app" or (
-            getattr(self._loop.executor, "appkit_phase", None) is not None
+        contract = _governed_verification_contract(events)
+        is_appkit = (
+            _strict_appkit_contract(contract)
+            if contract is not None
+            else verify_tool == "verify_appkit_app"
+            or getattr(self._loop.executor, "appkit_phase", None) is not None
         )
         # WO-TC3: a build that installed trusted components must pass through this
         # gate even without a web-deliverable marker — the component integrity/deps/
@@ -2147,8 +3125,25 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # in a plan-gated scope. add_trusted_component can only fire in the build
         # surface, so no non-build finish is affected in practice.
         tc_installed = _tc_components_installed(events)
+        # Governed structured-browser target with an app handoff: mandatory target
+        # claims (HTTP ready, rendered content, console/network clean, …) require a
+        # structured browser runtime. The legacy ``_is_web_deliverable`` detector
+        # recognizes index.html writes, preview_start pairs, and server_status
+        # records — it does NOT recognize a governed ``app`` handoff for a non-
+        # index entry (e.g. ``app.py`` after cancel/recovery). Without this
+        # disjunct the inline gate never arms and a host-unavailable verdict falls
+        # through to FINISHED with zero claim enforcement. This is claim-driven
+        # (target-owned), not filename/framework-specific: any governed admission
+        # whose mandatory claims require a browser runtime arms the gate when an
+        # app handoff exists, independently of the legacy detector.
+        governed_browser_target = (
+            _governed_structured_browser_target(events)
+            and not is_appkit
+            and _latest_app_deliverable_event(events) is not None
+        )
         if self._loop.mode != OperatingMode.PLANNING and (
             tc_installed
+            or governed_browser_target
             or (self._loop._planning_tools and (is_appkit or _is_web_deliverable(events)))
         ):
             # W-45: when the structured `verify_web_app` tool is in the execution
@@ -2160,7 +3155,12 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             if await self._browser_verify_delegated_to_host(step, events):
                 return Disp.FALLTHROUGH
             if verify_tool is not None:
-                return await self._gate_verify_web_app(events, verify_tool, step=step)
+                return await self._gate_verify_web_app(
+                    events,
+                    verify_tool,
+                    step=step,
+                    appkit_prepared=appkit_prepared,
+                )
             since_seq = _last_verification_authority_seq(events)
             # The preview platform assigns a RANDOM port — there is NO fixed :8000
             # inside the sandbox (a curl there 404s). Resolve the live preview the
@@ -2521,12 +3521,74 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             return disp
         events = await self._loop._events()
 
-        handoff = _latest_app_deliverable_event(events)
-        if (
-            _governed_structured_browser_target(events)
+        contract = _governed_verification_contract(events)
+        strict_appkit = _strict_appkit_contract(contract)
+        host_gate = cast(_HostVerifyGateMixin, self)
+        appkit_prepared: tuple[VerifierStartedEvent, HostVerificationDeliverable] | None = None
+        if contract is not None and strict_appkit:
+            compatibility_error = _strict_appkit_compatibility_error(contract)
+            if compatibility_error is not None:
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key=f"appkit:unsupported_contract:{compatibility_error}",
+                    guidance=compatibility_error,
+                )
+            external_error = _strict_appkit_external_requirement_error(self, contract, events)
+            if external_error is not None:
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key=f"appkit:external_claims:{external_error}",
+                    guidance=external_error,
+                )
+            if self._active_verify_tool() != "verify_appkit_app":
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key="appkit:strict_verifier_unavailable",
+                    guidance=(
+                        "the admitted AppKit target requires verify_appkit_app, but that "
+                        "strict verifier is not available in the current execution scope."
+                    ),
+                )
+            appkit_prepared = await _prepare_appkit_typed_authority(
+                host_gate,
+                step,
+                events,
+                contract,
+            )
+            if appkit_prepared is None:
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key="appkit:typed_preflight_unavailable",
+                    guidance=(
+                        "the strict AppKit target could not bind its canonical entry "
+                        "and current managed runtime before verification."
+                    ),
+                )
+            events = await self._loop._events()
+        handoff = _latest_deliverable_event(events)
+        missing_or_foreign_handoff = (
+            contract is not None
+            and _governed_verification_required(events)
+            and not strict_appkit
+            and (handoff is None or not _handoff_matches_verification_contract(handoff, contract))
+        )
+        legacy_missing_web_handoff = (
+            contract is None
+            and _governed_structured_browser_target(events)
             and not _appkit_scope_active(self._loop)
-            and handoff is None
-        ):
+            and _latest_app_deliverable_event(events) is None
+        )
+        if missing_or_foreign_handoff:
+            return await host_gate._governed_contract_refusal(
+                events,
+                failure_key="target:missing_or_foreign_handoff",
+                guidance=(
+                    "the current target has no exact current handoff matching its "
+                    "admitted delivery contract. Hand off the target-owned entry "
+                    "with the adapter's interactive-app or artifact-files shape."
+                ),
+            )
+        if legacy_missing_web_handoff:
             self._loop._invisible_steps += 1
             await self._loop._emit(
                 MessageEvent(
@@ -2534,10 +3596,11 @@ class _RenderVerifyGateMixin(_FinishGateProto):
                     message=LLMMessage(
                         role="user",
                         content=(
-                            "finish refused: the current target has mandatory "
-                            "structured-browser claims, but there is no app handoff. "
-                            "Hand off the runnable entry "
-                            'with `serve` using `kind: "app"`, then verify and finish.'
+                            "finish refused: the current target has no exact, current "
+                            "handoff matching its admitted delivery contract. Hand off "
+                            "the target-owned entry with `serve`, using the interactive "
+                            "app or artifact-files shape requested by the adapter, then "
+                            "verify and finish."
                         ),
                     ),
                     meta={"diagnostic": "finish_target_shape_refused"},
@@ -2545,7 +3608,13 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             )
             return await self._loop._post_noop_valve()
 
-        if self._host_verify_authoritative():
+        if strict_appkit:
+            disp = await self.gate_browser_verify(
+                step,
+                events,
+                appkit_prepared=appkit_prepared,
+            )
+        elif self._host_verify_authoritative() or _governed_verification_required(events):
             disp = await self.gate_host_verify(step, events)
             if disp is Disp.CONTINUE or disp is Disp.HALT:
                 return disp
@@ -2557,6 +3626,32 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             await self.gate_host_verify(step, events)  # shadow: advisory, records telemetry
         if disp is Disp.CONTINUE or disp is Disp.HALT:
             return disp
+        if contract is not None and strict_appkit:
+            events = await self._loop._events()
+            handoff = _latest_deliverable_event(events)
+            if handoff is None or not _handoff_matches_verification_contract(handoff, contract):
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key="appkit:foreign_materialized_handoff",
+                    guidance=(
+                        "the strict verifier did not produce an exact current handoff "
+                        "for the admitted AppKit delivery contract."
+                    ),
+                )
+            typed_status = (
+                _recorded_appkit_typed_status(events, appkit_prepared[0])
+                if appkit_prepared is not None
+                else None
+            )
+            if typed_status is not VerificationClaimStatus.PASS:
+                return await host_gate._governed_contract_refusal(
+                    events,
+                    failure_key="appkit:typed_receipt_unavailable",
+                    guidance=(
+                        "the strict AppKit verifier passed, but its result could not "
+                        "be bound to the current typed target authority."
+                    ),
+                )
         # [P10] Export render-correctness gate — for a files-deliverable (deck/
         # document) the app/browser gates above fall through, so THIS is the check
         # that a blank/truncated/corrupt export can't report FINISHED.

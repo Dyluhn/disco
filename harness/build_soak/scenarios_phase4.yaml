@@ -13,6 +13,21 @@ defaults:
       require_user_event: true
       require_plan_before_execution: true
       require_action_observation_pairs: true
+    governed_verification:
+      required: true
+      route: platform
+      composition_authority: build_platform_core
+      delivery_mode: interactive
+      required_receipt_kinds: [disco.web_functional@1]
+      required_claim_kinds:
+        artifact_identity: 1
+        http_ready: 1
+        rendered_content: 1
+        console_clean: 1
+        network_clean: 1
+      required_execution_modality: managed_preview
+      require_agent_view_binding: true
+      require_workspace_epoch: true
     tool_scope:
       planning_disallows:
         - file_write
@@ -421,6 +436,16 @@ scenarios:
       Build a strict AppKit local notes app titled exactly 'AppKit Create {{seed}}' with
       add, list, and delete behavior. Verify it and finish without ejecting to Freeform.
     assertions:
+      governed_verification:
+        required: true
+        route: platform
+        composition_authority: build_platform_core
+        delivery_mode: interactive
+        required_receipt_kinds: [disco.appkit_strict@1]
+        required_claim_kinds: {target_specific: 1}
+        required_execution_modality: appkit_strict_runtime
+        require_agent_view_binding: true
+        require_workspace_epoch: true
       tool_scope:
         execution_disallows: [file_write, file_append, file_edit, file_replace_lines, shell, code_exec]
       workspace:
@@ -444,6 +469,16 @@ scenarios:
         requires_plan_revision: true
         trigger: after_terminal
     assertions:
+      governed_verification:
+        required: true
+        route: platform
+        composition_authority: build_platform_core
+        delivery_mode: interactive
+        required_receipt_kinds: [disco.appkit_strict@1]
+        required_claim_kinds: {target_specific: 1}
+        required_execution_modality: appkit_strict_runtime
+        require_agent_view_binding: true
+        require_workspace_epoch: true
       tool_scope:
         execution_disallows: [file_write, file_append, file_edit, file_replace_lines, shell, code_exec]
       revisions:
@@ -472,6 +507,16 @@ scenarios:
         requires_plan_revision: true
         trigger: after_terminal
     assertions:
+      governed_verification:
+        required: true
+        route: platform
+        composition_authority: build_platform_core
+        delivery_mode: interactive
+        required_receipt_kinds: [disco.appkit_strict@1]
+        required_claim_kinds: {target_specific: 1}
+        required_execution_modality: appkit_strict_runtime
+        require_agent_view_binding: true
+        require_workspace_epoch: true
       tool_scope:
         execution_disallows: [file_write, file_append, file_edit, file_replace_lines, shell, code_exec]
       revisions:
@@ -494,6 +539,16 @@ scenarios:
       the governed AppKit guarantees: do not eject and do not use arbitrary raw file,
       shell, alias, or code-execution mutation. Verify the compatible app and finish.
     assertions:
+      governed_verification:
+        required: true
+        route: platform
+        composition_authority: build_platform_core
+        delivery_mode: interactive
+        required_receipt_kinds: [disco.appkit_strict@1]
+        required_claim_kinds: {target_specific: 1}
+        required_execution_modality: appkit_strict_runtime
+        require_agent_view_binding: true
+        require_workspace_epoch: true
       tool_scope:
         execution_disallows: [file_write, file_append, file_edit, file_replace_lines, shell, code_exec]
       workspace:
@@ -519,6 +574,16 @@ scenarios:
         requires_plan_revision: true
         trigger: after_terminal
     assertions:
+      governed_verification:
+        required: true
+        route: platform
+        composition_authority: build_platform_core
+        delivery_mode: interactive
+        required_receipt_kinds: [disco.appkit_strict@1]
+        required_claim_kinds: {target_specific: 1}
+        required_execution_modality: appkit_strict_runtime
+        require_agent_view_binding: true
+        require_workspace_epoch: true
       tool_scope:
         execution_disallows: [file_write, file_append, file_edit, file_replace_lines, shell, code_exec]
       revisions:

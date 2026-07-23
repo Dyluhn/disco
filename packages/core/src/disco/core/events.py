@@ -30,9 +30,14 @@ from .effects import (
     RecoveryLeaseTransition,
 )
 from .verification import (
+    AdmittedVerificationContract,
     HostVerificationClaim,
     HostVerificationResult,
+    PreviewSelectionIdentity,
+    VerificationArtifactIdentity,
     VerificationClaimStatus,
+    VerificationDeliveryContract,
+    VerificationExecutionIdentity,
     VerificationRequirementsDirective,
 )
 
@@ -952,12 +957,20 @@ class BuildPlatformAdmissionEvent(BaseEvent):
     # for backward-compatible legacy admissions; platform admissions persist it
     # so restart/code drift cannot silently change the completion authority.
     verification_claims: tuple[HostVerificationClaim, ...] = ()
+    verification_contract: AdmittedVerificationContract | None = None
 
     @model_validator(mode="after")
     def _route_identity_is_exact(self) -> BuildPlatformAdmissionEvent:
         claim_ids = [claim.claim_id for claim in self.verification_claims]
         if len(claim_ids) != len(set(claim_ids)):
             raise ValueError("Build admission verification claim ids must be unique")
+        if self.verification_contract is not None:
+            if tuple(self.verification_contract.required_claims) != tuple(
+                claim for claim in self.verification_claims if claim.required
+            ):
+                raise ValueError(
+                    "Build admission flattened claims differ from its verification contract"
+                )
         if self.route == "platform":
             if self.composition_authority != "build_platform_core":
                 raise ValueError("Platform route requires Build Platform Core authority")
@@ -1219,6 +1232,23 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
     # tunnel, or the live preview). When the agent serves to a known address it
     # passes it on `serve(url=…)`; the UI surfaces an "Open deployed app" link.
     deployment_url: str = ""
+    target_id: str = Field(default="", max_length=160)
+    delivery_contract: VerificationDeliveryContract | None = None
+    verification_contract_digest: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _target_delivery_identity_is_complete(self) -> DeliverableEvent:
+        values = (
+            bool(self.target_id),
+            self.delivery_contract is not None,
+            self.verification_contract_digest is not None,
+        )
+        if any(values) and not all(values):
+            raise ValueError("target-owned deliverable identity must be complete")
+        return self
 
     def to_llm_message(self) -> LLMMessage:
         return LLMMessage(
@@ -1243,6 +1273,25 @@ class VerifierStartedEvent(BaseEvent):
     artifact_kind: str = "files"
     verifier: str = "host"
     requested_by_event_id: str | None = None
+    target_id: str = ""
+    run_intent_id: str | None = None
+    run_identity: str | None = None
+    delivery_shape: str = ""
+    delivery_entry_reference: str = ""
+    check_id: str = ""
+    receipt_kind: str = ""
+    issuer_id: str = ""
+    operation: str = ""
+    delegated_issuer_ids: frozenset[str] = frozenset()
+    verification_contract_digest: str | None = None
+    deliverable_event_id: str | None = None
+    execution_identity: VerificationExecutionIdentity | None = None
+    artifact_identity: VerificationArtifactIdentity | None = None
+    preview_selection: PreviewSelectionIdentity | None = None
+    workspace_revision: int = 0
+    workspace_generation: str = ""
+    workspace_epoch: int | None = None
+    observed_after_seq: int = 0
 
 
 class VerifierVerdictEvent(BaseEvent):
@@ -1266,6 +1315,11 @@ class VerifierVerdictEvent(BaseEvent):
     # derived and persists in the append-only event log.
     screenshot_path: str | None = Field(default=None, max_length=512)
     verification_result: HostVerificationResult | None = None
+    target_id: str = ""
+    check_id: str = ""
+    receipt_kind: str = ""
+    verification_contract_digest: str | None = None
+    requested_by_event_id: str | None = None
 
     @model_validator(mode="after")
     def _typed_result_matches_event(self) -> VerifierVerdictEvent:
@@ -1281,6 +1335,12 @@ class VerifierVerdictEvent(BaseEvent):
             raise ValueError("verdict label does not match typed verification result")
         if (self.screenshot_path or "") != result.screenshot_path:
             raise ValueError("screenshot provenance does not match typed verification result")
+        if self.target_id != result.target_id:
+            raise ValueError("target identity does not match typed verification result")
+        if self.check_id != result.check_id or self.receipt_kind != result.receipt_kind:
+            raise ValueError("verifier check identity does not match typed verification result")
+        if self.verification_contract_digest != result.verification_contract_digest:
+            raise ValueError("verification contract digest does not match typed result")
         return self
 
 

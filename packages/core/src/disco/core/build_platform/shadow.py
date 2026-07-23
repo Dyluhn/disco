@@ -11,6 +11,7 @@ from .builtin_profiles import (
     APPKIT_PROFILE_ID,
     APPKIT_PROMPT_ID,
     APPKIT_RULES,
+    APPKIT_VERIFIER_ID,
     FREEFORM_ENGINE_ID,
     FREEFORM_PROFILE_ID,
     FREEFORM_PROMPT_ID,
@@ -79,7 +80,11 @@ def expected_legacy_snapshot(
         prompt_modules=((APPKIT_PROMPT_ID if appkit else FREEFORM_PROMPT_ID).canonical,),
         visible_tools=tuple(sorted(visible_tools)),
         preview=f"{HOST_PREVIEW_ID.canonical}|modality=legacy_host",
-        verifier=f"{HOST_VERIFIER_ID.canonical}|check=host.verify_deliverable",
+        verifier=(
+            f"{APPKIT_VERIFIER_ID.canonical}|check=host.verify_appkit_strict"
+            if appkit
+            else f"{HOST_VERIFIER_ID.canonical}|check=host.verify_deliverable"
+        ),
         exporter=f"{LEGACY_EXPORTER_ID.canonical}|package=web.legacy_archive",
     )
 
