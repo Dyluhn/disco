@@ -1816,6 +1816,46 @@ def event_matches_current_workspace_view(events: Iterable[Event], event: Event) 
     return view_id is not None and event.agent_view_id == view_id
 
 
+def event_matches_current_workspace_intent(events: Iterable[Event], event: Event) -> bool:
+    """Whether durable output was produced by a view admitted for the newest intent.
+
+    Unlike :func:`event_matches_current_workspace_view`, this deliberately keeps
+    output authoritative across later model views for the same run intent.  It
+    still rejects output from a superseded intent and late output from an older
+    in-flight view after a newer view for the current intent was admitted.
+    """
+
+    materialized = list(events)
+    latest, _view_id, _admission_seq, _progress_seq, strict = _workspace_run_intent_state(
+        materialized
+    )
+    if latest is None or not strict:
+        return True
+    if (
+        type(latest.seq) is not int
+        or type(event.seq) is not int
+        or event.seq <= latest.seq
+        or event.agent_view_id is None
+    ):
+        return False
+    producing_admission = max(
+        (
+            candidate
+            for candidate in materialized
+            if isinstance(candidate, WorkspaceMutationEvent)
+            and candidate.operation == "agent.view-admitted"
+            and candidate.run_intent_id == latest.id
+            and type(candidate.seq) is int
+            and latest.seq < candidate.seq < event.seq
+        ),
+        key=lambda candidate: candidate.seq or -1,
+        default=None,
+    )
+    return (
+        producing_admission is not None and producing_admission.agent_view_id == event.agent_view_id
+    )
+
+
 def workspace_run_intent_admission_required(events: Iterable[Event]) -> bool:
     """Whether a fresh model-view boundary must acknowledge the newest intent."""
 

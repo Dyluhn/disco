@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from disco.core import DeliverableEvent, SqliteEventStore, WorkspaceMutationEvent
+from disco.core import (
+    DeliverableEvent,
+    SqliteEventStore,
+    WorkspaceMutationEvent,
+    event_matches_current_workspace_intent,
+)
 from disco.core.loop.finish.common import _latest_app_deliverable_event
 
 
@@ -31,7 +36,7 @@ async def test_prior_revision_app_handoff_cannot_authorize_current_view() -> Non
     store = SqliteEventStore(":memory:")
     conversation_id = "conv_handoff_view"
     await _admit_view(store, conversation_id, view_id="view-old")
-    await store.append(
+    old_app = await store.append(
         conversation_id,
         DeliverableEvent(
             title="Old application",
@@ -45,6 +50,7 @@ async def test_prior_revision_app_handoff_cannot_authorize_current_view() -> Non
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) is None
+    assert not event_matches_current_workspace_intent(events, old_app)
 
 
 async def test_current_app_handoff_survives_later_file_attachment() -> None:
@@ -73,6 +79,7 @@ async def test_current_app_handoff_survives_later_file_attachment() -> None:
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) == app
+    assert event_matches_current_workspace_intent(events, app)
 
 
 async def test_current_app_handoff_survives_later_views_in_same_run_intent() -> None:
@@ -122,6 +129,7 @@ async def test_current_app_handoff_survives_later_views_in_same_run_intent() -> 
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) == app
+    assert event_matches_current_workspace_intent(events, app)
 
 
 async def test_late_old_view_handoff_cannot_cross_new_run_intent() -> None:
@@ -141,7 +149,7 @@ async def test_late_old_view_handoff_cannot_cross_new_run_intent() -> None:
             agent_view_id="view-current",
         ),
     )
-    await store.append(
+    late_app = await store.append(
         conversation_id,
         DeliverableEvent(
             title="Late stale application",
@@ -154,6 +162,7 @@ async def test_late_old_view_handoff_cannot_cross_new_run_intent() -> None:
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) is None
+    assert not event_matches_current_workspace_intent(events, late_app)
 
 
 async def test_late_old_view_handoff_cannot_land_after_newer_same_intent_view() -> None:
@@ -176,7 +185,7 @@ async def test_late_old_view_handoff_cannot_land_after_newer_same_intent_view() 
                 agent_view_id=view_id,
             ),
         )
-    await store.append(
+    late_app = await store.append(
         conversation_id,
         DeliverableEvent(
             title="Late stale application",
@@ -189,6 +198,7 @@ async def test_late_old_view_handoff_cannot_land_after_newer_same_intent_view() 
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) is None
+    assert not event_matches_current_workspace_intent(events, late_app)
 
 
 async def test_legacy_handoff_without_typed_view_admission_remains_readable() -> None:
@@ -214,3 +224,4 @@ async def test_legacy_handoff_without_typed_view_admission_remains_readable() ->
     events = await store.get_events(conversation_id)
 
     assert _latest_app_deliverable_event(events) == app
+    assert event_matches_current_workspace_intent(events, app)

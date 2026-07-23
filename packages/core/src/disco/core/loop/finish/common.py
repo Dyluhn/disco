@@ -61,9 +61,9 @@ from ...events import (
     VerifierShadowEvent,
     VerifierStartedEvent,
     VerifierVerdictEvent,
-    WorkspaceMutationEvent,
     current_build_platform_admission,
     current_workspace_agent_view_id,
+    event_matches_current_workspace_intent,
     latest_workspace_run_intent,
 )
 from ...llm import OperatingMode
@@ -546,72 +546,14 @@ def _deliverable_event_paths(events: list[Event]) -> list[str]:
 
 
 def _latest_app_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
-    latest_intent = latest_workspace_run_intent(events)
     for ev in reversed(events):
         if (
             isinstance(ev, DeliverableEvent)
             and ev.artifact_kind == "app"
-            and _deliverable_matches_current_run_intent(events, ev, latest_intent)
+            and event_matches_current_workspace_intent(events, ev)
         ):
             return ev
     return None
-
-
-def _deliverable_matches_current_run_intent(
-    events: list[Event],
-    deliverable: DeliverableEvent,
-    latest_intent: WorkspaceMutationEvent | None,
-) -> bool:
-    """Bind an app handoff to the current user/run intent, not one model turn.
-
-    ``agent.view-admitted`` advances on every model request. A durable handoff
-    remains authoritative across later plan-verifier and finish turns within
-    the same intent; requiring the latest view id silently discarded it. A new
-    user/run intent still invalidates the handoff unless the producing view was
-    admitted for that exact intent, which also rejects late output from an old
-    in-flight request.
-    """
-
-    if latest_intent is None:
-        return True
-    strict_v1 = any(
-        isinstance(event, WorkspaceMutationEvent)
-        and event.run_protocol_version == 1
-        and (
-            event.operation.startswith("agent.run-intent.")
-            or event.operation == "agent.view-admitted"
-        )
-        for event in events
-    )
-    if not strict_v1:
-        # Imported and restarted pre-v1 histories never recorded typed view
-        # admissions. Preserve their compatibility posture; only the durable v1
-        # protocol has enough authority data to apply the exact intent binding.
-        return True
-    if (
-        type(latest_intent.seq) is not int
-        or type(deliverable.seq) is not int
-        or deliverable.seq <= latest_intent.seq
-        or deliverable.agent_view_id is None
-    ):
-        return False
-    producing_admission = max(
-        (
-            event
-            for event in events
-            if isinstance(event, WorkspaceMutationEvent)
-            and event.operation == "agent.view-admitted"
-            and event.run_intent_id == latest_intent.id
-            and type(event.seq) is int
-            and latest_intent.seq < event.seq < deliverable.seq
-        ),
-        key=lambda event: event.seq or -1,
-        default=None,
-    )
-    return (
-        producing_admission is not None
-        and producing_admission.agent_view_id == deliverable.agent_view_id
-    )
 
 
 def _latest_deliverable_event(events: list[Event]) -> DeliverableEvent | None:

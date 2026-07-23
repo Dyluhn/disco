@@ -11,6 +11,7 @@ from disco.core import (
     PlanEvent,
     SqliteEventStore,
     StatusEvent,
+    WorkspaceMutationEvent,
 )
 from disco.core.effects import EffectCapability
 from disco.core.llm import LLMTransientError, OperatingMode
@@ -436,6 +437,50 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
     assert any(
         "duplicate `serve` call was ignored" in message.content
         for message in agent.seen_views[4].messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_path_serve_is_recorded_again_for_a_new_run_intent():
+    """A previous turn's handoff cannot suppress the current turn's receipt."""
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {}),
+            action_step("serve", {"title": "app", "path": "index.html"}),
+            finish_step(),
+            action_step("shell", {}),
+            action_step("serve", {"title": "updated app", "path": "index.html"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent)
+
+    await loop.send_message("build the app")
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    assert (await loop.run()).execution_status == ConversationStatus.FINISHED
+    await loop.send_message("update the app")
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    assert (await loop.run()).execution_status == ConversationStatus.FINISHED
+
+    events = await store.get_events(CID)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [event.title for event in deliverables] == ["app", "updated app"]
+    assert not any(
+        isinstance(event, MessageEvent)
+        and event.meta.get("diagnostic") == "serve_duplicate_ignored"
+        for event in events
     )
 
 

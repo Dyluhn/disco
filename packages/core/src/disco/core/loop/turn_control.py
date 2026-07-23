@@ -43,6 +43,7 @@ from ..events import (
     ToolCall,
     ToolResult,
     current_build_platform_admission,
+    event_matches_current_workspace_intent,
 )
 from ..llm import OperatingMode
 from ..verification import requires_structured_browser_runtime
@@ -457,6 +458,7 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
     )
     duplicate = (
         latest_handoff is not None
+        and event_matches_current_workspace_intent(events, latest_handoff)
         and latest_handoff.path == path
         and latest_handoff.artifact_kind == kind
     )
