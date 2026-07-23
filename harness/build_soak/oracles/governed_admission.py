@@ -1089,7 +1089,7 @@ class GovernedAdmissionOracle:
                     not isinstance(selection, dict)
                     or not _preview_selection_is_current(
                         selection,
-                        segment,
+                        events,
                         deliverable_seq=_seq(deliverable),
                         verdict_seq=_seq(verdict),
                     )

@@ -454,7 +454,7 @@ def _replace_receipt(
     events: list[dict[str, Any]],
     **updates: Any,
 ) -> HostVerificationResult:
-    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
+    verdict = next(event for event in reversed(events) if event.get("kind") == "verifier_verdict")
     receipt = HostVerificationResult.model_validate(verdict["verification_result"])
     changed = receipt.model_copy(update={**updates, "effect_receipt": None})
     anchored = with_verification_effect_receipt(changed)
@@ -715,6 +715,74 @@ def test_final_continue_segment_is_authoritative() -> None:
     result = _result(events)
     assert result.failed
     assert result.code == GOVERNED_ADMISSION_BYPASSED
+
+
+def _continued_segment_reusing_prior_preview(*, stopped: bool = False) -> list[dict[str, Any]]:
+    events = [*_segment(base=0), *_segment(base=20)]
+    first_verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
+    first_receipt = HostVerificationResult.model_validate(first_verdict["verification_result"])
+    assert first_receipt.preview_selection is not None
+    second_preview_action = next(
+        event
+        for event in events
+        if event.get("kind") == "action"
+        and event.get("seq") == 26
+        and event.get("tool_call", {}).get("tool_name") == "preview_start"
+    )
+    second_preview_observation = next(
+        event
+        for event in events
+        if event.get("kind") == "observation"
+        and event.get("action_id") == second_preview_action["id"]
+    )
+    events.remove(second_preview_action)
+    events.remove(second_preview_observation)
+    if stopped:
+        events.extend(
+            [
+                {
+                    "kind": "action",
+                    "source": "agent",
+                    "seq": 26,
+                    "id": "evt_continue_preview_stop",
+                    "tool_call": {
+                        "tool_name": "preview_stop",
+                        "call_id": "call-continue-preview-stop",
+                        "arguments": {"name": "web"},
+                    },
+                },
+                {
+                    "kind": "observation",
+                    "source": "environment",
+                    "seq": 27,
+                    "id": "evt_continue_preview_stop_result",
+                    "action_id": "evt_continue_preview_stop",
+                    "tool_result": {
+                        "tool_name": "preview_stop",
+                        "call_id": "call-continue-preview-stop",
+                        "success": True,
+                        "structured": {"stopped": ["web"]},
+                    },
+                },
+            ]
+        )
+    started = next(event for event in reversed(events) if event.get("kind") == "verifier_started")
+    started["preview_selection"] = first_receipt.preview_selection.model_dump(mode="json")
+    started["execution_identity"] = first_receipt.execution_identity.model_dump(mode="json")  # type: ignore[union-attr]
+    _replace_receipt(
+        events,
+        preview_selection=first_receipt.preview_selection,
+        execution_identity=first_receipt.execution_identity,
+    )
+    return events
+
+
+def test_continue_segment_may_reuse_exact_still_active_prior_preview() -> None:
+    assert _result(_continued_segment_reusing_prior_preview()).passed
+
+
+def test_continue_segment_cannot_reuse_prior_preview_after_stop() -> None:
+    assert _result(_continued_segment_reusing_prior_preview(stopped=True)).failed
 
 
 def test_latest_same_segment_failure_overrides_earlier_pass() -> None:
