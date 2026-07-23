@@ -26,7 +26,10 @@ from disco.core.verification import (
 
 from harness.build_soak.failure_codes import GOVERNED_ADMISSION_BYPASSED
 from harness.build_soak.oracles.contract import ContractOracle
-from harness.build_soak.oracles.governed_admission import GovernedAdmissionOracle
+from harness.build_soak.oracles.governed_admission import (
+    GovernedAdmissionOracle,
+    _preview_identity_from_pair,
+)
 from harness.build_soak.run import load_scenarios
 
 _RUN_ID = "run:sha256:" + "b" * 64
@@ -460,6 +463,61 @@ def _replace_receipt(
 
 def test_current_web_segment_with_exact_receipt_passes() -> None:
     assert _result(_segment()).passed
+
+
+def test_preview_oracle_normalizes_only_the_sandbox_workspace_root() -> None:
+    def identity(serve_dir: str) -> dict[str, Any] | None:
+        intent = {"launch_kind": "static", "serve_dir": serve_dir}
+        payload = {
+            "command": "python3 -m http.server 8000 -d /workspace",
+            "exec_dir": "/workspace",
+            "intent": intent,
+            "name": "site",
+            "port": 8000,
+        }
+        call_id = f"call-{hashlib.sha256(serve_dir.encode()).hexdigest()[:8]}"
+        action = {
+            "kind": "action",
+            "seq": 7,
+            "id": f"evt-action-{call_id}",
+            "tool_call": {
+                "tool_name": "preview_start",
+                "call_id": call_id,
+                "arguments": {"serve_dir": serve_dir},
+            },
+        }
+        observation = {
+            "kind": "observation",
+            "seq": 8,
+            "id": f"evt-observation-{call_id}",
+            "action_id": action["id"],
+            "tool_result": {
+                "tool_name": "preview_start",
+                "call_id": call_id,
+                "success": True,
+                "structured": {
+                    **payload,
+                    "status": "running",
+                    "url": "http://preview.test",
+                    "projection_id": "pv_" + "a" * 32,
+                    "sandbox_instance_id": "sandbox-1",
+                    "sandbox_generation": 1,
+                    "launch_kind": "static",
+                    "intent_digest": hashlib.sha256(
+                        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest(),
+                },
+            },
+        }
+        return _preview_identity_from_pair(action, observation)
+
+    root = identity("/workspace/")
+    nested = identity("/workspace/site")
+
+    assert root is not None and root["static_serve_dir"] == "."
+    assert nested is not None and nested["static_serve_dir"] == "site"
+    assert identity("/workspace/../srv/site") is None
+    assert identity("/srv/site") is None
 
 
 def test_target_specific_nonweb_policy_needs_no_preview() -> None:

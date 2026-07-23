@@ -243,6 +243,7 @@ def _gate_loop(
     autonomous: bool = False,
     host_verifier=None,
     host_authoritative: bool = False,
+    finish_alias: str | None = None,
 ):
     store = SqliteEventStore(":memory:")
     loop = AgentLoop(
@@ -260,6 +261,7 @@ def _gate_loop(
         host_verifier=host_verifier,
         host_verify_authoritative=host_authoritative,
         autonomous=autonomous,
+        finish_alias=finish_alias,
     )
     return loop, store
 
@@ -732,6 +734,42 @@ async def test_platform_appkit_does_not_drop_external_mandatory_claim() -> None:
         for event in verdicts
         if event.verification_result is not None and event.verification_result.passed
     } == {"disco.appkit_strict@1", "disco.web_functional@1"}
+
+
+@pytest.mark.asyncio
+async def test_platform_contract_does_not_invent_unadmitted_semantic_claim() -> None:
+    contract = _appkit_contract(with_web=True)
+    host = _StructuredPassingHostVerifier()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(
+        agent,
+        execu,
+        host_verifier=host,
+        finish_alias="ready_for_app_verification",
+    )
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert len(host.calls) == 1
+    assert {claim.claim_id for claim in host.calls[0].required_claims} == {
+        claim.claim_id for claim in contract.checks[1].claims
+    }
+    assert all(
+        result.kind is not VerificationClaimKind.CONTRACT_SEMANTIC
+        for event in events
+        if isinstance(event, VerifierVerdictEvent) and event.verification_result is not None
+        for result in event.verification_result.claim_results
+    )
 
 
 @pytest.mark.asyncio

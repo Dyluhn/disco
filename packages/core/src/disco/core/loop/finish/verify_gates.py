@@ -152,7 +152,11 @@ def _host_verification_claims(
         )
     requested_claims, _ = _user_verification_material(events)
     claims.extend(claim for claim in requested_claims if claim.kind in accepted)
-    if contract and VerificationClaimKind.CONTRACT_SEMANTIC in accepted:
+    if (
+        contract
+        and VerificationClaimKind.CONTRACT_SEMANTIC in accepted
+        and (admission is None or admission.verification_contract is None)
+    ):
         claims.append(
             HostVerificationClaim(
                 claim_id="web.contract_semantic",

@@ -383,6 +383,17 @@ def _preview_identity_from_pair(
     observation_seq = _seq(observation)
     if action_seq < 1 or observation_seq <= action_seq:
         return None
+    static_serve_dir: str | None = None
+    if launch_kind == "static":
+        normalized_serve_dir = posixpath.normpath(str(intent.get("serve_dir") or "."))
+        if normalized_serve_dir == "/workspace":
+            static_serve_dir = "."
+        elif normalized_serve_dir.startswith("/workspace/"):
+            static_serve_dir = normalized_serve_dir.removeprefix("/workspace/")
+        elif not normalized_serve_dir.startswith("/"):
+            static_serve_dir = normalized_serve_dir
+        else:
+            return None
     return {
         "projection_id": structured.get("projection_id"),
         "session_name": name,
@@ -392,9 +403,7 @@ def _preview_identity_from_pair(
         "intent_digest": digest,
         "sandbox_instance_id": structured.get("sandbox_instance_id"),
         "sandbox_generation": structured.get("sandbox_generation"),
-        "static_serve_dir": (
-            str(intent.get("serve_dir") or ".") if launch_kind == "static" else None
-        ),
+        "static_serve_dir": static_serve_dir,
         "source_action_id": action.get("id"),
         "source_action_seq": action_seq,
         "source_observation_id": observation.get("id"),
