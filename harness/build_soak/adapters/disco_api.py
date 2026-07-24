@@ -3195,6 +3195,15 @@ class DiscoApiClient:
         """
         avail_status, avail = await self._t.get_json(f"/conversations/{conversation_id}/preview")
         status, text, _hdrs = await self._t.fetch_isolated_preview(conversation_id)
+        if status == 409 and text.strip() == "preview generation changed":
+            # The canonical authority rotates BY DESIGN when the first post-finish
+            # request replays the sealed runtime from immutable bytes; the real
+            # client re-bootstraps on this exact 409 (counted seed 440041, where
+            # the availability projection was simultaneously and truthfully 200).
+            # Mirror that protocol ONCE with a fresh mint+redeem+fetch; a second
+            # rotation in a row is retained as the truthful failure and any other
+            # 409 is never retried.
+            status, text, _hdrs = await self._t.fetch_isolated_preview(conversation_id)
         return {
             "health": {"status": status},
             "content": text,

@@ -10695,3 +10695,78 @@ def test_export_artifact_paths_extract_from_db_row_events():
     )
     assert flat == ["index.html"]
     assert rows == ["index.html"], "DB-row events must extract identically to flat events"
+
+
+# ---- canonical generation rotation on post-finish replay (seed 440041) ------
+
+
+class _RotatingPreviewTransport(FakeTransport):
+    """First canonical fetch lands on the by-design 409 rotation boundary (the
+    sealed post-finish replay rotates the authority); the re-bootstrap succeeds."""
+
+    def __init__(self, *args, sequence, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sequence = list(sequence)
+        self.preview_fetches = 0
+
+    async def fetch_isolated_preview(self, conversation_id):
+        self.preview_fetches += 1
+        status, body = self.sequence[min(self.preview_fetches - 1, len(self.sequence) - 1)]
+        return status, body, {}
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_rebootstraps_once_across_generation_rotation(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [])
+    transport = _RotatingPreviewTransport(
+        db,
+        states=["FINISHED"],
+        sequence=[(409, "preview generation changed"), (200, "<h1>Sealed OK</h1>")],
+    )
+    client = _client(transport, tmp_path)
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 200
+    assert preview["content"] == "<h1>Sealed OK</h1>"
+    assert preview["available"] is True
+    assert transport.preview_fetches == 2
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_retains_persistent_rotation_failure(tmp_path):
+    """Bounded: a second rotation in a row is the truthful retained failure."""
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [])
+    transport = _RotatingPreviewTransport(
+        db,
+        states=["FINISHED"],
+        sequence=[(409, "preview generation changed"), (409, "preview generation changed")],
+    )
+    client = _client(transport, tmp_path)
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 409
+    assert preview["available"] is False
+    assert transport.preview_fetches == 2
+
+
+@pytest.mark.asyncio
+async def test_collect_preview_never_retries_other_conflicts(tmp_path):
+    """Any non-rotation 409 (or other failure) is retained on the first read."""
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [])
+    transport = _RotatingPreviewTransport(
+        db,
+        states=["FINISHED"],
+        sequence=[(409, "preview_authority_unavailable"), (200, "never fetched")],
+    )
+    client = _client(transport, tmp_path)
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 409
+    assert preview["content"] == "preview_authority_unavailable"
+    assert transport.preview_fetches == 1
