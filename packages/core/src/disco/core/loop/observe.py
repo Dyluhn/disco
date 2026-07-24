@@ -163,6 +163,84 @@ def _recover_elided_file_write_content(
     return None
 
 
+def _has_confirmed_prior_read(events: list[Event], path: str, *, before_id: str | None) -> bool:
+    """K1 (file_write, unauthored path): True iff a prior `file_read` of the SAME
+    `path` was CONFIRMED (ActionEvent + SUCCESSFUL ObservationEvent, no
+    AgentErrorEvent). A pure-marker `file_write` to a path the model only ever READ
+    means the marker stood for an ELIDED READ RESULT (scaffolded files the model
+    never authored — counted seed 440023): there is no authored content to
+    re-expand, and writing the file's own bytes back would fabricate a revision
+    that never happened. A confirmed prior read makes this a CONFUSED copy-back to
+    REDIRECT (not replay, not a hard error). `before_id` excludes the current
+    action. Pure + deterministic."""
+    if not path:
+        return False
+    confirmed: set[str] = set()
+    failed: set[str] = set()
+    for e in events:
+        if isinstance(e, ObservationEvent) and e.tool_result.success:
+            confirmed.add(e.tool_result.call_id)
+        elif isinstance(e, AgentErrorEvent) and e.tool_call_id is not None:
+            failed.add(e.tool_call_id)
+    seen_current = before_id is None
+    for e in reversed(events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if not seen_current:
+            if e.id == before_id:
+                seen_current = True
+            continue
+        if e.tool_call.tool_name != "file_read":
+            continue
+        if e.tool_call.arguments.get("path") != path:
+            continue
+        cid = e.tool_call.call_id
+        if cid in confirmed and cid not in failed:
+            return True
+    return False
+
+
+async def _redirect_marker_write_with_read_provenance(loop: Any, action: ActionEvent) -> bool:
+    """K1 (file_write, unauthored path) — the marker stood for an ELIDED READ
+    RESULT, not a prior write: scaffolded files (npm create vite authored
+    App.css/App.jsx) that the model only ever READ have no authored content to
+    re-expand, and executing the file's own bytes back would fabricate a revision
+    that never happened (counted seed 440023). REDIRECT with the same contract as
+    the append redirect: no (ActionEvent, AgentErrorEvent) pair, so a mid-recovery
+    model is not marched to the frozen thrash boundary by per-file repeats of the
+    same confusion. A model that ignores the redirect is still bounded by
+    identical-action thrash. Returns True iff the redirect was emitted."""
+    assert action.tool_call is not None
+    path = action.tool_call.arguments.get("path")
+    if not isinstance(path, str) or not path:
+        return False
+    if not _has_confirmed_prior_read(await loop._events(), path, before_id=action.id):
+        return False
+    _LOG.info(
+        "K1 redirect: file_write elision copy-back to %s of an elided READ result — "
+        "redirect, no execute (call_id=%s)",
+        path,
+        action.tool_call.call_id,
+    )
+    await loop._emit(
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content=(
+                    "<system-reminder>\nYour last file_write `content` was the engine's"
+                    " internal elision placeholder (a context-saving stand-in for content"
+                    f" shown to you earlier), NOT real text. {path} was NOT modified — it"
+                    f" still holds its actual current bytes. To revise it: file_read {path}"
+                    " now, then send file_write with the COMPLETE revised content as real"
+                    " text (never the placeholder).\n</system-reminder>"
+                ),
+            ),
+        )
+    )
+    return True
+
+
 def _has_confirmed_prior_append(events: list[Event], path: str, *, before_id: str | None) -> bool:
     """K1 (file_append): True iff a prior `file_append` to the SAME `path` was CONFIRMED
     executed (an ActionEvent + a SUCCESSFUL ObservationEvent for its call_id + no
@@ -512,6 +590,13 @@ class Observer:
                         )
                     )
                     return  # NO (action, error) pair → breaks repeated_action_error → STUCK
+            if (
+                _k1_bad == ["content"]
+                and action.tool_call.tool_name == "file_write"
+                and value_is_only_elision_marker(action.tool_call.arguments.get("content"))
+                and await _redirect_marker_write_with_read_provenance(self._loop, action)
+            ):
+                return  # NO (action, error) pair → breaks repeated_same_tool_error
             if _k1_bad:
                 _LOG.info(
                     "K1 guard: rejected %s — arg(s) %s carry an elision placeholder (call_id=%s)",

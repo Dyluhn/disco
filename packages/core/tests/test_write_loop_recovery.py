@@ -466,3 +466,62 @@ def test_f9_dedup_suppressed_when_canonically_same_path_mutated():
     )
     assert deduped is False, "a write under a canonically-same path must block the dedup"
     assert prior_id == "" and pointer == ""
+
+
+async def test_k1_redirects_marker_write_to_scaffolded_read_only_path():
+    """Counted seed 440023: the marker stood for an ELIDED READ RESULT of a
+    scaffolded file (npm create vite authored it; the model only ever READ it).
+    There is no authored content to re-expand and writing the file's own bytes
+    back would fabricate a revision that never happened — so the guard REDIRECTS
+    (message, no execution, no (action, error) pair) instead of marching a
+    mid-recovery model to the frozen thrash boundary with repeated identical
+    rejections."""
+    from disco.core.events import EventSource, MessageEvent
+
+    ex = _SpyExecutor()
+    loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())
+    # A CONFIRMED prior read of the scaffolded file (action + success observation).
+    read = ActionEvent(
+        thought="read",
+        tool_call=ToolCall(
+            tool_name="file_read", call_id="r_scaffold", arguments={"path": "src/App.css"}
+        ),
+    )
+    await loop.store.append(CID, read)
+    await loop.store.append(
+        CID,
+        ObservationEvent(
+            action_id=read.id,
+            tool_result=ToolResult(
+                call_id="r_scaffold", tool_name="file_read", success=True, content="B" * 2_891
+            ),
+        ),
+    )
+    marker = _marker_for("B" * 2_891)
+    events = await _drive(loop, _write("w_copy", marker, path="src/App.css"))
+
+    errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"]
+    assert errs == [], "a read-provenance marker write must REDIRECT, not error"
+    assert ex.calls == [], "a marker write must never execute"
+    redirects = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "elision placeholder" in (e.message.content or "")
+        and "src/App.css" in (e.message.content or "")
+    ]
+    assert redirects, "the redirect system-reminder must name the path and the recovery"
+
+
+async def test_k1_marker_write_without_read_or_write_provenance_still_errors():
+    """Fail-closed control (unchanged semantics): a marker write to a path the
+    model neither wrote nor read keeps the hard rejection."""
+    ex = _SpyExecutor()
+    loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())
+    marker = _marker_for("Z" * 4_000)
+    events = await _drive(loop, _write("w_copy", marker, path="untouched.js"))
+    errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"]
+    assert len(errs) == 1
+    assert "elision" in errs[0].error
+    assert ex.calls == []
