@@ -47,6 +47,11 @@ def retrieval_capability_handlers(
             "content": doc.content,
             "fetched_ok": doc.fetched_ok,
             "status": doc.status,
+            # The provider's concrete failure cause (e.g. an egress-policy denial
+            # for a loopback preview URL). Dropping it left the model a bare
+            # "error" and invited a retry of an impossible call (pilot seed
+            # 405717); the tool layer renders this message verbatim.
+            "error": doc.error,
         }
 
     return {"search": search_handler, "extract": extract_handler}
