@@ -353,16 +353,19 @@ def _child_environment_for_stack(
     manager: StackManager,
     source: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Give a suite the exact non-secret Preview topology its servers use.
+    """Give a suite the exact non-secret state and Preview topology its servers use.
 
-    The child validates server-minted canonical Preview URLs independently. It
-    must therefore receive the isolated listener block selected by the wrapper,
-    rather than inheriting a default or an ambient operator override.
+    Evidence children read the durable database and ProjectStore independently,
+    then validate server-minted canonical Preview URLs. All three authorities
+    must therefore come from the isolated stack rather than a repository default
+    or an ambient operator override.
     """
 
     environment = _child_environment(command, source)
     environment.update(
         {
+            "DISCO_DB": str(manager.db_path),
+            "DISCO_PROJECTS_ROOT": str(manager.root / "projects"),
             "DISCO_LOCAL_PREVIEW_PORT_START": str(manager.local_preview_port_start),
             "DISCO_LOCAL_PREVIEW_PORT_COUNT": str(manager.local_preview_port_count),
         }

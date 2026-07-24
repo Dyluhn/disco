@@ -140,11 +140,15 @@ def test_adjacent_isolated_agent_ports_get_non_overlapping_preview_ranges(
         ["python", "-m", "harness.build_soak.run"],
         first,
         {
+            "DISCO_DB": "/foreign/disco.db",
+            "DISCO_PROJECTS_ROOT": "/foreign/projects",
             "DISCO_LOCAL_PREVIEW_PORT_START": "19120",
             "DISCO_LOCAL_PREVIEW_PORT_COUNT": "32",
             "DISCO_SECRET_KEY": "must-not-cross",
         },
     )
+    assert child["DISCO_DB"] == str(first.db_path)
+    assert child["DISCO_PROJECTS_ROOT"] == str(first.root / "projects")
     assert child["DISCO_LOCAL_PREVIEW_PORT_START"] == "20000"
     assert child["DISCO_LOCAL_PREVIEW_PORT_COUNT"] == "16"
     assert "DISCO_SECRET_KEY" not in child
