@@ -1317,3 +1317,52 @@ def test_appkit_scenarios_replace_the_web_verification_policy_atomically() -> No
             )[0]
             .passed
         )
+
+
+# ---- run-admission bookkeeping vs workspace authority (seed 405512) ---------
+
+
+def _shift_verdict_and_insert_mutation(events: list[dict[str, Any]], operation: str) -> None:
+    """Insert a workspace_mutation between the receipt's observed_after_seq and
+    the verdict by shifting the verdict/terminal seqs up one slot."""
+    verdict = next(event for event in reversed(events) if event.get("kind") == "verifier_verdict")
+    terminal = next(event for event in reversed(events) if event.get("kind") == "status")
+    inserted_seq = verdict["seq"]
+    verdict["seq"] += 1
+    terminal["seq"] += 1
+    events.insert(
+        events.index(verdict),
+        {
+            "kind": "workspace_mutation",
+            "source": "system",
+            "seq": inserted_seq,
+            "id": f"evt_inserted_mutation_{inserted_seq}",
+            "operation": operation,
+        },
+    )
+
+
+def test_run_reclaim_between_receipt_and_verdict_is_not_an_authority_change() -> None:
+    """Pilot seed 405512: a re-plan/approve cycle re-claims the SAME registered
+    run between the verification receipt and the finish verdict. Run-admission
+    bookkeeping (`agent.run-claimed`) moves no workspace bytes — its emitter
+    verifies the registered run intent is unchanged — so the exact receipt must
+    stay valid."""
+    events = _segment()
+    _shift_verdict_and_insert_mutation(events, "agent.run-claimed")
+
+    result = _result(events)
+
+    assert result.passed
+
+
+def test_real_mutation_between_receipt_and_verdict_still_fails_closed() -> None:
+    """Control: an operation that can move workspace bytes in the same window
+    still invalidates the receipt — the bookkeeping exclusion is exact."""
+    events = _segment()
+    _shift_verdict_and_insert_mutation(events, "agent.run-intent.host-mutation")
+
+    result = _result(events)
+
+    assert result.failed
+    assert result.code == GOVERNED_ADMISSION_BYPASSED

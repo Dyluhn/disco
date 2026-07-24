@@ -602,7 +602,16 @@ def _authority_change_between(
             return True
         if event.get("kind") == "workspace_mutation":
             operation = str(event.get("operation") or "")
-            if not operation.startswith(("agent.view-", "artifact-manifest-fold")):
+            # `agent.run-claimed` is engine run-admission bookkeeping: its emitter
+            # verifies the registered run intent is UNCHANGED before recording it
+            # (workspace_service.run_with_workspace_fence), and no workspace bytes
+            # move. A legitimate re-plan/approve cycle between a verification
+            # receipt and the finish verdict re-claims the same run and must not
+            # read as a workspace authority change (live-surfaced at pilot seed
+            # 405512). Every other non-view operation stays authority-relevant.
+            if operation != "agent.run-claimed" and not operation.startswith(
+                ("agent.view-", "artifact-manifest-fold")
+            ):
                 return True
         if event.get("kind") == "action":
             call = event.get("tool_call")
