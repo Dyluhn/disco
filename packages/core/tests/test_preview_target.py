@@ -202,6 +202,40 @@ def test_port_owner_probe_preserves_tmux_session_names_with_spaces():
     }
 
 
+def test_port_owner_probe_attributes_deep_framework_process_tree():
+    ns = {}
+    exec(PORT_OWNER_PROBE_SRC, ns)  # noqa: S102 - executes the embedded probe under test
+
+    parents = {
+        900: 899,
+        899: 898,
+        898: 897,
+        897: 896,
+        896: 895,
+        895: 894,
+        894: 893,
+        893: 892,
+        892: 891,
+        891: 123,
+        123: 1,
+    }
+    ns["parent_pid"] = parents.get
+
+    assert ns["find_tmux_session"](900, {123: "disco-conv_abc-appkit-built-vite"}) == (
+        "disco-conv_abc-appkit-built-vite"
+    )
+
+
+def test_port_owner_probe_does_not_attribute_foreign_or_cyclic_ancestry():
+    ns = {}
+    exec(PORT_OWNER_PROBE_SRC, ns)  # noqa: S102 - executes the embedded probe under test
+
+    parents = {900: 899, 899: 898, 898: 899}
+    ns["parent_pid"] = parents.get
+
+    assert ns["find_tmux_session"](900, {123: "disco-other-appkit-built-vite"}) is None
+
+
 # ---- reserved-port command containment --------------------------------------
 
 

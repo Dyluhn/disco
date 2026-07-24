@@ -263,6 +263,33 @@ def read_tcp_listen(port_hex):
             pass
     return inodes
 
+def parent_pid(pid):
+    try:
+        with open(f'/proc/{pid}/status') as f:
+            for line in f:
+                if line.startswith('PPid:'):
+                    return int(line.split(':', 1)[1].strip())
+    except Exception:
+        pass
+    return None
+
+def find_tmux_session(pid, panes):
+    # npm/framework launchers can put several shells and Node processes between
+    # the listening process and tmux's pane shell. Walk the complete bounded
+    # ancestry instead of assuming a shallow process tree.
+    current_pid = pid
+    visited = set()
+    while True:
+        if current_pid in panes:
+            return panes[current_pid]
+        if current_pid <= 1 or current_pid in visited:
+            break
+        visited.add(current_pid)
+        current_pid = parent_pid(current_pid)
+        if current_pid is None:
+            break
+    return None
+
 def main():
     ports = [int(a) for a in sys.argv[1:]]
     inode_to_port = {}
@@ -306,21 +333,7 @@ def main():
         except Exception:
             pass
 
-        current_pid = found_pid
-        session = None
-        for _ in range(6):
-            if current_pid in panes:
-                session = panes[current_pid]
-                break
-            try:
-                with open(f'/proc/{current_pid}/stat') as f:
-                    stat_data = f.read().split()
-                    if len(stat_data) >= 4:
-                        current_pid = int(stat_data[3])
-                    else:
-                        break
-            except Exception:
-                break
+        session = find_tmux_session(found_pid, panes)
 
         results.append(
             {"port": target_port, "pid": found_pid, "cmdline": cmdline, "session": session}
