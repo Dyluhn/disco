@@ -10671,3 +10671,27 @@ async def test_poll_still_waits_through_live_pre_kick_idle(tmp_path):
     client = DiscoApiClient(_ParkedIdleTransport(last_seq=1), db_path=str(db))
     out = await client.poll_until_terminal_or_gate(_CID, inactivity_s=1.5, hard_cap_s=5.0)
     assert out == INACTIVE_TIMEOUT
+
+
+# ---- export-side artifact extraction on DB-row events (seed 440026) ---------
+
+
+def test_export_artifact_paths_extract_from_db_row_events():
+    """`collect_events` returns DB-row dicts (payload JSON string); the export
+    step's governed-artifact extraction must normalize before the admission
+    oracle — previously it saw no admission on live rows and returned None for
+    every run, masked by the root-viable fallback until the first subdirectory
+    build (counted seed 440026, EXPORT_DOWNLOAD_MISSING)."""
+    from _eventlog import to_db_rows
+    from test_governed_admission_oracle import _scenario as _gov_scenario
+    from test_governed_admission_oracle import _segment as _gov_segment
+
+    events = _gov_segment()
+    flat = _run_mod._governed_artifact_paths(
+        events, scenario=_gov_scenario(), conversation_id="conv_fixture"
+    )
+    rows = _run_mod._governed_artifact_paths(
+        to_db_rows(events), scenario=_gov_scenario(), conversation_id="conv_fixture"
+    )
+    assert flat == ["index.html"]
+    assert rows == ["index.html"], "DB-row events must extract identically to flat events"

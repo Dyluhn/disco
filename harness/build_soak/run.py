@@ -639,10 +639,22 @@ def _governed_artifact_paths(
     scenario: dict[str, Any],
     conversation_id: str,
 ) -> list[str] | None:
-    """Project exact artifact paths only from a fully admitted current receipt."""
+    """Project exact artifact paths only from a fully admitted current receipt.
 
+    `collect_events` hands over DB-ROW dicts whose event fields live inside a
+    `payload` JSON string; the admission oracle reads flattened events (classify
+    normalizes before every oracle). Without normalizing here the oracle saw no
+    admission at all and this returned None for EVERY live run — masked by the
+    root-viable export fallback for workspace-root builds and exposed as
+    EXPORT_DOWNLOAD_MISSING by the first subdirectory build (counted seed
+    440026). A log that cannot normalize projects no paths (fail closed)."""
+
+    try:
+        normalized = normalize_events(events)
+    except (NormalizationError, ValueError, TypeError):
+        return None
     for result in GovernedAdmissionOracle().check(
-        events,
+        normalized,
         scenario=scenario,
         conversation_id=conversation_id,
     ):
