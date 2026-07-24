@@ -1080,10 +1080,19 @@ class PreviewManager:
     async def _launch(self, session: PreviewSession) -> None:
         """Issue the (re)start command in the sandbox + poll health to a verdict."""
         session.status = PreviewStatus.STARTING
+        command = session.command
+        if session.exec_dir:
+            # The manager owns this tmux session, but the SHELL inside it is
+            # stateful: a relaunch re-execs into the surviving shell, which keeps
+            # the PRIOR generation's cwd — even after the model legitimately
+            # deleted that directory (counted seed 440025: node's uv_cwd ENOENT
+            # crashed every relaunch from the dead cwd, including corrected
+            # commands). The session's exec_dir is authoritative per generation,
+            # so bind it at every (re)launch; cd to an absolute path succeeds
+            # regardless of the shell's current (possibly deleted) directory.
+            command = f"cd {shlex.quote(session.exec_dir)} && {command}"
         try:
-            await self._sandbox.sessions.exec(
-                session.name, session.command, exec_dir=session.exec_dir
-            )
+            await self._sandbox.sessions.exec(session.name, command, exec_dir=session.exec_dir)
         except Exception as exc:  # noqa: BLE001 — surface as a status, never raise into a tool
             session.status = PreviewStatus.CRASHED
             session.detail = f"failed to launch: {exc}"

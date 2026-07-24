@@ -513,7 +513,12 @@ async def test_restart_canonical_reuses_exact_stored_intent() -> None:
     assert restarted.status is PreviewStatus.RUNNING
     assert restarted.intent == original_intent
     assert restarted.projection_id != original_projection
-    assert sandbox.sessions.exec_calls[-1][1] == restarted.command
+    # Every (re)launch binds the generation's exec_dir explicitly: the reused
+    # tmux shell keeps the PRIOR generation's cwd otherwise (seed 440025).
+    executed = sandbox.sessions.exec_calls[-1][1]
+    assert executed.endswith(restarted.command)
+    if restarted.exec_dir:
+        assert executed.startswith(f"cd {restarted.exec_dir}") or executed.startswith("cd '")
 
 
 @pytest.mark.asyncio
@@ -570,7 +575,9 @@ async def test_sealed_restore_revalidates_raw_intent_and_binds_fresh_generation(
     assert restored is not None and restored.status is PreviewStatus.RUNNING
     assert restored.port == 3000
     assert restored.intent == expected_intent
-    assert sandbox.sessions.exec_calls == [("web", "PORT=3000 python3 server.py", "/workspace")]
+    assert sandbox.sessions.exec_calls == [
+        ("web", "cd /workspace && PORT=3000 python3 server.py", "/workspace")
+    ]
     assert await mgr.resolve_sealed_contract(contract) is restored
     await mgr.aclose()
 
@@ -1921,3 +1928,34 @@ async def test_known_dev_framework_uses_liveness_not_static_root_success() -> No
 
     assert session.status is PreviewStatus.RUNNING
     assert session.intent["launch_kind"] == "framework"
+
+
+@pytest.mark.asyncio
+async def test_every_launch_binds_exec_dir_against_stale_shell_cwd() -> None:
+    """Counted seed 440025: the preview tmux shell survives generations and keeps
+    the PRIOR generation's cwd — even after the model legitimately deleted that
+    directory (project moved from react-app/ to the workspace root); node then
+    dies instantly on uv_cwd ENOENT for every relaunch, including corrected
+    commands. Every (re)launch must therefore bind the session's exec_dir
+    explicitly in the executed command (an absolute cd succeeds regardless of
+    the shell's current, possibly deleted, directory)."""
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox)
+    session = await mgr.start(serve_dir="dist", name="web", supervise=False)
+
+    name, executed, exec_dir = sandbox.sessions.exec_calls[-1]
+    assert name == "web"
+    assert exec_dir == session.exec_dir
+    assert session.exec_dir, "the launch workspace must resolve to a concrete directory"
+    assert executed.startswith("cd "), executed
+    assert session.exec_dir in executed
+    assert executed.endswith(session.command)
+
+    # The stopped-session relaunch (a NEW generation into the SAME tmux name)
+    # binds the exec_dir again — the exact path that regressed live.
+    await mgr.stop("web")
+    relaunched = await mgr.start(serve_dir="dist", name="web", supervise=False)
+    name2, executed2, _ = sandbox.sessions.exec_calls[-1]
+    assert name2 == "web"
+    assert executed2.startswith("cd "), executed2
+    assert executed2.endswith(relaunched.command)
