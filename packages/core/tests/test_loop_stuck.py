@@ -56,6 +56,90 @@ def test_repeated_action_observation_triggers_at_threshold():
     assert d.is_stuck(_pairs_ao(2)) is False  # below threshold
 
 
+def _file_read_pair(
+    *,
+    path: str = "src/index.css",
+    content: str = "[lines 1-1 of 1]\n1\tbody {}",
+    limit: int | None = None,
+):
+    args: dict[str, object] = {"path": path}
+    if limit is not None:
+        args["limit"] = limit
+    read = action(thought="inspect current bytes", tool="file_read", args=args)
+    return [
+        read,
+        observation(
+            action_id=read.id,
+            tool="file_read",
+            content=content,
+        ),
+    ]
+
+
+def test_exact_unchanged_file_read_arms_escape_before_third_call():
+    detector = StuckDetector()
+    one = _file_read_pair()
+    assert detector.evaluate(one).is_stuck is False
+
+    result = detector.evaluate(one + _file_read_pair())
+    assert result.is_stuck is True
+    assert result.reason == "repeated_unchanged_file_read"
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        _file_read_pair(path="src/App.css"),
+        _file_read_pair(limit=40),
+        _file_read_pair(content="[lines 1-1 of 1]\n1\tbody { color: red; }"),
+    ],
+    ids=["different-resource", "different-range", "changed-bytes"],
+)
+def test_exact_read_breaker_preserves_truthful_variation(second):
+    assert StuckDetector().evaluate(_file_read_pair() + second).is_stuck is False
+
+
+def test_exact_read_breaker_accepts_host_owned_f9_duplicate_receipt():
+    from disco.core.loop.dedup import _F9_POINTER_TEMPLATE
+
+    dedup = _F9_POINTER_TEMPLATE.format(tool_name="file_read", arg_summary="src/index.css")
+    result = StuckDetector().evaluate(_file_read_pair() + _file_read_pair(content=dedup))
+    assert result.reason == "repeated_unchanged_file_read"
+
+
+def test_exact_read_breaker_resets_at_typed_escape_and_on_productive_action():
+    repeated = _file_read_pair() + _file_read_pair()
+    escaped = repeated + [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="stuck_escape"),
+        *_file_read_pair(),
+    ]
+    assert StuckDetector().evaluate(escaped).is_stuck is False
+
+    write = action(
+        thought="change the application",
+        tool="file_write",
+        args={"path": "src/index.css", "content": "body { color: red; }"},
+    )
+    progressed = repeated[:2] + [
+        write,
+        observation(action_id=write.id, tool="file_write", content="wrote changed bytes"),
+        *_file_read_pair(),
+    ]
+    assert StuckDetector().evaluate(progressed).is_stuck is False
+
+
+def test_exact_read_breaker_does_not_lower_generic_tool_threshold():
+    detector = StuckDetector()
+    shell_pairs = []
+    for _ in range(2):
+        shell = action(thought="check", tool="shell", args={"command": "npm test"})
+        shell_pairs += [
+            shell,
+            observation(action_id=shell.id, tool="shell", content="all tests passed"),
+        ]
+    assert detector.evaluate(shell_pairs).is_stuck is False
+
+
 # ---- pattern 2: repeated action→error ---------------------------------------
 
 

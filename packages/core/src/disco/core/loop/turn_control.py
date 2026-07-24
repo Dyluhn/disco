@@ -88,6 +88,7 @@ _BOOKKEEPING_PLAN_SLACK = 2
 # consecutive auto-approved revisions, feed the existing bookkeeping-stuck valve.
 _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 _STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON: dict[str, frozenset[str]] = {
+    "repeated_unchanged_file_read": frozenset({"file_read"}),
     "redundant_read_after_churn_nudge": frozenset({"file_read"}),
     "redundant_read_coverage": frozenset({"file_read"}),
 }
@@ -1341,6 +1342,9 @@ class Valve:
                 blocked_tools = _STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON.get(
                     stuck_result.reason or "", frozenset()
                 )
+                reminder_meta = (
+                    {"blocking": f"stuck_escape:{stuck_result.reason}"} if blocked_tools else {}
+                )
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -1348,6 +1352,7 @@ class Valve:
                             role="user",
                             content=_stuck_escape_reminder(attempt),
                         ),
+                        meta=reminder_meta,
                     )
                 )
                 for tool_name in sorted(blocked_tools):

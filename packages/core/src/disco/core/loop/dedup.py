@@ -236,8 +236,9 @@ _F9_WINDOW_SIZE = 8
 # content if the model suspects staleness. The marker is short on
 # purpose (a few dozen chars) — the goal is to reclaim the context the
 # duplicated read would have eaten, not to re-render the prior output.
+_F9_POINTER_SENTINEL = "[F9 dedup:"
 _F9_POINTER_TEMPLATE = (
-    "[F9 dedup: {tool_name}({arg_summary}) identical to a recent read "
+    _F9_POINTER_SENTINEL + " {tool_name}({arg_summary}) identical to a recent read "
     "this turn — see the earlier result; file_read again only if you "
     "suspect it changed]"
 )

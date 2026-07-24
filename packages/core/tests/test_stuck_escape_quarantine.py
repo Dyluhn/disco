@@ -183,6 +183,61 @@ def _coverage_reads() -> list:
     ]
 
 
+async def test_exact_unchanged_read_escapes_and_quarantines_before_third_execution():
+    """The product breaker must beat the soak's third-identical-call boundary."""
+
+    executor = _CoverageExecutor()
+    agent = ScriptedAgent(
+        [
+            action_step("file_read", {"path": "index.html"}),
+            action_step("file_read", {"path": "index.html"}),
+            action_step("file_read", {"path": "index.html"}),
+            action_step("file_write", {"path": "styles.css", "content": "body{}"}),
+            finish_step(),
+        ]
+    )
+    loop, store = build_loop(agent, executor=executor)
+
+    await loop.send_message("build the site")
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    details = [event.detail for event in events if isinstance(event, StatusEvent)]
+    assert details.count("stuck_escape_block:file_read") == 1
+    assert details.count("stuck_escape") == 1
+    blocking = [
+        event.meta.get("blocking")
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.source == EventSource.ENVIRONMENT
+        and event.meta.get("blocking")
+    ]
+    assert blocking == ["stuck_escape:repeated_unchanged_file_read"]
+
+    # The model proposed a third read, but the host refused it from current,
+    # receipt-proven coverage. Only the first two reached the executor.
+    proposed_reads = [
+        event
+        for event in events
+        if isinstance(event, ActionEvent)
+        and event.tool_call is not None
+        and event.tool_call.tool_name == "file_read"
+    ]
+    assert len(proposed_reads) == 3
+    assert sum(call.tool_name == "file_read" for call in executor.calls) == 2
+    refusals = _read_refusals(events)
+    assert len(refusals) == 1
+    escape = next(
+        event
+        for event in events
+        if isinstance(event, StatusEvent) and event.detail == "stuck_escape"
+    )
+    assert proposed_reads[1].seq is not None and escape.seq is not None
+    assert proposed_reads[2].seq is not None
+    assert proposed_reads[1].seq < escape.seq < proposed_reads[2].seq
+
+
 def _frozen_h415_read(
     seq: int,
     start: int,

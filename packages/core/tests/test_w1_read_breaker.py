@@ -68,8 +68,12 @@ def test_thought_varied_read_loop_fires_via_pattern1():
 
 
 def test_thought_varied_read_loop_below_threshold_does_not_fire():
-    """3 varied-thought reads are BELOW the threshold=4 — must not fire."""
-    d = StuckDetector()
+    """The generic detector remains below threshold at three cycles.
+
+    Disable the separate exact-read breaker so this test continues to isolate
+    W1's generic four-cycle contract.
+    """
+    d = StuckDetector(StuckThresholds(repeat_unchanged_file_read=0))
     events = [user_msg("go")]
     for i in range(3):
         events += _read_pair(thought=f"try {i}")

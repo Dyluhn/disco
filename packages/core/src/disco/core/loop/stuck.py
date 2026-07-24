@@ -38,6 +38,7 @@ from ..events import (
     StatusEvent,
 )
 from ..workspace_paths import strip_redundant_workspace_prefix
+from .dedup import _F9_POINTER_SENTINEL
 from .signals import (
     _NON_PRODUCTIVE_TOOLS,
     _NONCRITICAL_FAILURE_TOOLS,
@@ -195,6 +196,12 @@ _PLAN_META_TOOLS = frozenset(
 
 
 class StuckThresholds(BaseModel):
+    # An exact, successful, byte-unchanged file_read may be repeated once, but
+    # the loop must enter its typed read-recovery episode before a third
+    # identical call. This is deliberately narrower and earlier than the
+    # generic four-cycle detector: changed bytes, another action, another
+    # resource/range, and failed reads do not contribute.
+    repeat_unchanged_file_read: int = 2
     repeat_action_observation: int = 4  # identical action→obs cycles (W1: raised 3→4)
     repeat_action_error: int = 3  # identical action→error cycles
     agent_monologue: int = 4  # consecutive agent msgs, no user
@@ -336,7 +343,12 @@ class StuckDetector:
             if self.t.redundant_read_coverage > 0
             else 0
         )
-        return max(self.t.scan_window, probe_window, read_window)
+        exact_read_window = (
+            self.t.repeat_unchanged_file_read * 2 + 4
+            if self.t.repeat_unchanged_file_read > 0
+            else 0
+        )
+        return max(self.t.scan_window, probe_window, read_window, exact_read_window)
 
     def evaluate(self, recent: list[Event]) -> StuckResult:
         """The richer stuck signal. Returns the same stuck bool the four
@@ -379,9 +391,76 @@ class StuckDetector:
             return "redundant_read_after_churn_nudge"
         if self._redundant_read_coverage(recent):
             return "redundant_read_coverage"
+        if self._repeated_unchanged_file_read(legacy_recent):
+            return "repeated_unchanged_file_read"
         if self._probe_spin(recent):
             return "probe_spin"
         return None
+
+    def _repeated_unchanged_file_read(self, events: list[Event]) -> bool:
+        """Detect an exact unchanged read cycle before a third call is proposed.
+
+        The soak contract permits two identical actions and rejects the third.
+        Disco therefore has to arm its existing one-shot read escape after the
+        second successful, unchanged read—not wait for the generic four-cycle
+        breaker. The check remains narrow and host-grounded:
+
+        - only the final consecutive action/observation pairs count, so any
+          intervening productive action breaks the streak;
+        - every action must be the same exact ``file_read`` request;
+        - every observation must be successful and either byte-equivalent to
+          the first result or an F9 host-owned dedup pointer proving that the
+          request was already satisfied from the unchanged prior read.
+
+        Changed output, failed reads, different paths/ranges, and non-read tools
+        remain ordinary positive variation.
+        """
+
+        n = self.t.repeat_unchanged_file_read
+        if n <= 0:
+            return False
+        # The trusted escape marker grants one recovery attempt. Historical
+        # reads remain available to the receipt-based quarantine, but they must
+        # not immediately re-convict the next (possibly different) action.
+        for index in range(len(events) - 1, -1, -1):
+            event = events[index]
+            if isinstance(event, StatusEvent) and event.detail == "stuck_escape":
+                events = events[index + 1 :]
+                break
+        pairs = _consecutive_pairs(events, ActionEvent, ObservationEvent)
+        if len(pairs) < n:
+            return False
+        last = pairs[-n:]
+        first_action, first_observation = last[0]
+        if (
+            not isinstance(first_action, ActionEvent)
+            or not isinstance(first_observation, ObservationEvent)
+            or first_action.tool_call is None
+            or first_action.tool_call.tool_name != "file_read"
+            or not first_observation.tool_result.success
+            or first_observation.tool_result.tool_name != "file_read"
+        ):
+            return False
+        for action, observation in last[1:]:
+            if (
+                not isinstance(action, ActionEvent)
+                or not isinstance(observation, ObservationEvent)
+                or action.tool_call is None
+                or action.tool_call.tool_name != "file_read"
+                or not observation.tool_result.success
+                or observation.tool_result.tool_name != "file_read"
+                or not event_content_eq(action, first_action, ignore_thought=True)
+            ):
+                return False
+            same_result = event_content_eq(
+                observation,
+                first_observation,
+                ignore_volatile_content=True,
+            )
+            host_dedup = observation.tool_result.content.startswith(_F9_POINTER_SENTINEL)
+            if not same_result and not host_dedup:
+                return False
+        return True
 
     # -- H336 pattern 7: varied offsets over already-known file content ------
 

@@ -94,6 +94,37 @@ def test_plain_environment_prose_cannot_reset_identical_action_streak() -> None:
     assert result.facts["action_seqs"] == [1, 4, 6]
 
 
+def test_typed_read_escape_boundary_keeps_third_refused_proposal_in_recovery_epoch() -> None:
+    obligation = msg(
+        5,
+        "environment",
+        "<system-reminder>take a different action</system-reminder>",
+        role="user",
+    )
+    obligation["meta"] = {"blocking": "stuck_escape:repeated_unchanged_file_read"}
+    third = action(8, "file_read", action_id="read8", args={"path": "same.txt"})
+    events = (
+        _successful_read(1, "same.txt")
+        + _successful_read(3, "same.txt")
+        + [
+            obligation,
+            status(6, "RUNNING", "stuck_escape_block:file_read"),
+            status(7, "RUNNING", "stuck_escape"),
+            third,
+            agent_error(
+                9,
+                "read8",
+                error="stuck_escape_tool_quarantine:file_read",
+            ),
+        ]
+    )
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["longest_identical_action_streak"] == 2
+
+
 def test_semantically_repeated_direct_script_verification_fails_across_shell_wrappers() -> None:
     commands = (
         "cd /workspace && python inventory.py",
