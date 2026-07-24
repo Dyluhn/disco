@@ -2116,7 +2116,8 @@ class DiscoApiClient:
         dangling_action_id: str | None = None
         dangling_action_deadline = 0.0
         while True:
-            last = self._status_of(await self.get_state(conversation_id))
+            state = await self.get_state(conversation_id)
+            last = self._status_of(state)
             thrash_crossed = await self._sample_live_thrash(conversation_id, terminal_status=last)
             if thrash_crossed and last not in TERMINAL_STATES:
                 # A confirmed oracle failure is a spend/reliability stop, not a
@@ -2149,7 +2150,9 @@ class DiscoApiClient:
                 # a cooperative / actionless PAUSE — the driver decides (resume or stop).
                 return last
             if last == "IDLE":
-                if seen_active and self._terminal_is_new(conversation_id, min_terminal_seq):
+                if (
+                    seen_active or self._idle_parked_durably(conversation_id, state)
+                ) and self._terminal_is_new(conversation_id, min_terminal_seq):
                     return last
                 # pre-kick / settling (or a stale pre-follow-up terminal) — keep waiting.
             else:
@@ -2350,6 +2353,30 @@ class DiscoApiClient:
         if min_terminal_seq is None:
             return True
         return self._latest_terminal_seq(conversation_id) > min_terminal_seq
+
+    def _idle_parked_durably(self, conversation_id: str, state: dict[str, Any]) -> bool:
+        """Whether an observed IDLE is a durably PARKED terminal rather than the
+        pre-kick beat. `seen_active` is invocation-local, so a poll invocation that
+        STARTS only after a kill parked the run (live-surfaced at pilot seed 405414:
+        a delayed approve_plan WS ack held the driver past the scenario kill) would
+        otherwise wait out the whole inactivity window against a stable IDLE and
+        never send the scenario's recovery follow-up. The durable log is the
+        authority: a terminal status event within the live state's own seq horizon
+        proves this IDLE is parked, not pre-kick. Bounding by the state's `last_seq`
+        keeps a fixture DB seeded ahead of its scripted states from short-circuiting
+        the genuine pre-kick wait."""
+        try:
+            last_seq = int(state.get("last_seq") or 0)
+        except (TypeError, ValueError):
+            return False
+        if last_seq <= 0:
+            return False
+        for e in self._read_events(conversation_id):
+            if e.get("kind") != "status" or int(e.get("seq", -1)) > last_seq:
+                continue
+            if _payload(e).get("status") in TERMINAL_STATES:
+                return True
+        return False
 
     async def capture_followup_baseline(self, conversation_id: str) -> dict[str, Any]:
         """Snapshot the state needed to detect REAL pickup of the NEXT follow-up (H1),

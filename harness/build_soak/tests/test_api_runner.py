@@ -10621,3 +10621,53 @@ async def test_restore_version_still_fails_closed_when_never_published(tmp_path)
     assert out == {"ok": False, "http_status": 200, "reason": "versions_unavailable"}
     assert transport.reads >= 2
     assert transport.restores == []
+
+
+# ---- parked-IDLE recognition across poll invocations (seed 405414) ----------
+
+
+class _ParkedIdleTransport:
+    """A conversation already killed to IDLE before this poll invocation began —
+    the live /state carries the durable horizon (`last_seq`) like the real route."""
+
+    def __init__(self, last_seq: int) -> None:
+        self.last_seq = last_seq
+
+    async def get_json(self, path):
+        assert path.endswith("/state")
+        return 200, {"execution_status": "IDLE", "last_seq": self.last_seq}
+
+
+def _killed_log() -> list[dict]:
+    killed = status(6, "IDLE", "killed")
+    return [
+        msg(1, "user", "build it"),
+        status(2, "RUNNING"),
+        action(3, "file_write", action_id="a3", args={"path": "app.py"}),
+        observation(4, "a3"),
+        killed,
+    ]
+
+
+async def test_poll_recognizes_parked_idle_when_invocation_starts_after_kill(tmp_path):
+    """Seed 405414: a delayed approve_plan WS ack held the driver past the
+    scenario kill, so a FRESH poll invocation began against a stable killed
+    IDLE. `seen_active` is invocation-local; the durable log within the live
+    state's seq horizon must prove the IDLE is parked, not pre-kick — the poll
+    returns IDLE promptly instead of waiting out the inactivity window."""
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, _killed_log())
+    client = DiscoApiClient(_ParkedIdleTransport(last_seq=6), db_path=str(db))
+    out = await client.poll_until_terminal_or_gate(_CID, inactivity_s=30.0, hard_cap_s=60.0)
+    assert out == "IDLE"
+
+
+async def test_poll_still_waits_through_live_pre_kick_idle(tmp_path):
+    """Control: a genuinely pre-kick IDLE (user turn durable, no status event in
+    the horizon) must still be waited through — the parked-IDLE rule cannot
+    abort the drive before the run ever goes active."""
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [msg(1, "user", "build it")])
+    client = DiscoApiClient(_ParkedIdleTransport(last_seq=1), db_path=str(db))
+    out = await client.poll_until_terminal_or_gate(_CID, inactivity_s=1.5, hard_cap_s=5.0)
+    assert out == INACTIVE_TIMEOUT
