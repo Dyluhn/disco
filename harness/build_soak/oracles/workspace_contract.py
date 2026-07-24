@@ -73,7 +73,17 @@ def resolve_open_assertion_root(
                 "reason": "governed artifact entry is not a normalized workspace-relative path",
                 "verified_artifact_path": raw_path,
             }
-        candidate_roots.add(posixpath.dirname(artifact_path) or ".")
+        # Every enclosing directory of the verified entry below the workspace
+        # root is within the governed lineage: a compiled delivery's entry names
+        # the build OUTPUT (react-continue/dist/index.html) while the open-set
+        # contract may describe the PROJECT that produced it
+        # (react-continue/package.json — counted seed 440026). Stale scaffolds
+        # outside the verified lineage never become candidates; "." stays the
+        # separately-guarded root_viable fallback.
+        ancestor = posixpath.dirname(artifact_path) or "."
+        while ancestor != ".":
+            candidate_roots.add(ancestor)
+            ancestor = posixpath.dirname(ancestor) or "."
         # A directory-shaped delivery is represented by members below its
         # boundary in a file manifest. Keep both boundary vocabularies eligible;
         # the exact declared paths determine which one is viable.
@@ -85,9 +95,14 @@ def resolve_open_assertion_root(
         for root in candidate_roots
         if all(join_workspace_relative(root, path) in paths for path in declared_paths)
     )
-    if len(viable) == 1:
-        return viable[0], None
-    if len(viable) > 1:
+    if viable:
+        # Bind to the root closest to the verified bytes. Nested viable roots
+        # along one artifact lineage resolve to the deepest; two DISTINCT
+        # deepest roots (sibling lineages) remain a refusal, never a guess.
+        deepest = max(len(root.split("/")) for root in viable)
+        deepest_roots = [root for root in viable if len(root.split("/")) == deepest]
+        if len(deepest_roots) == 1:
+            return deepest_roots[0], None
         return None, {
             "reason": "multiple governed artifact roots satisfy the declared output contract",
             "viable_verified_roots": viable,

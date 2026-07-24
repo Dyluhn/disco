@@ -701,3 +701,83 @@ def test_must_contain_is_case_insensitive():
     assert results[0].passed, (
         f"capitalized 'Bakery' must satisfy must_contain ['bakery']: {results[0].to_dict()}"
     )
+
+
+# ---- governed artifact lineage resolution (counted seed 440026) -------------
+
+
+def test_project_root_resolves_from_built_artifact_lineage() -> None:
+    """Counted seed 440026: the verified entry names the build OUTPUT
+    (react-continue/dist/index.html) while the open-set contract describes the
+    PROJECT that produced it. Every enclosing directory of the verified entry is
+    governed lineage; the contract binds to the deepest viable root."""
+    from harness.build_soak.oracles.workspace_contract import resolve_open_assertion_root
+
+    root, error = resolve_open_assertion_root(
+        present_paths=[
+            "react-continue/package.json",
+            "react-continue/index.html",
+            "react-continue/src/App.jsx",
+            "react-continue/dist/index.html",
+            "react-continue/dist/assets/index-abc.js",
+        ],
+        declared_paths=["package.json", "index.html"],
+        verified_artifact_paths=["react-continue/dist/index.html"],
+    )
+
+    assert error is None
+    assert root == "react-continue"
+
+
+def test_nested_viable_roots_bind_to_the_deepest() -> None:
+    """When both the artifact directory and its ancestor satisfy the contract,
+    the binding stays closest to the verified bytes — never a looser ancestor."""
+    from harness.build_soak.oracles.workspace_contract import resolve_open_assertion_root
+
+    root, error = resolve_open_assertion_root(
+        present_paths=[
+            "app/index.html",
+            "app/dist/index.html",
+        ],
+        declared_paths=["index.html"],
+        verified_artifact_paths=["app/dist/index.html"],
+    )
+
+    assert error is None
+    assert root == "app/dist"
+
+
+def test_sibling_lineages_still_refuse_to_guess() -> None:
+    """Control: two distinct sibling lineages both satisfying the contract stay
+    an explicit refusal — the lineage widening never guesses across roots."""
+    from harness.build_soak.oracles.workspace_contract import resolve_open_assertion_root
+
+    root, error = resolve_open_assertion_root(
+        present_paths=["one/index.html", "two/index.html"],
+        declared_paths=["index.html"],
+        verified_artifact_paths=["one/index.html", "two/index.html"],
+    )
+
+    assert root is None
+    assert error is not None
+    assert error["reason"] == (
+        "multiple governed artifact roots satisfy the declared output contract"
+    )
+
+
+def test_scaffold_outside_verified_lineage_never_satisfies() -> None:
+    """Control: a stale scaffold that is not on the verified artifact's lineage
+    cannot satisfy the contract even when its files exist."""
+    from harness.build_soak.oracles.workspace_contract import resolve_open_assertion_root
+
+    root, error = resolve_open_assertion_root(
+        present_paths=[
+            "old-scaffold/package.json",
+            "old-scaffold/index.html",
+            "app/dist/index.html",
+        ],
+        declared_paths=["package.json", "index.html"],
+        verified_artifact_paths=["app/dist/index.html"],
+    )
+
+    assert root is None
