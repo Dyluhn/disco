@@ -68,7 +68,13 @@ from .adapters.disco_api import (
 from .classify import CLASSIFICATION_NAME, classify
 from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
+from .oracles.governed_admission import GovernedAdmissionOracle
 from .oracles.thrash import ThrashOracle
+from .oracles.workspace_contract import (
+    join_workspace_relative,
+    normalized_workspace_relative_path,
+    resolve_open_assertion_root,
+)
 from .product_evidence import (
     PRODUCT_EVIDENCE_NAME,
     PROVIDER_LEDGER_NAME,
@@ -566,8 +572,10 @@ def _export_matches_workspace(
     archive_bytes: bytes,
     workspace: dict[str, Any],
     declared_paths: list[str],
+    *,
+    verified_artifact_paths: list[str] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
-    """Compare required and overlapping archive entries with frozen workspace bytes."""
+    """Compare an export with the exact governed target in the frozen workspace."""
     try:
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
             names = [name for name in archive.namelist() if name and not name.endswith("/")]
@@ -579,29 +587,69 @@ def _export_matches_workspace(
     except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
         return False, {"reason": "invalid_zip"}
     required = [path for path in declared_paths if not path.startswith((".pmx/", ".disco/"))]
-    missing = sorted(path for path in required if path not in archive_shas)
+    if any(normalized_workspace_relative_path(path) is None for path in required):
+        return False, {
+            "reason": "declared_export_path_not_workspace_relative",
+            "required_paths": required,
+        }
+    target_root, root_error = resolve_open_assertion_root(
+        present_paths=workspace,
+        declared_paths=required,
+        verified_artifact_paths=verified_artifact_paths,
+    )
+    if target_root is None:
+        return False, {
+            "reason": "governed_export_target_root_unresolved",
+            "required_paths": required,
+            **(root_error or {}),
+        }
+    resolved_required = {path: join_workspace_relative(target_root, path) for path in required}
+    missing = sorted(
+        path for path, resolved in resolved_required.items() if resolved not in archive_shas
+    )
     mismatched: list[str] = []
     for path, archive_sha in archive_shas.items():
         item = workspace.get(path)
         if isinstance(item, dict) and item.get("present") is True:
             if item.get("sha256") != archive_sha:
                 mismatched.append(path)
-    for path in required:
-        item = workspace.get(path)
+    for resolved in resolved_required.values():
+        item = workspace.get(resolved)
         if (
             isinstance(item, dict)
             and item.get("present") is True
-            and path in archive_shas
-            and item.get("sha256") != archive_shas[path]
-            and path not in mismatched
+            and resolved in archive_shas
+            and item.get("sha256") != archive_shas[resolved]
+            and resolved not in mismatched
         ):
-            mismatched.append(path)
+            mismatched.append(resolved)
     return not missing and not mismatched and bool(archive_shas), {
         "archive_file_count": len(archive_shas),
         "required_paths": required,
+        "resolved_required_paths": resolved_required,
+        "assertion_root": target_root,
         "missing_paths": missing,
         "mismatched_paths": sorted(mismatched),
     }
+
+
+def _governed_artifact_paths(
+    events: list[dict[str, Any]],
+    *,
+    scenario: dict[str, Any],
+    conversation_id: str,
+) -> list[str] | None:
+    """Project exact artifact paths only from a fully admitted current receipt."""
+
+    for result in GovernedAdmissionOracle().check(
+        events,
+        scenario=scenario,
+        conversation_id=conversation_id,
+    ):
+        paths = result.facts.get("verified_artifact_paths")
+        if result.passed and isinstance(paths, list):
+            return [path for path in paths if isinstance(path, str)]
+    return None
 
 
 async def _wait_for_cancel_idle(
@@ -1560,10 +1608,16 @@ async def drive_scenario(
     scenario_product_evidence: dict[str, Any] = dict(client.scenario_evidence)
     if terminal_snapshot_available and lifecycle.get("export_download"):
         export_status, archive_bytes = await client.download_project(cid)
+        verified_artifact_paths = _governed_artifact_paths(
+            events,
+            scenario=scenario,
+            conversation_id=cid,
+        )
         matches, export_facts = _export_matches_workspace(
             archive_bytes,
             workspace,
             _declared_workspace_paths(scenario),
+            verified_artifact_paths=verified_artifact_paths,
         )
         scenario_product_evidence["export"] = {
             "requested": True,

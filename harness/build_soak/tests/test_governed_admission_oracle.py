@@ -475,6 +475,7 @@ def test_current_web_segment_with_exact_receipt_passes() -> None:
         "network_clean",
         "rendered_content",
     }
+    assert result.facts["verified_artifact_paths"] == ["index.html"]
 
 
 def test_current_integrity_bound_observed_fact_is_projected() -> None:
@@ -497,6 +498,13 @@ def test_current_integrity_bound_observed_fact_is_projected() -> None:
 
     assert result.passed
     assert result.facts["verified_observed_facts"][0]["value"] == "Node Paused 403113"
+
+
+def test_target_neutral_native_entry_path_is_projected_after_full_adjudication() -> None:
+    result = _result(_segment(native=True), native=True)
+
+    assert result.passed
+    assert result.facts["verified_artifact_paths"] == ["build/Fixture.app"]
 
 
 def test_observed_fact_from_unadmitted_issuer_is_rejected() -> None:

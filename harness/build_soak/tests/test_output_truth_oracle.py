@@ -24,6 +24,7 @@ def _run(
     events=None,
     verified_claim_results=None,
     verified_observed_facts=None,
+    verified_artifact_paths=None,
 ):
     return OutputTruthOracle().check(
         normalize_events(events or clean_smoke_log()),
@@ -32,6 +33,7 @@ def _run(
         preview=preview,
         verified_claim_results=verified_claim_results,
         verified_observed_facts=verified_observed_facts,
+        verified_artifact_paths=verified_artifact_paths,
     )
 
 
@@ -157,6 +159,160 @@ def test_without_exact_paths_preserves_open_file_set_semantics():
     result = _run(workspace=workspace)[0]
 
     assert result.passed, result.to_dict()
+
+
+def test_governed_nested_application_root_satisfies_relative_file_contract():
+    scenario = {
+        "id": "nested-target",
+        "assertions": {
+            "workspace": {
+                "files": [
+                    {"path": "package.json", "must_contain": ["react", "vite"]},
+                    {"path": "index.html"},
+                ]
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        "react-continue/package.json": '{"dependencies":{"react":"latest","vite":"latest"}}',
+        "react-continue/index.html": "<main id='root'></main>",
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace=workspace,
+        verified_artifact_paths=["react-continue/index.html"],
+    )[0]
+
+    assert result.passed, result.to_dict()
+    assert result.facts["assertion_root"] == "react-continue"
+
+
+def test_untrusted_nested_files_do_not_move_the_assertion_root():
+    workspace = {"unrelated/index.html": "<h1>Build Smoke OK</h1>"}
+
+    result = _run(workspace=workspace)[0]
+
+    assert result.code == "FALSE_FINISH_NO_OUTPUT"
+    assert result.facts["required_path"] == "index.html"
+
+
+def test_governed_root_wins_over_stale_workspace_root_scaffold():
+    workspace = {
+        "package.json": '{"name":"stale"}',
+        "index.html": "stale scaffold",
+        "react-continue/package.json": '{"dependencies":{"react":"latest","vite":"latest"}}',
+        "react-continue/index.html": "<h1>current app</h1>",
+    }
+    scenario = {
+        "id": "canonical-target-wins",
+        "assertions": {
+            "workspace": {
+                "files": [
+                    {"path": "package.json", "must_contain": ["react", "vite"]},
+                    {"path": "index.html", "must_contain": ["current app"]},
+                ]
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace=workspace,
+        verified_artifact_paths=["react-continue/index.html"],
+    )[0]
+
+    assert result.passed, result.to_dict()
+    assert result.facts["assertion_root"] == "react-continue"
+
+
+def test_two_viable_governed_application_roots_fail_closed():
+    scenario = {
+        "id": "ambiguous-target",
+        "assertions": {
+            "workspace": {"files": [{"path": "index.html"}]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        "one/index.html": "one",
+        "two/index.html": "two",
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace=workspace,
+        verified_artifact_paths=["one/index.html", "two/index.html"],
+    )[0]
+
+    assert result.code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
+    assert result.facts["viable_verified_roots"] == ["one", "two"]
+
+
+@pytest.mark.parametrize("path", ["/workspace/index.html", "../index.html", "app/../index.html"])
+def test_unsafe_governed_artifact_path_never_becomes_a_lookup_root(path):
+    result = _run(
+        workspace={"index.html": "<h1>Build Smoke OK</h1>"},
+        verified_artifact_paths=[path],
+    )[0]
+
+    assert result.code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
+    assert result.first_broken_link == "governed_artifact -> output_contract_root"
+
+
+def test_root_qualified_contract_falls_back_to_workspace_root():
+    scenario = {
+        "id": "root-qualified-target",
+        "assertions": {
+            "workspace": {
+                "files": [
+                    {"path": ".disco/appspec.json", "must_contain": ["fixture"]},
+                    {"path": ".disco/designspec.json"},
+                ]
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        ".disco/appspec.json": '{"name":"fixture"}',
+        ".disco/designspec.json": "{}",
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace=workspace,
+        verified_artifact_paths=[".disco/appspec.json"],
+    )[0]
+
+    assert result.passed, result.to_dict()
+    assert result.facts["assertion_root"] == "."
+
+
+def test_directory_shaped_artifact_can_anchor_target_relative_assertions():
+    scenario = {
+        "id": "future-native-bundle",
+        "assertions": {
+            "workspace": {
+                "files": [{"path": "Info.plist", "must_contain": ["CFBundleIdentifier"]}]
+            },
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    workspace = {
+        "build/Fixture.app/Info.plist": "<key>CFBundleIdentifier</key>",
+        "build/Fixture.app/Fixture": "binary",
+    }
+
+    result = _run(
+        scenario=scenario,
+        workspace=workspace,
+        verified_artifact_paths=["build/Fixture.app"],
+    )[0]
+
+    assert result.passed, result.to_dict()
+    assert result.facts["assertion_root"] == "build/Fixture.app"
 
 
 def test_no_output_assertion_skips():

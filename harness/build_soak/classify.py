@@ -177,6 +177,7 @@ def classify(
     results: list[OracleResult] = []
     verified_claim_results: list[dict[str, Any]] | None = None
     verified_observed_facts: list[dict[str, Any]] | None = None
+    verified_artifact_paths: list[str] | None = None
 
     # 1. harness validity (evidence integrity + parse + presence).
     results += HarnessValidityOracle().check(
@@ -211,6 +212,12 @@ def classify(
                 verified_observed_facts = (
                     [dict(fact) for fact in facts if isinstance(fact, dict)]
                     if isinstance(facts, list)
+                    else []
+                )
+                artifact_paths = result.facts.get("verified_artifact_paths")
+                verified_artifact_paths = (
+                    [path for path in artifact_paths if isinstance(path, str)]
+                    if isinstance(artifact_paths, list)
                     else []
                 )
                 break
@@ -248,6 +255,7 @@ def classify(
             preview=preview,
             verified_claim_results=verified_claim_results,
             verified_observed_facts=verified_observed_facts,
+            verified_artifact_paths=verified_artifact_paths,
         )
         first_fail = _first_fail(results)
     if first_fail is None:

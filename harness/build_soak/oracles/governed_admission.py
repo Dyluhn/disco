@@ -14,6 +14,7 @@ from urllib.parse import quote
 from .. import failure_codes as fc
 from ..events import action_executed
 from .schema import OracleResult, failing, passing, skipping
+from .workspace_contract import normalized_workspace_relative_path
 
 _ORACLE = "GovernedVerificationOracle"
 _WORK_TERMINALS = frozenset({"FINISHED", "VERIFIED"})
@@ -885,6 +886,7 @@ class GovernedAdmissionOracle:
         # directly from an unvalidated event.
         verified_claim_results: list[dict[str, Any]] = []
         verified_observed_facts: list[dict[str, Any]] = []
+        verified_artifact_paths: set[str] = set()
         for check in required_checks:
             verdict = next(
                 (
@@ -952,6 +954,7 @@ class GovernedAdmissionOracle:
                 or receipt.get("tool_id") != check.get("operation")
                 or receipt.get("deliverable_event_id") != deliverable.get("id")
                 or receipt.get("artifact_path") != deliverable.get("path")
+                or normalized_workspace_relative_path(receipt.get("artifact_path")) is None
                 or receipt.get("artifact_kind") != deliverable.get("artifact_kind")
                 or (
                     requires_artifact_identity
@@ -1148,6 +1151,11 @@ class GovernedAdmissionOracle:
             verified_observed_facts.extend(
                 dict(fact) for fact in observed_facts or [] if isinstance(fact, dict)
             )
+            # Project only the entry that survived every issuer, contract,
+            # execution, workspace, generation, freshness, and effect-receipt
+            # check above. Downstream file truth may use its location, but never
+            # an unvalidated deliverable/model-authored path.
+            verified_artifact_paths.add(str(receipt["artifact_path"]))
 
         if len(execution_authorities) != 1:
             return _fail(
@@ -1170,6 +1178,7 @@ class GovernedAdmissionOracle:
                     "contract_digest": contract_digest,
                     "verified_claim_results": verified_claim_results,
                     "verified_observed_facts": verified_observed_facts,
+                    "verified_artifact_paths": sorted(verified_artifact_paths),
                 },
             )
         ]

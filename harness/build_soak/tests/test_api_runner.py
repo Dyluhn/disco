@@ -507,6 +507,60 @@ def test_export_archive_must_match_declared_workspace_bytes() -> None:
     assert facts["mismatched_paths"] == ["index.html"]
 
 
+def test_export_archive_uses_governed_nested_target_root() -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("react-continue/index.html", b"truth")
+        bundle.writestr("react-continue/package.json", b'{"dependencies":{"react":"latest"}}')
+    workspace = {
+        "react-continue/index.html": {
+            "present": True,
+            "sha256": hashlib.sha256(b"truth").hexdigest(),
+        },
+        "react-continue/package.json": {
+            "present": True,
+            "sha256": hashlib.sha256(b'{"dependencies":{"react":"latest"}}').hexdigest(),
+        },
+    }
+
+    ok, facts = _run_mod._export_matches_workspace(
+        archive.getvalue(),
+        workspace,
+        ["package.json", "index.html"],
+        verified_artifact_paths=["react-continue/index.html"],
+    )
+
+    assert ok is True
+    assert facts["assertion_root"] == "react-continue"
+    assert facts["resolved_required_paths"] == {
+        "index.html": "react-continue/index.html",
+        "package.json": "react-continue/package.json",
+    }
+
+
+def test_export_archive_never_guesses_between_two_governed_roots() -> None:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("one/index.html", b"one")
+        bundle.writestr("two/index.html", b"two")
+    workspace = {
+        "one/index.html": {"present": True, "sha256": hashlib.sha256(b"one").hexdigest()},
+        "two/index.html": {"present": True, "sha256": hashlib.sha256(b"two").hexdigest()},
+    }
+
+    ok, facts = _run_mod._export_matches_workspace(
+        archive.getvalue(),
+        workspace,
+        ["index.html"],
+        verified_artifact_paths=["one/index.html", "two/index.html"],
+    )
+
+    assert ok is False
+    assert (
+        facts["reason"] == "multiple governed artifact roots satisfy the declared output contract"
+    )
+
+
 @pytest.mark.asyncio
 async def test_pause_resume_trigger_records_durable_control_result(tmp_path):
     transport = FakeTransport(tmp_path / "disco.db", states=["PAUSED", "RUNNING"])

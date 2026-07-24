@@ -29,7 +29,12 @@ from disco.core.observations import scan_for_destructive_elision
 from .. import failure_codes as fc
 from ..events import terminal_status
 from .schema import OracleResult, failing, passing, skipping
-from .workspace_contract import is_platform_managed_path
+from .workspace_contract import (
+    is_platform_managed_path,
+    join_workspace_relative,
+    normalized_workspace_relative_path,
+    resolve_open_assertion_root,
+)
 
 _ORACLE = "OutputTruthOracle"
 
@@ -172,6 +177,7 @@ class OutputTruthOracle:
         preview: dict[str, Any] | None = None,
         verified_claim_results: list[dict[str, Any]] | None = None,
         verified_observed_facts: list[dict[str, Any]] | None = None,
+        verified_artifact_paths: list[str] | None = None,
     ) -> list[OracleResult]:
         assertions = (scenario or {}).get("assertions") or {}
         workspace_assert = assertions.get("workspace") or {}
@@ -258,23 +264,76 @@ class OutputTruthOracle:
         # level, then folded by deterministic precedence (Part A): one authoritative mismatch
         # makes the whole run a hard ARTIFACT_TRUTH_MISMATCH; all-non-authoritative →
         # INVALID_RUN snapshot-unverified.
-        content_mismatches: list[dict[str, Any]] = []
-        for spec in workspace_assert.get("files") or []:
-            path = spec.get("path")
-            if path is None:
+        file_specs = workspace_assert.get("files") or []
+        declared_paths: list[str] = []
+        for spec in file_specs:
+            raw_path = spec.get("path")
+            if raw_path is None:
                 continue
-            if path not in files:
+            path = normalized_workspace_relative_path(raw_path)
+            if path is None:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+                        first_broken_link="scenario_contract -> workspace_file_path",
+                        facts={
+                            "reason": (
+                                "declared output path is not a normalized "
+                                "POSIX workspace-relative path"
+                            ),
+                            "declared_path": raw_path,
+                        },
+                    )
+                ]
+            declared_paths.append(path)
+
+        assertion_root, root_error = resolve_open_assertion_root(
+            present_paths=files,
+            declared_paths=declared_paths,
+            verified_artifact_paths=verified_artifact_paths,
+        )
+        if assertion_root is None and root_error and root_error.get("reason"):
+            return [
+                failing(
+                    _ORACLE,
+                    fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+                    first_broken_link="governed_artifact -> output_contract_root",
+                    facts=root_error,
+                )
+            ]
+
+        content_mismatches: list[dict[str, Any]] = []
+        for spec in file_specs:
+            raw_path = spec.get("path")
+            if raw_path is None:
+                continue
+            path = normalized_workspace_relative_path(raw_path)
+            if path is None:
+                continue  # rejected above
+            resolved_path = (
+                join_workspace_relative(assertion_root, path)
+                if assertion_root is not None
+                else None
+            )
+            if resolved_path is None or resolved_path not in files:
+                facts: dict[str, Any] = {
+                    "required_path": path,
+                    "present_paths": sorted(files),
+                }
+                if root_error:
+                    facts.update(root_error)
                 return [
                     failing(
                         _ORACLE,
                         fc.FALSE_FINISH_NO_OUTPUT,
                         first_broken_link="finish -> required_file_exists",
-                        facts={"required_path": path, "present_paths": sorted(files)},
+                        facts=facts,
                     )
                 ]
-            content = files[path]
-            proof = _proof_for(workspace_manifest, path)
-            content_stable = _content_stable_for(workspace_manifest, path)
+            content = files[resolved_path]
+            proof = _proof_for(workspace_manifest, resolved_path)
+            content_stable = _content_stable_for(workspace_manifest, resolved_path)
             # Case-INSENSITIVE: these assert natural-language content ("bakery")
             # against model-authored copy ("Hearth & Crumb Bakery"). Capitalization
             # is content-neutral; a case-sensitive check FAILed a correct page on
@@ -284,6 +343,7 @@ class OutputTruthOracle:
                     content_mismatches.append(
                         {
                             "path": path,
+                            "resolved_path": resolved_path,
                             "check": "must_contain",
                             "missing_substring": needle,
                             "proof": proof,
@@ -295,6 +355,7 @@ class OutputTruthOracle:
                     content_mismatches.append(
                         {
                             "path": path,
+                            "resolved_path": resolved_path,
                             "check": "must_not_contain",
                             "forbidden_substring": needle,
                             "proof": proof,
@@ -306,6 +367,7 @@ class OutputTruthOracle:
                 content_mismatches.append(
                     {
                         "path": path,
+                        "resolved_path": resolved_path,
                         "check": "equals",
                         "proof": proof,
                         "content_stable": content_stable,
@@ -319,18 +381,28 @@ class OutputTruthOracle:
         # ("(elided)" / "[trimmed]" / "content omitted" / "truncated for brevity" with no
         # recover cue). Scoped to the asserted deliverables; waivable per scenario.
         if not workspace_assert.get("allow_elision"):
-            for spec in workspace_assert.get("files") or []:
-                path = spec.get("path")
-                if path is None or path not in files:
+            for spec in file_specs:
+                raw_path = spec.get("path")
+                if raw_path is None:
                     continue
-                hits = scan_for_destructive_elision(files[path])
+                path = normalized_workspace_relative_path(raw_path)
+                if path is None or assertion_root is None:
+                    continue
+                resolved_path = join_workspace_relative(assertion_root, path)
+                if resolved_path not in files:
+                    continue
+                hits = scan_for_destructive_elision(files[resolved_path])
                 if hits:
                     return [
                         failing(
                             _ORACLE,
                             fc.DESTRUCTIVE_ELISION,
                             first_broken_link="finish -> deliverable_recoverable",
-                            facts={"path": path, "offending_lines": hits[:5]},
+                            facts={
+                                "path": path,
+                                "resolved_path": resolved_path,
+                                "offending_lines": hits[:5],
+                            },
                         )
                     ]
 
@@ -400,4 +472,13 @@ class OutputTruthOracle:
                     )
                 ]
 
-        return [passing(_ORACLE, facts={"terminal_status": term, "file_count": len(files)})]
+        return [
+            passing(
+                _ORACLE,
+                facts={
+                    "terminal_status": term,
+                    "file_count": len(files),
+                    "assertion_root": assertion_root,
+                },
+            )
+        ]
