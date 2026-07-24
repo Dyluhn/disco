@@ -175,6 +175,7 @@ def classify(
     captured_browser_paths = set(browser_evidence_paths or set())
 
     results: list[OracleResult] = []
+    verified_claim_results: list[dict[str, Any]] | None = None
 
     # 1. harness validity (evidence integrity + parse + presence).
     results += HarnessValidityOracle().check(
@@ -193,11 +194,19 @@ def classify(
         # 3a. governed admission — Phase-4 governed Freeform scenarios must have
         # platform admission with claims and a typed PASS receipt. Inline browser
         # evidence cannot substitute for governed completion authority.
-        results += GovernedAdmissionOracle().check(
+        governed_results = GovernedAdmissionOracle().check(
             events,
             scenario=scenario,
             conversation_id=conversation_id,
         )
+        results += governed_results
+        for result in governed_results:
+            claims = result.facts.get("verified_claim_results")
+            if result.passed and isinstance(claims, list):
+                verified_claim_results = [
+                    dict(claim) for claim in claims if isinstance(claim, dict)
+                ]
+                break
         first_fail = _first_fail(results)
     if first_fail is None:
         # 4. tool scope.
@@ -226,7 +235,11 @@ def classify(
     if first_fail is None:
         # 8. output truth.
         results += OutputTruthOracle().check(
-            events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
+            events,
+            scenario=scenario,
+            workspace_manifest=workspace_manifest,
+            preview=preview,
+            verified_claim_results=verified_claim_results,
         )
         first_fail = _first_fail(results)
     if first_fail is None:

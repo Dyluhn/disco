@@ -17,12 +17,19 @@ _SCN = {
 }
 
 
-def _run(scenario=_SCN, workspace=None, preview=None, events=None):
+def _run(
+    scenario=_SCN,
+    workspace=None,
+    preview=None,
+    events=None,
+    verified_claim_results=None,
+):
     return OutputTruthOracle().check(
         normalize_events(events or clean_smoke_log()),
         scenario=scenario,
         workspace_manifest=workspace,
         preview=preview,
+        verified_claim_results=verified_claim_results,
     )
 
 
@@ -352,6 +359,75 @@ def test_preview_content_mismatch():
     }
     preview = {"health": {"status": 200}, "content": "<h1>old</h1>"}
     results = _run(scenario=scenario, preview=preview)
+    assert results[0].code == "PREVIEW_TRUTH_MISMATCH"
+
+
+def test_governed_visible_text_claim_proves_client_rendered_preview_content():
+    scenario = {
+        "id": "client-rendered",
+        "assertions": {
+            "preview": {"required": True, "must_contain": ["Live steer 440023"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    preview = {
+        "health": {"status": 200},
+        "content": "<div id='root'></div><script src='/assets/app.js'></script>",
+    }
+    results = _run(
+        scenario=scenario,
+        preview=preview,
+        verified_claim_results=[
+            {
+                "kind": "visible_text",
+                "expected": "Live steer 440023",
+                "status": "pass",
+                "evidence_modalities": ["dom_accessibility"],
+            }
+        ],
+    )
+
+    assert results[0].passed, results[0].to_dict()
+
+
+def test_governed_claim_set_never_falls_back_to_matching_source_bytes():
+    scenario = {
+        "id": "typed-claims-authoritative",
+        "assertions": {
+            "preview": {"required": True, "must_contain": ["Trusted text"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    preview = {"health": {"status": 200}, "content": "<!-- Trusted text --><div id='root'></div>"}
+    results = _run(
+        scenario=scenario,
+        preview=preview,
+        verified_claim_results=[
+            {"kind": "visible_text", "expected": "Trusted text", "status": "fail"}
+        ],
+    )
+
+    assert results[0].code == "PREVIEW_TRUTH_MISMATCH"
+    assert results[0].facts["evidence_basis"] == "current_governed_visible_text_claims"
+
+
+def test_non_text_and_model_authored_claim_shapes_do_not_prove_visible_text():
+    scenario = {
+        "id": "claim-kind-boundary",
+        "assertions": {
+            "preview": {"required": True, "must_contain": ["I verified it"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    results = _run(
+        scenario=scenario,
+        preview={"health": {"status": 200}, "content": ""},
+        verified_claim_results=[
+            {"kind": "rendered_content", "expected": "I verified it", "status": "pass"},
+            {"kind": "assistant_prose", "expected": "I verified it", "status": "pass"},
+        ],
+    )
+
     assert results[0].code == "PREVIEW_TRUTH_MISMATCH"
 
 

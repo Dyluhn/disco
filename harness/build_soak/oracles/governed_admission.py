@@ -876,6 +876,11 @@ class GovernedAdmissionOracle:
         external_required = set(_active_external_claims(events, through_seq=final_seq))
         covered_external: set[tuple[object, ...]] = set()
         execution_authorities: set[tuple[Any, Any, Any]] = set()
+        # Keep the exact claim results that survive every authority, freshness,
+        # execution-identity, and effect-receipt check below.  Downstream truth
+        # oracles may consume this projection, but must never re-extract claims
+        # directly from an unvalidated event.
+        verified_claim_results: list[dict[str, Any]] = []
         for check in required_checks:
             verdict = next(
                 (
@@ -1116,6 +1121,9 @@ class GovernedAdmissionOracle:
                         "managed Preview/result execution identity is absent, foreign, or stale",
                         check_id=check.get("check_id"),
                     )
+            verified_claim_results.extend(
+                dict(claim) for claim in claim_results or [] if isinstance(claim, dict)
+            )
 
         if len(execution_authorities) != 1:
             return _fail(
@@ -1136,6 +1144,7 @@ class GovernedAdmissionOracle:
                     "target_id": contract.get("target_id"),
                     "required_checks": len(required_checks),
                     "contract_digest": contract_digest,
+                    "verified_claim_results": verified_claim_results,
                 },
             )
         ]

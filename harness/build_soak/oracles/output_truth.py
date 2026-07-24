@@ -9,13 +9,15 @@ scenario asserts output):
   * required workspace files exist             -> FALSE_FINISH_NO_OUTPUT
   * required file contents present (must_contain) -> ARTIFACT_TRUTH_MISMATCH
   * preview health passes (when required)      -> FALSE_FINISH_PREVIEW_BROKEN
-  * preview content present (must_contain)     -> PREVIEW_TRUTH_MISMATCH
+  * required UI text proven by a current governed verifier receipt
+    (legacy non-governed runs fall back to captured preview source)
+                                                -> PREVIEW_TRUTH_MISMATCH
 
 Evidence shapes (captured by the runner; supplied as plain dicts):
   workspace_manifest: {"<relpath>": "<file content>", ...}
                   or  {"<relpath>": {"content": "..."}, ...}
                   or  {"files": {"<relpath>": "...", ...}}
-  preview: {"health": {"status": 200|404|...}, "content": "<served html>"}
+  preview: {"health": {"status": 200|404|...}, "content": "<served source>"}
 """
 
 from __future__ import annotations
@@ -127,6 +129,29 @@ def _fold_content_mismatches(mismatches: list[dict[str, Any]]):
     )
 
 
+def _verified_visible_text_claims(
+    verified_claim_results: list[dict[str, Any]],
+) -> list[str]:
+    """Return exact text values proven by the already-adjudicated claim set.
+
+    This helper is intentionally target-neutral. A web DOM/accessibility verifier,
+    a future native accessibility verifier, or another target adapter may prove a
+    ``visible_text`` claim. Output truth does not infer modality or trust a model's
+    prose; the governed oracle has already validated the issuer, receipt, target
+    execution, revision/generation, evidence references, and freshness.
+    """
+
+    return [
+        expected
+        for claim in verified_claim_results
+        if isinstance(claim, dict)
+        and claim.get("kind") == "visible_text"
+        and claim.get("status") == "pass"
+        and isinstance((expected := claim.get("expected")), str)
+        and bool(expected)
+    ]
+
+
 class OutputTruthOracle:
     def check(
         self,
@@ -135,6 +160,7 @@ class OutputTruthOracle:
         scenario: dict[str, Any] | None = None,
         workspace_manifest: dict[str, Any] | None = None,
         preview: dict[str, Any] | None = None,
+        verified_claim_results: list[dict[str, Any]] | None = None,
     ) -> list[OracleResult]:
         assertions = (scenario or {}).get("assertions") or {}
         workspace_assert = assertions.get("workspace") or {}
@@ -319,16 +345,45 @@ class OutputTruthOracle:
                         facts={"preview_health_status": status},
                     )
                 ]
-            preview_content = str(preview.get("content", ""))
-            for needle in preview_assert.get("must_contain") or []:
-                if needle.lower() not in preview_content.lower():
-                    return [
-                        failing(
-                            _ORACLE,
-                            fc.PREVIEW_TRUTH_MISMATCH,
-                            first_broken_link="finish -> preview_content",
-                            facts={"missing_substring": needle},
-                        )
-                    ]
+            preview_needles = preview_assert.get("must_contain") or []
+            if verified_claim_results is not None:
+                proven_text = _verified_visible_text_claims(verified_claim_results)
+                missing = [
+                    needle
+                    for needle in preview_needles
+                    if not any(str(needle).casefold() in value.casefold() for value in proven_text)
+                ]
+                evidence_basis = "current_governed_visible_text_claims"
+            else:
+                # Backward compatibility for historical/non-governed scenarios.
+                # Governed Build runs never take this branch: once a typed claim
+                # contract exists, raw HTML/source cannot substitute for rendered
+                # or target-specific UI truth.
+                preview_content = str(preview.get("content", ""))
+                missing = [
+                    needle
+                    for needle in preview_needles
+                    if str(needle).casefold() not in preview_content.casefold()
+                ]
+                proven_text = []
+                evidence_basis = "legacy_captured_preview_source"
+            if missing:
+                needle = missing[0]
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PREVIEW_TRUTH_MISMATCH,
+                        first_broken_link=(
+                            "finish -> preview_visible_text"
+                            if verified_claim_results is not None
+                            else "finish -> preview_content"
+                        ),
+                        facts={
+                            "missing_substring": needle,
+                            "evidence_basis": evidence_basis,
+                            "verified_visible_text": proven_text,
+                        },
+                    )
+                ]
 
         return [passing(_ORACLE, facts={"terminal_status": term, "file_count": len(files)})]

@@ -463,7 +463,17 @@ def _replace_receipt(
 
 
 def test_current_web_segment_with_exact_receipt_passes() -> None:
-    assert _result(_segment()).passed
+    result = _result(_segment())
+
+    assert result.passed
+    claims = result.facts["verified_claim_results"]
+    assert {claim["kind"] for claim in claims} == {
+        "artifact_identity",
+        "console_clean",
+        "http_ready",
+        "network_clean",
+        "rendered_content",
+    }
 
 
 def test_host_revision_seal_is_not_a_completed_work_terminal() -> None:
