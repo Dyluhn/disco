@@ -10569,3 +10569,55 @@ async def test_v4_bare_idle_after_late_finished_keeps_the_strict_path(tmp_path, 
 
     assert workspace_calls == 1
     assert (run.workspace_manifest or {}).get("_capture") is None
+
+
+# ---- post-terminal version publication (seed 405318) ------------------------
+
+
+class _LateVersionsTransport:
+    """Versions publish shortly AFTER the terminal status flips — the product's
+    finalization pipeline appends `workspace_version` events ~1.3s after
+    FINISHED (observed live at seed 405318). A fast restore read races it and
+    sees an empty list from the same 200 route."""
+
+    def __init__(self, empty_reads: int) -> None:
+        self.reads = 0
+        self.empty_reads = empty_reads
+        self.restores: list[str] = []
+
+    async def get_json(self, path):
+        assert path.endswith("/versions")
+        self.reads += 1
+        if self.reads <= self.empty_reads:
+            return 200, {"versions": []}
+        return 200, {"versions": [{"seq": 1}, {"seq": 2}]}
+
+    async def post_json(self, path, body):
+        self.restores.append(path)
+        return 200, {"restored": 1, "new_version": 3, "tree_digest": "sha256:x"}
+
+
+async def test_restore_version_waits_for_post_terminal_publication(tmp_path):
+    """The restore drive applies the snapshot-wait doctrine to the versions
+    route: a read that lands in the finalization gap polls to the deadline
+    instead of adjudicating a just-finished build as version-less."""
+    transport = _LateVersionsTransport(empty_reads=2)
+    client = DiscoApiClient(transport, db_path=str(tmp_path / "disco.db"), snapshot_wait_s=10.0)
+    out = await client.restore_workspace_version("conv_x", selector="previous")
+    assert out["ok"] is True
+    assert out["selected_seq"] == 1
+    assert out["new_version"] == 3
+    assert transport.reads == 3
+    assert transport.restores == ["/conversations/conv_x/versions/1/restore"]
+
+
+async def test_restore_version_still_fails_closed_when_never_published(tmp_path):
+    """Fail-closed control: a build whose versions never publish within the
+    budget still reports versions_unavailable — the wait fixes the race, it
+    does not grant availability."""
+    transport = _LateVersionsTransport(empty_reads=10**9)
+    client = DiscoApiClient(transport, db_path=str(tmp_path / "disco.db"), snapshot_wait_s=1.2)
+    out = await client.restore_workspace_version("conv_x", selector="previous")
+    assert out == {"ok": False, "http_status": 200, "reason": "versions_unavailable"}
+    assert transport.reads >= 2
+    assert transport.restores == []

@@ -1885,11 +1885,26 @@ class DiscoApiClient:
     async def restore_workspace_version(
         self, conversation_id: str, *, selector: str = "oldest"
     ) -> dict[str, Any]:
-        """Restore a durable project version through the public history routes."""
-        status, data = await self._t.get_json(f"/conversations/{conversation_id}/versions")
-        versions = data.get("versions") if isinstance(data, dict) else None
-        if status >= 400 or not isinstance(versions, list) or not versions:
-            return {"ok": False, "http_status": status, "reason": "versions_unavailable"}
+        """Restore a durable project version through the public history routes.
+
+        The product publishes its `workspace_version` events as part of the
+        FINISHED finalization pipeline, shortly AFTER the terminal status flips
+        (observed ~1.3s on a loaded host; the UI consumes the event stream, so a
+        human cannot lose this race). Keying the drive on the terminal status
+        alone therefore needs the same bounded flush wait the workspace snapshot
+        read already applies (`snapshot_wait_s`): poll the public versions route
+        to the deadline, then adjudicate availability truthfully. A build whose
+        versions never publish still fails as `versions_unavailable`.
+        """
+        deadline = time.monotonic() + self._snapshot_wait_s
+        while True:
+            status, data = await self._t.get_json(f"/conversations/{conversation_id}/versions")
+            versions = data.get("versions") if isinstance(data, dict) else None
+            if status < 400 and isinstance(versions, list) and versions:
+                break
+            if time.monotonic() >= deadline:
+                return {"ok": False, "http_status": status, "reason": "versions_unavailable"}
+            await asyncio.sleep(0.5)
         valid = [row for row in versions if isinstance(row, dict) and type(row.get("seq")) is int]
         if not valid:
             return {"ok": False, "http_status": status, "reason": "versions_malformed"}
