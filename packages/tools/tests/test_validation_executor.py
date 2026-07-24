@@ -435,6 +435,19 @@ async def test_execute_always_returns_never_raises_on_tool_exception():
     assert "kaboom" in res.error
 
 
+async def test_file_read_missing_path_preserves_typed_recovery_across_executor_boundary():
+    ex = _executor(sandbox=FakeSandboxInstance())
+
+    res = await ex.execute(call("file_read", path="/workspace/index.html"))
+
+    assert res.success is False
+    assert res.error == "file_not_found"
+    assert "'/workspace/index.html' does not exist in the current workspace" in res.content
+    assert "file_list" in res.content
+    assert "create it before reading it" in res.content
+    assert res.effect_receipts == ()
+
+
 async def test_correlation_call_id_preserved_on_success_and_failure():
     ex = _executor()
     c1 = call("file_read", path="x")  # will fail (no file in fresh fake)

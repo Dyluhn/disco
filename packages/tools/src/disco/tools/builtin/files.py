@@ -1223,7 +1223,22 @@ class FileReadTool:
 
     async def run(self, args: FileReadArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
-        data = await ctx.sandbox.read_file(args.path)
+        try:
+            data = await ctx.sandbox.read_file(args.path)
+        except FileNotFoundError:
+            # Process and container sandboxes expose the same typed base here
+            # (SandboxFileNotFoundError also subclasses FileNotFoundError).  Keep
+            # the canonical error stable while putting concrete recovery guidance
+            # in content, which the loop carries as AgentErrorEvent.detail.
+            return ToolOutcome(
+                success=False,
+                error="file_not_found",
+                content=(
+                    f"File read failed: {args.path!r} does not exist in the current "
+                    "workspace. Use file_list on its parent to inspect current paths; "
+                    "if the file is required, create it before reading it."
+                ),
+            )
         # F1 — set the read-since-write bit for this path so a subsequent
         # file_write is allowed (the happy path: read → write). Successful
         # mutators also set this via their returned numbered observations.

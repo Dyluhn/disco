@@ -69,6 +69,23 @@ async def test_file_read_rejects_invalid_utf8_instead_of_returning_lossy_text():
     await inst.destroy()
 
 
+async def test_file_read_missing_path_is_typed_and_actionable_without_grounding():
+    ctx, inst = await _ctx()
+
+    out = await FileReadTool().run(
+        FileReadTool().definition.args_model(path="missing/index.html"),
+        ctx,
+    )
+
+    assert not out.success
+    assert out.error == "file_not_found"
+    assert "'missing/index.html' does not exist in the current workspace" in out.content
+    assert "file_list" in out.content
+    assert "create it before reading it" in out.content
+    assert out.effect_receipts == ()
+    await inst.destroy()
+
+
 async def test_file_read_line_range_slice():
     ctx, inst = await _ctx()
     body = "\n".join(f"line{i}" for i in range(1, 21))  # 20 lines
