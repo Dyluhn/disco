@@ -1375,3 +1375,103 @@ async def test_non_appkit_dictated_content_literal_miss_still_refuses_then_cap_r
     )
     assert any("Required Copy" in m and "artifact.txt" in m for m in env), env
     assert any("Finished despite missing dictated content" in m for m in env), env
+
+
+@pytest.mark.asyncio
+async def test_root_entry_handoff_skips_node_compile_cache(tmp_path: Path):
+    """Counted seed 440023: node homes its module compile cache in the workspace
+    (a non-hidden runtime-state tree with hundreds of flat entries, the JS
+    analogue of __pycache__). A dev-mode handoff whose entry lives at the
+    workspace root must inspect the app files without walking that cache —
+    previously the per-directory bound tripped nondeterministically whenever
+    node had compiled enough modules."""
+    (tmp_path / "artifact.txt").write_text("bundle handoff", encoding="utf-8")
+    (tmp_path / "index.html").write_text("<h1>SELECTED RELEASE ONE</h1>", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.js").write_text(
+        "document.title = 'RELIABILITY MARKER TWO';", encoding="utf-8"
+    )
+    cache = tmp_path / "node-compile-cache" / "v22.22.2-x64-9ac5647c-1000"
+    cache.mkdir(parents=True)
+    for index in range(300):  # over the 256 per-directory inspection bound
+        (cache / f"{index:08x}").write_bytes(b"\x00cache-blob")
+
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-compile-cache",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "Build an app with 'SELECTED RELEASE ONE' and JS title 'RELIABILITY MARKER TWO'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-compile-cache",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="index.html",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-compile-cache")
+
+    assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
+    assert not any("node-compile-cache" in path for path in executor.sandbox.read_paths)
+    assert not any("node-compile-cache" in path for path in executor.sandbox.list_paths)
+
+
+@pytest.mark.asyncio
+async def test_oversized_ordinary_directory_still_fails_closed(tmp_path: Path):
+    """Control: the runtime-state skip is exact — an ordinary oversized app
+    directory still pauses the finish fail-closed at the inspection bound."""
+    (tmp_path / "artifact.txt").write_text("bundle handoff", encoding="utf-8")
+    (tmp_path / "index.html").write_text("<h1>SELECTED RELEASE ONE</h1>", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.js").write_text(
+        "document.title = 'RELIABILITY MARKER TWO';", encoding="utf-8"
+    )
+    data = tmp_path / "data"
+    data.mkdir()
+    for index in range(300):
+        (data / f"row-{index:04d}.txt").write_text("payload", encoding="utf-8")
+
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-oversized-dir",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "Build an app with 'SELECTED RELEASE ONE' and JS title 'RELIABILITY MARKER TWO'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-oversized-dir",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="release",
+            path="index.html",
+            artifact_kind="app",
+        ),
+    )
+
+    loop.agent = ScriptedAgent([_write("bundle handoff"), _finish()])
+    state = await loop.run()
+    events = await store.get_events("dictated-oversized-dir")
+
+    assert state.execution_status == ConversationStatus.PAUSED
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
+        for event in events
+    )

@@ -71,6 +71,15 @@ _DICTATED_CONTENT_BUNDLE_SKIP_DIRS = frozenset(
         ".pmx",
         ".venv",
         "__pycache__",
+        # Node's module compile cache (the JS analogue of __pycache__): the
+        # sandbox homes node processes in the workspace, so node deposits a
+        # non-hidden `node-compile-cache/v<ver>-<arch>-<hash>/` tree with
+        # hundreds of flat entries that grows with every node execution. It is
+        # runtime state, never app content; left in the walk it nondeterministically
+        # trips the per-directory inspection bound whenever the handed-off entry
+        # lives at the workspace root (dev-mode serving) rather than in dist/
+        # (counted seed 440023).
+        "node-compile-cache",
         "node_modules",
         "venv",
         "vendor",
