@@ -42,6 +42,58 @@ def test_identical_tool_call_streak_fails() -> None:
     assert result.facts["action_seqs"] == [1, 3, 5]
 
 
+def _successful_read(seq: int, path: str = ".disco/appspec.json") -> list[dict]:
+    action_id = f"read{seq}"
+    return [
+        action(seq, "file_read", action_id=action_id, args={"path": path}),
+        observation(seq + 1, action_id, tool="file_read", success=True),
+    ]
+
+
+def test_identical_reads_are_fresh_after_typed_plan_recovery_progress() -> None:
+    obligation = msg(4, "environment", "retain the dropped predicate", role="user")
+    obligation["meta"] = {"blocking": "plan_predicate_weakening"}
+    events = (
+        [_approved_plan_scope(1, 1, ["sha256:old"])]
+        + _successful_read(2)
+        + [obligation]
+        + _successful_read(5)
+        + [_approved_plan_scope(7, 2, ["sha256:old", "sha256:new"])]
+        + _successful_read(8)
+    )
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.passed
+    assert result.facts["longest_identical_action_streak"] == 1
+
+
+def test_same_predicate_reapproval_cannot_reset_identical_action_streak() -> None:
+    events = (
+        [_approved_plan_scope(1, 1, ["sha256:same"])]
+        + _successful_read(2)
+        + [_approved_plan_scope(4, 2, ["sha256:same"])]
+        + _successful_read(5)
+        + [_approved_plan_scope(7, 3, ["sha256:same"])]
+        + _successful_read(8)
+    )
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.facts["action_seqs"] == [2, 5, 8]
+
+
+def test_plain_environment_prose_cannot_reset_identical_action_streak() -> None:
+    reminder = msg(3, "environment", "<system-reminder>keep going</system-reminder>", role="user")
+    events = _successful_read(1) + [reminder] + _successful_read(4) + _successful_read(6)
+
+    result = ThrashOracle().check(events, scenario=_scenario())[0]
+
+    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.facts["action_seqs"] == [1, 4, 6]
+
+
 def test_semantically_repeated_direct_script_verification_fails_across_shell_wrappers() -> None:
     commands = (
         "cd /workspace && python inventory.py",

@@ -368,15 +368,37 @@ def _approved_plan_predicate_scope(event: dict[str, Any]) -> tuple[str, ...] | N
     return tuple(sorted(fingerprints))
 
 
-def _longest_identical_streak(actions: list[dict[str, Any]]) -> tuple[int, str, list[int]]:
+def _longest_identical_streak(
+    events: list[dict[str, Any]], *, action_ids: frozenset[str]
+) -> tuple[int, str, list[int]]:
+    """Return the longest exact-action streak within one trusted progress epoch.
+
+    A typed blocking obligation or a genuinely changed approved plan begins a
+    new causal unit of work. Repeating a read after either boundary is fresh
+    recovery/execution, not a third attempt in the earlier no-progress streak.
+    Plain prose and same-predicate reapproval remain inert.
+    """
+
     best_count, best_fp, best_seqs = 0, "", []
     current_fp, current_seqs = "", []
-    for action in actions:
-        fp = _fingerprint(action)
+    approved_scope: tuple[str, ...] | None = None
+    for event in events:
+        next_scope = _approved_plan_predicate_scope(event)
+        if next_scope is not None:
+            if approved_scope != next_scope:
+                current_fp, current_seqs = "", []
+                approved_scope = next_scope
+            continue
+        if progress_epoch_boundary(event, action_ids=action_ids):
+            current_fp, current_seqs = "", []
+            continue
+        if kind_of(event) != KIND_ACTION:
+            continue
+        fp = _fingerprint(event)
         if fp == current_fp:
-            current_seqs.append(seq_of(action))
+            current_seqs.append(seq_of(event))
         else:
-            current_fp, current_seqs = fp, [seq_of(action)]
+            current_fp, current_seqs = fp, [seq_of(event)]
         if len(current_seqs) > best_count:
             best_count, best_fp, best_seqs = len(current_seqs), fp, list(current_seqs)
     return best_count, best_fp, best_seqs
@@ -895,7 +917,9 @@ class ThrashOracle:
                     )
                 ]
 
-        streak, fingerprint, streak_seqs = _longest_identical_streak(actions)
+        streak, fingerprint, streak_seqs = _longest_identical_streak(
+            events, action_ids=known_action_ids
+        )
         if streak > limits["max_identical_action_repeats"]:
             return [
                 failing(
