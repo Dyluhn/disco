@@ -27,15 +27,24 @@ exactly that surface.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
 import hashlib
 import json
 import logging
+import os
 import re
 import shlex
+import stat
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - the process backend is POSIX-only today
+    _fcntl = None  # type: ignore[assignment]
 
 _LOG = logging.getLogger(__name__)
 
@@ -64,7 +73,7 @@ class PreviewReloadStrategy(str, Enum):
 _FRAMEWORK_COMMANDS: dict[str, str] = {
     "static": "python3 -m http.server {port} -d {dir}",
     "http": "python3 -m http.server {port} -d {dir}",
-    "vite": "npm run dev -- --port {port} --host 0.0.0.0",
+    "vite": "npm run dev -- --port {port} --host 0.0.0.0 --strictPort",
     "next": "npm run dev -- -p {port}",
     "nextjs": "npm run dev -- -p {port}",
     "react": "PORT={port} npm start",
@@ -87,7 +96,7 @@ _FRAMEWORK_COMMANDS: dict[str, str] = {
 # keep the existing custom-command contract (PORT and/or an explicit {port}
 # placeholder), and non-web targets never enter PreviewManager.
 _FRAMEWORK_COMMAND_PORT_ARGS: dict[str, tuple[str, ...]] = {
-    "vite": ("--port", "{port}", "--host", "0.0.0.0"),
+    "vite": ("--port", "{port}", "--host", "0.0.0.0", "--strictPort"),
     "next": ("-p", "{port}"),
     "nextjs": ("-p", "{port}"),
     "astro": ("--port", "{port}", "--host", "0.0.0.0"),
@@ -362,6 +371,19 @@ class NoPreviewPortAvailableError(RuntimeError):
     """The platform's preview port pool is exhausted — every curated port is in use."""
 
 
+@dataclass
+class _PreviewPortLease:
+    """Kernel-backed reservation for one shared-host preview port."""
+
+    fd: int
+    path: str
+
+    def close(self) -> None:
+        fd, self.fd = self.fd, -1
+        if fd >= 0:
+            os.close(fd)
+
+
 class PreviewManager:
     """Platform-owned preview lifecycle for ONE conversation's sandbox.
 
@@ -398,6 +420,10 @@ class PreviewManager:
         self._supervisor: asyncio.Task[None] | None = None
         self._closed = False
         self._auto_preview_coordinated = False  # P1 #2: legacy auto-preview stood down once
+        # Process sandboxes share one host network across conversations and Agent
+        # server processes. Socket probing alone has a check/use gap, so keep a
+        # kernel lease for every allocated port through the preview lifecycle.
+        self._port_leases: dict[int, _PreviewPortLease] = {}
         # Host-only bindings from an immutable final workspace contract to the
         # freshly revalidated runtime session serving those exact bytes.
         self._sealed_contracts: dict[str, tuple[str, dict[str, Any]]] = {}
@@ -423,17 +449,76 @@ class PreviewManager:
             checked.append(port)
             if len(checked) > _MAX_PORT_ALLOCATION_ATTEMPTS:
                 break
+            lease: _PreviewPortLease | None = None
+            if self._shares_host_network():
+                lease = self._try_host_port_lease(port)
+                if lease is None:
+                    continue
             # A real listener already owns this curated port (not one of ours) -> skip it,
             # or its response would falsely validate a process that EADDRINUSE'd. HTTP
             # health is only the last fallback; the primary checks are in-sandbox socket
             # ownership and bindability.
-            if not await self._port_available_for_allocation(port, reclaim_name=reclaim_name):
-                continue
-            return port
+            try:
+                if not await self._port_available_for_allocation(port, reclaim_name=reclaim_name):
+                    continue
+                if lease is not None:
+                    self._port_leases[port] = lease
+                    lease = None
+                return port
+            finally:
+                if lease is not None:
+                    lease.close()
         raise NoPreviewPortAvailableError(
             "no free platform preview port found after checking "
             f"{len(checked)} candidate(s): {checked or sorted(self._pool)}"
         )
+
+    def _shares_host_network(self) -> bool:
+        """Whether this manager competes for one host-wide TCP namespace."""
+
+        explicit = getattr(self._sandbox, "shares_host_network", None)
+        if isinstance(explicit, bool):
+            return explicit
+        return (getattr(self._sandbox, "backend_name", "") or "") == "process"
+
+    @staticmethod
+    def _try_host_port_lease(port: int) -> _PreviewPortLease | None:
+        """Acquire ``port`` without waiting; a busy lease selects another port."""
+
+        if _fcntl is None:
+            raise NoPreviewPortAvailableError(
+                "shared-host preview allocation requires POSIX file locking"
+            )
+        from .workspace_process_fence import workspace_process_lock_dir
+
+        path = workspace_process_lock_dir() / f"preview-port-{int(port)}.lock"
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd: int | None = None
+        try:
+            fd = os.open(path, flags, 0o600)
+            opened = os.fstat(fd)
+            named = path.lstat()
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+                named.st_dev,
+                named.st_ino,
+            ):
+                raise OSError("preview port lease changed identity or is not a regular file")
+            _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError as exc:
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                return None
+            raise NoPreviewPortAvailableError(
+                f"shared-host preview port {port} could not be reserved: {exc}"
+            ) from exc
+        return _PreviewPortLease(fd=fd, path=str(path))
+
+    def _release_port_lease(self, port: int) -> None:
+        lease = self._port_leases.pop(port, None)
+        if lease is not None:
+            lease.close()
 
     async def _port_available_for_allocation(
         self, port: int, *, reclaim_name: str | None = None
@@ -796,7 +881,10 @@ class PreviewManager:
             return None  # nobody attributable listening (health said yes) → inconclusive
         owner_session = getattr(owner, "session", None)
         if not owner_session:
-            return None  # a listener exists but no tmux attribution → inconclusive
+            # Isolated network health is sufficient when a backend cannot map the
+            # listener to a shell session. On a shared host, an unattributed PID
+            # may be any sibling or owner process and cannot certify this build.
+            return False if self._shares_host_network() else None
         return self._owner_is_this_session(str(owner_session), session.name)
 
     async def _port_owner(self, port: int) -> Any | None:
@@ -886,30 +974,37 @@ class PreviewManager:
                 return existing
 
             port = await self._allocate_port(reclaim_name=key)
-            resolved = self._resolve_command(
-                port, serve_dir=serve_dir, command=command, framework=framework
-            )
-            # P1 #3: run the server FROM the workspace (not serve_dir) so the static
-            # `-d <serve_dir>` resolves to workspace/<serve_dir> — running from serve_dir
-            # with `-d <serve_dir>` served `<serve_dir>/<serve_dir>` (404 / wrong tree).
-            exec_dir = await self._launch_workspace(cwd)
-            session = PreviewSession(
-                name=key,
-                port=port,
-                command=resolved,
-                exec_dir=exec_dir,
-                intent={
-                    "serve_dir": serve_dir,
-                    "command": command,
-                    "framework": framework,
-                    "cwd": cwd,
-                    "launch_kind": self._launch_kind(command=command, framework=framework),
-                },
-                _supervise=supervise,
-            )
-            self._sessions[key] = session
-            await self._launch(session)
-            self._record_explicit_selection(session)
+            registered = False
+            try:
+                resolved = self._resolve_command(
+                    port, serve_dir=serve_dir, command=command, framework=framework
+                )
+                # P1 #3: run the server FROM the workspace (not serve_dir) so the static
+                # `-d <serve_dir>` resolves to workspace/<serve_dir> — running from serve_dir
+                # with `-d <serve_dir>` served `<serve_dir>/<serve_dir>` (404 / wrong tree).
+                exec_dir = await self._launch_workspace(cwd)
+                session = PreviewSession(
+                    name=key,
+                    port=port,
+                    command=resolved,
+                    exec_dir=exec_dir,
+                    intent={
+                        "serve_dir": serve_dir,
+                        "command": command,
+                        "framework": framework,
+                        "cwd": cwd,
+                        "launch_kind": self._launch_kind(command=command, framework=framework),
+                    },
+                    _supervise=supervise,
+                )
+                self._sessions[key] = session
+                registered = True
+                await self._launch(session)
+                self._record_explicit_selection(session)
+            except BaseException:
+                if not registered:
+                    self._release_port_lease(port)
+                raise
 
         if supervise:
             self._ensure_supervisor()
@@ -1294,23 +1389,30 @@ class PreviewManager:
 
             if target.status is PreviewStatus.STOPPED:
                 port = await self._allocate_port(reclaim_name=target.name)
-                resolved = self._resolve_command(
-                    port,
-                    serve_dir=serve_dir,
-                    command=command,
-                    framework=framework,
-                )
-                exec_dir = await self._launch_workspace(cwd)
-                target = PreviewSession(
-                    name=target.name,
-                    port=port,
-                    command=resolved,
-                    exec_dir=exec_dir,
-                    intent=dict(target.intent),
-                    _supervise=supervise,
-                )
-                self._sessions[target.name] = target
-                await self._launch(target)
+                registered = False
+                try:
+                    resolved = self._resolve_command(
+                        port,
+                        serve_dir=serve_dir,
+                        command=command,
+                        framework=framework,
+                    )
+                    exec_dir = await self._launch_workspace(cwd)
+                    target = PreviewSession(
+                        name=target.name,
+                        port=port,
+                        command=resolved,
+                        exec_dir=exec_dir,
+                        intent=dict(target.intent),
+                        _supervise=supervise,
+                    )
+                    self._sessions[target.name] = target
+                    registered = True
+                    await self._launch(target)
+                except BaseException:
+                    if not registered:
+                        self._release_port_lease(port)
+                    raise
             else:
                 await self._refresh(target)
                 if target.status is PreviewStatus.CRASHED:
@@ -1510,6 +1612,7 @@ class PreviewManager:
         session.status = PreviewStatus.STOPPED
         session.url = None
         session.detail = "stopped on request"
+        self._release_port_lease(session.port)
         return name
 
     def list(self) -> list[PreviewSession]:
@@ -1527,6 +1630,8 @@ class PreviewManager:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         await self.stop(None)
+        for port in tuple(self._port_leases):
+            self._release_port_lease(port)
 
 
 def _default_port_pool(sandbox: Any) -> list[int]:

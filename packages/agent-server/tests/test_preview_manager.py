@@ -411,7 +411,7 @@ async def test_framework_adapter_binds_explicit_vite_script_to_platform_port() -
     assert session.port == 3000
     assert session.intent["launch_kind"] == "framework"
     assert session.reload_strategy is PreviewReloadStrategy.HMR
-    assert session.command == ("PORT=3000 npm run dev -- --port 3000 --host 0.0.0.0")
+    assert session.command == ("PORT=3000 npm run dev -- --port 3000 --host 0.0.0.0 --strictPort")
     assert 5173 not in sandbox._serving
 
 
@@ -1437,6 +1437,40 @@ async def test_foreign_namespace_owner_with_same_name_is_not_misattributed() -> 
     assert "different process" in session.detail.lower()
 
 
+@pytest.mark.asyncio
+async def test_shared_host_unattributed_listener_cannot_certify_preview() -> None:
+    """A host PID with no conversation session is foreign until proven otherwise."""
+
+    class _UnattributedSharedSandbox(_FakeSandbox):
+        shares_host_network = True
+
+        def __init__(self) -> None:
+            super().__init__(backend_name="process")
+
+        async def port_owner(self, port: int):  # noqa: ANN201
+            if port in self._serving:
+                return _Owner(pid=7331, session=None)
+            return _Owner(pid=None, session=None)
+
+    sandbox = _UnattributedSharedSandbox()
+    sandbox._serving.add(39011)
+    mgr = _mgr(sandbox, port_pool=[39011])
+    session = PreviewSession(
+        name="app",
+        port=39011,
+        command="python3 -m http.server 39011 -d dist",
+        exec_dir="/workspace",
+        intent={},
+        _supervise=False,
+    )
+    mgr._sessions["app"] = session
+
+    await mgr._launch(session)
+
+    assert session.status is PreviewStatus.CRASHED
+    assert "different process" in session.detail.lower()
+
+
 def test_owner_match_requires_full_exact_session_identity() -> None:
     """Unit-level: `_owner_is_this_session` accepts ONLY the exact `disco-{ns}{name}` id.
     A foreign-namespace session ending in `-{name}`, or the bare `{name}`, is rejected."""
@@ -1505,6 +1539,34 @@ async def test_allocation_skips_socket_occupied_ports_until_free_candidate() -> 
     sandbox = _SocketOccupiedSandbox({3000, 5173})
     mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
     assert await mgr._allocate_port() == 8080
+
+
+@pytest.mark.asyncio
+async def test_shared_host_port_lease_closes_cross_process_allocation_race() -> None:
+    """Independent managers cannot both reserve the same apparently-free host port."""
+
+    first_sandbox = _FakeSandbox(backend_name="process")
+    first_sandbox.shares_host_network = True
+    second_sandbox = _FakeSandbox(backend_name="process")
+    second_sandbox.shares_host_network = True
+    first = _mgr(first_sandbox, port_pool=[39001, 39002])
+    second = _mgr(second_sandbox, port_pool=[39001, 39002])
+
+    first_session = await first.start(serve_dir="dist", name="first", supervise=False)
+    second_session = await second.start(serve_dir="dist", name="second", supervise=False)
+
+    assert first_session.port == 39001
+    assert second_session.port == 39002
+    await first.stop("first")
+
+    third_sandbox = _FakeSandbox(backend_name="process")
+    third_sandbox.shares_host_network = True
+    third = _mgr(third_sandbox, port_pool=[39001, 39002])
+    third_session = await third.start(serve_dir="dist", name="third", supervise=False)
+    assert third_session.port == 39001
+
+    await second.aclose()
+    await third.aclose()
 
 
 class _StalePreviewSessions(_FakeSessions):
