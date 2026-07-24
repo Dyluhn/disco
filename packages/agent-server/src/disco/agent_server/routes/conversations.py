@@ -528,6 +528,16 @@ def make_conversations_router(
         if runtime is not None:
             await runtime.kill(conversation_id)
         state = await store.get_state(conversation_id)
+        # A successful kill has already revoked host capabilities and destroyed
+        # the preview runtime. Keep the DNS-free origin durable across ordinary
+        # finish/restart, but release it after this explicit teardown so a long-
+        # lived server cannot exhaust the bounded listener pool. If a newer run
+        # superseded the kill, ControlOps leaves it non-IDLE and its lease stays.
+        if state.execution_status is ConversationStatus.IDLE:
+            store.release_local_preview_lease(
+                conversation_id=conversation_id,
+                owner_id=current_owner_id(request),
+            )
         return {
             "killed": True,
             "state": state.model_dump(mode="json"),
@@ -582,6 +592,10 @@ def make_conversations_router(
         _revoke_host_tokens(host_token_store, conversation_id)
         if runtime is not None:
             await runtime.forget_conversation(conversation_id)
+        store.release_local_preview_lease(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+        )
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
         if deleted:
             remove_report_audio_cache(conversation_id)

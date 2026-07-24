@@ -198,6 +198,24 @@ class LocalPreviewLeaseStore:
                 storage_authority_id=self._storage_authority(listener_port),
             )
 
+    def release(self, *, conversation_id: str, owner_id: str) -> bool:
+        """Release one explicitly torn-down conversation's listener origin.
+
+        The retained ``local_preview_origin_state`` row is intentionally not
+        removed. A later authority may reuse the listener only through the
+        existing browser-storage reset fence, so prompt capacity recovery does
+        not weaken generated-application cookie or storage isolation.
+        """
+
+        if not conversation_id or not owner_id:
+            return False
+        with self._lock, self._connection:
+            deleted = self._connection.execute(
+                "DELETE FROM local_preview_leases WHERE conversation_id = ? AND owner_id = ?",
+                (conversation_id, owner_id),
+            )
+            return deleted.rowcount == 1
+
     def complete_storage_reset(
         self,
         listener_port: int,

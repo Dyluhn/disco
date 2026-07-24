@@ -387,6 +387,12 @@ class _ClosableSqliteStore:
     ) -> LocalPreviewLease | None:
         return self._local_preview_leases.resolve(listener_port, now=now)
 
+    def release_local_preview_lease(self, *, conversation_id: str, owner_id: str) -> bool:
+        return self._local_preview_leases.release(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+        )
+
     def complete_local_preview_storage_reset(
         self, listener_port: int, *, authority_id: str, now: int
     ) -> bool:

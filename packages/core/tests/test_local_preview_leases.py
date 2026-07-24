@@ -117,6 +117,112 @@ def test_recycled_origin_requires_reset_for_new_conversation_and_authority(tmp_p
     store.close()
 
 
+def test_explicit_release_is_owner_scoped_and_preserves_storage_reset_fence(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(tmp_path / "released.sqlite3")
+    ports = (19120, 19121)
+    first_cid = "conv_a1b2c3d4released"
+    second_cid = "conv_b1c2d3e4replacement"
+    store.create_conversation(first_cid, owner_id="owner-a")
+    store.create_conversation(second_cid, owner_id="owner-b")
+    first = store.acquire_local_preview_lease(
+        conversation_id=first_cid,
+        owner_id="owner-a",
+        target_port=8000,
+        authority_id="live:first",
+        now=100,
+        expires_at=1_000,
+        listener_ports=ports,
+    )
+    assert first is not None
+    assert store.complete_local_preview_storage_reset(
+        first.listener_port,
+        authority_id="live:first",
+        now=101,
+    )
+
+    assert not store.release_local_preview_lease(
+        conversation_id=first_cid,
+        owner_id="owner-b",
+    )
+    assert store.resolve_local_preview_lease(first.listener_port, now=102) is not None
+    assert store.release_local_preview_lease(
+        conversation_id=first_cid,
+        owner_id="owner-a",
+    )
+    assert store.resolve_local_preview_lease(first.listener_port, now=102) is None
+    assert not store.release_local_preview_lease(
+        conversation_id=first_cid,
+        owner_id="owner-a",
+    )
+
+    replacement = store.acquire_local_preview_lease(
+        conversation_id=second_cid,
+        owner_id="owner-b",
+        target_port=8000,
+        authority_id="live:replacement",
+        now=103,
+        expires_at=1_000,
+        listener_ports=(first.listener_port,),
+    )
+    assert replacement is not None
+    assert replacement.listener_port == first.listener_port
+    assert replacement.storage_reset_required is True
+    assert not store.complete_local_preview_storage_reset(
+        replacement.listener_port,
+        authority_id="live:first",
+        now=104,
+    )
+    assert store.complete_local_preview_storage_reset(
+        replacement.listener_port,
+        authority_id="live:replacement",
+        now=104,
+    )
+    store.close()
+
+
+def test_explicit_teardown_recycles_bounded_pool_without_cross_authority_reuse(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(tmp_path / "bounded-churn.sqlite3")
+    ports = (19120, 19121)
+
+    for index in range(100):
+        cid = f"conv_churn_{index:03d}"
+        authority = f"live:generation-{index:03d}"
+        store.create_conversation(cid, owner_id="owner-a")
+        lease = store.acquire_local_preview_lease(
+            conversation_id=cid,
+            owner_id="owner-a",
+            target_port=8000,
+            authority_id=authority,
+            now=100 + index,
+            expires_at=10_000,
+            listener_ports=ports,
+        )
+        assert lease is not None
+        assert lease.storage_reset_required is True
+        assert store.complete_local_preview_storage_reset(
+            lease.listener_port,
+            authority_id=authority,
+            now=100 + index,
+        )
+        assert store.release_local_preview_lease(
+            conversation_id=cid,
+            owner_id="owner-a",
+        )
+        assert (
+            store.resolve_local_preview_lease(
+                lease.listener_port,
+                now=100 + index,
+            )
+            is None
+        )
+
+    store.close()
+
+
 def test_preview_capability_authority_survives_intent_exchange_and_is_checked_early(
     tmp_path: Path,
 ) -> None:
