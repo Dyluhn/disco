@@ -306,6 +306,60 @@ def test_favicon_and_analytics_network_failures_ignored():
     assert v["passed"] is True
 
 
+def test_favicon_resource_console_error_is_ignored_like_its_network_failure():
+    console = [
+        {
+            "level": "error",
+            "text": (
+                "Failed to load resource: the server responded with a status of 404 (Not Found)"
+            ),
+            "location": {
+                "url": "http://127.0.0.1:8080/favicon.ico",
+                "lineNumber": 0,
+                "columnNumber": 0,
+            },
+        }
+    ]
+    v = compute_verdict(
+        url="http://127.0.0.1:8080/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(console=console),
+        meaningful=True,
+    )
+    assert v["console_errors"] == []
+    assert v["passed"] is True
+
+
+def test_console_filter_keeps_real_exceptions_and_load_bearing_resource_failures():
+    console = [
+        {
+            "level": "error",
+            "text": "TypeError: cannot read properties of undefined",
+            "location": {"url": "http://127.0.0.1:8080/favicon-helper.js"},
+        },
+        {
+            "level": "error",
+            "text": (
+                "Failed to load resource: the server responded with a status of 404 (Not Found)"
+            ),
+            "location": {"url": "http://127.0.0.1:8080/assets/main.js"},
+        },
+    ]
+    v = compute_verdict(
+        url="http://127.0.0.1:8080/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(console=console),
+        meaningful=True,
+    )
+    assert [entry["text"] for entry in v["console_errors"]] == [
+        "TypeError: cannot read properties of undefined",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    ]
+    assert v["passed"] is False
+
+
 # ---- run() integration with fakes -------------------------------------------
 
 

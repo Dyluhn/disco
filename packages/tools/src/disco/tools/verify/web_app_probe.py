@@ -57,10 +57,19 @@ def _console_errors(console: list[dict[str, Any]]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for c in console:
         if c.get("level") == "error":
+            source = _source_of(c)
+            text = str(c.get("text", ""))
+            # Chromium mirrors failed resource requests into the console. Apply
+            # the same narrow non-load-bearing resource policy used by the
+            # network classifier, but only to the browser's generic load-error
+            # message. A real exception remains an error even if its source URL
+            # happens to contain an allowlisted token.
+            if "failed to load resource" in text.lower() and _is_ignorable_network({"url": source}):
+                continue
             out.append(
                 {
-                    "text": str(c.get("text", "")),
-                    "source": _source_of(c),
+                    "text": text,
+                    "source": source,
                     "stack": str(c.get("stack", "") or ""),
                 }
             )
