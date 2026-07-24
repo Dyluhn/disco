@@ -29,6 +29,8 @@ class ServerStatusTool:
 
     async def run(self, args: ServerStatusArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        from disco.core.loop.preview_target import active_managed_preview_ports
+
         from ..sandbox._container import USER_PORTS
         from ..sandbox.port_owner import port_owners
 
@@ -46,7 +48,7 @@ class ServerStatusTool:
 
         out_lines.append("ports:")
 
-        ports = sorted(USER_PORTS)
+        ports = sorted(set(USER_PORTS) | set(active_managed_preview_ports(ctx.sandbox)))
         owners = await port_owners(ctx.sandbox, ports)
         # Strip the manager's session prefix for display. Dual-read both the
         # current `disco-` and legacy `pmx-` prefixes (sourced from the manager,

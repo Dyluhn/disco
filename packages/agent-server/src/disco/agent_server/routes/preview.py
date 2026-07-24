@@ -46,6 +46,7 @@ from disco.core.auth import (
 )
 from disco.core.env import disco_env
 from disco.core.events import Event
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
@@ -470,7 +471,11 @@ async def _serve_active_finished_projection(
     if not isinstance(resolved, dict):
         return None
     port = resolved.get("port")
-    if type(port) is not int or port not in USER_PORTS or port == NOVNC_PORT:
+    if (
+        type(port) is not int
+        or (port not in USER_PORTS and not is_managed_host_preview_port(port))
+        or port == NOVNC_PORT
+    ):
         return None
     if capability_port is not None and capability_port != port:
         return None
@@ -720,7 +725,7 @@ def _canonical_preview_port(runtime: ConversationRuntime, conversation_id: str) 
     if (
         not isinstance(port, int)
         or isinstance(port, bool)
-        or port not in USER_PORTS
+        or (port not in USER_PORTS and not is_managed_host_preview_port(port))
         or port == NOVNC_PORT
     ):
         return None
@@ -1081,7 +1086,11 @@ async def _preview_capability_response(
     body: PreviewCapabilityBody,
     request: Request,
 ) -> Response:
-    if body.port is not None and body.port not in USER_PORTS:
+    if (
+        body.port is not None
+        and body.port not in USER_PORTS
+        and not (body.transport == "canonical" and is_managed_host_preview_port(body.port))
+    ):
         raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
     if body.workspace_version is not None and body.transport != "canonical":
         raise HTTPException(

@@ -39,6 +39,7 @@ from disco.core.auth import (
     validated_canonical_preview_url,
 )
 from disco.core.evidence.schema import redact
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 from websockets.typing import Origin
@@ -477,7 +478,10 @@ class HttpVerifyClient(AbstractVerifyClient):
                 or not body.get("preview_authority")
                 or not isinstance(selected_port, int)
                 or isinstance(selected_port, bool)
-                or selected_port not in USER_PORTS
+                or (
+                    selected_port not in USER_PORTS
+                    and not is_managed_host_preview_port(selected_port)
+                )
                 or selected_port == NOVNC_PORT
             ):
                 return None

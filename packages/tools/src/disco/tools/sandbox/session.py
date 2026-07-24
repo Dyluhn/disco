@@ -563,8 +563,14 @@ class SandboxSession:
         import base64
         import urllib.parse
 
-        # Containment: only the curated USER_PORTS are ever a preview surface.
-        if port not in USER_PORTS:
+        # Container/generic service containment stays on USER_PORTS. A process
+        # sandbox may additionally fetch one of the platform's managed host
+        # runtime ports; signed Preview authority, not this liveness primitive,
+        # decides whether any such response is user-visible.
+        from disco.core.loop.preview_target import is_managed_host_preview_port
+
+        managed_host_port = self.shares_host_network and is_managed_host_preview_port(port)
+        if port not in USER_PORTS and not managed_host_port:
             return None
 
         # URL-encode the path so it can't break out of the single-quoted shell arg

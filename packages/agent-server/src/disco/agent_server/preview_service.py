@@ -27,6 +27,7 @@ from dataclasses import replace
 from typing import Any
 
 from disco.core import DEFAULT_OWNER_ID, ConversationStatus, DeliverableEvent
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
@@ -164,10 +165,12 @@ class PreviewService:
             return None
         if port is None:
             return None
+        managed_host_port = is_managed_host_preview_port(port)
         if (
             not isinstance(port, int)
             or isinstance(port, bool)
-            or port not in USER_PORTS
+            or (port not in USER_PORTS and not managed_host_port)
+            or (managed_host_port and not getattr(session, "shares_host_network", False))
             or port == NOVNC_PORT
         ):
             return None
@@ -497,6 +500,12 @@ class PreviewService:
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return None
+        if port not in USER_PORTS and (
+            not is_managed_host_preview_port(port)
+            or not getattr(session, "shares_host_network", False)
+            or port != self.preview_target_port(conversation_id)
+        ):
+            return None
         if port == NOVNC_PORT and not (
             self._live_browser_enabled() and getattr(session, "supports_live_view", False)
         ):
@@ -582,11 +591,14 @@ class PreviewService:
                 "ports": [],
                 **metadata,
             }
+        target_port = self.preview_target_port(conversation_id)
+        probe_ports = set(USER_PORTS)
+        if target_port is not None:
+            probe_ports.add(target_port)
         try:
-            owners = await port_owners(inst, sorted(USER_PORTS))
+            owners = await port_owners(inst, sorted(probe_ports))
         except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
             owners = {}
-        target_port = self.preview_target_port(conversation_id)
         owner = owners.get(target_port) if target_port is not None else None
 
         ns = f"pmx-{session.sessions.namespace}"

@@ -42,6 +42,7 @@ from disco.core.auth import (
     local_preview_gateway_ports,
     preview_ttl_s,
 )
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.tools.projects import is_runtime_secret_path
 from disco.tools.sandbox._container import PREVIEW_PORT
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -492,7 +493,12 @@ class HostPreviewProxyMiddleware:
 
         from disco.tools.sandbox._container import USER_PORTS
 
-        if port not in USER_PORTS:
+        managed_canonical_port = (
+            self.require_capability
+            and (local_gateway or preview_family == "p2")
+            and is_managed_host_preview_port(port)
+        )
+        if port not in USER_PORTS and not managed_canonical_port:
             if scope["type"] == "http":
                 await send(
                     {

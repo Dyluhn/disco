@@ -229,7 +229,6 @@ def _classify_port_flag(tok: str, nxt: str | None) -> tuple[str | None, int, str
 # tmux session-name prefix the ShellSessionManager writes (see shell_sessions._PREFIX).
 # Used to confirm a listening port is owned by THIS preview's shell session.
 _TMUX_PREFIX = "disco"
-_MAX_PORT_ALLOCATION_ATTEMPTS = 20
 
 _PORT_BIND_TEST_SRC = """\
 import socket
@@ -237,6 +236,12 @@ import sys
 
 port = int(sys.argv[1])
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# Match the bind semantics of the servers the platform actually launches
+# (http.server, node, vite all set SO_REUSEADDR): sockets a torn-down sibling
+# preview left in TIME_WAIT must not disqualify the port, while a live listener
+# still refuses the bind. Without this, eligibility and server_status disagree
+# for ~60s after every teardown ("FREE" vs "no free platform preview port").
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
     sock.bind(("0.0.0.0", port))
 except OSError:
@@ -442,13 +447,14 @@ class PreviewManager:
         cross-server contamination."""
         taken = {s.port for s in self._sessions.values() if s.status is not PreviewStatus.STOPPED}
         taken |= self._sandbox_tracked_ports()
-        checked: list[int] = []
+        checked_count = 0
+        checked_sample: list[int] = []
         for port in self._pool:
             if port in taken:
                 continue
-            checked.append(port)
-            if len(checked) > _MAX_PORT_ALLOCATION_ATTEMPTS:
-                break
+            checked_count += 1
+            if len(checked_sample) < 20:
+                checked_sample.append(port)
             lease: _PreviewPortLease | None = None
             if self._shares_host_network():
                 lease = self._try_host_port_lease(port)
@@ -470,7 +476,8 @@ class PreviewManager:
                     lease.close()
         raise NoPreviewPortAvailableError(
             "no free platform preview port found after checking "
-            f"{len(checked)} candidate(s): {checked or sorted(self._pool)}"
+            f"{checked_count} candidate(s)"
+            + (f" (first candidates: {checked_sample})" if checked_sample else "")
         )
 
     def _shares_host_network(self) -> bool:
@@ -1642,12 +1649,31 @@ def _default_port_pool(sandbox: Any) -> list[int]:
     own control ports (8000/8800/5173) are excluded so the platform can never allocate
     a preview onto a port the dev stack already owns — keeping the model out of port
     selection must not put the PLATFORM into a port collision either."""
-    from disco.core.loop.preview_target import PREVIEW_PORTS, reserved_control_ports
+    from disco.core.loop.preview_target import (
+        PREVIEW_PORTS,
+        managed_host_preview_ports,
+        reserved_control_ports,
+    )
     from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
     ordered = [p for p in PREVIEW_PORTS if p in USER_PORTS and p != NOVNC_PORT]
-    backend = getattr(sandbox, "backend_name", "") or ""
-    if backend in ("process", "local"):
+    explicit = getattr(sandbox, "shares_host_network", None)
+    host_shared = (
+        explicit
+        if isinstance(explicit, bool)
+        else (getattr(sandbox, "backend_name", "") or "") == "process"
+    )
+    if host_shared:
         reserved = reserved_control_ports()
         ordered = [p for p in ordered if p not in reserved]
+        dynamic = list(managed_host_preview_ports())
+        # Conversations start at different points in the large range, avoiding
+        # a herd on its first socket while retaining deterministic allocation.
+        identity = str(getattr(sandbox, "conversation_id", "") or "")
+        if dynamic and identity:
+            offset = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big") % len(
+                dynamic
+            )
+            dynamic = dynamic[offset:] + dynamic[:offset]
+        ordered.extend(port for port in dynamic if port not in ordered)
     return ordered

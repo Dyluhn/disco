@@ -6,8 +6,12 @@ ports, and graceful URL degradation.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import re
+import socket
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -1112,15 +1116,18 @@ async def test_port_pool_exhaustion_raises() -> None:
         await mgr.start(serve_dir="b", name="b", supervise=False)
 
 
-def test_shared_host_pool_excludes_control_ports() -> None:
-    """On process/local the agent-server's own ports (8000/5173/8800) must never be
-    allocated for a preview — the platform must not collide with the dev stack."""
+def test_shared_host_pool_scales_beyond_framework_defaults_and_excludes_controls() -> None:
+    """Process previews get a broad host-only pool; containers retain published ports."""
     from disco.agent_server.preview_manager import _default_port_pool
+    from disco.core.loop.preview_target import is_managed_host_preview_port
 
     shared = _default_port_pool(_FakeSandbox(backend_name="process"))
     assert 8000 not in shared and 5173 not in shared
+    assert len(shared) > 4
+    assert any(is_managed_host_preview_port(port) for port in shared)
     isolated = _default_port_pool(_FakeSandbox(backend_name="gvisor"))
     assert 8000 in isolated  # inside an isolated box 8000 is the box's own
+    assert not any(is_managed_host_preview_port(port) for port in isolated)
 
 
 # ============================================================ P1 #1: raw-command ports
@@ -1539,6 +1546,143 @@ async def test_allocation_skips_socket_occupied_ports_until_free_candidate() -> 
     sandbox = _SocketOccupiedSandbox({3000, 5173})
     mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
     assert await mgr._allocate_port() == 8080
+
+
+@pytest.mark.asyncio
+async def test_allocation_scans_past_twenty_busy_candidates() -> None:
+    """A broad pool's capacity is not silently truncated by an allocation retry cap."""
+
+    ports = list(range(39020, 39046))
+    sandbox = _SocketOccupiedSandbox(set(ports[:-1]))
+    mgr = _mgr(sandbox, port_pool=ports)
+    assert await mgr._allocate_port() == ports[-1]
+
+
+@pytest.mark.asyncio
+async def test_default_shared_host_pool_supports_more_than_four_concurrent_managers() -> None:
+    """Independent conversations retain one kernel lease each beyond the old ceiling."""
+
+    managers: list[PreviewManager] = []
+    sessions = []
+    try:
+        for index in range(6):
+            sandbox = _FakeSandbox(backend_name="process")
+            sandbox.conversation_id = f"conv_capacity_{index}"
+            sandbox.shares_host_network = True
+            manager = _mgr(sandbox)
+            managers.append(manager)
+            sessions.append(
+                await manager.start(
+                    serve_dir="dist",
+                    name=f"preview-{index}",
+                    supervise=False,
+                )
+            )
+
+        assert len({session.port for session in sessions}) == 6
+        assert all(session.status is PreviewStatus.RUNNING for session in sessions)
+    finally:
+        for manager in managers:
+            await manager.aclose()
+
+
+class _HostExecSandbox(_FakeSandbox):
+    """Process-backend-shaped fake that REALLY executes shell probes on the host
+    (the process backend's sandbox IS the host), so the bind test's kernel
+    semantics — TIME_WAIT ghosts vs live listeners — are exercised for real.
+    `port_owner` deliberately sees nothing either way: the kernel-level bind
+    test must be the deciding authority even in an attribution blind spot."""
+
+    def __init__(self) -> None:
+        super().__init__(backend_name="process")
+        self.shares_host_network = True
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        return _Owner(pid=None, session=None)
+
+    async def exec_shell(self, command: str, *, timeout_s: int = 5):
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return SimpleNamespace(
+            exit_code=proc.returncode, stdout=stdout.decode(), stderr=stderr.decode()
+        )
+
+
+def _manufacture_server_side_time_wait() -> int:
+    """Create the exact kernel state a torn-down sibling preview leaves behind:
+    the server side actively closes first (http.server per-request close; node
+    keepAliveTimeout), then the listener goes away. Only a TIME_WAIT ghost
+    remains on the port — no listener, no owner, no lease."""
+    for _ in range(10):
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        cli = socket.create_connection(("127.0.0.1", port), timeout=5)
+        conn, _ = srv.accept()
+        conn.close()  # server actively closes first → server-side TIME_WAIT
+        cli.settimeout(5)
+        with contextlib.suppress(OSError):
+            cli.recv(1)
+        cli.close()
+        srv.close()  # listener gone; only the ghost remains
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                probe.bind(("0.0.0.0", port))
+            except OSError:
+                probe.close()
+                return port  # strict bind refuses ⇒ the ghost is present
+            probe.close()
+            time.sleep(0.02)
+    pytest.skip("kernel did not exhibit a TIME_WAIT ghost")
+
+
+@pytest.mark.asyncio
+async def test_allocation_accepts_port_with_only_time_wait_ghosts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,  # noqa: ANN001
+) -> None:
+    """Seed 405210's earliest broken link: a just-torn-down sibling preview leaves
+    server-side TIME_WAIT sockets for ~60s. No listener exists (server_status:
+    FREE) and every server the platform launches binds with SO_REUSEADDR, so
+    allocation must accept the port instead of reporting the pool exhausted."""
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
+    port = _manufacture_server_side_time_wait()
+    mgr = _mgr(_HostExecSandbox(), port_pool=[port])
+    try:
+        assert await mgr._allocate_port() == port
+    finally:
+        await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_allocation_still_rejects_live_listener_unseen_by_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,  # noqa: ANN001
+) -> None:
+    """Positive control for the TIME_WAIT rule: SO_REUSEADDR never permits binding
+    over a LIVE listener, so a real foreign server still disqualifies the port
+    even when the ownership probe cannot attribute it."""
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    mgr = _mgr(_HostExecSandbox(), port_pool=[port])
+    try:
+        with pytest.raises(NoPreviewPortAvailableError):
+            await mgr._allocate_port()
+    finally:
+        await mgr.aclose()
+        srv.close()
 
 
 @pytest.mark.asyncio

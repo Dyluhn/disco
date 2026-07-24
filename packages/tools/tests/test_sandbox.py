@@ -368,7 +368,7 @@ async def test_process_backend_expose_port_defense():
     from pathlib import Path
 
     import pytest
-    from disco.core.loop.preview_target import reserved_control_ports
+    from disco.core.loop.preview_target import managed_host_preview_ports, reserved_control_ports
     from disco.tools.sandbox._container import USER_PORTS
     from disco.tools.sandbox.process import ProcessSandboxInstance
 
@@ -397,6 +397,29 @@ async def test_process_backend_expose_port_defense():
 
         # 3. INTERNAL_PORTS (8899) -> None
         assert inst.expose_port(8899) is None
+
+        # 4. A bound platform-managed host port is exposed without expanding
+        # the generic/container USER_PORTS allowlist.
+        managed_socket = None
+        managed_port = None
+        for candidate in managed_host_preview_ports():
+            try:
+                candidate_socket = socket.socket()
+                candidate_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                candidate_socket.bind(("127.0.0.1", candidate))
+                candidate_socket.listen()
+            except OSError:
+                candidate_socket.close()
+                continue
+            managed_socket = candidate_socket
+            managed_port = candidate
+            break
+        if managed_socket is None or managed_port is None:
+            pytest.skip("no managed host Preview port is free")
+        try:
+            assert inst.expose_port(managed_port) == f"http://127.0.0.1:{managed_port}"
+        finally:
+            managed_socket.close()
 
         await inst.destroy()
 

@@ -42,6 +42,7 @@ def _start_pair(
     *,
     success: bool = True,
     launch_kind: str = "custom",
+    port: int = _PORT,
     structured_updates: dict[str, object] | None = None,
 ) -> tuple[ActionEvent, ObservationEvent]:
     call = ToolCall(
@@ -51,10 +52,11 @@ def _start_pair(
     )
     action = ActionEvent(thought="start the app preview", tool_call=call)
     intent = {**_INTENT, "launch_kind": launch_kind}
+    command = f"PORT={port} python3 server.py"
     digest = preview_projection_digest(
         name=_NAME,
-        port=_PORT,
-        command=_COMMAND,
+        port=port,
+        command=command,
         exec_dir=_EXEC_DIR,
         intent=intent,
     )
@@ -62,13 +64,13 @@ def _start_pair(
     structured: dict[str, object] = {
         "status": "running",
         "name": _NAME,
-        "port": _PORT,
+        "port": port,
         "launch_kind": launch_kind,
         "projection_id": f"pv_{'a' * 32}",
         "intent_digest": digest,
         "sandbox_instance_id": "sbx_exact_generation",
         "sandbox_generation": 7,
-        "command": _COMMAND,
+        "command": command,
         "exec_dir": _EXEC_DIR,
         "intent": intent,
     }
@@ -112,6 +114,23 @@ def test_valid_custom_start_derives_exact_active_generation() -> None:
         source_observation_id=events[1].id,
         source_observation_seq=2,
     )
+
+
+def test_host_managed_dynamic_port_derives_exact_active_generation() -> None:
+    action, observation = _start_pair(port=10_123)
+    events = _sequenced((action, observation))
+
+    projection = derive_active_live_preview_projection(events, terminal_seq=3)
+
+    assert projection is not None
+    assert projection.port == 10_123
+
+
+def test_port_outside_fixed_and_managed_ranges_never_authorizes_projection() -> None:
+    action, observation = _start_pair(port=9_999)
+    events = _sequenced((action, observation))
+
+    assert derive_active_live_preview_projection(events, terminal_seq=3) is None
 
 
 @pytest.mark.parametrize(

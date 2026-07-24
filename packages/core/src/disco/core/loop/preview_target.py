@@ -22,6 +22,7 @@ import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from ..auth import local_preview_gateway_ports
 from ..env import disco_env
 
 # Canonical preview ports the user-visible deliverable may serve on (ordered by
@@ -29,6 +30,76 @@ from ..env import disco_env
 # sandbox; `finish.py` re-exports this as `_PREVIEW_PORTS` (the tool imports that
 # name) so the gate's preview detection and the tool's auto-detect stay identical.
 PREVIEW_PORTS: tuple[int, ...] = (8000, 5173, 3000, 8080, 5000, 4321)
+
+# Process sandboxes share the host TCP namespace. Their managed runtimes cannot
+# be limited to the few framework-default ports above: concurrent conversations
+# need independent listeners, while container backends must retain their small
+# create-time published allowlist. This bounded non-ephemeral range is therefore
+# ONLY for platform-owned PreviewManager runtimes on a shared host. It is never
+# added to USER_PORTS and never becomes an agent-selectable generic port surface.
+DEFAULT_MANAGED_PREVIEW_PORT_START = 10_000
+DEFAULT_MANAGED_PREVIEW_PORT_COUNT = 8_000
+
+
+def _managed_host_preview_port_config() -> tuple[int, int, frozenset[int]]:
+    raw_start = disco_env(
+        "MANAGED_PREVIEW_PORT_START",
+        str(DEFAULT_MANAGED_PREVIEW_PORT_START),
+    )
+    raw_count = disco_env(
+        "MANAGED_PREVIEW_PORT_COUNT",
+        str(DEFAULT_MANAGED_PREVIEW_PORT_COUNT),
+    )
+    try:
+        start = int(str(raw_start).strip())
+        count = int(str(raw_count).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("managed Preview port range must be numeric") from exc
+    if start < 1_024 or count < 1 or start + count - 1 > 65_535:
+        raise ValueError("managed Preview port range is outside the user-port range")
+    excluded = reserved_control_ports() | frozenset(local_preview_gateway_ports())
+    return start, count, excluded
+
+
+def managed_host_preview_ports() -> tuple[int, ...]:
+    """Configured host-only port candidates for platform-managed runtimes.
+
+    The configured interval is finite because TCP ports are finite, but unlike
+    the former four-entry framework-default pool it scales to ordinary concurrent
+    builds. Control servers and DNS-free Preview gateway listeners are excluded
+    from the returned authority even when an operator configures an overlapping
+    interval.
+    """
+
+    start, count, excluded = _managed_host_preview_port_config()
+    return tuple(port for port in range(start, start + count) if port not in excluded)
+
+
+def is_managed_host_preview_port(port: object) -> bool:
+    """Whether ``port`` may carry one exact host-managed Preview generation."""
+
+    if type(port) is not int:
+        return False
+    start, count, excluded = _managed_host_preview_port_config()
+    return start <= port < start + count and port not in excluded
+
+
+def active_managed_preview_ports(sandbox: object) -> tuple[int, ...]:
+    """Read the exact canonical host port currently selected by this manager.
+
+    Consumers use this single-value list for ownership probes. They must never
+    scan the whole host range, or let an older still-running manager session
+    supersede the product-selected Preview generation.
+    """
+
+    manager = getattr(sandbox, "_preview_manager", None)
+    if manager is None:
+        return ()
+    try:
+        port = manager.canonical_port()
+    except Exception:  # noqa: BLE001 - malformed optional collaborator is no authority
+        return ()
+    return (port,) if is_managed_host_preview_port(port) else ()
 
 
 def _int_env(suffix: str, default: int) -> int:
@@ -484,10 +555,15 @@ def remap_reserved_preview_serve(
 
 
 __all__ = [
+    "DEFAULT_MANAGED_PREVIEW_PORT_COUNT",
+    "DEFAULT_MANAGED_PREVIEW_PORT_START",
     "PREVIEW_PORTS",
     "PortOwnership",
+    "active_managed_preview_ports",
     "backend_shares_host_network",
     "explicit_target_allowed",
+    "is_managed_host_preview_port",
+    "managed_host_preview_ports",
     "parse_port_ownership",
     "port_ownership_probe_command",
     "process_safe_preview_port",

@@ -94,6 +94,7 @@ from ..plan_conditions import (
 )
 from ..preview_target import (
     PREVIEW_PORTS,
+    active_managed_preview_ports,
     backend_shares_host_network,
     parse_port_ownership,
     port_ownership_probe_command,

@@ -596,12 +596,19 @@ class VerifyWebAppTool:
         the gate to the honest-unverifiable path. On an ISOLATED backend (gVisor/
         Podman) `:8000` IS the app, so the legacy "first owned, else 8000" holds."""
         assert ctx.sandbox is not None
-        from disco.core.loop.preview_target import PortOwnership, resolve_preview_port
+        from disco.core.loop.preview_target import (
+            PortOwnership,
+            active_managed_preview_ports,
+            resolve_preview_port,
+        )
 
         from ..sandbox.port_owner import port_owners
 
+        preview_ports = tuple(
+            dict.fromkeys((*_PREVIEW_PORTS, *active_managed_preview_ports(ctx.sandbox)))
+        )
         try:
-            owners = await port_owners(ctx.sandbox, list(_PREVIEW_PORTS))
+            owners = await port_owners(ctx.sandbox, list(preview_ports))
         except Exception:  # noqa: BLE001 — detection failure → resolver default
             owners = {}
 
@@ -617,7 +624,7 @@ class VerifyWebAppTool:
             host_shared=host_shared,
             owned=owned,
             conversation_id=str(getattr(ctx.sandbox, "conversation_id", "") or ""),
-            preview_ports=_PREVIEW_PORTS,
+            preview_ports=preview_ports,
         )
         if chosen is None:
             # Shared-host backend with no conversation-owned preview → UNDETECTABLE.

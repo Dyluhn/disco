@@ -5,10 +5,14 @@ that the finish gate (core) and `verify_web_app` (tools) both consume."""
 from __future__ import annotations
 
 from disco.core.loop.preview_target import (
+    DEFAULT_MANAGED_PREVIEW_PORT_COUNT,
+    DEFAULT_MANAGED_PREVIEW_PORT_START,
     PORT_OWNER_PROBE_SRC,
     PREVIEW_PORTS,
     PortOwnership,
     explicit_target_allowed,
+    is_managed_host_preview_port,
+    managed_host_preview_ports,
     parse_port_ownership,
     process_safe_preview_port,
     remap_reserved_preview_serve,
@@ -131,6 +135,32 @@ def test_reserved_control_ports_protect_defaults_and_isolated_stack_alternates(m
     monkeypatch.setenv("DISCO_UI_PORT", "5291")
 
     assert reserved_control_ports() == frozenset({8000, 8800, 5173, 18101, 18901, 5291})
+
+
+def test_managed_host_preview_range_is_broad_and_excludes_other_platform_listeners():
+    ports = managed_host_preview_ports()
+
+    assert len(ports) == DEFAULT_MANAGED_PREVIEW_PORT_COUNT
+    assert ports[0] == DEFAULT_MANAGED_PREVIEW_PORT_START
+    assert ports[-1] == DEFAULT_MANAGED_PREVIEW_PORT_START + DEFAULT_MANAGED_PREVIEW_PORT_COUNT - 1
+    assert not (set(ports) & reserved_control_ports())
+    assert all(is_managed_host_preview_port(port) for port in ports)
+    assert not is_managed_host_preview_port(DEFAULT_MANAGED_PREVIEW_PORT_START - 1)
+
+
+def test_managed_host_preview_range_excludes_configured_gateway_and_control_ports(monkeypatch):
+    monkeypatch.setenv("DISCO_MANAGED_PREVIEW_PORT_START", "12000")
+    monkeypatch.setenv("DISCO_MANAGED_PREVIEW_PORT_COUNT", "10")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", "12002")
+    monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
+    monkeypatch.setenv("DISCO_AGENT_PORT", "12004")
+    monkeypatch.setenv("DISCO_APP_PORT", "12005")
+    monkeypatch.setenv("DISCO_UI_PORT", "12006")
+
+    assert managed_host_preview_ports() == (12000, 12001, 12007, 12008, 12009)
+    assert is_managed_host_preview_port(12000)
+    assert not is_managed_host_preview_port(12002)
+    assert not is_managed_host_preview_port(12005)
 
 
 # ---- explicit-url validation (Bug 7 explicit-url bypass) --------------------

@@ -91,8 +91,10 @@ class _Svc:
         return None
 
 
-def _session(inst: _FramingInstance) -> SandboxSession:
-    return SandboxSession(_Svc(inst), conversation_id="conv-fetchinside")
+def _session(inst: _FramingInstance, *, service_name: str = "fake") -> SandboxSession:
+    service = _Svc(inst)
+    service.name = service_name
+    return SandboxSession(service, conversation_id="conv-fetchinside")
 
 
 @pytest.mark.asyncio
@@ -131,6 +133,20 @@ async def test_fetch_inside_non_user_port_returns_none_without_exec():
     # exec_shell was never reached for the (rejected) fetch — only the auto-preview
     # pwd probe may have run, never a curl to 9999.
     assert inst.last_cmd is None or "9999" not in inst.last_cmd
+
+
+@pytest.mark.asyncio
+async def test_fetch_inside_allows_platform_managed_port_only_on_shared_host():
+    """The managed range is a process-runtime seam, not a container/user-port expansion."""
+
+    inst = _FramingInstance(status=200, body=b"managed", ctype="text/plain")
+    process_session = _session(inst, service_name="process")
+    assert await process_session.fetch_inside(10_123, "") == (200, b"managed", "text/plain")
+
+    isolated_inst = _FramingInstance(status=200, body=b"wrong", ctype="text/plain")
+    isolated_session = _session(isolated_inst)
+    assert await isolated_session.fetch_inside(10_123, "") is None
+    assert isolated_inst.last_cmd is None
 
 
 @pytest.mark.asyncio

@@ -193,7 +193,17 @@ def classify(
         results += EventChainOracle().check(events, scenario=scenario)
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 3a. governed admission — Phase-4 governed Freeform scenarios must have
+        # 3a. model/tool thrash. Cost valves may eventually stop or recover a
+        # repeated bad call; the soak still treats that interaction as broken.
+        # Ordered BEFORE the terminal-shape oracles (governed admission, tool
+        # scope): the live monitor kills a thrashing run at the moment of the
+        # repeated error, so "no successful work terminal exists" is downstream
+        # of the thrash — reporting the terminal shape first would obscure the
+        # earliest broken link.
+        results += ThrashOracle().check(events, scenario=scenario, inspect_trace=inspect_trace)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 3b. governed admission — Phase-4 governed Freeform scenarios must have
         # platform admission with claims and a typed PASS receipt. Inline browser
         # evidence cannot substitute for governed completion authority.
         governed_results = GovernedAdmissionOracle().check(
@@ -225,11 +235,6 @@ def classify(
     if first_fail is None:
         # 4. tool scope.
         results += ToolScopeOracle().check(events, scenario=scenario, tool_scope=tool_scope)
-        first_fail = _first_fail(results)
-    if first_fail is None:
-        # 5. model/tool thrash. Cost valves may eventually stop or recover a
-        # repeated bad call; the soak still treats that interaction as broken.
-        results += ThrashOracle().check(events, scenario=scenario, inspect_trace=inspect_trace)
         first_fail = _first_fail(results)
     if first_fail is None:
         # 6. revision.

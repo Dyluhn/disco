@@ -284,6 +284,67 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
 
 
 @pytest.mark.asyncio
+async def test_canonical_preview_accepts_exact_shared_host_managed_port_only():
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    selected_port = 10_123
+
+    class _ManagedHostSession(_FakeSession):
+        shares_host_network = True
+
+        def expose_port(self, port: int) -> str | None:
+            return f"http://managed:{port}" if port == selected_port else None
+
+    session = _ManagedHostSession("process", None)
+    managed_preview = PreviewSession(
+        name="web",
+        port=selected_port,
+        command=f"python3 -m http.server {selected_port}",
+        exec_dir="/workspace",
+        intent={"framework": "static", "launch_kind": "static"},
+        projection_id="pv_managed_host_generation",
+        status=PreviewStatus.RUNNING,
+    )
+    session._preview_manager = SimpleNamespace(
+        canonical_port=lambda: selected_port,
+        canonical_lifecycle_session=lambda: managed_preview,
+    )
+    rt._executors["managed-host"] = _FakeExecutor(session)
+
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    async def mock_port_owners(inst, ports):  # noqa: ANN001
+        assert selected_port in ports
+        return {
+            port: (
+                PortOwner(
+                    port=port,
+                    pid=1234,
+                    cmdline="python3 -m http.server",
+                    session="disco-managed-host",
+                )
+                if port == selected_port
+                else None
+            )
+            for port in ports
+        }
+
+    import unittest.mock
+
+    with unittest.mock.patch(
+        "disco.agent_server.preview_service.port_owners",
+        side_effect=mock_port_owners,
+    ):
+        preview = await rt.preview("managed-host")
+
+    assert rt.preview_target_port("managed-host") == selected_port
+    assert rt.preview_upstream("managed-host") == f"http://managed:{selected_port}"
+    assert preview["available"] is True
+    assert preview["port"] == selected_port
+    assert any(entry["port"] == selected_port for entry in preview["ports"])
+    assert rt.port_upstream("managed-host", selected_port + 1) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "detail", "reason_fragment"),
     [
@@ -406,6 +467,10 @@ async def test_port_proxy_route_auth_and_defense():
     # 404 for ports NOT in USER_PORTS (defense stays in the app layer)
     assert 9999 not in USER_PORTS
     assert client.get(f"/conversations/{cid}/port/9999/").status_code == 404
+    # The broad managed range is canonical Preview authority, not a generic
+    # user-selected service surface.
+    assert 10123 not in USER_PORTS
+    assert client.get(f"/conversations/{cid}/port/10123/").status_code == 404
     # 404 for INTERNAL_PORTS (8899)
     assert 8899 not in USER_PORTS
     assert client.get(f"/conversations/{cid}/port/8899/").status_code == 404

@@ -2736,6 +2736,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         sbx = getattr(self._loop.executor, "sandbox", None)
         if sbx is None or not hasattr(sbx, "exec_shell"):
             return None
+        preview_ports = tuple(dict.fromkeys((*_PREVIEW_PORTS, *active_managed_preview_ports(sbx))))
         host_shared = backend_shares_host_network(sbx)
         if host_shared:
             # Process backend (shares host net): ownership-aware — never bind the
@@ -2743,7 +2744,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             # 8000 IS the app (the old `workspace_path` heuristic wrongly sent them here).
             try:
                 res = await sbx.exec_shell(
-                    port_ownership_probe_command(_PREVIEW_PORTS), timeout_s=10
+                    port_ownership_probe_command(preview_ports), timeout_s=10
                 )
             except Exception:  # noqa: BLE001 — detection failure → no binding (degrade safe)
                 return None
@@ -2752,13 +2753,14 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
                 host_shared=True,
                 owned=owned,
                 conversation_id=str(getattr(sbx, "conversation_id", "") or ""),
+                preview_ports=preview_ports,
             )
             return f"http://127.0.0.1:{port}/" if port is not None else None
 
         # Isolated backend: 8000 is the app inside the box — first reachable wins.
         import shlex
 
-        ports = list(_PREVIEW_PORTS)
+        ports = list(preview_ports)
         script = (
             "import socket,sys\n"
             f"for p in {ports!r}:\n"

@@ -303,3 +303,84 @@ def test_classify_run_folder_detects_tamper(tmp_path):
     c = classify_run_folder(tmp_path)
     assert c["status"] == "INVALID_RUN"
     assert c["code"] == "EVIDENCE_HASH_MISMATCH"
+
+
+def _governed_thrash_scenario() -> dict:
+    """Pilot-shaped scenario: governed verification required, one identical tool
+    error allowed (the live monitor's strictness for seed 405210)."""
+    return {
+        "id": "governed-thrash-order",
+        "assertions": {
+            "thrash": {"max_same_tool_error_repeats": 1},
+            "governed_verification": {
+                "required": True,
+                "route": "platform",
+                "composition_authority": "build_platform_core",
+                "delivery_mode": "interactive",
+                "required_receipt_kinds": ["disco.web_functional@1"],
+                "required_claim_kinds": {
+                    "artifact_identity": 1,
+                    "http_ready": 1,
+                    "rendered_content": 1,
+                    "console_clean": 1,
+                    "network_clean": 1,
+                },
+                "required_execution_modality": "managed_preview",
+            },
+        },
+    }
+
+
+def _monitor_killed_thrash_log() -> list[dict]:
+    """Seed 405210's shape: valid chain, two identical preview_start errors, then
+    the live monitor killed the run — so no work terminal ever exists."""
+    port_error = (
+        "no free platform preview port found after checking 4 candidate(s): "
+        "[3000, 8080, 5000, 4321]"
+    )
+    return [
+        msg(1, "user", "build a page, serve it, verify it"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+        status(5, "RUNNING", "plan_approved"),
+        status(6, "RUNNING"),
+        action(7, "preview_start", args={"name": "app", "serve_dir": "/workspace"}, action_id="a7"),
+        agent_error(8, "a7", error=port_error),
+        action(9, "preview_start", args={"name": "app", "serve_dir": "/workspace"}, action_id="a9"),
+        agent_error(10, "a9", error=port_error),
+        status(11, "IDLE", "killed"),
+    ]
+
+
+def test_thrash_finding_outranks_downstream_missing_terminal():
+    """The live monitor kills a thrashing run at the moment of the repeated error,
+    so 'no successful work terminal exists' is DOWNSTREAM of the thrash. The
+    classifier must report the earliest broken link, not the terminal shape."""
+    c = classify(
+        _monitor_killed_thrash_log(),
+        scenario=_governed_thrash_scenario(),
+        run_id="r-thrash-order",
+        conversation_id="conv_thrash_order",
+        commit="deadbeef",
+    )
+    assert c["status"] == "FAIL"
+    assert c["code"] == "TOOL_ERROR_THRASH"
+    assert c["first_broken_link"] == "tool_error -> repeated_same_tool_error"
+
+
+def test_governed_missing_terminal_still_fails_closed_without_thrash():
+    """Control: with no thrash in the log, the governed missing-terminal verdict
+    is unchanged — reordering surfaced the earlier link, it weakened nothing."""
+    events = _monitor_killed_thrash_log()
+    del events[8:10]  # drop the second identical error pair; one error is allowed
+    c = classify(
+        events,
+        scenario=_governed_thrash_scenario(),
+        run_id="r-governed-terminal",
+        conversation_id="conv_governed_terminal",
+        commit="deadbeef",
+    )
+    assert c["status"] == "FAIL"
+    assert c["code"] == "GOVERNED_ADMISSION_BYPASSED"
+    assert c["first_broken_link"] == "event_chain -> terminal"

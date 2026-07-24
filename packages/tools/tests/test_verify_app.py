@@ -5,6 +5,8 @@ without a sandbox. A single `run()` integration test exercises the wiring with a
 fake sandbox + a stubbed BrowserTool (no real Playwright daemon).
 """
 
+from types import SimpleNamespace
+
 import pytest
 from disco.core import SecurityRisk
 from disco.tools.anatomy import ToolContext, ToolOutcome
@@ -603,6 +605,44 @@ async def test_process_autodetect_targets_conversation_port_not_8000(monkeypatch
     assert sbx.probed_url == "http://127.0.0.1:8080/", sbx.probed_url
     assert "8000" not in (sbx.probed_url or "")
     # not-serving verdict (we forced unreachable) — honest, not a fabricated pass.
+    assert out.structured["passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_process_autodetect_targets_exact_managed_host_port(monkeypatch):
+    """Blank verification follows the manager selection without scanning the range."""
+
+    class _ManagedHostSandbox(_ProcessLikeSandbox):
+        def __init__(self):
+            super().__init__()
+            self._preview_manager = SimpleNamespace(
+                canonical_port=lambda: 10_123,
+                list=lambda: [
+                    SimpleNamespace(
+                        port=10_123,
+                        status=SimpleNamespace(value="running"),
+                    )
+                ],
+            )
+
+        async def exec_shell(self, cmd, *, timeout_s=10):
+            if "10123" in cmd:
+                return _ShellRes(
+                    '[{"port": 8000, "pid": 7, "session": "disco-other777-preview"},'
+                    ' {"port": 10123, "pid": 9, "session": "disco-conv_zzz-preview"}]'
+                )
+            return _ShellRes("0")
+
+    sbx = _ManagedHostSandbox()
+
+    async def fake_probe(self, ctx, url):
+        sbx.probed_url = url
+        return (False, 0)
+
+    monkeypatch.setattr(VerifyWebAppTool, "_probe_http", fake_probe)
+    out = await VerifyWebAppTool().run(VerifyWebAppArgs(url=""), _ctx(sbx))
+
+    assert sbx.probed_url == "http://127.0.0.1:10123/"
     assert out.structured["passed"] is False
 
 

@@ -17,6 +17,7 @@ from typing import Any
 
 from disco.core import ActionEvent, Event, ObservationEvent, StatusEvent
 from disco.core.events import ConversationStatus
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.tools.builtin.preview import PreviewStartArgs
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
@@ -131,7 +132,7 @@ def _projection_from_pair(
         or not session_name
         or len(session_name) > 128
         or type(port) is not int
-        or port not in USER_PORTS
+        or (port not in USER_PORTS and not is_managed_host_preview_port(port))
         or port == NOVNC_PORT
         or launch_kind not in {"custom", "framework"}
         or not isinstance(intent_digest, str)

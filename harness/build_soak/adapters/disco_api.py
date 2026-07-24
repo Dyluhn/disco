@@ -61,6 +61,7 @@ from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
 from disco.core.auth import SESSION_COOKIE, validated_canonical_preview_url
+from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.projects.store import tree_digest as project_tree_digest
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
@@ -4192,7 +4193,10 @@ class HttpTransport:
                 or not body.get("preview_authority")
                 or not isinstance(selected_port, int)
                 or isinstance(selected_port, bool)
-                or selected_port not in USER_PORTS
+                or (
+                    selected_port not in USER_PORTS
+                    and not is_managed_host_preview_port(selected_port)
+                )
                 or selected_port == NOVNC_PORT
             ):
                 return 502, "invalid preview capability response", {}

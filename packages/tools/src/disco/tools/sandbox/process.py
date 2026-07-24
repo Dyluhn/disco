@@ -583,8 +583,13 @@ class ProcessSandboxInstance:
     def expose_port(self, port: int) -> str | None:
         """Dev-mode usability: host processes bind host ports directly, so hand
         back the local URL when the port is actually bound. No isolation boundary
-        to defend on this backend, but stay within the curated USER set."""
-        from disco.core.loop.preview_target import reserved_control_ports
+        to defend on this backend. Generic services stay within USER_PORTS; the
+        platform-owned Preview lifecycle may additionally expose its bounded
+        host-managed range."""
+        from disco.core.loop.preview_target import (
+            is_managed_host_preview_port,
+            reserved_control_ports,
+        )
 
         from ._container import USER_PORTS
 
@@ -593,7 +598,7 @@ class ProcessSandboxInstance:
         # the shared host that port is the server's own, not the build's app.
         if port in reserved_control_ports():
             return None
-        if port not in USER_PORTS:
+        if port not in USER_PORTS and not is_managed_host_preview_port(port):
             return None
         import socket
 

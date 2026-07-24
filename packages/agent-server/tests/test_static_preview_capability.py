@@ -45,6 +45,10 @@ from disco.core.auth import (
     path_preview_host_label,
 )
 from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
+from disco.core.loop.preview_target import (
+    is_managed_host_preview_port,
+    managed_host_preview_ports,
+)
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import ProjectStore
 from fastapi import FastAPI, HTTPException, Request
@@ -544,7 +548,7 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
     monkeypatch.setattr("disco.agent_server.auth._is_testclient", lambda _request: False)
 
     free_ports: list[int] = []
-    for candidate in (3000, 8080, 5000, 4321):
+    for candidate in managed_host_preview_ports():
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             probe.bind(("127.0.0.1", candidate))
@@ -553,8 +557,11 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
             continue
         finally:
             probe.close()
-    assert free_ports, "no curated process-preview port is available"
+        if free_ports:
+            break
+    assert free_ports, "no managed process-preview port is available"
     selected_port = free_ports[0]
+    assert is_managed_host_preview_port(selected_port)
     monkeypatch.setattr(
         "disco.agent_server.preview_manager._default_port_pool",
         lambda _sandbox: list(free_ports),

@@ -309,6 +309,63 @@ async def test_live_capability_uses_body_post_and_durable_one_time_exchange(upst
 
 
 @pytest.mark.asyncio
+async def test_managed_host_port_requires_and_honors_exact_signed_capability(upstream_http):
+    """The broad range is reachable only through the existing capability boundary."""
+
+    port = 10_123
+    store = SqliteEventStore(":memory:")
+    app = Starlette()
+    app.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda cid8, selected, _owner=None: (
+            upstream_http if cid8 == "aaaaaaaa" and selected == port else None
+        ),
+        require_capability=True,
+        redemption_store=store,
+    )
+    signer = PreviewCapabilitySigner(redemption_store=store)
+    session = AuthSession("owner-a", "csrf", "session", 2**31)
+    intent = signer.mint_intent(
+        session=session,
+        conversation_id="conv_aaaaaaaafull",
+        port=port,
+        target_path="/",
+        allow_websocket=True,
+        http_methods=PREVIEW_APP_HTTP_METHODS,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=f"http://p2-aaaaaaaa-{port}.localhost",
+    ) as client:
+        unsigned = await client.get("/")
+        assert unsigned.status_code == 403
+
+        redeemed = await client.post(PREVIEW_BOOTSTRAP_PATH, data={"intent": intent})
+        assert redeemed.status_code == 200
+        capability_cookie = redeemed.headers["set-cookie"].split(";", 1)[0]
+        proxied = await client.get("/", headers={"Cookie": capability_cookie})
+        assert proxied.status_code == 200
+
+    # The same dynamic-looking host is still rejected when the capability
+    # middleware is absent; the range never becomes anonymous generic routing.
+    ungoverned = Starlette()
+    ungoverned.add_middleware(
+        HostPreviewProxyMiddleware,
+        upstream_resolver=lambda *_args: upstream_http,
+        require_capability=False,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=ungoverned),
+        base_url=f"http://p2-aaaaaaaa-{port}.localhost",
+    ) as client:
+        rejected = await client.get("/")
+    assert rejected.status_code == 404
+    assert rejected.text == "unknown port"
+    store.close()
+
+
+@pytest.mark.asyncio
 async def test_canonical_live_proxy_preserves_real_http_and_rejects_stale_authority(
     upstream_http,
 ) -> None:
