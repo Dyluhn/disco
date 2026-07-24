@@ -129,10 +129,11 @@ def _fold_content_mismatches(mismatches: list[dict[str, Any]]):
     )
 
 
-def _verified_visible_text_claims(
+def _verified_visible_text(
     verified_claim_results: list[dict[str, Any]],
+    verified_observed_facts: list[dict[str, Any]],
 ) -> list[str]:
-    """Return exact text values proven by the already-adjudicated claim set.
+    """Return exact text values proven or observed by the adjudicated receipt.
 
     This helper is intentionally target-neutral. A web DOM/accessibility verifier,
     a future native accessibility verifier, or another target adapter may prove a
@@ -141,7 +142,7 @@ def _verified_visible_text_claims(
     execution, revision/generation, evidence references, and freshness.
     """
 
-    return [
+    claims = [
         expected
         for claim in verified_claim_results
         if isinstance(claim, dict)
@@ -150,6 +151,15 @@ def _verified_visible_text_claims(
         and isinstance((expected := claim.get("expected")), str)
         and bool(expected)
     ]
+    facts = [
+        value
+        for fact in verified_observed_facts
+        if isinstance(fact, dict)
+        and fact.get("kind") == "visible_text"
+        and isinstance((value := fact.get("value")), str)
+        and bool(value)
+    ]
+    return [*claims, *facts]
 
 
 class OutputTruthOracle:
@@ -161,6 +171,7 @@ class OutputTruthOracle:
         workspace_manifest: dict[str, Any] | None = None,
         preview: dict[str, Any] | None = None,
         verified_claim_results: list[dict[str, Any]] | None = None,
+        verified_observed_facts: list[dict[str, Any]] | None = None,
     ) -> list[OracleResult]:
         assertions = (scenario or {}).get("assertions") or {}
         workspace_assert = assertions.get("workspace") or {}
@@ -347,7 +358,10 @@ class OutputTruthOracle:
                 ]
             preview_needles = preview_assert.get("must_contain") or []
             if verified_claim_results is not None:
-                proven_text = _verified_visible_text_claims(verified_claim_results)
+                proven_text = _verified_visible_text(
+                    verified_claim_results,
+                    verified_observed_facts or [],
+                )
                 missing = [
                     needle
                     for needle in preview_needles

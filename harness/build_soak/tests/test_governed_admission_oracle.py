@@ -10,6 +10,7 @@ from disco.core.verification import (
     AdmittedVerificationContract,
     HostVerificationClaim,
     HostVerificationClaimResult,
+    HostVerificationObservedFact,
     HostVerificationResult,
     PreviewSelectionIdentity,
     VerificationArtifactIdentity,
@@ -474,6 +475,47 @@ def test_current_web_segment_with_exact_receipt_passes() -> None:
         "network_clean",
         "rendered_content",
     }
+
+
+def test_current_integrity_bound_observed_fact_is_projected() -> None:
+    events = _segment()
+    _replace_receipt(
+        events,
+        observed_facts=(
+            HostVerificationObservedFact(
+                fact_id="web.observed.visible_text",
+                kind=VerificationClaimKind.VISIBLE_TEXT,
+                value="Node Paused 403113",
+                verifier_id="disco.host_web_verifier@1",
+                capability_basis="configured target-specific host verifier",
+                evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
+            ),
+        ),
+    )
+
+    result = _result(events)
+
+    assert result.passed
+    assert result.facts["verified_observed_facts"][0]["value"] == "Node Paused 403113"
+
+
+def test_observed_fact_from_unadmitted_issuer_is_rejected() -> None:
+    events = _segment()
+    _replace_receipt(
+        events,
+        observed_facts=(
+            HostVerificationObservedFact(
+                fact_id="web.observed.visible_text",
+                kind=VerificationClaimKind.VISIBLE_TEXT,
+                value="forged",
+                verifier_id="model_role.unadmitted@1",
+                capability_basis="model prose",
+                evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
+            ),
+        ),
+    )
+
+    assert _result(events).failed
 
 
 def test_host_revision_seal_is_not_a_completed_work_terminal() -> None:

@@ -176,6 +176,7 @@ def classify(
 
     results: list[OracleResult] = []
     verified_claim_results: list[dict[str, Any]] | None = None
+    verified_observed_facts: list[dict[str, Any]] | None = None
 
     # 1. harness validity (evidence integrity + parse + presence).
     results += HarnessValidityOracle().check(
@@ -206,6 +207,12 @@ def classify(
                 verified_claim_results = [
                     dict(claim) for claim in claims if isinstance(claim, dict)
                 ]
+                facts = result.facts.get("verified_observed_facts")
+                verified_observed_facts = (
+                    [dict(fact) for fact in facts if isinstance(fact, dict)]
+                    if isinstance(facts, list)
+                    else []
+                )
                 break
         first_fail = _first_fail(results)
     if first_fail is None:
@@ -240,6 +247,7 @@ def classify(
             workspace_manifest=workspace_manifest,
             preview=preview,
             verified_claim_results=verified_claim_results,
+            verified_observed_facts=verified_observed_facts,
         )
         first_fail = _first_fail(results)
     if first_fail is None:

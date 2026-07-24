@@ -23,6 +23,7 @@ def _run(
     preview=None,
     events=None,
     verified_claim_results=None,
+    verified_observed_facts=None,
 ):
     return OutputTruthOracle().check(
         normalize_events(events or clean_smoke_log()),
@@ -30,6 +31,7 @@ def _run(
         workspace_manifest=workspace,
         preview=preview,
         verified_claim_results=verified_claim_results,
+        verified_observed_facts=verified_observed_facts,
     )
 
 
@@ -382,6 +384,32 @@ def test_governed_visible_text_claim_proves_client_rendered_preview_content():
                 "kind": "visible_text",
                 "expected": "Live steer 440023",
                 "status": "pass",
+                "evidence_modalities": ["dom_accessibility"],
+            }
+        ],
+    )
+
+    assert results[0].passed, results[0].to_dict()
+
+
+def test_current_host_observed_fact_proves_text_not_declared_as_product_claim():
+    scenario = {
+        "id": "host-observed-target-text",
+        "assertions": {
+            "preview": {"required": True, "must_contain": ["Node Paused 403113"]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
+    results = _run(
+        scenario=scenario,
+        preview={"health": {"status": 200}, "content": ""},
+        verified_claim_results=[{"kind": "rendered_content", "expected": "", "status": "pass"}],
+        verified_observed_facts=[
+            {
+                "fact_id": "web.observed.visible_text",
+                "kind": "visible_text",
+                "value": "Node Paused 403113",
+                "verifier_id": "disco.host_web_verifier@1",
                 "evidence_modalities": ["dom_accessibility"],
             }
         ],

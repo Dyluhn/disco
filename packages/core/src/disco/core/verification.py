@@ -408,6 +408,31 @@ class HostVerificationClaimResult(BaseModel):
         return self
 
 
+class HostVerificationObservedFact(BaseModel):
+    """One bounded host observation, distinct from a requirement judgement.
+
+    Claims say what must be true. Facts retain what a trusted target adapter
+    actually observed so a deterministic consumer may evaluate an additional
+    exact assertion without falling back to source files or model prose.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fact_id: str = Field(min_length=1, max_length=160, pattern=r"^[a-z][a-z0-9_.:-]*$")
+    kind: VerificationClaimKind
+    value: str = Field(min_length=1, max_length=131_072, repr=False)
+    verifier_id: str = Field(min_length=1, max_length=160)
+    capability_basis: str = Field(min_length=1, max_length=240)
+    evidence_modalities: tuple[VerificationEvidenceModality, ...] = Field(min_length=1)
+    evidence_refs: tuple[str, ...] = Field(default=(), max_length=32)
+
+    @model_validator(mode="after")
+    def _fact_is_observation_not_visual_judgement(self) -> HostVerificationObservedFact:
+        if self.kind is VerificationClaimKind.VISUAL_SEMANTIC:
+            raise ValueError("visual semantics require a claim judgement, not an observed fact")
+        return self
+
+
 class VerifierReferenceImage(BaseModel):
     """One user-authored visual reference retained behind the verifier boundary."""
 
@@ -690,6 +715,7 @@ class HostVerificationResult(BaseModel):
     status: VerificationClaimStatus
     reason: str = Field(min_length=1, max_length=2048)
     claim_results: tuple[HostVerificationClaimResult, ...] = Field(min_length=1)
+    observed_facts: tuple[HostVerificationObservedFact, ...] = ()
     screenshot_path: str = Field(default="", max_length=512)
     screenshot_sha256: str | None = Field(
         default=None,
@@ -701,6 +727,9 @@ class HostVerificationResult(BaseModel):
         ids = [result.claim_id for result in self.claim_results]
         if len(ids) != len(set(ids)):
             raise ValueError("verification claim result ids must be unique")
+        fact_ids = [fact.fact_id for fact in self.observed_facts]
+        if len(fact_ids) != len(set(fact_ids)):
+            raise ValueError("verification observed fact ids must be unique")
         required = [result for result in self.claim_results if result.required]
         if not required:
             raise ValueError("verification result needs at least one required claim")
@@ -735,6 +764,8 @@ class HostVerificationResult(BaseModel):
                 result.verifier_id not in allowed_claim_issuers for result in self.claim_results
             ):
                 raise ValueError("governed PASS claim comes from an unadmitted evidence issuer")
+            if any(fact.verifier_id not in allowed_claim_issuers for fact in self.observed_facts):
+                raise ValueError("governed PASS fact comes from an unadmitted evidence issuer")
         return self
 
     @property
@@ -843,7 +874,7 @@ def _canonical_digest(value: Any) -> str:
 
 
 def _result_authority_payload(result: HostVerificationResult) -> dict[str, Any]:
-    return {
+    payload = {
         "conversation_id": result.conversation_id,
         "run_intent_id": result.run_intent_id,
         "run_identity": result.run_identity,
@@ -881,6 +912,11 @@ def _result_authority_payload(result: HostVerificationResult) -> dict[str, Any]:
         "workspace_epoch": result.workspace_epoch,
         "observed_after_seq": result.observed_after_seq,
     }
+    # Schema-v1 receipts predate observed facts. Keep their authority digest
+    # byte-compatible while binding every new non-empty fact set exactly.
+    if result.observed_facts:
+        payload["observed_facts"] = [fact.model_dump(mode="json") for fact in result.observed_facts]
+    return payload
 
 
 def _result_authority_digest(result: HostVerificationResult) -> str:
@@ -1682,6 +1718,23 @@ def structured_web_verification_result(
         status=status,
         reason=reason,
         claim_results=tuple(results),
+        observed_facts=(
+            (
+                HostVerificationObservedFact(
+                    fact_id="web.observed.visible_text",
+                    kind=VerificationClaimKind.VISIBLE_TEXT,
+                    value=rendered_text,
+                    verifier_id=resolved_verifier_id,
+                    capability_basis=basis,
+                    evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
+                    evidence_refs=refs,
+                ),
+            )
+            if deterministic_pass
+            and isinstance(rendered_text, str)
+            and 0 < len(rendered_text) <= 131_072
+            else ()
+        ),
         screenshot_path=screenshot_path,
         screenshot_sha256=screenshot_sha256,
     )

@@ -231,6 +231,9 @@ def _receipt_authority_payload(receipt: dict[str, Any]) -> dict[str, Any]:
         )
     }
     payload["delegated_issuer_ids"] = sorted(receipt.get("delegated_issuer_ids") or [])
+    observed_facts = receipt.get("observed_facts")
+    if isinstance(observed_facts, list) and observed_facts:
+        payload["observed_facts"] = observed_facts
     return payload
 
 
@@ -881,6 +884,7 @@ class GovernedAdmissionOracle:
         # oracles may consume this projection, but must never re-extract claims
         # directly from an unvalidated event.
         verified_claim_results: list[dict[str, Any]] = []
+        verified_observed_facts: list[dict[str, Any]] = []
         for check in required_checks:
             verdict = next(
                 (
@@ -907,6 +911,7 @@ class GovernedAdmissionOracle:
             )
             receipt = verdict.get("verification_result") if isinstance(verdict, dict) else None
             claim_results = receipt.get("claim_results") if isinstance(receipt, dict) else None
+            observed_facts = receipt.get("observed_facts") if isinstance(receipt, dict) else None
             expected_claims = {
                 _claim_contract(claim)
                 for claim in check.get("claims") or []
@@ -968,6 +973,22 @@ class GovernedAdmissionOracle:
                     claim.get("verifier_id") not in allowed_claim_issuers
                     for claim in claim_results or []
                     if isinstance(claim, dict) and claim.get("status") == "pass"
+                )
+                or observed_facts is not None
+                and (
+                    not isinstance(observed_facts, list)
+                    or any(
+                        not isinstance(fact, dict)
+                        or not isinstance(fact.get("fact_id"), str)
+                        or not fact.get("fact_id")
+                        or fact.get("kind") == "visual_semantic"
+                        or not isinstance(fact.get("value"), str)
+                        or not fact.get("value")
+                        or fact.get("verifier_id") not in allowed_claim_issuers
+                        or not isinstance(fact.get("evidence_modalities"), list)
+                        or not fact.get("evidence_modalities")
+                        for fact in observed_facts
+                    )
                 )
                 or not _effect_receipt_is_exact(receipt)
             ):
@@ -1124,6 +1145,9 @@ class GovernedAdmissionOracle:
             verified_claim_results.extend(
                 dict(claim) for claim in claim_results or [] if isinstance(claim, dict)
             )
+            verified_observed_facts.extend(
+                dict(fact) for fact in observed_facts or [] if isinstance(fact, dict)
+            )
 
         if len(execution_authorities) != 1:
             return _fail(
@@ -1145,6 +1169,7 @@ class GovernedAdmissionOracle:
                     "required_checks": len(required_checks),
                     "contract_digest": contract_digest,
                     "verified_claim_results": verified_claim_results,
+                    "verified_observed_facts": verified_observed_facts,
                 },
             )
         ]

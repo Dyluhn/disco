@@ -104,6 +104,34 @@ def _deliverable(
     )
 
 
+def _governed_deliverable(
+    *extra: HostVerificationClaim,
+) -> HostVerificationDeliverable:
+    base = _deliverable(*extra)
+    check = VerificationCheckContract(
+        check_id="web_functional",
+        receipt_kind="disco.web_functional@1",
+        issuer_id="disco.host_web_verifier@1",
+        operation="host.verify_deliverable",
+        required_execution_modality="managed_preview",
+        accepted_claim_kinds=frozenset(claim.kind for claim in base.required_claims),
+        claims=base.required_claims,
+    )
+    contract = AdmittedVerificationContract(
+        target_id="disco.legacy_web@1",
+        verifier_id=check.issuer_id,
+        delivery=VerificationDeliveryContract(
+            shape="web.legacy_deliverable",
+            mode="interactive",
+            entry_kind="manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="legacy_host",
+        checks=(check,),
+    )
+    return base.model_copy(update={"verification_contract": contract, "verification_check": check})
+
+
 def _verdict(**updates: object) -> dict[str, object]:
     verdict: dict[str, object] = {
         "passed": True,
@@ -157,6 +185,24 @@ def test_text_only_web_receipt_proves_exact_visible_text_without_vision() -> Non
         VerificationEvidenceModality.SCREENSHOT_PIXELS not in result.evidence_modalities
         for result in receipt.claim_results
     )
+
+
+def test_structured_receipt_retains_integrity_bound_visible_text_observation() -> None:
+    receipt = structured_web_verification_result(
+        deliverable=_governed_deliverable(),
+        verdict=_verdict(),
+    )
+
+    assert len(receipt.observed_facts) == 1
+    fact = receipt.observed_facts[0]
+    assert fact.kind is VerificationClaimKind.VISIBLE_TEXT
+    assert fact.value == "Static Seed 400301\nLaunch"
+    assert fact.evidence_modalities == (VerificationEvidenceModality.DOM_ACCESSIBILITY,)
+
+    forged = receipt.model_dump(mode="json")
+    forged["observed_facts"][0]["value"] = "model-authored replacement"
+    with pytest.raises(ValueError, match="effect receipt subject"):
+        HostVerificationResult.model_validate(forged)
 
 
 def test_http_dom_console_network_and_interaction_are_nonvision_claims() -> None:
