@@ -901,6 +901,55 @@ class _InspectTraceAggregation:
             self.reasons.add("no_valid_snapshot")
         self.finalized = True
 
+    def active_agent_step_request_id(self) -> str | None:
+        """Return the one currently open host-owned driver request, if provable.
+
+        An ``agent.step`` span starts before the provider stream and ends in the
+        span context manager on success, failure, timeout, or cancellation.  A
+        latest unmatched start therefore proves that the product is still doing
+        model work even though no durable ActionEvent exists yet.
+
+        This is deliberately strict.  A tainted aggregate, a missing/foreign
+        request id, duplicate starts, multiple unmatched requests, or any later
+        driver-span event fails closed.  Those shapes must never turn an old
+        observability record into an unbounded inactivity exemption.
+        """
+
+        if self.reasons or self.accepted_sample_count == 0:
+            return None
+
+        open_requests: dict[str, int] = {}
+        latest: tuple[int, str, str] | None = None
+        for seq in sorted(self.canonical_events):
+            try:
+                event = json.loads(self.canonical_events[seq].decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return None
+            if (
+                not isinstance(event, dict)
+                or event.get("span") != "agent.step"
+                or event.get("role") != "agent_driver"
+            ):
+                continue
+            phase = event.get("event")
+            request_id = event.get("request_id")
+            if phase not in {"start", "end"} or not isinstance(request_id, str) or not request_id:
+                return None
+            if phase == "start":
+                if request_id in open_requests:
+                    return None
+                open_requests[request_id] = seq
+            else:
+                if request_id not in open_requests:
+                    return None
+                del open_requests[request_id]
+            latest = (seq, phase, request_id)
+
+        if latest is None or latest[1] != "start" or len(open_requests) != 1:
+            return None
+        request_id = latest[2]
+        return request_id if open_requests.get(request_id) == latest[0] else None
+
     def render(self) -> dict[str, Any]:
         events = [
             json.loads(self.canonical_events[seq].decode("utf-8"))
@@ -2003,6 +2052,14 @@ class DiscoApiClient:
         state = self._durable_action_state(conversation_id)
         return None if state is None else state[1]
 
+    def _active_agent_step_request_id(self, conversation_id: str) -> str | None:
+        """Return a current same-conversation model request from trusted inspect state."""
+
+        aggregation = self._inspect_aggregations.get(conversation_id)
+        if aggregation is None or aggregation.conversation_id != conversation_id:
+            return None
+        return aggregation.active_agent_step_request_id()
+
     @staticmethod
     def _action_timeout_s(tool_name: str) -> float:
         return _TOOL_TIMEOUT_OVERRIDES_S.get(tool_name, _DEFAULT_TOOL_TIMEOUT_S)
@@ -2113,6 +2170,16 @@ class DiscoApiClient:
                 # prior valid snapshot already proved one, retain its ORIGINAL bound:
                 # clearing it here would let intermittent read failures restart the
                 # same action's full timeout indefinitely on the next valid poll.
+
+                # A provider request begins before the model can emit its next
+                # ActionEvent.  The lossless inspect collector observes that exact,
+                # host-owned boundary.  While its latest driver span is a single
+                # unmatched start, the run is active rather than silent.  Refreshing
+                # last_progress here does not remove the hard cap: a provider/router
+                # wedge still ends as PROGRESSING_TIMEOUT (inconclusive), while a
+                # completed, stale, foreign, or malformed span grants no extension.
+                if self._active_agent_step_request_id(conversation_id) is not None:
+                    last_progress = now
             else:
                 dangling_action_id = None
                 dangling_action_deadline = 0.0
