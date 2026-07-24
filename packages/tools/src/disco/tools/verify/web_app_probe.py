@@ -182,6 +182,10 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     # Keep it bounded: this is evidence for exact required-text claims, not a
     # second unbounded page transcript.
     rendered_text = text[:32_768]
+    raw_visible_dom_text = s.get("visible_dom_text")
+    visible_dom_text = (
+        raw_visible_dom_text[:32_768] if isinstance(raw_visible_dom_text, str) else ""
+    )
     raw_freshness = s.get("freshness")
     freshness: dict[str, Any] = dict(raw_freshness) if isinstance(raw_freshness, dict) else {}
 
@@ -198,6 +202,7 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
         "screenshot_path": screenshot_path,
         "screenshot_b64": screenshot_b64,
         "rendered_text": rendered_text,
+        "visible_dom_text": visible_dom_text,
         "freshness": freshness,
         "failure_fingerprint": _failure_fingerprint(console_errors, network_failures),
     }
@@ -235,6 +240,7 @@ def compute_verdict(
     screenshot_path = str(probe["screenshot_path"])
     screenshot_b64 = str(probe["screenshot_b64"])
     rendered_text = str(probe["rendered_text"])
+    visible_dom_text = str(probe["visible_dom_text"])
     freshness = dict(probe["freshness"])
     fingerprint = str(probe["failure_fingerprint"])
 
@@ -309,6 +315,7 @@ def compute_verdict(
         "network_failures": network_failures,
         "screenshot_path": screenshot_path,
         "rendered_text": rendered_text,
+        "visible_dom_text": visible_dom_text,
         "freshness": freshness,
         "vision": {"used": False, "passed": None, "notes": []},
         "failure_fingerprint": fingerprint,

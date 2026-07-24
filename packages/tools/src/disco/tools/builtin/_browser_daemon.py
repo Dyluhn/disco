@@ -1053,6 +1053,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             except Exception:
                 canvas_count = 0
             visible_semantic_elements = self._count_visible_semantic_elements(page)
+            visible_dom_text = self._visible_dom_text(page)
 
             res = {
                 "ok": True,
@@ -1064,6 +1065,11 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "text": text,
                 "appkit_sections": appkit_sections,
                 "canvas_count": canvas_count,
+                # Exact authored text from rendered, non-hidden text nodes.
+                # Unlike innerText, this is not rewritten by CSS text-transform,
+                # so exact-content claims retain their case while still requiring
+                # structured browser visibility/geometry evidence.
+                "visible_dom_text": visible_dom_text,
                 # Captured from the Playwright main-document Response event, not
                 # from page JavaScript (which can shadow document.contentType).
                 "document_content_type": lane.document_content_type,
@@ -1080,6 +1086,74 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 res["screenshot_b64"] = b64
 
             return res
+
+    @staticmethod
+    def _visible_dom_text(page) -> str:
+        """Return bounded exact text from rendered, non-hidden DOM text nodes.
+
+        ``innerText`` is the right user-facing summary, but browsers apply CSS
+        ``text-transform`` to it. Exact content claims also need the authored
+        node text, coupled to browser-owned visibility and geometry rather than
+        raw HTML/source bytes. Hidden, transparent, clipped, zero-area, and
+        ``aria-hidden`` nodes are excluded.
+        """
+        try:
+            value = page.evaluate(r"""
+                () => {
+                    const output = [];
+                    const transparent = value => value === 'transparent' ||
+                        /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
+                    const intersects = (first, second) =>
+                        Math.min(first.right, second.right) >
+                            Math.max(first.left, second.left) &&
+                        Math.min(first.bottom, second.bottom) >
+                            Math.max(first.top, second.top);
+                    const walker = document.createTreeWalker(
+                        document.body, NodeFilter.SHOW_TEXT
+                    );
+                    while (walker.nextNode()) {
+                        const node = walker.currentNode;
+                        const raw = (node.nodeValue || '').replace(/\s+/g, ' ').trim();
+                        if (!raw) continue;
+                        const parent = node.parentElement;
+                        if (!parent || parent.closest('[aria-hidden="true"]')) continue;
+
+                        let visible = true;
+                        const clippingAncestors = [];
+                        for (let current = parent; current; current = current.parentElement) {
+                            const style = window.getComputedStyle(current);
+                            if (style.display === 'none' ||
+                                style.visibility === 'hidden' ||
+                                style.visibility === 'collapse' ||
+                                Number(style.opacity) === 0 ||
+                                transparent(style.color) ||
+                                transparent(style.webkitTextFillColor || '') ||
+                                style.clipPath === 'inset(100%)') {
+                                visible = false;
+                                break;
+                            }
+                            if (/(hidden|clip|scroll|auto)/.test(
+                                `${style.overflow} ${style.overflowX} ${style.overflowY}`
+                            )) {
+                                clippingAncestors.push(current.getBoundingClientRect());
+                            }
+                        }
+                        if (!visible) continue;
+
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        const rendered = Array.from(range.getClientRects()).some(rect => {
+                            if (rect.width <= 0 || rect.height <= 0) return false;
+                            return clippingAncestors.every(clip => intersects(rect, clip));
+                        });
+                        if (rendered) output.push(raw);
+                    }
+                    return output.join('\n').slice(0, 4000);
+                }
+            """)
+        except Exception:
+            return ""
+        return value if isinstance(value, str) else ""
 
     @staticmethod
     def _count_visible_semantic_elements(page) -> int:

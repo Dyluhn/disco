@@ -110,6 +110,7 @@ def test_verdict_vision_off_is_lean_and_carries_structured_claim_evidence():
         "network_failures",
         "screenshot_path",
         "rendered_text",
+        "visible_dom_text",
         "freshness",
         "vision",
         "failure_fingerprint",

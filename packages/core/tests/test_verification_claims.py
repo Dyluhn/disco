@@ -187,6 +187,45 @@ def test_text_only_web_receipt_proves_exact_visible_text_without_vision() -> Non
     )
 
 
+def test_exact_visible_text_uses_rendered_visible_dom_nodes_before_css_case_transform() -> None:
+    visible = _claim(
+        "web.visible_text:imported_complete",
+        VerificationClaimKind.VISIBLE_TEXT,
+        "Imported Complete 405115",
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(visible),
+        verdict=_verdict(
+            rendered_text="Imported Seed 405115\nIMPORTED COMPLETE 405115",
+            visible_dom_text="Imported Seed 405115\nImported Complete 405115",
+        ),
+    )
+
+    assert receipt.status is VerificationClaimStatus.PASS
+    result = next(item for item in receipt.claim_results if item.claim_id == visible.claim_id)
+    assert result.status is VerificationClaimStatus.PASS
+    assert receipt.observed_facts[0].value == ("Imported Seed 405115\nImported Complete 405115")
+
+
+def test_exact_visible_text_does_not_casefold_or_accept_absent_dom_text() -> None:
+    visible = _claim(
+        "web.visible_text:imported_complete",
+        VerificationClaimKind.VISIBLE_TEXT,
+        "Imported Complete 405115",
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(visible),
+        verdict=_verdict(
+            rendered_text="IMPORTED COMPLETE 405115",
+            visible_dom_text="Different authored text",
+        ),
+    )
+
+    assert receipt.status is VerificationClaimStatus.FAIL
+    result = next(item for item in receipt.claim_results if item.claim_id == visible.claim_id)
+    assert result.status is VerificationClaimStatus.FAIL
+
+
 def test_structured_receipt_retains_integrity_bound_visible_text_observation() -> None:
     receipt = structured_web_verification_result(
         deliverable=_governed_deliverable(),

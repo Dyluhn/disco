@@ -569,6 +569,88 @@ def test_visible_semantic_elements_are_strict_rendered_evidence():
     assert handler._count_visible_semantic_elements(page) == 0
 
 
+def test_visible_dom_text_is_exact_bounded_structured_evidence():
+    import disco.tools.builtin._browser_daemon as daemon_mod
+
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+    page = MagicMock()
+    page.evaluate.return_value = "Imported Complete 405115"
+    assert handler._visible_dom_text(page) == "Imported Complete 405115"
+    script = page.evaluate.call_args.args[0]
+    assert "createTreeWalker" in script
+    assert "getClientRects" in script
+    assert "getComputedStyle" in script
+    assert "aria-hidden" in script
+    assert "text-transform" not in script
+    assert "slice(0, 4000)" in script
+
+    for invalid in (True, 1, [], None):
+        page.evaluate.return_value = invalid
+        assert handler._visible_dom_text(page) == ""
+
+    page.evaluate.side_effect = RuntimeError("page closed")
+    assert handler._visible_dom_text(page) == ""
+
+
+@pytest.mark.integration
+def test_visible_dom_text_real_chromium_preserves_authored_case_and_rejects_hidden():
+    import base64
+    import importlib.resources
+
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin.browser import _installed_chromium_executable
+    from playwright.sync_api import sync_playwright
+
+    executable = _installed_chromium_executable()
+    if executable is None:
+        pytest.skip("installed Chromium is required")
+    font = (
+        importlib.resources.files("disco.core.brand")
+        .joinpath("fonts/SchibstedGrotesk.ttf")
+        .read_bytes()
+    )
+    font_b64 = base64.b64encode(font).decode("ascii")
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            executable_path=executable,
+            args=["--no-sandbox"],
+        )
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page.set_content(
+                """
+                <style>*{font-family:"DiscoProbe"!important}</style>
+                <h2 style="text-transform:uppercase">Imported Complete 405115</h2>
+                <p hidden>Hidden attribute</p>
+                <p style="display:none">Display hidden</p>
+                <p aria-hidden="true">Accessibility hidden</p>
+                <p style="color:transparent">Transparent hidden</p>
+                """
+            )
+            page.evaluate(
+                """
+                async b64 => {
+                    const bytes = atob(b64);
+                    const data = new Uint8Array(bytes.length);
+                    for (let index = 0; index < bytes.length; index++) {
+                        data[index] = bytes.charCodeAt(index);
+                    }
+                    const font = new FontFace('DiscoProbe', data.buffer);
+                    await font.load();
+                    document.fonts.add(font);
+                    await document.fonts.ready;
+                }
+                """,
+                font_b64,
+            )
+            assert page.locator("h2").inner_text() == "IMPORTED COMPLETE 405115"
+            assert handler._visible_dom_text(page) == "Imported Complete 405115"
+        finally:
+            browser.close()
+
+
 @pytest.mark.integration
 def test_visible_semantic_elements_real_chromium():
     """H335 executable DOM proof: visible heading only; false-pass shapes stay zero."""

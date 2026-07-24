@@ -1398,6 +1398,7 @@ class _StructuredWebEvidence:
     url: str
     http_status: Any
     rendered_text: Any
+    visible_dom_text: Any
     console_errors: Any
     network_failures: Any
     meaningful: bool
@@ -1468,21 +1469,31 @@ def _basic_structured_claim_result(
             **common,
         )
     if claim.kind is VerificationClaimKind.VISIBLE_TEXT:
-        text = evidence.rendered_text if isinstance(evidence.rendered_text, str) else None
-        ok = text is not None and claim.expected in text
+        rendered_text = evidence.rendered_text if isinstance(evidence.rendered_text, str) else None
+        visible_dom_text = (
+            evidence.visible_dom_text if isinstance(evidence.visible_dom_text, str) else None
+        )
+        available = rendered_text is not None or visible_dom_text is not None
+        ok = (
+            rendered_text is not None
+            and claim.expected in rendered_text
+            or visible_dom_text is not None
+            and claim.expected in visible_dom_text
+        )
         return _result(
             claim,
             VerificationClaimStatus.PASS
             if ok
             else VerificationClaimStatus.FAIL
-            if text is not None
+            if available
             else VerificationClaimStatus.UNAVAILABLE,
-            f"rendered DOM contains required text {claim.expected!r}"
+            f"structured visible DOM/accessibility contains required text {claim.expected!r}"
             if ok
-            else f"rendered DOM does not contain required text {claim.expected!r}"
-            if text is not None
-            else "structured browser receipt omitted rendered DOM text",
-            modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,) if text else (),
+            else f"structured visible DOM/accessibility does not contain required text "
+            f"{claim.expected!r}"
+            if available
+            else "structured browser receipt omitted visible DOM/accessibility text",
+            modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,) if available else (),
             **common,
         )
     if claim.kind is VerificationClaimKind.CONSOLE_CLEAN:
@@ -1610,6 +1621,7 @@ def structured_web_verification_result(
     url = str(verdict.get("url") or "")
     http_status = verdict.get("http_status")
     rendered_text = verdict.get("rendered_text")
+    visible_dom_text = verdict.get("visible_dom_text")
     console_errors = verdict.get("console_errors")
     network_failures = verdict.get("network_failures")
     meaningful = verdict.get("meaningful_content") is True
@@ -1644,6 +1656,7 @@ def structured_web_verification_result(
         url=url,
         http_status=http_status,
         rendered_text=rendered_text,
+        visible_dom_text=visible_dom_text,
         console_errors=console_errors,
         network_failures=network_failures,
         meaningful=meaningful,
@@ -1698,6 +1711,11 @@ def structured_web_verification_result(
         and raw_workspace_epoch > 0
         else None
     )
+    observed_visible_text = (
+        visible_dom_text
+        if isinstance(visible_dom_text, str) and visible_dom_text
+        else rendered_text
+    )
     receipt = HostVerificationResult(
         conversation_id=deliverable.conversation_id,
         run_intent_id=deliverable.run_intent_id,
@@ -1723,7 +1741,7 @@ def structured_web_verification_result(
                 HostVerificationObservedFact(
                     fact_id="web.observed.visible_text",
                     kind=VerificationClaimKind.VISIBLE_TEXT,
-                    value=rendered_text,
+                    value=observed_visible_text,
                     verifier_id=resolved_verifier_id,
                     capability_basis=basis,
                     evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
@@ -1731,8 +1749,8 @@ def structured_web_verification_result(
                 ),
             )
             if deterministic_pass
-            and isinstance(rendered_text, str)
-            and 0 < len(rendered_text) <= 131_072
+            and isinstance(observed_visible_text, str)
+            and 0 < len(observed_visible_text) <= 131_072
             else ()
         ),
         screenshot_path=screenshot_path,
