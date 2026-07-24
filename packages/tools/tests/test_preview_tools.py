@@ -102,6 +102,7 @@ def test_preview_start_spec_schema_has_no_port() -> None:
     command_help = schema["properties"]["command"]["description"]
     assert "PORT environment variable" in command_help
     assert "{port}" in command_help
+    assert "configured runtime adapter" in command_help
 
 
 def test_preview_start_description_distinguishes_startup_from_runtime_recovery() -> None:

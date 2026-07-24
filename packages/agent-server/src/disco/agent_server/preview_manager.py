@@ -75,6 +75,25 @@ _FRAMEWORK_COMMANDS: dict[str, str] = {
     "express": "PORT={port} npm start",
 }
 
+# Port arguments required when a caller supplies its own start script *and* declares
+# one of the configured runtimes below.  The start script remains authoritative (a
+# project may call it "develop", perform setup first, or use another package manager),
+# while the runtime adapter remains authoritative for how that server binds the
+# platform-owned port.  Relying on PORT alone is not sufficient: Vite/Astro/Svelte do
+# not use it as their CLI listen port, so ``command="npm run dev", framework="vite"``
+# otherwise starts a foreign server on 5173 while Preview owns (for example) 8000.
+#
+# These are lifecycle adapters, not generic-loop assumptions. Unknown/future runtimes
+# keep the existing custom-command contract (PORT and/or an explicit {port}
+# placeholder), and non-web targets never enter PreviewManager.
+_FRAMEWORK_COMMAND_PORT_ARGS: dict[str, tuple[str, ...]] = {
+    "vite": ("--port", "{port}", "--host", "0.0.0.0"),
+    "next": ("-p", "{port}"),
+    "nextjs": ("-p", "{port}"),
+    "astro": ("--port", "{port}", "--host", "0.0.0.0"),
+    "svelte": ("--port", "{port}", "--host", "0.0.0.0"),
+}
+
 # These configured framework intents start development servers whose own runtime
 # supplies hot-module updates. Static launches, generic node servers, and arbitrary
 # custom commands have no such platform-guaranteed contract, so clients reload them
@@ -222,6 +241,22 @@ class PreviewCommandError(ValueError):
     """A raw `command` cannot be made platform-port-safe (it binds a hardcoded port via
     a form the platform can't override). The model must remove the port or use the
     literal `{port}` placeholder. Surfaced to the model as a recoverable tool failure."""
+
+
+def _adapt_framework_command_port(tokens: list[str], *, framework: str | None) -> list[str]:
+    """Apply configured runtime binding to a caller-selected start script."""
+
+    adapter_args = _FRAMEWORK_COMMAND_PORT_ARGS.get((framework or "").strip().lower())
+    if adapter_args is None or any("{port}" in token for token in tokens):
+        return tokens
+    adapted = list(tokens)
+    # npm consumes script arguments unless they follow `--`. Other common script
+    # runners and direct framework executables forward unknown arguments themselves.
+    executable = adapted[0].rsplit("/", 1)[-1] if adapted else ""
+    if executable == "npm" and "--" not in adapted:
+        adapted.append("--")
+    adapted.extend(adapter_args)
+    return adapted
 
 
 def preview_projection_digest(
@@ -568,8 +603,9 @@ class PreviewManager:
     ) -> str:
         """Turn model INTENT into the actual command, with the PLATFORM port baked in.
 
-        Precedence: an explicit `command` (port scrubbed/validated + injected) > a known
-        `framework` template > static file serving of `serve_dir` (the safe MVP default).
+        An explicit `command` chooses the project script; a known `framework` still
+        adapts it to the platform port. Otherwise use a known framework template or
+        statically serve `serve_dir`.
 
         A raw command never gets to pick the port: any `--port/-p/PORT=` the model
         embedded (quoted, `=`-joined, or bare) is stripped on the SHLEX'D TOKENS and the
@@ -628,11 +664,9 @@ class PreviewManager:
                     "<its port>), or put the literal placeholder '{port}' where the port "
                     "goes (e.g. 'python3 -m http.server {port} -d dist')."
                 )
-            # Fill any `{port}` placeholder (flag value or positional slot) with OUR port,
-            # then re-join into a single safely-quoted command. Filling BEFORE the join
-            # avoids `shlex.join` quoting the `{...}` braces (which would break the served
-            # port). Inject the platform port as an env var too (honored by Node/Vite/Next/
-            # CRA/Flask-via-env, …); the static template path below handles dir/framework.
+            cleaned = _adapt_framework_command_port(cleaned, framework=framework)
+            # Fill sanctioned placeholders before safely rejoining. PORT covers generic
+            # custom runtimes; configured adapters add their required CLI binding.
             filled = [t.replace("{port}", str(port)) for t in cleaned]
             return f"PORT={port} {shlex.join(filled)}"
         if framework:
@@ -683,8 +717,6 @@ class PreviewManager:
     def _launch_kind(*, command: str | None, framework: str | None) -> str:
         """Mirror command resolution so root-health policy matches the actual launcher."""
 
-        if command:
-            return "custom"
         normalized = (framework or "").strip().lower()
         if (
             normalized
@@ -696,6 +728,8 @@ class PreviewManager:
             }
         ):
             return "framework"
+        if command:
+            return "custom"
         return "static"
 
     def _default_name(self, serve_dir: str | None, framework: str | None) -> str:

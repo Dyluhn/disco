@@ -379,6 +379,110 @@ async def test_model_cannot_override_port_via_command() -> None:
 
 
 @pytest.mark.asyncio
+async def test_framework_adapter_binds_explicit_vite_script_to_platform_port() -> None:
+    """A project-specific script does not demote a declared runtime to PORT-only.
+
+    Vite deliberately ignores the generic PORT environment variable.  The configured
+    adapter must therefore add Vite's own CLI binding and retain framework/HMR
+    authority; otherwise the process serves 5173 while canonical Preview owns 3000.
+    """
+
+    class _ViteSessions(_FakeSessions):
+        async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
+            self.exec_calls.append((name, command, exec_dir))
+            match = re.search(r"--port[= ](\d+)", command)
+            port = int(match.group(1)) if match else 5173
+            self._name_port[name] = port
+            self._serving.add(port)
+            self._running[name] = True
+            self._logs[name] = f"$ {command}\nVite serving on port {port}\n"
+
+    sandbox = _FakeSandbox()
+    sandbox.sessions = _ViteSessions(sandbox._serving)
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(
+        command="npm run dev",
+        framework="vite",
+        supervise=False,
+    )
+
+    assert session.status is PreviewStatus.RUNNING
+    assert session.port == 3000
+    assert session.intent["launch_kind"] == "framework"
+    assert session.reload_strategy is PreviewReloadStrategy.HMR
+    assert session.command == ("PORT=3000 npm run dev -- --port 3000 --host 0.0.0.0")
+    assert 5173 not in sandbox._serving
+
+
+@pytest.mark.parametrize(
+    ("framework", "binding"),
+    (
+        ("next", "-- -p 3000"),
+        ("nextjs", "-- -p 3000"),
+        ("astro", "-- --port 3000 --host 0.0.0.0"),
+        ("svelte", "-- --port 3000 --host 0.0.0.0"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_configured_runtime_adapts_project_script(
+    framework: str,
+    binding: str,
+) -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(
+        command="npm run develop",
+        framework=framework,
+        supervise=False,
+    )
+
+    assert session.command == f"PORT=3000 npm run develop {binding}"
+    assert session.intent["launch_kind"] == "framework"
+
+
+@pytest.mark.asyncio
+async def test_custom_and_unknown_runtime_commands_remain_flexible() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+
+    custom = await mgr.start(
+        command="python3 server.py",
+        name="custom",
+        supervise=False,
+    )
+    future = await mgr.start(
+        command="future-preview serve",
+        framework="future-native-webview",
+        name="future",
+        supervise=False,
+    )
+
+    assert custom.command == "PORT=3000 python3 server.py"
+    assert custom.intent["launch_kind"] == "custom"
+    assert future.command == "PORT=5173 future-preview serve"
+    assert future.intent["launch_kind"] == "custom"
+    assert "--port" not in future.command
+
+
+@pytest.mark.asyncio
+async def test_explicit_framework_port_placeholder_is_not_duplicated() -> None:
+    sandbox = _FakeSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000])
+
+    session = await mgr.start(
+        command="npm run dev -- --port {port}",
+        framework="vite",
+        supervise=False,
+    )
+
+    assert session.command.count("--port") == 1
+    assert "--port 3000" in session.command
+    assert session.intent["launch_kind"] == "framework"
+
+
+@pytest.mark.asyncio
 async def test_two_previews_get_distinct_ports_without_model_choosing() -> None:
     sandbox = _FakeSandbox()
     mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])

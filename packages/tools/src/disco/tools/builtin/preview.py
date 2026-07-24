@@ -104,16 +104,18 @@ class PreviewStartArgs(BaseModel):
         default=None,
         description=(
             "A start command for a dev server (e.g. 'npm run dev'). Do NOT include a "
-            "port — the platform injects its chosen port (any port you put here is "
-            "ignored). The program must honor the injected PORT environment variable, "
-            "or put the literal {port} placeholder where its port argument belongs. "
-            "Use this when serve_dir/framework don't fit."
+            "port — the platform binds its chosen port (any port you put here is "
+            "ignored). Pair this with framework when a configured runtime adapter should "
+            "bind that script (for example Vite); for an unrecognized custom runtime, the "
+            "program must honor the injected PORT environment variable or put the literal "
+            "{port} placeholder where its port argument belongs."
         ),
     )
     framework: str | None = Field(
         default=None,
         description=(
-            "Framework hint so the platform picks the right start command "
+            "Framework hint so the platform picks the right start command and port-binding "
+            "adapter, including when command supplies a project-specific start script "
             "(static, vite, next, react/cra, astro, svelte, node/express)."
         ),
     )
