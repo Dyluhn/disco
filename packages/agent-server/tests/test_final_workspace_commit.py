@@ -1769,3 +1769,48 @@ async def test_seal_still_fails_closed_when_nothing_was_pinned_and_nothing_is_li
 
     with pytest.raises(RuntimeError, match="no live sandbox"):
         await persistence._resolve_capture_session("conv_pin", seal_fence=(7, None))
+
+
+@pytest.mark.asyncio
+async def test_pinned_sandbox_yields_to_a_rotated_live_one():
+    """A pin must never be WORSE than the lookup it replaces.
+
+    If the box rotated between the terminal and the seal, the pinned reference is
+    a dead generation — its workspace directory is already gone, and sealing
+    against it fails on paths that no longer exist. The pin closes the
+    dropped-executor window; it does not bind the seal to a corpse.
+    """
+    from disco.agent_server.workspace_persistence import WorkspacePersistence
+
+    class _Store:
+        def status(self):
+            from disco.tools.projects import StorageStatus
+
+            return StorageStatus.OK
+
+    live = object()
+
+    class _Executor:
+        _sandbox = live
+
+    class _Runtime:
+        def __init__(self):
+            self._executors = {"conv_rot": _Executor()}
+
+        def _project_store_now(self):
+            return _Store()
+
+        async def _emit_persistence_reminder(self, *a, **k):
+            return None
+
+    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
+    persistence._rt = _Runtime()
+    stale = object()
+
+    resolved = await persistence._resolve_capture_session(
+        "conv_rot", seal_fence=(9, None), pinned_session=stale
+    )
+
+    assert resolved is not None
+    session, _store = resolved
+    assert session is live, "a rotated generation must lose to the live sandbox"

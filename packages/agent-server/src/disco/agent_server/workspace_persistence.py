@@ -943,10 +943,22 @@ class WorkspacePersistence:
         # A caller that pinned the sandbox at the terminal wins over a fresh
         # lookup: by seal time the executor may already have been dropped, and
         # re-resolving it there is what left FINISHED builds unsealed.
+        #
+        # But a pin must never be WORSE than the lookup it replaces. If the box
+        # rotated between the terminal and the seal, the pinned reference is a dead
+        # generation, so fall back to whatever is live now. The pin closes the
+        # dropped-executor window; it does not bind the seal to a corpse.
         executor = self._rt._executors.get(conversation_id)
+        live_session = getattr(executor, "_sandbox", None) if executor is not None else None
         session = pinned_session
+        if session is not None and live_session is not None and live_session is not session:
+            _LOG.warning(
+                "snapshot %s: pinned sandbox is a previous generation — sealing the live one",
+                conversation_id,
+            )
+            session = live_session
         if session is None:
-            session = getattr(executor, "_sandbox", None) if executor is not None else None
+            session = live_session
         if session is None:
             _LOG.warning(
                 "snapshot SKIPPED for %s: no sandbox (executor=%s) — workspace NOT persisted",
