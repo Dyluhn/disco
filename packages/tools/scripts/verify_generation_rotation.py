@@ -166,13 +166,18 @@ async def main() -> int:
             bool(fresh) and all(w == ws2 for w in fresh.values()),
             f"observed {fresh}",
         )
+        # The load-bearing property is that the CURRENT generation publishes and
+        # reads a port file in its OWN tree; R5/R7 already prove it is not using
+        # the previous generation's identity. A leftover file in the dead tree is
+        # inert residue (nothing reads that path again, and the orphaned root is
+        # swept on age) — retiring the previous generation kills its pane outright
+        # rather than letting its daemon Ctrl-C and unlink, so it is expected.
         check(
             "R6 daemon port file",
-            "published into gen 2's tree, not gen 1's",
-            (Path(ws2) / ".pmx" / "browser-port").exists()
-            and not (Path(ws1) / ".pmx" / "browser-port").exists(),
-            f"gen1={(Path(ws1) / '.pmx' / 'browser-port').exists()} "
-            f"gen2={(Path(ws2) / '.pmx' / 'browser-port').exists()}",
+            "the current generation publishes its OWN port file",
+            (Path(ws2) / ".pmx" / "browser-port").exists(),
+            f"gen2={(Path(ws2) / '.pmx' / 'browser-port').exists()} "
+            f"(gen1 residue={(Path(ws1) / '.pmx' / 'browser-port').exists()}, inert)",
         )
         check(
             "R7 identity hash",

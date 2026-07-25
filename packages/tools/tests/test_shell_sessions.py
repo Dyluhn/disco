@@ -712,6 +712,13 @@ async def test_previous_generation_process_session_is_replaced_not_adopted():
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["show-environment"] = (0, "DISCO_WORKSPACE=/tmp/disco-generation-1")
     inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
+    # A dev server the agent left in another pane of the SAME dead generation is
+    # exactly what leaks: nothing re-`ensure`s it, so only a namespace sweep frees
+    # the port it still holds. A foreign conversation's session must be untouched.
+    inst.canned_outputs["list-sessions"] = (
+        0,
+        "disco-conv-c-main\ndisco-conv-c-server\ndisco-other-main\n",
+    )
 
     async def get_inst():
         return inst
@@ -719,11 +726,13 @@ async def test_previous_generation_process_session_is_replaced_not_adopted():
     manager = ShellSessionManager(get_inst, namespace="conv-c-")
     await manager.ensure("main")
 
-    assert any("kill-session -t disco-conv-c-main" in cmd for cmd in inst.cmd_log)
+    kills = [cmd for cmd in inst.cmd_log if "kill-session" in cmd]
+    assert any("kill-session -t disco-conv-c-main" in cmd for cmd in kills)
+    assert any("kill-session -t disco-conv-c-server" in cmd for cmd in kills)
+    assert not any("disco-other-main" in cmd for cmd in kills)
     create = next(cmd for cmd in inst.cmd_log if "tmux new-session" in cmd)
     assert "-e DISCO_WORKSPACE=/tmp/disco-generation-2" in create
-    # Only this conversation's namespaced session is ever killed.
-    kills = [cmd for cmd in inst.cmd_log if "kill-session" in cmd]
+    # Only this conversation's namespaced sessions are ever killed.
     assert all("disco-conv-c-" in cmd for cmd in kills)
 
 
@@ -736,6 +745,7 @@ async def test_unreadable_session_binding_replaces_rather_than_adopts():
     inst.canned_outputs["has-session"] = (0, "")
     inst.canned_outputs["show-environment"] = (1, "")
     inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
+    inst.canned_outputs["list-sessions"] = (0, "disco-conv-d-main\n")
 
     async def get_inst():
         return inst

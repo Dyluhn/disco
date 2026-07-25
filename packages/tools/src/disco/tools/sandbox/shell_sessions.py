@@ -102,6 +102,9 @@ class ShellSessionManager:
         # Survives `reset_known_sessions()`: tmux sessions on the old box are
         # gone, but the METADATA needed to restart them is what carries across.
         self._persistent_servers: dict[str, PersistentServer] = {}
+        # A generation rotation retires the whole namespace exactly once; see
+        # _retire_previous_generation.
+        self._retired_previous_generation = False
 
     def reset_known_sessions(self) -> None:
         # Note: _persistent_servers is intentionally NOT cleared here. The
@@ -233,6 +236,34 @@ class ShellSessionManager:
         res = await inst.exec_shell(f"tmux {cmd}", timeout_s=_TMUX_TIMEOUT_S)
         return res.exit_code, res.stdout
 
+    async def _retire_previous_generation(self) -> list[str]:
+        """Kill every session in THIS conversation's namespace, once.
+
+        Scoped by construction: only `disco-<namespace>*` (and the legacy `pmx-`
+        prefix) is matched, so one conversation's rotation can never touch
+        another's sessions, and a namespace-less manager (container backends,
+        which own a tmux server per box) sweeps nothing.
+        """
+        if self._retired_previous_generation:
+            return []
+        self._retired_previous_generation = True
+        code, out = await self._run_tmux_safe("list-sessions -F '#{session_name}'")
+        if code != 0:
+            return []
+        prefixes = tuple(f"{prefix}-{self.namespace}" for prefix in (_PREFIX, _LEGACY_PREFIX))
+        if not self.namespace:
+            return []
+        retired: list[str] = []
+        for line in out.splitlines():
+            session = line.strip()
+            if not session.startswith(prefixes):
+                continue
+            await self._run_tmux_safe(f"kill-session -t {shlex.quote(session)}")
+            retired.append(session)
+        self._foreground_state.clear()
+        self._known_sessions.clear()
+        return retired
+
     async def ensure(self, name: str, exec_dir: str | None = None) -> None:
         full = self._full_name(name)
         if name in self._known_sessions:
@@ -246,10 +277,13 @@ class ShellSessionManager:
                 self._lost_sessions.discard(name)
                 return
             # A previous generation's pane: replace it rather than adopt a dead
-            # workspace identity. Whatever still runs in it was launched against
-            # the old workspace, so killing it also releases the port it holds.
-            await self._run_tmux_safe(f"kill-session -t {shlex.quote(full)}")
-            self._foreground_state.pop(name, None)
+            # workspace identity. Sweep the WHOLE namespace, not just this name —
+            # every session under it is bound to the same dead workspace, so none
+            # is adoptable, and the ones nothing happens to re-`ensure` are exactly
+            # the ones that leak. A dev server left running in such a pane keeps
+            # its port bound, so the next generation's bind fails EADDRINUSE with
+            # no visible owner (the "no free platform preview port" shape).
+            await self._retire_previous_generation()
 
         cd_args = f"-c {shlex.quote(exec_dir)}" if exec_dir else ""
         session_env = await self._process_session_environment()

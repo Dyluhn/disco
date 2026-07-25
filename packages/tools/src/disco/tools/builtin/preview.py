@@ -27,6 +27,25 @@ from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares, narrows
 
 
+async def _surviving_port_owners(ctx: ToolContext, ports: list[int]) -> list[Any]:
+    """Ports still held by a LIVE listener after the platform released them.
+
+    Uses the one shared /proc+tmux ownership walk (`port_owner`), so this and the
+    finish gate can never disagree about who owns a port. A TIME_WAIT socket has
+    no owning process and is correctly reported as free. Best-effort: a probe
+    failure returns nothing rather than inventing a blocker.
+    """
+    if ctx.sandbox is None or not ports:
+        return []
+    from ..sandbox.port_owner import port_owners
+
+    try:
+        owners = await port_owners(ctx.sandbox, sorted(set(ports)))
+    except Exception:  # noqa: BLE001 — a probe failure must not fail the stop
+        return []
+    return [owner for owner in owners.values() if owner is not None]
+
+
 def _manager(ctx: ToolContext) -> Any:
     """The conversation's PreviewManager, bound to the live sandbox session.
 
@@ -312,11 +331,42 @@ class PreviewStopTool:
         if ctx.sandbox is None:
             return ToolOutcome(success=True, content="No previews to stop (no sandbox).")
         mgr = _manager(ctx)
+        # Ports are read BEFORE the stop: afterwards the registry no longer knows
+        # which ports these previews held.
+        ports = {session.name: session.port for session in mgr.list()}
         stopped = await mgr.stop(args.name)
         if not stopped:
             return ToolOutcome(success=True, content="No matching preview to stop.")
+
+        # A preview stop releases what the PLATFORM owns. When the agent started the
+        # real listener itself — in its own shell session — the platform's registry
+        # entry goes away while the socket stays bound, and reporting a bare
+        # "Stopped preview(s): X" tells the model the port is free. It then rebinds
+        # and gets EADDRINUSE, and retries, until the thrash detector stops the run
+        # (Build-soak p4_ff_node_restart seed 406434). Name the surviving owner
+        # instead, so the next call is a kill rather than an impossible rebind.
+        residual = await _surviving_port_owners(ctx, [ports[n] for n in stopped if n in ports])
+        content = "Stopped preview(s): " + ", ".join(stopped)
+        if residual:
+            content += "\n" + "\n".join(
+                f"NOTE: port {owner.port} is STILL served by "
+                + (
+                    f"shell session {owner.session!r} — stop it with "
+                    f"shell_kill_process(session={owner.session!r}) before rebinding it."
+                    if owner.session
+                    else f"pid {owner.pid} ({owner.cmdline or 'unknown command'}) — "
+                    "it was not started by the platform, so stopping the preview "
+                    "cannot release it."
+                )
+                for owner in residual
+            )
         return ToolOutcome(
             success=True,
-            content="Stopped preview(s): " + ", ".join(stopped),
-            structured={"stopped": stopped},
+            content=content,
+            structured={
+                "stopped": stopped,
+                "ports_still_served": [
+                    {"port": o.port, "session": o.session, "pid": o.pid} for o in residual
+                ],
+            },
         )

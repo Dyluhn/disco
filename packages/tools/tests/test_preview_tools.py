@@ -268,3 +268,62 @@ def _stop_args():
     from disco.tools.builtin.preview import PreviewStopArgs
 
     return PreviewStopArgs()
+
+
+@pytest.mark.asyncio
+async def test_stop_names_a_port_the_platform_could_not_release(monkeypatch) -> None:
+    """A preview stop releases what the PLATFORM owns.
+
+    When the agent started the real listener itself, the registry entry goes away
+    while the socket stays bound. Reporting a bare "Stopped preview(s): app" then
+    tells the model the port is free; it rebinds, gets EADDRINUSE, retries, and
+    the thrash detector stops the run (Build-soak p4_ff_node_restart seed 406434).
+    The surviving owner must be named so the next call is a kill, not an
+    impossible rebind.
+    """
+    from disco.tools.sandbox.port_owner import PortOwner
+
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    async def _still_bound(_instance, ports):
+        return {
+            port: PortOwner(port=port, pid=4242, cmdline="node server.js", session="server")
+            for port in ports
+        }
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owners", _still_bound)
+
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert stop.success  # the preview WAS stopped; only the port report changes
+    assert "STILL served by" in stop.content
+    assert "shell_kill_process(session='server')" in stop.content
+    assert stop.structured is not None
+    assert stop.structured["ports_still_served"] == [
+        {"port": 3000, "session": "server", "pid": 4242}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stop_stays_quiet_when_the_port_is_actually_free(monkeypatch) -> None:
+    """The note must appear only when a live listener really survives — a
+    TIME_WAIT socket has no owning process and is correctly reported as free."""
+    sandbox = _FakeSandbox()
+    _attach_manager(sandbox)
+    ctx = _ctx(sandbox)
+    await PreviewStartTool().run(PreviewStartArgs(serve_dir="dist", name="app"), ctx)
+
+    async def _free(_instance, ports):
+        return dict.fromkeys(ports)
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owners", _free)
+
+    stop = await PreviewStopTool().run(_stop_args(), ctx)
+
+    assert stop.success
+    assert "STILL served by" not in stop.content
+    assert stop.structured is not None
+    assert stop.structured["ports_still_served"] == []
