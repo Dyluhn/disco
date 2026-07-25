@@ -54,6 +54,14 @@ _SNAPSHOT_EXCLUDED_DIRS = frozenset(
         ".yarn",
         ".cache",
         ".venv",
+        # PEP 370 user site (`pip install --user` -> ~/.local/lib/pythonX.Y/
+        # site-packages) is the same reproducible dependency tree as node_modules
+        # and the one inside .venv, which are already excluded — it was simply
+        # missed because it lives outside a virtualenv. It matters because the
+        # final seal refuses any tree with an unreadable entry, and a Playwright
+        # install puts a 118MB `driver/node` there, far over the 32MB sandbox
+        # transfer cap, so its presence made the run permanently unsealable.
+        "site-packages",
         "__pycache__",
         ".pytest_cache",
         ".mypy_cache",
@@ -559,12 +567,24 @@ async def snapshot_workspace(
             data: bytes | None = None
             try:
                 data = await sandbox.read_file(child)
-            except Exception:  # noqa: BLE001 — could be a directory; try walking
+            except Exception as read_exc:  # noqa: BLE001 — could be a directory; try walking
                 try:
                     await sandbox.list_dir(child)
                 except Exception as exc:  # noqa: BLE001
                     preserve_paths.add(child)
-                    _skip(child, f"could not read or descend: {exc}")
+                    # Report why the READ failed, not why the directory fallback
+                    # failed. For any ordinary file the fallback always fails with
+                    # ENOTDIR — "Not a directory" is true, useless, and was the only
+                    # thing this message used to say. It masked a 32MB transfer-cap
+                    # EFBIG on a 118MB toolchain binary and a still-unidentified
+                    # failure on a small built CSS file behind one identical
+                    # sentence, and an unreadable entry fails the final seal, so the
+                    # discarded exception was the whole diagnosis.
+                    _skip(
+                        child,
+                        f"could not read ({type(read_exc).__name__}: {read_exc}) "
+                        f"and could not descend ({type(exc).__name__}: {exc})",
+                    )
                     continue
                 await _walk(child, depth + 1)
                 continue

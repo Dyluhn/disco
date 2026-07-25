@@ -9,6 +9,7 @@ if the bytes actually round-trip.
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import os
 import tarfile
@@ -732,3 +733,61 @@ async def test_snapshot_oversized_file_skipped_not_fatal(tmp_path: Path) -> None
     result = await snapshot_workspace(_FakeSandbox(payload), tmp_path / "snap", max_file_bytes=32)
     assert result.paths == ["small.txt"]
     assert len(result.skipped) == 1 and "huge.bin" in result.skipped[0]
+
+
+async def test_snapshot_excludes_the_python_user_site(tmp_path: Path) -> None:
+    """PEP 370 user site is the same reproducible dependency tree as node_modules.
+
+    Band-probe trial 002 could never be sealed: a Playwright install under
+    `.local/lib/python3.14/site-packages` puts a 118MB `driver/node` in the
+    workspace, far past the 32MB sandbox transfer cap, and the final seal refuses
+    any tree containing an unreadable entry. `.venv` was already excluded, so the
+    identical tree was in scope purely for living outside a virtualenv.
+    """
+    payload = {
+        "index.html": b"<h1>ok</h1>",
+        ".local/lib/python3.14/site-packages/playwright/__init__.py": b"x = 1",
+        ".local/lib/python3.14/site-packages/playwright/driver/node": b"\x7fELF",
+        ".local/bin/playwright": b"#!/bin/sh",
+        "src/app.py": b"print('hi')",
+    }
+    result = await snapshot_workspace(_FakeSandbox(payload), tmp_path / "snap")
+
+    assert set(result.paths) == {"index.html", ".local/bin/playwright", "src/app.py"}
+    assert result.skipped == []
+    assert not (tmp_path / "snap" / ".local" / "lib").exists()
+    # Negative control: excluding site-packages must not exclude all of .local,
+    # which holds real user-owned files (here, a console script).
+    assert (tmp_path / "snap" / ".local" / "bin" / "playwright").exists()
+
+
+async def test_unreadable_entry_reports_the_read_error_not_the_descend_error(
+    tmp_path: Path,
+) -> None:
+    """The message must say why the READ failed, not why the fallback failed.
+
+    The walker tries `read_file`, then `list_dir` as a "maybe it's a directory"
+    fallback. It used to report only the fallback's error — and for any ordinary
+    file that is always ENOTDIR, so a 32MB transfer-cap EFBIG and an unrelated
+    failure on a small built CSS both surfaced as the same eleven words. An
+    unreadable entry fails the final seal, so the discarded exception was the
+    entire diagnosis.
+    """
+
+    class _CapSandbox(_FakeSandbox):
+        async def read_file(self, path: str) -> bytes:
+            if path == "big.bin":
+                raise OSError(errno.EFBIG, "read_file 'big.bin' exceeds the transfer cap")
+            return await super().read_file(path)
+
+    payload = {"index.html": b"<h1>ok</h1>", "big.bin": b"\x00"}
+    result = await snapshot_workspace(_CapSandbox(payload), tmp_path / "snap")
+
+    assert result.paths == ["index.html"]
+    assert len(result.skipped) == 1
+    entry = result.skipped[0]
+    assert entry.startswith("big.bin: ")
+    assert "exceeds the transfer cap" in entry, entry
+    assert "OSError" in entry, entry
+    # The fallback's verdict may still appear, but it must not be the only thing.
+    assert entry.index("exceeds the transfer cap") < len(entry)
