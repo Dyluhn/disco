@@ -658,3 +658,150 @@ async def test_idempotent_authority_reconstructs_after_sqlite_restart(tmp_path: 
         for event in after
     )
     store2.close()
+
+
+# ---- a command predicate the agent PROVED is broken can be replaced -----------
+
+
+def _approved(plan: PlanEvent, predicates) -> StatusEvent:
+    return StatusEvent(
+        status=ConversationStatus.RUNNING,
+        detail="plan_approved",
+        plan_verification_transition=PlanVerificationTransition(
+            new_plan_revision=plan.revision,
+            new_plan_event_id=plan.id,
+            new_predicate_fingerprints=predicate_fingerprints(predicates),
+        ),
+    )
+
+
+def _ran_and_failed(command: str) -> list:
+    """The agent executing `command` itself and seeing it fail."""
+    act = ActionEvent(
+        thought="run my own acceptance command",
+        tool_call=ToolCall(call_id="c1", tool_name="shell", arguments={"command": command}),
+    )
+    return [
+        act,
+        ObservationEvent(
+            action_id=act.id,
+            tool_result=ToolResult(
+                call_id="c1",
+                tool_name="shell",
+                success=False,
+                content="SyntaxError: invalid syntax",
+            ),
+        ),
+    ]
+
+
+def _productive_write() -> list:
+    act = ActionEvent(
+        thought="write the working verifier",
+        tool_call=ToolCall(
+            call_id="c2", tool_name="file_write", arguments={"path": "verify_app.py"}
+        ),
+    )
+    return [
+        act,
+        ObservationEvent(
+            action_id=act.id,
+            tool_result=ToolResult(
+                call_id="c2",
+                tool_name="file_write",
+                success=True,
+                content="wrote 703 bytes",
+            ),
+        ),
+    ]
+
+
+def test_command_predicate_the_agent_proved_broken_may_be_replaced() -> None:
+    """A command acceptance condition is authored by the agent, so it can be
+    wrong — and the agent discovers that by RUNNING it, not by waiting for the
+    plan verifier. Both prior escapes keyed on a `plan_verifier_failure`, so a
+    predicate the verifier never ran had no legal repair path at all.
+
+    Counted seed 440028 authored an invalid `python3 -c` one-liner as a
+    done-condition, ran it, got a SyntaxError, wrote a working verifier that
+    proved the required strings were rendered, and was refused SIXTEEN times when
+    it tried to swap the broken condition for the working one.
+    """
+    from disco.core.loop.plan_revisions import assert_plan_revision_approvable
+
+    broken = CommandExitPredicate(cmd='python3 -c "async def main(): async with x"')
+    working = CommandExitPredicate(cmd="python3 /workspace/verify_app.py")
+    old = PlanEvent(
+        summary="old",
+        steps=[PlanStep(title="verify", done_condition=broken)],
+        revision=1,
+    )
+    candidate = PlanEvent(
+        summary="repaired",
+        steps=[PlanStep(title="verify", done_condition=working)],
+        revision=2,
+    )
+    events = with_seqs(
+        [old, _approved(old, [broken]), *_ran_and_failed(broken.cmd), *_productive_write()]
+    )
+
+    assert_plan_revision_approvable(events, candidate)  # must not raise
+
+
+def test_command_predicate_never_run_may_not_be_replaced() -> None:
+    """Negative control: without demonstrated failure this is still weakening."""
+    from disco.core.loop.plan_revisions import (
+        PlanRevisionWeakeningError,
+        assert_plan_revision_approvable,
+    )
+
+    broken = CommandExitPredicate(cmd='python3 -c "async def main(): async with x"')
+    working = CommandExitPredicate(cmd="python3 /workspace/verify_app.py")
+    old = PlanEvent(
+        summary="old", steps=[PlanStep(title="verify", done_condition=broken)], revision=1
+    )
+    candidate = PlanEvent(
+        summary="repaired", steps=[PlanStep(title="verify", done_condition=working)], revision=2
+    )
+    events = with_seqs([old, _approved(old, [broken]), *_productive_write()])
+
+    with pytest.raises(PlanRevisionWeakeningError):
+        assert_plan_revision_approvable(events, candidate)
+
+
+def test_demonstrated_failure_does_not_license_dropping_other_conditions() -> None:
+    """Negative control: the escape is one-for-one. Proving ONE command broken
+    must not let an unrelated acceptance condition disappear with it."""
+    from disco.core.loop.plan_revisions import (
+        PlanRevisionWeakeningError,
+        assert_plan_revision_approvable,
+    )
+
+    broken = CommandExitPredicate(cmd='python3 -c "async def main(): async with x"')
+    unrelated = FileExistsPredicate(path="dist/index.html")
+    working = CommandExitPredicate(cmd="python3 /workspace/verify_app.py")
+    old = PlanEvent(
+        summary="old",
+        steps=[
+            PlanStep(title="verify", done_condition=broken),
+            PlanStep(title="build", done_condition=unrelated),
+        ],
+        revision=1,
+    )
+    # Drops BOTH, adds only the repaired command — a cardinality reduction.
+    candidate = PlanEvent(
+        summary="repaired",
+        steps=[PlanStep(title="verify", done_condition=working)],
+        revision=2,
+    )
+    events = with_seqs(
+        [
+            old,
+            _approved(old, [broken, unrelated]),
+            *_ran_and_failed(broken.cmd),
+            *_productive_write(),
+        ]
+    )
+
+    with pytest.raises(PlanRevisionWeakeningError):
+        assert_plan_revision_approvable(events, candidate)
