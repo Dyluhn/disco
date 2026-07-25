@@ -1696,3 +1696,76 @@ async def test_dry_plan_lone_user_changes_event_head_seq(
         assert projects.path_for(cid).is_dir()
     finally:
         primary.close()
+
+
+# ---- the seal must not race the executor's lifetime ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_seal_uses_the_sandbox_pinned_at_the_terminal_not_a_later_lookup():
+    """The seal used to re-resolve `runtime._executors[cid]` AFTER appending
+    FINISHED. Anything dropping the executor in that window left the build
+    unsealed — "no sandbox (executor=None) — workspace NOT persisted", then
+    "FINISHED remains unsealed" — so no durable version existed and a later
+    restore 503'd. A finished build was silently unsaved (pilot seed 406546,
+    p4_ff_import_rollback). The reference is now pinned while the producing run is
+    still live.
+    """
+    from disco.agent_server.workspace_persistence import WorkspacePersistence
+
+    class _Store:
+        def status(self):
+            from disco.tools.projects import StorageStatus
+
+            return StorageStatus.OK
+
+    class _Runtime:
+        def __init__(self):
+            self._executors = {}  # the executor is ALREADY gone at seal time
+
+        def _project_store_now(self):
+            return _Store()
+
+        async def _emit_persistence_reminder(self, *a, **k):
+            return None
+
+    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
+    persistence._rt = _Runtime()
+    pinned = object()
+
+    resolved = await persistence._resolve_capture_session(
+        "conv_pin", seal_fence=(7, None), pinned_session=pinned
+    )
+
+    assert resolved is not None, "a pinned sandbox must survive a dropped executor"
+    session, _store = resolved
+    assert session is pinned
+
+
+@pytest.mark.asyncio
+async def test_seal_still_fails_closed_when_nothing_was_pinned_and_nothing_is_live():
+    """Regression guard: the pin is a window fix, not a way to seal without a
+    sandbox. With no pin and no live executor the strict path still raises."""
+    from disco.agent_server.workspace_persistence import WorkspacePersistence
+
+    class _Store:
+        def status(self):
+            from disco.tools.projects import StorageStatus
+
+            return StorageStatus.OK
+
+    class _Runtime:
+        def __init__(self):
+            self._executors = {}
+
+        def _project_store_now(self):
+            return _Store()
+
+        async def _emit_persistence_reminder(self, *a, **k):
+            return None
+
+    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
+    persistence._rt = _Runtime()
+
+    with pytest.raises(RuntimeError, match="no live sandbox"):
+        await persistence._resolve_capture_session("conv_pin", seal_fence=(7, None))

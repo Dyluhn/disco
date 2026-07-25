@@ -477,6 +477,21 @@ class WorkspacePersistence:
         async def finalize() -> tuple[StatusEvent, WorkspaceVersionEvent | None]:
             # The whole terminal pipeline is one drained task. Cancellation can
             # otherwise strand an avoidable partial finalization after FINISHED.
+            #
+            # PIN the sandbox now, while the run that produced these bytes is still
+            # the live one. The seal used to re-resolve it from `runtime._executors`
+            # AFTER appending FINISHED, and anything that dropped the executor in
+            # that window (notably the sealed-run exception rollback) left the build
+            # unsealed: "no sandbox (executor=None) — workspace NOT persisted", then
+            # "FINISHED remains unsealed". No durable version exists after that, so
+            # a later restore 503s and the user's finished build is silently unsaved
+            # (pilot seed 406546, p4_ff_import_rollback). Holding the reference does
+            # not keep a dead box alive — capture still fails closed if the session
+            # is gone — it removes the WINDOW.
+            pinned_executor = self._rt._executors.get(conversation_id)
+            pinned_session = (
+                getattr(pinned_executor, "_sandbox", None) if pinned_executor is not None else None
+            )
             events = await self._rt._store.get_events(conversation_id)
             # The shadow manifest is a real workspace write. Record its effect
             # before touching bytes and complete it before FINISHED so the
@@ -521,6 +536,7 @@ class WorkspacePersistence:
                     journal=journal,
                     snapshot_fn=snapshot_fn,
                     host_mirror=host_mirror,
+                    pinned_session=pinned_session,
                 )
                 return stored, sealed
             except Exception:
@@ -746,6 +762,7 @@ class WorkspacePersistence:
         journal: dict[str, Any] | None = None,
         snapshot_fn: Callable[..., Any] | None,
         host_mirror: bool = False,
+        pinned_session: Any | None = None,
     ) -> WorkspaceVersionEvent | None:
         """Mirror live bytes and optionally publish a strict immutable seal.
 
@@ -764,6 +781,7 @@ class WorkspacePersistence:
             resolved = await self._resolve_capture_session(
                 conversation_id,
                 seal_fence=seal_fence,
+                pinned_session=pinned_session,
             )
             if resolved is None:
                 return None
@@ -892,6 +910,7 @@ class WorkspacePersistence:
         conversation_id: str,
         *,
         seal_fence: tuple[int, int | None] | None = None,
+        pinned_session: Any | None = None,
     ) -> tuple[Any, ProjectStore] | None:
         """Validate store status and resolve the live sandbox session for capture.
 
@@ -921,8 +940,13 @@ class WorkspacePersistence:
             if seal_fence is not None:
                 raise RuntimeError(f"project storage is {status.value}")
             return None
+        # A caller that pinned the sandbox at the terminal wins over a fresh
+        # lookup: by seal time the executor may already have been dropped, and
+        # re-resolving it there is what left FINISHED builds unsealed.
         executor = self._rt._executors.get(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = pinned_session
+        if session is None:
+            session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             _LOG.warning(
                 "snapshot SKIPPED for %s: no sandbox (executor=%s) — workspace NOT persisted",
