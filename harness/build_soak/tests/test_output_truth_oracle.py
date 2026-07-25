@@ -781,3 +781,28 @@ def test_scaffold_outside_verified_lineage_never_satisfies() -> None:
     )
 
     assert root is None
+
+
+def test_visible_text_match_is_whitespace_normalized_but_not_content_blind():
+    """Rendered text comes from the accessibility tree, which emits a newline at
+    element boundaries.
+
+    `<h1>Node Seed <span>440028</span></h1>` visibly reads exactly "Node Seed
+    440028" but extracts as "Node Seed\\n440028", so whether a `must_contain`
+    passed depended on whether the model wrapped the seed in a block-level
+    element — a styling choice. Content-neutral whitespace must not decide the
+    verdict; intervening CONTENT still must.
+    """
+    from harness.build_soak.oracles.output_truth import _content_normalized
+
+    rendered = "Node Seed\n440028\nA warm-mesh welcome from your minimal Node service"
+
+    # the exact failure from counted seed 440028
+    assert _content_normalized("Node Seed 440028") in _content_normalized(rendered)
+    # capitalization stays content-neutral too (the pre-existing relaxation)
+    assert _content_normalized("node seed 440028") in _content_normalized(rendered)
+
+    # ...but the check is NOT weakened: separated by other content, absent, or wrong
+    assert _content_normalized("Node Seed 999999") not in _content_normalized(rendered)
+    assert _content_normalized("Node 440028") not in _content_normalized(rendered)
+    assert _content_normalized("Seed welcome") not in _content_normalized(rendered)

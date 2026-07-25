@@ -22,6 +22,7 @@ Evidence shapes (captured by the runner; supplied as plain dicts):
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from disco.core.observations import scan_for_destructive_elision
@@ -37,6 +38,28 @@ from .workspace_contract import (
 )
 
 _ORACLE = "OutputTruthOracle"
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+
+
+def _content_normalized(text: object) -> str:
+    """Collapse whitespace runs and case for a CONTENT comparison.
+
+    Rendered visible text is extracted from the accessibility tree, which emits a
+    newline at element boundaries. So `<h1>Node Seed <span>440028</span></h1>` —
+    a page that visibly reads exactly "Node Seed 440028" — extracts as
+    "Node Seed\n440028" and failed a `must_contain` of the heading. Whether the
+    check passed depended on whether the model wrapped the seed in a block-level
+    element, which is a STYLING choice: the check was testing layout while
+    claiming to test content (counted seed 440028, p4_ff_node_basic).
+
+    This does not weaken the check. Needle text separated by any OTHER content
+    still does not match — only runs of whitespace collapse — so a missing
+    string, a typo, or the wrong seed still fails. It is the same content-neutral
+    relaxation already applied to capitalization below, for the same reason.
+    """
+
+    return _WHITESPACE_RUN_RE.sub(" ", str(text)).strip().casefold()
+
 
 _FINISHED_STATES = frozenset({"FINISHED", "VERIFIED"})
 
@@ -339,7 +362,7 @@ class OutputTruthOracle:
             # is content-neutral; a case-sensitive check FAILed a correct page on
             # the 2026-07-09 overnight soak (ARTIFACT_TRUTH_MISMATCH on 'bakery').
             for needle in spec.get("must_contain") or []:
-                if needle.lower() not in content.lower():
+                if _content_normalized(needle) not in _content_normalized(content):
                     content_mismatches.append(
                         {
                             "path": path,
@@ -351,7 +374,9 @@ class OutputTruthOracle:
                         }
                     )
             for needle in spec.get("must_not_contain") or []:
-                if needle.lower() in content.lower():
+                # Normalizing here can only make a FORBIDDEN string easier to find,
+                # so this stays fail-closed.
+                if _content_normalized(needle) in _content_normalized(content):
                     content_mismatches.append(
                         {
                             "path": path,
@@ -437,7 +462,10 @@ class OutputTruthOracle:
                 missing = [
                     needle
                     for needle in preview_needles
-                    if not any(str(needle).casefold() in value.casefold() for value in proven_text)
+                    if not any(
+                        _content_normalized(needle) in _content_normalized(value)
+                        for value in proven_text
+                    )
                 ]
                 evidence_basis = "current_governed_visible_text_claims"
             else:
@@ -449,7 +477,7 @@ class OutputTruthOracle:
                 missing = [
                     needle
                     for needle in preview_needles
-                    if str(needle).casefold() not in preview_content.casefold()
+                    if _content_normalized(needle) not in _content_normalized(preview_content)
                 ]
                 proven_text = []
                 evidence_basis = "legacy_captured_preview_source"
