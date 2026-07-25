@@ -284,3 +284,76 @@ def test_unknown_conversation_404s_when_enabled(monkeypatch):
     res = client.get("/api/debug/trace/conv_does_not_exist")
     assert res.status_code == 404
     assert res.json()["error"] == "no trace"
+
+
+# ---- journal durability across a process restart -----------------------------
+
+
+def test_journal_makes_the_trace_survive_a_process_restart(tmp_path):
+    """The trace is otherwise bound to a PROCESS lifetime.
+
+    A server restart resets the in-memory ring and the global sequence counter,
+    so a consumer auditing one conversation across the restart sees the trace
+    vanish and reappear renumbered from 1 — indistinguishable from evidence
+    loss, and exactly what invalidated the Build-soak restart lane. With a
+    journal attached the stream stays continuous and strictly monotonic, which
+    is what every downstream continuity proof requires.
+    """
+    from disco.core.inspect import InspectJournal, InspectRegistry
+
+    journal_path = tmp_path / "inspect-trace.jsonl"
+    cid = "conv_restart_probe"
+
+    # --- generation 1 ---
+    first = InspectRegistry()
+    first.attach_journal(InspectJournal(journal_path))
+    first.add(cid, "routing", {"role": "agent_driver", "chosen_model": "m1"})
+    first.add(cid, "routing", {"role": "agent_driver", "chosen_model": "m2"})
+    before = first.snapshot(cid)
+    assert before is not None
+    assert [event["seq"] for event in before["events"]] == [1, 2]
+
+    # --- generation 2: a brand-new process, same journal ---
+    second = InspectRegistry()
+    restored = second.attach_journal(InspectJournal(journal_path))
+    assert restored == 2
+    second.add(cid, "routing", {"role": "agent_driver", "chosen_model": "m3"})
+
+    after = second.snapshot(cid)
+    assert after is not None
+    seqs = [event["seq"] for event in after["events"]]
+    assert seqs == [1, 2, 3], "sequence must continue across the restart, not restart at 1"
+    assert seqs == sorted(set(seqs)), "strictly increasing and unique"
+    models = [event["chosen_model"] for event in after["events"]]
+    assert models == ["m1", "m2", "m3"], "pre-restart events are retained verbatim"
+
+
+def test_registry_without_a_journal_is_unchanged(tmp_path):
+    """Zero-cost-when-off: no journal attached means no durability and no file."""
+    from disco.core.inspect import InspectRegistry
+
+    registry_a = InspectRegistry()
+    registry_a.add("conv_x", "routing", {"role": "agent_driver", "chosen_model": "m1"})
+    assert not list(tmp_path.iterdir())
+
+    registry_b = InspectRegistry()
+    assert registry_b.snapshot("conv_x") is None
+
+
+def test_journal_replay_stops_at_a_torn_tail(tmp_path):
+    """A hard kill can tear the last line. Past a tear nothing can be trusted to
+    be in order, so replay keeps the intact prefix and stops there."""
+    from disco.core.inspect import InspectJournal, InspectRegistry
+
+    journal_path = tmp_path / "inspect-trace.jsonl"
+    journal = InspectJournal(journal_path)
+    journal.append("conv_t", 1, "routing", {"chosen_model": "m1"})
+    journal.append("conv_t", 2, "routing", {"chosen_model": "m2"})
+    with journal_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"cid": "conv_t", "seq": 3, "kind": "rout')  # torn write
+
+    restored = InspectRegistry()
+    assert restored.attach_journal(InspectJournal(journal_path)) == 2
+    snapshot = restored.snapshot("conv_t")
+    assert snapshot is not None
+    assert [event["seq"] for event in snapshot["events"]] == [1, 2]

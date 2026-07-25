@@ -28,10 +28,12 @@ can't grow the buffer without limit.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections import OrderedDict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .env import disco_env
@@ -47,6 +49,8 @@ _MAX_TOOL_SCOPE_NAMES = 512
 _MAX_TOOL_NAME_CHARS = 256
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+_LOG = logging.getLogger(__name__)
 
 
 def inspect_enabled() -> bool:
@@ -99,6 +103,79 @@ class ConversationTrace:
         }
 
 
+class InspectJournal:
+    """Optional write-through durability for the inspect trace.
+
+    The trace is otherwise bound to a PROCESS lifetime: the registry is an
+    in-memory ring, so a server restart silently resets the whole sequence
+    space. Anything auditing a conversation ACROSS a restart then sees the
+    trace vanish and reappear renumbered from 1 — indistinguishable from
+    evidence loss, and exactly what invalidated the Build-soak restart lane
+    (`source_reset` + `inspect_unavailable` + a renumbered stream colliding
+    with the retained prefix as `event_content_conflict`).
+
+    A journal makes the trace survive the process instead of teaching every
+    consumer to tolerate the gap. It is DEBUG-MODE ONLY: nothing attaches one
+    unless ``DISCO_INSPECT`` is on, so the documented "zero cost when off"
+    contract is untouched. Append-only JSONL — no schema, no migration, and a
+    torn tail from a hard kill costs exactly the events after the tear.
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def append(self, cid: str, seq: int, kind: str, data: dict[str, Any]) -> None:
+        """Best-effort durable append. A journal failure must never break the
+        agent loop — inspect is evidence, not a product gate — but it is logged
+        rather than swallowed, because a silent gap is the failure mode this
+        class exists to remove."""
+        line = json.dumps(
+            {"cid": cid, "seq": seq, "kind": kind, "data": data},
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        try:
+            with self._lock, self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            _LOG.warning("inspect journal append failed for %s seq %s", cid, seq, exc_info=True)
+
+    def replay(self) -> list[tuple[str, int, str, dict[str, Any]]]:
+        """Every durably recorded event, in file order. A malformed or torn line
+        ends the replay: past the tear nothing can be trusted to be in order."""
+        if not self.path.exists():
+            return []
+        restored: list[tuple[str, int, str, dict[str, Any]]] = []
+        try:
+            with self.path.open("r", encoding="utf-8") as handle:
+                for raw in handle:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        row = json.loads(raw)
+                    except json.JSONDecodeError:
+                        break
+                    cid, seq, kind, data = (
+                        row.get("cid"),
+                        row.get("seq"),
+                        row.get("kind"),
+                        row.get("data"),
+                    )
+                    if (
+                        not isinstance(cid, str)
+                        or type(seq) is not int
+                        or not isinstance(kind, str)
+                        or not isinstance(data, dict)
+                    ):
+                        break
+                    restored.append((cid, seq, kind, data))
+        except OSError:
+            _LOG.warning("inspect journal replay failed at %s", self.path, exc_info=True)
+        return restored
+
+
 class InspectRegistry:
     """Thread-safe, bounded store of per-conversation traces.
 
@@ -117,6 +194,24 @@ class InspectRegistry:
         self._seq = 0
         self._max_conversations = max_conversations
         self._max_events = max_events
+        self._journal: InspectJournal | None = None
+
+    def attach_journal(self, journal: InspectJournal) -> int:
+        """Rehydrate from `journal`, then record through it from now on.
+
+        Replay walks the same `add` path the live seam uses, so ring eviction
+        and `dropped_event_count` come out exactly as they would have in the
+        original process. The global counter resumes above the highest restored
+        sequence, which is what keeps the stream monotonic ACROSS the restart —
+        a consumer sees one continuous trace, not two colliding ones.
+        """
+        restored = journal.replay()
+        with self._lock:
+            for cid, seq, kind, data in restored:
+                self._trace_for(cid).add(TraceEvent(seq, kind, data))
+                self._seq = max(self._seq, seq)
+            self._journal = journal
+        return len(restored)
 
     def _trace_for(self, cid: str) -> ConversationTrace:
         # Caller holds the lock. LRU: touch on access, evict oldest over the cap.
@@ -136,7 +231,13 @@ class InspectRegistry:
             return
         with self._lock:
             self._seq += 1
-            self._trace_for(cid).add(TraceEvent(self._seq, kind, data))
+            seq = self._seq
+            self._trace_for(cid).add(TraceEvent(seq, kind, data))
+            journal = self._journal
+        # Outside the lock: the journal owns its own serialization, and a slow
+        # disk must not stall the span handler or the router seam.
+        if journal is not None:
+            journal.append(cid, seq, kind, data)
 
     def snapshot(self, cid: str) -> dict[str, Any] | None:
         with self._lock:

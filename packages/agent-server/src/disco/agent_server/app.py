@@ -17,8 +17,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from pathlib import Path
 
 from disco.core.auth import allowed_frontend_origins
+from disco.core.inspect import InspectJournal, inspect_enabled, registry
 from disco.core.origin_approvals import OriginApprovalStore
 from disco.core.quota import SqliteQuotaStore
 from disco.core.store.sqlite import SqliteEventStore
@@ -103,6 +105,29 @@ def _webhook_approvals(runtime: object | None) -> OriginApprovalStore | None:
     return result if isinstance(result, OriginApprovalStore) else None
 
 
+def _attach_inspect_journal(event_db_path: str) -> None:
+    """DISCO_INSPECT only: give the trace registry durability across restarts.
+
+    The registry is an in-memory ring, so a server restart resets it AND the
+    global sequence counter — a conversation audited across the restart sees
+    its trace vanish and reappear renumbered from 1, indistinguishable from
+    evidence loss. Attached at lifespan start, before anything can emit, so the
+    restored prefix is never interleaved with fresh events. Nothing is attached
+    when inspect is off, so the documented zero-cost contract holds; an
+    in-memory store has nowhere durable to put it and is skipped.
+    """
+    if not inspect_enabled() or event_db_path == ":memory:":
+        return
+    try:
+        journal = InspectJournal(Path(event_db_path).with_name("inspect-trace.jsonl"))
+        restored = registry().attach_journal(journal)
+    except Exception:  # noqa: BLE001 — debug evidence never blocks boot
+        _LOG.warning("inspect journal could not be attached", exc_info=True)
+        return
+    if restored:
+        _LOG.info("inspect journal restored %d trace event(s)", restored)
+
+
 def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
     try:
         project_store = runtime.project_store()
@@ -156,6 +181,7 @@ def create_app(
         mcp_start_task: asyncio.Task | None = None
         idle_sweep_task: asyncio.Task | None = None
         schedule_task: asyncio.Task | None = None
+        _attach_inspect_journal(event_db_path)
         if runtime is not None:
             # Narrow once outside the nested startup coroutine. Type checkers
             # correctly refuse to retain Optional narrowing for a closure over
