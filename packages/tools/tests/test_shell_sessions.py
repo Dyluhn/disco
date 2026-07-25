@@ -683,6 +683,8 @@ async def test_existing_process_session_refreshes_tmux_environment():
     inst = FakeInstance()
     inst.workspace_path = "/tmp/disco-conversation-b"
     inst.canned_outputs["has-session"] = (0, "")
+    # The surviving session is bound to THIS workspace, so it is ours to adopt.
+    inst.canned_outputs["show-environment"] = (0, "DISCO_WORKSPACE=/tmp/disco-conversation-b")
 
     async def get_inst():
         return inst
@@ -694,6 +696,74 @@ async def test_existing_process_session_refreshes_tmux_environment():
     assert "DISCO_WORKSPACE /tmp/disco-conversation-b" in refresh
     assert "HOME /tmp/disco-conversation-b" in refresh
     assert "TMPDIR /tmp/disco-conversation-b" in refresh
+    assert not any("kill-session" in cmd for cmd in inst.cmd_log)
+
+
+@pytest.mark.asyncio
+async def test_previous_generation_process_session_is_replaced_not_adopted():
+    """A host tmux session outlives the agent-server that made it. The next
+    generation composes a NEW workspace, and `set-environment` cannot reach the
+    pane's already-running shell — so adopting it would hand every helper the
+    dead generation's identity (the browser daemon then publishes its port file
+    into the dead tree and reports the dead instance hash, and the backend looks
+    like it has no browser at all)."""
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/disco-generation-2"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["show-environment"] = (0, "DISCO_WORKSPACE=/tmp/disco-generation-1")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv-c-")
+    await manager.ensure("main")
+
+    assert any("kill-session -t disco-conv-c-main" in cmd for cmd in inst.cmd_log)
+    create = next(cmd for cmd in inst.cmd_log if "tmux new-session" in cmd)
+    assert "-e DISCO_WORKSPACE=/tmp/disco-generation-2" in create
+    # Only this conversation's namespaced session is ever killed.
+    kills = [cmd for cmd in inst.cmd_log if "kill-session" in cmd]
+    assert all("disco-conv-c-" in cmd for cmd in kills)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_session_binding_replaces_rather_than_adopts():
+    """Unknown binding fails toward replacement: one tmux round-trip to recreate a
+    shell, versus a whole run spent talking to a dead generation."""
+    inst = FakeInstance()
+    inst.workspace_path = "/tmp/disco-generation-2"
+    inst.canned_outputs["has-session"] = (0, "")
+    inst.canned_outputs["show-environment"] = (1, "")
+    inst.canned_outputs["capture-pane"] = (0, "__DISCO_PS1__0__$ ")
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="conv-d-")
+    await manager.ensure("main")
+
+    assert any("kill-session" in cmd for cmd in inst.cmd_log)
+    assert any("tmux new-session" in cmd for cmd in inst.cmd_log)
+
+
+@pytest.mark.asyncio
+async def test_container_backend_session_is_adopted_without_a_workspace_probe():
+    """Container backends own a tmux server per box, so it dies with the box and
+    there is no surviving-pane hazard. They expose no host workspace; keep their
+    adopt-always behavior and never spend a probe round-trip on them."""
+    inst = FakeInstance()
+    inst.workspace_path = None
+    inst.canned_outputs["has-session"] = (0, "")
+
+    async def get_inst():
+        return inst
+
+    manager = ShellSessionManager(get_inst, namespace="")
+    await manager.ensure("main")
+
+    assert not any("show-environment" in cmd for cmd in inst.cmd_log)
+    assert not any("kill-session" in cmd for cmd in inst.cmd_log)
 
 
 @pytest.mark.integration
@@ -814,6 +884,70 @@ async def test_shared_tmux_server_cannot_cross_bind_process_workspaces():
         await inst_a.exec_shell(f"tmux -L {socket_name} kill-server", timeout_s=10)
         await inst_a.destroy()
         await inst_b.destroy()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_generation_rotation_replaces_the_previous_generations_pane():
+    """A pane belongs to the sandbox generation it was created for.
+
+    The agent-server's lifespan destroys no sandbox and sweeps no tmux, so on the
+    process backend a SIGTERM leaves every `disco-<conv8>-*` session alive on the
+    host tmux server. The next generation composes a new workspace under the SAME
+    conversation namespace, and `set-environment` only seeds shells tmux spawns
+    afterwards — the running pane keeps the dead generation's environment. This
+    proves both directions on a real tmux: same generation is adopted (the model's
+    shell state must survive), rotated generation is replaced.
+    """
+    service = ProcessSandboxService()
+    conv = "gen" + uuid.uuid4().hex
+    namespace = f"{conv[:8]}-"
+    inst_1 = await service.create(spec=None, owner_id="test", conversation_id=conv)
+    inst_2 = await service.create(spec=None, owner_id="test", conversation_id=conv)
+    socket_name = "disco-gen-" + uuid.uuid4().hex
+
+    class IsolatedTmuxManager(ShellSessionManager):
+        async def _run_tmux(self, cmd: str) -> str:
+            inst = await self._get_instance()
+            res = await inst.exec_shell(f"tmux -L {socket_name} {cmd}", timeout_s=10)
+            if res.exit_code != 0:
+                raise RuntimeError(res.stderr)
+            return res.stdout
+
+        async def _run_tmux_safe(self, cmd: str) -> tuple[int, str]:
+            inst = await self._get_instance()
+            res = await inst.exec_shell(f"tmux -L {socket_name} {cmd}", timeout_s=10)
+            return res.exit_code, res.stdout
+
+    async def get_1():
+        return inst_1
+
+    async def get_2():
+        return inst_2
+
+    try:
+        first = IsolatedTmuxManager(get_1, namespace=namespace)
+        await first.exec("main", "MARKER=first-generation", None)
+
+        # Same generation, fresh manager — exactly what `reset_known_sessions()`
+        # (sandbox recreate) and a new agent-server process both produce. The pane
+        # is ours: adopt it, or the model silently loses its shell between calls.
+        same = IsolatedTmuxManager(get_1, namespace=namespace)
+        adopted = await same.exec("main", "echo VALUE=[$MARKER]", None)
+        assert "VALUE=[first-generation]" in adopted.output
+
+        # Rotated generation — the pane's shell is bound to a workspace this
+        # generation does not own, so it is replaced, not inherited.
+        rotated = IsolatedTmuxManager(get_2, namespace=namespace)
+        replaced = await rotated.exec("main", "echo VALUE=[$MARKER]", None)
+        assert "VALUE=[]" in replaced.output
+
+        workspace = await rotated.exec("main", "echo WS=[$DISCO_WORKSPACE]", None)
+        assert f"WS=[{inst_2.workspace_path}]" in workspace.output
+    finally:
+        await inst_1.exec_shell(f"tmux -L {socket_name} kill-server", timeout_s=10)
+        await inst_1.destroy()
+        await inst_2.destroy()
 
 
 # ---- Bug 16: reserved-port preview-serve remap at the CLEAN-command point ----

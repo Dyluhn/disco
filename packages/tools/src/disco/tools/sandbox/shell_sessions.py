@@ -182,6 +182,45 @@ class ShellSessionManager:
                 f"set-environment -t {shlex.quote(full)} {shlex.quote(key)} {shlex.quote(value)}"
             )
 
+    async def _session_owned_by_current_workspace(self, full: str) -> bool:
+        """Does this surviving tmux session belong to THIS sandbox generation?
+
+        Process sandboxes share the HOST tmux server, so a session outlives the
+        agent-server that created it (the app lifespan closes stores and the MCP
+        pool on SIGTERM; it destroys no sandbox and sweeps no tmux). The next
+        generation composes a NEW workspace, and `set-environment` only seeds
+        shells tmux spawns AFTER it — the pane's already-running shell keeps the
+        dead generation's PATH/HOME/TMPDIR/DISCO_WORKSPACE and cwd forever.
+
+        Adopting such a pane hands every helper launched into it a previous
+        generation's workspace IDENTITY. The browser daemon derives both its
+        port file and its instance hash from `DISCO_WORKSPACE`, so an adopted
+        pane makes it publish into the dead tree and report the dead hash: the
+        allocator's identity pin then refuses it (correctly) on every poll and
+        the backend is reported as having no browser at all — the earliest
+        broken link behind counted restart trial `p4_ff_react_restart` 450000,
+        where browser verification worked before the restart and was
+        permanently unavailable after it.
+
+        So a session is OWNED by the generation whose workspace it was created
+        for; one bound to any other workspace is not adopted, it is replaced.
+        The read is taken BEFORE `_bind_existing_process_session` overwrites the
+        session copy. Unknown/unreadable binding fails toward replacement — the
+        safe direction, since recreating a shell costs one tmux round-trip and
+        adopting a dead one costs the whole run. Container backends own their
+        own tmux server per instance and are never subject to this: they expose
+        no host workspace, so they keep the previous adopt-always behavior.
+        """
+        expected = (await self._process_session_environment()).get("DISCO_WORKSPACE")
+        if expected is None:
+            return True  # container backend — its tmux server dies with the box
+        code, out = await self._run_tmux_safe(
+            f"show-environment -t {shlex.quote(full)} DISCO_WORKSPACE"
+        )
+        if code != 0:
+            return False
+        return out.strip() == f"DISCO_WORKSPACE={expected}"
+
     async def _run_tmux(self, cmd: str) -> str:
         inst = await self._get_instance()
         res = await inst.exec_shell(f"tmux {cmd}", timeout_s=_TMUX_TIMEOUT_S)
@@ -201,10 +240,16 @@ class ShellSessionManager:
 
         code, _ = await self._run_tmux_safe(f"has-session -t {shlex.quote(full)} 2>/dev/null")
         if code == 0:
-            await self._bind_existing_process_session(full)
-            self._known_sessions.add(name)
-            self._lost_sessions.discard(name)
-            return
+            if await self._session_owned_by_current_workspace(full):
+                await self._bind_existing_process_session(full)
+                self._known_sessions.add(name)
+                self._lost_sessions.discard(name)
+                return
+            # A previous generation's pane: replace it rather than adopt a dead
+            # workspace identity. Whatever still runs in it was launched against
+            # the old workspace, so killing it also releases the port it holds.
+            await self._run_tmux_safe(f"kill-session -t {shlex.quote(full)}")
+            self._foreground_state.pop(name, None)
 
         cd_args = f"-c {shlex.quote(exec_dir)}" if exec_dir else ""
         session_env = await self._process_session_environment()
