@@ -1475,3 +1475,51 @@ async def test_oversized_ordinary_directory_still_fails_closed(tmp_path: Path):
         isinstance(event, StatusEvent) and event.detail == "dictated_content_inspection_incomplete"
         for event in events
     )
+
+
+def test_retitle_supersedes_the_prior_application_title():
+    """`retitle` is the exact synonym of `rename` for this slot, and both read
+    naturally without a `to`/`as`.
+
+    Before this, "retitle the app exactly 'X'" gave the NEW title no slot while
+    the superseded one kept its own — so the old title stayed a required
+    identity claim that the retitled app could never satisfy. An app has one
+    name, so the two claims were mutually exclusive and the build could not
+    finish however correctly the model behaved (Build-soak p4_appkit_restart,
+    seed 406431).
+    """
+    for phrasing in (
+        'Use only AppKit semantic capabilities to retitle the app exactly "Beta".',
+        'Retitle the app to exactly "Beta".',
+        'Retitle the site as exactly "Beta".',
+        'Rename the app exactly "Beta".',
+    ):
+        events = [
+            _user('Build a strict AppKit app titled exactly "Alpha".', 1),
+            _plan(1, 2),
+            _status("plan_approved", 3),
+            _user(phrasing, 4),
+            _status("planning", 5),
+            _plan(2, 6),
+        ]
+        conditions = dictated_content_conditions_from_events(events)
+        assert [(c.revision, c.literal) for c in conditions] == [(2, "Beta")], phrasing
+        assert conditions[-1].requirement_slot == "application.title", phrasing
+
+
+def test_an_unrelated_literal_never_claims_the_title_slot():
+    """The replacement syntax must stay narrow: an ordinary quoted string in a
+    later revision is content, not a retitle, and must not retire the title."""
+    events = [
+        _user('Build a strict AppKit app titled exactly "Alpha".', 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user('Add a button that says "Beta".', 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+    conditions = dictated_content_conditions_from_events(events)
+    assert [(c.revision, c.literal, c.requirement_slot) for c in conditions] == [
+        (1, "Alpha", "application.title"),
+        (2, "Beta", None),
+    ]

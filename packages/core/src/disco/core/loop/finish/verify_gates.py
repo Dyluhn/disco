@@ -147,10 +147,24 @@ def _host_verification_claims(
         if check is None and admission is not None and admission.verification_contract is not None
         else accepted
     )
-    for condition in dictated_content_conditions_from_events(events):
+    conditions = dictated_content_conditions_from_events(events)
+    # `application.title` is SINGLE-VALUED: an app has exactly one name, so a later
+    # revision that dictates a new title SUPERSEDES the earlier one rather than
+    # adding a second. Accumulating both minted two mutually exclusive identity
+    # claims — the retitle satisfied one and permanently failed the other, so the
+    # build could never finish however correctly the model behaved (seed 406431:
+    # AppSpec held the requested 'AppKit Restart Recovered 406431' while the
+    # superseded 'AppKit Restart 406431' was still required). Visible-text claims
+    # are NOT slot-scoped and keep accumulating; only identity collapses.
+    latest_title_condition = next(
+        (c for c in reversed(conditions) if c.requirement_slot == "application.title"),
+        None,
+    )
+    for condition in conditions:
         digest = hashlib.sha256(condition.literal.encode("utf-8")).hexdigest()[:24]
         if (
             condition.requirement_slot == "application.title"
+            and condition is latest_title_condition
             and VerificationClaimKind.APPLICATION_IDENTITY in accepted
             and VerificationClaimKind.APPLICATION_IDENTITY in contract_accepted
         ):
@@ -1087,7 +1101,15 @@ async def _record_appkit_typed_verdict(
                 else base_status
             ),
             reason=(
+                # State BOTH sides: a bare "authoritative AppSpec name is 'X'" on a
+                # FAIL reads as a fact with no expectation, which hides whether the
+                # app or the requirement is wrong.
                 f"authoritative AppSpec name is {raw_application_title!r}"
+                + (
+                    ""
+                    if raw_application_title == claim.expected
+                    else f"; required {claim.expected!r}"
+                )
                 if claim.kind is VerificationClaimKind.APPLICATION_IDENTITY
                 and isinstance(raw_application_title, str)
                 else "strict AppKit verifier omitted authoritative application identity"

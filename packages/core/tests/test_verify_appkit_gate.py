@@ -907,13 +907,18 @@ async def test_platform_appkit_application_identity_uses_appspec_not_visible_cop
         if result.kind is VerificationClaimKind.APPLICATION_IDENTITY
     )
     assert first_identity.status.value == "fail"
-    assert first_identity.reason == "authoritative AppSpec name is 'Old title'"
+    # A FAIL must name BOTH sides: the bare authoritative-name form hid whether
+    # the app or the requirement was the wrong one.
+    assert first_identity.reason == (
+        "authoritative AppSpec name is 'Old title'; required 'Revised title'"
+    )
     first_guidance = next(
         message
         for message in _env(events)
         if "mandatory typed claim 'application.title:revised'" in message
     )
     assert "authoritative AppSpec name is 'Old title'" in first_guidance
+    assert "required 'Revised title'" in first_guidance
     assert "did not bind the current started runtime" not in first_guidance
 
 

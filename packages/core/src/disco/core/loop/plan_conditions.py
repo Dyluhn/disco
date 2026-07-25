@@ -151,7 +151,12 @@ _APPLICATION_TITLE_REPLACEMENT_RE = re.compile(
     r"(?:"
     r"\b(?:change|set|update)\s+(?:the\s+)?"
     r"(?:(?:app(?:lication)?|site)\s+)?(?:title|name)\s+(?:to|as)"
-    r"|\brename\s+(?:the\s+)?(?:app(?:lication)?|site)\s+(?:to|as)"
+    # `retitle` is the exact synonym of `rename` for this slot, and both are
+    # natural without a `to`/`as` ("retitle the app exactly 'X'"). Without this
+    # the new title got NO slot while the superseded one kept its own, so the
+    # old title stayed a required identity claim that the retitled app could
+    # never satisfy — an unfinishable build (Build-soak p4_appkit_restart).
+    r"|\b(?:rename|retitle)\s+(?:the\s+)?(?:app(?:lication)?|site)(?:\s+(?:to|as))?"
     r")\s+(?:exactly\s+)?$",
     re.IGNORECASE,
 )
