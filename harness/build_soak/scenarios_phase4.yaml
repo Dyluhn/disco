@@ -248,9 +248,15 @@ scenarios:
       browser_verification: {required: true}
 
   - id: p4_ff_node_restart
+    # `server.js` is asserted below, so the prompt has to ASK for it — index.js,
+    # app.js and server.js are all ordinary names for a Node entrypoint, and a
+    # build that picks one of the others is correct work failed on a requirement
+    # it was never given (seed 406438: the model wrote index.js and the run died
+    # FALSE_FINISH_NO_OUTPUT). Both sibling node scenarios already name the file
+    # in their prompt; this one was the outlier.
     prompt: >-
-      Build and browser-verify a Node service using process.env.PORT with the root
-      heading 'Node Restart {{seed}}'.
+      Build and browser-verify a Node service in server.js using process.env.PORT
+      with the root heading 'Node Restart {{seed}}'.
     lifecycle:
       restart_after_terminal: true
     followups:
