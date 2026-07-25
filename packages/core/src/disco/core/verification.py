@@ -797,8 +797,19 @@ class HostVerificationResult(BaseModel):
         }
         return expected == actual
 
-    def is_current_authority_for(self, deliverable: Any, *, observed_url: str) -> bool:
-        """Compare execution authority independently of one receipt's claim subset."""
+    def authority_clauses(
+        self, deliverable: Any, *, observed_url: str
+    ) -> tuple[tuple[str, bool], ...]:
+        """Every authority comparison, each paired with the fact name it binds.
+
+        `is_current_authority_for` is the conjunction of these; `first_authority_mismatch`
+        reads the same list to NAME the one that failed. A receipt that binds ~30 facts
+        can fail for ~30 reasons, and a caller told only "mismatched" — an agent above
+        all — has no move but to guess. Guessing is indistinguishable from degeneracy,
+        so the name is not a nicety: it is the difference between a fixable report and
+        an unfixable one. Keep this the single source of the comparison; a predicate
+        that duplicates a clause here will drift out of the name space.
+        """
 
         contract = getattr(deliverable, "verification_contract", None)
         check = getattr(deliverable, "verification_check", None)
@@ -809,49 +820,80 @@ class HostVerificationResult(BaseModel):
         expected_check_id = check.check_id if check is not None else ""
         expected_receipt_kind = check.receipt_kind if check is not None else ""
         expected_issuer_id = check.issuer_id if check is not None else ""
-        return bool(
-            (expected_contract_digest is None or self.effect_receipt is not None)
-            and self.conversation_id == deliverable.conversation_id
-            and self.run_intent_id == deliverable.run_intent_id
-            and self.run_identity == deliverable.run_identity
-            and self.target_id == expected_target_id
-            and self.delivery_shape == expected_delivery_shape
-            and self.delivery_entry_reference == expected_delivery_entry
-            and self.verification_contract_digest == expected_contract_digest
-            and self.check_id == expected_check_id
-            and self.receipt_kind == expected_receipt_kind
-            and self.issuer_id == expected_issuer_id
-            and self.operation == (check.operation if check is not None else "")
-            and (
+        return (
+            ("effect_receipt", expected_contract_digest is None or self.effect_receipt is not None),
+            ("conversation_id", self.conversation_id == deliverable.conversation_id),
+            ("run_intent_id", self.run_intent_id == deliverable.run_intent_id),
+            ("run_identity", self.run_identity == deliverable.run_identity),
+            ("target_id", self.target_id == expected_target_id),
+            ("delivery_shape", self.delivery_shape == expected_delivery_shape),
+            ("delivery_entry_reference", self.delivery_entry_reference == expected_delivery_entry),
+            (
+                "verification_contract_digest",
+                self.verification_contract_digest == expected_contract_digest,
+            ),
+            ("check_id", self.check_id == expected_check_id),
+            ("receipt_kind", self.receipt_kind == expected_receipt_kind),
+            ("issuer_id", self.issuer_id == expected_issuer_id),
+            ("operation", self.operation == (check.operation if check is not None else "")),
+            (
+                "verifier_identity",
                 check is None
-                or (self.verifier_id == expected_issuer_id and self.tool_id == check.operation)
-            )
-            and self.delegated_issuer_ids
-            == (check.delegated_issuer_ids if check is not None else frozenset())
-            and self.execution_identity == getattr(deliverable, "execution_identity", None)
-            and self.artifact_identity == getattr(deliverable, "artifact_identity", None)
-            and self.agent_view_id == deliverable.agent_view_id
-            and self.deliverable_event_id == deliverable.deliverable_event_id
-            and self.artifact_path == deliverable.artifact_path
-            and self.artifact_kind == deliverable.artifact_kind
-            and self.preview_selection == deliverable.preview_selection
-            and (
+                or (self.verifier_id == expected_issuer_id and self.tool_id == check.operation),
+            ),
+            (
+                "delegated_issuer_ids",
+                self.delegated_issuer_ids
+                == (check.delegated_issuer_ids if check is not None else frozenset()),
+            ),
+            (
+                "execution_identity",
+                self.execution_identity == getattr(deliverable, "execution_identity", None),
+            ),
+            (
+                "artifact_identity",
+                self.artifact_identity == getattr(deliverable, "artifact_identity", None),
+            ),
+            ("agent_view_id", self.agent_view_id == deliverable.agent_view_id),
+            ("deliverable_event_id", self.deliverable_event_id == deliverable.deliverable_event_id),
+            ("artifact_path", self.artifact_path == deliverable.artifact_path),
+            ("artifact_kind", self.artifact_kind == deliverable.artifact_kind),
+            ("preview_selection", self.preview_selection == deliverable.preview_selection),
+            (
+                "deployment_url",
                 deliverable.preview_selection is not None
                 or not deliverable.deployment_url
-                or self.observed_url.rstrip("/") == deliverable.deployment_url.rstrip("/")
-            )
-            and self.workspace_revision == deliverable.workspace_revision
-            and (
+                or self.observed_url.rstrip("/") == deliverable.deployment_url.rstrip("/"),
+            ),
+            ("workspace_revision", self.workspace_revision == deliverable.workspace_revision),
+            (
+                "workspace_generation",
                 not deliverable.workspace_generation
-                or self.workspace_generation == deliverable.workspace_generation
-            )
-            and (
+                or self.workspace_generation == deliverable.workspace_generation,
+            ),
+            (
+                "workspace_epoch",
                 deliverable.workspace_epoch is None
-                or self.workspace_epoch == deliverable.workspace_epoch
-            )
-            and self.observed_after_seq == deliverable.observed_after_seq
-            and self.observed_url == observed_url
+                or self.workspace_epoch == deliverable.workspace_epoch,
+            ),
+            ("observed_after_seq", self.observed_after_seq == deliverable.observed_after_seq),
+            ("observed_url", self.observed_url == observed_url),
         )
+
+    def is_current_authority_for(self, deliverable: Any, *, observed_url: str) -> bool:
+        """Compare execution authority independently of one receipt's claim subset."""
+
+        return all(
+            ok for _, ok in self.authority_clauses(deliverable, observed_url=observed_url)
+        )
+
+    def first_authority_mismatch(self, deliverable: Any, *, observed_url: str) -> str | None:
+        """Name the first authority fact this receipt does not bind, or None if current."""
+
+        for name, ok in self.authority_clauses(deliverable, observed_url=observed_url):
+            if not ok:
+                return name
+        return None
 
     def is_current_for(self, deliverable: Any, *, observed_url: str) -> bool:
         """Exact authority and claim comparison; no fuzzy or name-derived matching."""
@@ -860,6 +902,14 @@ class HostVerificationResult(BaseModel):
         return self.covers(claims) and self.is_current_authority_for(
             deliverable, observed_url=observed_url
         )
+
+    def first_currency_mismatch(self, deliverable: Any, *, observed_url: str) -> str | None:
+        """Name why this receipt is not current for `deliverable`, or None if it is."""
+
+        claims = deliverable.required_claims or default_structured_web_claims()
+        if not self.covers(claims):
+            return "required_claims"
+        return self.first_authority_mismatch(deliverable, observed_url=observed_url)
 
 
 def _canonical_digest(value: Any) -> str:

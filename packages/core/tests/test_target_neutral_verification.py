@@ -21,11 +21,12 @@ from disco.core.loop.finish.common import (
     _last_productive_seq,
     _last_verification_authority_seq,
 )
-from disco.core.loop.finish.verify_gates import _typed_host_result
+from disco.core.loop.finish.verify_gates import _typed_host_mismatch, _typed_host_result
 from disco.core.verification import (
     AdmittedVerificationContract,
     HostVerificationClaim,
     HostVerificationClaimResult,
+    HostVerificationResult,
     PreviewSelectionIdentity,
     VerificationArtifactIdentity,
     VerificationCheckContract,
@@ -927,3 +928,124 @@ async def test_required_checks_cannot_certify_different_execution_generations() 
         isinstance(event, StatusEvent) and event.status is ConversationStatus.STUCK
         for event in events
     )
+
+
+def _current_pair() -> tuple[HostVerificationDeliverable, HostVerificationResult]:
+    check = _check("launch", _claim("native.launch", "bundle launches"))
+    deliverable = _deliverable(_contract((check,)), check)
+    receipt = target_verification_result(
+        deliverable=deliverable,
+        claim_results=(_pass_result(deliverable),),
+        verifier_id=check.issuer_id,
+        tool_id=check.operation,
+        reason="pass",
+    )
+    return deliverable, receipt
+
+
+def test_authority_clause_names_are_unique() -> None:
+    """A duplicated name would make a reported mismatch ambiguous — the whole point."""
+
+    deliverable, receipt = _current_pair()
+    names = [name for name, _ in receipt.authority_clauses(deliverable, observed_url="")]
+
+    assert len(names) == len(set(names))
+
+
+def test_naming_never_invents_a_mismatch_for_a_current_receipt() -> None:
+    """Negative control: a receipt that IS current must be named as mismatching nothing."""
+
+    deliverable, receipt = _current_pair()
+
+    assert receipt.is_current_authority_for(deliverable, observed_url="")
+    assert receipt.first_authority_mismatch(deliverable, observed_url="") is None
+    assert receipt.first_currency_mismatch(deliverable, observed_url="") is None
+
+
+@pytest.mark.parametrize(
+    ("update", "expected_name"),
+    [
+        ({"conversation_id": "conv_other"}, "conversation_id"),
+        ({"run_intent_id": "intent_other"}, "run_intent_id"),
+        ({"target_id": "other.target@1"}, "target_id"),
+        ({"check_id": "other_check"}, "check_id"),
+        ({"receipt_kind": "other.kind@1"}, "receipt_kind"),
+        ({"artifact_path": "build/Other.app"}, "artifact_path"),
+        ({"agent_view_id": "view_other"}, "agent_view_id"),
+        ({"deliverable_event_id": "evt_other"}, "deliverable_event_id"),
+        ({"observed_url": "http://localhost:5000/"}, "observed_url"),
+    ],
+)
+def test_first_authority_mismatch_names_the_perturbed_fact(
+    update: dict[str, object], expected_name: str
+) -> None:
+    """Perturb exactly one bound fact; the report must name THAT fact.
+
+    Counted idx 022 died because the gate could only say "omitted or mismatched"
+    across ~30 facts, leaving the agent to guess the receipt shape until a thrash
+    oracle stopped it. The name is the fix; these pin that it is the right name.
+    """
+
+    deliverable, receipt = _current_pair()
+    perturbed = receipt.model_copy(update=update)
+
+    assert not perturbed.is_current_authority_for(deliverable, observed_url="")
+    assert perturbed.first_authority_mismatch(deliverable, observed_url="") == expected_name
+
+
+def test_mismatch_naming_agrees_with_the_boolean_predicate() -> None:
+    """The named-reason reader and the boolean must never disagree.
+
+    They read one clause list precisely so they cannot drift; this proves it for a
+    current receipt and for every single-fact perturbation above.
+    """
+
+    deliverable, receipt = _current_pair()
+    perturbations: tuple[dict[str, object], ...] = (
+        {},
+        {"conversation_id": "conv_other"},
+        {"artifact_kind": "site"},
+        {"observed_url": "http://127.0.0.1:5000"},
+        {"verifier_id": "foreign.verifier@1"},
+    )
+    for update in perturbations:
+        candidate = receipt.model_copy(update=update) if update else receipt
+        current = candidate.is_current_authority_for(deliverable, observed_url="")
+        named = candidate.first_authority_mismatch(deliverable, observed_url="")
+        assert current is (named is None), (update, current, named)
+
+
+def test_typed_host_mismatch_message_names_the_failing_fact() -> None:
+    """The agent-facing message must carry the name, not just the fact of a mismatch."""
+
+    deliverable, receipt = _current_pair()
+    # An INTACT receipt against a different observed URL — the production shape.
+    # (Perturbing the receipt itself instead would trip its authority digest and
+    # report "did not parse", which is tamper-evidence doing its job, not a
+    # currency mismatch. The two must stay distinguishable in the message.)
+    verdict = {"verification_result": receipt, "url": "http://localhost:5000/"}
+
+    assert _typed_host_result(verdict, deliverable) is None
+    assert "observed_url" in _typed_host_mismatch(verdict, deliverable)
+    assert "did not parse" not in _typed_host_mismatch(verdict, deliverable)
+    assert "no receipt was returned" == _typed_host_mismatch({"url": ""}, deliverable)
+    assert "did not parse" in _typed_host_mismatch(
+        {"verification_result": {"not": "a receipt"}, "url": ""}, deliverable
+    )
+
+
+def test_tampered_receipt_is_reported_as_unparseable_not_as_a_currency_mismatch() -> None:
+    """A mutated receipt must read as tamper-evidence, distinct from a stale one.
+
+    `model_copy` bypasses validation, so the copy's authority digest no longer matches
+    its contents and re-validation rejects it. Both outcomes previously collapsed into
+    "omitted or mismatched"; an operator reading that could not tell a forged receipt
+    from a merely superseded one.
+    """
+
+    deliverable, receipt = _current_pair()
+    tampered = receipt.model_copy(update={"conversation_id": "conv_other"})
+    verdict = {"verification_result": tampered, "url": ""}
+
+    assert _typed_host_result(verdict, deliverable) is None
+    assert "did not parse" in _typed_host_mismatch(verdict, deliverable)

@@ -671,6 +671,33 @@ def _typed_host_result(
     )
 
 
+def _typed_host_mismatch(
+    verdict: dict[str, Any],
+    deliverable: HostVerificationDeliverable,
+) -> str:
+    """Name why the typed receipt was unusable, for the message the agent reads.
+
+    Only called on the failure path. "Omitted or mismatched" tells the agent that one
+    of ~30 bound facts disagreed but not which, and the only move it leaves is to guess
+    the receipt shape and retry — which reads downstream as a degenerate model rather
+    than as a caller starved of the one word it needed.
+    """
+
+    raw = verdict.get("verification_result")
+    if raw is None:
+        return "no receipt was returned"
+    try:
+        result = HostVerificationResult.model_validate(
+            raw.model_dump(mode="json") if isinstance(raw, HostVerificationResult) else raw
+        )
+    except Exception:
+        return "the receipt did not parse as a typed HostVerificationResult"
+    mismatch = result.first_currency_mismatch(
+        deliverable, observed_url=str(verdict.get("url") or "")
+    )
+    return f"the receipt does not bind this deliverable's {mismatch}" if mismatch else "unknown"
+
+
 async def _emit_verifier_started_event(
     loop: Any,
     deliverable: HostVerificationDeliverable,
@@ -766,8 +793,8 @@ async def _prepare_typed_host_verdict(
     if typed_required and typed_result is None:
         host_verdict = gate._host_unavailable_verdict(
             deliverable,
-            "verification could not run: host verifier omitted or mismatched "
-            "the typed authority/claim receipt.",
+            "verification could not run: "
+            f"{_typed_host_mismatch(host_verdict, deliverable)}.",
         )
     if typed_result is not None:
         host_verdict["passed"] = typed_result.passed
