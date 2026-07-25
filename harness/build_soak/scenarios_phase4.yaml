@@ -281,7 +281,14 @@ scenarios:
         files:
           - path: server.js
             must_contain: ["Node Restart {{seed}}", "healthy {{seed}}", "process.env.PORT"]
-          - path: package.json
+          # No package.json requirement: this prompt asks only for a Node service in
+          # server.js. Its siblings p4_ff_node_basic and p4_ff_node_pause both say
+          # "Include package.json" and legitimately assert it; this one never does,
+          # and a dependency-free service started with `node server.js` has no
+          # toolchain that guarantees one. Asserting it made a correct build
+          # unsatisfiable — and because the declared set then never resolved a
+          # candidate root, the oracle blamed server.js, which was present, served,
+          # HTTP 200 and governed-verified. Seed 450001, counted restart lane.
       preview: {required: true, must_contain: ["Node Restart {{seed}}"]}
       browser_verification: {required: true}
 

@@ -806,3 +806,81 @@ def test_visible_text_match_is_whitespace_normalized_but_not_content_blind():
     assert _content_normalized("Node Seed 999999") not in _content_normalized(rendered)
     assert _content_normalized("Node 440028") not in _content_normalized(rendered)
     assert _content_normalized("Seed welcome") not in _content_normalized(rendered)
+
+
+_NODE_RESTART_SCN = {
+    "id": "node_restart_shape",
+    "assertions": {
+        "workspace": {
+            "files": [
+                {"path": "server.js", "must_contain": ["Node Restart 450001"]},
+                {"path": "package.json"},
+            ]
+        },
+        "terminal_status_in": ["FINISHED", "VERIFIED"],
+    },
+}
+
+
+def test_dependency_free_node_service_passes_without_package_json():
+    """POSITIVE CONTROL: counted restart seed 450001, with the contract corrected.
+
+    A dependency-free service is `server.js` and nothing else. With package.json no
+    longer asserted (it was never requested by that prompt), the same workspace
+    that FAILED must pass.
+    """
+    scenario = {
+        "id": "node_restart_shape",
+        "assertions": {
+            "workspace": {
+                "files": [{"path": "server.js", "must_contain": ["Node Restart 450001"]}]
+            },
+            "terminal_status_in": ["FINISHED", "VERIFIED"],
+        },
+    }
+    results = _run(
+        scenario=scenario,
+        workspace={"server.js": "// Node Restart 450001\nprocess.env.PORT"},
+        verified_artifact_paths=["server.js"],
+    )
+
+    assert results[0].passed, results[0].to_dict()
+
+
+def test_unresolvable_root_never_blames_a_present_verified_file():
+    """The defect from counted restart seed 450001.
+
+    `server.js` was present, served, HTTP 200 and governed-verified; `package.json`
+    was genuinely absent. Root resolution failed, so every declared path resolved to
+    None and the per-spec loop blamed spec[0] — `required_path: server.js`. The
+    report must name the file that is actually missing, and must never name a file
+    the run demonstrably produced.
+    """
+    results = _run(
+        scenario=_NODE_RESTART_SCN,
+        workspace={"server.js": "// Node Restart 450001"},
+        verified_artifact_paths=["server.js"],
+    )
+
+    facts = results[0].facts
+    assert results[0].code == "FALSE_FINISH_NO_OUTPUT", facts
+    assert facts.get("required_path") == "package.json", facts
+    assert facts.get("required_path") != "server.js"
+    assert "package.json" in facts.get("missing_declared_paths", []), facts
+    assert "server.js" in facts.get("present_declared_paths", []), facts
+
+
+def test_a_genuinely_missing_requested_file_still_fails():
+    """NEGATIVE CONTROL: honest attribution must not become leniency.
+
+    When the asserted file really is absent, the run must still FAIL — narrowing
+    who gets blamed must not narrow what gets caught.
+    """
+    results = _run(
+        scenario=_NODE_RESTART_SCN,
+        workspace={"package.json": "{}"},
+        verified_artifact_paths=["package.json"],
+    )
+
+    assert results[0].code == "FALSE_FINISH_NO_OUTPUT", results[0].facts
+    assert results[0].facts.get("required_path") == "server.js", results[0].facts

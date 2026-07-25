@@ -326,6 +326,47 @@ class OutputTruthOracle:
                 )
             ]
 
+        if assertion_root is None:
+            # Root resolution failed, so no declared path can be resolved. Falling
+            # into the per-spec loop below would blame whichever spec happens to be
+            # FIRST — and that file may be present, served and governed-verified.
+            # Counted restart seed 450001 died exactly this way: `required_path:
+            # server.js` while `present_paths` and `verified_artifact_paths` both
+            # listed server.js, because the genuinely absent package.json was
+            # spec[1] and the loop never reached it. Name what is actually missing,
+            # and never a file the run demonstrably produced.
+            absent = [
+                path
+                for path in declared_paths
+                if not any(
+                    join_workspace_relative(root, path) in files
+                    for root in (*(root_error or {}).get("verified_candidate_roots", ()), ".")
+                )
+            ]
+            facts: dict[str, Any] = {
+                "reason": "no candidate root satisfies every declared output path",
+                "missing_declared_paths": absent,
+                "present_declared_paths": [p for p in declared_paths if p not in absent],
+                "declared_paths": list(declared_paths),
+                "present_paths": sorted(files),
+            }
+            if root_error:
+                facts.update({k: v for k, v in root_error.items() if k not in facts})
+            if absent:
+                facts["required_path"] = absent[0]
+            return [
+                failing(
+                    _ORACLE,
+                    fc.FALSE_FINISH_NO_OUTPUT if absent else fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+                    first_broken_link=(
+                        "finish -> required_file_exists"
+                        if absent
+                        else "governed_artifact -> output_contract_root"
+                    ),
+                    facts=facts,
+                )
+            ]
+
         content_mismatches: list[dict[str, Any]] = []
         for spec in file_specs:
             raw_path = spec.get("path")
