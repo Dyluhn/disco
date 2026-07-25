@@ -58,6 +58,9 @@ from .config import SandboxConfig
 # substring ('myworkspace'); the lookahead right after `/workspace` keeps it from
 # matching a longer name ('/workspaces') — it only fires when `/workspace` is followed
 # by a path separator, a token boundary, or end-of-string.
+# Shell expansion inside a token: $VAR, ${VAR}, $(cmd), `cmd`.
+_SHELL_EXPANSION_RE = re.compile(r"[$`]")
+
 _WORKSPACE_TOKEN_RE = re.compile(
     r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])"
     r"(?:/(?:\\[^\n]|[^\s\\'\";|&<>()`])*)?"
@@ -258,20 +261,44 @@ class ProcessSandboxInstance:
         the rewrite must never itself manufacture an out-of-jail absolute path.
         """
 
+        # A token whose tail the SHELL computes at run time ("/workspace/$f",
+        # "/workspace/${name}", "/workspace/`basename x`"). It cannot be resolved
+        # here, and shlex.quote-ing it is actively WRONG: unquoted it suppresses
+        # the expansion the model wrote, and inside existing quotes it injects
+        # literal quote characters into the filename. Either way every path comes
+        # back "missing" while a literal `ls` of the same file succeeds — the
+        # environment contradicting itself, which is what sent counted seed 440023
+        # into a read-loop it could not reason its way out of.
         def _sub(m: re.Match[str]) -> str:
             # _resolve strips the redundant /workspace prefix, joins onto the real
             # workspace root, resolves, and raises SandboxPermissionError on escape.
             # Parse shell escapes in this ONE matched token first.  In particular,
             # ``hero\ image.svg`` is one path; treating its space as a boundary
             # rewrote only ``hero\`` and silently manufactured a second argv token.
+            token = m.group(0)
+            if _SHELL_EXPANSION_RE.search(token):
+                # Substitute ONLY the `/workspace` prefix and leave the shell's own
+                # expansion — and the caller's quoting context — exactly as written.
+                rest = token[len("/workspace") :]
+                if ".." in rest:
+                    raise SandboxPermissionError(
+                        f"/workspace path with shell expansion may not traverse: {token!r}"
+                    )
+                root = str(self._workspace)
+                if shlex.quote(root) != root:
+                    # Bare substitution is only safe while the root needs no quoting;
+                    # refuse loudly rather than emit a path that silently mis-parses.
+                    raise SandboxPermissionError(
+                        "cannot expand a /workspace path containing shell expansion "
+                        f"because the workspace path requires quoting: {root!r}"
+                    )
+                return root + rest
             try:
-                parsed = shlex.split(m.group(0), posix=True)
+                parsed = shlex.split(token, posix=True)
             except ValueError as exc:
-                raise SandboxPermissionError(
-                    f"invalid /workspace path token: {m.group(0)!r}"
-                ) from exc
+                raise SandboxPermissionError(f"invalid /workspace path token: {token!r}") from exc
             if len(parsed) != 1:
-                raise SandboxPermissionError(f"invalid /workspace path token: {m.group(0)!r}")
+                raise SandboxPermissionError(f"invalid /workspace path token: {token!r}")
             return shlex.quote(str(self._resolve(parsed[0])))
 
         return _WORKSPACE_TOKEN_RE.sub(_sub, cmd)

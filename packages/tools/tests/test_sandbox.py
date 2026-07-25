@@ -672,3 +672,66 @@ async def test_session_no_hook_recreate_still_works():
         await session.read_file("pre.txt")
     assert session.generation == 2
     await session.destroy()
+
+
+@pytest.mark.asyncio
+async def test_process_shell_workspace_path_built_from_a_shell_variable_resolves():
+    """A `/workspace` path whose tail the SHELL computes must still resolve.
+
+    The rewrite used to `shlex.quote` the whole matched token. Unquoted that
+    suppressed the very expansion the model wrote (`'…/$f'` — a literal `$f`
+    filename); inside existing quotes it injected literal quote characters into the
+    path (`"'…/$f'"`). Either way EVERY file came back "missing" while a literal
+    `ls` of the same file succeeded — the environment contradicting itself.
+
+    That is the earliest broken link behind counted seed 440023: the model ran an
+    ordinary `for f in …; do test -f "/workspace/$f"` loop, was told all five files
+    were missing, `ls`-ed them and was told they existed, and spent the rest of the
+    run trying to reconcile the two until the read-loop guard stopped it.
+    """
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    await inst.write_file("vite.config.ts", b"CONFIG")
+    await inst.write_file("screenshot.png", b"PNG")
+
+    # The exact 440023 shape: quoted, variable-built, in a loop.
+    res = await inst.exec_shell(
+        "for f in vite.config.ts screenshot.png absent.txt; do "
+        'test -f "/workspace/$f" && echo "$f: EXISTS" || echo "$f: MISSING"; done',
+        timeout_s=10,
+    )
+    assert res.exit_code == 0
+    assert "vite.config.ts: EXISTS" in res.stdout
+    assert "screenshot.png: EXISTS" in res.stdout
+    # ...and a genuinely absent file is still reported absent.
+    assert "absent.txt: MISSING" in res.stdout
+
+    # Unquoted variable form resolves too.
+    res = await inst.exec_shell("f=vite.config.ts; cat /workspace/$f", timeout_s=10)
+    assert res.exit_code == 0
+    assert res.stdout == "CONFIG"
+
+    # Command substitution in the tail also survives.
+    res = await inst.exec_shell(
+        'cat "/workspace/$(echo vite.config.ts)"',
+        timeout_s=10,
+    )
+    assert res.exit_code == 0
+    assert res.stdout == "CONFIG"
+
+
+@pytest.mark.asyncio
+async def test_process_shell_expansion_path_may_not_traverse_out_of_the_jail():
+    """The expansion form cannot be statically resolved, so it cannot be statically
+    jailed either — a literal `..` in the tail is therefore refused outright rather
+    than substituted. The jail must never be the thing the rewrite bypasses."""
+    from disco.tools.sandbox.base import SandboxPermissionError
+
+    svc = ProcessSandboxService()
+    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+
+    # Fails closed exactly like the statically-resolvable traversal above.
+    with pytest.raises(SandboxPermissionError):
+        await inst.exec_shell('cat "/workspace/../$f"', timeout_s=10)
+    with pytest.raises(SandboxPermissionError):
+        await inst.exec_shell("cat /workspace/../$f", timeout_s=10)
