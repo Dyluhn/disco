@@ -708,6 +708,7 @@ class _InspectTraceAggregation:
     # Single-use license for a harness-declared stack restart; see
     # note_expected_stack_restart. Counted for auditability, not rendered.
     restart_pending: bool = False
+    restart_outage_seen: bool = False
     declared_restart_count: int = 0
 
     @staticmethod
@@ -786,6 +787,12 @@ class _InspectTraceAggregation:
         self.unavailable_sample_count += 1
         if not self.restart_pending:
             self.reasons.add("inspect_unavailable")
+            return
+        # The declared outage has now actually been observed. Until this point
+        # the license must NOT be consumable: the drive arms it before issuing
+        # the restart, and the poller keeps taking accepted samples for the
+        # seconds the old server takes to die.
+        self.restart_outage_seen = True
 
     def note_trace_disappeared(self) -> None:
         self.note_unavailable()
@@ -919,9 +926,12 @@ class _InspectTraceAggregation:
 
         self.canonical_events.update(encoded)
         self.accepted_sample_count += 1
-        # The declared-restart license covers exactly the outage window: the
-        # trace is reachable again, so any later unavailability is real.
-        self.restart_pending = False
+        # The license closes only once the declared outage has been observed AND
+        # the trace answers again — that is the window's true far edge. Clearing
+        # it on any accepted sample would close it before the server even died.
+        if self.restart_outage_seen:
+            self.restart_pending = False
+            self.restart_outage_seen = False
         if current:
             self.event_bearing_sample_count += 1
         self.last_source_dropped_count = dropped

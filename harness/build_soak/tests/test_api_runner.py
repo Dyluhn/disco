@@ -10847,3 +10847,34 @@ def test_undeclared_outage_still_taints_continuity():
     aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
     aggregation.note_unavailable()
     assert "inspect_unavailable" in aggregation.reasons
+
+
+def test_declared_restart_license_survives_samples_taken_before_the_server_dies():
+    """The drive arms the license BEFORE issuing the restart, and the old server
+    takes seconds to die — so the poller keeps taking accepted samples in
+    between. Consuming the license on any accepted sample closed the window
+    before the outage even began, and the real 13-sample outage still tainted
+    continuity (observed live at seed 406426)."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+
+    aggregation.note_expected_stack_restart()
+    # ... the server is still up; several accepted samples land.
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1), _restart_span(2)]))
+    aggregation.add_snapshot(
+        _inspect_snapshot([_restart_span(1), _restart_span(2), _restart_span(3)])
+    )
+    assert aggregation.restart_pending is True, "license must still be armed"
+
+    # ... now the server actually dies.
+    for _ in range(13):
+        aggregation.note_unavailable()
+    assert aggregation.reasons == set(), "the declared outage is still exempt"
+
+    # ... and comes back, closing the window.
+    aggregation.add_snapshot(
+        _inspect_snapshot([_restart_span(1), _restart_span(2), _restart_span(3), _restart_span(4)])
+    )
+    assert aggregation.restart_pending is False
+    aggregation.note_unavailable()
+    assert "inspect_unavailable" in aggregation.reasons, "a later outage is real"
