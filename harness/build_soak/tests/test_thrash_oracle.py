@@ -1125,3 +1125,66 @@ def test_v3_receipt_trust_matches_the_product_boundary() -> None:
         boundary_events(real_applied), scenario=_scenario(max_same_tool_error_repeats=1)
     )
     assert [r.code for r in results if r.failed] == []
+
+
+def _repair(kind: str, **extra: object) -> dict[str, object]:
+    return {"span": "agent.repair", "event": "point", "repair_kind": kind, **extra}
+
+
+def test_one_first_repair_per_drive_is_not_repeated_behaviour() -> None:
+    """Counted idx 022: two drives, each spending its one legal repair, is not thrash.
+
+    `attempt` is 1-based within ONE drive's budget (`drive_step` re-initialises the
+    counters), so two `attempt: 1` records are two independent first recoveries
+    separated by a user turn. Lifetime counting reported them as one repeated
+    behaviour and failed a run in which the product did exactly what it was built
+    to do.
+    """
+
+    trace = {"spans": [_repair("empty_reasoning", attempt=1) for _ in range(2)]}
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+    assert result.passed
+    assert result.facts["model_repair_count"] == 2
+
+
+def test_escalating_repair_within_one_drive_still_fails() -> None:
+    """Negative control: real escalation inside one budget must still stop the run."""
+
+    trace = {"spans": [_repair("empty_reasoning", attempt=depth) for depth in (1, 2)]}
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+    assert result.code == fc.MODEL_REPAIR_THRASH
+    assert result.facts["repair_kind"] == "empty_reasoning"
+    assert result.facts["count"] == 2
+
+
+def test_repairs_without_an_attempt_are_counted_the_old_way() -> None:
+    """Negative control: an unattributable repair must never be waved through.
+
+    A span with no usable `attempt` cannot be tied to a drive's budget, so the
+    oracle keeps counting occurrences for it. This fix narrows what counts as
+    thrash; it must not open a hole for span shapes that predate the field.
+    """
+
+    for bad in ({}, {"attempt": 0}, {"attempt": "1"}, {"attempt": True}, {"attempt": None}):
+        trace = {"spans": [_repair("unknown_tool", **bad) for _ in range(2)]}
+        result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+        assert result.code == fc.MODEL_REPAIR_THRASH, bad
+        assert result.facts["count"] == 2, bad
+
+
+def test_first_repairs_across_many_drives_still_hit_the_total_bound() -> None:
+    """The lifetime bound is the backstop the per-drive rule leans on.
+
+    Four honest first attempts are individually legal but collectively excessive;
+    `max_total_model_repairs` must still catch that, or narrowing the same-kind
+    rule would let a run repair forever one drive at a time.
+    """
+
+    trace = {"spans": [_repair("empty_reasoning", attempt=1) for _ in range(4)]}
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+    assert result.code == fc.MODEL_REPAIR_THRASH
+    assert result.facts["count"] == 4

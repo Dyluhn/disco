@@ -815,8 +815,33 @@ class ThrashOracle:
             else []
         )
         repair_counts = Counter(str(span["repair_kind"]) for span in repairs)
-        if repair_counts:
-            repair_kind, repair_count = repair_counts.most_common(1)[0]
+        # Every `_record_model_repair` call site passes a 1-based `attempt` taken from a
+        # counter initialised inside `drive_step` — so `attempt` is escalation depth
+        # WITHIN one drive's repair budget, and a fresh drive legitimately starts over at
+        # 1. Counting lifetime occurrences instead made the oracle contradict the product
+        # it grades: a scenario with a followup has two drives, each entitled to its one
+        # repair, and two honest first attempts were being reported as one repeated
+        # behaviour. That is the same correction k6g F2 made for tool errors, which
+        # already treats a user turn as a progress boundary.
+        #
+        # Fail closed on spans that carry no usable attempt: they cannot be attributed to
+        # a budget, so they are counted the old way rather than waved through.
+        deepest: dict[str, int] = {}
+        unattributed: Counter[str] = Counter()
+        for span in repairs:
+            kind = str(span["repair_kind"])
+            raw = span.get("attempt")
+            depth = raw if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1 else 0
+            if depth:
+                deepest[kind] = max(deepest.get(kind, 0), depth)
+            else:
+                unattributed[kind] += 1
+        escalation = {
+            kind: max(deepest.get(kind, 0), unattributed[kind])
+            for kind in set(deepest) | set(unattributed)
+        }
+        if escalation:
+            repair_kind, repair_count = max(escalation.items(), key=lambda item: item[1])
             if repair_count > limits["max_same_model_repair_repeats"]:
                 return [
                     failing(
@@ -826,6 +851,7 @@ class ThrashOracle:
                         facts={
                             "repair_kind": repair_kind,
                             "count": repair_count,
+                            "occurrences": repair_counts[repair_kind],
                             "allowed": limits["max_same_model_repair_repeats"],
                             "repairs": repairs,
                         },
