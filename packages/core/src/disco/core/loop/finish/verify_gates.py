@@ -286,17 +286,49 @@ def _strict_appkit_compatibility_error(
     return None
 
 
+def _handoff_clauses(
+    handoff: DeliverableEvent,
+    contract: AdmittedVerificationContract,
+) -> tuple[tuple[str, bool], ...]:
+    """Each handoff/contract comparison paired with the fact name it binds.
+
+    Same reason as `HostVerificationResult.authority_clauses`: an agent told only
+    that its handoff does not match, across four bound facts, can do nothing but
+    hand off the identical thing again — and the duplicate suppressor then drops
+    that, and the actionless valve pauses the run. Naming the fact is what turns
+    an unrecoverable loop into one corrective move.
+    """
+
+    expected_kind = "app" if contract.delivery.mode == "interactive" else "files"
+    return (
+        ("artifact_kind", handoff.artifact_kind == expected_kind),
+        ("target_id", handoff.target_id == contract.target_id),
+        ("delivery_contract", handoff.delivery_contract == contract.delivery),
+        ("verification_contract_digest", handoff.verification_contract_digest == contract.digest),
+    )
+
+
 def _handoff_matches_verification_contract(
     handoff: DeliverableEvent,
     contract: AdmittedVerificationContract,
 ) -> bool:
-    expected_kind = "app" if contract.delivery.mode == "interactive" else "files"
-    return bool(
-        handoff.artifact_kind == expected_kind
-        and handoff.target_id == contract.target_id
-        and handoff.delivery_contract == contract.delivery
-        and handoff.verification_contract_digest == contract.digest
-    )
+    return all(ok for _, ok in _handoff_clauses(handoff, contract))
+
+
+def _handoff_refusal_detail(
+    handoff: DeliverableEvent | None,
+    contract: AdmittedVerificationContract | None,
+) -> str:
+    """Say WHY the current handoff cannot serve this target, naming the fact."""
+
+    if handoff is None:
+        return "there is no handoff for the current target at all"
+    if contract is None:
+        return "the latest handoff is not current for this target"
+    for name, ok in _handoff_clauses(handoff, contract):
+        if not ok:
+            return f"the latest handoff does not bind this target's {name}"
+    return "the latest handoff is not current for this target"
 
 
 def _latest_appkit_verification_outcome(
@@ -3811,13 +3843,15 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             and _latest_app_deliverable_event(events) is None
         )
         if missing_or_foreign_handoff:
+            detail = _handoff_refusal_detail(handoff, contract)
             return await host_gate._governed_contract_refusal(
                 events,
                 failure_key="target:missing_or_foreign_handoff",
                 guidance=(
-                    "the current target has no exact current handoff matching its "
-                    "admitted delivery contract. Hand off the target-owned entry "
-                    "with the adapter's interactive-app or artifact-files shape."
+                    f"{detail}. Hand off the target-owned entry with the adapter's "
+                    "interactive-app or artifact-files shape. Serving the SAME entry "
+                    "again will be ignored as a duplicate and will not clear this — "
+                    "change the fact named above."
                 ),
             )
         if legacy_missing_web_handoff:

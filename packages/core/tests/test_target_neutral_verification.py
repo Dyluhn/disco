@@ -9,6 +9,8 @@ from disco.core import (
     AgentErrorEvent,
     BuildPlatformAdmissionEvent,
     ConversationStatus,
+    DeliverableEvent,
+    EventSource,
     NoOpCondenser,
     SqliteEventStore,
     StatusEvent,
@@ -1049,3 +1051,51 @@ def test_tampered_receipt_is_reported_as_unparseable_not_as_a_currency_mismatch(
 
     assert _typed_host_result(verdict, deliverable) is None
     assert "did not parse" in _typed_host_mismatch(verdict, deliverable)
+
+
+def test_handoff_refusal_names_the_contract_fact_it_failed_to_bind() -> None:
+    """Pilot seed 406316: an unnamed handoff mismatch is an unrecoverable loop.
+
+    The gate told the agent its handoff did not match the admitted delivery
+    contract, across four bound facts, without naming one. Its only move was to
+    serve the identical entry again — which the duplicate suppressor drops, which
+    the actionless valve then counts as no work, which pauses the run. Naming the
+    fact converts that loop into a single corrective move.
+    """
+
+    from disco.core.loop.finish.verify_gates import (
+        _handoff_clauses,
+        _handoff_matches_verification_contract,
+        _handoff_refusal_detail,
+    )
+
+    check = _check("launch", _claim("native.launch", "bundle launches"))
+    contract = _contract((check,))
+    handoff = DeliverableEvent(
+        source=EventSource.AGENT,
+        title="fixture",
+        path="index.html",
+        artifact_kind="app",
+        target_id=contract.target_id,
+        delivery_contract=contract.delivery,
+        verification_contract_digest=contract.digest,
+    )
+
+    # Positive control: a matching handoff is named as mismatching nothing.
+    assert _handoff_matches_verification_contract(handoff, contract)
+    assert "not current" in _handoff_refusal_detail(handoff, contract)
+
+    names = [name for name, _ in _handoff_clauses(handoff, contract)]
+    assert len(names) == len(set(names))
+
+    # Each single-fact perturbation must be named, not collapsed into one sentence.
+    for update, expected in (
+        ({"artifact_kind": "files"}, "artifact_kind"),
+        ({"target_id": "other.target@1"}, "target_id"),
+        ({"verification_contract_digest": "sha256:" + "0" * 64}, "verification_contract_digest"),
+    ):
+        stale = handoff.model_copy(update=update)
+        assert not _handoff_matches_verification_contract(stale, contract)
+        assert expected in _handoff_refusal_detail(stale, contract), update
+
+    assert "no handoff" in _handoff_refusal_detail(None, contract)
