@@ -4,11 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.core.workspace_paths import strip_redundant_workspace_prefix
+
 from .. import failure_codes as fc
 from .schema import OracleResult, failing, passing, skipping
 
 _LIFECYCLE = "ScenarioLifecycleOracle"
 _CONTEXT = "ContextPressureOracle"
+
+
+def _same_workspace_file(observed: Any, declared: str) -> bool:
+    """Compare which FILE was read, not how the agent happened to spell it.
+
+    `/workspace/catalog.txt` and `catalog.txt` are the same file by the product's
+    own documented contract (`strip_redundant_workspace_prefix`), and the agent is
+    free to use either. Comparing the raw strings made this oracle measure a
+    spelling instead of the property it exists to check.
+
+    Context seed 460000 read catalog.txt at offsets 1, 9996 and 19996 — three
+    distinct offsets, exactly what `min_distinct_offsets: 3` asks for — and every
+    read was discarded because the agent wrote `/workspace/catalog.txt`. The oracle
+    then reported `read_count: 0` and failed the run for not paging a file it had
+    paged correctly. Using the product's own helper keeps the two from drifting.
+    """
+
+    if not isinstance(observed, str) or not observed:
+        return False
+    return strip_redundant_workspace_prefix(observed) == strip_redundant_workspace_prefix(declared)
 
 
 def _status(event: dict[str, Any]) -> str:
@@ -127,7 +149,7 @@ class ContextPressureOracle:
             if call.get("tool_name") != "file_read":
                 continue
             args = call.get("arguments") or {}
-            if str(args.get("path") or "") != path:
+            if not _same_workspace_file(args.get("path"), path):
                 continue
             raw_offset = args.get("offset")
             offset = "0" if raw_offset is None else str(raw_offset)
