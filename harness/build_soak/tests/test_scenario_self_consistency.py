@@ -48,6 +48,30 @@ def _requested_text(scenario: dict) -> str:
 
 
 @pytest.mark.parametrize("scenario", _scenarios(), ids=lambda s: str(s.get("id")))
+def test_every_asserted_literal_is_requested_in_the_prompt(scenario: dict) -> None:
+    """A `must_contain` literal must be something the run was actually ASKED for.
+
+    `p4_ff_node_basic` asked for "the runtime PORT environment variable" — a
+    property — and asserted the spelling `process.env.PORT`. A build writing the
+    idiomatic `const { PORT = 3000 } = process.env` honours PORT exactly and
+    contains no such substring, so correct work failed on a spelling it was never
+    given (counted seed 440027). Seed-templated copy is exempt: it comes from the
+    prompt by construction.
+    """
+    workspace = ((scenario.get("assertions") or {}).get("workspace") or {}).get("files") or []
+    requested = _requested_text(scenario).lower()
+    for entry in workspace:
+        for needle in entry.get("must_contain") or []:
+            literal = str(needle)
+            if "{{seed}}" in literal:
+                continue
+            assert literal.lower() in requested, (
+                f"{scenario.get('id')} asserts the literal {literal!r} but never asks for "
+                "it — an equally correct spelling would fail a correct build"
+            )
+
+
+@pytest.mark.parametrize("scenario", _scenarios(), ids=lambda s: str(s.get("id")))
 def test_every_asserted_file_is_named_in_the_prompt(scenario: dict) -> None:
     workspace = ((scenario.get("assertions") or {}).get("workspace") or {}).get("files") or []
     requested = _requested_text(scenario)

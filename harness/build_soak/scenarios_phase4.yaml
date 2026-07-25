@@ -219,8 +219,15 @@ scenarios:
       browser_verification: {required: true}
 
   - id: p4_ff_node_basic
+    # `process.env.PORT` is asserted below, so the prompt has to ASK for it. Saying only
+    # "the runtime PORT environment variable" left an equally correct build — the
+    # idiomatic `const { PORT = 3000 } = process.env`, which honours PORT exactly —
+    # failing on a spelling it was never given (counted seed 440027). Both sibling node
+    # scenarios already name it; this one was the outlier. Naming the mechanism is
+    # clear context, not a narrowed recipe: the model is told what is wanted instead of
+    # being marked wrong for guessing a different idiom.
     prompt: >-
-      Build a Node service in server.js using the runtime PORT environment variable.
+      Build a Node service in server.js that reads its port with process.env.PORT.
       Its root page must show the exact heading 'Node Seed {{seed}}'. Include package.json,
       launch it with the preview tool, and verify the root page in a browser.
     assertions:
