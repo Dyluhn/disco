@@ -1047,6 +1047,9 @@ class _InspectTraceAggregation:
                 "continuity": "complete" if lossless else "incomplete",
                 "continuity_reason": continuity_reason,
                 "conflict_count": self.conflict_count,
+                # Disclosed so the independent gate can tell a harness-declared
+                # outage from silently swallowed evidence loss.
+                "declared_restart_count": self.declared_restart_count,
                 "failure_reasons": reasons,
                 "lossless": lossless,
                 "finalized": self.finalized,
@@ -1086,6 +1089,7 @@ _INSPECT_AGGREGATION_KEYS = frozenset(
         "continuity",
         "continuity_reason",
         "conflict_count",
+        "declared_restart_count",
         "failure_reasons",
         "lossless",
         "finalized",
@@ -1102,6 +1106,7 @@ _INSPECT_AGGREGATION_COUNTER_KEYS = (
     "source_max_dropped_count",
     "unique_event_count",
     "conflict_count",
+    "declared_restart_count",
 )
 
 
@@ -1307,7 +1312,14 @@ def inspect_aggregate_violations(trace: object, *, conversation_id: str) -> list
     # green around disclosed evidence loss.
     if counter("conflict_count") > 0 and "event_content_conflict" not in reasons:
         flag("conflict_reason_incoherent")
-    if counter("unavailable_sample_count") > 0 and "inspect_unavailable" not in reasons:
+    if (
+        counter("unavailable_sample_count") > 0
+        and "inspect_unavailable" not in reasons
+        and counter("declared_restart_count") == 0
+    ):
+        # Unavailable samples with no taint are legitimate ONLY as the outage a
+        # restart scenario declared and caused. Absent a declared restart this is
+        # still swallowed evidence loss, and still fails.
         flag("unavailable_reason_incoherent")
     if counter("malformed_sample_count") > 0 and "malformed_snapshot" not in reasons:
         flag("malformed_reason_incoherent")

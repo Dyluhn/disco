@@ -10878,3 +10878,45 @@ def test_declared_restart_license_survives_samples_taken_before_the_server_dies(
     assert aggregation.restart_pending is False
     aggregation.note_unavailable()
     assert "inspect_unavailable" in aggregation.reasons, "a later outage is real"
+
+
+def test_silent_unavailable_samples_still_fail_without_a_declared_restart():
+    """The counter<->reason coherence rule is what stops a forged aggregate from
+    wearing green around disclosed evidence loss. The declared-restart exemption
+    must widen it by exactly one case and no more."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+    aggregation.finish()
+    rendered = aggregation.render()
+
+    # Hand-forge the shape the exemption could otherwise hide: unavailable
+    # samples, no taint, no declared restart. Sample accounting is kept honest so
+    # the ONLY thing under test is the counter<->reason rule.
+    rendered["aggregation"]["unavailable_sample_count"] = 3
+    rendered["aggregation"]["sample_count"] += 3
+    assert "unavailable_reason_incoherent" in _disco_mod.inspect_aggregate_violations(
+        rendered, conversation_id=_CID
+    )
+
+    # The same shape WITH a declared restart is the legitimate window.
+    rendered["aggregation"]["declared_restart_count"] = 1
+    assert _disco_mod.inspect_aggregate_violations(rendered, conversation_id=_CID) == []
+
+
+def test_declared_restart_aggregate_is_internally_consistent_end_to_end():
+    """render() -> inspect_aggregate_violations() must agree across the whole
+    declared-restart lifecycle; producer/gate drift here is what invalidated
+    seeds 406427/406428 with 'internally consistent inspect aggregate'."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+    aggregation.note_expected_stack_restart()
+    for _ in range(13):
+        aggregation.note_unavailable()
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1), _restart_span(2)]))
+    aggregation.finish()
+
+    rendered = aggregation.render()
+    assert rendered["aggregation"]["lossless"] is True
+    assert rendered["aggregation"]["declared_restart_count"] == 1
+    assert rendered["aggregation"]["unavailable_sample_count"] == 13
+    assert _disco_mod.inspect_aggregate_violations(rendered, conversation_id=_CID) == []
