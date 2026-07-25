@@ -951,3 +951,90 @@ async def test_app_snapshot_version_does_not_touch_specs_or_tree():
     assert new_keys == {out.structured["path"]}
     for path, data in before.items():
         assert sbx._fs[path] == data
+
+
+# ---- rename carries the display copies of the identity ------------------------
+
+
+def test_rename_moves_display_slots_seeded_from_the_app_name():
+    """Every seeded spec builder copies the app name into section headings, so
+    renaming ONLY AppSpec.name left the app called one thing and DISPLAYING
+    another — the title changed while the on-screen heading kept the old name,
+    and the tool reported success (counted seed 440074, p4_appkit_semantic_edit).
+    """
+    from disco.tools.builtin.app_kit import carry_identity_into_display_slots
+
+    data = {
+        "name": "AppKit Revised 440074",
+        "pages": [
+            {
+                "id": "home",
+                "sections": [
+                    # seeded FROM the identity — must follow the rename
+                    {"id": "hero", "content": {"heading": "AppKit Edit 440074"}},
+                    # authored copy — must be left exactly alone
+                    {
+                        "id": "about",
+                        "content": {
+                            "heading": "Why we built this",
+                            "body": "AppKit Edit 440074 is a great tool.",
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+    moved = carry_identity_into_display_slots(data, "AppKit Edit 440074", "AppKit Revised 440074")
+
+    assert moved == ["home.hero.heading"]
+    sections = data["pages"][0]["sections"]
+    assert sections[0]["content"]["heading"] == "AppKit Revised 440074"
+    # authored prose that merely MENTIONS the old name is not identity and is untouched
+    assert sections[1]["content"]["heading"] == "Why we built this"
+    assert sections[1]["content"]["body"] == "AppKit Edit 440074 is a great tool."
+
+
+def test_rename_moves_nothing_when_no_slot_held_the_identity():
+    from disco.tools.builtin.app_kit import carry_identity_into_display_slots
+
+    data = {
+        "name": "New",
+        "pages": [{"id": "home", "sections": [{"id": "hero", "content": {"heading": "Custom"}}]}],
+    }
+    assert carry_identity_into_display_slots(data, "Old", "New") == []
+    assert data["pages"][0]["sections"][0]["content"]["heading"] == "Custom"
+
+
+def test_every_seeded_builder_survives_a_rename_with_no_stale_identity():
+    """The class detector: all five seeded builders leak the old name without the
+    carry, so this was guaranteed for every AppKit rename, not one bad recipe."""
+    import disco.core.appkit as appkit_pkg
+    from disco.core.appkit import RECIPES
+    from disco.core.appkit.spec import AppSpec
+    from disco.tools.builtin.app_kit import carry_identity_into_display_slots
+
+    old, new = "Corpus Original 4242", "Corpus Renamed 4242"
+    builders = [
+        getattr(appkit_pkg, name)
+        for name in dir(appkit_pkg)
+        if name.startswith("default_")
+        and "app_spec" in name
+        and callable(getattr(appkit_pkg, name))
+    ]
+    assert builders, "no seeded spec builders discovered"
+
+    for builder in builders:
+        for recipe in RECIPES:
+            try:
+                spec = builder(old, recipe)
+            except Exception:
+                continue
+            data = spec.model_dump(mode="json")
+            data["name"] = new
+            carry_identity_into_display_slots(data, old, new)
+            rendered = AppSpec.model_validate(data).model_dump(mode="json")
+            assert old not in json.dumps(rendered), (
+                f"{builder.__name__}/{recipe.id} still displays the previous name"
+            )
+            break

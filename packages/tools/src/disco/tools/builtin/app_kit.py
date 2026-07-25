@@ -775,6 +775,40 @@ class ContentUpdate(BaseModel):
         return _unwrap_weak_fc_items_wrapper(value)
 
 
+def carry_identity_into_display_slots(
+    data: dict[str, Any], previous_name: str, new_name: str
+) -> list[str]:
+    """Move display copies of the app identity along with a rename.
+
+    Every seeded spec builder copies the app name into section headings at
+    scaffold time, so renaming ONLY `AppSpec.name` left the app called one thing
+    and DISPLAYING another: the title changed while the on-screen heading still
+    read the old name — and the tool reported success (counted seed 440074,
+    p4_appkit_semantic_edit). All five seeded builders do this, so it was
+    guaranteed for every AppKit rename, not a quirk of one recipe.
+
+    Deliberately EXACT-match only: a slot still holding the previous name verbatim
+    is a copy of the identity, while any edited slot is authored content and is
+    left alone. Section copy stays owned by the section-update path — this closes
+    the second copy of the identity, it does not make a rename rewrite prose.
+
+    Returns the `page.section.slot` paths it moved, so the caller can say what it
+    did: a silent content rewrite is worse than a named one.
+    """
+
+    moved: list[str] = []
+    for page in data.get("pages") or []:
+        for section in page.get("sections") or []:
+            content = section.get("content")
+            if not isinstance(content, dict):
+                continue
+            for slot, value in list(content.items()):
+                if isinstance(value, str) and value == previous_name:
+                    content[slot] = new_name
+                    moved.append(f"{page.get('id')}.{section.get('id')}.{slot}")
+    return moved
+
+
 class AppUpdateContentArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -847,8 +881,12 @@ class AppUpdateContentTool:
 
             data = app.model_dump(mode="json")
             identity_changed = args.app_name is not None and args.app_name != app.name
+            renamed_slots: list[str] = []
             if args.app_name is not None:
                 data["name"] = args.app_name
+            if identity_changed:
+                assert args.app_name is not None
+                renamed_slots = carry_identity_into_display_slots(data, app.name, args.app_name)
 
             section_changed = False
             existing: dict[str, Any] | None = None
@@ -920,6 +958,14 @@ class AppUpdateContentTool:
             changes = []
             if identity_changed:
                 changes.append(f"application name to {new_app.name!r}")
+                if renamed_slots:
+                    # Say what else moved: a silent content rewrite is worse than a
+                    # named one, even when it is the coherent thing to do.
+                    changes.append(
+                        f"{len(renamed_slots)} display slot(s) that still carried the "
+                        f"previous name ({', '.join(renamed_slots[:4])}"
+                        f"{'…' if len(renamed_slots) > 4 else ''})"
+                    )
             if section_changed:
                 changes.append(f"section {args.section_id!r} on page {args.page_id!r}")
             return ToolOutcome(
