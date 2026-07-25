@@ -1518,3 +1518,86 @@ async def test_process_browser_recovers_stale_busy_daemon_session():
         assert replacement_port != stale_port
     finally:
         await session.destroy()
+
+
+@pytest.mark.integration
+def test_gradient_text_heading_is_visible_but_cloaked_text_is_not():
+    """`background-clip: text` with a transparent fill is how a gradient heading
+    is painted — the glyphs ARE visible.
+
+    Treating the transparent fill as invisible dropped the heading from the
+    extracted text, so a page that plainly showed the required copy failed its
+    `must_contain` (counted seed 440034: `<h1>Node Seed 440034</h1>` styled with a
+    linear-gradient). Any model choosing that very common heading treatment
+    failed regardless of how correct its build was.
+
+    The exemption is exactly the gradient idiom: a transparent fill WITHOUT a
+    clipped background is still cloaked copy and must stay excluded.
+    """
+    import base64
+    import importlib.resources
+
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin.browser import _installed_chromium_executable
+    from playwright.sync_api import sync_playwright
+
+    executable = _installed_chromium_executable()
+    if executable is None:
+        pytest.skip("installed Chromium is required")
+    # This host's headless Chromium cannot rasterize text without an embedded
+    # font, so glyphs get zero client rects and NOTHING extracts. Same
+    # scaffolding as the sibling extractor test.
+    font = (
+        importlib.resources.files("disco.core.brand")
+        .joinpath("fonts/SchibstedGrotesk.ttf")
+        .read_bytes()
+    )
+    font_b64 = base64.b64encode(font).decode("ascii")
+    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True, executable_path=executable, args=["--no-sandbox"]
+        )
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page.set_content(
+                """
+                <style>*{font-family:"DiscoProbe"!important}</style>
+                <h1 style="background:linear-gradient(135deg,#C65D3B,#E5A93C);
+                           -webkit-background-clip:text;background-clip:text;
+                           -webkit-text-fill-color:transparent">Node Seed 440034</h1>
+                <h2 style="background:linear-gradient(135deg,#C65D3B,#E5A93C);
+                           -webkit-background-clip:text;background-clip:text;
+                           color:transparent">Gradient Via Color 440034</h2>
+                <p style="-webkit-text-fill-color:transparent">Cloaked fill</p>
+                <p style="color:transparent">Cloaked color</p>
+                <p>Running on Node.js</p>
+                """
+            )
+            page.evaluate(
+                """
+                async b64 => {
+                    const bytes = atob(b64);
+                    const data = new Uint8Array(bytes.length);
+                    for (let index = 0; index < bytes.length; index++) {
+                        data[index] = bytes.charCodeAt(index);
+                    }
+                    const font = new FontFace('DiscoProbe', data.buffer);
+                    await font.load();
+                    document.fonts.add(font);
+                    await document.fonts.ready;
+                }
+                """,
+                font_b64,
+            )
+            text = handler._visible_dom_text(page)
+
+            # the gradient idiom, in both spellings, is visible text
+            assert "Node Seed 440034" in text
+            assert "Gradient Via Color 440034" in text
+            assert "Running on Node.js" in text
+            # ...and cloaking without a clipped background is still excluded
+            assert "Cloaked fill" not in text
+            assert "Cloaked color" not in text
+        finally:
+            browser.close()

@@ -1103,6 +1103,18 @@ class BrowserHandler(BaseHTTPRequestHandler):
                     const output = [];
                     const transparent = value => value === 'transparent' ||
                         /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
+                    // A transparent fill over a background CLIPPED TO TEXT is
+                    // the gradient-heading idiom: the glyphs are painted by the
+                    // background and ARE visible. Transparent fill WITHOUT that
+                    // clip is still cloaked copy and stays excluded.
+                    const paintsTextViaBackground = style =>
+                        (style.webkitBackgroundClip === 'text' ||
+                         style.backgroundClip === 'text') &&
+                        (style.backgroundImage || 'none') !== 'none';
+                    const hiddenText = style =>
+                        (transparent(style.color) ||
+                         transparent(style.webkitTextFillColor || '')) &&
+                        !paintsTextViaBackground(style);
                     const intersects = (first, second) =>
                         Math.min(first.right, second.right) >
                             Math.max(first.left, second.left) &&
@@ -1126,8 +1138,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                                 style.visibility === 'hidden' ||
                                 style.visibility === 'collapse' ||
                                 Number(style.opacity) === 0 ||
-                                transparent(style.color) ||
-                                transparent(style.webkitTextFillColor || '') ||
+                                hiddenText(style) ||
                                 style.clipPath === 'inset(100%)') {
                                 visible = false;
                                 break;
@@ -1177,6 +1188,18 @@ class BrowserHandler(BaseHTTPRequestHandler):
                         document.documentElement.clientHeight;
                     const transparent = value => value === 'transparent' ||
                         /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
+                    // A transparent fill over a background CLIPPED TO TEXT is
+                    // the gradient-heading idiom: the glyphs are painted by the
+                    // background and ARE visible. Transparent fill WITHOUT that
+                    // clip is still cloaked copy and stays excluded.
+                    const paintsTextViaBackground = style =>
+                        (style.webkitBackgroundClip === 'text' ||
+                         style.backgroundClip === 'text') &&
+                        (style.backgroundImage || 'none') !== 'none';
+                    const hiddenText = style =>
+                        (transparent(style.color) ||
+                         transparent(style.webkitTextFillColor || '')) &&
+                        !paintsTextViaBackground(style);
                     const intersect = (box, left, top, right, bottom) => ({
                         left: Math.max(box.left, left),
                         top: Math.max(box.top, top),
@@ -1193,8 +1216,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                         const style = window.getComputedStyle(el);
                         if (style.visibility === 'hidden' || style.display === 'none' ||
                             style.pointerEvents === 'none' || Number(style.opacity) === 0 ||
-                            transparent(style.color) ||
-                            transparent(style.webkitTextFillColor || '')) {
+                            hiddenText(style)) {
                             return false;
                         }
 
@@ -1221,8 +1243,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                                 nodeStyle.display === 'none' ||
                                 nodeStyle.pointerEvents === 'none' ||
                                 Number(nodeStyle.opacity) === 0 ||
-                                transparent(nodeStyle.color) ||
-                                transparent(nodeStyle.webkitTextFillColor || '')) {
+                                hiddenText(nodeStyle)) {
                                 return false;
                             }
                             const range = document.createRange();
