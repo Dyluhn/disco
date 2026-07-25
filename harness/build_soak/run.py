@@ -1301,6 +1301,10 @@ async def drive_scenario(
         declared_paths = _declared_workspace_paths(scenario)
         before_status = DiscoApiClient._status_of(await client.get_state(cid))
         before_digest = await client.workspace_snapshot_digest(cid, declared_paths)
+        # Declare the outage before causing it: the inspect poller cannot reach a
+        # server this drive is killing, and that is not evidence loss. Scoped to
+        # the restart window only (see note_expected_stack_restart).
+        client.note_expected_stack_restart(cid)
         restarted = await _restart_isolated_stack()
         after_status = ""
         after_digest: str | None = None

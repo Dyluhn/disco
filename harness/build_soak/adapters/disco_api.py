@@ -705,6 +705,10 @@ class _InspectTraceAggregation:
     last_snapshot_seqs: tuple[int, ...] = ()
     reasons: set[str] = field(default_factory=set)
     finalized: bool = False
+    # Single-use license for a harness-declared stack restart; see
+    # note_expected_stack_restart. Counted for auditability, not rendered.
+    restart_pending: bool = False
+    declared_restart_count: int = 0
 
     @staticmethod
     def _canonical_event(event: dict[str, Any]) -> bytes:
@@ -754,14 +758,39 @@ class _InspectTraceAggregation:
         self.sample_count += 1
         self.pretrace_unavailable_count += 1
 
+    def note_expected_stack_restart(self) -> None:
+        """Arm a single-use license for the outage THIS harness is about to cause.
+
+        A `restart_after_terminal` scenario kills the agent-server on purpose, so
+        the poller's next samples cannot reach it. That unreachability is not
+        evidence loss and must not be scored as such — but the exemption has to be
+        exactly as narrow as the declared act, or it becomes a blanket excuse.
+
+        So: armed only by the drive, immediately before it restarts the stack;
+        covers only unreachability, never a content conflict or a sequence
+        regression; and consumed by the first accepted post-restart sample, after
+        which unavailability is a real reason again. The samples still increment
+        `unavailable_sample_count`, so the window stays auditable in the rendered
+        aggregate without any change to its shape.
+
+        This is only sound because the trace itself now survives the restart (the
+        inspect journal): the post-restart stream continues the same monotonic
+        sequence rather than renumbering from 1. If that durability regresses, the
+        conflict and regression reasons still fire and still fail the run.
+        """
+        self.declared_restart_count += 1
+        self.restart_pending = True
+
     def note_unavailable(self) -> None:
         self.sample_count += 1
         self.unavailable_sample_count += 1
-        self.reasons.add("inspect_unavailable")
+        if not self.restart_pending:
+            self.reasons.add("inspect_unavailable")
 
     def note_trace_disappeared(self) -> None:
         self.note_unavailable()
-        self.reasons.add("source_reset")
+        if not self.restart_pending:
+            self.reasons.add("source_reset")
 
     def note_poller_cancelled(self) -> None:
         self.reasons.add("poller_cancelled")
@@ -890,6 +919,9 @@ class _InspectTraceAggregation:
 
         self.canonical_events.update(encoded)
         self.accepted_sample_count += 1
+        # The declared-restart license covers exactly the outage window: the
+        # trace is reachable again, so any later unavailability is real.
+        self.restart_pending = False
         if current:
             self.event_bearing_sample_count += 1
         self.last_source_dropped_count = dropped
@@ -1511,6 +1543,20 @@ class DiscoApiClient:
         aggregation = self._inspect_aggregations.get(conversation_id)
         if aggregation is not None and not aggregation.finalized:
             aggregation.reasons.add("active_stop_unconfirmed")
+
+    def note_expected_stack_restart(self, conversation_id: str) -> None:
+        """Declare the stack restart this run is about to perform.
+
+        The drive knows it is killing the agent-server; the poller only sees the
+        endpoint stop answering. Without the declaration the aggregate scores a
+        harness-caused outage as evidence loss. Narrow by construction: see
+        `_InspectTraceAggregation.note_expected_stack_restart`. A no-op after
+        finalization, so a late call can never reopen a closed verdict.
+        """
+
+        aggregation = self._inspect_aggregations.get(conversation_id)
+        if aggregation is not None and not aggregation.finalized:
+            aggregation.note_expected_stack_restart()
 
     @property
     def live_thrash_monitor(self) -> dict[str, Any]:

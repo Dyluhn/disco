@@ -10770,3 +10770,80 @@ async def test_collect_preview_never_retries_other_conflicts(tmp_path):
     assert preview["health"]["status"] == 409
     assert preview["content"] == "preview_authority_unavailable"
     assert transport.preview_fetches == 1
+
+
+# ---- declared stack restart: the outage the harness itself causes -------------
+
+
+def _restart_span(seq: int, request_id: str = "req_restart") -> dict[str, Any]:
+    return {
+        "seq": seq,
+        "kind": "span",
+        "span": "agent.step",
+        "event": "start",
+        "role": "agent_driver",
+        "request_id": request_id,
+    }
+
+
+def test_declared_stack_restart_does_not_score_its_own_outage_as_evidence_loss():
+    """A restart_after_terminal scenario kills the agent-server on purpose.
+
+    The poller then cannot reach it, and before the trace was durable that
+    unreachability was indistinguishable from evidence loss. It is not: the
+    stream continues monotonically across the restart, so the declared window
+    must not taint continuity — while still being counted, so it stays visible.
+    """
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+
+    aggregation.note_expected_stack_restart()
+    aggregation.note_unavailable()
+    aggregation.note_trace_disappeared()
+
+    assert aggregation.reasons == set(), "the declared outage is not evidence loss"
+    assert aggregation.unavailable_sample_count == 2, "but it stays counted/auditable"
+    assert aggregation.declared_restart_count == 1
+
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1), _restart_span(2)]))
+    aggregation.finish()
+    assert aggregation.render()["aggregation"]["lossless"] is True
+
+
+def test_declared_restart_license_is_consumed_by_the_first_sample_back():
+    """Narrowness is the whole point: once the trace answers again, a later
+    outage is real and must taint continuity."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+    aggregation.note_expected_stack_restart()
+    aggregation.note_unavailable()
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1), _restart_span(2)]))
+
+    aggregation.note_unavailable()  # a SECOND outage, undeclared
+
+    assert "inspect_unavailable" in aggregation.reasons
+    aggregation.finish()
+    assert aggregation.render()["aggregation"]["lossless"] is False
+
+
+def test_declared_restart_never_excuses_a_content_conflict():
+    """The license covers unreachability only. If trace durability regresses and
+    the post-restart stream renumbers over the retained prefix, that is still a
+    conflict and still fails the run."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1, "req_a")]))
+    aggregation.note_expected_stack_restart()
+
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1, "req_b")]))
+
+    assert "event_content_conflict" in aggregation.reasons
+    aggregation.finish()
+    assert aggregation.render()["aggregation"]["lossless"] is False
+
+
+def test_undeclared_outage_still_taints_continuity():
+    """Regression guard: without a declaration nothing changes."""
+    aggregation = _disco_mod._InspectTraceAggregation(_CID)
+    aggregation.add_snapshot(_inspect_snapshot([_restart_span(1)]))
+    aggregation.note_unavailable()
+    assert "inspect_unavailable" in aggregation.reasons
