@@ -10920,3 +10920,71 @@ def test_declared_restart_aggregate_is_internally_consistent_end_to_end():
     assert rendered["aggregation"]["declared_restart_count"] == 1
     assert rendered["aggregation"]["unavailable_sample_count"] == 13
     assert _disco_mod.inspect_aggregate_violations(rendered, conversation_id=_CID) == []
+
+
+# ---- a non-terminal run is judged on its own truth, not the snapshot ----------
+
+
+def test_snapshot_wait_does_not_mask_a_run_that_never_finished():
+    """A run with no SYSTEM FINISHED terminal has no agent-final state.
+
+    Demanding the snapshot converge on one is demanding something that cannot
+    exist, and raising there made the snapshot the reported cause while the real
+    one — a STUCK run released at the clarify cap — was buried. It happened three
+    times this campaign (seeds 440023, 450000, 440019), each time costing a
+    counted stream to re-diagnose.
+    """
+    assert _disco_mod._NO_SYSTEM_FINISHED_TERMINAL == "latest status is not exact SYSTEM FINISHED"
+
+    # The producer emits exactly the sentinel the snapshot wait keys on, so the
+    # two cannot drift apart.
+    evidence = _disco_mod._strict_final_workspace_seal(
+        [
+            {"kind": "status", "seq": 1, "source": "system", "status": "RUNNING"},
+            {"kind": "status", "seq": 2, "source": "system", "status": "STUCK"},
+        ],
+        "conv_mask_probe",
+    )
+    assert evidence.error == _disco_mod._NO_SYSTEM_FINISHED_TERMINAL
+
+
+def test_seal_evidence_still_reports_a_finished_run_normally():
+    """Regression guard: the exemption keys on 'never finished', so a run that DID
+    finish keeps its full snapshot demand."""
+    evidence = _disco_mod._strict_final_workspace_seal(
+        [
+            {"kind": "status", "seq": 1, "source": "system", "status": "RUNNING"},
+            {"kind": "status", "seq": 2, "source": "system", "status": "FINISHED"},
+        ],
+        "conv_mask_probe",
+    )
+    assert evidence.error != _disco_mod._NO_SYSTEM_FINISHED_TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_non_terminal_run_returns_observed_state_instead_of_masking(tmp_path):
+    """A run whose LIVE status never reached a terminal has no agent-final state.
+
+    The snapshot then returns what it observed and the ordinary oracles judge the
+    run on its real status — a stricter outcome than INVALID_RUN, which does not
+    count. The sibling fail-closed tests cover the other side: a live-FINISHED run
+    missing its terminal EVENT is evidence loss and still raises.
+    """
+    db = tmp_path / "disco.db"
+    projects = tmp_path / "projects"
+    events = _smoke_log_with_file_write("index.html", "<h1>bytes</h1>")[:-1]
+    _seed_db(db, _CID, events)
+    _plant_snapshot(projects, _CID, {"index.html": "<h1>bytes</h1>"})
+    client = DiscoApiClient(
+        # LIVE status is STUCK: the run really did not finish.
+        FakeTransport(db, states=["STUCK"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(projects),
+        snapshot_wait_s=0.0,
+        require_workspace_commit=True,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert isinstance(manifest, dict)  # observed state, not a masking exception

@@ -319,6 +319,12 @@ class FollowupPickupError(Exception):
         self.facts = facts or {}
 
 
+# The one seal-evidence reason meaning "this run has no agent-final state at all".
+# Named so the producer (the seal check) and the consumer (the snapshot wait, which
+# must not demand convergence on a state that cannot exist) cannot drift apart.
+_NO_SYSTEM_FINISHED_TERMINAL = "latest status is not exact SYSTEM FINISHED"
+
+
 class SnapshotNotReadyError(Exception):
     """The host ProjectStore workspace SNAPSHOT never reached the build's AGENT-FINAL state
     within `snapshot_wait_s`: for at least one declared file the snapshot's on-disk bytes
@@ -399,9 +405,7 @@ def _strict_final_workspace_seal(
         or latest_status.get("source") != "system"
         or latest_status.get("status") != "FINISHED"
     ):
-        return _FinalWorkspaceSealEvidence(
-            error="latest status is not exact SYSTEM FINISHED",
-        )
+        return _FinalWorkspaceSealEvidence(error=_NO_SYSTEM_FINISHED_TERMINAL)
 
     effects = [event for event in events if event.get("kind") in _FINAL_SEAL_EFFECT_KINDS]
     latest_effect_seq = max((exact_seq(event) or -1 for event in effects), default=-1)
@@ -2863,6 +2867,18 @@ class DiscoApiClient:
         observed_total_bytes: int | None = None
         final_seal_error: str | None = None
         event_evidence_valid = False
+        # The LIVE status is what separates "this run genuinely never finished"
+        # from "it finished but its terminal event is missing". Only the first is
+        # exempt from the snapshot demand; the second is evidence loss and must
+        # still fail closed. Unreadable live state counts as finished, so an
+        # unknown falls to the strict path.
+        try:
+            _finished_live = self._status_of(await self.get_state(conversation_id)) in {
+                "FINISHED",
+                "VERIFIED",
+            }
+        except Exception:  # noqa: BLE001 — unknown live status → strict path
+            _finished_live = True
         while True:
             try:
                 current_events = normalize_events(self.collect_events(conversation_id))
@@ -3076,6 +3092,21 @@ class DiscoApiClient:
                         )
                 break
             if time.monotonic() >= deadline:
+                # A run that never reached a SYSTEM FINISHED terminal HAS no
+                # agent-final state, so waiting for the snapshot to converge on one
+                # is waiting for something that cannot exist. Raising here made the
+                # snapshot the reported cause and buried the real one: a STUCK run
+                # released at the clarify cap came back INVALID_RUN /
+                # WORKSPACE_SNAPSHOT_NOT_READY three separate times this campaign
+                # (seeds 440023, 450000, 440019) while the truth was upstream.
+                #
+                # Returning what was observed is STRICTER, not laxer: the ordinary
+                # oracles then judge the run on its real terminal status and it
+                # FAILS as the unfinished build it is, instead of an INVALID_RUN
+                # that does not count. A run that DID finish is untouched — its
+                # snapshot demand still fails fast.
+                if final_seal_error == _NO_SYSTEM_FINISHED_TERMINAL and not _finished_live:
+                    break
                 if blocking or not commit_ready:
                     raise SnapshotNotReadyError(
                         "workspace snapshot never reached the agent's final state within "
