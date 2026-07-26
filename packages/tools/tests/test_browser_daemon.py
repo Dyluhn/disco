@@ -8,6 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
+from disco.tools.builtin._browser_daemon import (
+    _count_visible_semantic_elements,
+    _visible_dom_text,
+)
 from disco.tools.builtin.browser import BrowserArgs, BrowserTool
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import ProcessSandboxService
@@ -544,12 +548,10 @@ def test_visible_semantic_elements_are_strict_rendered_evidence():
 
     The Python boundary rejects malformed/boolean page values fail-closed.
     """
-    import disco.tools.builtin._browser_daemon as daemon_mod
 
-    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
     page = MagicMock()
     page.evaluate.return_value = 1
-    assert handler._count_visible_semantic_elements(page) == 1
+    assert _count_visible_semantic_elements(page) == 1
     script = page.evaluate.call_args.args[0]
     assert "getBoundingClientRect" in script
     assert "getComputedStyle" in script
@@ -563,19 +565,17 @@ def test_visible_semantic_elements_are_strict_rendered_evidence():
 
     for invalid in (True, -1, "1", None):
         page.evaluate.return_value = invalid
-        assert handler._count_visible_semantic_elements(page) == 0
+        assert _count_visible_semantic_elements(page) == 0
 
     page.evaluate.side_effect = RuntimeError("page closed")
-    assert handler._count_visible_semantic_elements(page) == 0
+    assert _count_visible_semantic_elements(page) == 0
 
 
 def test_visible_dom_text_is_exact_bounded_structured_evidence():
-    import disco.tools.builtin._browser_daemon as daemon_mod
 
-    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
     page = MagicMock()
     page.evaluate.return_value = "Imported Complete 405115"
-    assert handler._visible_dom_text(page) == "Imported Complete 405115"
+    assert _visible_dom_text(page) == "Imported Complete 405115"
     script = page.evaluate.call_args.args[0]
     assert "createTreeWalker" in script
     assert "getClientRects" in script
@@ -586,10 +586,10 @@ def test_visible_dom_text_is_exact_bounded_structured_evidence():
 
     for invalid in (True, 1, [], None):
         page.evaluate.return_value = invalid
-        assert handler._visible_dom_text(page) == ""
+        assert _visible_dom_text(page) == ""
 
     page.evaluate.side_effect = RuntimeError("page closed")
-    assert handler._visible_dom_text(page) == ""
+    assert _visible_dom_text(page) == ""
 
 
 @pytest.mark.integration
@@ -597,7 +597,6 @@ def test_visible_dom_text_real_chromium_preserves_authored_case_and_rejects_hidd
     import base64
     import importlib.resources
 
-    import disco.tools.builtin._browser_daemon as daemon_mod
     from disco.tools.builtin.browser import _installed_chromium_executable
     from playwright.sync_api import sync_playwright
 
@@ -610,7 +609,6 @@ def test_visible_dom_text_real_chromium_preserves_authored_case_and_rejects_hidd
         .read_bytes()
     )
     font_b64 = base64.b64encode(font).decode("ascii")
-    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -646,7 +644,7 @@ def test_visible_dom_text_real_chromium_preserves_authored_case_and_rejects_hidd
                 font_b64,
             )
             assert page.locator("h2").inner_text() == "IMPORTED COMPLETE 405115"
-            assert handler._visible_dom_text(page) == "Imported Complete 405115"
+            assert _visible_dom_text(page) == "Imported Complete 405115"
         finally:
             browser.close()
 
@@ -654,7 +652,6 @@ def test_visible_dom_text_real_chromium_preserves_authored_case_and_rejects_hidd
 @pytest.mark.integration
 def test_visible_semantic_elements_real_chromium():
     """H335 executable DOM proof: visible heading only; false-pass shapes stay zero."""
-    import disco.tools.builtin._browser_daemon as daemon_mod
     from disco.tools.builtin.browser import _installed_chromium_executable
     from playwright.sync_api import sync_playwright
 
@@ -708,7 +705,6 @@ def test_visible_semantic_elements_real_chromium():
             'background:white;z-index:9999"></div>'
         ): 0,
     }
-    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -726,7 +722,7 @@ def test_visible_semantic_elements_real_chromium():
                         "() => document.querySelector('h1').getBoundingClientRect().height > 0",
                         timeout=2_000,
                     )
-                assert handler._count_visible_semantic_elements(page) == expected, html
+                assert _count_visible_semantic_elements(page) == expected, html
         finally:
             browser.close()
 
@@ -1537,7 +1533,6 @@ def test_gradient_text_heading_is_visible_but_cloaked_text_is_not():
     import base64
     import importlib.resources
 
-    import disco.tools.builtin._browser_daemon as daemon_mod
     from disco.tools.builtin.browser import _installed_chromium_executable
     from playwright.sync_api import sync_playwright
 
@@ -1553,7 +1548,6 @@ def test_gradient_text_heading_is_visible_but_cloaked_text_is_not():
         .read_bytes()
     )
     font_b64 = base64.b64encode(font).decode("ascii")
-    handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True, executable_path=executable, args=["--no-sandbox"]
@@ -1590,7 +1584,7 @@ def test_gradient_text_heading_is_visible_but_cloaked_text_is_not():
                 """,
                 font_b64,
             )
-            text = handler._visible_dom_text(page)
+            text = _visible_dom_text(page)
 
             # the gradient idiom, in both spellings, is visible text
             assert "Node Seed 440034" in text

@@ -920,3 +920,43 @@ lint cleanup.
 | `StuckDetector` +16 | needs the read-churn collaborator extraction |
 | `BrowserHandler` +51 | not yet attempted |
 | 23 pre-existing stable-main entries | owner-visible decision still required |
+
+## 2026-07-26 — Epic 5, part 3: all three branch regressions cleared
+
+**Architecture budget 26 → 23.** Every violation this branch introduced is gone;
+what remains is exactly the 23 that were already over cap at `stable-main`.
+
+| symbol | before | after | cap |
+|---|---|---|---|
+| `make_conversations_router` | 336 | **301** | 321 |
+| `StuckDetector` | 816 | **694** | 800 |
+| `BrowserHandler` | 851 | **637** | 800 |
+
+**`StuckDetector` — the lesson from the first, failed attempt.** Moving one pure
+helper out broke three tests. The cluster is mutually referential, and half of it
+referenced the class *by name* (`StuckDetector._bounded_decimal`) rather than
+through `cls`, so a partial move left dangling attribute lookups on a class that
+no longer owned them. Moving all eight read-parsing helpers **together** — none
+of which read instance state — keeps every reference internally consistent. What
+remains in the class is what belongs there: threshold state and the detection
+rules that consult it.
+
+**`BrowserHandler`** gave up its two DOM-analysis helpers (`_visible_dom_text`,
+`_count_visible_semantic_elements`, 212 LOC). Both reference nothing at all —
+verified by AST before moving — so the move was mechanical.
+
+**No test was lost or weakened**, checked rather than asserted:
+`test_browser_daemon.py` has **36 test functions and 7 skip markers both before
+and after**, and every changed assertion differs only in its receiver
+(`handler._x(page)` → `_x(page)`) with identical arguments and identical expected
+values.
+
+**Gates:** `packages/core`, `packages/tools`, `packages/agent-server` all exit 0;
+`ruff check` **0**; `ruff format --check` **0**; `basedpyright` **0/0/0**.
+
+**Still open for Epic 5:** the 23 pre-existing entries need an owner-visible
+decision (decompose vs. justified rebaseline) — they are `stable-main` debt, not
+this branch's, and `ConversationRuntime` alone is 4519 against a 3970 cap. Also
+outstanding: the frontend Vitest/G11/Firefox lanes, Export Track-1 + Docker 8/8,
+the test-inventory comparison against stable integration, and the whole-diff
+practical review.

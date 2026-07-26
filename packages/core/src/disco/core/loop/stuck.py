@@ -351,9 +351,7 @@ def _read_range(content: str) -> tuple[int, int, int] | None:
     start = _bounded_decimal(match.group(1))
     end = _bounded_decimal(match.group(2))
     total = _bounded_decimal(match.group(3))
-    more_offset = (
-        _bounded_decimal(match.group(4)) if match.group(4) is not None else None
-    )
+    more_offset = _bounded_decimal(match.group(4)) if match.group(4) is not None else None
     # Observation bytes are untrusted detector input. The shared bounded
     # parser prevents Python's max-digit guard (or huge arbitrary-precision
     # integers) from turning malformed evidence into a loop crash/CPU sink.
