@@ -396,7 +396,9 @@ def test_c6_zip_writer_reserves_directory_prefixes(tmp_path: Path) -> None:
     (src / COMPOSE_PATH / "inner.txt").write_bytes(_INNER_MARKER)
     (src / "keep.txt").write_bytes(b"workspace\n")
 
-    content = b"".join(_zip_workspace_with_overlay(src, {COMPOSE_PATH: "generated compose file"}))
+    content = b"".join(
+        _zip_workspace_with_overlay(src, {COMPOSE_PATH: "generated compose file"})
+    )
     names = _zip_names(content)
     assert f"{COMPOSE_PATH}/inner.txt" in names, "the workspace directory entry must survive"
     assert COMPOSE_PATH not in names, (

@@ -166,7 +166,7 @@ def _assert_toolchain_unsupported(result: object) -> None:
 _STRAY_MARKERS: tuple[tuple[str, str], ...] = (
     (".yarnrc", "registry=https://registry.example\n"),
     (".yarnrc.yml", "nodeLinker: node-modules\n"),
-    ("bunfig.toml", '[install]\nregistry = "https://registry.example"\n'),
+    ("bunfig.toml", "[install]\nregistry = \"https://registry.example\"\n"),
     ("pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n"),
     ("pnpm-workspace.yml", "packages:\n  - 'apps/*'\n"),
 )
@@ -181,7 +181,9 @@ def test_committed_package_lock_beats_stray_marker(
     stays a candidate. Pre-fix the marker wrongly emitted ``toolchain_unsupported``."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
+        "package.json": _package_json(
+            str(closeout_name("svc")), {"start": "node server.js"}, None
+        ),
         "package-lock.json": _PACKAGE_LOCK,
         marker: content,
         "server.js": _SERVER_JS,
@@ -389,7 +391,9 @@ def test_stray_marker_without_npm_signal_still_fails_closed(
     marker STILL fails closed — finding #1's precedence must not open a blanket bypass."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
+        "package.json": _package_json(
+            str(closeout_name("svc")), {"start": "node server.js"}, None
+        ),
         marker: content,
         "server.js": _SERVER_JS,
     }
@@ -419,7 +423,9 @@ def test_plain_npm_project_stays_a_candidate(closeout_name: object) -> None:
     stray marker, no non-npm head) stays a self-host candidate with no toolchain reject."""
     assert callable(closeout_name)
     files = {
-        "package.json": _package_json(str(closeout_name("svc")), {"start": "node server.js"}, None),
+        "package.json": _package_json(
+            str(closeout_name("svc")), {"start": "node server.js"}, None
+        ),
         "package-lock.json": _PACKAGE_LOCK,
         "server.js": _SERVER_JS,
     }

@@ -890,7 +890,9 @@ def test_unupgradeable_v1_intent_sidecar_is_upgrade_required_not_validation_erro
     cid = _cid(closeout_name, "conv_c4v1bad")
     client, ps = _client(_store, tmp_path, monkeypatch)
     _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _NODE_FOR_LEGACY_SIDECAR)
-    ps.release_intent_for(cid).write_text(json.dumps(_UNUPGRADEABLE_V1_SIDECAR), encoding="utf-8")
+    ps.release_intent_for(cid).write_text(
+        json.dumps(_UNUPGRADEABLE_V1_SIDECAR), encoding="utf-8"
+    )
 
     res = client.get(f"/api/projects/{cid}/release")
     assert res.status_code == 200, (
@@ -1084,7 +1086,8 @@ def test_unsupported_package_manager_lockfile_fails_closed(
 # to ``npm install``, shipping a self-hostable candidate.
 _NODE_PM_FIELD_NO_LOCKFILE: dict[str, bytes] = {
     "package.json": (
-        b'{"name":"svc","packageManager":"pnpm@8.15.0","scripts":{"start":"node server.js"}}'
+        b'{"name":"svc","packageManager":"pnpm@8.15.0",'
+        b'"scripts":{"start":"node server.js"}}'
     ),
     "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),
 }
@@ -1102,7 +1105,8 @@ _NODE_PNPM_WORKSPACE_NO_LOCKFILE: dict[str, bytes] = {
 # stays a self-hostable candidate.
 _NODE_NPM_PM_FIELD: dict[str, bytes] = {
     "package.json": (
-        b'{"name":"svc","packageManager":"npm@10.5.0","scripts":{"start":"node server.js"}}'
+        b'{"name":"svc","packageManager":"npm@10.5.0",'
+        b'"scripts":{"start":"node server.js"}}'
     ),
     "package-lock.json": b'{"lockfileVersion":3,"name":"svc"}',
     "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),

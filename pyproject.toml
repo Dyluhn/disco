@@ -87,6 +87,19 @@ addopts = "-q -m 'not sandbox_integration'"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Frozen closeout evidence. These files' BYTES are the acceptance record for an
+# already-ratified campaign: `verify_export_track1_closeout.py` compares their
+# hashes against a frozen manifest, so a formatter rewriting them is not a
+# cosmetic change, it invalidates the evidence. A tree-wide `ruff format` did
+# exactly that here and turned the frozen-manifest check red. Excluding them is
+# the root fix — the formatter must not be able to reach frozen bytes at all.
+# New code does not go in these directories, so nothing is left unformatted.
+extend-exclude = [
+    "packages/agent-server/tests/export_track1_closeout",
+    "packages/core/tests/export_track1_closeout",
+    "packages/agent-server/tests/integration/_closeout_live_support.py",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
+]
 
 [tool.ruff.lint]
 # Sensible defaults: pyflakes, pycodestyle, isort, bugbear, pyupgrade.
