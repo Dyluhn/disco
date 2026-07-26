@@ -1622,6 +1622,77 @@ single trajectory.
 
 ---
 
+## 2026-07-26 — seed 460000 PASSES (attempt 6), and the passing dossier exposes a defect present in EVERY run
+
+**Attempt 6 on `560cda52` with `--hard-cap 2400`: PASS.** First Epic-4
+diagnostic PASS of the campaign. 11 minutes, 28 actions, 18 condensations.
+Every oracle PASS or SKIP — including ThrashOracle, the
+GovernedVerificationOracle whose dead allowlist entry started all of this, and
+the new ContextPressureOracle content check. `repo_dirty: false`, revision
+`560cda52`. Ledger: `driver_context_window: 24000`, host `opencode.ai`, wire
+`deepseek-v4-flash`, no fallback.
+
+**Epic 3 live acceptance, properly met this time:** 0 residue persisted AND 0
+host fallbacks — every summary was real prose accepted on first attempt. The
+grep that "passed" on attempt 3 is what a blind check looks like; this is what
+the property actually being true looks like.
+
+**Epic 2 live acceptance: vacuous, stated plainly.** Zero `runtime_constraint`
+events — no host-signal refusal fired, so the conditional clause is satisfied
+without providing positive live evidence. Epic 2's acceptance continues to rest
+on its unit lane. Not counted as a live pass.
+
+**Attempt 5's thrash was variance, not a defect.** Attempt 6 ran the same
+configuration and converged in 28 actions where attempt 5 burned 107. That
+retroactively vindicates not "fixing" the thrash from a single trajectory — a
+product change made on n=1 there would have been chasing noise.
+
+### The defect the PASSING run exposed
+
+`_pinned_seqs` refused to pin the user's turn, and said why in its own
+docstring: *"The head user message is already protected by `keep_head`."* That
+is FALSE on any path that puts an event ahead of the user. `keep_head` protects
+the head **event**, not the head **user message**, and the import-fixture path
+opens with an ENVIRONMENT notice ("Imported 2 files from …zip"). So `keep_head=1`
+anchored 129 characters of one-time bookkeeping while the user's actual task —
+carrying the two literal strings the verifier matches character-for-character —
+sat at seq 2 and was forgotten by the FIRST condensation.
+
+Measured across every dossier: attempts 3, 5 **and 6** all forgot the task at
+condensation (2, 9). **100% of runs, including the one that passed.** Attempt 6
+passed *despite* it, because its summaries happened to carry the strings;
+attempt 5 oscillated 11-and-11 between `Catalog Audit 460000` and
+`Catalog Audited 460000` when they did not. That is the mechanism behind the
+oscillation, and it also explains why the residue bug was accidentally
+load-bearing: raw tool-call fragments replayed the literal strings back to the
+model, standing in for the requirement it had lost.
+
+Fixed by pinning the task by IDENTITY (first USER message) rather than by
+POSITION. Raising `keep_head` to 2 would only re-break on the next path with a
+different preamble — this is a bug of identity, not of quantity. Later user
+turns are deliberately not pinned: steering follow-ups are ordinary forgettable
+context, and pinning every user turn grows without bound in interactive runs,
+which is what condensation exists to prevent. Verified DECISIVE by removing the
+pin at runtime and confirming the fixture fails.
+
+One existing test needed its fixture reshaped, and it is worth being precise
+about why that is not moving a goalpost: `test_pin_survives_condensation…`
+carried its "forgettable" marker on a USER message, and its own fake condenser
+forgets the earliest seq regardless of `keep_head`. The marker moved onto an
+environment notice — genuinely forgettable, and the exact shape production
+emits — so the test still proves forgetting works, and now additionally asserts
+the task is not collateral damage. The assertion got stronger, not weaker.
+
+**Accepted cost:** a source change restarts the diagnostic set from 460000. One
+seed of ten was complete, so the cost is a single rerun. Shipping a candidate
+that forgets the user's task at the first condensation, having found and fixed
+it, would be knowingly promoting a known reliability defect into the 100 — the
+opposite of what this campaign is for. The fix should also *reduce* the run-time
+variance that produced two timeouts, since an agent that keeps its requirements
+has less to oscillate about.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving

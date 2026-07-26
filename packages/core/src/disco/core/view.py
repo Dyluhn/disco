@@ -38,9 +38,11 @@ from .events import (
     CondensationEvent,
     DatasourceEvent,
     Event,
+    EventSource,
     KnowledgeEvent,
     LLMConvertible,
     LLMMessage,
+    MessageEvent,
     ObservationEvent,
     PlanEvent,
     RuntimeConstraintEvent,
@@ -443,11 +445,32 @@ def _fallback_summary(start_seq: int, end_seq: int) -> str:
 def _pinned_seqs(events: list[Event]) -> set[int]:
     """Seqs that condensation/masking must not remove from this request.
 
-    This includes the latest plan, durable knowledge/data-source guidance, and
-    the minimal revision/range-aware file-read set whose exact bytes are not yet
-    duplicated by another retained read. Action and observation halves are
-    pinned together so provider tool pairing remains valid. The head user
-    message is already protected by ``keep_head``.
+    This includes the user's TASK statement, the latest plan, durable
+    knowledge/data-source guidance, and the minimal revision/range-aware
+    file-read set whose exact bytes are not yet duplicated by another retained
+    read. Action and observation halves are pinned together so provider tool
+    pairing remains valid.
+
+    This docstring used to say the head user message "is already protected by
+    ``keep_head``" and therefore did not pin it. That was FALSE on any path that
+    puts an event ahead of the user's turn. ``keep_head`` protects the head
+    *event*, not the head *user message*, and the import-fixture path opens with
+    an ENVIRONMENT notice ("Imported 2 files from ...zip"), so `keep_head=1`
+    anchored 129 characters of one-time bookkeeping while the user's actual task
+    was forgotten by the FIRST condensation (live-surfaced at Epic-4 seed 460000:
+    the task sat at seq 2 and the first condensation forgot seqs 2-9).
+
+    Everything after that depended on a summary reproducing the requirements,
+    including literal strings the verifier matches character-for-character. The
+    agent then oscillated -- 11 verdicts failing "Catalog Audit 460000" and 11
+    failing "Catalog Audited 460000", satisfying each by breaking the other.
+
+    Pinning the task by IDENTITY rather than by position is the fix; raising
+    ``keep_head`` to 2 would only re-break on the next path with a different
+    preamble. Later user turns are deliberately NOT pinned here: steering
+    follow-ups are ordinary forgettable context, and pinning every user turn
+    would grow without bound in interactive runs -- which is what condensation
+    exists to prevent.
     """
     # Import locally: view is a foundational module while the resource fold is
     # a loop projection. The fold itself imports only event/effect value types,
@@ -455,6 +478,16 @@ def _pinned_seqs(events: list[Event]) -> set[int]:
     from .loop.resource_context import essential_read_pair_seqs
 
     pinned: set[int] = set(essential_read_pair_seqs(events))
+    first_user_turn = next(
+        (
+            e
+            for e in events
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER and e.seq is not None
+        ),
+        None,
+    )
+    if first_user_turn is not None and first_user_turn.seq is not None:
+        pinned.add(first_user_turn.seq)
     plan = _latest_plan(events)
     if plan is not None and plan.seq is not None:
         pinned.add(plan.seq)

@@ -426,3 +426,59 @@ async def test_update_in_place_fires_on_real_re_condensation():
     assert _select_summarize_instruction(summarizer.seen[1]) is _SUMMARIZE_UPDATE_INSTRUCTION, (
         "re-condensation must select UPDATE-in-place, not CREATE-fresh"
     )
+
+
+# ---- the task statement survives condensation (Epic-4 seed 460000) ----------
+
+
+async def test_user_task_survives_when_an_environment_notice_precedes_it():
+    """`keep_head` protects the head EVENT, not the head USER MESSAGE, and the
+    import-fixture path opens with an ENVIRONMENT notice ("Imported 2 files from
+    ...zip") before the user's turn. `keep_head=1` therefore anchored 129
+    characters of one-time bookkeeping while the actual task was forgotten by the
+    FIRST condensation — live at seed 460000, where the task sat at seq 2 and the
+    first condensation forgot seqs 2-9.
+
+    Everything afterwards depended on a summary reproducing requirements the
+    verifier matches character-for-character, and the agent oscillated between
+    two required strings, satisfying each by breaking the other.
+    """
+    store = SqliteEventStore(":memory:")
+    await store.append(
+        CID,
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content="Imported 2 files from context-catalog-460000.zip; largest: catalog.txt.",
+            ),
+        ),
+    )
+    task = await store.append(
+        CID,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(
+                role="user",
+                content="Render 'Catalog Audit 460000' AND 'Catalog Audited 460000' on the page.",
+            ),
+        ),
+    )
+    await _append_pairs(store, n=8, body="detail " * 20)
+
+    events = await store.get_events(CID)
+    summarizer = _Summarizer()
+    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2)
+    tomb = await condenser.condense(events, View.of(events), summarizer=summarizer)
+    assert isinstance(tomb, CondensationEvent)
+    await store.append(CID, tomb)
+
+    view = View.of(await store.get_events(CID))
+    assert task.seq in view.visible_seqs, (
+        "the user's TASK must survive condensation; keep_head anchored the "
+        "environment notice ahead of it"
+    )
+    rendered = "\n".join(m.content for m in view.messages)
+    assert "Catalog Audit 460000" in rendered and "Catalog Audited 460000" in rendered, (
+        "the literal requirements the verifier matches must still be in context"
+    )

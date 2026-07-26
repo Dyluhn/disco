@@ -260,10 +260,23 @@ def test_pin_survives_condensation_and_covers_touched_files(monkeypatch):
     # legitimately carry the old goal, which is not what this asserts about.
     monkeypatch.setenv("DISCO_CONTEXT_PACK", "off")
     sbx = _FakeSandbox({"app.js": b"const ANSWER = 42;\n"})
-    # An OLD user message (will be forgotten) + a write that creates the working set.
+    # An OLD forgettable span + a write that creates the working set.
+    #
+    # This used to carry the marker on a USER message, which no longer works and
+    # should not: the user's TASK is pinned against condensation now (an
+    # ENVIRONMENT notice ahead of the user turn meant `keep_head` anchored
+    # bookkeeping while the real task was forgotten — Epic-4 seed 460000). The
+    # marker moves onto an environment notice, which is both genuinely
+    # forgettable and the exact shape production emits on the import-fixture
+    # path, so this fixture now mirrors the real event order instead of an order
+    # that cannot occur.
     old = MessageEvent(
-        source=EventSource.USER,
+        source=EventSource.ENVIRONMENT,
         message=LLMMessage(role="user", content="UNIQUE-OLD-INSTRUCTION-XYZ"),
+    )
+    task = MessageEvent(
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="TASK-STATEMENT-MUST-SURVIVE"),
     )
     write = ActionEvent(
         thought="scaffold",
@@ -274,7 +287,7 @@ def test_pin_survives_condensation_and_covers_touched_files(monkeypatch):
         action_id=write.id,
     )
     cond = _FiringCondenser()
-    loop = _FakeLoop(assist=False, sandbox=sbx, events=[old, write, obs], condenser=cond)
+    loop = _FakeLoop(assist=False, sandbox=sbx, events=[old, task, write, obs], condenser=cond)
     view = asyncio.run(ViewBuilder(loop).build(loop._log))
 
     # The condenser fired (a tombstone was emitted into the log).
@@ -285,6 +298,8 @@ def test_pin_survives_condensation_and_covers_touched_files(monkeypatch):
     all_text = "\n".join(m.content for m in view.messages)
     assert "UNIQUE-OLD-INSTRUCTION-XYZ" not in all_text
     assert "[CONDENSED OLD SPAN]" in all_text  # the summary took its place
+    # ...and the user's TASK is NOT collateral damage of that forgetting.
+    assert "TASK-STATEMENT-MUST-SURVIVE" in all_text
 
     # The pin SURVIVED: the snapshot is present, in the cacheable PREFIX (index 0),
     # and covers the touched file IN FULL (disk content, not condensed away).
