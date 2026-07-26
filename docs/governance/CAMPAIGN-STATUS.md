@@ -635,3 +635,52 @@ campaign continues.
 Consequently the "at most one live focused replay on the first clean post-Epic-5
 candidate" allowance is **moot** — there is nothing live to spend it on. The
 scheduled F1 profile proof is unaffected.
+
+## 2026-07-26 — Epic 2 opened: design settled against existing code
+
+Resumed Epic 2 immediately after the acceleration insertion. Before writing any
+code I reconciled the requirement against what the loop already has, and the
+answer changes the design.
+
+**Half of Epic 2 already exists, and must be extended rather than duplicated.**
+`KnowledgeEvent` (`packages/core/src/disco/core/events.py:1170`) is already:
+
+- `source: EventSource.SYSTEM` — host-authored;
+- `LLMConvertible` — renders into model context as `<knowledge …>`;
+- **pinned against condensation** (`view.py:355-369`), its docstring saying
+  precisely "pinned against condensation so standing guidance survives a long
+  run";
+- **deduplicated** by `(scope, sha256(snippet))`, where the first instance stays
+  pinned and exact duplicates become forgettable.
+
+That already satisfies, structurally, three Epic-2 acceptance items: it survives
+multiple real condensations, it appears once near current context, and duplicate
+observations do not grow context. `DatasourceEvent` is even condensation-immune.
+
+**What genuinely does not exist** — confirmed `NOT FOUND` for `ConstraintEvent`,
+`RuntimeConstraint`, `HostConstraint` anywhere under `packages/core/src/disco/core/`:
+
+1. a **stable key** (today the identity is an incidental content hash);
+2. an explicit **scope** beyond a free-text applicability hint;
+3. a **lifetime/expiry**, so a constraint can end;
+4. **expiry on backend/capability-generation change**;
+5. the rule that a **transient** error must stay retryable and never pin;
+6. any **typed producer** — the process-backend host-signal prohibition
+   (`packages/tools/src/disco/tools/sandbox/process.py:102`) is today only an
+   actionable refusal *string*, which is exactly why condensation could forget it
+   in `k460000`.
+
+**DECISION — extend the proven pinned host-authored pattern; do not add a
+parallel channel.** A second mechanism for "host facts the model must keep"
+would be a competing source of truth (ARCHITECTURE-BOUNDARIES §8) and would
+duplicate pinning and dedup logic that already works. The typed constraint
+therefore reuses the pinning/dedup path and adds only the missing typed fields
+(key, scope, lifetime/expiry, bounded guidance, usable alternative), with the
+process-backend prohibition as its first producer.
+
+**Explicitly NOT in scope, per the campaign plan:** no parsing of the English
+refusal inside the condenser, and no universal policy engine. The prohibition is
+one typed producer; the recovery points at the managed session/process
+termination tool the refusal already names (`shell_kill_process`).
+
+This is the design entering implementation. Nothing is claimed done.
