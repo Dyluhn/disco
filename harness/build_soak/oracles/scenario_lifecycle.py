@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.core.view import summary_rejection_reason
 from disco.core.workspace_paths import strip_redundant_workspace_prefix
 
 from .. import failure_codes as fc
@@ -175,6 +176,33 @@ class ContextPressureOracle:
             offset: sum(1 for _seq, seen in reads if seen == offset) for offset in offsets
         }
         compactions = sum(1 for event in events if event.get("kind") == "condensation")
+        # Counting condensations proves the mechanism RAN; it says nothing about
+        # what it stored. Seed 460000 persisted 22 summaries that were raw
+        # tool-call protocol residue -- replayed to the model as conversation --
+        # while this oracle happily reported `compaction_count: 32`. Adjudicate
+        # with the PRODUCT's own predicate so the harness cannot keep a private,
+        # staler idea of what protocol markup looks like and agree with the bug.
+        unusable = [
+            {"seq": event.get("seq"), "reason": reason}
+            for event in events
+            if event.get("kind") == "condensation"
+            and isinstance(event.get("summary"), str)
+            and (reason := summary_rejection_reason(event["summary"])) is not None
+        ]
+        if unusable:
+            return [
+                failing(
+                    _CONTEXT,
+                    fc.CONDENSATION_SUMMARY_UNUSABLE,
+                    first_broken_link="condensation -> persisted_summary",
+                    facts={
+                        "path": path,
+                        "compaction_count": compactions,
+                        "unusable_summary_count": len(unusable),
+                        "unusable_summaries": unusable[:10],
+                    },
+                )
+            ]
         ok = (
             len(offsets) >= min_offsets
             and range_hints >= 1

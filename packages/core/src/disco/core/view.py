@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from typing import Literal, Protocol
 
 from pydantic import BaseModel
@@ -364,12 +365,44 @@ _PROTOCOL_MARKERS: tuple[str, ...] = (
     '"tool_call_id":',
 )
 
+# The same protocol keywords, but with the delimiter DRESSED UP by the provider.
+#
+# The literal list above is ASCII-only, which silently assumes every provider
+# opens a tool-call tag with a bare `<`. DeepSeek's DSML dialect does not: it
+# writes `<｜｜DSML｜｜parameter name="path" string="true">` and
+# `<｜tool▁calls▁begin｜>`, decorating the delimiter with FULLWIDTH VERTICAL LINE
+# (U+FF5C) and LOWER ONE EIGHTH BLOCK (U+2581). The KEYWORD is identical; only
+# the dressing differs, so none of the literals above match and the residue was
+# persisted as though it were prose. Live-surfaced at Epic-4 seed 460000, where
+# 22 of 36 persisted summaries carried DSML tool-call markup and one summary was
+# nothing BUT a `file_read` call.
+#
+# Two wrong fixes were available. Appending the DSML literals is whack-a-mole —
+# the next provider's decoration reopens the hole. Widening to "looks like XML"
+# would eat the legitimate `<div>` / `</section>` / `<Button />` that the list
+# above deliberately protects. So: still require a real protocol KEYWORD, and
+# allow only meaningless delimiter decoration between the bracket and it. That
+# covers the whole family of dressed delimiters without touching honest markup.
+_PROTOCOL_TAG = re.compile(
+    r"<\s*/?\s*(?:[|｜▁]+|DSML)*\s*(?:parameter|invoke|function_calls|tool[_▁]calls?)\b",
+    re.IGNORECASE,
+)
+
+# The repair is the ONLY chance to get a real summary instead of a content-free
+# host fallback, so it must name the failure in terms the model recognises. The
+# original wording listed ASCII examples only, which never described the dialect
+# the offending model actually speaks -- DeepSeek emits `<｜｜DSML｜｜invoke …>`
+# and would read the instruction as being about somebody else's syntax. Naming
+# the shape generally, and the emitter's own delimiters explicitly, is what makes
+# a repair land rather than degrade 22 spans to "not summarized" (seed 460000).
 _SUMMARY_REPAIR_INSTRUCTION = (
     "Your previous summary contained tool-call protocol markup. Re-write it as "
-    "plain prose describing what happened. Do not include any tool-call syntax "
-    "such as <parameter>, <invoke>, <function_calls>, or a tool_calls JSON "
-    "payload. Ordinary code, HTML or shell snippets are fine when they are part "
-    "of what you are describing."
+    "plain prose describing what happened. Do not include ANY tool-call syntax, "
+    "in any dialect: not <parameter>, <invoke>, <function_calls>, a tool_calls "
+    "JSON payload, and not your own special tool-call delimiters even when they "
+    "are written with unusual characters. Do not call a tool now — answer with "
+    "the summary text itself. Ordinary code, HTML or shell snippets are fine "
+    "when they are part of what you are describing."
 )
 
 
@@ -384,6 +417,9 @@ def summary_rejection_reason(summary: str) -> str | None:
     for marker in _PROTOCOL_MARKERS:
         if marker.lower() in lowered:
             return f"contains tool-call protocol markup: {marker!r}"
+    dressed = _PROTOCOL_TAG.search(summary)
+    if dressed is not None:
+        return f"contains tool-call protocol markup: {dressed.group(0)!r}"
     return None
 
 

@@ -61,6 +61,15 @@ STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
 PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
 ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
 CONTEXT_PRESSURE_NOT_OBSERVED = "CONTEXT_PRESSURE_NOT_OBSERVED"
+# P1: a persisted condensation summary is not prose but the summarizer's own
+# tool-call PROTOCOL residue, which is then replayed to the model as though it
+# were conversation history. The harness counted that condensation happened and
+# never looked at what it stored: Epic-4 seed 460000 persisted 22 such summaries,
+# one of them nothing but a `file_read` call. Adjudicated with the PRODUCT's own
+# `summary_rejection_reason`, never a private copy of the rule -- a harness that
+# keeps its own list of what protocol looks like will drift from the product and
+# agree with the bug (that drift is exactly how this went unseen).
+CONDENSATION_SUMMARY_UNUSABLE = "CONDENSATION_SUMMARY_UNUSABLE"
 # CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
 # "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
 # placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
@@ -239,6 +248,7 @@ SEVERITY_BY_CODE: dict[str, str] = {
     PREVIEW_TRUTH_MISMATCH: P1,
     ARTIFACT_TRUTH_MISMATCH: P1,
     CONTEXT_PRESSURE_NOT_OBSERVED: P1,
+    CONDENSATION_SUMMARY_UNUSABLE: P1,
     DESTRUCTIVE_ELISION: P1,
     NO_CLEAR_FAILURE_TO_USER: P1,
     OBSERVATION_WITHOUT_ACTION: P1,

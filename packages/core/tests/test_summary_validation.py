@@ -81,6 +81,52 @@ def test_ordinary_code_html_and_shell_content_remains_allowed(legitimate):
     assert summary_rejection_reason(legitimate) is None
 
 
+@pytest.mark.parametrize(
+    "dressed",
+    [
+        # DeepSeek DSML, verbatim from Epic-4 seed 460000's persisted summaries.
+        '<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="file_read">',
+        '<｜｜DSML｜｜parameter name="path" string="true">REPORT.md</｜｜DSML｜｜parameter>',
+        "</｜｜DSML｜｜invoke>",
+        "<｜tool▁calls▁begin｜>",
+        "<｜tool▁call▁begin｜>",
+        # The ASCII pipe form the literal list only half-covered.
+        "<|tool_call_begin|>",
+    ],
+)
+def test_provider_dressed_protocol_delimiters_are_rejected(dressed):
+    """The rule keyed on a bare `<`, so a provider that decorates its delimiter
+    walked straight through it. DeepSeek writes `<｜｜DSML｜｜parameter …>`; the
+    keyword is identical and only the dressing differs. 22 of 36 summaries in
+    seed 460000 were persisted protocol residue, one of them nothing but a
+    `file_read` call, because none of the ASCII literals matched."""
+    assert summary_rejection_reason(dressed) is not None
+
+
+@pytest.mark.parametrize(
+    "legitimate",
+    [
+        # Full-width and box-drawing characters are not protocol markers by
+        # themselves -- only dressing on a real protocol KEYWORD is.
+        "Compared ranges A｜B｜C and rendered the ▁ separator glyph.",
+        "The table used ｜ as a column divider in the generated README.",
+        "Added an <input name='invoked_by'> field to the form.",
+        "Described the tool_call flow in prose without any markup.",
+    ],
+)
+def test_decoration_without_a_protocol_keyword_remains_allowed(legitimate):
+    """Overhardening control for the dressed-delimiter rule: the decoration
+    characters are ordinary text on their own, and a keyword appearing anywhere
+    other than immediately inside a tag opening (`name='invoked_by'`) is not
+    protocol markup.
+
+    Note the pre-existing literal `<parameter` is an unanchored substring, so
+    prose about a `<parameters>` element is rejected by the ORIGINAL rule, not
+    by this one. That is untouched here: no observed run has ever produced it,
+    and widening a settled rule on a hypothetical is not in this fix's scope."""
+    assert summary_rejection_reason(legitimate) is None
+
+
 def test_the_fallback_asserts_only_durable_facts():
     text = _fallback_summary(10, 42)
 

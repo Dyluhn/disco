@@ -1366,3 +1366,55 @@ def test_real_mutation_between_receipt_and_verdict_still_fails_closed() -> None:
 
     assert result.failed
     assert result.code == GOVERNED_ADMISSION_BYPASSED
+
+
+# ---- terminal manifest fold vs workspace authority (Epic-4 seed 460000) -----
+
+
+def _insert_mutation_before_terminal(events: list[dict[str, Any]], operation: str) -> None:
+    """Insert a workspace_mutation between the PASS verdict and the terminal
+    status, reproducing the live terminal layout (verdict, agent message, fold,
+    FINISHED) by shifting the terminal seq up one slot."""
+    terminal = next(event for event in reversed(events) if event.get("kind") == "status")
+    inserted_seq = terminal["seq"]
+    terminal["seq"] += 1
+    events.insert(
+        events.index(terminal),
+        {
+            "kind": "workspace_mutation",
+            "source": "system",
+            "seq": inserted_seq,
+            "id": f"evt_inserted_terminal_mutation_{inserted_seq}",
+            "operation": operation,
+        },
+    )
+
+
+def test_terminal_manifest_fold_after_verdict_is_not_an_authority_change() -> None:
+    """Epic-4 seed 460000: under DISCO_ARTIFACT_MANIFEST_SHADOW=1 the terminal
+    pipeline records `agent.artifact-manifest-fold` after the PASS verdict and
+    before FINISHED. It writes only `.disco/context/artifact_manifest.json`
+    under the terminal event's own view and cannot change the verified entry —
+    the product excludes it from its own staleness fence, and so must this
+    oracle. The exemption previously matched the un-namespaced
+    `"artifact-manifest-fold"`, which the emitter never writes, so every
+    governed run that EARNED a PASS receipt false-FAILed at
+    `verifier_receipt -> terminal`."""
+    events = _segment()
+    _insert_mutation_before_terminal(events, "agent.artifact-manifest-fold")
+
+    result = _result(events)
+
+    assert result.passed
+
+
+def test_real_mutation_after_verdict_still_fails_closed() -> None:
+    """Control: a byte-moving operation in that same post-verdict window still
+    invalidates the receipt — verification must describe the delivered bytes."""
+    events = _segment()
+    _insert_mutation_before_terminal(events, "agent.run-intent.host-mutation")
+
+    result = _result(events)
+
+    assert result.failed
+    assert result.code == GOVERNED_ADMISSION_BYPASSED

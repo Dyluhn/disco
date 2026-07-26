@@ -1406,6 +1406,106 @@ approvals verifying, tree clean at `9ffdba8e`.
 
 ---
 
+## 2026-07-26 — Epic 4 seed 460000 attempt 3: TWO real defects, one in the ruler and one in the product
+
+Attempt 3 (`f1d85478`, tree clean, platform-route flag on) ran to a finished
+build and then FAILed `GOVERNED_ADMISSION_BYPASSED` at
+`verifier_receipt -> terminal`, reason *"target authority changed after the
+selected PASS receipt"*. That is a different failure from attempt 2 — trap 11's
+fix worked; this was the next layer.
+
+**Method note that paid for itself.** `GovernedAdmissionOracle.check` is a pure
+function of `(events, scenario)`, so a recorded dossier reproduces its verdict
+offline with no server, model, or spend. The reproduction and the proof-of-fix
+each cost milliseconds instead of a 13-minute live run. Any oracle disagreement
+from here on gets replayed offline first
+(`scratchpad/replay_governed_oracle.py`).
+
+### Defect 1 — harness. The exemption that never once fired (P11)
+
+`_authority_change_between` exempts engine bookkeeping that moves no workspace
+bytes. Its allowlist held the un-namespaced string `"artifact-manifest-fold"`,
+but the sole emitter (`workspace_persistence.py`) has ALWAYS written
+`"agent.artifact-manifest-fold"`. The prefix never matched, so the exemption was
+dead from the day it was written — **P11, a consumer reading a shape the
+producer never emits.**
+
+It stayed invisible because it needs two conditions at once: the fold is emitted
+only under `DISCO_ARTIFACT_MANIFEST_SHADOW=1` (which the campaign env sets), and
+it only matters on a run good enough to EARN a PASS receipt. Under campaign env,
+that is a 100% false-FAIL of every governed run that succeeds — it would have
+zeroed the Epic-6 promotion set on the first passing trial.
+
+The exemption is semantically right and the product says so itself: the fold
+writes only `.disco/context/artifact_manifest.json` under the terminal event's
+own view, after verification, and `workspace_persistence.py` excludes it from
+its own staleness fence with exactly that reasoning. Fixed as an exact match
+(not a prefix), mirroring the product. Swept every other operation literal in
+the oracle layer — `agent.view-admitted`, `agent.view-`, `agent.run-intent` all
+match real emitters; the fold was the lone dead entry.
+
+Proof: the identical recorded bytes now yield PASS with a fully populated
+receipt — 7 required claims (artifact identity, http_ready, rendered_content,
+console_clean, network_clean, two visible_text), real DOM/HTTP/screenshot
+evidence, target `disco.legacy_web@1`. **The agent's behavior was correct the
+whole time; only the ruler was wrong.** Regression tests added for the
+post-verdict window that actually broke, and verified DECISIVE by restoring the
+old predicate at runtime and confirming the fixture fails.
+
+### Defect 2 — product. The summary guard's alphabet was ASCII-only (P9)
+
+Found by running Epic 3's live acceptance against the same dossier. The plan's
+three greps (`<parameter`, `tool_calls":`, `<invoke `) reported clean, but
+**22 of 36 persisted summaries were raw tool-call protocol residue** in
+DeepSeek's DSML dialect — `<｜｜DSML｜｜invoke name="file_write">`,
+`</｜｜DSML｜｜parameter>` — and the summary at seq 61 was nothing but a
+`file_read` call, 169 characters of pure protocol persisted as prose and
+replayed to the model as conversation history.
+
+Epic 3's guard was wired correctly (reject → one bounded repair → truthful host
+fallback); its *marker list* was the defect. Every literal assumed a tool-call
+tag opens with a bare `<`. DSML dresses the delimiter with FULLWIDTH VERTICAL
+LINE (U+FF5C) and LOWER ONE EIGHTH BLOCK (U+2581) while the keyword stays
+identical — so nothing matched. **P9: the predicate's scope was narrower than
+the claim it certified.** Epic 3 was closed on unit fixtures written in ASCII;
+the live driver speaks a different dialect.
+
+Two wrong fixes were on the table. Appending the DSML literals is whack-a-mole —
+the next provider's decoration reopens the hole. Widening to "looks like XML"
+would eat the `<div>` / `</section>` / `<Button />` the original rule
+deliberately protects, and that rule's own comment is right that a condenser
+rejecting honest summaries is worse than one occasionally passing junk. Chosen
+instead: still require a real protocol KEYWORD, but allow meaningless delimiter
+decoration between the bracket and it. One rule, whole family.
+
+Verified against reality rather than fixtures: all 22 leaked summaries now
+rejected, zero false positives across a control set of HTML, shell pipes,
+`<template>`, `<svg>`, and full-width characters used as ordinary text.
+
+Recorded and NOT fixed: the pre-existing literal `<parameter` is an unanchored
+substring, so prose about a `<parameters>` element would be rejected by the
+ORIGINAL rule. No observed run has produced it; widening a settled rule on a
+hypothetical is tail-hardening, not root-cause work.
+
+### Consequences
+
+- Source changed (harness + product), so per D the diagnostic set **restarts
+  from 460000** on the new bytes. Nothing had counted yet, so no counted work is
+  lost. `seed-460000-attempt3/` is kept as history — it is the dossier that
+  produced both findings.
+- Epic 5's recorded full-suite pass must land on these bytes, not `b47e6f9c`'s.
+- Epic 2's live acceptance is **vacuous on this dossier**: zero
+  `runtime_constraint` events, because no host-signal refusal fired. The plan's
+  wording is conditional ("if the refusal fired at all"), so this satisfies it
+  without providing positive live evidence; Epic 2's acceptance continues to
+  rest on its unit lane. Stated plainly rather than counted as a live pass.
+- Epic 3's live acceptance is now a REAL check rather than a passing grep: the
+  three ASCII markers were blind to this driver's dialect. Future runs are
+  checked with the product's own `summary_rejection_reason`, not with greps that
+  can silently agree with a bug.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
@@ -1504,8 +1604,11 @@ Per-run verification, all from evidence (not from feelings):
   the Epic 2 live acceptance** (`k460000` history: verify the refused
   host-signal operation is NOT repeated after condensation, and the typed
   `runtime_constraint` event appears once near current context if the refusal
-  fired at all) **and the Epic 3 live acceptance** (grep persisted summaries
-  for `<parameter`, `tool_calls":`, `<invoke ` — must be absent);
+  fired at all) **and the Epic 3 live acceptance** — now enforced by the oracle
+  rather than by grep: `CONDENSATION_SUMMARY_UNUSABLE` runs every persisted
+  condensation summary through the product's own `summary_rejection_reason`. Do
+  NOT re-run the old ASCII greps as confirmation; they reported clean on a
+  dossier holding 22 residue summaries (trap 13);
 - zero leaks: cleanup slice green, `podman ps` shows no `disco-sbx-*`/
   `disco-egr-*` residue;
 - three bounded ranged reads with offsets/disclosure receipts (the scenario
@@ -1610,6 +1713,21 @@ health checks only, afterwards.
     `DISCO_FREEFORM_PLATFORM_ROUTE=1` (`build_platform_shadow.py:54`) or every
     run FAILs with `GOVERNED_ADMISSION_BYPASSED` after finishing its build —
     seed-460000-attempt2 is exactly that dossier.
+12. Oracles are PURE functions of `(events, scenario)`, so any oracle
+    disagreement is reproducible offline from a recorded dossier at zero cost
+    (`scratchpad/replay_governed_oracle.py`). Never spend a 13-minute live run
+    to re-observe an oracle verdict — replay it, fix it, replay it again.
+13. Greps are not acceptance checks. The Epic-3 marker greps (`<parameter`,
+    `tool_calls":`, `<invoke `) reported CLEAN on a dossier where 22 of 36
+    summaries were tool-call residue, because this driver writes DSML
+    (`<｜｜DSML｜｜parameter …>`) and the greps are ASCII. Adjudicate product
+    properties with the PRODUCT's own predicate
+    (`disco.core.view.summary_rejection_reason`), now enforced per-run by
+    `CONDENSATION_SUMMARY_UNUSABLE` so no one has to remember.
+14. A harness that keeps a private copy of a product rule will drift from it and
+    eventually agree with the bug. Both of today's defects are that shape (P11
+    dead string, P9 narrow alphabet). `scenario_lifecycle.py` already had the
+    antidote in its own comment — import the product's helper.
 
 ## I. Post-campaign notes — recorded only, NEVER a reason to pause
 

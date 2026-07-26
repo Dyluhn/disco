@@ -145,6 +145,52 @@ def test_context_pressure_missing_compaction_fails() -> None:
     assert result.code == "CONTEXT_PRESSURE_NOT_OBSERVED"
 
 
+def _context_scenario() -> dict:
+    return {
+        "assertions": {
+            "context_pressure": {
+                "path": "catalog.txt",
+                "min_distinct_offsets": 2,
+                "max_reads_per_offset": 2,
+                "require_compaction": True,
+            }
+        }
+    }
+
+
+def test_condensation_that_persisted_protocol_residue_fails() -> None:
+    """Epic-4 seed 460000: 32 condensations happened and 22 of them stored the
+    summarizer's own tool-call markup, which is then replayed to the model as
+    conversation history. Counting compactions reported `compaction_count: 32`
+    and passed. The content is what matters."""
+    events = _context_events()
+    events[-1]["summary"] = (
+        '<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="file_read">\n'
+        '<｜｜DSML｜｜parameter name="path" string="true">REPORT.md</｜｜DSML｜｜parameter>'
+    )
+
+    result = ContextPressureOracle().check(events, scenario=_context_scenario())[0]
+
+    assert result.code == "CONDENSATION_SUMMARY_UNUSABLE"
+    assert result.facts["unusable_summary_count"] == 1
+
+
+def test_condensation_with_real_prose_still_passes() -> None:
+    """Control: an honest summary — including the host's own truthful fallback,
+    which is exactly what the product persists when it rejects a bad one — must
+    not trip the content check."""
+    events = _context_events()
+    events[-1]["summary"] = (
+        "[host summary] Events 10-42 were removed from context to stay within "
+        "the window; their content was not summarized. Built index.html with a "
+        "<div class='card'> layout and ran `grep -r foo . 2>&1 | tee out.log`."
+    )
+
+    result = ContextPressureOracle().check(events, scenario=_context_scenario())[0]
+
+    assert result.passed, result.to_dict()
+
+
 def test_context_pressure_rejects_silent_reread_churn() -> None:
     events = _context_events()
     events.insert(2, {**events[0], "seq": 21})

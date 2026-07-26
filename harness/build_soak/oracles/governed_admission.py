@@ -602,16 +602,36 @@ def _authority_change_between(
             return True
         if event.get("kind") == "workspace_mutation":
             operation = str(event.get("operation") or "")
-            # `agent.run-claimed` is engine run-admission bookkeeping: its emitter
+            # Two engine-bookkeeping operations move no workspace bytes and must
+            # not read as authority changes:
+            #
+            # `agent.run-claimed` is run-admission bookkeeping: its emitter
             # verifies the registered run intent is UNCHANGED before recording it
-            # (workspace_service.run_with_workspace_fence), and no workspace bytes
-            # move. A legitimate re-plan/approve cycle between a verification
-            # receipt and the finish verdict re-claims the same run and must not
-            # read as a workspace authority change (live-surfaced at pilot seed
-            # 405512). Every other non-view operation stays authority-relevant.
-            if operation != "agent.run-claimed" and not operation.startswith(
-                ("agent.view-", "artifact-manifest-fold")
-            ):
+            # (workspace_service.run_with_workspace_fence). A legitimate
+            # re-plan/approve cycle between a verification receipt and the finish
+            # verdict re-claims the same run (live-surfaced at pilot seed 405512).
+            #
+            # `agent.artifact-manifest-fold` is the terminal internal-manifest
+            # fold: it writes only `.disco/context/artifact_manifest.json` under
+            # the terminal event's own view, after verification, and cannot change
+            # the verified entry. The PRODUCT states exactly that and excludes it
+            # from its own staleness fence (workspace_persistence.py, the
+            # `last_mutation_seq` computation) -- this oracle always meant to
+            # mirror it, but matched the un-namespaced string
+            # `"artifact-manifest-fold"` while the sole emitter has always written
+            # `"agent.artifact-manifest-fold"`, so the exemption never once fired
+            # (P11: consumer reads a shape the producer never emits). It stayed
+            # invisible because the fold is emitted only under
+            # DISCO_ARTIFACT_MANIFEST_SHADOW=1; with that flag on, EVERY governed
+            # run that earns a PASS receipt then false-FAILs at
+            # `verifier_receipt -> terminal` (live-surfaced at Epic-4 seed 460000
+            # attempt 3). Exact match, not a prefix, exactly as the product does.
+            #
+            # Every other non-view operation stays authority-relevant.
+            if operation not in {
+                "agent.run-claimed",
+                "agent.artifact-manifest-fold",
+            } and not operation.startswith("agent.view-"):
                 return True
         if event.get("kind") == "action":
             call = event.get("tool_call")
