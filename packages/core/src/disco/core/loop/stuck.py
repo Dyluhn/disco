@@ -302,6 +302,141 @@ def _consecutive_pairs(
     return pairs
 
 
+# Pure read-parsing helpers, extracted from StuckDetector.
+# None of them read instance state; they only ever called each other. Keeping
+# them inside the class bought nothing and pushed a capped coordinator over
+# budget, so they move together -- moving one alone breaks the cluster.
+
+
+def _normalized_read_path(raw: object) -> str | None:
+    path = str(raw or "").strip()
+    if not path:
+        return None
+    normalized = posixpath.normpath(strip_redundant_workspace_prefix(path))
+    return normalized if normalized not in ("", ".") else None
+
+
+def _bounded_decimal(raw: str) -> int | None:
+    if len(raw) > 18:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _numbered_read_lines(content: str) -> dict[int, str] | None:
+    lines: dict[int, str] = {}
+    for match in _FILE_READ_NUMBERED_LINE_RE.finditer(content):
+        number = _bounded_decimal(match.group(1))
+        if number is None:
+            return None
+        lines[number] = match.group(2)
+    return lines
+
+
+def _read_total(content: str) -> int | None:
+    match = _FILE_READ_HEADER_RE.match(content)
+    if match is None:
+        return None
+    raw = match.group(1)
+    return _bounded_decimal(raw)
+
+
+def _read_range(content: str) -> tuple[int, int, int] | None:
+    header = content.splitlines()[0] if content else ""
+    match = _FILE_READ_RANGE_HEADER_RE.fullmatch(header)
+    if match is None:
+        return None
+    start = _bounded_decimal(match.group(1))
+    end = _bounded_decimal(match.group(2))
+    total = _bounded_decimal(match.group(3))
+    more_offset = (
+        _bounded_decimal(match.group(4)) if match.group(4) is not None else None
+    )
+    # Observation bytes are untrusted detector input. The shared bounded
+    # parser prevents Python's max-digit guard (or huge arbitrary-precision
+    # integers) from turning malformed evidence into a loop crash/CPU sink.
+    if start is None or end is None or total is None:
+        return None
+    if match.group(4) is not None and more_offset is None:
+        return None
+    past_eof = match.group(5) is not None
+    if more_offset is not None and (end >= total or more_offset != end + 1):
+        return None
+    if past_eof and not (total > 0 and start > total and end == total):
+        return None
+    return (start, end, total)
+
+
+def _trusted_read_churn_nudge_path(event: Event) -> str | None:
+    """Return the exact path named by a trusted typed read-churn nudge."""
+    if (
+        not isinstance(event, MessageEvent)
+        or event.source != EventSource.ENVIRONMENT
+        or event.meta.get("diagnostic") != READ_CHURN_NUDGE_DIAGNOSTIC
+        or type(event.meta.get("count")) is not int
+        or int(event.meta["count"]) < 5
+    ):
+        return None
+    return _normalized_read_path(event.meta.get("path"))
+
+
+def _permitted_whole_read_baseline(
+    action: ActionEvent,
+    observation: ObservationEvent,
+    expected_path: str,
+) -> tuple[dict[int, str], int] | None:
+    """Return a strictly paired whole-file baseline for a trusted nudge."""
+    result = observation.tool_result
+    if (
+        action.source != EventSource.AGENT
+        or observation.source != EventSource.ENVIRONMENT
+        or observation.action_id != action.id
+        or action.tool_call is None
+        or action.tool_call.tool_name != "file_read"
+        or result.tool_name != "file_read"
+        or not result.success
+        or _normalized_read_path(action.tool_call.arguments.get("path")) != expected_path
+        or "offset" in action.tool_call.arguments
+        or "limit" in action.tool_call.arguments
+    ):
+        return None
+    lines = _numbered_read_lines(result.content)
+    read_range = _read_range(result.content)
+    if lines is None or read_range is None:
+        return None
+    start, end, total = read_range
+    body = result.content.splitlines()[1:]
+    numbered_matches = [_FILE_READ_NUMBERED_LINE_RE.fullmatch(line) for line in body]
+    parsed_sequence = [
+        _bounded_decimal(match.group(1)) for match in numbered_matches if match is not None
+    ]
+    body_valid = all(match is not None for match in numbered_matches) and all(
+        number is not None for number in parsed_sequence
+    )
+    numbered_sequence = [number for number in parsed_sequence if number is not None]
+    whole_result = (
+        total == 0 and start == 1 and end == 0 and body_valid and not numbered_sequence
+    ) or (
+        total > 0
+        and start == 1
+        and end == total
+        and body_valid
+        and _contiguous_numbered_range(numbered_sequence, 1, total)
+    )
+    return (dict(lines), total) if whole_result else None
+
+
+def _contiguous_numbered_range(numbers: list[int], start: int, end: int) -> bool:
+    expected_count = end - start + 1
+    return (
+        expected_count >= 0
+        and len(numbers) == expected_count
+        and all(number == start + index for index, number in enumerate(numbers))
+    )
+
+
 class StuckDetector:
     """[CONTRACT] Pure stuck-pattern detection over the recent event window."""
 
@@ -464,136 +599,6 @@ class StuckDetector:
 
     # -- H336 pattern 7: varied offsets over already-known file content ------
 
-    @staticmethod
-    def _normalized_read_path(raw: object) -> str | None:
-        path = str(raw or "").strip()
-        if not path:
-            return None
-        normalized = posixpath.normpath(strip_redundant_workspace_prefix(path))
-        return normalized if normalized not in ("", ".") else None
-
-    @staticmethod
-    def _bounded_decimal(raw: str) -> int | None:
-        if len(raw) > 18:
-            return None
-        try:
-            return int(raw)
-        except ValueError:
-            return None
-
-    @classmethod
-    def _numbered_read_lines(cls, content: str) -> dict[int, str] | None:
-        lines: dict[int, str] = {}
-        for match in _FILE_READ_NUMBERED_LINE_RE.finditer(content):
-            number = cls._bounded_decimal(match.group(1))
-            if number is None:
-                return None
-            lines[number] = match.group(2)
-        return lines
-
-    @staticmethod
-    def _read_total(content: str) -> int | None:
-        match = _FILE_READ_HEADER_RE.match(content)
-        if match is None:
-            return None
-        raw = match.group(1)
-        return StuckDetector._bounded_decimal(raw)
-
-    @staticmethod
-    def _read_range(content: str) -> tuple[int, int, int] | None:
-        header = content.splitlines()[0] if content else ""
-        match = _FILE_READ_RANGE_HEADER_RE.fullmatch(header)
-        if match is None:
-            return None
-        start = StuckDetector._bounded_decimal(match.group(1))
-        end = StuckDetector._bounded_decimal(match.group(2))
-        total = StuckDetector._bounded_decimal(match.group(3))
-        more_offset = (
-            StuckDetector._bounded_decimal(match.group(4)) if match.group(4) is not None else None
-        )
-        # Observation bytes are untrusted detector input. The shared bounded
-        # parser prevents Python's max-digit guard (or huge arbitrary-precision
-        # integers) from turning malformed evidence into a loop crash/CPU sink.
-        if start is None or end is None or total is None:
-            return None
-        if match.group(4) is not None and more_offset is None:
-            return None
-        past_eof = match.group(5) is not None
-        if more_offset is not None and (end >= total or more_offset != end + 1):
-            return None
-        if past_eof and not (total > 0 and start > total and end == total):
-            return None
-        return (start, end, total)
-
-    @classmethod
-    def _trusted_read_churn_nudge_path(cls, event: Event) -> str | None:
-        """Return the exact path named by a trusted typed read-churn nudge."""
-        if (
-            not isinstance(event, MessageEvent)
-            or event.source != EventSource.ENVIRONMENT
-            or event.meta.get("diagnostic") != READ_CHURN_NUDGE_DIAGNOSTIC
-            or type(event.meta.get("count")) is not int
-            or int(event.meta["count"]) < 5
-        ):
-            return None
-        return cls._normalized_read_path(event.meta.get("path"))
-
-    @classmethod
-    def _permitted_whole_read_baseline(
-        cls,
-        action: ActionEvent,
-        observation: ObservationEvent,
-        expected_path: str,
-    ) -> tuple[dict[int, str], int] | None:
-        """Return a strictly paired whole-file baseline for a trusted nudge."""
-        result = observation.tool_result
-        if (
-            action.source != EventSource.AGENT
-            or observation.source != EventSource.ENVIRONMENT
-            or observation.action_id != action.id
-            or action.tool_call is None
-            or action.tool_call.tool_name != "file_read"
-            or result.tool_name != "file_read"
-            or not result.success
-            or cls._normalized_read_path(action.tool_call.arguments.get("path")) != expected_path
-            or "offset" in action.tool_call.arguments
-            or "limit" in action.tool_call.arguments
-        ):
-            return None
-        lines = cls._numbered_read_lines(result.content)
-        read_range = cls._read_range(result.content)
-        if lines is None or read_range is None:
-            return None
-        start, end, total = read_range
-        body = result.content.splitlines()[1:]
-        numbered_matches = [_FILE_READ_NUMBERED_LINE_RE.fullmatch(line) for line in body]
-        parsed_sequence = [
-            cls._bounded_decimal(match.group(1)) for match in numbered_matches if match is not None
-        ]
-        body_valid = all(match is not None for match in numbered_matches) and all(
-            number is not None for number in parsed_sequence
-        )
-        numbered_sequence = [number for number in parsed_sequence if number is not None]
-        whole_result = (
-            total == 0 and start == 1 and end == 0 and body_valid and not numbered_sequence
-        ) or (
-            total > 0
-            and start == 1
-            and end == total
-            and body_valid
-            and cls._contiguous_numbered_range(numbered_sequence, 1, total)
-        )
-        return (dict(lines), total) if whole_result else None
-
-    @staticmethod
-    def _contiguous_numbered_range(numbers: list[int], start: int, end: int) -> bool:
-        expected_count = end - start + 1
-        return (
-            expected_count >= 0
-            and len(numbers) == expected_count
-            and all(number == start + index for index, number in enumerate(numbers))
-        )
-
     def _redundant_read_after_churn_nudge(self, events: list[Event]) -> bool:
         """Escalate an ignored typed read-churn instruction.
 
@@ -618,7 +623,7 @@ class StuckDetector:
             if isinstance(event, ActionEvent) and event.tool_call is not None:
                 actions[event.id] = event
                 continue
-            trusted_nudge_path = self._trusted_read_churn_nudge_path(event)
+            trusted_nudge_path = _trusted_read_churn_nudge_path(event)
             if trusted_nudge_path is not None:
                 # Only actions emitted after the trusted marker may satisfy
                 # its one-whole-read allowance. This is both sequence-safe
@@ -662,22 +667,20 @@ class StuckDetector:
                 or action is None
                 or action.tool_call is None
                 or action.tool_call.tool_name != "file_read"
-                or self._normalized_read_path(action.tool_call.arguments.get("path")) != nudge_path
+                or _normalized_read_path(action.tool_call.arguments.get("path")) != nudge_path
             ):
                 continue
-            lines = self._numbered_read_lines(result.content)
+            lines = _numbered_read_lines(result.content)
             if lines is None:
                 continue
-            read_range = self._read_range(result.content)
+            read_range = _read_range(result.content)
             if read_range is None:
                 continue
             start, end, total = read_range
             body = result.content.splitlines()[1:]
             numbered_matches = [_FILE_READ_NUMBERED_LINE_RE.fullmatch(line) for line in body]
             parsed_sequence = [
-                self._bounded_decimal(match.group(1))
-                for match in numbered_matches
-                if match is not None
+                _bounded_decimal(match.group(1)) for match in numbered_matches if match is not None
             ]
             body_valid = all(match is not None for match in numbered_matches) and all(
                 number is not None for number in parsed_sequence
@@ -685,7 +688,7 @@ class StuckDetector:
             numbered_sequence = [number for number in parsed_sequence if number is not None]
             if baseline_lines is None:
                 args = action.tool_call.arguments
-                permitted_baseline = self._permitted_whole_read_baseline(action, event, nudge_path)
+                permitted_baseline = _permitted_whole_read_baseline(action, event, nudge_path)
                 if permitted_baseline is not None:
                     baseline_lines, baseline_total = permitted_baseline
                 elif "offset" in args or "limit" in args:
@@ -703,7 +706,7 @@ class StuckDetector:
                 and (
                     (
                         1 <= start <= end <= total
-                        and self._contiguous_numbered_range(numbered_sequence, start, end)
+                        and _contiguous_numbered_range(numbered_sequence, start, end)
                     )
                     or (1 <= start <= total and end == start - 1 and not numbered_sequence)
                     or (start > total and end == total and not numbered_sequence)
@@ -754,7 +757,7 @@ class StuckDetector:
                 if nudge_path is not None:
                     post_nudge_action_ids.add(event.id)
                 continue
-            trusted_nudge_path = self._trusted_read_churn_nudge_path(event)
+            trusted_nudge_path = _trusted_read_churn_nudge_path(event)
             if trusted_nudge_path is not None:
                 # The typed nudge explicitly permits one whole-file baseline read
                 # before requiring action. Rearm only its named path's repeat
@@ -795,17 +798,17 @@ class StuckDetector:
                 continue
             if action.tool_call.tool_name != "file_read" or result.tool_name != "file_read":
                 continue
-            path = self._normalized_read_path(action.tool_call.arguments.get("path"))
-            lines = self._numbered_read_lines(result.content)
+            path = _normalized_read_path(action.tool_call.arguments.get("path"))
+            lines = _numbered_read_lines(result.content)
             if lines is None:
                 continue
-            total = self._read_total(result.content)
+            total = _read_total(result.content)
             if path is None or total is None:
                 continue
             permitted_baseline = (
                 nudge_path == path
                 and action.id in post_nudge_action_ids
-                and self._permitted_whole_read_baseline(action, event, path) is not None
+                and _permitted_whole_read_baseline(action, event, path) is not None
             )
             prior_total = total_by_path.get(path)
             if prior_total is None or prior_total != total:
