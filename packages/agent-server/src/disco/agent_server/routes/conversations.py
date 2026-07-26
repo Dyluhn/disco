@@ -266,6 +266,53 @@ def _register_workspace_version_routes(
             ) from exc
 
 
+async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> None:
+    """Apply the settings that are fixed while a run is in flight, or refuse.
+
+    model_override / assist / the Deep Research compose fields move together
+    through the one state-aware gate, because swapping the brain mid-step is
+    incoherent. `model_fields_set` is the present-vs-absent signal: a
+    model_override present-but-null on a terminal conversation is an explicit
+    "reset to default" and must be applied, not silently dropped.
+    """
+    model_field_set = "model_override" in body.model_fields_set
+    deep_fields = {"depth_tier", "iterative", "recency_window", "sources"}
+    deep_field_set = bool(deep_fields & body.model_fields_set)
+    if not (model_field_set or body.assist is not None or deep_field_set):
+        return
+    ok = await runtime.apply_settings_change(
+        conversation_id,
+        model_override=body.model_override,
+        assist=body.assist,
+        model_provided=model_field_set,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "conversation_not_pristine",
+                "hint": "compose settings are fixed while a run is in flight"
+                " — change them once the run has finished, errored, stopped, or paused",
+            },
+        )
+
+
+def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
+    """Apply the settings that are safe to change at any point in a run."""
+    if body.autonomous is not None:
+        runtime.set_autonomous(conversation_id, body.autonomous)
+    if body.quiet is not None:
+        runtime.set_quiet(conversation_id, body.quiet)
+    if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
+        runtime.set_depth(conversation_id, body.depth_tier)
+    if "iterative" in body.model_fields_set and body.iterative is not None:
+        runtime.set_iterative(conversation_id, body.iterative)
+    if "recency_window" in body.model_fields_set:
+        runtime.set_recency(conversation_id, body.recency_window)
+    if "sources" in body.model_fields_set and body.sources is not None:
+        runtime.set_research_sources(conversation_id, body.sources)
+
+
 def make_conversations_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -313,43 +360,8 @@ def make_conversations_router(
         # terminal-vs-pristine state). No _resolve_model here — sticky-seeding a null is a
         # PRE-KICK convenience owned by apply_settings_change, and applying it on the route
         # would mask an explicit terminal reset.
-        model_field_set = "model_override" in body.model_fields_set
-        deep_fields = {
-            "depth_tier",
-            "iterative",
-            "recency_window",
-            "sources",
-        }
-        deep_field_set = bool(deep_fields & body.model_fields_set)
-        if model_field_set or body.assist is not None or deep_field_set:
-            ok = await runtime.apply_settings_change(
-                conversation_id,
-                model_override=body.model_override,
-                assist=body.assist,
-                model_provided=model_field_set,
-            )
-            if not ok:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "reason": "conversation_not_pristine",
-                        "hint": "compose settings are fixed while a run is in flight"
-                        " — change them once the run has finished, errored, stopped, or paused",
-                    },
-                )
-
-        if body.autonomous is not None:
-            runtime.set_autonomous(conversation_id, body.autonomous)
-        if body.quiet is not None:
-            runtime.set_quiet(conversation_id, body.quiet)
-        if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
-            runtime.set_depth(conversation_id, body.depth_tier)
-        if "iterative" in body.model_fields_set and body.iterative is not None:
-            runtime.set_iterative(conversation_id, body.iterative)
-        if "recency_window" in body.model_fields_set:
-            runtime.set_recency(conversation_id, body.recency_window)
-        if "sources" in body.model_fields_set and body.sources is not None:
-            runtime.set_research_sources(conversation_id, body.sources)
+        await _apply_gated_compose_settings(runtime, conversation_id, body)
+        _apply_ungated_settings(runtime, conversation_id, body)
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")

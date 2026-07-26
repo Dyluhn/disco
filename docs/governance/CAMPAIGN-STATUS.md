@@ -881,3 +881,42 @@ prevent growth should not be paid with more growth.
 the gate's whole point is preventing growth, and this branch is where they
 crossed — then make an explicit, owner-visible decision on the 23 pre-existing
 entries rather than silently waiving them.
+
+## 2026-07-26 — Epic 5, part 2: one of three branch regressions decomposed
+
+**`make_conversations_router` fixed: 336 → 301 (cap 321).** The endpoint mixed
+two unrelated concerns — the compose settings that are *gated* while a run is in
+flight (model/assist/Deep-Research fields, which move together through one
+state-aware check because swapping the brain mid-step is incoherent) and the
+settings that are safe to change at any time. Split into
+`_apply_gated_compose_settings()` and `_apply_ungated_settings()`. Violations
+26 → 25; full `packages/agent-server` suite exit 0, `basedpyright` 0/0/0, ruff
+clean.
+
+**`StuckDetector` attempted and REVERTED, deliberately.** The obvious lever was
+`_permitted_whole_read_baseline` (45 LOC, and it reads no instance state at all).
+Extracting it broke three tests: it turned out to be a `classmethod` whose body
+calls five sibling `cls.*` parsing helpers, so the move needed those relationships
+untangled too. After two corrective attempts it still failed on an arity mismatch,
+so I reverted `stuck.py` to its committed state rather than keep pushing — the
+standards are explicit that a package which is still structurally wrong gets
+redesigned, not subjected to an endless correction tail. Tests green again after
+the revert.
+
+The real finding: `StuckDetector`'s read-churn analysis
+(`_redundant_read_coverage` 127 LOC, `_redundant_read_after_churn_nudge` 133,
+`_permitted_whole_read_baseline` 45, `_repeated_unchanged_file_read` 64 — 369 LOC
+of one cohesive family) wants extracting as a **collaborator**, the pattern this
+codebase already uses for `ViewBuilder`, `Observer` and `Valve`. That is a real
+refactor with its own test pass, not a line-shaving exercise, and it is only 16
+lines over cap. It gets its own focused package rather than being bolted onto a
+lint cleanup.
+
+**Remaining architecture-budget work, precisely scoped:**
+
+| item | state |
+|---|---|
+| `make_conversations_router` 336→301 | **DONE** |
+| `StuckDetector` +16 | needs the read-churn collaborator extraction |
+| `BrowserHandler` +51 | not yet attempted |
+| 23 pre-existing stable-main entries | owner-visible decision still required |
