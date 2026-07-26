@@ -568,3 +568,70 @@ new tool, and cannot false-positive on a payload-aware reader.
 
 It touches many signatures, so it is deliberately **not** in this bounded
 insertion. Carried to `ARCHITECTURE-ROADMAP.md` as post-campaign work.
+
+## 2026-07-26 — Acceleration Package B: failure capsules, and an honest replay boundary
+
+Non-promoting diagnostic tooling. It creates **no** new store, checkpoint
+mechanism, product route, or lifecycle — every fact a capsule binds already
+exists in the dossier `assemble_dossier` writes, and the one boundary it may
+bind to is the accepted event horizon Epic 1 already establishes and proves.
+
+**What a capsule binds.** Schema version and parent run/conversation; the
+original classification and failure code; scenario id + `scenario_sha256` + seed
++ surface; provider/model/kernel/mode/assist/autonomous and repo
+commit/revision/dirty; the accepted event horizon, paused seq, and the exact
+immutable `workspace_version_seq` with its `tree_digest`, file count and byte
+total; the per-file sha256 byte manifest; browser references (already clipped to
+the horizon by Epic 1, with any symlink refused outright); the dossier's
+`evidence_hashes`; and cleanup state. The whole body is sealed with a
+`capsule_digest`, so altering any bound field is detected.
+
+**The one boundary rule.** `accepted_boundary()` admits a capsule **only** when
+the pre-kill freeze actually landed. A `FREEZE_TIMEOUT` is refused with "no safe
+boundary" rather than dressed up as one. There is no attempt to snapshot
+mid-provider, interpreter memory, a browser process, or a live sandbox.
+
+**Restoration reads only the exact immutable version** through the store's own
+`open_verified_version`, then re-checks every restored byte against the capsule's
+manifest. It never reads the mutable ProjectStore head and never follows a
+symlink.
+
+**Gates:** 6 capsule tests passed against the **real** `run_once` hard-cap path
+with a real `ProjectStore` version (not fixtures); `ruff check harness/build_soak/`
+**All checks passed**; formatted; `basedpyright` **0 errors, 0 warnings, 0 notes**.
+Negative controls: no-safe-boundary refused; six distinct tampered fields each
+refused before any replay spend (version seq, scenario hash, model binding, byte
+manifest, event horizon, and the promotion-disclosure flag); a tampered immutable
+version fails restoration closed; a capsule tree is proven un-ingestable by the
+real `_build_soak_result`.
+
+### LIMITATION — live focused replay is NOT supported, and was not built
+
+The instruction says to record an unsupported live-replay boundary rather than
+build toward it. Having checked, it is unsupported, and here is exactly why.
+
+A replay must be a **new isolated diagnostic run** that leaves the original
+verdict byte-stable. Restoring the *workspace* is solved — the capsule does it.
+Restoring the accepted *durable context* into a **new** conversation is not:
+there is no product API to seed prior conversation history into a fresh
+conversation. `restore_workspace_version`
+(`routes/conversations.py:245`) restores a version into an **existing**
+conversation, and no `import_events` / `fork_conversation` / `clone_conversation`
+route exists.
+
+That leaves only three routes, and the instruction excludes all three:
+
+1. add a new product API to inject prior events — a new product API;
+2. write events straight into the store behind the product — fabricated internal
+   state and a second lifecycle owner;
+3. re-drive the **original** conversation — mutates the original dossier and its
+   verdict.
+
+So Package B ships the capsule schema, integrity checks, exact workspace
+restoration, and provider-free proofs, and stops there. This is a truthful
+bounded result, not a blocked one. Carried to `ARCHITECTURE-ROADMAP.md`; the
+campaign continues.
+
+Consequently the "at most one live focused replay on the first clean post-Epic-5
+candidate" allowance is **moot** — there is nothing live to spend it on. The
+scheduled F1 profile proof is unaffected.

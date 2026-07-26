@@ -118,6 +118,22 @@ weaken the current Build reliability campaign.**
   from the broken one because they are syntactically identical. Deferred from
   the acceleration insertion because it touches many signatures.
 
+- **Live focused replay from a failure capsule.** **[RESEARCH-GATE]** — capsules
+  bind a safe boundary and restore the exact immutable workspace today
+  (`harness/build_soak/capsule.py`), but a *live* re-drive cannot be built
+  without crossing a boundary the campaign forbids. A replay must be a new
+  isolated run that leaves the original verdict byte-stable, and there is no
+  product API to seed prior conversation history into a **new** conversation:
+  `restore_workspace_version` targets an existing one, and no
+  `import_events`/`fork_conversation` route exists. The three available routes —
+  a new product API, writing events behind the product, or re-driving the
+  original conversation — are respectively a new API, fabricated internal state
+  with a second lifecycle owner, and mutation of the original dossier. The open
+  question is whether a *first-class, product-owned* "fork a conversation at an
+  accepted event horizon" capability is worth having on its own merits; if it
+  is, replay follows for free. It should not be reverse-engineered to serve a
+  diagnostic convenience.
+
 - **Architecture-budget debt.** **[PLANNED]** — `scripts/check_arch_budget.py`
   fails on `stable-main` itself with 26 violations. Epic 5 requires it to pass,
   so it needs either honest decomposition or an explicitly justified, owner-
