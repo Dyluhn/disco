@@ -145,6 +145,41 @@ describe("previewHostUrl legacy helper", () => {
       previewHostUrl("conv_abcdef123456", 8000, "http://127.0.0.1:8000"),
     ).toBe("http://p2-abcdef12-8000.localhost:8000");
   });
+
+  // Restored 2026-07-26. These four cases were dropped when the preview
+  // architecture moved to canonical capabilities, but previewHostUrl is still
+  // live production code (api/client.ts:94, called at :208), so its host-rewrite
+  // rules lost their only coverage. Epic 5 forbids a removed test on a shipping
+  // path.
+  it("extracts cid8 and maps localhost to .localhost", () => {
+    expect(previewHostUrl("conv_abcdef123456", 5173, "http://localhost:8000")).toBe(
+      "http://p2-abcdef12-5173.localhost:8000",
+    );
+  });
+
+  it("prepends cid8-port to other hostnames", () => {
+    expect(previewHostUrl("conv_11112222", 8000, "http://my-magic-dns.net")).toBe(
+      "http://p2-11112222-8000.my-magic-dns.net",
+    );
+    expect(previewHostUrl("conv_11112222", 8000, "https://my-magic-dns.net:443")).toBe(
+      "https://p2-11112222-8000.my-magic-dns.net",
+    );
+  });
+
+  it("maps IPv6 loopback and fails closed on other bare IPs", () => {
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://[::1]:8000")).toBe(
+      "http://p2-abcdef12-8000.localhost:8000",
+    );
+    expect(previewHostUrl("conv_abcdef123456", 8000, "http://[2001:db8::1]:8000")).toBeNull();
+  });
+
+  it("drops a relative API prefix from the wildcard preview origin", () => {
+    const expected = new URL("/", window.location.origin);
+    expected.hostname = "p2-abcdef12-8000.localhost";
+    expect(previewHostUrl("conv_abcdef123456", 8000, "/svc/agent")).toBe(
+      expected.toString().replace(/\/+$/, ""),
+    );
+  });
 });
 
 describe("ExecutionCanvas — canonical Preview selection", () => {
@@ -297,6 +332,14 @@ describe("PreviewPane — one canonical owned-web surface", () => {
     );
 
     expect(screen.getByTitle("Preview")).toBe(frame);
+    // Restored 2026-07-26: the TRUSTED runtime frame's sandbox posture lost its
+    // only assertion when the preview moved to canonical capabilities. The
+    // untrusted path is asserted below (sandbox=""); without this, a change that
+    // silently widened or dropped the trusted sandbox would pass every test.
+    expect(frame).toHaveAttribute(
+      "sandbox",
+      "allow-scripts allow-forms allow-same-origin allow-popups allow-downloads",
+    );
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Preview runtime is recovering: managed runtime exited",
     );

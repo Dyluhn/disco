@@ -1017,3 +1017,58 @@ allowances and turning 23 violations into 10 different ones. Caught immediately
 by re-running the gate, reverted, and redone as a merge. Name-based matching also
 damaged two unrelated entries (`engine.py`'s `run` and `__init__`) because two
 symbols share each name across files; both were measured and corrected.
+
+## 2026-07-26 — Epic 5, part 5: the review and the test inventory both landed
+
+**Whole-diff practical review: APPROVE.** One independent reviewer over
+`f55efb03..HEAD` (334 files, ~47k insertions) checking the five required
+dimensions. Verdict APPROVE with no material defects. Its load-bearing claims
+were **spot-verified by me** rather than taken on trust:
+
+- governed verification routes to `_governed_non_pass_disposition` *before* any
+  `unverified_release` path, so AppKit strictness has no release-cap fallback —
+  confirmed at `verify_gates.py:2646-2709`;
+- `ExportDownloadOracle` gained `or ex.get("workspace_match") is not True`, a
+  **rejection** condition — i.e. tightened, not weakened;
+- zero web/framework strings in `build_platform/` — confirmed by grep.
+
+**Test inventory: TWO REAL VIOLATIONS FOUND, and fixed.** This is the check
+earning its place: across a 334-file diff I had no other way to see these.
+
+`frontend/src/components/build/ExecutionCanvas.preview.test.tsx` went **27 → 12**
+tests when the preview moved to canonical capabilities. Two consequences:
+
+1. **`previewHostUrl` lost its unit coverage while remaining live production
+   code** (`api/client.ts:94`, called at `:208`). Four host-rewrite cases were
+   gone: localhost mapping, non-loopback hostname prefixing, IPv6 loopback, and
+   relative-API-prefix handling. Restored, with a comment saying why.
+2. **The trusted runtime frame's sandbox posture lost its only assertion.**
+   `allow-scripts` assertions in that file went **7 → 0**. The untrusted path is
+   asserted (`sandbox=""`), but nothing asserted the trusted frame's
+   `allow-scripts allow-forms allow-same-origin allow-popups allow-downloads`
+   (`PreviewPane.tsx:687`) — so a change that silently widened or dropped the
+   trusted sandbox would have passed every test. Restored.
+
+**Both restorations proven sensitive, not just green:** widening the trusted
+sandbox by a single token (`allow-top-navigation`) fails the assertion; reverting
+passes it.
+
+**Gates:** frontend Vitest **175 files / 1150 tests passed** (was 1146 — the four
+restored cases), `typecheck:build` exit 0, Vite build exit 0, G11 exit 0.
+
+**Epic 4 infrastructure repaired.** A stack now runs **from this checkout** on
+8010/8810 — verified by `/proc/<pid>/cwd` — carrying the historical product
+driver route (OpenRouter) and the exact feature flags from the reference server,
+so Epic 4 will measure the candidate's own bytes under the historical
+configuration rather than a substituted one. No other worktree's servers were
+touched. Candidate bytes confirmed intact: `disco.db` and
+`disco-approved-origins.json` are both gitignored and the source fingerprint is
+unchanged.
+
+**Remaining Epic 4 blocker, precisely stated:** the checkout's
+`disco-approved-origins.json` was signed under a different `DISCO_SECRET_KEY`, so
+its HMAC does not verify and **all provider origins read as unapproved**. The
+product's own remedy is to re-approve via Settings
+(`origin_approval_wiring.approve_provider_origin`). Until that is done, no live
+model call can be routed, so Epic 4's diagnostics cannot start. Recorded rather
+than worked around.
