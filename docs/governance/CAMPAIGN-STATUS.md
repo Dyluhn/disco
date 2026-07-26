@@ -1439,6 +1439,9 @@ cd /var/home/dylan/projects/build-platform-core-v1/disclaude
 export DISCO_INSPECT=1 DISCO_ARTIFACT_MANIFEST_SHADOW=1 DISCO_HOST_VERIFY_CANARY=1
 export DISCO_TOOLSCOPE_AUDIT=1 DISCO_WORKFLOW_ROUTER=on DISCO_CONTEXT_PACK=on
 export DISCO_PROVIDER_LEDGER=/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic4/provider-ledger.jsonl
+export DISCO_FREEFORM_PLATFORM_ROUTE=1   # without this, Freeform admits via the
+                                          # legacy route and the governed-admission
+                                          # oracle fails the run (trap 11)
 nohup env DISCO_PORT=8010 .venv/bin/python3 -m disco.agent_server > /tmp/agent.log 2>&1 &
 nohup env DISCO_PORT=8810 .venv/bin/python3 -m disco.app_server  > /tmp/app.log  2>&1 &
 # then confirm: no "IGNORED" origin-approval warning in agent.log; sandbox
@@ -1601,6 +1604,12 @@ health checks only, afterwards.
    afterwards (it bit three times today).
 10. `ruff format` must never touch the frozen closeout dirs (now excluded in
     `pyproject.toml`) — their bytes are a ratified campaign's acceptance record.
+11. Freeform runs default to the LEGACY admission route; the context scenarios'
+    governed-admission policy requires `composition_authority:
+    build_platform_core`, so the agent-server needs
+    `DISCO_FREEFORM_PLATFORM_ROUTE=1` (`build_platform_shadow.py:54`) or every
+    run FAILs with `GOVERNED_ADMISSION_BYPASSED` after finishing its build —
+    seed-460000-attempt2 is exactly that dossier.
 
 ## I. Owner items (not blockers, for the record)
 
@@ -1611,5 +1620,84 @@ health checks only, afterwards.
 - Whether the export-track1 acceptance should be re-ratified against this
   lineage (the two unsatisfiable lanes) is that campaign's decision.
 
-*End of handoff. Next concrete action: pre-flight P1, then seed 460000.*
+## J. Delegation map — GLM 5.2 (and DeepSeek V4 Pro) as context relief for Opus
+
+Owner statement (2026-07-26): effectively unlimited **GLM 5.2** (Ollama Cloud)
+and **DeepSeek V4 Pro** usage; use them wherever they genuinely help. Opus keeps
+task interpretation, architecture, root-cause synthesis, integration, and every
+acceptance verdict. Delegated output is *leads and evidence, never verdicts* —
+spot-verify each load-bearing claim before building on it (this session's
+discipline, and it caught real errors both directions).
+
+**Mechanics (proven this session):**
+- Launcher: `/var/home/dylan/Desktop/Disclaude-Claude-GLM52/glm-run.sh <label> "<prompt>"`
+  — asserts the ollama-cloud route before spend, writes `receipt.json` /
+  `stream.json` / `answer.md` under
+  `build-platform-campaign-evidence/*/glm-delegations/`.
+- Prompt shape that works: READ-ONLY header, numbered questions, **hard line
+  budget (120–250)**, "file:line or NOT FOUND". The narrowest delegation cost
+  47k tokens; an open-ended one cost 1.23M for comparable value (~25×).
+- Up to 4 parallel **non-overlapping read-only** streams. Never two editing
+  agents in one worktree — and from Epic 4 onward prefer read-only delegation
+  entirely, because any source change resets the diagnostic set (and later,
+  promotion to zero).
+- Do NOT delegate: single-file reads, reversible decisions, acceptance
+  verdicts, anything counted, or watching a log (that is polling, not work).
+
+**Where it pays, per remaining phase:**
+
+*Epic 4 — after every seed (the biggest context saver):* one GLM stream per
+completed dossier answering the fixed checklist so Opus never pages a 200+-event
+`events.jsonl` into context: condensation-event count and seq spans; grep of
+persisted summaries for `<parameter` / `"tool_calls":` / `<invoke ` (must be
+absent); the three ranged reads + disclosure receipts present; ledger records
+all `driver_context_window == 24000` / host `opencode.ai` / wire
+`deepseek-v4-flash`; cleanup/sidecar slices green; for seed 460000
+specifically, the Epic-2 check (refused host-signal op not repeated after
+condensation; at most one live `runtime_constraint` per key). Opus reads the
+one-page answer and verifies only the claims that decide PASS.
+
+*Epic 4 — on a FAIL:* three parallel streams — (1) event-chain reconstruction
+around the failing span, (2) the oracle predicate that fired (exact code path),
+(3) history of the implicated contract. Opus synthesizes the earliest broken
+contract and decides source-fix-vs-infra-fix (D's failure protocol).
+
+*Epic 5 remainder:* GLM digests the recorded full-suite log into the ledger
+evidence block (counts, skips, exact command, log path). The run itself is not
+delegable.
+
+*Epic 6 — before:* manifest-authoring assist — one stream inventories every
+binding the matrix must carry (model entries, assignments, sandbox config, env
+flags, scenario-file hash, seeds, allocation) into a draft; Opus re-reads each
+value live and signs the manifest. GLM drafts, Opus binds.
+
+*Epic 6 — during promotion (the scale case):* 100 trials produce 100 dossiers.
+After each cohort completes, one GLM stream runs the fixed per-trial checklist
+(classification PASS, ledger binding, evidence hygiene, cleanup slices, no
+duplicate cell) across the cohort and returns a table with anything anomalous
+flagged; a second stream re-computes the source/tree fingerprints between
+cohorts to prove no drift. Opus adjudicates only the flags. Failure triage =
+the Epic-4 three-stream pattern. Capacity/headroom proof: GLM may gather the
+read-only numbers; Opus asserts them.
+
+*Epic 7 — closeout fan-out:* streams re-verify every counted dossier's
+evidence-manifest hashes, prove each of the 100 cells occurs exactly once and
+no diagnostic leaked into the count, and draft the final report skeleton from
+this ledger. Opus verifies and writes every judgment sentence itself.
+
+**DeepSeek V4 Pro (new authorization, route not yet configured):** the standing
+§9 lock binds *delegation* to `ollama-cloud/glm-5.2` and forbade `opencode-go`
+for it; the owner's 2026-07-26 statement adds V4 Pro to the pool. Before first
+use: confirm the exact provider route with the owner, then create a **separate**
+fail-closed launcher config mirroring `glm-run.sh` (route assertion → receipt →
+answer) — do not modify the GLM launcher, and never let delegation traffic near
+the product driver's ledger accounting. Suggested split once configured: GLM 5.2
+(1M ctx) for repo-wide inventories and dossier digestion; V4 Pro for root-cause
+hypothesis generation on failures and the single practical review per package.
+If the route turns out to share the product driver's `opencode.ai` credential,
+prefer keeping ALL delegation on GLM until after Epic 7 — provider-capacity
+contention with the driver during promotion is not worth the marginal quality.
+
+*End of handoff. Next concrete action: pre-flight P1 (done at handoff), then
+seed 460000 (attempt3 in flight at handoff — platform-route flag on).*
 
