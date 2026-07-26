@@ -1506,6 +1506,68 @@ hypothetical is tail-hardening, not root-cause work.
 
 ---
 
+## 2026-07-26 — Epic 4 attempt 4: the condensation fix is PROVEN live; the ceiling, not the product, ended the run
+
+Attempt 4 ran on `5508f261` with the stack restarted from those bytes (the
+product fix lives in `view.py`, which the old agent-server had already loaded —
+restarting is mandatory after a product change, not hygiene).
+
+**The fix works, measured on live traffic rather than asserted:**
+
+| | attempt 3 (before) | attempt 4 (after) |
+|---|---|---|
+| condensations | 32 | 40 |
+| protocol residue persisted | **22 of 36** | **0 of 40** |
+| real prose summaries | 14 | **36**, avg 3100 chars, anchored template |
+| host fallbacks | 0 | 4 |
+
+The agent log carried exactly 11 `summarizer output rejected (contains
+tool-call protocol markup: '<｜｜DSML｜｜tool_calls')` warnings and no other
+errors — the detector firing on precisely the dialect it was written for. Of
+those rejections the bounded repair recovered all but 4, which degraded
+honestly to `[host summary]` rather than to residue. Zero residue reached the
+event log: the property Epic 3 claimed, now actually true against this driver.
+
+**Outcome: `INVALID_RUN / RUN_TIMEOUT_WHILE_PROGRESSING`, severity NONE** —
+1200 s hard cap, cut at `stage: terminal_wait` at 21:16 wall, *after* the run
+had emitted its terminal events (270–273). Not a product FAIL, and per D an
+INVALID_RUN with an infra cause reruns the same seed without restarting the set.
+
+**Two responses, and the reasoning for each.**
+
+*Root cause first — prevent, do not just repair.* The summarizer request binds
+NO tools, so protocol residue is pure imitation of the transcript being
+summarized. Both primary directives (fresh and update-in-place) now carry the
+same dialect-neutral prohibition the repair prompt got. Prevention removes the
+round-trip, the latency and the lost context at once, where repair only
+recovers the last of the three — and it is the version that scales to 100
+trials.
+
+*Then the ceiling, deliberately narrow.* `hard_cap_s` is not an acceptance
+criterion; `run.py` defines it as "the generous safety ceiling that bounds a
+truly-hung run, set well above a normal build (~5min)". The context lane is not
+a normal build — attempt 3 already took 12:53 against that 1200 s ceiling, so
+this lane was always running near a limit calibrated for something else. The
+context lane now launches with `--hard-cap 2400`, a **launch parameter, not a
+source change**, bound in the Epic-6 manifest §3b.
+
+This is not gate-weakening, and the distinction matters enough to state
+plainly: PASS/FAIL is decided by the oracle set, and no oracle is relaxed. The
+genuine stall detector is `inactivity_s = 180`, left **untouched** — a hung run
+still dies after three minutes of silence. What changed is only the ceiling that
+was mislabelling a continuously-progressing run as timed out. Had the run gone
+quiet, it would have been killed at 180 s either way.
+
+**Also recorded:** the Epic-6 qualification manifest (F0) is drafted at
+`<evidence>/2026-07-26/epic6/QUALIFICATION-MANIFEST.md` — candidate SHA and
+config values left as explicit `«bind»` fields to be re-read live at signing,
+never copied. It supersedes the stale SOAK-MATRIX as counting authority, states
+the sandbox runtime honestly as `runc` (no gVisor claim anywhere), records the
+`default_model` / `roles.summarizer` deltas, and verifies the 86-trial main
+allocation sums to exactly 86.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
