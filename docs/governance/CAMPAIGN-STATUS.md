@@ -1303,3 +1303,57 @@ Everything else is staged: stack running from this checkout on 8010/8810, correc
 flags, origin approvals verifying, clean tree.
 
 **Continuing on provider-free work.**
+
+## 2026-07-26 — Epic 5: the Export Track-1 requirement is MET; two lanes are unsatisfiable by construction
+
+The `soffice` fix worked — and overshot into the decisive evidence.
+
+`python-nonlive` moved from "test X was SKIPPED (must PASS)" to a different
+rejection: **"has 1 skipped (must be exactly 2: the frozen §3.2 baseline, nothing
+more, nothing less)"**. So the baseline demands exactly two non-passing nodes
+(`_NONLIVE_BASELINE_ALLOWLIST`, `verify_export_track1_closeout.py:416`):
+
+1. `packages/core/tests/test_router_overflow.py` → `skipped` — present here, the
+   documented dormant revival harness;
+2. `packages/core/tests/test_appkit_directory.py::test_unknown_app_kind_lowers_as_lead_gen_byte_identical`
+   → `xfailed`.
+
+**That second node does not exist in this lineage.** Not at HEAD, and **not at
+`f55efb03` either** — `test_appkit_directory.py` has 17 tests in both. Its only
+trace anywhere is a *string* inside another lane-truthfulness test. It belongs to
+the `export-track1` branch the manifest was frozen against (`2ec1ceba`).
+
+**So the lane cannot go green on this candidate no matter what I do**: it requires
+an xfail from a different lineage. The same applies to `anti-bypass-scan`, whose
+diff range is literally `2ec1ceba..HEAD`, and to the residual `frozen_manifest`
+drift on two `tests/integration/_closeout_live_support.py`-family files this
+branch never touched.
+
+This is pattern **P8** in its purest form: a prior campaign's ratified acceptance
+record applied to a candidate from a different lineage. Earlier I said this needed
+deciding "on evidence, not assumed either way" — this is that evidence.
+
+### What Epic 5 actually asks for, and its status
+
+> "Export Track-1 focused gates and real Docker 8/8 lifecycle lane on the same
+> candidate"
+
+| required lane | result |
+|---|---|
+| Export Track-1 **focused gates** (`python-closeout`) | **PASS** — 401/401, zero skips |
+| **Docker 8/8 lifecycle** (`live-docker`) | **PASS** |
+| `live-capture` | **PASS** |
+| `frontend` (frozen closeout vitest + typecheck + build) | **PASS** |
+| `g11-typecheck` | **PASS** |
+
+**Both requirements are met.** The verifier's aggregate `passed=False` is driven
+entirely by the two cross-lineage lanes plus their frozen-manifest companion —
+none of which Epic 5 asks for, and none of which this candidate can satisfy
+without adopting another branch's test inventory.
+
+**Recorded, not waived:** if the owner wants the *whole* Export Track-1 acceptance
+re-ratified against this lineage, that is a re-freeze of that campaign's manifest
+and baselines — their decision and their record, not something this campaign
+should quietly rewrite. My work here left both improvements intact regardless: the
+`soffice` skip is genuinely fixed (21/21, zero skips) and the forbidden
+release-route seam is genuinely removed.
