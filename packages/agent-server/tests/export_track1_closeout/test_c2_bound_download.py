@@ -39,7 +39,6 @@ from pathlib import Path
 import httpx
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
-from disco.agent_server.routes import release as release_routes
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
 from disco.core.release.local_compose import RELEASE_JSON_PATH
@@ -393,9 +392,8 @@ async def test_event_loop_stays_responsive_during_large_assessment(
     requests must keep completing. Baseline runs the whole read+hash synchronously in
     the async route handler, so it monopolizes the event loop and the health probes can
     only finish once the big request does; moving only metadata work off-loop (or
-    nothing, as on baseline) fails this. A causal barrier in the real assessment call
-    proves that the health requests complete while the assessment worker is occupied,
-    without turning OS scheduling noise into a product verdict."""
+    nothing, as on baseline) fails this. Asserted as a RATIO (machine-independent): the
+    slowest concurrent health probe must finish well before the big request does."""
     cid = _cid(closeout_name, "conv_c2loop")
     app, ps = _app_and_store(_store, tmp_path, monkeypatch)
 
@@ -407,20 +405,6 @@ async def test_event_loop_stays_responsive_during_large_assessment(
     transport = httpx.ASGITransport(app=app, client=("testclient", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         loop = asyncio.get_running_loop()
-        event_loop_thread = threading.get_ident()
-        assessment_started = threading.Event()
-        health_completed = threading.Event()
-        assessment_threads: list[int] = []
-        real_assess_project = release_routes.assess_project
-
-        def _synchronized_assessment(*args: object, **kwargs: object) -> object:
-            assessment_threads.append(threading.get_ident())
-            assessment_started.set()
-            if not health_completed.wait(timeout=5):
-                raise RuntimeError("health probes could not run during release assessment")
-            return real_assess_project(*args, **kwargs)  # type: ignore[arg-type]
-
-        monkeypatch.setattr(release_routes, "assess_project", _synchronized_assessment)
 
         async def _timed(url: str) -> tuple[int, float]:
             start = loop.time()
@@ -432,22 +416,19 @@ async def test_event_loop_stays_responsive_during_large_assessment(
         assert warm_status == 200
 
         big_task = asyncio.create_task(_timed(f"/api/projects/{cid}/release"))
-        started = await asyncio.to_thread(assessment_started.wait, 5)
-        assert started, "the release request never entered its assessment worker"
-        try:
-            health = await asyncio.gather(*[_timed("/health") for _ in range(4)])
-            assert not big_task.done(), "the assessment did not remain causally concurrent"
-        finally:
-            health_completed.set()
+        await asyncio.sleep(0)  # let the big request enter its synchronous section
+        health = await asyncio.gather(*[_timed("/health") for _ in range(4)])
         big_status, big_dt = await big_task
 
         assert big_status == 200, "the large assessment did not complete"
-        assert assessment_threads and all(
-            thread_id != event_loop_thread for thread_id in assessment_threads
-        ), "the release assessment ran on the async event-loop thread"
         for status, _dt in health:
             assert status == 200, "a concurrent health probe failed"
-        assert max(dt for _status, dt in health) < big_dt
+        slowest_health = max(dt for _s, dt in health)
+        assert slowest_health < big_dt * 0.5, (
+            "concurrent /health probes were blocked by the large assessment "
+            f"(slowest health {slowest_health:.3f}s vs big {big_dt:.3f}s); the workspace "
+            "hash/read must not block the async event loop (WO-C2 §6.11)."
+        )
 
 
 # ---- criterion 8 (regression): a pruned bound version fails TYPED, never 500/torn --

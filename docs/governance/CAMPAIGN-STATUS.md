@@ -1137,3 +1137,43 @@ different candidate. Epic 5 asks for "Export Track-1 focused gates and real
 Docker 8/8 lifecycle lane", both of which pass; whether that older campaign's
 *whole* acceptance must also re-ratify here needs deciding on evidence, not
 assumed either way. Next action after the re-run.
+
+## 2026-07-26 — Epic 5, part 7: the anti-bypass scan found a real seam
+
+Of 451 reported violations, **450 are baseline noise** — the scan diffs against
+`2ec1ceba..HEAD` (the **export-track1** lineage, not `stable-main`), so 316
+`new_suppression_noqa` and 119 `new_suppression_type_ignore` across 141 files are
+mostly the ordinary content of a branch that diverged 334 files ago.
+
+**One is real, and it matters.** `test_c2_bound_download.py:423` did
+`monkeypatch.setattr(release_routes, "assess_project", ...)`. The closeout
+anti-bypass contract permits a test to seam the system at exactly two points —
+the config loader and the environment — and names *release-route* among the
+things that are never patched.
+
+Introduced by campaign commit `ef06e4c5 test(export): make responsiveness gate
+causal`, with sound intent: it replaced a machine-dependent timing **ratio**
+("the slowest health probe must finish well before the big request") with a
+deterministic causal barrier. But the barrier was built by wrapping
+`assess_project`, so the test stopped exercising the real release route's
+concurrency and started exercising a wrapper — which is exactly the failure mode
+the anti-bypass rule exists to prevent.
+
+**DECISION — reverted to the ratified bytes rather than ratifying the seam.**
+The alternative was amending `docs/export-track1-closeout-suppression-baseline.json`,
+the ratified acceptance record of an **already-completed** campaign. Amending
+another campaign's acceptance record to accommodate a change made after it closed
+expands authority I was not granted, and it is exactly the stale/borrowed-authority
+shape (pattern P8) pointed the other way.
+
+Checked before deciding rather than assuming: the ratified version passes **3/3
+consecutive runs** on this machine, so the revert does not reintroduce an
+observed flake here. Byte parity with the frozen manifest is restored (`git diff
+f55efb03` → **0 lines**), the forbidden target is gone, all 401 closeout tests
+pass, and both Ruff gates stay 0.
+
+**Carried honestly:** the flakiness `ef06e4c5` was trying to fix is a real
+concern on slower or noisier hosts, even though it did not reproduce here. The
+right home for a causal barrier is the export-track1 owners' next ratified
+revision, built through an allowed seam — not retrofitted into a frozen test by a
+different campaign.
