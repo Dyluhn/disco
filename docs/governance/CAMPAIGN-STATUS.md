@@ -1177,3 +1177,42 @@ concern on slower or noisier hosts, even though it did not reproduce here. The
 right home for a causal barrier is the export-track1 owners' next ratified
 revision, built through an allowed seam — not retrofitted into a frozen test by a
 different campaign.
+
+## 2026-07-26 — Epic 4 unblocked: the driver route was configured all along
+
+Traced the blocker to ground rather than assuming a missing provider.
+
+**The frozen product driver route** (from the Phase-4 soak matrix, frozen before
+the first counted model call) is:
+
+> saved model `prov-opencode-go-2-deepseek-v4-flash`; every provider-ledger record
+> must match host substring `opencode.ai` and exact wire model
+> `deepseek-v4-flash`; fallback disabled.
+
+**Important scoping correction I had to make.** The brief's "do not use
+`opencode-go`" instruction lives in §9, which governs **my GLM delegation route**
+— it is not a ban on the product-under-test driver. §8 states the opposite
+explicitly: "GLM/Ollama delegation is separate from the product-under-test
+driver." Reading that prohibition too broadly would have substituted a different
+provider and silently changed the frozen route.
+
+**What was actually wrong:** nothing was missing. The model
+`prov-opencode-go-deepseek-v4-flash` (`https://opencode.ai/zen/go/v1`,
+`deepseek-v4-flash`) is configured, and the approvals ledger already named the
+right origin. It simply carried an HMAC signed under a **different**
+`DISCO_SECRET_KEY`, so every provider origin read as unapproved and no call could
+route.
+
+**Fixed through the product's own remedy**, which the server itself names
+("re-save Settings to re-approve these origins"): re-saved the driver model via
+`PUT /api/models/{id}` on the authenticated session, which runs
+`approve_model_origin()` and re-binds the stored secret ref to the exact origin
+under the current secret. No key was read, printed, or committed.
+
+Verified by restart: the agent-server's origin-approval warning is **gone**.
+
+**Also noted:** the configured `default_model` is `driver-local`, a LAN host at
+`192.168.1.231:18080` that is **unreachable** from here (curl 000). That does not
+block Epic 4 — the soak runner binds its driver explicitly via `--model`, and the
+frozen route is the opencode-go one — but any run must name the driver rather
+than inherit the default.
