@@ -1,5 +1,5 @@
-> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Design-primitives catalog — the design reference is durable; the “current honest inventory” section (9 directions, “image-gen never used in slides”) is stale (now 22 directions, always-on art direction) — see `docs/disco-status-and-remaining.md`.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims. 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Design-primitives catalog — the design reference is durable, but its inventory and status claims are stale.
+> Historical only. Not a source of current status or operating instructions.
 
 # Design Primitives Catalog — the "fantastic output" campaign basis
 

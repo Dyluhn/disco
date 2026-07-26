@@ -116,7 +116,7 @@ NOT built and are a separate security-classed item.
 ## 5. Per-primitive adversarial harnesses (the template_only set)
 
 Every future `template_only` primitive ships a real exploit-style harness as its
-build gate (from `docs/disco-builder-primitives-plan.md` §7). Stripe payment
+build gate. Stripe payment
 webhooks and generic outbound/inbound webhooks now supply the first two live
 harnesses; the remaining roadmap stays separately deferred.
 

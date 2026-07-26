@@ -1,0 +1,10 @@
+# Seal manifest for the change-controlled governance files.
+#
+# Verified by scripts/check_governance_seal.py, which is the authoritative
+# backstop for docs/governance/ENGINEERING-STANDARDS.md and
+# docs/governance/ARCHITECTURE-BOUNDARIES.md.
+#
+# Do not hand-edit.  Rebaselining requires an explicit owner instruction and the
+# procedure in docs/governance/README.md.
+d1b8ed9065c4178928ce6878f0209a12ad7c890dbe789657b3c6df60221bd16d  docs/governance/ENGINEERING-STANDARDS.md
+22e725fcc2851bd1402ec505a6c5569d22efac1b3bddfa8f4abc91d47f44fd1f  docs/governance/ARCHITECTURE-BOUNDARIES.md

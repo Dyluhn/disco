@@ -1,10 +1,10 @@
 # Security tiers — the template-only set + its adversarial harnesses
 
-> Extracted from `docs/disco-builder-primitives-plan.md` §7 (segregation 2026-07-06).
-> The plan keeps a one-line pointer here. This is forward-looking security work:
+> Extracted from the now-archived builder-primitives plan §7 (segregation 2026-07-06).
+> This is forward-looking security work:
 > the build-gate harness each template-only primitive must ship before it can be
-> registered. The catalog rows these refer to (RLS, payments, uploads, webhooks,
-> …) stay inline in the plan §4 tagged `template_only` — this file owns their
+> registered. The historical catalog rows referred to RLS, payments, uploads,
+> and webhooks; this file owns their
 > **adversarial harness contracts**.
 
 These primitives are **LLM-FORBIDDEN** (Disco generates the code) and each ships a real
@@ -24,7 +24,8 @@ exploit-style harness as its build gate, inheriting the security campaign's disc
 ## Labor routing (from plan §10.4 / §10.5 — security-classed, NOT Fable)
 
 The security half of the framework's credential plane and every template-only adversarial
-harness above are **security-classed work** — done in Opus/codex sessions, never Fable:
+harness above were historically treated as **security-classed work**. This file records
+that completed campaign; it is not current model-routing policy:
 
 - **WO-A2.2 auth slice** — the bus per-app bearer (conversation-bound v0); adversarial review (codex xhigh).
 - **WO-A4 security half** — token format/minting/rotation/scope model for per-app credentials + threat model + codex adversarial pass. (The *feature* half — usage accounting, quota, 429/retry-after, per-service rate limits — is Fable-safe.)

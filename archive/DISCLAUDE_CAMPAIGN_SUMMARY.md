@@ -1,5 +1,5 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Old disclaude campaign summary, pinned to an experimental-branch HEAD.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims. 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
+> Historical only. Not a source of current status or operating instructions.
 
 # Disclaude Campaign — Work Summary
 

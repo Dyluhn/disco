@@ -17,7 +17,7 @@ DONE / DEFERRED + the fail-closed `template_only` finish gate). Start there.
 | [`SECURITY.md`](./SECURITY.md) | The repo's public security policy / disclosure doc (was at repo root). |
 | [`wo-a2-host-bus-design-notes.md`](./wo-a2-host-bus-design-notes.md) | Host-service bus auth design notes — the per-app bearer deferred from WO-A2.1. |
 | [`from-mega-campaign-epic-s.md`](./from-mega-campaign-epic-s.md) | EPIC-S wave breakdown (S-W1..S-W6 + S-post), lifted from `docs/disco-mega-campaign.md`. |
-| [`from-builder-primitives-plan-sec7.md`](./from-builder-primitives-plan-sec7.md) | The template-only adversarial-harness table + Fable-forbidden labor routing, lifted from `docs/disco-builder-primitives-plan.md` §7 / §10.4–10.5. |
+| [`from-builder-primitives-plan-sec7.md`](./from-builder-primitives-plan-sec7.md) | Historical template-only harness and labor-routing notes from the superseded builder-primitives campaign. |
 
 ## Current security state (one-liner)
 
@@ -37,12 +37,10 @@ mention security but are **not** "sec work remaining," so they stayed in place:
   section describe the **shipped, running** auth / kill-switch / `SecurityRisk` / egress-approval
   system. They are the integration + design authority for code that exists; moving them would make
   those docs lie about the live surface.
-- **Records, not plans** — `CHANGELOG.md`'s `### Security` entry (a Keep-a-Changelog log of fixes
-  that *already shipped*) and `docs/mega-campaign-run-log.md` (timestamped history, already
-  corrected in place). Their cross-references were repointed here, but the history stays put.
-- **Interwoven catalog rows** — the `template_only` primitives in `disco-builder-primitives-plan.md`
-  §4 (RLS, payment webhooks, uploads, …) are feature-catalog entries tagged by labor class; their
-  **adversarial-harness contracts** were lifted here (`from-builder-primitives-plan-sec7.md`), but
-  the catalog rows themselves stay so the feature plan remains whole.
+- **Records, not plans** — `CHANGELOG.md`'s `### Security` entry is the repository history of
+  fixes that shipped. Superseded campaign narratives were moved to the external context archive.
+- **Historical catalog rows** — the superseded builder-primitives plan was moved to the external
+  context archive. Its still-relevant template-only harness notes remain here in
+  `from-builder-primitives-plan-sec7.md`.
 
-If the intent is to pull *those* out too, that's a follow-up — say so and it's a quick pass.
+Current work must use the governance status and campaign files, not these historical records.

@@ -1,10 +1,40 @@
 # CLAUDE.md — operating manual for AI agents working in this repo
 
-This file is for an LLM coding agent (Claude Code et al.). It captures the
-conventions and hard-won gotchas that aren't obvious from the code and that cost
-real time when missed. Humans: see [`CONTRIBUTING.md`](./CONTRIBUTING.md). Design
-authority when code and prose disagree: [`basis-of-design.md`](./basis-of-design.md)
-and [`event-state-contract.md`](./event-state-contract.md) — those win.
+This file is a **bootstrap**, not an authority. It captures verified repository
+navigation, package layering, commands, durable gotchas, and event-sourcing
+invariants — the things that aren't obvious from the code and cost real time when
+missed. Humans: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+
+## Where authority actually lives
+
+**Read [`docs/governance/README.md`](./docs/governance/README.md) first.** It is
+the finite authority surface. The order, highest first:
+
+1. **Current code + passing tests + live evidence** — beats every document.
+2. [`docs/governance/ENGINEERING-STANDARDS.md`](./docs/governance/ENGINEERING-STANDARDS.md) — sealed.
+3. [`docs/governance/ARCHITECTURE-BOUNDARIES.md`](./docs/governance/ARCHITECTURE-BOUNDARIES.md) — sealed.
+4. [`docs/governance/CAMPAIGN-PLAN.md`](./docs/governance/CAMPAIGN-PLAN.md) — the current work order.
+5. [`docs/governance/CURRENT-STATE.md`](./docs/governance/CURRENT-STATE.md) and
+   [`CAMPAIGN-STATUS.md`](./docs/governance/CAMPAIGN-STATUS.md) — what is true right now.
+
+The two sealed files are hash-gated by
+[`scripts/check_governance_seal.py`](./scripts/check_governance_seal.py); an agent
+cannot silently edit them.
+
+Subject-matter design authority (below governance, above prose):
+[`basis-of-design.md`](./basis-of-design.md),
+[`event-state-contract.md`](./event-state-contract.md),
+[`agent-loop-contract.md`](./agent-loop-contract.md),
+[`llm-router-contract.md`](./llm-router-contract.md),
+[`retrieval-grounding-contract.md`](./retrieval-grounding-contract.md),
+[`security-analyzer-contract.md`](./security-analyzer-contract.md),
+[`tool-sandbox-contract.md`](./tool-sandbox-contract.md).
+
+> **Historical campaign prose is non-authoritative.** `archive/`,
+> `docs/archive/`, and any dated handoff, "current status", findings, or
+> work-order file are **history only**. Read them for a specific code-archaeology
+> question — never as status, policy, or open-work authority. This file
+> deliberately carries **no** campaign status and no second copy of the campaign.
 
 ## What this is
 
