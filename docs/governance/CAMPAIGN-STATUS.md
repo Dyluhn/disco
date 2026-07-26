@@ -498,3 +498,73 @@ promotion name ever leaks back in.
 execution is scheduled on the first clean candidate after Epic 5, immediately
 before Epic 6's governed canaries, still at zero promotion credit. Spending it
 against knowingly pre-candidate Epic-2/3/4 bytes would prove nothing.
+
+## 2026-07-26 — Acceleration Package C: audit run, and NO custom rule admitted
+
+**Audit (advisory, non-gating, zero promotion credit).** Semgrep Community
+Edition **1.145.0**, installed as an isolated `uv tool` so no repository byte
+changed — verified: the source fingerprint was identical before and after the
+install.
+
+```bash
+semgrep scan --metrics=off --config=p/python --json \
+  --exclude=archive --exclude=docs/archive --exclude=node_modules --exclude=.venv \
+  --exclude=__pycache__ --exclude=cassettes --exclude=evidence \
+  --exclude='*.generated.md' --exclude=frontend/dist --exclude=.serena \
+  packages/ harness/ scripts/
+```
+
+Result: **151 rules over 550 files, 15 findings** (6 ERROR, 7 WARNING, 2 INFO) —
+`use-defused-xml-parse` ×3, `insecure-hash-algorithm-md5` ×3,
+`subprocess-shell-true` ×3, `insecure-file-permissions` ×3,
+`avoid-bind-to-all-interfaces` ×2, `directly-returned-format-string` ×1.
+Evidence outside the repo at
+`build-platform-campaign-evidence/2026-07-25/semgrep/`. Public packs remain
+**advisory and non-gating**; none is treated as a campaign finding.
+
+### DECISION — no custom rule is admitted. The candidate honestly fails the test.
+
+The obvious candidate was the P11 raw-event/normalization recurrence. I
+evaluated it against the admission criteria rather than assuming it qualified,
+and it fails three of the six.
+
+Investigating it did pay off in a different way: I checked **every** unnormalized
+`collect_events()` call site for the same defect. Six exist. Five are safe
+because they read only `seq` (a genuine top-level column) or hand the events to
+a consumer that normalizes internally. The sixth, `run.py:1190`, reads status and
+detail — and is **also correct**, because `_status_value_and_detail`
+(`run.py:2012`) parses `payload` as a fallback. No second instance exists.
+
+That verification is exactly what disqualifies the rule:
+
+| Criterion | Verdict |
+|---|---|
+| Demonstrated recurring defect family | **Pass** — two instances (the P0 in `normalize_event`'s docstring; the freeze bug) |
+| Durable invariant expressible with local static structure | **FAIL** |
+| Catches the historical bad form | Pass, but only with false positives |
+| A legitimate positive control remains accepted | **FAIL** |
+| Negligible repo-wide false positives | **FAIL** |
+| Not already enforced elsewhere | Pass |
+
+The reason is that the correct and incorrect forms are **syntactically
+identical**. `_status_value_and_detail` opens with `event.get("status")` and is
+*correct*; `_event_status_value` opened with `event.get("status")` and was
+*wrong*. What separates them is whether a payload fallback follows, or whether
+the value was normalized upstream — dataflow and semantics, not local structure.
+Any rule matching the bad form flags a legitimate positive control.
+
+Writing it anyway would manufacture a gate that fails on correct code, which
+trains everyone to ignore it. Per the instruction, the honest outcome is to
+record that and add no rule.
+
+### The better remedy, recorded rather than built
+
+The durable fix for P11 is **type-level, not pattern-level**: give the raw
+SQLite row shape a distinct type (e.g. `NewType("RawEventRow", dict[str, Any])`)
+so `collect_events` returns something structurally different from a normalized
+event, and let **basedpyright** — already a required, zero-error gate — refuse
+the confusion at every call site. That is stronger than a text pattern, needs no
+new tool, and cannot false-positive on a payload-aware reader.
+
+It touches many signatures, so it is deliberately **not** in this bounded
+insertion. Carried to `ARCHITECTURE-ROADMAP.md` as post-campaign work.

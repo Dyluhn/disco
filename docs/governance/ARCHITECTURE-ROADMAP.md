@@ -104,6 +104,25 @@ weaken the current Build reliability campaign.**
 | Secret-key rotation | **[RESEARCH-GATE]** |
 | Fresh-device count and RPO/RTO | **[OWNER-DECISION]** |
 
+## Carried from campaign findings
+
+- **Type-level separation of raw event rows from normalized events.**
+  **[ACCEPTED-DESIGN]** — `collect_events()` returns raw SQLite rows
+  (`{seq, kind, source, id, created_at, payload}`, payload an unparsed JSON
+  string) typed identically to a normalized event: both `dict[str, Any]`. That
+  collision produced pattern **P11** twice, once fatally (a freeze that could
+  never fire). Giving the row shape a distinct type — e.g.
+  `NewType("RawEventRow", dict[str, Any])` — lets **basedpyright**, already a
+  required zero-error gate, refuse the confusion at every call site. Stronger
+  than a lint pattern, which cannot distinguish the correct payload-aware reader
+  from the broken one because they are syntactically identical. Deferred from
+  the acceleration insertion because it touches many signatures.
+
+- **Architecture-budget debt.** **[PLANNED]** — `scripts/check_arch_budget.py`
+  fails on `stable-main` itself with 26 violations. Epic 5 requires it to pass,
+  so it needs either honest decomposition or an explicitly justified, owner-
+  visible cap rebaseline. See `CAMPAIGN-STATUS.md`.
+
 ## Accepted planning backbone
 
 ```text
