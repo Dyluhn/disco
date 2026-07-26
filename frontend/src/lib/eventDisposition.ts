@@ -44,6 +44,7 @@ export const KNOWN_EVENT_KINDS = [
   "report",
   "alternatives",
   "knowledge",
+  "runtime_constraint",
   "datasource",
   "deliverable",
   "verifier_started",
@@ -116,6 +117,10 @@ export const EVENT_DISPOSITION: Record<
   knowledge: {
     disposition: "suppressed",
     where: "Internal pinned best-practice snippet injected into the model's context (Cluster 7). Not a user card. (Candidate for a future 'pinned facts' affordance.)",
+  },
+  runtime_constraint: {
+    disposition: "suppressed",
+    where: "Internal host-authored typed runtime constraint pinned into the model's context (one live copy per key). Model-context only, not a user card. (Same future 'pinned facts' affordance candidate as knowledge.)",
   },
   datasource: {
     disposition: "suppressed",

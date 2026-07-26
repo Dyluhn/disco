@@ -684,3 +684,79 @@ one typed producer; the recovery points at the managed session/process
 termination tool the refusal already names (`shell_kill_process`).
 
 This is the design entering implementation. Nothing is claimed done.
+
+## 2026-07-26 — Epic 2 implemented: the typed runtime constraint
+
+Built exactly as the recorded design said: **extend** the proven pinned
+host-authored channel, add no parallel one.
+
+**The chain, typed end to end.** The prohibition is declared where the host
+actually enforced it and carried verbatim from there — no layer re-derives a
+constraint by reading refusal prose:
+
+```text
+process.py  host_signal_constraint()      → RuntimeConstraintDeclaration
+  → ExecResult.runtime_constraints        (sandbox/base.py, additive+defaulted)
+  → ToolOutcome.runtime_constraints       (tools/anatomy.py)
+  → ToolResult.runtime_constraints        (core/events.py, host-only lane)
+  → observe.py persist_runtime_constraints()
+  → RuntimeConstraintEvent                (SYSTEM-sourced, LLMConvertible)
+  → view.py _live_runtime_constraint_seqs() → pinned through condensation
+```
+
+**Why typed at all.** The refusal already existed as actionable *text*, and Bug
+16 in `system.py` shows why that is not enough: the loop drops `content` and
+keeps only `error`, so a refusal survives one turn as prose and is forgettable
+after that. In `k460000` condensation forgot it at seq 297/298 and the model
+repeated the same kill at seq 324.
+
+**Three lifetime rules**, all in one pure function so they are testable without a
+loop:
+
+1. **One per key** — only the newest event for a `constraint_key` is live, so
+   repeated observations cannot grow context however often the model retries.
+2. **Superseded generations expire** — the constraint names
+   `sandbox-backend:process`, the *backend kind*, not an instance. Moving to an
+   isolated backend (own PID namespace, not routed through this check at all)
+   expires it. A prohibition must not outlive the configuration that justified it.
+3. **Explicitly lifted constraints drop** — `active=False` retires a key.
+
+**Transient failures never pin.** `RuntimeConstraintDeclaration.transient` is
+representable and `persist_runtime_constraints` skips those: a command that may
+succeed on retry must stay retryable, and pinning it would turn a blip into a
+permanent belief.
+
+**Host authority is structural.** `source` is fixed to `SYSTEM`, and the
+declaration rides the same host-only lane as `effect_receipts`, which explicitly
+never carries model/domain-controlled data. A model emitting the same words in
+ordinary content is a `MessageEvent`, not a constraint, and is not pinned —
+proven by test.
+
+**Gates:** `test_runtime_constraints.py` **16 passed**, covering every Epic-2
+acceptance item except the live `k460000` run (Epic 4). Revert-check: removing
+the pinning line fails exactly the four survival tests and nothing else.
+`packages/core` + `packages/tools` exit 0. Frontend `typecheck:build` **exit 0**.
+`basedpyright` **0 errors, 0 warnings, 0 notes**. `ruff` clean on all changed
+files.
+
+**Frontend contract honoured, not bypassed.** Adding the kind made
+`test_event_kind_frontend_contract.py` fail with exactly the right message; the
+kind is now classified `suppressed` in `eventDisposition.ts` (model-context only,
+not a user card) and the contract is green again.
+
+**DECISION — I reverted two files my own blanket `ruff --fix` had touched.**
+`test_driver_outage_meta.py` and `test_release_detect.py` were already
+ruff-dirty on the committed tree; auto-fixing them here would have mixed
+unrelated churn into a package under review. Reverted, and the debt is recorded
+below.
+
+**OPEN FINDING (pre-existing, Epic 5), now quantified.** The config-driven
+`uv run ruff check` gate exits **1** on the committed tree: **3 × E501** in
+`packages/core/tests/test_driver_outage_meta.py` and
+`packages/core/tests/test_release_detect.py`. Trivial, but Epic 5 requires the
+gate to pass, so it is listed with the architecture-budget debt rather than
+discovered late.
+
+**Epic 2 remaining:** the deterministic loop test proving the prohibited action
+class is not repeated after condensation, and the live `k460000` confirmation
+(which belongs to Epic 4's diagnostics on final bytes).

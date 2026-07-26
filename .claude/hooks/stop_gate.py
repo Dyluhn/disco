@@ -96,9 +96,7 @@ def main() -> int:
 
     seal_code, seal_output = verify_seal(root)
     if seal_code != 0:
-        reasons.append(
-            f"• The governance seal is not clean (exit {seal_code}):\n    {seal_output}"
-        )
+        reasons.append(f"• The governance seal is not clean (exit {seal_code}):\n    {seal_output}")
 
     if not reasons:
         allow(state, root)
@@ -112,8 +110,7 @@ def main() -> int:
             root,
             "Stop gate: allowing this stop after "
             f"{MAX_CONSECUTIVE_BLOCKS} consecutive refusals. The campaign "
-            "completion contract is still NOT satisfied:\n"
-            + "\n".join(reasons),
+            "completion contract is still NOT satisfied:\n" + "\n".join(reasons),
         )
 
     detail = "\n".join(reasons)

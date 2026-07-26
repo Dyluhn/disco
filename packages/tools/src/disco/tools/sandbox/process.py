@@ -31,6 +31,8 @@ import time
 import uuid
 from pathlib import Path
 
+from disco.core.events import RuntimeConstraintDeclaration
+
 from ._container import (
     MAX_SANDBOX_LIST_ENTRIES,
     MAX_SANDBOX_READ_BYTES,
@@ -106,6 +108,45 @@ _HOST_SIGNAL_REFUSAL = (
     "your named preview/dev session). To restart your OWN server, stop/start that session "
     "(shell_kill_process), never `kill`/`pkill`/`killall`/`fuser -k` a host PID or free a port."
 )
+
+
+# The capability generation this prohibition is true under. It names the BACKEND
+# KIND, not an instance: the refusal is a property of running on a shared host, so
+# it holds for every process-backend sandbox and must EXPIRE the moment the build
+# moves to an isolated backend (which has its own PID namespace and is not routed
+# through this check at all).
+PROCESS_BACKEND_CAPABILITY_GENERATION = "sandbox-backend:process"
+
+# Stable identity for the prohibition. Re-observing it re-emits this same key, so
+# the View keeps exactly one live copy however many times the model retries.
+HOST_SIGNAL_CONSTRAINT_KEY = "sandbox.host_signal_prohibited"
+
+
+def host_signal_constraint(
+    capability_generation: str = PROCESS_BACKEND_CAPABILITY_GENERATION,
+) -> RuntimeConstraintDeclaration:
+    """The typed form of the host-signal refusal.
+
+    Deliberately built from the same constant the model is shown, so the typed
+    directive and the tool-error text can never drift apart.
+    """
+
+    return RuntimeConstraintDeclaration(
+        constraint_key=HOST_SIGNAL_CONSTRAINT_KEY,
+        scope=PROCESS_BACKEND_CAPABILITY_GENERATION,
+        guidance=(
+            "Killing host processes is not permitted on this (process) backend: it "
+            "shares the host, so signalling a host PID can take down the platform. "
+            "Ports 8000/8800 are platform-owned."
+        ),
+        alternative=(
+            "Serve a preview on a non-reserved port such as 8080, and stop/start "
+            "your OWN server with the managed session tool (shell_kill_process) "
+            "rather than kill/pkill/killall/fuser -k on a host PID."
+        ),
+        capability_generation=capability_generation,
+        transient=False,
+    )
 
 
 def process_backend_signal_command_violation(command: str) -> str | None:
@@ -345,7 +386,18 @@ class ProcessSandboxInstance:
         # namespace and is not routed here. Returns BEFORE the subprocess launcher.
         signal_why = process_backend_signal_command_violation(cmd)
         if signal_why is not None:
-            return ExecResult(exit_code=126, stdout="", stderr=signal_why)
+            # Declare the prohibition as TYPED host authority alongside the text.
+            # The refusal string alone is ordinary tool-error content: in the
+            # k460000 diagnostic condensation forgot it and the model repeated the
+            # same forbidden kill. A typed declaration carries its own identity, so
+            # exactly one live copy stays near current context however many times it
+            # is re-observed. Not transient -- this backend refuses the whole class.
+            return ExecResult(
+                exit_code=126,
+                stdout="",
+                stderr=signal_why,
+                runtime_constraints=(host_signal_constraint(),),
+            )
         cmd = self._rewrite_workspace_paths(cmd)
         proc = await asyncio.create_subprocess_exec(
             *bounded_exec_argv(cmd, timeout_s, python=sys.executable),

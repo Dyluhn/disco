@@ -48,11 +48,15 @@ def cmd_status(root: Path) -> int:
     last = state.get("last_review_epoch")
     print(f"last review       : {'never' if last is None else time.ctime(int(last))}")
     print(f"next due          : {time.ctime(int(state.get('next_due_epoch', 0)))}")
-    print(
-        f"due now?          : {'YES (overdue ' + humanize(remaining) + ')' if review_is_due(state) else 'no (in ' + humanize(remaining) + ')'}"
+    due = (
+        f"YES (overdue {humanize(remaining)})"
+        if review_is_due(state)
+        else f"no (in {humanize(remaining)})"
     )
+    print(f"due now?          : {due}")
     print(f"seal              : exit {seal_code} {seal_output}")
-    print(f"completion contract: {'SATISFIED' if completion_contract_satisfied(root) else 'not satisfied'}")
+    contract = "SATISFIED" if completion_contract_satisfied(root) else "not satisfied"
+    print(f"completion contract: {contract}")
     return 0
 
 

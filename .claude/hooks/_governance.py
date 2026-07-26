@@ -61,9 +61,7 @@ REVIEW_HEADING_PREFIX = "## Review "
 
 # The exact sentence CAMPAIGN-STATUS.md must contain for a voluntary stop to be
 # permitted.  Deliberately verbose so it cannot be written by accident.
-COMPLETION_SENTINEL = (
-    "COMPLETION CONTRACT SATISFIED: Epics 0-7 all acceptance items met."
-)
+COMPLETION_SENTINEL = "COMPLETION CONTRACT SATISFIED: Epics 0-7 all acceptance items met."
 
 
 # --------------------------------------------------------------------------
@@ -277,11 +275,7 @@ def missing_review_fields(block: str | None) -> list[str]:
         same_line = tail if line_end == -1 else tail[:line_end]
         next_chunk = tail[line_end + 1 : line_end + 400] if line_end != -1 else ""
         answered = bool(same_line.strip()) or bool(
-            [
-                line
-                for line in next_chunk.splitlines()
-                if line.strip() and not line.startswith("#")
-            ]
+            [line for line in next_chunk.splitlines() if line.strip() and not line.startswith("#")]
         )
         if not answered:
             missing.append(f"{field} (label present but unanswered)")

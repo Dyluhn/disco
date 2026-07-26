@@ -912,6 +912,9 @@ class DefaultToolExecutor:
                 action_profile,
                 profile_error,
             ),
+            # Carried through verbatim from the tool that enforced it. The loop
+            # must never have to re-derive a constraint by reading refusal prose.
+            runtime_constraints=outcome.runtime_constraints,
             action_profile=persisted_profile,
         )
 

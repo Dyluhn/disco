@@ -117,6 +117,12 @@ async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None)
         content=content,
         structured=structured,
         error=error,
+        # Carried verbatim from the backend that enforced it. Bug 16 above shows
+        # why the text alone is not enough: the loop drops `content` and keeps only
+        # `error`, so a refusal survives one turn as prose and is then forgettable.
+        # The typed declaration is what lets the View keep one live copy of the
+        # prohibition instead of relying on the model remembering the sentence.
+        runtime_constraints=res.runtime_constraints,
     )
 
 

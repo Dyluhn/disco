@@ -32,13 +32,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _governance import (  # noqa: E402
     LEDGER_PATHS,
     emit,
+    humanize,
     load_state,
     project_dir,
     protected_paths,
     read_hook_input,
     review_is_due,
     seconds_until_due,
-    humanize,
 )
 
 FILE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}

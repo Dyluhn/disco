@@ -41,6 +41,7 @@ from .events import (
     LLMMessage,
     ObservationEvent,
     PlanEvent,
+    RuntimeConstraintEvent,
     StatusEvent,
     agent_view_consistent_events,
 )
@@ -367,7 +368,43 @@ def _pinned_seqs(events: list[Event]) -> set[int]:
                 pinned.add(e.seq)
         elif isinstance(e, DatasourceEvent) and e.seq is not None:
             pinned.add(e.seq)
+    pinned |= _live_runtime_constraint_seqs(events)
     return pinned
+
+
+def _live_runtime_constraint_seqs(events: list[Event]) -> set[int]:
+    """Seqs of the runtime constraints that are still LIVE, one per key.
+
+    Three rules, each answering a way a constraint could go wrong:
+
+    * **One per key.** Only the newest event for a ``constraint_key`` is pinned.
+      Re-observing the same prohibition therefore cannot grow context, however
+      many times the model retries it.
+    * **Superseded generations expire.** A constraint is only true of the host
+      capabilities it was observed under. Once any constraint is recorded under a
+      newer ``capability_generation``, older-generation constraints stop being
+      live -- a prohibition must not outlive the configuration that justified it.
+    * **Explicitly lifted constraints are dropped.** ``active=False`` for a key
+      retires it rather than leaving a stale rule pinned forever.
+    """
+    latest: dict[str, RuntimeConstraintEvent] = {}
+    generations: list[str] = []
+    for event in events:
+        if not isinstance(event, RuntimeConstraintEvent):
+            continue
+        latest[event.constraint_key] = event
+        if event.capability_generation:
+            generations.append(event.capability_generation)
+
+    current_generation = generations[-1] if generations else ""
+    live: set[int] = set()
+    for event in latest.values():
+        if not event.active or event.seq is None:
+            continue
+        if current_generation and event.capability_generation != current_generation:
+            continue
+        live.add(event.seq)
+    return live
 
 
 def _recitation_message(

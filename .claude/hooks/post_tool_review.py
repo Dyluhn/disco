@@ -41,7 +41,7 @@ WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # without flooding every single tool result.
 REINJECT_SECONDS = 90
 
-REVIEW_TEMPLATE = f"""\
+REVIEW_TEMPLATE = """\
 ## Review <N> — <YYYY-MM-DD HH:MM local> / <YYYY-MM-DDTHH:MM:SSZ UTC>
 
 Source fingerprint: sha256:<.venv/bin/python3 scripts/source_fingerprint.py --which source --quiet>
@@ -112,12 +112,41 @@ def handle_review_written(root: Path, state: dict) -> None:
     )
 
 
+def _pending_watchdog_nudge(root: Path) -> str | None:
+    """An unacknowledged out-of-session watchdog nudge, if one is waiting.
+
+    The watchdog runs detached and cannot inject context itself. Surfacing its
+    nudge here is what actually reaches the model.
+    """
+    import json as _json
+
+    path = root / ".claude" / "runtime" / "watchdog-nudge.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if payload.get("acknowledged"):
+        return None
+    payload["acknowledged"] = True
+    try:
+        path.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return str(payload.get("message") or "")
+
+
 def main() -> int:
     payload = read_hook_input()
     tool = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
     root = project_dir()
     state = load_state(root)
+
+    nudge = _pending_watchdog_nudge(root)
+    if nudge:
+        inject(f"⏱ {nudge}")
 
     # --- did the agent just write the review? --------------------------------
     if tool in WRITE_TOOLS and isinstance(tool_input, dict):

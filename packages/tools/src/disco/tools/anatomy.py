@@ -25,6 +25,7 @@ from uuid import uuid4
 from disco.core import SecurityRisk
 from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.effects import EffectReceipt, ToolBehavior
+from disco.core.events import RuntimeConstraintDeclaration
 from disco.core.llm import ToolSpec
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -131,6 +132,10 @@ class ToolOutcome(BaseModel):
     # Host-authored reliability evidence. Domain/model-controlled payloads stay
     # in ``structured`` and are never promoted into these typed receipts.
     effect_receipts: tuple[EffectReceipt, ...] = ()
+    # Host-authored runtime constraints this call proved (e.g. a backend that
+    # refuses an operation class). Declared where the host actually enforced it,
+    # so the loop never re-derives a constraint by parsing refusal prose.
+    runtime_constraints: tuple[RuntimeConstraintDeclaration, ...] = ()
 
 
 class ToolDef(BaseModel):

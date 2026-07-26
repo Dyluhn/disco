@@ -82,6 +82,7 @@ class EventKind(str, Enum):
     REPORT = "report"  # a finished Deep Research multi-section grounded report
     ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
     KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
+    RUNTIME_CONSTRAINT = "runtime_constraint"  # host-authored typed constraint + recovery
     DATASOURCE = "datasource"  # durable API/schema docs, condensation-immune (Cluster 7)
     DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
     VERIFIER_STARTED = "verifier_started"  # REL-1b: host verifier audit marker
@@ -196,6 +197,10 @@ class ToolResult(BaseModel):
     # deliberately separate from model/domain-controlled ``structured`` data.
     # The empty default keeps every historical event log backward compatible.
     effect_receipts: tuple[EffectReceipt, ...] = ()
+    # Host-authored runtime constraints this call proved. Same host-only lane as
+    # effect_receipts: never populated from model/domain-controlled data, so a
+    # model-authored lookalike carries no authority.
+    runtime_constraints: tuple[RuntimeConstraintDeclaration, ...] = ()
     # Host-classified behavior of this validated invocation. Persisting the
     # profile on the result makes progress/recovery reconstruction deterministic
     # across restart and replay. Calls refused before execution leave it absent.
@@ -1187,6 +1192,93 @@ class KnowledgeEvent(BaseEvent, LLMConvertible):
         )
 
 
+class RuntimeConstraintDeclaration(BaseModel):
+    """A host-authored constraint a tool declares, before it becomes an event.
+
+    Declared at the point the host actually enforced something, so the loop never
+    re-derives a constraint by reading refusal prose. This travels the same
+    host-only lane as ``effect_receipts``: model- and domain-controlled payloads
+    stay in ``structured`` and are never promoted into it, which is what makes a
+    model-authored lookalike powerless.
+
+    ``transient=True`` marks a failure that may succeed on retry. Those are
+    deliberately representable and deliberately never pinned -- a blip must not
+    become a permanent belief.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    constraint_key: str = Field(min_length=1, max_length=128)
+    scope: str = Field(default="", max_length=160)
+    guidance: str = Field(min_length=1, max_length=1200)
+    alternative: str = Field(default="", max_length=600)
+    capability_generation: str = Field(default="", max_length=160)
+    transient: bool = False
+
+
+class RuntimeConstraintEvent(BaseEvent, LLMConvertible):
+    """A host-authored typed runtime constraint, with a usable alternative.
+
+    Why this is typed rather than prose: in the `k460000` diagnostic the process
+    backend refused a host-process kill, condensation forgot the refusal span, and
+    the model repeated the same forbidden operation.  A refusal delivered only as
+    tool-error *text* is ordinary forgettable content.  A constraint carries its own
+    identity, so the View can keep exactly one live copy of it near current context
+    no matter how many times it is re-observed or how often the log is condensed.
+
+    Field roles:
+
+    ``constraint_key``
+        Stable identity.  Re-observing the same prohibition re-emits the same key,
+        and only the newest event for a key stays live -- so repeated observations
+        never grow context.
+    ``scope``
+        What the constraint applies to (e.g. the backend it is true of).
+    ``guidance``
+        Bounded statement of what is not permitted.  Deliberately length-capped: a
+        constraint that can grow without limit becomes its own context problem.
+    ``alternative``
+        The supported way to accomplish the intent.  A prohibition without a usable
+        alternative just blocks the model; the recovery path is the point.
+    ``capability_generation``
+        The host capability generation this was true under.  When the backend or
+        its capabilities change generation, constraints from an older generation
+        stop being live -- a prohibition must not outlive the configuration that
+        justified it.
+    ``active``
+        False explicitly lifts a constraint for its key.
+
+    **Host authority only.**  ``source`` is fixed to SYSTEM.  Model prose cannot
+    create one of these, and a model-authored lookalike in ordinary content has no
+    authority because it is not this event type.
+
+    **Transient failures must never produce one.**  A command that failed once and
+    may succeed on retry is not a constraint; pinning it would turn a blip into a
+    permanent belief.  Only a durable host-enforced prohibition qualifies.
+    """
+
+    kind: Literal[EventKind.RUNTIME_CONSTRAINT] = EventKind.RUNTIME_CONSTRAINT
+    source: EventSource = EventSource.SYSTEM
+    constraint_key: str = Field(min_length=1, max_length=128)
+    scope: str = Field(default="", max_length=160)
+    guidance: str = Field(min_length=1, max_length=1200)
+    alternative: str = Field(default="", max_length=600)
+    capability_generation: str = Field(default="", max_length=160)
+    active: bool = True
+
+    def to_llm_message(self) -> LLMMessage:
+        scope = f' scope="{self.scope}"' if self.scope else ""
+        alternative = f"\nInstead: {self.alternative}" if self.alternative else ""
+        return LLMMessage(
+            role="user",
+            content=(
+                f'<runtime-constraint key="{self.constraint_key}"{scope}>\n'
+                f"{self.guidance}{alternative}\n"
+                "</runtime-constraint>"
+            ),
+        )
+
+
 class DatasourceEvent(BaseEvent, LLMConvertible):
     """Durable data-API / schema documentation the agent learned or was given
     (Cluster 7). The long-horizon hazard this fixes: an API contract learned
@@ -1515,6 +1607,7 @@ Event = Annotated[
     | ReportEvent
     | AlternativesEvent
     | KnowledgeEvent
+    | RuntimeConstraintEvent
     | DatasourceEvent
     | DeliverableEvent
     | VerifierStartedEvent

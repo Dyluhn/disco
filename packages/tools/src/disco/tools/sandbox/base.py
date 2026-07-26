@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import NoReturn, Protocol, runtime_checkable
 
+from disco.core.events import RuntimeConstraintDeclaration
 from disco.core.workspace_paths import (
     strip_redundant_workspace_prefix as strip_redundant_workspace_prefix,
 )
@@ -137,6 +138,11 @@ class ExecResult(BaseModel):
     # code survive and the caller can distinguish a timeout from a normal non-zero
     # exit. Additive + defaulted, so existing callers are unaffected.
     timed_out: bool = False
+    # Host-authored constraints this execution PROVED (e.g. a backend that refuses
+    # an operation class outright). Declared here, at the point the host actually
+    # enforced it, so no later layer has to re-derive a constraint by reading the
+    # refusal text. Additive + defaulted, so existing callers are unaffected.
+    runtime_constraints: tuple[RuntimeConstraintDeclaration, ...] = ()
 
 
 class SandboxSpec(BaseModel):

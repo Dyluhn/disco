@@ -24,6 +24,7 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    RuntimeConstraintEvent,
     ToolResult,
     find_elided_arg_markers,
     value_is_only_elision_marker,
@@ -637,6 +638,28 @@ class Observer:
         sbx = getattr(self._loop.executor, "sandbox", None)
         gen_before = getattr(sbx, "generation", 0) if sbx is not None else 0
 
+        async def persist_runtime_constraints(result: ToolResult) -> None:
+            """Record host-authored constraints this call proved, as typed events.
+
+            Emitted alongside the ordinary observation/error rather than instead of
+            it: the tool result still says what happened to THIS call, while the
+            constraint says what remains true afterwards. Transient declarations are
+            skipped by design -- a failure that may succeed on retry must stay
+            retryable, and pinning it would turn a blip into a permanent belief.
+            """
+            for declaration in result.runtime_constraints:
+                if declaration.transient:
+                    continue
+                await self._loop._emit(
+                    RuntimeConstraintEvent(
+                        constraint_key=declaration.constraint_key,
+                        scope=declaration.scope,
+                        guidance=declaration.guidance,
+                        alternative=declaration.alternative,
+                        capability_generation=declaration.capability_generation,
+                    )
+                )
+
         async def persist_primary_result(result: ToolResult) -> None:
             if any(
                 isinstance(event, (ObservationEvent, AgentErrorEvent))
@@ -644,6 +667,7 @@ class Observer:
                 for event in await self._loop.store.get_events(self._loop.conversation_id)
             ):
                 return
+            await persist_runtime_constraints(result)
             if result.success:
                 await self._loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
                 return
