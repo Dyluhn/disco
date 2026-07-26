@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from typing import Literal, Protocol
 
@@ -333,6 +334,74 @@ def effective_plan_progress(
                 except (TypeError, ValueError, AttributeError):
                     continue
     return (plan, states)
+
+
+_LOG = logging.getLogger("disco.view")
+
+
+# Tool-call PROTOCOL residue. Deliberately a short, literal list of the shapes a
+# provider actually leaks -- not a generic "looks like XML" rule.
+#
+# The distinction matters more than it first appears. A summary of a React build
+# legitimately contains `<div>`, `<Button />`, `</section>`; a summary of a shell
+# session legitimately contains `#!/bin/sh` and `2>&1`. A rule broad enough to
+# catch protocol markup by its angle brackets would eat all of that, and a
+# condenser that rejects honest summaries is worse than one that occasionally
+# passes junk. So: only delimiters that carry no meaning outside a tool-call
+# protocol. `openai_provider.py` already strips `</parameter>` on the tool-ARGUMENT
+# path for exactly this reason; the summary path simply never checked.
+_PROTOCOL_MARKERS: tuple[str, ...] = (
+    "<parameter",
+    "</parameter>",
+    "<function_calls>",
+    "</function_calls>",
+    "<invoke ",
+    "</invoke>",
+    "<tool_call",
+    "</tool_call>",
+    "<|tool_call",
+    '"tool_calls":',
+    '"tool_call_id":',
+)
+
+_SUMMARY_REPAIR_INSTRUCTION = (
+    "Your previous summary contained tool-call protocol markup. Re-write it as "
+    "plain prose describing what happened. Do not include any tool-call syntax "
+    "such as <parameter>, <invoke>, <function_calls>, or a tool_calls JSON "
+    "payload. Ordinary code, HTML or shell snippets are fine when they are part "
+    "of what you are describing."
+)
+
+
+def summary_rejection_reason(summary: str) -> str | None:
+    """Why this summarizer output must not be persisted, or None if it is fine.
+
+    Structural rejection, not taste: a summary carrying tool-call protocol markup
+    is replayed to the model as though it were prose, which is how a provider's
+    own protocol ends up looking like conversation history.
+    """
+    lowered = summary.lower()
+    for marker in _PROTOCOL_MARKERS:
+        if marker.lower() in lowered:
+            return f"contains tool-call protocol markup: {marker!r}"
+    return None
+
+
+def _fallback_summary(start_seq: int, end_seq: int) -> str:
+    """A truthful host-authored stand-in when the summarizer cannot be trusted.
+
+    Asserts ONLY what the host knows for certain -- which events were dropped --
+    and states plainly that their content was not summarized. It deliberately
+    does not invent progress: an honest gap is recoverable, a fabricated summary
+    is not.
+    """
+    return (
+        f"[host summary] Events {start_seq}-{end_seq} were removed from context to "
+        "stay within the model's window. The summarizer's output was rejected as "
+        "unusable, so the work done in that span is NOT summarized here. Treat "
+        "this range as unknown rather than as 'nothing happened': re-read files or "
+        "re-check state before assuming any step in it was or was not completed."
+    )
 
 
 def _pinned_seqs(events: list[Event]) -> set[int]:
@@ -1118,6 +1187,28 @@ class LLMSummarizingCondenser:
         summary = await summarizer.summarize(view.messages)
         if not summary.strip():
             return None  # an empty summary would forget context for nothing
+
+        rejection = summary_rejection_reason(summary)
+        if rejection is not None:
+            # ONE bounded repair. The span is about to be forgotten either way,
+            # so a single corrective re-ask is worth it -- but only one: retrying
+            # a summarizer that emits protocol markup tends to emit it again, and
+            # an unbounded loop here burns the context budget the condensation
+            # exists to protect.
+            _LOG.warning("summarizer output rejected (%s); requesting one repair", rejection)
+            repaired = await summarizer.summarize(
+                [*view.messages, LLMMessage(role="user", content=_SUMMARY_REPAIR_INSTRUCTION)]
+            )
+            if repaired.strip() and summary_rejection_reason(repaired) is None:
+                summary = repaired
+            else:
+                # Both attempts unusable. Persist a TRUTHFUL host-generated
+                # fallback rather than protocol markup: it asserts only what the
+                # host itself knows (the seq range) and says plainly that the
+                # progress in that span was not summarized. Claiming a summary we
+                # do not have would be worse than admitting the gap.
+                _LOG.warning("summarizer repair also rejected; using truthful fallback")
+                summary = _fallback_summary(start_seq, end_seq)
         return CondensationEvent(
             forgotten_start_seq=start_seq,
             forgotten_end_seq=end_seq,

@@ -760,3 +760,50 @@ discovered late.
 **Epic 2 remaining:** the deterministic loop test proving the prohibited action
 class is not repeated after condensation, and the live `k460000` confirmation
 (which belongs to Epic 4's diagnostics on final bytes).
+
+## 2026-07-26 — Epic 3 completed: malformed summaries rejected, repaired once, or told truthfully
+
+The summary path had **exactly one** check before this: `if not summary.strip()`.
+Anything non-empty was persisted verbatim into a `CondensationEvent` and replayed
+to the model as conversation — which is how provider tool-call protocol markup
+ended up in `k460000`'s context.
+
+**Finding that shaped the rule: "DSML" does not exist in this codebase.** The
+term appears only in governance prose; there is no `<function_calls>`, `<antml`,
+or `<invoke` literal anywhere in code. What actually leaks is XML-ish tool-call
+residue such as `</parameter>` — and `openai_provider.py:782-801` already strips
+exactly that on the tool-**argument** path. The summary path simply never
+checked.
+
+**So the rule is narrow by design.** `summary_rejection_reason()` matches a short
+literal list of delimiters that carry no meaning outside a tool-call protocol. It
+deliberately does **not** reject generic angle brackets, because a real summary of
+a React build contains `<div>` and `<Button />`, and a shell summary contains
+`2>&1`. Six overhardening controls assert exactly those stay allowed, including
+`</section>` and `<svg viewBox=…>`. A condenser that rejects honest summaries is
+worse than one that occasionally passes junk.
+
+**One repair, then the truth.** A rejected summary triggers exactly one corrective
+re-ask; a summarizer that emits protocol markup tends to emit it again, and an
+unbounded retry burns the very context budget condensation exists to protect. If
+the repair is also unusable, the host writes its own summary asserting only what
+it actually knows — the exact dropped seq range — and states plainly that the
+work in that span is not summarized, telling the reader to treat the range as
+*unknown rather than as "nothing happened"*. Claiming a summary we do not have
+would be worse than admitting the gap.
+
+**Gates:** `test_summary_validation.py` **19 passed**; `packages/core` exit 0;
+`ruff` clean; `basedpyright` **0/0/0**. Revert-check: removing the validation
+block fails exactly the four behavioural tests and leaves the rule/fallback unit
+tests passing, which is the correct blast radius.
+
+**Defect caught during implementation:** I referenced `_LOG` in `view.py`, which
+had no logger defined — the import still succeeded because the references sit
+inside a function body, so it would have `NameError`d at the first rejection.
+Logger added.
+
+**Epic 3 acceptance — all items met** (a span condensed once, via `fad36450`;
+valid summaries unchanged; protocol markup rejected and never persisted; one
+repair accepted; two failures → one truthful fallback with no loop; the fallback
+asserts only durable facts; typed constraints survive the fallback; ordinary
+HTML/JSX/shell still allowed).
