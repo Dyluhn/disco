@@ -37,28 +37,6 @@ _ANCHORED_HEADINGS: tuple[str, ...] = (
     "FILES:",
 )
 
-# Both directives end with the same prohibition, because the summarizer request
-# binds NO tools -- any tool-call syntax in the reply is pure imitation of the
-# transcript being summarized, and a small model handed a conversation full of
-# tool calls will keep writing them. Seed 460000 produced 22 such summaries.
-#
-# The condenser's guard catches them, but catching costs a second round-trip to
-# repair and, when the repair also fails, degrades the span to a content-free
-# host fallback. Saying it up front is strictly cheaper than repairing it after:
-# prevention removes the call, the latency and the lost context at once, and
-# across a 100-trial promotion those round-trips are the difference between
-# fitting the run ceiling and not. Phrased dialect-neutrally on purpose -- the
-# model that produced the residue writes `<｜｜DSML｜｜invoke …>`, so a list of
-# ASCII examples alone reads to it as being about somebody else's syntax.
-_NO_PROTOCOL_CLAUSE = (
-    "\nAnswer with the summary TEXT ONLY. Do not call a tool, and do not emit "
-    "tool-call syntax in any dialect: no <parameter>, <invoke> or "
-    "<function_calls>, no tool_calls JSON payload, and none of your own special "
-    "tool-call delimiters even when they are written with unusual characters. "
-    "Ordinary code, HTML or shell snippets are fine when they are part of what "
-    "you are describing."
-)
-
 # A-S4 carried forward + HS-02 reshaped: the FAILED-approaches content is
 # load-bearing (prevents the agent from repeating work that already failed) and
 # MUST survive every condensation. The anchored template folds it under
@@ -82,7 +60,7 @@ _SUMMARIZE_FRESH_INSTRUCTION = (
     "FILES: every file created or modified, by path, with a one-line note of "
     "what it contains.\n"
     "Be concise but do not drop file paths, the plan state, FAILED "
-    "approaches, or the goal/constraints." + _NO_PROTOCOL_CLAUSE
+    "approaches, or the goal/constraints."
 )
 
 # HS-02 update-in-place: when a prior anchored summary is already in the
@@ -110,7 +88,7 @@ _SUMMARIZE_UPDATE_INSTRUCTION = (
     "by the condenser).\n"
     "Output the COMPLETE updated summary (all six headings, even if "
     "unchanged), with file paths, plan state, and FAILED approaches "
-    "preserved." + _NO_PROTOCOL_CLAUSE
+    "preserved."
 )
 
 # Stable template marker: the create-fresh directive mandates a "GOAL:" line as

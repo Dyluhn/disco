@@ -1568,6 +1568,60 @@ allocation sums to exactly 86.
 
 ---
 
+## 2026-07-26 — Epic 4 attempt 5: the prevention clause earned nothing, so it is reverted; and a real thrash signal appears
+
+Attempt 5 ran on `3ff9cbf2` with `--hard-cap 2400`. Result: `INVALID_RUN /
+RUN_TIMEOUT_WHILE_PROGRESSING` again, this time against the raised ceiling.
+
+**First reading was wrong, and the correction matters.** Rejections went 11 →
+28, which looks like the prevention clause backfiring by priming the model with
+the very tokens it forbids. Normalising kills that reading:
+
+| | attempt 4 | attempt 5 |
+|---|---|---|
+| actions | 50 | 107 |
+| condensations | 40 | 90 |
+| rejections | 11 | 28 |
+| **rejections per condensation** | **0.275** | **0.311** |
+| residue persisted | 0 | 0 |
+
+The rate is flat. The absolute rise is just 2.1× more work. So the clause
+neither helped nor hurt protocol emission measurably — it earned **nothing**.
+
+**Reverted (`3ff9cbf2`), and the reason is discipline, not doubt about the
+theory.** A change with no measured benefit must not ride into a candidate about
+to be frozen for 100 trials: it adds a variable to every subsequent comparison
+and the brief explicitly warns against theoretical-tail hardening. The proven
+mechanism — guard → one bounded repair → truthful fallback — stays, and it is
+what drives residue to 0 in both post-fix runs. The revert is also good
+experiment design: attempt 4 and the next run now share one configuration, so
+their difference measures VARIANCE rather than confounding it with a third
+variable.
+
+**The real signal, and it is a product one.** Attempt 5 is a verify/edit thrash
+loop: `verify_web_app` ×24 and 19 edits to the same `index.html`, never
+converging. Attempt 4 showed the same shape at half scale (8 verifies, 7
+edits); attempt 3, before the condensation fix, converged in 40 actions and 6
+verdicts. Had attempt 5 terminated it would have FAILed the ThrashOracle on its
+own limits (`max_identical_action_repeats: 2`) — correctly.
+
+**Stated as a hypothesis, not a finding, because n=1 per configuration on a
+high-variance driver does not support more.** A plausible mechanism: the 22
+residue summaries were raw tool-call text, which replayed to the model as a
+verbatim log of the calls it had made — accidentally useful detail that real
+prose summaries do not preserve. If that is what was carrying the agent, the
+defect it was masking is that the anchored template does not retain *why the
+last verification failed*, so the agent re-edits by guessing. The template does
+demand FAILED approaches under CONSTRAINTS; whether this driver complies is
+exactly what the next runs will show. No product change is being made on this
+until the data supports one.
+
+**Next:** rerun seed 460000 on the reverted bytes with `--hard-cap 2400`. Two
+samples of one configuration, then decide from variance rather than from a
+single trajectory.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
