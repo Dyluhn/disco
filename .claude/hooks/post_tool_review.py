@@ -65,7 +65,15 @@ Next action: <the next campaign action you are taking immediately>
 """
 
 
-def inject(text: str) -> None:
+def inject(text: str, nudge: str | None = None) -> None:
+    """Emit one PostToolUse message, carrying any pending watchdog nudge with it.
+
+    The nudge is appended rather than emitted separately: an early return for the
+    nudge previously swallowed the review-acceptance path, so a review that was
+    genuinely written never advanced the schedule.
+    """
+    if nudge:
+        text = f"{text}\n\n⏱ {nudge}"
     emit(
         {
             "hookSpecificOutput": {
@@ -82,7 +90,7 @@ def quiet() -> None:
     sys.exit(0)
 
 
-def handle_review_written(root: Path, state: dict) -> None:
+def handle_review_written(root: Path, state: dict, nudge: str | None = None) -> None:
     block = last_review_block(root)
     missing = missing_review_fields(block)
 
@@ -92,7 +100,8 @@ def handle_review_written(root: Path, state: dict) -> None:
             "HOURLY REVIEW NOT YET ACCEPTED — the last block in "
             f"{SELF_REVIEWS} is missing required content:\n\n{bullet}\n\n"
             "A timestamp is not a review. Answer every field, then the schedule "
-            "advances automatically."
+            "advances automatically.",
+            nudge,
         )
 
     if not (root / CAMPAIGN_STATUS).is_file():
@@ -108,7 +117,8 @@ def handle_review_written(root: Path, state: dict) -> None:
         f"HOURLY REVIEW ACCEPTED (#{count}). Next review due in {interval}.\n\n"
         "Source mutations are unblocked. A review is not a checkpoint and not "
         "permission to stop — CONTINUE the campaign with the next action you just "
-        "recorded."
+        "recorded.",
+        nudge,
     )
 
 
@@ -144,9 +154,11 @@ def main() -> int:
     root = project_dir()
     state = load_state(root)
 
+    # Read the nudge now, but do NOT emit it here. Emitting immediately made the
+    # watchdog swallow the review-acceptance path below: a pending nudge returned
+    # first, so a review that WAS written never advanced the schedule. Two
+    # mechanisms both wanting to speak must not let one silently eat the other.
     nudge = _pending_watchdog_nudge(root)
-    if nudge:
-        inject(f"⏱ {nudge}")
 
     # --- did the agent just write the review? --------------------------------
     if tool in WRITE_TOOLS and isinstance(tool_input, dict):
@@ -160,10 +172,12 @@ def main() -> int:
             except (ValueError, OSError):
                 rel = ""
             if rel == SELF_REVIEWS:
-                handle_review_written(root, state)
+                handle_review_written(root, state, nudge)
 
     # --- otherwise: is a review due? -----------------------------------------
     if not review_is_due(state):
+        if nudge:
+            inject(f"⏱ {nudge}")
         quiet()
 
     now_overdue = humanize(seconds_until_due(state))
@@ -189,7 +203,8 @@ def main() -> int:
         f"demonstrated cross-cutting mechanism, record it in {RELIABILITY_PATTERNS}.\n\n"
         "Then CONTINUE immediately with the next campaign action. An hourly review "
         "is not a checkpoint, not a status report to hand back, and not permission "
-        "to stop."
+        "to stop.",
+        nudge,
     )
     return 0
 
