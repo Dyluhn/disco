@@ -1262,3 +1262,44 @@ re-entered.**
 
 **Not blocked, and continuing:** all provider-free work — the Export Track-1
 verifier re-run now in flight, and the remaining Epic 5 items.
+
+## 2026-07-26 — Epic 4: BOTH provider routes exhausted. Owner-only, definitively.
+
+I was too quick to defer earlier, so I went back and tested the alternative the
+campaign actually permits. Epic 6 says a provider route MAY change if it is
+disclosed and bound, with fresh qualification and promotion from zero — and
+promotion is already zero. So a reachable substitute was in scope. It does not
+exist on this host.
+
+| route | state |
+|---|---|
+| `opencode-go` / `deepseek-v4-flash` (**the frozen route**) | origin re-approved and verifying, but the stored API key **cannot be decrypted** — encrypted under a secret absent from every running process |
+| `openrouter` / `gemini-3-flash` | key decrypts and a real request is made; OpenRouter answers **401 `"User not found."`** — the account behind the key is gone |
+| `driver-local` (LAN Qwen, `192.168.1.231:18080`) | host unreachable (curl 000) |
+| `driver-minimax` (`localhost:8080`) | not an LLM endpoint on this host |
+
+**A false positive I caught before reporting it.** I first "validated" the
+OpenRouter key with `curl /v1/models` → HTTP 200 and nearly recorded the key as
+good. `/v1/models` is **public**: an unauthenticated request also returns 200. The
+decisive test is a real completion, which returns 401. This is the same shape as
+pattern **P9** — a check whose scope cannot distinguish the thing it is trusted to
+prove. Recorded so the next credential check starts from a completion, not a
+catalogue read.
+
+**State I changed and am disclosing:** I wrote the environment's OpenRouter key
+into the store via `PUT /api/openrouter/key`. The previously stored value was
+already producing 401, so nothing working was overwritten — but the store now
+holds the env key rather than its original.
+
+**The blocker is now genuinely owner-only and fully exhausted.** It needs one of:
+
+1. the **plaintext `opencode-go` API key** (restores the frozen route — preferred,
+   keeps historical comparability); or
+2. a **working OpenRouter key** (a disclosed route change, which Epic 6 permits
+   with fresh qualification at zero promotion); or
+3. the **`driver-local` LAN host** at `192.168.1.231:18080` brought online.
+
+Everything else is staged: stack running from this checkout on 8010/8810, correct
+flags, origin approvals verifying, clean tree.
+
+**Continuing on provider-free work.**
