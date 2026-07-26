@@ -1693,6 +1693,45 @@ has less to oscillate about.
 
 ---
 
+## 2026-07-26 — seed 460000 PASS on the final candidate `f0498c3a`; a measurement correction worth keeping
+
+Attempt 7, on the task-pin bytes with `--hard-cap 2400`: **PASS**, revision
+`f0498c3a`, `repo_dirty: false`, zero non-PASS oracles. 451 events, 75 actions,
+61 condensations, **0 protocol residue**, 1 host fallback. Seed 460000 is
+complete on the final candidate.
+
+**A correction, because it would otherwise have been recorded as a failed fix.**
+The first read of this dossier said the task was STILL forgotten: a condensation
+tombstone still declares the range (2, 9), which covers the task at seq 2. That
+measured the wrong thing. `View.of` reads:
+
+```python
+def is_forgotten(seq):
+    if seq is not None and seq in pinned:
+        return False          # pinned seqs survive even a covering tombstone
+```
+
+Pinning does not shrink the tombstone's declared range — it exempts the event
+from that range at render time, exactly as the code's own comment says of the
+pinned PlanEvent ("never forgotten even if a tombstone range covers it"). So the
+correct live check is whether the seq is RENDERED, which is precisely what the
+unit test asserts and what was proven decisive. Deployment is independently
+confirmed: the commit landed 14:49:40 and the agent-server started 14:50:08.
+
+The general lesson is the campaign's own recurring one, a third time today:
+**a check that reads a nearby-but-different quantity agrees with whatever it
+happens to see.** Tombstone range is not visibility, `ev["_"]` is not
+`ev["events"]`, and an ASCII grep is not a protocol predicate.
+
+**Timing variance is large on this driver and is now quantified**, which matters
+for planning Epic 6's context lane: seed 460000 finished in 11:00 (attempt 6),
+21:16 (attempt 4, cut), 30:00+ (attempt 7), and blew past 40:00 (attempt 5, cut)
+— on identical bytes and the same seed. The `--hard-cap 2400` binding is
+therefore not generous, it is necessary. Budget the 10-trial context lane at
+roughly 25 minutes per trial with two workers.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
