@@ -25,6 +25,9 @@ disco-secrets.json
 *-secrets.json
 # Operator origin-approval ledger (runtime state — HMAC + approved provider origins)
 disco-approved-origins.json
+# DISCO_INSPECT=1 writes this beside the server. A live run must not be able
+# to dirty the candidate tree -- Epics 6/7 certify exact bytes.
+inspect-trace.jsonl
 
 # OS / editor
 .DS_Store
