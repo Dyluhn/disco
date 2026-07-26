@@ -18,7 +18,7 @@ from disco.core.events import (
     RuntimeConstraintDeclaration,
     RuntimeConstraintEvent,
 )
-from disco.core.view import View, _live_runtime_constraint_seqs
+from disco.core.view import CondensationRequest, View, _live_runtime_constraint_seqs
 from disco.tools.sandbox.base import ExecResult
 from disco.tools.sandbox.process import (
     HOST_SIGNAL_CONSTRAINT_KEY,
@@ -269,3 +269,49 @@ def test_knowledge_pinning_still_works_alongside_constraints():
 
     assert "prefer small commits" in rendered
     assert "sandbox.host_signal_prohibited" in rendered
+
+
+# ---- through the real loop -------------------------------------------------
+
+
+async def test_the_constraint_reaches_the_model_after_a_real_condensation():
+    """Drive the REAL loop through a condensation and inspect what the model got.
+
+    This proves the half of the contract the product actually controls: when the
+    loop calls the model *after* condensing, the prompt it sends still carries
+    the prohibition. Whether the model then obeys is a live-behaviour question
+    (the k460000 confirmation in Epic 4) -- a scripted agent does whatever its
+    script says, so asserting "the model did not repeat it" here would only be
+    asserting the fixture.
+    """
+    from disco.core.events import CondensationEvent as _Cond
+    from loop_fakes import FakeCondenser, ScriptedAgent, action_step, build_loop, finish_step
+
+    cond = FakeCondenser(
+        request=CondensationRequest(soft=False, reason="events"),
+        tombstone=_Cond(forgotten_start_seq=1, forgotten_end_seq=2, summary="[condensed]"),
+    )
+    agent = ScriptedAgent([action_step(), finish_step()])
+    loop, store = build_loop(agent, condenser=cond)
+
+    await store.append(
+        "conv",
+        RuntimeConstraintEvent(
+            constraint_key=HOST_SIGNAL_CONSTRAINT_KEY,
+            guidance="killing host processes is not permitted on this backend",
+            alternative="use shell_kill_process on your own session",
+            capability_generation=_GEN,
+        ),
+    )
+    await loop.send_message("go")
+    await loop.run()
+
+    assert cond.condense_calls >= 1, "the run must actually have condensed"
+    assert agent.seen_views, "the model must have been called"
+
+    final_prompt = "\n".join(m.content for m in agent.seen_views[-1].messages)
+    assert HOST_SIGNAL_CONSTRAINT_KEY in final_prompt, (
+        "after condensation the model was no longer told the prohibition — "
+        "this is exactly the k460000 failure"
+    )
+    assert "shell_kill_process" in final_prompt, "the recovery path must survive too"
