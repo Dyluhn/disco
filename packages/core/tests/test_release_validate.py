@@ -151,18 +151,14 @@ def test_missing_lockfile_blocks_but_present_lockfile_ok() -> None:
 def test_two_ingress_services_block() -> None:
     # model_copy(update=...) bypasses the spec's exactly-one-ingress validator,
     # letting us exercise the validation plane's independent defense-in-depth check.
-    two = _spec().model_copy(
-        update={"services": (_ingress(id="web1"), _ingress(id="web2"))}
-    )
+    two = _spec().model_copy(update={"services": (_ingress(id="web1"), _ingress(id="web2"))})
     result = validate_release(two, {"index.html": 3})
     assert BlockerCode.ingress_count in _codes(result)
     assert result.ok is False
 
 
 def test_zero_ingress_services_block() -> None:
-    backend = ReleaseService(
-        id="api", role=ServiceRole.backend, runtime=RuntimeStrategy.python
-    )
+    backend = ReleaseService(id="api", role=ServiceRole.backend, runtime=RuntimeStrategy.python)
     zero = _spec().model_copy(update={"services": (backend,)})
     result = validate_release(zero, {"index.html": 3})
     assert BlockerCode.ingress_count in _codes(result)
@@ -185,9 +181,7 @@ def test_declared_env_var_in_command_is_ok() -> None:
         env=(EnvVarDecl(name="MYSTERY_TOKEN", scope=EnvScope.runtime),),
     )
     result = validate_release(spec, {"index.html": 3})
-    assert not any(
-        blocker.code is BlockerCode.undeclared_env_var for blocker in result.blockers
-    )
+    assert not any(blocker.code is BlockerCode.undeclared_env_var for blocker in result.blockers)
 
 
 def test_undeclared_env_var_in_resource_blocks() -> None:
@@ -204,9 +198,7 @@ def test_port_env_reference_is_not_undeclared() -> None:
         services=(_ingress(port_env="PORT", start_cmd=("node", "server.js", "--port", "${PORT}")),)
     )
     result = validate_release(spec, {"index.html": 3})
-    assert not any(
-        blocker.code is BlockerCode.undeclared_env_var for blocker in result.blockers
-    )
+    assert not any(blocker.code is BlockerCode.undeclared_env_var for blocker in result.blockers)
 
 
 # ---- criterion 2d: secret file present in the tree ---------------------------
@@ -249,9 +241,7 @@ def test_secret_name_used_as_reference_does_not_leak() -> None:
         env=(EnvVarDecl(name="API_TOKEN", scope=EnvScope.runtime, secret=SecretClass.secret),),
     )
     result = validate_release(spec, {"index.html": 3})
-    assert not any(
-        blocker.code is BlockerCode.secret_name_leaked for blocker in result.blockers
-    )
+    assert not any(blocker.code is BlockerCode.secret_name_leaked for blocker in result.blockers)
 
 
 def test_public_env_name_literal_does_not_leak() -> None:
@@ -262,9 +252,7 @@ def test_public_env_name_literal_does_not_leak() -> None:
         env=(EnvVarDecl(name="PUBLIC_FLAG", scope=EnvScope.runtime, secret=SecretClass.public),),
     )
     result = validate_release(spec, {"index.html": 3})
-    assert not any(
-        blocker.code is BlockerCode.secret_name_leaked for blocker in result.blockers
-    )
+    assert not any(blocker.code is BlockerCode.secret_name_leaked for blocker in result.blockers)
 
 
 # ---- criterion 3: relocated predicate identical + re-export resolves ---------
@@ -280,9 +268,20 @@ def test_is_runtime_secret_path_reexport_resolves_and_is_identical() -> None:
     assert archive_fn is core_fn
 
     # Behavior is identical to the pre-move predicate on the canonical cases.
-    for secret in (".env", ".env.local", "nested/.ENV.production.local", ".dev.vars",
-                   "worker/.dev.vars.production", "sub/.env.local"):
+    for secret in (
+        ".env",
+        ".env.local",
+        "nested/.ENV.production.local",
+        ".dev.vars",
+        "worker/.dev.vars.production",
+        "sub/.env.local",
+    ):
         assert tools_fn(secret) is True
-    for safe in (".env.example", ".env.sample", "nested/.dev.vars.dist",
-                 ".dev.vars.template", "src/environment.ts"):
+    for safe in (
+        ".env.example",
+        ".env.sample",
+        "nested/.dev.vars.dist",
+        ".dev.vars.template",
+        "src/environment.ts",
+    ):
         assert tools_fn(safe) is False

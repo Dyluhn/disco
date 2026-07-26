@@ -583,11 +583,14 @@ def test_preview_intent_preserves_bounded_hash_route_without_expanding_path_scop
     assert redeemed is not None
     token, target = redeemed
     assert target == "/work?tab=details#inspector"
-    assert signer.verify(
-        token,
-        cid8="a1b2c3d4",
-        port=8000,
-        method="GET",
-        path="/work",
-    ) is not None
+    assert (
+        signer.verify(
+            token,
+            cid8="a1b2c3d4",
+            port=8000,
+            method="GET",
+            path="/work",
+        )
+        is not None
+    )
     store.close()

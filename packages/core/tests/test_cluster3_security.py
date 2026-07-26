@@ -154,7 +154,7 @@ def test_hard_deny_does_not_false_positive_on_real_builds():
         "cat <(printf ok)",
         "cat >(printf ok)",
         "echo $((1 + 2))",
-        'echo "$(printf \'rm -rf /\\n\')"',
+        "echo \"$(printf 'rm -rf /\\n')\"",
         'echo "$(case x in x) printf ok;; esac)"',
         'echo "$(case y in x) printf esac;; y) printf HIT;; esac)"',
         'echo "$(case y in x|esac) printf no;; y) printf HIT;; esac)"',
@@ -226,7 +226,7 @@ def test_h343_nested_substitution_quote_and_escape_controls():
     nested_dangerous = [
         'echo "$(printf ok; rm -rf /)"',
         "echo $((1 + $(rm -rf /)))",
-        'cat <(printf \'%s\' "$(rm -rf /)")',
+        "cat <(printf '%s' \"$(rm -rf /)\")",
     ]
     for command in nested_dangerous:
         assert hard_deny_reason(command) is not None, (

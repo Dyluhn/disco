@@ -18,9 +18,7 @@ _TEXT_CONTROLS = frozenset({"\t", "\n", "\r"})
 _DECODE_REPLACEMENT = "\ufffd"
 
 
-def sanitize_execution_output(
-    text: str, *, stream: str
-) -> tuple[str, dict[str, int] | None]:
+def sanitize_execution_output(text: str, *, stream: str) -> tuple[str, dict[str, int] | None]:
     """Replace binary/control-bearing execution output with bounded metadata.
 
     Backends decode process bytes before constructing ``ExecResult``.  A decode

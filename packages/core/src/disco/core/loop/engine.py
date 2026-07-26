@@ -1268,12 +1268,6 @@ class AgentLoop:
             _ACTIVE_AGENT_VIEW_ID.set(view_id)
             await self._prepare_executor(events)
             consistent_events = agent_view_consistent_events(events)
-            # Take the events the View was ACTUALLY built from. `build` can append
-            # microcompact tombstones, compaction snips, and a condensation
-            # tombstone, re-reading the log each time, so `consistent_events` is a
-            # PRE-build list: returning it beside a post-build View would hand the
-            # caller two horizons, and the span the condenser just replaced would
-            # still look live -- letting the same span be condensed twice.
             view, consistent_events = await self._view.build_with_horizon(consistent_events)
             await self._assert_current_agent_view()
         return view, consistent_events

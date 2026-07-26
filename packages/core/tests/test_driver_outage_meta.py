@@ -24,11 +24,10 @@ import json
 import httpx
 import pytest
 from disco.core import ConversationStatus, MessageEvent, StatusEvent
-from disco.core.events import LLMConvertible
+from disco.core.events import LLMConvertible, LLMMessage
 from disco.core.llm import LLMTransientError
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
-from disco.core.events import LLMMessage
 from loop_fakes import ScriptedAgent, assert_blocked_question_landing, build_loop
 
 CID = "conv"
@@ -232,7 +231,11 @@ async def test_labeling_never_changes_statuses_details_or_model_visible_bytes(mo
     content — and the model view (to_llm_message) never contains the labels."""
     _s1, labeled, a1 = await _run_exhaustion(monkeypatch, _usage_limit_error())
     _s2, plain, a2 = await _run_exhaustion(
-        monkeypatch, LLMTransientError("provider opencode-go returned HTTP 429 type=GoUsageLimitError", provider="opencode-go")
+        monkeypatch,
+        LLMTransientError(
+            "provider opencode-go returned HTTP 429 type=GoUsageLimitError",
+            provider="opencode-go",
+        ),
     )
     assert a1.calls == a2.calls == 4
     assert _semantic_projection(labeled) == _semantic_projection(plain)

@@ -761,7 +761,6 @@ async def _handle_delete_project(
     return {"id": conversation_id, "deleted": deleted}
 
 
-
 async def _resolve_project_for_read(
     request: Request,
     store: SqliteEventStore,
@@ -1092,7 +1091,6 @@ async def _download_response(
         else aiter_zip_workspace(workspace)
     )
     return StreamingResponse(body, media_type="application/zip", headers=headers)
-
 
 
 def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:

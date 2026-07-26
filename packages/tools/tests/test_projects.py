@@ -403,7 +403,12 @@ def test_imported_provenance_is_recorded_and_survives_resnapshot(tmp_path: Path)
 
     # import-time write records the provenance.
     store.write_manifest(
-        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        cid,
+        title="t",
+        owner_id="local",
+        created_at=None,
+        file_count=1,
+        total_bytes=8,
         imported=True,
     )
     assert store.get(cid).imported is True
@@ -411,13 +416,23 @@ def test_imported_provenance_is_recorded_and_survives_resnapshot(tmp_path: Path)
 
     # a re-snapshot (no `imported` arg) MUST preserve it, not reset it to False.
     store.write_manifest(
-        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        cid,
+        title="t",
+        owner_id="local",
+        created_at=None,
+        file_count=1,
+        total_bytes=8,
     )
     assert store.get(cid).imported is True
 
     # an explicit False clears it; a fresh (never-imported) project defaults False.
     store.write_manifest(
-        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        cid,
+        title="t",
+        owner_id="local",
+        created_at=None,
+        file_count=1,
+        total_bytes=8,
         imported=False,
     )
     assert store.get(cid).imported is False
@@ -426,7 +441,12 @@ def test_imported_provenance_is_recorded_and_survives_resnapshot(tmp_path: Path)
     (store.path_for(fresh)).mkdir(parents=True, exist_ok=True)
     (store.path_for(fresh) / "a").write_text("x")
     store.write_manifest(
-        fresh, title=None, owner_id="local", created_at=None, file_count=1, total_bytes=1,
+        fresh,
+        title=None,
+        owner_id="local",
+        created_at=None,
+        file_count=1,
+        total_bytes=1,
     )
     assert store.get(fresh).imported is False
 

@@ -589,9 +589,7 @@ def test_unknown_consumed_lease_outcomes_are_indeterminate_not_exhausted() -> No
 
 def test_invalid_receipts_on_consumed_lease_are_indeterminate_not_model_zero() -> None:
     prefix = _sequenced((_user(),))
-    issue_transition = _lease_transition(
-        prefix, transition=RecoveryLeaseTransitionKind.ISSUE
-    )
+    issue_transition = _lease_transition(prefix, transition=RecoveryLeaseTransitionKind.ISSUE)
     issue = StatusEvent(
         status=ConversationStatus.STUCK,
         recovery_lease_transition=issue_transition,

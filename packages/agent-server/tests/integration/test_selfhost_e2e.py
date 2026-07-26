@@ -440,7 +440,9 @@ def test_emitted_compose_parses_and_has_ingress_structure_for_each_fixture(
     with zipfile.ZipFile(io.BytesIO(dl.content)) as zf:
         doc = yaml.safe_load(zf.read("compose.yaml"))
     services = doc["services"]
-    oneshot = [sid for sid, s in services.items() if isinstance(s, dict) and s.get("restart") == "no"]
+    oneshot = [
+        sid for sid, s in services.items() if isinstance(s, dict) and s.get("restart") == "no"
+    ]
     assert oneshot, "AppKit compose must declare a one-shot init/migrate service"
     app_service = next(s for s in services.values() if isinstance(s, dict) and "ports" in s)
     assert "depends_on" in app_service, "AppKit app must wait on init via depends_on"

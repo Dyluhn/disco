@@ -22,7 +22,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from disco.core.release.detect import (
     DetectionResult,
     Provenance,
@@ -122,9 +121,7 @@ def test_dockerfile_and_intent_conflict_is_needs_review_with_both_evidence() -> 
 
 def test_unknown_stack_with_complete_intent_is_candidate() -> None:
     files = _load_fixture("unknown-stack")
-    result = detect_release(
-        files, intent=_complete_intent(), provenance=Provenance(imported=True)
-    )
+    result = detect_release(files, intent=_complete_intent(), provenance=Provenance(imported=True))
 
     assert result.assessment is ReleaseAssessment.candidate
     assert result.ingress is not None
@@ -252,8 +249,7 @@ def test_node_and_fastapi_conflict_is_needs_review_with_both_evidences() -> None
     # a genuinely conflicting pair, not a single guessed runtime.
     assert any("node" in signal.lower() for signal in result.evidence)
     assert any(
-        ("python" in signal.lower() or "fastapi" in signal.lower())
-        for signal in result.evidence
+        ("python" in signal.lower() or "fastapi" in signal.lower()) for signal in result.evidence
     )
 
 
@@ -261,9 +257,7 @@ def test_single_runtime_detection_is_unchanged_by_conflict_handling() -> None:
     # A node-only project (no python manifest) stays a node candidate; a
     # python-only project stays a python candidate — conflict handling must not
     # regress single-runtime detection.
-    node = detect_release(
-        _load_fixture("express-node"), intent=None, provenance=Provenance()
-    )
+    node = detect_release(_load_fixture("express-node"), intent=None, provenance=Provenance())
     assert node.assessment is ReleaseAssessment.candidate
     assert node.ingress is not None and node.ingress.runtime is RuntimeStrategy.node
     python = detect_release(_load_fixture("fastapi"), intent=None, provenance=Provenance())

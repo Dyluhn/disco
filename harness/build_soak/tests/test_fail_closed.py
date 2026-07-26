@@ -414,9 +414,7 @@ def test_appkit_execution_scope_can_assert_raw_tools_are_not_callable():
     scenario = {
         "id": "appkit_strict_scope",
         "assertions": {
-            "tool_scope": {
-                "execution_disallows": ["file_write", "file_edit", "shell", "code_exec"]
-            }
+            "tool_scope": {"execution_disallows": ["file_write", "file_edit", "shell", "code_exec"]}
         },
     }
     scope = {
@@ -435,8 +433,7 @@ def test_appkit_execution_scope_can_assert_raw_tools_are_not_callable():
     result = next(
         r
         for r in c["oracle_results"]
-        if r["oracle"] == "ToolScopeOracle"
-        and "execution_turn_count" in r.get("facts", {})
+        if r["oracle"] == "ToolScopeOracle" and "execution_turn_count" in r.get("facts", {})
     )
     assert result["facts"]["execution_turn_count"] == 1
 

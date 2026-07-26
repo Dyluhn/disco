@@ -883,9 +883,7 @@ class HostVerificationResult(BaseModel):
     def is_current_authority_for(self, deliverable: Any, *, observed_url: str) -> bool:
         """Compare execution authority independently of one receipt's claim subset."""
 
-        return all(
-            ok for _, ok in self.authority_clauses(deliverable, observed_url=observed_url)
-        )
+        return all(ok for _, ok in self.authority_clauses(deliverable, observed_url=observed_url))
 
     def first_authority_mismatch(self, deliverable: Any, *, observed_url: str) -> str | None:
         """Name the first authority fact this receipt does not bind, or None if current."""

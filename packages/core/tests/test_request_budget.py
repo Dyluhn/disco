@@ -165,11 +165,14 @@ class TestProviderPreview:
 
         def handler(request: httpx.Request) -> httpx.Response:
             seen.append(request)
-            return httpx.Response(200, json={
-                "model": "m1",
-                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m1",
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                },
+            )
 
         provider = OpenAIProvider(
             "http://fake/v1",
@@ -187,15 +190,17 @@ class TestProviderPreview:
 
     def test_preview_returns_none_when_window_missing(self) -> None:
         provider = OpenAIProvider(
-            "http://fake/v1", name="fake",
+            "http://fake/v1",
+            name="fake",
             transport=httpx.MockTransport(
-                lambda r: httpx.Response(200, json={
-                    "model": "m1",
-                    "choices": [
-                        {"message": {"content": "ok"}, "finish_reason": "stop"}
-                    ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-                })
+                lambda r: httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                    },
+                )
             ),
         )
         result = provider.request_budget_preview(
@@ -210,27 +215,30 @@ class TestProviderPreview:
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured_body.append(request.read())
-            return httpx.Response(200, json={
-                "model": "m1",
-                "choices": [
-                    {"message": {"content": "ok"}, "finish_reason": "stop"}
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m1",
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                },
+            )
 
         provider = OpenAIProvider(
             "http://fake/v1",
             name="fake",
             transport=httpx.MockTransport(handler),
         )
-        tools = [ToolSpec(
-            name="test_tool",
-            description="A test tool",
-            parameters_schema={
-                "type": "object",
-                "properties": {"x": {"type": "integer"}},
-            },
-        )]
+        tools = [
+            ToolSpec(
+                name="test_tool",
+                description="A test tool",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                },
+            )
+        ]
         req = _req(
             messages=[
                 LLMMessage(role="system", content="You are helpful."),
@@ -253,15 +261,17 @@ class TestProviderPreview:
     def test_preview_shape_differs_with_tools(self) -> None:
         """Different tool surfaces produce different exact sizes."""
         provider = OpenAIProvider(
-            "http://fake/v1", name="fake",
+            "http://fake/v1",
+            name="fake",
             transport=httpx.MockTransport(
-                lambda r: httpx.Response(200, json={
-                    "model": "m1",
-                    "choices": [
-                        {"message": {"content": "ok"}, "finish_reason": "stop"}
-                    ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-                })
+                lambda r: httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                    },
+                )
             ),
         )
 
@@ -270,16 +280,22 @@ class TestProviderPreview:
         assert no_tools is not None
 
         with_tools = provider.request_budget_preview(
-            base.model_copy(update={"tools": [
-                ToolSpec(
-                    name="t1", description="d1",
-                    parameters_schema={"type": "object"},
-                ),
-                ToolSpec(
-                    name="t2", description="d2",
-                    parameters_schema={"type": "object"},
-                ),
-            ]}),
+            base.model_copy(
+                update={
+                    "tools": [
+                        ToolSpec(
+                            name="t1",
+                            description="d1",
+                            parameters_schema={"type": "object"},
+                        ),
+                        ToolSpec(
+                            name="t2",
+                            description="d2",
+                            parameters_schema={"type": "object"},
+                        ),
+                    ]
+                }
+            ),
             model="m1",
         )
         assert with_tools is not None
@@ -291,32 +307,40 @@ class TestProviderPreview:
     def test_preview_planning_vs_execution_tools_differ(self) -> None:
         """Planning and execution tool surfaces produce different exact sizes."""
         provider = OpenAIProvider(
-            "http://fake/v1", name="fake",
+            "http://fake/v1",
+            name="fake",
             transport=httpx.MockTransport(
-                lambda r: httpx.Response(200, json={
-                    "model": "m1",
-                    "choices": [
-                        {"message": {"content": "ok"}, "finish_reason": "stop"}
-                    ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-                })
+                lambda r: httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                    },
+                )
             ),
         )
 
-        plan_tools = [ToolSpec(
-            name="submit_plan", description="Submit a plan",
-            parameters_schema={"type": "object"},
-        )]
-        exec_tools = [ToolSpec(
-            name="file_write", description="Write a file",
-            parameters_schema={
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
+        plan_tools = [
+            ToolSpec(
+                name="submit_plan",
+                description="Submit a plan",
+                parameters_schema={"type": "object"},
+            )
+        ]
+        exec_tools = [
+            ToolSpec(
+                name="file_write",
+                description="Write a file",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
                 },
-            },
-        )]
+            )
+        ]
 
         plan_req = _req(tools=plan_tools, metadata={"driver_context_window": 65536})
         exec_req = plan_req.model_copy(update={"tools": exec_tools})
@@ -325,10 +349,7 @@ class TestProviderPreview:
         exec_est = provider.request_budget_preview(exec_req, model="m1")
         assert plan_est is not None
         assert exec_est is not None
-        msg = (
-            f"plan={plan_est.canonical_payload_bytes} "
-            f"exec={exec_est.canonical_payload_bytes}"
-        )
+        msg = f"plan={plan_est.canonical_payload_bytes} exec={exec_est.canonical_payload_bytes}"
         assert plan_est.canonical_payload_bytes != exec_est.canonical_payload_bytes, msg
 
 
@@ -362,7 +383,8 @@ class TestRouterPreview:
         config = RouterConfig(
             models={
                 "m1": ModelEntry(
-                    model_id="m1", provider="missing_provider",
+                    model_id="m1",
+                    provider="missing_provider",
                     context_window=65536,
                 ),
             },
@@ -423,7 +445,9 @@ class TestRouterAgentPreview:
         agent = RouterAgent(router)
         view = View(
             messages=[LLMMessage(role="user", content="hi")],
-            visible_seqs=[], total_events=1, forgotten_count=0,
+            visible_seqs=[],
+            total_events=1,
+            forgotten_count=0,
         )
         result = agent.request_budget_preview(
             view,
@@ -445,7 +469,9 @@ class TestRouterAgentPreview:
         )
         view = View(
             messages=[LLMMessage(role="user", content="hi")],
-            visible_seqs=[], total_events=1, forgotten_count=0,
+            visible_seqs=[],
+            total_events=1,
+            forgotten_count=0,
         )
         result = agent.request_budget_preview(
             view,
@@ -459,15 +485,21 @@ class TestRouterAgentPreview:
         from disco.core.llm import InMemoryRoutingSink
 
         large_est = _estimate(
-            canonical_payload_bytes=10000, tools_json_bytes=3000, tool_count=5,
+            canonical_payload_bytes=10000,
+            tools_json_bytes=3000,
+            tool_count=5,
         )
         small_est = _estimate(
-            canonical_payload_bytes=5000, tools_json_bytes=0, tool_count=0,
+            canonical_payload_bytes=5000,
+            tools_json_bytes=0,
+            tool_count=0,
         )
 
         class PreviewProvider(FakeModelProvider):
             def request_budget_preview(
-                self, req, model  # noqa: ANN001
+                self,
+                req,
+                model,  # noqa: ANN001
             ) -> RequestBudgetEstimate | None:
                 self.seen_requests.append(req)
                 if req.tools and len(req.tools) > 0:
@@ -482,11 +514,14 @@ class TestRouterAgentPreview:
 
         view = View(
             messages=[LLMMessage(role="user", content="hi")],
-            visible_seqs=[], total_events=1, forgotten_count=0,
+            visible_seqs=[],
+            total_events=1,
+            forgotten_count=0,
         )
 
         no_tools = agent.request_budget_preview(
-            view, tools=[],
+            view,
+            tools=[],
             mode=OperatingMode.INTERACTIVE,
             overflow_signal=OverflowSignal(difficulty=Difficulty.ROUTINE),
         )
@@ -494,7 +529,8 @@ class TestRouterAgentPreview:
             view,
             tools=[
                 ToolSpec(
-                    name="t", description="d",
+                    name="t",
+                    description="d",
                     parameters_schema={"type": "object"},
                 )
             ],
@@ -564,14 +600,29 @@ class RefRecordingAgent(ScriptedAgent):
         return self._budget_estimate
 
     async def step(
-        self, view, tools, *, mode, overflow_signal, on_stream=None,
-        temperature=None, assist=False, attempt=1, provider_prefs=None,
+        self,
+        view,
+        tools,
+        *,
+        mode,
+        overflow_signal,
+        on_stream=None,
+        temperature=None,
+        assist=False,
+        attempt=1,
+        provider_prefs=None,
     ):
         self.step_tool_lists.append(tools)
         return await super().step(
-            view, tools, mode=mode, overflow_signal=overflow_signal,
-            on_stream=on_stream, temperature=temperature, assist=assist,
-            attempt=attempt, provider_prefs=provider_prefs,
+            view,
+            tools,
+            mode=mode,
+            overflow_signal=overflow_signal,
+            on_stream=on_stream,
+            temperature=temperature,
+            assist=assist,
+            attempt=attempt,
+            provider_prefs=provider_prefs,
         )
 
 
@@ -591,7 +642,8 @@ class TestA_UnderThresholdProof:
             tools_json_bytes=30,
         )
         agent = RefRecordingAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(request=None)
         loop, store = build_loop(agent, condenser=cond, conversation_id=CID)
@@ -610,7 +662,8 @@ class TestA_UnderThresholdProof:
             tools_json_bytes=5000,
         )
         agent = RefRecordingAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         _seen_tokens: list = []
 
@@ -644,7 +697,14 @@ class TestB_PreviewAbsentRaisesNone:
     async def test_preview_raises_makes_one_call(self, monkeypatch) -> None:
         class RaisingPreviewAgent(ScriptedAgent):
             def request_budget_preview(
-                self, view, tools, *, mode, overflow_signal, temperature=None, assist=False,
+                self,
+                view,
+                tools,
+                *,
+                mode,
+                overflow_signal,
+                temperature=None,
+                assist=False,
             ):
                 raise RuntimeError("boom")
 
@@ -657,7 +717,14 @@ class TestB_PreviewAbsentRaisesNone:
     async def test_preview_returns_none_makes_one_call(self) -> None:
         class NonePreviewAgent(ScriptedAgent):
             def request_budget_preview(
-                self, view, tools, *, mode, overflow_signal, temperature=None, assist=False,
+                self,
+                view,
+                tools,
+                *,
+                mode,
+                overflow_signal,
+                temperature=None,
+                assist=False,
             ):
                 return None
 
@@ -702,7 +769,8 @@ class TestC_SnipsFirst:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
@@ -720,20 +788,19 @@ class TestC_SnipsFirst:
         )
 
         # Two local snips to emit
-        snip_a = CondensationEvent(
-            forgotten_start_seq=1, forgotten_end_seq=1, summary="[snip-a]"
-        )
-        snip_b = CondensationEvent(
-            forgotten_start_seq=2, forgotten_end_seq=2, summary="[snip-b]"
-        )
+        snip_a = CondensationEvent(forgotten_start_seq=1, forgotten_end_seq=1, summary="[snip-a]")
+        snip_b = CondensationEvent(forgotten_start_seq=2, forgotten_end_seq=2, summary="[snip-b]")
 
         monkeypatch.setattr(
-            "disco.core.loop.driver.context_pack_enabled", lambda: True,
+            "disco.core.loop.driver.context_pack_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
             "disco.core.loop.driver.context_compact_if_needed",
-            lambda events, policy, *,
-            protected_seqs=frozenset(), pressure_chars=None: [snip_a, snip_b],
+            lambda events, policy, *, protected_seqs=frozenset(), pressure_chars=None: [
+                snip_a,
+                snip_b,
+            ],
         )
 
         wrapper = TracingLoopWrapper(loop)
@@ -741,7 +808,11 @@ class TestC_SnipsFirst:
 
         trace.clear()
         result = await loop._driver._try_request_budget_preview(
-            view, events, OperatingMode.INTERACTIVE, None, [],
+            view,
+            events,
+            OperatingMode.INTERACTIVE,
+            None,
+            [],
         )
         assert result == Disp.CONTINUE
         assert trace == ["assert", "emit", "assert", "emit"]
@@ -749,14 +820,21 @@ class TestC_SnipsFirst:
 
         # Verify canonical_payload_bytes was passed as pressure_chars
         _pressure_chars: list = []
+
         def _spy_compact(events, policy, *, protected_seqs=frozenset(), pressure_chars=None):
             _pressure_chars.append(pressure_chars)
             return [snip_a, snip_b]
+
         monkeypatch.setattr(
-            "disco.core.loop.driver.context_compact_if_needed", _spy_compact,
+            "disco.core.loop.driver.context_compact_if_needed",
+            _spy_compact,
         )
         result = await loop._driver._try_request_budget_preview(
-            view, events, OperatingMode.INTERACTIVE, None, [],
+            view,
+            events,
+            OperatingMode.INTERACTIVE,
+            None,
+            [],
         )
         assert _pressure_chars == [est.canonical_payload_bytes]
 
@@ -774,7 +852,8 @@ class TestD_CondenserFallback:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
 
         _condense_events: list = []
@@ -807,7 +886,13 @@ class TestD_CondenserFallback:
                 return None
 
             async def condense(
-                self, events, view, *, summarizer, reason="tokens", artifact_paths=None,
+                self,
+                events,
+                view,
+                *,
+                summarizer,
+                reason="tokens",
+                artifact_paths=None,
             ) -> CondensationEvent | None:
                 nonlocal _condense_events, _condense_view
                 _trace.append("condense")
@@ -843,7 +928,11 @@ class TestD_CondenserFallback:
 
             _trace.clear()
             result = await loop._driver._try_request_budget_preview(
-                view, events, OperatingMode.INTERACTIVE, None, [],
+                view,
+                events,
+                OperatingMode.INTERACTIVE,
+                None,
+                [],
             )
         finally:
             monkeypatch.undo()
@@ -877,7 +966,8 @@ class TestE_FailOpen:
                 return None
 
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = RaisingCondenser()
         monkeypatch_env = pytest.MonkeyPatch()
@@ -892,7 +982,8 @@ class TestE_FailOpen:
         assert agent.calls == 1
 
     async def test_context_pack_raises_then_condenser_returns_none_calls_model(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         est = _estimate(
             canonical_payload_bytes=200000,
@@ -900,7 +991,8 @@ class TestE_FailOpen:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
@@ -932,12 +1024,19 @@ class TestE_FailOpen:
                 return None
 
             async def condense(
-                self, events, view, *, summarizer, reason="tokens", artifact_paths=None,
+                self,
+                events,
+                view,
+                *,
+                summarizer,
+                reason="tokens",
+                artifact_paths=None,
             ):
                 raise RuntimeError("condense boom")
 
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = RaisingCondenseCondenser()
         monkeypatch_env = pytest.MonkeyPatch()
@@ -952,7 +1051,8 @@ class TestE_FailOpen:
         assert agent.calls == 1
 
     async def test_agent_view_superseded_at_snip_assert_propagates(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         from disco.core.loop.engine import AgentViewSuperseded
 
@@ -962,7 +1062,8 @@ class TestE_FailOpen:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
@@ -987,10 +1088,13 @@ class TestE_FailOpen:
                 return await self._loop._emit(event)
 
         snip = CondensationEvent(
-            forgotten_start_seq=1, forgotten_end_seq=1, summary="[snip]",
+            forgotten_start_seq=1,
+            forgotten_end_seq=1,
+            summary="[snip]",
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.context_pack_enabled", lambda: True,
+            "disco.core.loop.driver.context_pack_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
             "disco.core.loop.driver.context_compact_if_needed",
@@ -1012,13 +1116,16 @@ class TestE_FailOpen:
 
         with pytest.raises(AgentViewSuperseded):
             await loop._driver._try_request_budget_preview(
-                view, events, OperatingMode.INTERACTIVE, None, [],
+                view,
+                events,
+                OperatingMode.INTERACTIVE,
+                None,
+                [],
             )
 
         events_after = await store.get_events(CID)
         assert not any(
-            isinstance(e, CondensationEvent) and e.summary == "[snip]"
-            for e in events_after
+            isinstance(e, CondensationEvent) and e.summary == "[snip]" for e in events_after
         )
 
 
@@ -1047,9 +1154,12 @@ class TestF_RetryRecomputation:
 
             async def execute(self, call):
                 from disco.core import ToolResult
+
                 return ToolResult(
-                    call_id=call.call_id, tool_name=call.tool_name,
-                    success=True, content="ok",
+                    call_id=call.call_id,
+                    tool_name=call.tool_name,
+                    success=True,
+                    content="ok",
                 )
 
         executor = VaryingExecutor()
@@ -1064,7 +1174,10 @@ class TestF_RetryRecomputation:
         )
         cond = FakeCondenser(request=None)
         loop, store = build_loop(
-            agent, condenser=cond, executor=executor, conversation_id=CID,
+            agent,
+            condenser=cond,
+            executor=executor,
+            conversation_id=CID,
         )
         await loop.send_message("hi")
         await loop.run()
@@ -1090,7 +1203,8 @@ class TestF_RetryRecomputation:
 
 class TestG_WindowExceeded:
     async def test_context_window_exceeded_after_preview_still_hard_resets(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         from disco.core.llm import LLMContextWindowExceeded
 
@@ -1102,7 +1216,14 @@ class TestG_WindowExceeded:
 
         class ExceedAgent(ScriptedAgent):
             def request_budget_preview(
-                self, view, tools, *, mode, overflow_signal, temperature=None, assist=False,
+                self,
+                view,
+                tools,
+                *,
+                mode,
+                overflow_signal,
+                temperature=None,
+                assist=False,
             ):
                 return est
 
@@ -1130,8 +1251,7 @@ class TestG_WindowExceeded:
 
         final_events = await store.get_events(CID)
         assert any(
-            isinstance(e, ErrorEvent) and e.code == "context_window"
-            for e in final_events
+            isinstance(e, ErrorEvent) and e.code == "context_window" for e in final_events
         ), "Expected a context_window ErrorEvent after hard reset made no progress"
 
 
@@ -1156,9 +1276,14 @@ class TestH_OutputReserve:
     def _make_condenser(cls):
         class ThresholdCondenser(FakeCondenser):
             def __init__(self):
-                super().__init__(request=None, tombstone=CondensationEvent(
-                    forgotten_start_seq=1, forgotten_end_seq=1, summary="[ok]",
-                ))
+                super().__init__(
+                    request=None,
+                    tombstone=CondensationEvent(
+                        forgotten_start_seq=1,
+                        forgotten_end_seq=1,
+                        summary="[ok]",
+                    ),
+                )
                 self.token_count_seen: list = []
 
             def should_condense(self, view, *, token_count):
@@ -1187,7 +1312,8 @@ class TestH_OutputReserve:
         assert est.pressure_tokens == est.estimated_input_tokens
 
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = self._make_condenser()
         monkeypatch_env = pytest.MonkeyPatch()
@@ -1212,7 +1338,11 @@ class TestH_OutputReserve:
             )
 
             preview_disp = await loop._driver._try_request_budget_preview(
-                view, events, OperatingMode.INTERACTIVE, None, initial_tools,
+                view,
+                events,
+                OperatingMode.INTERACTIVE,
+                None,
+                initial_tools,
             )
             assert preview_disp is None  # within_budget → proceed
             assert cond.should_calls == 1
@@ -1232,7 +1362,8 @@ class TestH_OutputReserve:
         assert est.pressure_tokens > self.THRESHOLD
 
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = self._make_condenser()
         monkeypatch_env = pytest.MonkeyPatch()
@@ -1257,7 +1388,11 @@ class TestH_OutputReserve:
             )
 
             result = await loop._driver._try_request_budget_preview(
-                view, events, OperatingMode.INTERACTIVE, None, initial_tools,
+                view,
+                events,
+                OperatingMode.INTERACTIVE,
+                None,
+                initial_tools,
             )
             assert result == Disp.CONTINUE
             assert agent.calls == 0
@@ -1284,16 +1419,19 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=30,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(request=None)
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: False,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: False,
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.log_event", lambda *a, **kw: log_calls.append((a, kw)),
+            "disco.core.loop.driver.log_event",
+            lambda *a, **kw: log_calls.append((a, kw)),
         )
 
         loop, store = self._build_loop_for_telemetry(agent, cond)
@@ -1309,13 +1447,15 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=30,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(request=None)
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
             "disco.core.loop.driver.log_event",
@@ -1326,9 +1466,7 @@ class TestI_TelemetryMonkeypatch:
         await loop.send_message("hi")
         await loop.run()
 
-        budget_events = [
-            (a, kw) for a, kw in log_calls if a == ("request_budget.preview",)
-        ]
+        budget_events = [(a, kw) for a, kw in log_calls if a == ("request_budget.preview",)]
         assert len(budget_events) == 1
         _, ev = budget_events[0]
 
@@ -1357,10 +1495,12 @@ class TestI_TelemetryMonkeypatch:
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.log_event", lambda *a, **kw: log_calls.append((a, dict(kw))),
+            "disco.core.loop.driver.log_event",
+            lambda *a, **kw: log_calls.append((a, dict(kw))),
         )
 
         loop, store = self._build_loop_for_telemetry(agent, cond)
@@ -1383,16 +1523,20 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
         )
         snip = CondensationEvent(
-            forgotten_start_seq=1, forgotten_end_seq=1, summary="[snip]",
+            forgotten_start_seq=1,
+            forgotten_end_seq=1,
+            summary="[snip]",
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.context_pack_enabled", lambda: True,
+            "disco.core.loop.driver.context_pack_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
             "disco.core.loop.driver.context_compact_if_needed",
@@ -1401,10 +1545,12 @@ class TestI_TelemetryMonkeypatch:
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.log_event", lambda *a, **kw: log_calls.append((a, dict(kw))),
+            "disco.core.loop.driver.log_event",
+            lambda *a, **kw: log_calls.append((a, dict(kw))),
         )
 
         loop, store = self._build_loop_for_telemetry(agent, cond)
@@ -1426,7 +1572,11 @@ class TestI_TelemetryMonkeypatch:
         )
 
         result = await loop._driver._try_request_budget_preview(
-            view, events, OperatingMode.INTERACTIVE, None, initial_tools,
+            view,
+            events,
+            OperatingMode.INTERACTIVE,
+            None,
+            initial_tools,
         )
         assert result == Disp.CONTINUE
 
@@ -1458,7 +1608,8 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
@@ -1468,10 +1619,12 @@ class TestI_TelemetryMonkeypatch:
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.log_event", lambda *a, **kw: log_calls.append((a, dict(kw))),
+            "disco.core.loop.driver.log_event",
+            lambda *a, **kw: log_calls.append((a, dict(kw))),
         )
 
         loop, store = self._build_loop_for_telemetry(agent, cond)
@@ -1493,7 +1646,11 @@ class TestI_TelemetryMonkeypatch:
         )
 
         result = await loop._driver._try_request_budget_preview(
-            view, events, OperatingMode.INTERACTIVE, None, initial_tools,
+            view,
+            events,
+            OperatingMode.INTERACTIVE,
+            None,
+            initial_tools,
         )
         assert result is None  # no_progress → proceed to model call
 
@@ -1518,7 +1675,8 @@ class TestI_TelemetryMonkeypatch:
             assert v is None or isinstance(v, (str, int)), f"unexpected type {type(v)} for {v}"
 
     async def test_should_condense_raises_emits_unavailable_scalar_event(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         est = _estimate(
             canonical_payload_bytes=200000,
@@ -1526,7 +1684,8 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
 
         class RaisingShouldCondense(FakeCondenser):
@@ -1538,10 +1697,12 @@ class TestI_TelemetryMonkeypatch:
 
         log_calls: list = []
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
-            "disco.core.loop.driver.log_event", lambda *a, **kw: log_calls.append((a, dict(kw))),
+            "disco.core.loop.driver.log_event",
+            lambda *a, **kw: log_calls.append((a, dict(kw))),
         )
 
         loop, store = self._build_loop_for_telemetry(agent, cond)
@@ -1563,7 +1724,11 @@ class TestI_TelemetryMonkeypatch:
         )
 
         result = await loop._driver._try_request_budget_preview(
-            view, events, OperatingMode.INTERACTIVE, None, initial_tools,
+            view,
+            events,
+            OperatingMode.INTERACTIVE,
+            None,
+            initial_tools,
         )
         assert result is None  # unavailable → proceed to model call
 
@@ -1593,12 +1758,14 @@ class TestI_TelemetryMonkeypatch:
             tools_json_bytes=30,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(request=None)
 
         monkeypatch.setattr(
-            "disco.core.loop.driver.inspect_enabled", lambda: True,
+            "disco.core.loop.driver.inspect_enabled",
+            lambda: True,
         )
         monkeypatch.setattr(
             "disco.core.loop.driver.log_event",
@@ -1625,27 +1792,30 @@ class TestJ_ProviderPreviewProof:
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured_body.append(request.read())
-            return httpx.Response(200, json={
-                "model": "m1",
-                "choices": [
-                    {"message": {"content": "ok"}, "finish_reason": "stop"}
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "model": "m1",
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                },
+            )
 
         provider = OpenAIProvider(
             "http://fake/v1",
             name="fake",
             transport=httpx.MockTransport(handler),
         )
-        tools = [ToolSpec(
-            name="test_tool",
-            description="A test tool",
-            parameters_schema={
-                "type": "object",
-                "properties": {"x": {"type": "integer"}},
-            },
-        )]
+        tools = [
+            ToolSpec(
+                name="test_tool",
+                description="A test tool",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                },
+            )
+        ]
         req = _req(
             messages=[
                 LLMMessage(role="system", content="You are helpful."),
@@ -1675,15 +1845,17 @@ class TestJ_ProviderPreviewProof:
 
     def test_preview_no_routing_decision_emitted(self) -> None:
         provider = OpenAIProvider(
-            "http://fake/v1", name="fake",
+            "http://fake/v1",
+            name="fake",
             transport=httpx.MockTransport(
-                lambda r: httpx.Response(200, json={
-                    "model": "m1",
-                    "choices": [
-                        {"message": {"content": "ok"}, "finish_reason": "stop"}
-                    ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
-                })
+                lambda r: httpx.Response(
+                    200,
+                    json={
+                        "model": "m1",
+                        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                    },
+                )
             ),
         )
         result = provider.request_budget_preview(
@@ -1701,7 +1873,8 @@ class TestJ_ProviderPreviewProof:
 
 class TestK_CompactionPolicyDefaultRaising:
     async def test_compaction_policy_default_raises_still_calls_model(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         est = _estimate(
             canonical_payload_bytes=200000,
@@ -1709,7 +1882,8 @@ class TestK_CompactionPolicyDefaultRaising:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
@@ -1743,7 +1917,8 @@ class TestK_CompactionPolicyDefaultRaising:
 
 class TestL_ViewOfRaisingInCondenserFallback:
     async def test_view_of_raises_only_when_condenser_attempted_still_calls_model(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ) -> None:
         est = _estimate(
             canonical_payload_bytes=200000,
@@ -1751,12 +1926,15 @@ class TestL_ViewOfRaisingInCondenserFallback:
             tools_json_bytes=5000,
         )
         agent = PreviewScriptedAgent(
-            [finish_step()], budget_estimate=est,
+            [finish_step()],
+            budget_estimate=est,
         )
         cond = FakeCondenser(
             request=CondensationRequest(soft=True, reason="tokens"),
             tombstone=CondensationEvent(
-                forgotten_start_seq=1, forgotten_end_seq=1, summary="[ok]",
+                forgotten_start_seq=1,
+                forgotten_end_seq=1,
+                summary="[ok]",
             ),
         )
         monkeypatch.setenv("DISCO_CONTEXT_PACK", "0")

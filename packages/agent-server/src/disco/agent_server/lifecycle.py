@@ -202,7 +202,8 @@ class LifecycleManager:
                                         content=(
                                             "⚠️ This run was interrupted when the server restarted, "
                                             "so its sandbox was reclaimed. It's paused — send a "
-                                            "message to pick it up (your saved files restore on the "
+                                            "message to pick it up (your saved files restore on "
+                                            "the "
                                             "next step)."
                                         ),
                                     ),

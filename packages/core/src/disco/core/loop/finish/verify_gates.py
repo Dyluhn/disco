@@ -825,8 +825,7 @@ async def _prepare_typed_host_verdict(
     if typed_required and typed_result is None:
         host_verdict = gate._host_unavailable_verdict(
             deliverable,
-            "verification could not run: "
-            f"{_typed_host_mismatch(host_verdict, deliverable)}.",
+            f"verification could not run: {_typed_host_mismatch(host_verdict, deliverable)}.",
         )
     if typed_result is not None:
         host_verdict["passed"] = typed_result.passed

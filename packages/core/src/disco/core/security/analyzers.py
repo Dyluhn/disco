@@ -155,7 +155,7 @@ _SUBSTITUTION_MAX_DEPTH = 8
 _SUBSTITUTION_MAX_COUNT = 32
 _SUBSTITUTION_MAX_CHARS = 64 * 1024
 _UNSAFE_HEREDOC = -2
-_DOUBLE_QUOTE_ESCAPES = frozenset({'$', '`', '"', "\\", "\n"})
+_DOUBLE_QUOTE_ESCAPES = frozenset({"$", "`", '"', "\\", "\n"})
 
 
 def _without_shell_line_continuations(command: str) -> str:
@@ -573,10 +573,7 @@ def _active_shell_substitutions(
                 body_length = closing - (index + 2)
                 budget[0] += 1
                 budget[1] += body_length
-                if (
-                    budget[0] > _SUBSTITUTION_MAX_COUNT
-                    or budget[1] > _SUBSTITUTION_MAX_CHARS
-                ):
+                if budget[0] > _SUBSTITUTION_MAX_COUNT or budget[1] > _SUBSTITUTION_MAX_CHARS:
                     return found, "nested shell substitution exceeds analysis bounds"
                 found.append((kind, command[index + 2 : closing]))
                 index = closing + 1
@@ -598,14 +595,9 @@ def _active_shell_substitutions(
                 body_length = closing - (index + 1)
                 budget[0] += 1
                 budget[1] += body_length
-                if (
-                    budget[0] > _SUBSTITUTION_MAX_COUNT
-                    or budget[1] > _SUBSTITUTION_MAX_CHARS
-                ):
+                if budget[0] > _SUBSTITUTION_MAX_COUNT or budget[1] > _SUBSTITUTION_MAX_CHARS:
                     return found, "nested shell substitution exceeds analysis bounds"
-                found.append(
-                    ("backtick", _decode_backtick_body(command[index + 1 : closing]))
-                )
+                found.append(("backtick", _decode_backtick_body(command[index + 1 : closing])))
                 index = closing + 1
                 continue
             index += 1

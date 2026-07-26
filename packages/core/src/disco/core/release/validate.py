@@ -185,8 +185,7 @@ def _check_ingress_count(spec: ReleaseSpec, blockers: list[Blocker]) -> None:
             Blocker(
                 code=BlockerCode.ingress_count,
                 message=(
-                    "a releasable spec must declare EXACTLY ONE ingress service, "
-                    f"found {count}"
+                    f"a releasable spec must declare EXACTLY ONE ingress service, found {count}"
                 ),
             )
         )
@@ -290,9 +289,7 @@ def _check_secret_name_leaks(spec: ReleaseSpec, blockers: list[Blocker]) -> None
                 blockers.append(
                     Blocker(
                         code=BlockerCode.secret_name_leaked,
-                        message=(
-                            f"secret env name {name!r} appears as a literal value in {label}"
-                        ),
+                        message=(f"secret env name {name!r} appears as a literal value in {label}"),
                     )
                 )
 

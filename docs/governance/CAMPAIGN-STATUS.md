@@ -838,3 +838,46 @@ non-conflicting ports, with its route disclosed and bound in the run manifest.
 
 **Not done, deliberately:** the other worktrees' servers were not stopped,
 re-pointed, or otherwise disturbed. They are outside this authorization.
+
+## 2026-07-26 — Epic 5, part 1: Ruff gates green; architecture budget attributed
+
+**Ruff now passes both gates on the whole tree** — `uv run ruff check` **exit 0**
+and `uv run ruff format --check` **exit 0**. Three E501s were re-wrapped by hand
+(a user-facing string in `lifecycle.py`, a comprehension in
+`test_selfhost_e2e.py`, a constructor argument in `test_driver_outage_meta.py`)
+and 19 files were formatted. All mechanical and semantics-preserving; `packages/core`
+still exit 0 and `basedpyright` still **0/0/0**.
+
+**Architecture budget: attributed line by line rather than lumped together.**
+Comparing every flagged symbol against its size at `f55efb03`:
+
+| | count | meaning |
+|---|---|---|
+| **Pre-existing at stable-main** | **23 / 26** | already over cap before this branch existed |
+| **Grew past cap on this branch** | **3 / 26** | this branch is where they crossed |
+
+The pre-existing debt is substantial and long-standing — `ConversationRuntime`
+4519 vs a 3970 cap, `Driver` 1306 vs 800, `reduce_progress` 522 vs 200,
+`_ContentGateMixin` 1087 vs 800. `scripts/check_arch_budget.py` is unchanged
+since `f55efb03`, and its own comments say the caps were "frozen at the measured
+post-campaign sizes", so these were already failing when Phase 2 was accepted.
+
+The three this branch grew are small and therefore genuinely fixable here:
+
+| symbol | stable-main | now | cap | over |
+|---|---|---|---|---|
+| `BrowserHandler` | 753 | 851 | 800 | +51 |
+| `StuckDetector` | 744 | 816 | 800 | +16 |
+| `make_conversations_router` | 302 | 336 | 321 | +15 |
+
+**I also removed my own contribution to the debt.** My Epic-3 horizon change had
+added 6 lines to `AgentLoop` (2225 → 2231) — a capped coordinator. The
+explanation belongs in `ViewBuilder.build_with_horizon`'s docstring, not inside a
+god-object, so the comment was dropped and `AgentLoop` is now byte-for-byte back
+at its stable-main size of **2225** (delta **+0**). A gate whose purpose is to
+prevent growth should not be paid with more growth.
+
+**Plan for the rest of Epic 5:** decompose the three that this branch broke —
+the gate's whole point is preventing growth, and this branch is where they
+crossed — then make an explicit, owner-visible decision on the 23 pre-existing
+entries rather than silently waiving them.

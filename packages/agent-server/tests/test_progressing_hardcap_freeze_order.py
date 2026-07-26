@@ -183,9 +183,9 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
 
     # 8. no intervening user message, resume, or newer run intent
     after = [e for e in await event_store.get_events(cid) if (e.seq or -1) > (paused.seq or -1)]
-    assert not any(
-        isinstance(e, MessageEvent) and e.source is EventSource.USER for e in after
-    ), "a user turn between pause and freeze would invalidate the horizon"
+    assert not any(isinstance(e, MessageEvent) and e.source is EventSource.USER for e in after), (
+        "a user turn between pause and freeze would invalidate the horizon"
+    )
 
     # 9. ordinary kill afterwards for destructive cleanup — evidence already frozen
     sandbox.destroyed = True

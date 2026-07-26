@@ -40,9 +40,9 @@ def test_import_pause_restart_and_rollback_require_causal_evidence() -> None:
         "rollback": {"ok": True, "restored": 1, "new_version": 3},
     }
 
-    result = ScenarioLifecycleOracle().check(
-        events, scenario=scenario, product_evidence=evidence
-    )[0]
+    result = ScenarioLifecycleOracle().check(events, scenario=scenario, product_evidence=evidence)[
+        0
+    ]
     assert result.passed, result.to_dict()
 
 
@@ -141,9 +141,7 @@ def test_context_pressure_missing_compaction_fails() -> None:
             }
         }
     }
-    result = ContextPressureOracle().check(
-        _context_events(compacted=False), scenario=scenario
-    )[0]
+    result = ContextPressureOracle().check(_context_events(compacted=False), scenario=scenario)[0]
     assert result.code == "CONTEXT_PRESSURE_NOT_OBSERVED"
 
 
