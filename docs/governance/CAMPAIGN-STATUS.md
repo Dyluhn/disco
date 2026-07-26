@@ -1611,14 +1611,20 @@ health checks only, afterwards.
     run FAILs with `GOVERNED_ADMISSION_BYPASSED` after finishing its build —
     seed-460000-attempt2 is exactly that dossier.
 
-## I. Owner items (not blockers, for the record)
+## I. Post-campaign notes — recorded only, NEVER a reason to pause
 
-- The `opencode-go` key was pasted into the chat transcript — rotate it once
-  the campaign no longer needs it.
-- `default_model` and `roles.summarizer` were repointed for the campaign;
-  restoring them to the local models afterwards is the owner's call.
-- Whether the export-track1 acceptance should be re-ratified against this
-  lineage (the two unsatisfiable lanes) is that campaign's decision.
+Nothing in this section blocks, gates, or defers any epic. No item here needs
+an answer before, during, or between epics. Do not ask about them; do not wait
+on them. They exist so the *final report* (Epic 7) can list them as
+after-campaign housekeeping:
+
+- rotate the `opencode-go` key after the campaign (it appears in a chat
+  transcript);
+- `default_model` / `roles.summarizer` were repointed to the frozen driver for
+  the campaign — the final report notes the original values (`driver-local`,
+  `summarizer-local`) so they can be restored later if wanted;
+- the two cross-lineage export-track1 lanes stay documented as
+  unsatisfiable-by-construction; no action in this campaign.
 
 ## J. Delegation map — GLM 5.2 (and DeepSeek V4 Pro) as context relief for Opus
 
@@ -1685,18 +1691,17 @@ evidence-manifest hashes, prove each of the 100 cells occurs exactly once and
 no diagnostic leaked into the count, and draft the final report skeleton from
 this ledger. Opus verifies and writes every judgment sentence itself.
 
-**DeepSeek V4 Pro (new authorization, route not yet configured):** the standing
-§9 lock binds *delegation* to `ollama-cloud/glm-5.2` and forbade `opencode-go`
-for it; the owner's 2026-07-26 statement adds V4 Pro to the pool. Before first
-use: confirm the exact provider route with the owner, then create a **separate**
-fail-closed launcher config mirroring `glm-run.sh` (route assertion → receipt →
-answer) — do not modify the GLM launcher, and never let delegation traffic near
-the product driver's ledger accounting. Suggested split once configured: GLM 5.2
-(1M ctx) for repo-wide inventories and dossier digestion; V4 Pro for root-cause
-hypothesis generation on failures and the single practical review per package.
-If the route turns out to share the product driver's `opencode.ai` credential,
-prefer keeping ALL delegation on GLM until after Epic 7 — provider-capacity
-contention with the driver during promotion is not worth the marginal quality.
+**DeepSeek V4 Pro (authorized, optional, never a dependency):** GLM 5.2 is
+fully sufficient for every delegation in this plan — no step anywhere depends
+on V4 Pro, and its absence is never a reason to pause or ask. It becomes usable
+only if a working route config for it *already exists or appears* (e.g. the
+owner drops one in); in that case mirror `glm-run.sh` as a **separate**
+fail-closed launcher (route assertion → receipt → answer; never modify the GLM
+launcher) and prefer it for failure root-cause hypotheses and the one practical
+review per package, keeping GLM for inventories/digestion. One hard rule: if
+its route shares the product driver's `opencode.ai` credential, keep ALL
+delegation on GLM until after Epic 7 — never contend with the driver's provider
+capacity during counted runs.
 
 *End of handoff. Next concrete action: pre-flight P1 (done at handoff), then
 seed 460000 (attempt3 in flight at handoff — platform-route flag on).*
