@@ -310,3 +310,81 @@ contract, with the process-backend host-signal prohibition as its first typed
 producer — then the remaining Epic-3 acceptance work (raw DSML/tool-markup
 rejection, one bounded repair, truthful deterministic fallback), then Epics 4-7
 in governed order.
+
+## Review 4 — 2026-07-26 01:39 CDT / 2026-07-26T06:39:35Z
+
+Source fingerprint: sha256:e03c5be62b53603448315b572ac7dbd2a30faaa8860e0c6ca5815614cf52049d
+
+Work completed since prior review: Epic 2 implemented and committed (typed
+runtime constraint, its producer, and the deterministic loop proof). Epic 3
+completed (summary rejection, one bounded repair, truthful fallback). Epic 4
+found blocked on infrastructure and the blocker recorded. Epic 5 taken first:
+both Ruff gates brought green tree-wide, all three architecture-budget
+regressions this branch introduced decomposed, the gate rebaselined and proven
+still sensitive, frontend Vitest / typecheck / Vite build / G11 all green, and
+the Export Track-1 verifier launched.
+
+Evidence that it actually worked: `test_runtime_constraints.py` 17 passed,
+`test_summary_validation.py` 19 passed, `packages/core` + `packages/tools` +
+`packages/agent-server` exit 0 (9,020 tests, 0 failure markers, 1 skip). All
+four architecture fitness gates exit 0, plus tool schemas, both Ruff gates and
+the governance seal. Frontend: Vitest 175 files / 1146 tests passed, typecheck
+exit 0, Vite build exit 0, G11 exit 0. Budget-gate sensitivity proven by probe:
+`View.of` 255 → 258 exits 1, restored exits 0.
+
+What went well and why: attribution before action, repeatedly. Measuring every
+budget violation against `f55efb03` turned "26 failures" into "23 inherited, 3
+ours", which converted an apparently campaign-scale refactor into three small,
+tractable fixes plus a documented decision. The same habit caught that the live
+stack on 8000/8800 belongs to *other checkouts* — running Epic 4 against it
+would have filed another worktree's behaviour as this candidate's evidence.
+
+What went rough / consumed time or tokens: three self-inflicted errors, all
+caught by re-running the gate rather than by review. My first `StuckDetector`
+extraction moved one member of a mutually-referential cluster and broke three
+tests. My first rebaseline *replaced* the allowlist instead of merging it,
+silently dropping legitimate allowances and turning 23 violations into 10
+different ones. And a name-based regex damaged two unrelated entries because two
+symbols share each name across files. Each was cheap to catch and would have been
+expensive to miss.
+
+Immediate process or technical correction: when a symbol belongs to a cluster,
+move the whole cluster; when editing a keyed table, merge rather than regenerate;
+when matching by name, match on the qualifying path too. And re-run the gate
+after every mechanical edit, not at the end of a batch.
+
+Recent fixes reviewed together: the three decompositions, the budget rebaseline,
+and lifting Epic 2's helper out of `execute_and_observe`.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: **a mechanical edit applied by name rather
+    than by identity.** The regex that matched `sed -i` without its path, the one
+    that rewrote `run`/`__init__` in the wrong file, and the extraction that took
+    one member of a cluster are the same mistake: a transformation keyed on a
+    fragment that does not uniquely identify its target.
+  - structural product/harness remedy: key mechanical edits on the full identity —
+    (path, symbol), not symbol; the whole cluster, not one member; merge into a
+    keyed structure rather than regenerate it.
+  - signal that would recognize it earlier next time: any edit performed by regex
+    or string replace over a namespace where the key can repeat. Ask "how many
+    things does this pattern match?" before applying, not after.
+  - existing/new regression that protects it: the budget gate itself now has a
+    proven sensitivity probe, and the gate was what caught all three errors.
+  - why the remedy remains target-neutral and flexible: it is a rule about how I
+    edit, not about product behaviour; nothing in the codebase constrains a
+    future target.
+
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: every
+    decomposition traces to a specific symbol this branch pushed over a cap; the
+    rebaseline traces to a gate that was red at stable-main and therefore blind;
+    the Ruff work traces to an explicit Epic 5 gate.
+  - any theoretical tail to drop: yes — I did **not** decompose the 23 inherited
+    violations. `ConversationRuntime` at 4567 and `reduce_progress` at 522 against
+    a 200 cap are campaign-scale refactors with real regression risk, and doing
+    them inside a preflight would be the opposite of the smallest general
+    solution. Recorded as roadmap work with the debt annotated in the source.
+
+Next action: start a Disco stack from THIS checkout on non-conflicting ports so
+Epic 4's context diagnostics measure the candidate's own bytes, while the Export
+Track-1 verifier and the two GLM review streams finish.
