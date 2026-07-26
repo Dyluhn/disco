@@ -1216,3 +1216,49 @@ Verified by restart: the agent-server's origin-approval warning is **gone**.
 block Epic 4 — the soak runner binds its driver explicitly via `--model`, and the
 frozen route is the opencode-go one — but any run must name the driver rather
 than inherit the default.
+
+## 2026-07-26 — Epic 4 BLOCKED on an owner-only secret. Precisely bounded.
+
+The origin approval was necessary but not sufficient. With the re-approved
+ledger the driver still refuses:
+
+```
+Driver 'prov-opencode-go-deepseek-v4-flash' is misconfigured: model
+'deepseek-v4-flash' is unavailable: its endpoint was not wired — the origin is
+not operator-approved, its secret-ref is not allowed for that origin, or the API
+key could not be decrypted.
+```
+
+The origin **is** now approved (warning gone, ledger verifies), so the live
+failure is the third clause: **the stored `provider_opencode-go` API key cannot
+be decrypted.**
+
+**Every safe in-scope alternative was tried and is exhausted:**
+
+| attempt | result |
+|---|---|
+| Carry `DISCO_SECRET_KEY` from the running `/projects/disclaude` server | ledger verifies, key still undecryptable |
+| Run with no `DISCO_SECRET_KEY` (derive from `~/.disco/auth_secret`) | ledger stops verifying — proves the carried key is what signed it |
+| Re-approve via the product's own `PUT /api/models/{id}` remedy | origin approved; does not re-encrypt a key it cannot read |
+| Look for a third secret on the host | the `reliability-kernel-wt` server's `DISCO_SECRET_KEY` is **identical** to the first — no other key exists in any running process |
+
+So this checkout's secret store holds ciphertext encrypted under a secret that no
+longer exists anywhere on this machine. Re-entering the key requires the
+**plaintext `opencode-go` API key**, which only the owner has. Fabricating or
+substituting a provider would silently change the frozen driver route, which the
+campaign forbids.
+
+**This is the one blocker meeting the protocol's deferral bar** — it "requires
+information only the owner can supply" — and it is stated as a single precise
+action, not a menu:
+
+> Re-save the `prov-opencode-go-deepseek-v4-flash` model in Settings with its
+> API key, against the stack now running on **8010/8810 from this checkout**.
+
+Everything else is ready: the stack runs from the candidate's own bytes on
+non-conflicting ports with the historical route and flags, the origin approval
+verifies, and the tree is clean. **Epic 4 starts the moment that key is
+re-entered.**
+
+**Not blocked, and continuing:** all provider-free work — the Export Track-1
+verifier re-run now in flight, and the remaining Epic 5 items.
