@@ -21,32 +21,33 @@ handoff.
 
 # CURRENT SNAPSHOT
 
-**Last updated (local + UTC):** 2026-07-25 23:30 CDT / 2026-07-26T04:30:22Z
+**Last updated (local + UTC):** 2026-07-25 23:49 CDT / 2026-07-26T04:49:29Z
 
 **Current branch / HEAD / source fingerprint:**
-`disclaude/build-platform-core-v1` / `32a09957eaf26723e56544b8a1ef426f3675ff21` /
-`source sha256:96d23ee69296e608ba558445021e503f392372ee0968ecc050069dd934537f1f`
+`disclaude/build-platform-core-v1` / `579cabaf` (Epic 1) /
+`source sha256:a432bb1de459d67a67cf1faae829133f8acd6d64b3073513e2fe0dbd667ded36`
 (1929 files; tree
-`sha256:089bfc3363f18044779cb33c8c7dc6bd85e295b66e48d2481a126647ecd5337b`,
+`sha256:b1f8830bdb44983fa103d2168990b2614584e5b32588e862cdf008e4068deb2a`,
 2533 files)
 
 **Tree cleanliness and every intentional dirty path:**
-Not clean. Every dirty path is intentional and accounted for.
+Epic 0 (`32a09957`) and Epic 1 (`579cabaf`) are committed. The only dirty paths
+are the in-flight Epic-3 **one-horizon** slice:
 
 ```text
-M  .claude/hooks/stop_gate.py                       (Epic 0 correction — bounded refusal)
-M  harness/build_soak/adapters/disco_api.py         (Epic 1 — Ruling-2)
-M  harness/build_soak/run.py                        (Epic 1 — Ruling-2)
-M  harness/build_soak/tests/test_api_runner.py      (Epic 1 — horizon regression)
-?? harness/build_soak/tests/test_freeze_before_kill.py  (Epic 1 — Ruling-2)
+M  packages/core/src/disco/core/loop/view_render.py   (build_with_horizon)
+M  packages/core/src/disco/core/loop/engine.py        (return the built horizon)
+M  packages/core/tests/test_loop_condensation.py      (one-horizon regression)
 ```
 
-The context/governance reset is now committed at `32a09957` (85 paths: 19 added,
-33 deleted, 33 modified). The three original active product paths were
-deliberately excluded from that commit and remain dirty.
+**Current epic and package:** Epic 3, **one-horizon slice only**. This slice
+does **not** complete Epic 3 — raw DSML/tool-markup rejection, bounded repair,
+and the truthful fallback all remain open.
 
-**Current epic and package:** Epic 1 complete and about to be committed.
-Next: Epic 2 — durable typed runtime constraints.
+Owner authorized (2026-07-25) a bounded, non-promoting **reliability-loop
+acceleration insertion** (Packages A/B/C) to run at the next clean committed
+boundary, before resuming Epic 2. It adds no campaign acceptance count and earns
+zero promotion credit. `CAMPAIGN-PLAN.md` is deliberately unchanged.
 
 **Current operation:** none running. (No background PID; no live model run.)
 
@@ -387,3 +388,57 @@ the test fails for the right reason.
 part of this coherent package. Reformatting them here would inflate the diff and
 mix unrelated churn into a package under review. **Carried to Epic 5**, where
 Ruff/format is an explicit gate and must pass tree-wide.
+
+## 2026-07-25 — Epic 3, one-horizon slice (NOT all of Epic 3)
+
+**Confirmed the documented two-horizon mechanism in code, then closed it.**
+`AgentLoop._materialize_current_view` computed `consistent_events`, passed them to
+`ViewBuilder.build()`, and returned **its own pre-build list** beside the built
+View. But `ViewBuilder._build` appends durable events mid-build and re-reads the
+log after each one — microcompact tombstones (`view_render.py:839`),
+context-compaction snips (`:905`), and a condensation tombstone (`:915`) — then
+returns only the View (`:1004`). The local `events` at that return **is** the
+horizon the View describes, and it was simply discarded. A caller rendering a
+post-condensation View while holding a pre-condensation list sees the replaced
+span as still live, which is how the same span gets condensed twice (pattern P5).
+
+**Correction.** `_build` now returns `(View, events)`. `build()` keeps its exact
+existing signature and behaviour for all ~10 existing callers; a new
+`build_with_horizon()` returns both, and `_materialize_current_view` uses it. One
+response, one horizon — enforced by the return type rather than by discipline.
+
+**Proven by revert-check.** With the fix reverted, the new regression fails with
+exactly `AssertionError: returned events predate the condensation the View
+already reflects`; restored, it passes.
+
+**Gates:** `packages/core` exit 0; `packages/agent-server` exit 0;
+`test_loop_condensation.py` 5 passed; Ruff clean and formatted;
+`uv run basedpyright` **0 errors, 0 warnings, 0 notes**; `lint-imports`
+**2 contracts kept, 0 broken**; generated diagram fresh (exit 0); tool schemas
+exit 0.
+
+**Epic 3 remains OPEN.** This slice closes only the horizon family. Raw
+DSML/tool-markup rejection, the one bounded repair, the truthful deterministic
+fallback, and the "typed constraints survive fallback" item are untouched.
+
+**OPEN FINDING (pre-existing, blocks Epic 5) — the architecture budget gate
+fails on the committed tree.** `scripts/check_arch_budget.py` exits **1** with
+**26** violations, e.g. `AgentLoop` 2225 LOC > 2028, `ConversationRuntime`
+4567 > 3970, `Driver` 1306 > 800, `reduce_progress` 522 > 200.
+
+Characterised rather than assumed:
+
+- my slice adds **zero** new violations — identical list before and after, with
+  `AgentLoop` moving 2225 → 2231, already far over cap either way;
+- the allowlist `scripts/check_arch_budget.py` is **unchanged since
+  `f55efb03`** (stable-main);
+- `engine.py` and `driver.py` are **byte-identical to `f55efb03`** yet over cap.
+
+Therefore the gate was **already failing at stable-main**; the campaign branch
+did not introduce it. Epic 5 lists "architecture budget" as a required gate, so
+this must be resolved there — by honest decomposition or by an explicitly
+justified, owner-visible cap rebaseline. It is recorded here so it cannot be
+discovered late and quietly waived. Classification: harness/gate truth, not a
+product defect. Earliest broken contract: a required gate that does not pass
+cannot be treated as "pre-existing therefore green"
+(ENGINEERING-STANDARDS §3).

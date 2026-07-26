@@ -814,6 +814,28 @@ class ViewBuilder:
         return view.model_copy(update={"messages": messages})
 
     async def build(self, events: list[Event]) -> View:
+        """The View alone, for callers that own their history and do not re-read it.
+
+        Prefer :meth:`build_with_horizon` on any path that will go on to use "the
+        events" afterwards -- see that method for why.
+        """
+        view, _horizon = await self.build_with_horizon(events)
+        return view
+
+    async def build_with_horizon(self, events: list[Event]) -> tuple[View, list[Event]]:
+        """The View **and the exact event list it was built from**.
+
+        ``_build`` can append durable events mid-build -- microcompact tombstones,
+        context-compaction snips, and a condensation tombstone -- re-reading the log
+        after each. The View therefore describes a LATER horizon than the list the
+        caller passed in. A caller that renders this View but keeps its own
+        pre-build list is holding two different horizons at once, and the span the
+        condenser just replaced still looks live to it, so the SAME span can be
+        condensed a second time.
+
+        Returning both together makes the horizon impossible to lose: one response,
+        one horizon.
+        """
         # CW-2/CW-6 — derive the per-turn caps once and thread them into the
         # snapshot (pin breadth/size) + the observation snip. assist-ON → the
         # baseline caps + a None snip override → byte-identical to today.
@@ -827,7 +849,7 @@ class ViewBuilder:
         finally:
             obs_snip_override.reset(snip_token)
 
-    async def _build(self, events: list[Event], caps: ContextCaps) -> View:
+    async def _build(self, events: list[Event], caps: ContextCaps) -> tuple[View, list[Event]]:
         # S3 Microcompact (GAP A): a cheap, no-model pass FIRST — tombstone no-op
         # turns (a failed call an identical later call superseded) so the lossy
         # model-summarization condenser fires on a smaller, denser residue (or not
@@ -1001,4 +1023,7 @@ class ViewBuilder:
             tail = [stale_msg] if stale_msg is not None else []
             if prefix or tail:
                 view = view.model_copy(update={"messages": [*prefix, *view.messages, *tail]})
-        return view
+        # `events` has been re-read after every durable append above, so it is the
+        # exact horizon this View describes. Returning it with the View is what
+        # keeps a caller from carrying a stale list forward.
+        return view, events

@@ -85,3 +85,32 @@ async def test_summarizer_is_wired_into_condensation():
     await loop.send_message("go")
     await loop.run()
     assert summ.calls >= 1  # the loop's summarizer was used during condensation
+
+
+async def test_materialized_view_and_events_share_one_horizon():
+    """The returned View and event list must describe the SAME horizon.
+
+    ``ViewBuilder`` can append durable events mid-build -- microcompact
+    tombstones, context-compaction snips, and a condensation tombstone -- and
+    re-reads the log after each. If the caller keeps its own pre-build list while
+    rendering a post-build View it holds two horizons at once, and the span the
+    condenser just replaced still looks live to it, so the same span can be
+    condensed a second time (pattern P5).
+    """
+    cond = FakeCondenser(
+        request=CondensationRequest(soft=False, reason="events"), tombstone=_tombstone()
+    )
+    agent = ScriptedAgent([finish_step()])
+    loop, store = build_loop(agent, condenser=cond)
+    await loop.send_message("go")
+
+    _view, returned = await loop._materialize_current_view()
+
+    # The build condensed, so the tombstone exists durably...
+    stored = await store.get_events(CID)
+    assert any(isinstance(e, CondensationEvent) for e in stored)
+    # ...and the caller was handed the horizon that INCLUDES it, not the
+    # pre-build list it passed in.
+    assert any(isinstance(e, CondensationEvent) for e in returned), (
+        "returned events predate the condensation the View already reflects"
+    )
