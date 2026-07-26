@@ -807,3 +807,34 @@ valid summaries unchanged; protocol markup rejected and never persisted; one
 repair accepted; two failures → one truthful fallback with no loop; the fallback
 asserts only durable facts; typed constraints survive the fallback; ordinary
 HTML/JSX/shell still allowed).
+
+## 2026-07-26 — Epic 4 blocked on infrastructure; Epic 5 taken first (provider-free)
+
+**BLOCKING FINDING, caught before any spend: the live stack on 8000/8800 is not
+this worktree's.**
+
+```text
+:8000  pid 1983741  /var/home/dylan/projects/disclaude/.venv/... disco.agent_server
+:8800  pid 2826117  /var/home/dylan/projects/disclaude/.venv/... disco.app_server
+       pid 575166   /var/home/dylan/projects/reliability-kernel-wt/... agent_server
+```
+
+Every one of those is a **different checkout**. `/var/home/dylan/projects/disclaude`
+is the older shared worktree the brief explicitly says not to touch. Driving
+Epic 4's context diagnostics at those ports would have exercised another
+worktree's bytes and filed the results as evidence for *this* candidate —
+certifying code that was never under test. That is precisely the class of error
+the campaign exists to prevent, so it is recorded rather than worked around.
+
+Also: this checkout has **no `.env`**, so it carries no provider binding of its
+own.
+
+**Decision, per ENGINEERING-STANDARDS §4 (autonomy):** preserve the fact, advance
+provider-free work, repair/reroute the infrastructure, and resume — do not weaken
+acceptance and do not claim completion. Epic 5's preflight is entirely
+provider-free and already has two known, quantified blockers, so it is taken
+first. Epic 4 resumes once a stack is running **from this checkout** on
+non-conflicting ports, with its route disclosed and bound in the run manifest.
+
+**Not done, deliberately:** the other worktrees' servers were not stopped,
+re-pointed, or otherwise disturbed. They are outside this authorization.
