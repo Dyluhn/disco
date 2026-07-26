@@ -128,3 +128,97 @@ Overhardening check:
 Next action: set the review interval to 3,600 s, reconcile root `CLAUDE.md` into
 a bootstrap pointing at the governance authority order, then commit only the
 context/governance paths — never the three active product paths.
+
+## Review 2 — 2026-07-25 23:00 CDT / 2026-07-26T04:00:00Z
+
+Source fingerprint: sha256:b94c9002bbc19bd0bdead6cdeeca7ef32d1ed2398778857ce4188e58c78da4b0
+
+Work completed since prior review: Closed Epic 0 and committed it as `32a09957`
+(85 paths, three active product paths excluded by explicit pathspec). Proved hook
+wiring end-to-end with two real sessions. Found and fixed a defect I had
+introduced in the Stop gate. Opened Epic 1 and closed three of its named gaps:
+browser-evidence horizon binding, the mutable-head fallback, and the
+authority-race fence (adding resume and agent-view supersession to the existing
+user-turn and run-intent checks, unified into one choke point). Then found and
+fixed a defect in the pre-existing dirty Ruling-2 code that would have made the
+freeze useless in production.
+
+Evidence that it actually worked: full `harness/build_soak/tests/` suite exit 0
+(~890 passed, 1 skipped) after every change. `test_freeze_before_kill.py` 11
+passed. The committed `test_progressing_hardcap_freeze_order.py` reproduction
+still 3 passed. Two real `claude -p` sessions attempted to mutate sealed files
+via Edit/Write and via Bash and were blocked by the PreToolUse hook in the
+model's own words, with the seal exit 0 and both files untouched afterwards. The
+new real-path positive test asserts the freeze lands, names the exact immutable
+version (`version_seq`, `tree_digest`), preserves `index.html` byte-exact and the
+PNG byte-exact across the kill, retains
+`RUN_TIMEOUT_WHILE_PROGRESSING`, and issues exactly one kill.
+
+What went well and why: Two methods paid for themselves repeatedly. First,
+running adversarial controls instead of trusting the happy path — every single
+defect this session was found by a deliberate negative control, never by normal
+use. Second, the revert-check: after fixing the raw-row bug I re-broke it on
+purpose and confirmed the new test fails with exactly the production symptom
+(`FREEZE_TIMEOUT != frozen`) while all 11 fake-based tests still pass. That
+turned "I wrote a test" into "I proved this test protects this fix".
+
+What went rough / consumed time or tokens: Three things. (1) My e2e probe
+sessions ran with `--dangerously-skip-permissions` and made uninstructed writes
+in the campaign worktree — rewriting CAMPAIGN-STATUS.md, stripping
+`.serena/project.yml` comments, and creating a 212-line `scripts/glm_delegate.py`
+built against a *local* Ollama endpoint, contradicting the mandated
+`ollama-cloud` route. All reverted. (2) The `authority-race` GLM delegation cost
+1.13M tokens and produced a report I had largely superseded by reading the code
+directly. (3) I burned 27,793 tokens on an invalid negative control that could
+not have failed, because `glm-run.sh` re-exports the very variable I was trying
+to poison.
+
+Immediate process or technical correction: Probe sessions now run read-only or in
+a disposable copy — never with write permission in the campaign worktree.
+Delegations get a narrower scope and a stated token expectation; anything I can
+answer by reading one file, I read. A negative control must be checked for
+whether it can actually fail before I trust its result.
+
+Recent fixes reviewed together: the `sed -i` fail-open, the completion-sentinel
+false affordance, the unbounded Stop gate, and the raw-row freeze bug.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: a consumer read a *shape* the producer
+    never emits. `freeze_progressing_workspace` read `status`, `trigger`,
+    `version_seq`, `run_intent_id` and `agent_view_id` straight off raw SQLite
+    rows, where only `seq`/`kind`/`source` are real columns and everything else
+    lives inside an unparsed JSON `payload` string. Every one of those reads
+    returned None, so the freeze would have reported FREEZE_TIMEOUT on 100% of
+    real runs. `normalize_event`'s own docstring records a prior P0 false-negative
+    with the identical shape — "a row with top-level `kind` had its payload
+    dropped" — so this is the second occurrence, not an anecdote.
+  - structural product/harness remedy: exactly one canonical normalizer, applied
+    at every boundary where persisted rows enter logic. `normalize_events` was
+    already used at four other sites in this adapter; the freeze was the sole
+    path that skipped it.
+  - signal that would recognize it earlier next time: a test whose fixture is
+    hand-built flat dicts while the production source is a database row. The
+    fake modelled a shape the real producer never emits, so it could not fail.
+  - existing/new regression that protects it: the real-path positive test, which
+    drives run_once against real SQLite rows and a real ProjectStore version.
+    Proven by revert-check to fail on the bug while the fakes stay green.
+  - why the remedy remains target-neutral and flexible: it adds no new contract
+    and no scenario-specific knowledge — it routes one existing consumer through
+    the normalizer the codebase already treats as canonical.
+
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: the
+    horizon clip and the workspace-source registration each trace to a specific
+    named gap and an observed loss (counted seeds 460004/460005); the resume and
+    agent-view fences are explicit acceptance items; the subordinate-verdict test
+    protects an acceptance item about not laundering the primary verdict.
+  - any theoretical tail to drop: yes — dropped one. I removed a test asserting
+    that an event with no usable `seq` is excluded by the horizon clip: the
+    schema enforces `NOT NULL` on `events.seq`, so the durable log cannot produce
+    one. The three-line defensive branch stays because it is fail-closed and free;
+    asserting an impossible state does not.
+
+Next action: finish Epic 1's remaining acceptance — the symlink and mutable-head
+fail-closed identity checks around collection, and explicit confirmation that the
+product pause/kill APIs and kill semantics are unchanged — then commit Epic 1 as
+one coherent package and move to Epic 2.

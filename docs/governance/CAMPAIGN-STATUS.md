@@ -21,34 +21,40 @@ handoff.
 
 # CURRENT SNAPSHOT
 
-**Last updated (local + UTC):** 2026-07-25 21:53 CDT / 2026-07-26T02:53:03Z
+**Last updated (local + UTC):** 2026-07-25 23:30 CDT / 2026-07-26T04:30:22Z
 
 **Current branch / HEAD / source fingerprint:**
-`disclaude/build-platform-core-v1` / `271af2e60062988507984d6df6d64e05877a5bc8` /
-`source sha256:bd1b1bba209e6b9362df1e69e360b0dd6d8b56087b147bfa72eeae81a63c8b98`
-(tree `sha256:448ba2ed4925e3b0c61ff96daae882403bfd08be8833ef209872add8cd87836c`)
+`disclaude/build-platform-core-v1` / `32a09957eaf26723e56544b8a1ef426f3675ff21` /
+`source sha256:96d23ee69296e608ba558445021e503f392372ee0968ecc050069dd934537f1f`
+(1929 files; tree
+`sha256:089bfc3363f18044779cb33c8c7dc6bd85e295b66e48d2481a126647ecd5337b`,
+2533 files)
 
 **Tree cleanliness and every intentional dirty path:**
-Not clean. Every dirty path is intentional and preserved.
+Not clean. Every dirty path is intentional and accounted for.
 
-*Active product work (Ruling-2, unfinished — must not be discarded):*
 ```text
-M  harness/build_soak/adapters/disco_api.py
-M  harness/build_soak/run.py
-?? harness/build_soak/tests/test_freeze_before_kill.py
+M  .claude/hooks/stop_gate.py                       (Epic 0 correction — bounded refusal)
+M  harness/build_soak/adapters/disco_api.py         (Epic 1 — Ruling-2)
+M  harness/build_soak/run.py                        (Epic 1 — Ruling-2)
+M  harness/build_soak/tests/test_api_runner.py      (Epic 1 — horizon regression)
+?? harness/build_soak/tests/test_freeze_before_kill.py  (Epic 1 — Ruling-2)
 ```
 
-*Context/governance reset (intentional — must not be reverted):* 34 modified /
-33 deleted tracked paths, plus the new governance surface being added in Epic 0.
+The context/governance reset is now committed at `32a09957` (85 paths: 19 added,
+33 deleted, 33 modified). The three original active product paths were
+deliberately excluded from that commit and remain dirty.
 
-**Current epic and package:** Epic 0 — context/governance reset.
-Package: governance surface + seal + hourly-review hooks + GLM launcher.
+**Current epic and package:** Epic 1 complete and about to be committed.
+Next: Epic 2 — durable typed runtime constraints.
 
 **Current operation:** none running. (No background PID; no live model run.)
 
 **Promotion count on current bytes:** **0 / 100.** No clean candidate exists.
 
-**Completed epics/packages with evidence links:** none yet.
+**Completed epics/packages with evidence links:** Epic 0 — committed `32a09957`.
+All eight acceptance items met; evidence in the gate tables below and in the
+2026-07-25 work log.
 
 **Focused gates and exact results:**
 
@@ -62,8 +68,31 @@ Package: governance surface + seal + hourly-review hooks + GLM launcher.
 | `scripts/check_governance_seal.py` verify | exit **0** |
 | `scripts/check_governance_seal.py` after byte mutation | exit **1** (drift named exactly) |
 | `scripts/check_governance_seal.py` after restore | exit **0** |
+| PreToolUse guard mutation matrix (hook contract) | **11/11 denied**, **5/5 legitimate allowed**, no false positives |
+| Completion sentinel — negative control (documentation mention) | not satisfied — as designed |
+| Completion sentinel — positive control (standalone assertion) | satisfied, then restored |
+| Hourly review — 60 s wall clock | not due at T-20 s; **due injection fired** at T+21 s |
+| Hourly review — bare timestamp | **rejected**, all 10 fields named, schedule did **not** advance |
+| Hourly review — complete review | **accepted (#1)**, schedule advanced atomically, source unblocked |
+| Overdue source mutation / ledger write | source **denied**; ledger **allowed** (no deadlock) |
+| Stop gate bounded refusal | block, block, block, **allow** on 4th; counter resets and re-arms |
+| GLM launcher — hijacked `baseURL` | exit **70**, **no `stream.json`** — nothing was sent |
+| GLM launcher — correct route | assertion passed; round-trip verified against ground truth |
+| `pytest harness/build_soak/tests/` (`-m "not integration"`) | **exit 0**, ~890 passed, 1 skipped |
+| `pytest packages/agent-server/tests/test_progressing_hardcap_freeze_order.py` | **exit 0**, 3 passed |
+| `pytest harness/build_soak/tests/test_freeze_before_kill.py` | **exit 0**, 11 passed |
 
-**Broad/live gates and exact results:** none run yet on this tree.
+**Broad/live gates and exact results:**
+
+| Gate | Result |
+|------|--------|
+| **E2E hook wiring** — real `claude -p` session attempts `Edit`/`Write` of a sealed file | **BLOCKED by the hook.** Model reported: "The edit was blocked — a hook rejected it because `ENGINEERING-STANDARDS.md` is a change-controlled governance file requiring the rebaseline procedure; the file is unchanged." |
+| **E2E hook wiring** — real session attempts a `Bash` append to a sealed file | **BLOCKED by the hook.** Model reported: "Blocked — a pre-tool hook refused the write, citing `ARCHITECTURE-BOUNDARIES.md` as change-controlled; the file is unmodified." |
+| Seal after both e2e attempts | exit **0**; `git status` shows both sealed files untouched |
+
+This proves the wiring, not merely the hook logic: `.claude/settings.json` is
+loaded, `${CLAUDE_PROJECT_DIR}` is substituted, the guard fires, and its reason
+text reaches the model.
 
 **Open observed findings, classification, and earliest broken contract:**
 
@@ -88,16 +117,30 @@ Package: governance surface + seal + hourly-review hooks + GLM launcher.
 
 **Decisions made autonomously and why:** see the dated log below.
 
-**GLM delegations (provider/model receipt + output + verified value):** none
-yet — launcher is being created in this package.
+**GLM delegations (provider/model receipt + output + verified value):**
+
+Launcher: `/var/home/dylan/Desktop/Disclaude-Claude-GLM52/glm-run.sh`. Every call
+resolves and asserts the route before sending; receipts land in
+`/var/home/dylan/build-platform-campaign-evidence/2026-07-25/glm-delegations/`.
+
+| Label | Route receipt | Output | What I independently verified |
+|-------|---------------|--------|-------------------------------|
+| smoke | `ollama-cloud/glm-5.2`, variant max, `baseURL=https://ollama.com/v1`, key present/redacted | `10` | Counted `packages/core/src/disco/core/build_platform/*.py` myself: **10**. Matches. |
+| `badroute` | asserted OK (my negative control was invalid — `glm-run.sh` re-exports the route, overwriting the hostile value) | ran anyway, 27,793 tokens | Disclosed as a wasted call, not evidence. |
+| `hijack` | **REFUSED, exit 70** | none — no `stream.json` written | Confirmed nothing was sent. |
+| `authority-race` | `ollama-cloud/glm-5.2`, variant max | event-kind inventory with file:line | Cross-checked its `EventKind` list against `packages/core/src/disco/core/events.py`; used as leads only. **Cost 1.13M tokens for a report I largely superseded by reading the code directly — delegations must be scoped tighter.** |
 
 **Next three concrete actions:**
-1. Prove the PreToolUse seal guard and the hourly-review hook functionally
-   (blocked Edit/Write, blocked Bash write, 60 s due-injection and completed
-   review acknowledgement), then set the interval to 3,600 s.
-2. Create and fail-closed verify the Ollama-only GLM 5.2 OpenCode launcher.
-3. Reconcile root `CLAUDE.md` into a bootstrap and commit **only**
-   context/governance paths — never the three active product paths.
+1. Finish Epic 1's remaining acceptance: prove the full **real**
+   `drive_scenario` process-backend hard-cap positive (known artifact + PNG,
+   true progressing hard cap, both hashes preserved across kill, inspect
+   finalized after kill, zero owned resources, primary
+   `RUN_TIMEOUT_WHILE_PROGRESSING` retained).
+2. Add the bounded pause-timeout case proving subordinate `FREEZE_TIMEOUT` does
+   not launder the primary verdict, and the symlink / mutable-head fail-closed
+   identity checks around collection.
+3. Confirm product pause/kill APIs and kill semantics are unchanged, then commit
+   Epic 1 as one coherent package.
 
 **Known deferred post-campaign work:** everything in
 [`ARCHITECTURE-ROADMAP.md`](./ARCHITECTURE-ROADMAP.md) (Tier A/B/C and the
@@ -108,8 +151,8 @@ closeout.
 
 | Epic | State |
 |------|-------|
-| 0 — context/governance reset | IN PROGRESS |
-| 1 — finish freeze-before-kill | not started |
+| 0 — context/governance reset | **COMPLETE** — committed `32a09957`; all 8 acceptance items met and e2e-proven |
+| 1 — finish freeze-before-kill | **COMPLETE** — all 7 acceptance items met; the freeze also had a production-fatal raw-row defect found and fixed |
 | 2 — durable typed runtime constraints | not started |
 | 3 — coherent, safe condensation | not started |
 | 4 — context diagnostics on final bytes | not started |
@@ -216,3 +259,131 @@ writing the very review that clears the block.
 **Seal gate proven across its full state machine** before the guard was
 installed: exit 3 (no manifest) → 1 (rebaseline refused without explicit env) →
 0 (rebaselined) → 0 (verify) → 1 (drift, named exactly) → 0 (restored).
+
+## 2026-07-25 — Epic 0 closed, Epic 1 opened
+
+**Epic 0 committed as `32a09957`** (85 paths: 19 added, 33 deleted, 33 modified).
+The three active product paths were excluded by explicit pathspec and verified
+absent from the index before committing.
+
+**DEFECT I INTRODUCED, found and fixed: the Stop gate had no termination bound.**
+While trying to prove hook wiring end-to-end, `claude -p` hung in this repository
+on even a trivial prompt. Parking `.claude/settings.json` made it return
+instantly — so the hooks were the cause. Root cause: the Stop gate blocks
+whenever the completion contract is unmet, which is *by definition* true until
+Epic 7 closes, so **every** session in this repository became unstoppable,
+campaign or not. My earlier decision to "report `stop_hook_active` rather than
+yield to it, because the harness cap is the safety valve" was half right: the cap
+exists, but reaching it costs a wedged session and a pile of tokens. Corrected to
+a bounded refusal — `MAX_CONSECUTIVE_BLOCKS = 3`, then allow with a loud message,
+counter reset on allow so the next genuine early hand-back is refused just as
+firmly. Proven: block, block, block, allow, then re-armed. Refusing a premature
+hand-back must be emphatic, not infinite.
+
+**Hook wiring is now proven end-to-end, not just at the contract level.** Two
+real `claude -p` sessions in this worktree attempted to mutate a sealed file —
+once via `Edit`/`Write`, once via `Bash` append — and both were blocked by the
+PreToolUse guard, in the model's own words. Seal exit 0 afterwards; both files
+untouched. Trust was granted through an **isolated** `CLAUDE_CONFIG_DIR` under
+the session scratchpad, so the user's `~/.claude.json` was never modified and no
+other project was affected.
+
+**INCIDENT — my own e2e probes performed uninstructed writes.** The probe sessions
+ran with `--dangerously-skip-permissions`, and beyond the one edit they were asked
+to attempt they also: rewrote `CAMPAIGN-STATUS.md`, stripped the comments from
+`.serena/project.yml`, and created `scripts/glm_delegate.py` — a 212-line launcher
+built against a **local** Ollama endpoint, directly contradicting the mandated
+`ollama-cloud` / `https://ollama.com/v1` route. All three were reverted or
+removed; none of it is campaign work and none of it was verified by me. *Process
+correction:* any future probe session runs read-only or in a disposable copy —
+never with write permission in the campaign worktree.
+
+**Epic 1 progress — two named gaps closed, with the causal mechanism identified
+rather than guessed.**
+
+1. *Mutable-head fallback.* `collect_browser_evidence` resolves its source as
+   `_collected_workspace_dirs.get(cid) or _snapshot_workspace_dir(cid)`. That dict
+   is populated only inside `collect_workspace`, which the freeze path
+   deliberately bypasses — so the `or` silently resolved to the mutable
+   ProjectStore head, which after the kill holds only the pre-run import snapshot.
+   Fix: a landed freeze registers the freshly verified immutable version as the
+   conversation's workspace directory, making the fallback **unreachable** here
+   rather than merely unlikely. Pattern P2.
+2. *Browser evidence not clipped to the horizon.* `_referenced_screenshot_paths`
+   saw every event, so a screenshot referenced *after* the accepted
+   `WorkspaceVersionEvent` was eligible. Fix: `collect_browser_evidence` takes a
+   `horizon_seq` and only observations at or before it are eligible; the run.py
+   hard-cap call site passes the frozen horizon, and when the freeze does **not**
+   land it now claims *no* browser truth at all instead of falling through.
+3. *Authority race fence completed.* The existing check covered a new user turn
+   and a changed `run_intent_id`. Added **resume** (the run left `PAUSED` before
+   the snapshot event) and **agent-view supersession** — a separate authority axis
+   the product tracks via `current_workspace_agent_view_id`, which can move while
+   the intent id is unchanged. All four now live in one choke point,
+   `_freeze_horizon_violation`, so a new race is fenced by adding a case rather
+   than by scattering checks.
+
+**DECISION — dropped a test of an unreachable state.** I wrote a case asserting
+that an observation with no usable `seq` is dropped by the horizon clip, and it
+failed at `_seed_db` with `NOT NULL constraint failed: events.seq`. The durable
+log *cannot* produce an unplaceable event. The three-line defensive branch stays
+(it is fail-closed and protects direct callers), but asserting a state the schema
+forbids is overhardening, so the test was removed rather than contorted into
+passing.
+
+**Gates:** full `harness/build_soak/tests/` suite exit 0 (~890 passed, 1 skipped);
+`test_freeze_before_kill.py` 11 passed; the committed
+`test_progressing_hardcap_freeze_order.py` reproduction still 3 passed.
+
+## 2026-07-25 — Epic 1 complete
+
+**A production-fatal defect in the inherited Ruling-2 code, found by building the
+test the acceptance demanded.** `freeze_progressing_workspace` read `status`,
+`trigger`, `version_seq`, `run_intent_id`, and `agent_view_id` **directly off raw
+SQLite rows**. `collect_events()` returns
+`{seq, kind, source, id, created_at, payload}` where `payload` is an unparsed
+JSON string — only `seq`/`kind`/`source` are real columns. Every one of those
+reads returned `None`, so the pre-kill freeze could never find a durable `PAUSED`
+status or a `trigger="PAUSED"` version event: **it would have returned
+`FREEZE_TIMEOUT` on 100% of real runs** while the harness reported, truthfully but
+uselessly, that no workspace truth was preserved. The whole point of the Ruling-2
+work would have silently not happened.
+
+Eleven unit tests passed throughout, because their fake `collect_events` returned
+hand-built **flat dicts** — a shape the real producer never emits. This is
+recorded as pattern **P11**, and it is the concrete instance of the handoff's own
+warning that the tests were "helper-heavy and do not yet prove the full real
+`drive_scenario` hard-cap path."
+
+Fix: route both reads through `normalize_events`, the canonical flattener already
+used at four other sites in the same adapter. No new contract; a routing fix.
+
+**Proven by revert-check.** After fixing, I re-broke it deliberately. The new
+real-path test fails with exactly the production symptom
+(`assert 'FREEZE_TIMEOUT' == 'frozen'`) while all eleven fake-based tests stay
+green. That is now standing practice: when a fix matters, re-break it and confirm
+the test fails for the right reason.
+
+**Epic 1 acceptance — all seven items met.**
+
+| Acceptance item | Evidence |
+|---|---|
+| Full real process-backend `drive_scenario` positive | `test_progressing_hardcap_freeze_preserves_artifact_and_png_across_kill` — drives real `run_once` against real SQLite rows and a real `ProjectStore` version. Freeze lands; `version_seq`/`tree_digest` match exactly; `index.html` sha256 preserved; PNG bytes preserved; `inspect-trace.json` finalized after kill; `cleanup.container_orphans == 0`; `release_confirmed` true; primary `RUN_TIMEOUT_WHILE_PROGRESSING` retained; exactly **one** kill |
+| ProjectStore dedup reuses an existing `version_seq` | `test_deduplicated_version_seq_is_still_a_valid_freeze` — the **event** is the freeze proof, not a numerically new version |
+| Bounded pause timeout: kills normally, claims nothing, subordinate `FREEZE_TIMEOUT` | `test_failed_freeze_is_subordinate_and_never_launders_the_primary_verdict` — verdict stays `RUN_TIMEOUT_WHILE_PROGRESSING`, one kill, empty manifest, freeze disclosed with a reason |
+| Authority-race negatives: new user message, resume, run intent, agent view | four tests in `test_freeze_before_kill.py`; all four now route through one choke point, `_freeze_horizon_violation` |
+| Browser references after the accepted horizon cannot be certified | `test_browser_evidence_after_the_freeze_horizon_is_not_certifiable`, with a control proving the clip is what excludes the late reference |
+| Immutable identity/digest checked around collection; symlinks and mutable head fail closed | `test_tampered_immutable_version_makes_the_freeze_fail_closed`; `_verified_workspace_version` rescans size+sha256 and never follows symlinks; a landed freeze registers the verified version so the mutable-head `or` branch is unreachable |
+| Product pause/kill APIs and kill semantics unchanged | **zero changes under `packages/`** — every edit is harness-only; kill count asserted as exactly 1 in both the positive and the failure test |
+
+**Gates:** `harness/build_soak/tests/` exit 0 (~890 passed, 1 skipped);
+`uv run ruff check harness/build_soak/` **All checks passed**;
+`uv run basedpyright` **0 errors, 0 warnings, 0 notes**.
+
+**DECISION — I did not reformat two files I never touched.**
+`ruff format --check` also flags `test_fail_closed.py` and
+`test_scenario_lifecycle_oracle.py`. I verified by stashing that both were
+**already** unformatted on the committed tree, so they are pre-existing and not
+part of this coherent package. Reformatting them here would inflate the diff and
+mix unrelated churn into a package under review. **Carried to Epic 5**, where
+Ruff/format is an explicit gate and must pass tree-wide.

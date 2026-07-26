@@ -365,6 +365,103 @@ class _FinalWorkspaceSealEvidence:
         return self.error is None and self.event_seq is not None
 
 
+def _event_status_value(event: dict[str, Any]) -> str:
+    """The status string of a normalized status event (dict or scalar shape)."""
+
+    value = event.get("status")
+    if isinstance(value, dict):
+        value = value.get("value")
+    return str(value or "")
+
+
+def _latest_run_intent_id(events: list[dict[str, Any]]) -> str | None:
+    """The most recent run-intent id carried by any event, or None.
+
+    Run authority changes when a new intent is claimed; the freeze horizon is only
+    honest if authority did not move underneath it.
+    """
+
+    latest: str | None = None
+    for event in events:
+        raw = event.get("run_intent_id")
+        if isinstance(raw, str) and raw:
+            latest = raw
+    return latest
+
+
+def _latest_agent_view_id(events: list[dict[str, Any]]) -> str | None:
+    """The most recent model-view generation carried by any event, or None.
+
+    The product treats the agent view as a separate authority axis from the run
+    intent (``current_workspace_agent_view_id`` in ``disco.core.events``): a view
+    can be superseded while the intent id is unchanged, and a control targeting a
+    superseded view is not current.  A freeze that ignored this would bind evidence
+    to a horizon whose model-view authority had already moved.
+    """
+
+    latest: str | None = None
+    for event in events:
+        raw = event.get("agent_view_id")
+        if isinstance(raw, str) and raw:
+            latest = raw
+    return latest
+
+
+def _freeze_horizon_violation(
+    events: list[dict[str, Any]],
+    *,
+    pre_seq: int,
+    paused_seq: int,
+    horizon_seq: int,
+    pre_intent: str | None,
+    pre_view: str | None,
+) -> str | None:
+    """Why this freeze horizon is not certifiable, or None when it holds.
+
+    One choke point for every authority race, so a new race is fenced by adding a
+    case here rather than by scattering checks through the freeze sequence.  All
+    four are supersession of the same kind: something took authority over the run
+    between the pre-pause watermark and the accepted WorkspaceVersionEvent, which
+    means the frozen bytes are not a truthful snapshot of *this* run's work.
+    """
+
+    for event in events:
+        try:
+            seq = int(event.get("seq", -1))
+        except (TypeError, ValueError):
+            continue
+        if not (pre_seq < seq <= horizon_seq):
+            continue
+
+        # (a) a new user turn: the user changed the request mid-freeze.
+        if (
+            event.get("kind") == "message"
+            and str((event.get("message") or {}).get("role") or "") == "user"
+            and str(event.get("source") or "") == "user"
+        ):
+            return f"user turn at seq {seq} crossed the freeze horizon"
+
+        # (b) a resume: the run left PAUSED before the snapshot event landed, so
+        # the version does not describe a quiesced workspace.
+        if seq > paused_seq:
+            status = _event_status_value(event)
+            if status and status != PAUSED_STATE:
+                return (
+                    f"run left {PAUSED_STATE} (status {status} at seq {seq}) "
+                    "before the freeze horizon"
+                )
+
+    # (c) run authority moved to a newer intent.
+    if _latest_run_intent_id(events) != pre_intent:
+        return "run intent changed across the freeze horizon"
+
+    # (d) the model-view generation was superseded.
+    if _latest_agent_view_id(events) != pre_view:
+        return "agent view generation changed across the freeze horizon"
+
+    return None
+
+
 @dataclass(frozen=True)
 class _VerifiedWorkspaceVersion:
     workspace: Path
@@ -2710,6 +2807,7 @@ class DiscoApiClient:
         workspace_manifest: dict[str, Any],
         *,
         require_verified_host_screenshot: bool = False,
+        horizon_seq: int | None = None,
     ) -> dict[str, bytes]:
         """Capture referenced screenshots from the authoritative ProjectStore snapshot.
 
@@ -2719,7 +2817,25 @@ class DiscoApiClient:
         SHA256.  Missing, changing, escaping, or over-limit bytes raise
         :class:`BrowserEvidenceCollectionError`; silently dropping visual evidence would
         make a frozen replay look stronger than the live run.
+
+        ``horizon_seq`` binds collection to an accepted event horizon: only
+        observations at or before that seq are eligible.  A workspace frozen at a
+        ``WorkspaceVersionEvent`` cannot contain a screenshot that was referenced
+        *after* that event, so certifying one would assert evidence the frozen bytes
+        do not carry.  Events without a usable ``seq`` are dropped rather than
+        assumed in-horizon: an unplaceable observation cannot be proven to precede
+        the freeze.
         """
+        if horizon_seq is not None:
+            eligible: list[dict[str, Any]] = []
+            for event in events:
+                try:
+                    seq = int(event.get("seq", -1))
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= seq <= horizon_seq:
+                    eligible.append(event)
+            events = eligible
         references = _referenced_screenshot_paths(
             events,
             require_verified_host_screenshot=require_verified_host_screenshot,
@@ -3205,6 +3321,160 @@ class DiscoApiClient:
             if path not in manifest and rel in manifest:
                 manifest[path] = manifest[rel]
         return manifest
+
+    async def freeze_progressing_workspace(
+        self,
+        conversation_id: str,
+        declared: list[str],
+        *,
+        deadline_s: float = 90.0,
+    ) -> dict[str, Any]:
+        """Freeze a still-progressing run's workspace BEFORE the destructive kill.
+
+        The hard-cap stop used to kill first and read the durable store afterwards.
+        Product kill correctly destroys the executor/sandbox WITHOUT snapshotting, so
+        the store still held only the original import snapshot: every edit, REPORT.md
+        and every `.pmx/screenshots/*.png` was absent. Counted context seeds
+        460004/460005 surfaced that as MISSING_REQUIRED_EVIDENCE naming
+        `0001-navigate.png`, which was merely the FIRST referenced missing path.
+
+        No product change is needed. A Build run that ends PAUSED is snapshotted by
+        `_run_with_persistence`'s end-gate under the product's own `workspace_lock`,
+        emitting a durable WorkspaceVersionEvent and an immutable ProjectStore version.
+        So: pause -> await a NEW durable PAUSED -> await the NEW version event that
+        FOLLOWS it -> verify and read that exact immutable version. The mutable store
+        head is never read and the live sandbox is never read.
+
+        Returns a disclosure dict; `status="frozen"` only when every step held.
+        Any bounded failure returns `FREEZE_TIMEOUT` with an EMPTY manifest — the
+        caller must then kill unchanged and must never claim evidence was preserved.
+        """
+
+        result: dict[str, Any] = {
+            "status": "FREEZE_TIMEOUT",
+            "manifest": {},
+            "horizon_seq": None,
+            "version_seq": None,
+            "paused_seq": None,
+            "reason": None,
+        }
+        # 1. pre-pause watermarks and run authority
+        #
+        # NORMALIZE. `collect_events` returns raw SQLite ROWS --
+        # {seq, kind, source, id, created_at, payload} -- where `payload` is an
+        # unparsed JSON STRING. Only seq/kind/source are real top-level columns, so
+        # reading `status`, `trigger`, `version_seq`, `run_intent_id`, or
+        # `agent_view_id` straight off a row yields None every time and this freeze
+        # would report FREEZE_TIMEOUT on every real run. `normalize_events` is the
+        # canonical flattener the rest of this adapter already uses.
+        try:
+            before = normalize_events(self.collect_events(conversation_id))
+        except Exception as exc:  # noqa: BLE001 — disclosed, never fabricated
+            result["reason"] = f"pre-pause event read failed: {type(exc).__name__}"
+            return result
+        pre_seq = max((int(e.get("seq", -1)) for e in before), default=-1)
+        pre_intent = _latest_run_intent_id(before)
+        pre_view = _latest_agent_view_id(before)
+
+        # 2. the existing cooperative WS pause
+        try:
+            await self.pause(conversation_id)
+        except Exception as exc:  # noqa: BLE001
+            result["reason"] = f"pause control failed: {type(exc).__name__}"
+            return result
+
+        # 3/4. bounded wait for a NEW durable PAUSED, then the version event AFTER it
+        deadline = time.monotonic() + deadline_s
+        paused_seq: int | None = None
+        version_event: dict[str, Any] | None = None
+        events: list[dict[str, Any]] = before
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            try:
+                events = normalize_events(self.collect_events(conversation_id))
+            except Exception:  # noqa: BLE001 — retry to the deadline
+                continue
+            if paused_seq is None:
+                paused_seq = next(
+                    (
+                        int(e.get("seq", -1))
+                        for e in events
+                        if int(e.get("seq", -1)) > pre_seq and _event_status_value(e) == "PAUSED"
+                    ),
+                    None,
+                )
+            if paused_seq is not None:
+                version_event = next(
+                    (
+                        e
+                        for e in events
+                        if e.get("kind") == "workspace_version"
+                        and int(e.get("seq", -1)) > paused_seq
+                        and str(e.get("trigger") or "") == "PAUSED"
+                    ),
+                    None,
+                )
+                if version_event is not None:
+                    break
+        if paused_seq is None:
+            result["reason"] = "no durable PAUSED status within the freeze deadline"
+            return result
+        result["paused_seq"] = paused_seq
+        if version_event is None:
+            result["reason"] = "no PAUSED WorkspaceVersionEvent within the freeze deadline"
+            return result
+
+        horizon_seq = int(version_event.get("seq", -1))
+        # 5. a numerically NEW version_seq is deliberately NOT required: an unchanged
+        # tree may deduplicate onto an existing immutable version while still emitting
+        # a new event. The EVENT is the freeze proof, not the version number.
+        version_seq = version_event.get("version_seq")
+
+        # 8. no user turn, resume, newer run intent, or superseded agent view may
+        # cross the horizon. One choke point; see _freeze_horizon_violation.
+        violation = _freeze_horizon_violation(
+            events,
+            pre_seq=pre_seq,
+            paused_seq=paused_seq,
+            horizon_seq=horizon_seq,
+            pre_intent=pre_intent,
+            pre_view=pre_view,
+        )
+        if violation is not None:
+            result["reason"] = violation
+            return result
+
+        # 6. verify and read THAT immutable version — never the mutable head.
+        verified = self._verified_workspace_version(conversation_id, version_seq)
+        if verified is None:
+            result["reason"] = "the PAUSED immutable version could not be freshly verified"
+            return result
+        # 7. Register THIS immutable version as the conversation's authoritative
+        # workspace directory.
+        #
+        # `collect_browser_evidence` resolves its source as
+        # `_collected_workspace_dirs.get(cid) or _snapshot_workspace_dir(cid)`.  The
+        # freeze path deliberately bypasses `collect_workspace`, so without this
+        # registration that dict is empty and the `or` silently falls back to the
+        # MUTABLE ProjectStore head -- which, after the kill, holds only the pre-run
+        # import snapshot.  Registering the verified immutable path makes the
+        # mutable-head fallback unreachable here rather than merely unlikely.
+        self._collected_workspace_dirs[conversation_id] = verified.workspace
+        result.update(
+            {
+                "status": "frozen",
+                "manifest": self._read_snapshot_manifest(
+                    conversation_id, declared, verified.workspace
+                ),
+                "horizon_seq": horizon_seq,
+                "version_seq": version_seq,
+                "workspace_dir": str(verified.workspace),
+                "tree_digest": verified.tree_digest,
+                "file_count": verified.file_count,
+                "total_bytes": verified.total_bytes,
+            }
+        )
+        return result
 
     def _snapshot_workspace_dir(self, conversation_id: str) -> Path | None:
         """The host ProjectStore ``workspace/`` directory for this conversation, or None

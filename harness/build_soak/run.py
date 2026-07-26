@@ -1090,6 +1090,39 @@ async def drive_scenario(
             pre_stop_events = []
             pre_stop_watermark_trusted = False
         pre_stop_max_seq = max((int(event.get("seq", -1)) for event in pre_stop_events), default=-1)
+
+        # FREEZE BEFORE THE DESTRUCTIVE KILL.
+        #
+        # Kill correctly destroys the executor/sandbox WITHOUT snapshotting, and
+        # `collect_workspace` reads the durable ProjectStore — so killing first lost
+        # every byte a still-progressing run had written (counted context seeds
+        # 460004/460005: MISSING_REQUIRED_EVIDENCE naming `0001-navigate.png`, which
+        # was only the FIRST referenced missing path; REPORT.md and every other
+        # screenshot were gone too).
+        #
+        # No product change is required: a Build run that ends PAUSED is snapshotted
+        # by `_run_with_persistence`'s end-gate under the product's own
+        # `workspace_lock`, emitting a durable WorkspaceVersionEvent and an immutable
+        # version. This pauses, waits for that event, and reads THAT exact immutable
+        # version. `/kill` below is unchanged and still runs for destructive cleanup.
+        #
+        # A bounded failure returns FREEZE_TIMEOUT with an EMPTY manifest: spend and
+        # resources still stop via the unchanged kill, and nothing claims the
+        # workspace was preserved.
+        frozen_workspace = await client.freeze_progressing_workspace(
+            cid, _declared_workspace_paths(scenario)
+        )
+        timeline.append(
+            "progress hard-cap freeze before kill: "
+            f"{frozen_workspace.get('status')}"
+            + (
+                f" (version_seq={frozen_workspace.get('version_seq')}, "
+                f"horizon_seq={frozen_workspace.get('horizon_seq')})"
+                if frozen_workspace.get("status") == "frozen"
+                else f" — {frozen_workspace.get('reason')}"
+            )
+        )
+
         kill_response: dict[str, Any] = {}
         kill_response_epoch: float | None = None
         kill_acknowledged = False
@@ -1156,26 +1189,46 @@ async def drive_scenario(
             timeline.append(
                 f"progress hard-cap final-state collection failed: {type(state_exc).__name__}"
             )
-        try:
-            workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
-        except Exception as workspace_exc:  # noqa: BLE001
+        if frozen_workspace.get("status") == "frozen":
+            # Read the version frozen BEFORE the kill. A post-kill store read here
+            # would return the pre-run import snapshot and silently understate the
+            # run's work as missing deliverables.
+            workspace = frozen_workspace.get("manifest") or {}
+        else:
+            # Honestly empty: the freeze did not land, so there is no workspace truth
+            # to report. Never substitute the destroyed sandbox or the mutable head.
             workspace = {}
             timeline.append(
-                f"progress hard-cap workspace collection failed: {type(workspace_exc).__name__}"
+                "progress hard-cap workspace evidence unavailable: "
+                f"{frozen_workspace.get('status')}"
             )
-        try:
-            browser_evidence = client.collect_browser_evidence(
-                cid,
-                events,
-                workspace,
-                require_verified_host_screenshot=_browser_verification_required(scenario),
-            )
-        except Exception as browser_exc:  # noqa: BLE001
+        frozen_horizon = frozen_workspace.get("horizon_seq")
+        if frozen_workspace.get("status") != "frozen" or not isinstance(frozen_horizon, int):
+            # No accepted event horizon means there is nothing to bind evidence to.
+            # Claim NO browser truth: never read the mutable store head, and never
+            # certify a screenshot the frozen bytes cannot carry.
             browser_evidence = {}
             timeline.append(
-                "progress hard-cap browser-evidence collection failed: "
-                f"{type(browser_exc).__name__}"
+                "progress hard-cap browser evidence unavailable: no accepted freeze horizon"
             )
+        else:
+            try:
+                # Bound to the accepted WorkspaceVersionEvent horizon: a screenshot
+                # referenced AFTER the freeze is not in the frozen version and must
+                # not be certifiable.
+                browser_evidence = client.collect_browser_evidence(
+                    cid,
+                    events,
+                    workspace,
+                    require_verified_host_screenshot=_browser_verification_required(scenario),
+                    horizon_seq=frozen_horizon,
+                )
+            except Exception as browser_exc:  # noqa: BLE001
+                browser_evidence = {}
+                timeline.append(
+                    "progress hard-cap browser-evidence collection failed: "
+                    f"{type(browser_exc).__name__}"
+                )
         preview: dict[str, Any] | None = None
         if _preview_required(scenario):
             try:
@@ -1227,6 +1280,20 @@ async def drive_scenario(
                     # attribution source so a parallel wave never falls back to
                     # counting other trials' live containers as this run's leaks.
                     "sandbox_instance_ids": _extract_sandbox_instance_ids(kill_response),
+                    # Disclosed, never implied: whether the pre-kill freeze landed,
+                    # which immutable version it read, and the event horizon browser
+                    # evidence is bound to. FREEZE_TIMEOUT states plainly that no
+                    # workspace truth was preserved.
+                    "workspace_freeze": {
+                        "status": frozen_workspace.get("status"),
+                        "reason": frozen_workspace.get("reason"),
+                        "version_seq": frozen_workspace.get("version_seq"),
+                        "paused_seq": frozen_workspace.get("paused_seq"),
+                        "horizon_seq": frozen_workspace.get("horizon_seq"),
+                        "tree_digest": frozen_workspace.get("tree_digest"),
+                        "file_count": frozen_workspace.get("file_count"),
+                        "total_bytes": frozen_workspace.get("total_bytes"),
+                    },
                 },
             },
             diagnostic_stop="progressing_hard_cap",

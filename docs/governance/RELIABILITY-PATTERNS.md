@@ -165,4 +165,122 @@ than for design rationale.
 
 ## Campaign-observed patterns
 
-*(Appended as they are evidenced during this campaign.)*
+### P9 — A predicate evaluated over a narrower span than the claim it supports
+
+**Evidence (two instances, 2026-07-25, both in the governance tooling itself).**
+
+1. The seal guard's shell-mutation regex `\bsed\b[^|;]*-i` matched only the text
+   `"sed -i"`. The target path fell outside `match.group(0)`, so the guard asked
+   "does this two-character match contain a protected path?", correctly answered
+   no, and **failed open** on `sed -i … ENGINEERING-STANDARDS.md`.
+2. The campaign completion sentinel was checked with a substring test. The
+   status ledger *documents* the sentence that must eventually appear, inside a
+   fenced code block — so the gate read its own documentation as the assertion
+   and reported the contract **SATISFIED at Epic 0**, which would have permitted
+   an immediate voluntary stop.
+
+**Shared earliest broken invariant.** A predicate reported a stronger result than
+its evidence supported, because it was evaluated over a *smaller* span (2
+characters) or a *larger* span (the whole file including citations) than the
+claim required.
+
+**Structural remedy.** Evaluate a predicate over exactly the span the claim is
+about: the whole shell segment when asking "does this command touch path P"; a
+single non-quoted, non-fenced line when asking "does this document *assert* S".
+Citation contexts — fenced, indented, block-quoted — are excluded before a claim
+is read as an assertion.
+
+**Signal to recognise it earlier.** A guard or gate that has never been run
+against a deliberately hostile input. Both defects were invisible in normal use
+and both surfaced on the *first* adversarial control.
+
+**Regression that protects it.** The guard mutation matrix (11 deny / 5 allow,
+including `sed -i`, `tee`, `truncate`, `git checkout`, `python -c`, and
+basename-only spellings) and the sentinel negative+positive control pair.
+
+**Why it stays target-neutral.** It constrains only how a predicate is *scoped*.
+It adds no framework-, model-, or scenario-specific knowledge, and the seal guard
+remains deliberately heuristic — `check_governance_seal.py` stays the authority.
+
+---
+
+### P10 — An enforcement mechanism with no termination bound
+
+**Evidence (one demonstrated cross-cutting mechanism, 2026-07-25).** The `Stop`
+hook refused to let a session end whenever the campaign completion contract was
+unmet. That condition is true *by definition* until the final epic closes, so
+**every** session started in this repository became unstoppable — including
+unrelated one-shot invocations with nothing to do with the campaign. Observed as
+`claude -p` hanging on a trivial prompt; parking `.claude/settings.json` made it
+return instantly.
+
+**Earliest broken invariant.** A guard must bound its own refusals. An
+enforcement rule whose stop condition can never be met during normal operation is
+a denial of service on all future work, not a guardrail.
+
+**Structural remedy.** Bound consecutive refusals (here:
+`MAX_CONSECUTIVE_BLOCKS = 3`, then allow with a loud message), and reset the
+counter once a stop is allowed so the next genuine attempt is refused just as
+firmly. The intent — defeat a premature hand-back — is fully served by an
+*emphatic* refusal; it never required an *infinite* one.
+
+**Signal to recognise it earlier.** Any always-on gate whose release condition is
+a project milestone rather than a per-invocation fact. Ask: "what does this do to
+a session that is not the one I am thinking about?"
+
+**Regression that protects it.** The bounded-refusal sequence test: block, block,
+block, allow, then re-armed on the next attempt.
+
+**Why it stays target-neutral.** It is a property of the guard's control flow,
+not of any product behaviour, and it leaves the refusal semantics unchanged.
+
+**Related.** This is the mirror image of [P7](#p7--a-host-fallback-or-false-classification-masking-the-original-verdict):
+P7 is a mechanism that says too little (a verdict laundered away); P10 is a
+mechanism that says the same true thing forever, until saying it is the failure.
+
+---
+
+### P11 — A consumer reads a shape the producer never emits
+
+**Evidence (two instances).**
+
+1. *Prior, recorded in code.* `normalize_event`'s docstring documents a P0
+   false-negative in which "a row with top-level `kind` had its payload dropped,
+   hiding `detail`/`tool_call`/`revision` from every predicate."
+2. *This campaign, 2026-07-25.* `freeze_progressing_workspace` read `status`,
+   `trigger`, `version_seq`, `run_intent_id`, and `agent_view_id` **directly off
+   raw SQLite rows**. `collect_events()` returns
+   `{seq, kind, source, id, created_at, payload}` where `payload` is an unparsed
+   JSON string — only `seq`/`kind`/`source` are real columns. Every one of those
+   reads returned `None`, so the pre-kill freeze would have reported
+   `FREEZE_TIMEOUT` on **100% of real runs** while claiming to preserve evidence.
+
+**Earliest broken invariant.** Persisted rows are not domain events. A predicate
+must consume the canonical normalized form, not the storage form.
+
+**Structural remedy.** Exactly one canonical normalizer, applied at every
+boundary where persisted rows enter logic. `normalize_events` was already used at
+four other call sites in the same adapter; the freeze was the only path that
+skipped it. The remedy is routing, not a new contract.
+
+**Signal to recognise it earlier — this is the important half.** The defect was
+invisible to **eleven** passing unit tests, because their fake `collect_events`
+returned hand-built **flat dicts**: a shape the real producer never emits. A fake
+that is more convenient than the real source cannot fail the way production
+fails. Watch for any fixture whose event shape differs from what the real query
+returns.
+
+**Regression that protects it.** A real-path test driving `run_once` against
+actual SQLite rows and a real `ProjectStore` version. Its protective value was
+**proven by revert-check**: with the bug reintroduced it fails with exactly the
+production symptom (`FREEZE_TIMEOUT != frozen`), while all eleven fake-based
+tests stay green.
+
+**Why it stays target-neutral.** It adds no product behaviour and no
+scenario-specific knowledge — one existing consumer now uses the normalizer the
+codebase already treats as canonical.
+
+**Standing practice this earns.** When a fix matters, **re-break it on purpose**
+and confirm the new test fails for the right reason. That converts "I wrote a
+test" into "I proved this test protects this fix", and it is what exposed the
+blindness of the fake-based suite here.

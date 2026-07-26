@@ -11,10 +11,17 @@ So this hook blocks when either is true:
 - an hourly review is overdue, or
 - CAMPAIGN-STATUS.md does not declare the completion contract satisfied.
 
-`stop_hook_active` is reported back in the reason rather than used to silently
-give up, because giving up is precisely the behaviour the contract forbids.  The
-harness's own consecutive-block cap remains the safety valve against a genuinely
-stuck loop.
+The refusal is **bounded**.  An unbounded Stop gate makes every session in this
+repository unstoppable -- including unrelated one-shot invocations that have
+nothing to do with the campaign -- because the completion contract is unmet by
+definition until Epic 7 closes.  That is a denial of service on all future work,
+not a guardrail.  So the gate refuses up to `MAX_CONSECUTIVE_BLOCKS` times and
+then allows the stop with a loud message.  Refusing a premature hand-back has to
+be emphatic, not infinite.
+
+The consecutive counter lives in the same runtime state as the review schedule
+and resets as soon as a stop is allowed, so the next genuine attempt to
+hand back early is refused just as firmly.
 """
 
 from __future__ import annotations
@@ -35,18 +42,31 @@ from _governance import (  # noqa: E402
     project_dir,
     read_hook_input,
     review_is_due,
+    save_state,
     seconds_until_due,
     verify_seal,
 )
 
+# How many times in a row this gate may refuse before it must let the session
+# end. See the module docstring: an unbounded refusal wedges every session in
+# the repository, campaign or not.
+MAX_CONSECUTIVE_BLOCKS = 3
 
-def block(reason: str) -> None:
+_COUNTER = "stop_blocks_consecutive"
+
+
+def block(reason: str, state: dict, root, count: int) -> None:
+    state[_COUNTER] = count
+    save_state(state, root)
     emit({"decision": "block", "reason": reason})
     sys.exit(0)
 
 
-def allow() -> None:
-    emit({})
+def allow(state: dict, root, message: str | None = None) -> None:
+    if state.get(_COUNTER):
+        state[_COUNTER] = 0
+        save_state(state, root)
+    emit({"systemMessage": message} if message else {})
     sys.exit(0)
 
 
@@ -81,12 +101,26 @@ def main() -> int:
         )
 
     if not reasons:
-        allow()
+        allow(state, root)
+
+    consecutive = int(state.get(_COUNTER, 0)) + 1
+    if consecutive > MAX_CONSECUTIVE_BLOCKS:
+        # Bounded: refusing forever would make every session in this repository
+        # unstoppable, which is a denial of service, not a guardrail.
+        allow(
+            state,
+            root,
+            "Stop gate: allowing this stop after "
+            f"{MAX_CONSECUTIVE_BLOCKS} consecutive refusals. The campaign "
+            "completion contract is still NOT satisfied:\n"
+            + "\n".join(reasons),
+        )
 
     detail = "\n".join(reasons)
     nudge = (
-        "\n\nThis is a standing stop-hook block, not a new instruction: keep working "
-        "the campaign rather than re-asking whether to continue."
+        f"\n\n(Refusal {consecutive} of {MAX_CONSECUTIVE_BLOCKS}. This is a standing "
+        "stop-hook block, not a new instruction: keep working the campaign rather "
+        "than re-asking whether to continue.)"
         if already_blocking
         else ""
     )
@@ -95,7 +129,10 @@ def main() -> int:
         f"{detail}\n\n"
         "Do not end the turn with a question, a menu, 'awaiting direction', or an "
         "offer to proceed. Resolve the item above and continue with the next "
-        "concrete campaign action." + nudge
+        "concrete campaign action." + nudge,
+        state,
+        root,
+        consecutive,
     )
     return 0
 
