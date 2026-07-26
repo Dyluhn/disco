@@ -1357,3 +1357,52 @@ and baselines — their decision and their record, not something this campaign
 should quietly rewrite. My work here left both improvements intact regardless: the
 `soffice` skip is genuinely fixed (21/21, zero skips) and the forbidden
 release-route seam is genuinely removed.
+
+## 2026-07-26 — Epic 4 UNBLOCKED: the frozen driver route is live
+
+The owner supplied the `opencode-go` API key. Identified, stored, and verified —
+the frozen route works, so **no provider substitution was needed** and the
+historical driver binding is preserved intact.
+
+**Identified by capability, not by prefix.** The key was probed against both
+candidate providers with a **real completion** (not a catalogue read):
+
+| provider | result |
+|---|---|
+| `openrouter.ai/api/v1/chat/completions` | 401 |
+| **`opencode.ai/zen/go/v1/chat/completions`** | **200** — real `deepseek-v4-flash` completion |
+
+So it is the frozen route's credential: `opencode.ai` / `deepseek-v4-flash`,
+exactly what the Phase-4 soak matrix froze before the first counted model call.
+
+**Stored through the route that owns the credential.** The generic
+`/api/secrets/{name}` refused it — the ref `provider_opencode-go` contains a
+hyphen and that route requires an env-var identifier. `PUT /api/providers/opencode-go`
+is the owning route; it stored the key and probed it (`catalogue_ok: true`).
+Re-saving the driver model then re-bound both origin approvals under the current
+secret:
+
+```
+approved: https://opencode.ai | model:prov-opencode-go-deepseek-v4-flash
+approved: https://opencode.ai | provider:opencode-go
+```
+
+The key was read from a mode-600 file outside the repository and written straight
+to the API. **It was never printed, echoed into a log, or committed.**
+
+**Proven live, end to end:** a conversation pinned to the driver reached
+`FINISHED` with an assistant reply of `OK`. Origin-approval warning gone.
+
+**A second false positive, caught the same way as the first.** My smoke script
+initially reported "0 assistant messages" because it read `ev["_"]` when the
+route returns `ev["events"]` — the reply was there all along. Together with the
+`/v1/models` public-endpoint mistake, that is twice in one session that a *check*
+could not see what it was trusted to prove (pattern **P9**). Both were caught by
+looking at raw output instead of believing the summary.
+
+**Stack state for Epic 4:** running from this checkout on 8010/8810, single
+host-derived `DISCO_SECRET_KEY` (the borrowed one is gone with its process),
+approvals verifying, tree clean at `9ffdba8e`.
+
+**Next:** the driver's configured `context_window` is **131072**; Epic 4 requires
+`driver_context_window == 24000`, which is the single intended scalar change.
