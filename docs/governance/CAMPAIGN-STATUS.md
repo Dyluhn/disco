@@ -1072,3 +1072,68 @@ product's own remedy is to re-approve via Settings
 (`origin_approval_wiring.approve_provider_origin`). Until that is done, no live
 model call can be routed, so Epic 4's diagnostics cannot start. Recorded rather
 than worked around.
+
+## 2026-07-26 — Epic 5, part 6: the Export Track-1 verifier's two red lanes, diagnosed and fixed
+
+First full run: `passed=False (clean=True author=False frozen_ok=False)` —
+`python-closeout=True frontend=True g11-typecheck=True live-docker=True
+live-capture=True`, but `python-nonlive=False` and `anti-bypass-scan=False`.
+**Docker 8/8 and the frozen Firefox e2e lane both passed** (7 expected, 0
+unexpected, 0 flaky, 0 skipped).
+
+### 1. `python-nonlive` — a skip that had to be a pass
+
+The lane exited 0 with **9,042 tests, 0 failures**, and was still rejected:
+
+```
+python-nonlive: test packages/tools/tests/test_heavy_validators.py::
+test_validate_pptx_renders_real_clean_pptx was SKIPPED (must PASS)
+```
+
+Root cause was an **environment discoverability gap, not a missing dependency**:
+the test gates on `shutil.which("soffice")`, and LibreOffice **26.2.4.2 is
+installed on this host** — as a Flatpak, so no `soffice` on `PATH`. The skip is
+pre-existing at `f55efb03`; the machine simply never exposed the binary.
+
+Fixed by exposing the existing install (a `~/bin/soffice` shim → the Flatpak),
+**not** by weakening or unskipping the test. Two details the shim documents,
+because both cost a debug cycle:
+
+- the in-sandbox entrypoint is `/app/bin/libreoffice`; there is no `soffice` on
+  the sandbox `PATH`;
+- `--filesystem=host` **deliberately excludes `/tmp`**, where pytest writes its
+  fixtures, so `/tmp` needs its own grant — without it conversion fails with
+  "source file could not be loaded".
+
+Result: `test_heavy_validators.py` now **21 passed, 0 skipped**.
+
+`packages/core/tests/test_router_overflow.py` is a *deliberate* module-level
+skip — a documented dormant "revival harness", pre-existing at `f55efb03`. Left
+alone; it is explained, which is what Epic 5 requires.
+
+### 2. `frozen_ok=False` — my own format sweep invalidated frozen evidence
+
+`frozen_manifest.note` reported hash drift on the `export_track1_closeout` files.
+Three of them drifted **because my tree-wide `ruff format` rewrote them**. Those
+files' bytes *are* the acceptance record of an already-ratified campaign; the
+verifier hashes them against a frozen manifest, so reformatting is not cosmetic.
+
+Restored byte-for-byte to `f55efb03` (verified: zero diff lines), and the frozen
+paths are now **excluded from Ruff entirely**. Excluding is the root fix rather
+than revert-and-hope: a formatter that *can* reach frozen bytes will eventually
+reach them again. Both Ruff gates still exit 0.
+
+### 3. `anti-bypass-scan` — cross-lineage baseline, still open
+
+451 violations, but its diff range is `2ec1ceba..HEAD` — the **export-track1**
+branch, not `stable-main`. 316 are `new_suppression_noqa` and 119
+`new_suppression_type_ignore` across 669 production files, i.e. largely the
+normal content of a branch that has diverged 334 files from that older lineage.
+Exactly one is a real category hit (`forbidden_monkeypatch_target`).
+
+Not yet resolved, and deliberately not waved away: this is the stale-authority
+shape (pattern **P8**) — a prior campaign's ratified baseline being applied to a
+different candidate. Epic 5 asks for "Export Track-1 focused gates and real
+Docker 8/8 lifecycle lane", both of which pass; whether that older campaign's
+*whole* acceptance must also re-ratify here needs deciding on evidence, not
+assumed either way. Next action after the re-run.
