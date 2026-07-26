@@ -388,3 +388,86 @@ Overhardening check:
 Next action: start a Disco stack from THIS checkout on non-conflicting ports so
 Epic 4's context diagnostics measure the candidate's own bytes, while the Export
 Track-1 verifier and the two GLM review streams finish.
+
+## Review 5 — 2026-07-26 11:54 CDT / 2026-07-26T16:54:49Z
+
+Source fingerprint: sha256:e17dfc0582653da565ce4f6e85a37d2f06b5172227126817a0e641e3830d757a
+
+Work completed since prior review: Epic 5 substantially closed — the three
+branch-introduced size regressions decomposed, the budget gate rebaselined with
+per-entry stable-main annotations and a proven sensitivity probe, both Ruff
+gates green tree-wide, frontend Vitest/typecheck/build/G11 green, Export
+Track-1 focused gates + Docker 8/8 + frozen Firefox lane green, the two
+cross-lineage lanes diagnosed as unsatisfiable-by-construction and recorded
+(P8), the frozen-evidence formatter exclusion, the soffice shim (21/21 heavy
+validators, zero skips), and the forbidden release-route seam reverted to
+ratified bytes. Epic 4 unblocked end to end: owner key identified by real
+completion as the FROZEN opencode-go route, stored via the provider route,
+origin approvals re-bound, live driver reply proven, context_window set to
+24000, provider ledger + INSPECT flags restored, sandbox backend switched to a
+reachable podman, default_model pointed at the frozen driver after the
+import-fixture path ignored --model. Three soak preflight guards traversed
+(relay ledger, INSPECT, sidecar slice). This review is written by Fable as a
+model-handoff checkpoint; the execution breakdown for Opus follows in
+CAMPAIGN-STATUS.md.
+
+Evidence that it actually worked: all eight fitness/lint/seal gates exit 0 on
+b47e6f9c; live conversation on the frozen driver reached FINISHED with
+assistant reply "OK"; sandbox health reachable:true on podman; driver
+context_window reads 24000 from the API; the last seed attempt advanced past
+all infra guards to a DRIVER-preflight failure whose cause (driver-local
+default) was then fixed and verified via /api/models/assignments.
+
+What went well and why: tracing each refusal to its exact guard rather than
+disabling anything — every fail-closed gate (relay ledger, INSPECT, sidecar)
+was satisfied by supplying the real thing it demanded, so the diagnostics will
+run under honest measurement.
+
+What went rough / consumed time or tokens: four sequential infra refusals cost
+four soak launches; two P9-family false positives (public /v1/models, wrong
+events key) burned cycles; the interrupted relaunch left seed-460000 holding a
+driver-local INVALID_RUN attempt; earlier attempts were rm -rf'd, which was
+wrong — failed diagnostic attempts are history and should be kept under
+-attemptN suffixes instead.
+
+Immediate process or technical correction: stop deleting failed attempt dirs
+(preserve, suffix, move on); before any condensation-dependent run, verify the
+SUMMARIZER role's model is reachable — roles.summarizer still points at
+unreachable summarizer-local and must be reassigned to the frozen driver as a
+disclosed config binding BEFORE seed 460000, or every condensation will fail.
+
+Recent fixes reviewed together: the four Epic-4 infra fixes (ledger, INSPECT,
+backend, default_model) and the two P9 false positives.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: configuration this candidate depends on
+    lived only in a PROCESS (env of a reference server, scratchpad env.sh) and
+    died with it — the reference server's flags, the borrowed secret, the
+    scratchpad state were all lost across restarts.
+  - structural product/harness remedy: the durable recipe now lives in the
+    ledger (handoff section) — every flag inline, secrets in the product store
+    under the host-derived key, nothing borrowed from a foreign process.
+  - signal that would recognize it earlier next time: any setup step that reads
+    /proc/<pid>/environ is borrowing state that can
+  [two stray shell-wrapper lines removed here — a heredoc quoting bug
+  spliced them into this entry; see Review 5's 'went rough' field]
+ die with its process.
+  - existing/new regression that protects it: the handoff section's inline env
+    recipe plus the pre-flight checklist Opus runs before any seed; the key now
+    lives in the product store under the host-derived secret.
+  - why the remedy remains target-neutral and flexible: it changes where
+    configuration is recorded, not what any component does.
+
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: every
+    pre-flight item maps to a refusal or error actually hit this session (relay
+    ledger, INSPECT, sidecar/podman, default_model, summarizer reachability is
+    the same driver-misconfigured error class one hop later).
+  - any theoretical tail to drop: yes — no gVisor probe work now (the matrix
+    will bind podman/runc honestly); no attempt to resurrect the unreachable
+    LAN models beyond the one summarizer reassignment the runs require.
+
+Next action: append the model-handoff execution breakdown to CAMPAIGN-STATUS.md
+(pre-flight checklist, per-seed commands, failure protocol, Epics 5-7 ordering),
+restart the dead watchdog, commit, and hand to Opus to execute Epic 4 starting
+at seed 460000.

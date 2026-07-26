@@ -21,41 +21,38 @@ handoff.
 
 # CURRENT SNAPSHOT
 
-**Last updated (local + UTC):** 2026-07-25 23:49 CDT / 2026-07-26T04:49:29Z
+**Last updated (local + UTC):** 2026-07-26 11:56 CDT / 2026-07-26T16:56:18Z
+(Fable handoff checkpoint — execution breakdown for Opus is the HANDOFF section
+at the end of this file.)
 
 **Current branch / HEAD / source fingerprint:**
-`disclaude/build-platform-core-v1` / `579cabaf` (Epic 1) /
-`source sha256:a432bb1de459d67a67cf1faae829133f8acd6d64b3073513e2fe0dbd667ded36`
-(1929 files; tree
-`sha256:b1f8830bdb44983fa103d2168990b2614584e5b32588e862cdf008e4068deb2a`,
-2533 files)
+`disclaude/build-platform-core-v1` / `b47e6f9c` /
+`source sha256:e17dfc0582653da565ce4f6e85a37d2f06b5172227126817a0e641e3830d757a`
+(tree `sha256:2fdff8012c707745ea044ee96d6f9c8840cd82cbdd39b6afc9d94cda37e938b5`)
 
-**Tree cleanliness and every intentional dirty path:**
-Epic 0 (`32a09957`) and Epic 1 (`579cabaf`) are committed. The only dirty paths
-are the in-flight Epic-3 **one-horizon** slice:
+**Tree cleanliness and every intentional dirty path:** CLEAN. Epics 0-3 and the
+acceleration insertion are all committed; there are no dirty paths.
 
-```text
-M  packages/core/src/disco/core/loop/view_render.py   (build_with_horizon)
-M  packages/core/src/disco/core/loop/engine.py        (return the built horizon)
-M  packages/core/tests/test_loop_condensation.py      (one-horizon regression)
-```
+**Current epic and package:** Epic 4 — context diagnostics. Infrastructure is
+fully staged (stack from this checkout on 8010/8810, frozen driver live at 24k,
+podman backend, provider ledger + INSPECT bound). Seed 460000 has NOT yet had a
+counted attempt on the correct driver: the last attempt failed on the
+`driver-local` default (fixed) and the relaunch was interrupted by the model
+switch. **One pre-flight item is outstanding and mandatory: reassign the
+summarizer role — see HANDOFF pre-flight P1.**
 
-**Current epic and package:** Epic 3, **one-horizon slice only**. This slice
-does **not** complete Epic 3 — raw DSML/tool-markup rejection, bounded repair,
-and the truthful fallback all remain open.
+**Current operation:** none running. Servers up (agent 8010, app 8810, this
+checkout). No soak in flight. Watchdog restarted at handoff.
 
-Owner authorized (2026-07-25) a bounded, non-promoting **reliability-loop
-acceleration insertion** (Packages A/B/C) to run at the next clean committed
-boundary, before resuming Epic 2. It adds no campaign acceptance count and earns
-zero promotion credit. `CAMPAIGN-PLAN.md` is deliberately unchanged.
+**Promotion count on current bytes:** **0 / 100.**
 
-**Current operation:** none running. (No background PID; no live model run.)
-
-**Promotion count on current bytes:** **0 / 100.** No clean candidate exists.
-
-**Completed epics/packages with evidence links:** Epic 0 — committed `32a09957`.
-All eight acceptance items met; evidence in the gate tables below and in the
-2026-07-25 work log.
+**Completed epics/packages with evidence links:** Epics 0 (`32a09957`),
+1 (`579cabaf`), 2 (`90532f45`+`38605a8d`), 3 (`fad36450`+`3b1cdd29`);
+acceleration packages A (`4ec9bf30`), B (`2fc8645c`), C (`d0d70649`). Epic 5:
+all eight fitness/lint/seal gates green, whole-diff review APPROVE
+(spot-verified), test-inventory violations found and fixed, Export Track-1
+focused gates + Docker 8/8 + frozen Firefox lane green; remaining Epic-5 items
+listed in HANDOFF step E2.
 
 **Focused gates and exact results:**
 
@@ -154,10 +151,10 @@ closeout.
 |------|-------|
 | 0 — context/governance reset | **COMPLETE** — committed `32a09957`; all 8 acceptance items met and e2e-proven |
 | 1 — finish freeze-before-kill | **COMPLETE** — all 7 acceptance items met; the freeze also had a production-fatal raw-row defect found and fixed |
-| 2 — durable typed runtime constraints | not started |
-| 3 — coherent, safe condensation | not started |
-| 4 — context diagnostics on final bytes | not started |
-| 5 — deterministic/integration preflight | not started |
+| 2 — durable typed runtime constraints | **COMPLETE** except the live k460000 confirmation, which Epic 4's seed 460000 provides |
+| 3 — coherent, safe condensation | **COMPLETE** — one-horizon fix + summary validation/repair/fallback, all revert-checked |
+| 4 — context diagnostics on final bytes | IN PROGRESS — staged; blocked only on HANDOFF pre-flight P1, then seeds 460000+ |
+| 5 — deterministic/integration preflight | NEARLY COMPLETE — see HANDOFF E2 for the two remaining items |
 | 6 — qualification and exact 100 | not started |
 | 7 — same-byte closeout and local integration | not started |
 
@@ -1406,3 +1403,213 @@ approvals verifying, tree clean at `9ffdba8e`.
 
 **Next:** the driver's configured `context_window` is **131072**; Epic 4 requires
 `driver_context_window == 24000`, which is the single intended scalar change.
+
+---
+
+# HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
+
+Written at a model switch so the next session executes without re-deriving
+anything. Every value below was verified live at write time, not copied from
+memory. Authority order is unchanged; this section is *operational directions*,
+not new policy.
+
+## A. Verified state at handoff
+
+| fact | value |
+|---|---|
+| HEAD | `b47e6f9c`, tree **clean** |
+| Stack | agent-server :8010, app-server :8810, both `cwd = this checkout` (verify with `readlink /proc/<pid>/cwd`) |
+| Driver | `prov-opencode-go-deepseek-v4-flash` → `https://opencode.ai/zen/go/v1`, wire model `deepseek-v4-flash`; key stored in the product store under the **host-derived** secret; live reply proven |
+| `context_window` (driver) | **24000** (the Epic-4 setting; Epic 6 main/restart lanes need it flipped back to **131072** — see F) |
+| `default_model` | `prov-opencode-go-deepseek-v4-flash` (required: the import-fixture path ignores `--model`) |
+| Sandbox backend | **podman**, `reachable: true` (was `local`/docker, dead socket) |
+| Provider ledger | `DISCO_PROVIDER_LEDGER=/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic4/provider-ledger.jsonl` |
+| Review schedule | 5 completed; hourly; source edits block while overdue — write the review, the hook auto-advances |
+| Watchdog | restarted at handoff (see C3) |
+| Evidence root | `/var/home/dylan/build-platform-campaign-evidence/2026-07-26/` (always outside the repo) |
+
+## B. Environment recipe (reproducible; no secrets in it)
+
+If the servers die, this is the complete recipe. The API key is already in the
+product store; nothing is borrowed from any other process — that lesson is
+Review 5's pattern entry.
+
+```bash
+cd /var/home/dylan/projects/build-platform-core-v1/disclaude
+export DISCO_INSPECT=1 DISCO_ARTIFACT_MANIFEST_SHADOW=1 DISCO_HOST_VERIFY_CANARY=1
+export DISCO_TOOLSCOPE_AUDIT=1 DISCO_WORKFLOW_ROUTER=on DISCO_CONTEXT_PACK=on
+export DISCO_PROVIDER_LEDGER=/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic4/provider-ledger.jsonl
+nohup env DISCO_PORT=8010 .venv/bin/python3 -m disco.agent_server > /tmp/agent.log 2>&1 &
+nohup env DISCO_PORT=8810 .venv/bin/python3 -m disco.app_server  > /tmp/app.log  2>&1 &
+# then confirm: no "IGNORED" origin-approval warning in agent.log; sandbox
+# health reachable:true; driver context_window as intended for the lane.
+```
+
+## C. PRE-FLIGHT — mandatory before seed 460000
+
+**P1 (blocking): reassign the summarizer role.** `roles.summarizer` is
+`summarizer-local` → `192.168.1.231:18080`, **unreachable** (curl 000). Every
+context scenario requires real condensations; condensation calls the SUMMARIZER
+role; an unreachable summarizer fails exactly like the `driver-local` preflight
+failure already observed, one hop later. Fix via
+`PUT /api/models/assignments` with `roles.summarizer =
+"prov-opencode-go-deepseek-v4-flash"` (same authenticated-session pattern as
+`scratchpad/setdefault.py` used for `default_model`). `rag_answerer` /
+`query_rewriter` are research-surface roles, unused by Build — leave them.
+**Disclose this and the `default_model` change in the Epic-6 manifest binding.**
+
+**P2: evidence-dir hygiene.** `epic4/seed-460000/` holds the `driver-local`
+INVALID_RUN attempt — **keep it** (it is history). Never `rm -rf` a failed
+attempt again; launch reruns into `seed-460000-attempt2/`, `-attempt3/`, … Two
+earlier infra-failure attempts were deleted before this rule; the ledger entries
+above are their only record.
+
+**P3: watchdog.** If `pgrep -f campaign_watchdog` is empty:
+`setsid nohup python3 .claude/hooks/campaign_watchdog.py >/dev/null 2>&1 &`.
+It exits on its own when the completion sentinel is truthfully asserted.
+
+## D. Epic 4 — the ten diagnostics
+
+Command template (per seed; run from repo root with section-B env active):
+
+```bash
+.venv/bin/python3 -m harness.build_soak.run \
+  --scenario <SCENARIO> --scenarios harness/build_soak/scenarios_phase4.yaml \
+  --iterations 1 --seed-base <SEED> \
+  --model prov-opencode-go-deepseek-v4-flash --base-url http://127.0.0.1:8010 \
+  --expected-provider-host opencode.ai --expected-provider-model deepseek-v4-flash \
+  --parallel 1 --out <EVIDENCE>/seed-<SEED>[-attemptN]
+```
+
+**Never pass `--autonomous`**: both context scenarios are import-fixture
+scenarios and the adapter refuses autonomous for them (guard at
+`disco_api.py:1849`).
+
+Order and stop rules (CAMPAIGN-PLAN Epic 4, verbatim intent):
+
+1. `460000` → `p4_ff_context_catalog`, `460001` → `p4_ff_context_ledger`.
+   **Both must PASS** before anything else.
+2. Then `460002`…`460009`, one at a time, alternating catalog/ledger
+   (even seed → catalog, odd → ledger). **Stop on first non-PASS.**
+
+Per-run verification, all from evidence (not from feelings):
+
+- `classification.json` → `status: PASS`;
+- provider ledger records: `driver_context_window == 24000`, host `opencode.ai`,
+  wire model `deepseek-v4-flash`, no fallback;
+- ≥1 durable `condensation` event in `events.jsonl` — **seed 460000 doubles as
+  the Epic 2 live acceptance** (`k460000` history: verify the refused
+  host-signal operation is NOT repeated after condensation, and the typed
+  `runtime_constraint` event appears once near current context if the refusal
+  fired at all) **and the Epic 3 live acceptance** (grep persisted summaries
+  for `<parameter`, `tool_calls":`, `<invoke ` — must be absent);
+- zero leaks: cleanup slice green, `podman ps` shows no `disco-sbx-*`/
+  `disco-egr-*` residue;
+- three bounded ranged reads with offsets/disclosure receipts (the scenario
+  prompt demands them; the oracles check).
+
+**On a non-PASS:** classify from the dossier; if the earliest broken contract is
+product/harness source, fix it, commit the coherent package, then **restart the
+whole set from 460000 on the new bytes** (source change resets the set — never
+rerun an unchanged failure for luck). If it is infrastructure (INFRA_FAILURE /
+INVALID_RUN with an infra cause), fix the infra and rerun the same seed in a new
+`-attemptN` dir; the set does not restart for infra-only fixes.
+
+## E. After Epic 4 — closing Epic 5
+
+**E1.** If Epic 4 forced source changes, the whole preflight below runs on the
+new bytes; if not, it certifies `b47e6f9c`-lineage bytes as the candidate.
+
+
+**E2. Two Epic-5 items remain open:**
+
+1. **One recorded full-suite pass on the final candidate bytes** — the earlier
+   background run finished 100% with zero failure marks but its output file was
+   lost with the scratchpad; nothing recorded = not done. Run and KEEP the log
+   outside the repo:
+   `pytest packages/core packages/tools packages/agent-server harness/build_soak/tests -m "not integration"`.
+2. **Ledger checklist flip** — when (1) is green on the exact candidate, mark
+   Epic 5 COMPLETE with the log path as evidence.
+
+Already done for Epic 5 (do NOT redo): eight gates green, whole-diff review
+APPROVE with spot-verified claims, test-inventory violations fixed
+(`6e920287`), Export Track-1 focused + Docker 8/8 + Firefox lane green, the two
+cross-lineage lanes documented as unsatisfiable (`e6ba20b6`).
+
+## F. Epic 6 — qualification and the exact 100
+
+**F0. Author the truthful final matrix/manifest FIRST** (outside the repo,
+beside the evidence). The old SOAK-MATRIX is stale as counting authority. The
+new manifest must bind: candidate SHA + source fingerprint; driver route
+(`opencode.ai` / `deepseek-v4-flash`, fallback disabled); sandbox backend
+**podman/runc** stated honestly (no gVisor claim); the config deltas this
+campaign made (`default_model`, `roles.summarizer`, per-lane `context_window`);
+seeds and allocation below. Nothing counts before this exists.
+
+**F1. Fast-qualification proof** (zero promotion credit): F0 profile + the F1
+dry-run selection proof, then ONE live F1
+(`python -m harness.build_soak.profile f1 …`) on the clean candidate. Its
+receipt already enforces `counts_toward_promotion: false` structurally.
+
+**F2. Config-flip discipline — `context_window` is server-global**, so lanes
+CANNOT interleave:
+
+1. Main 86 + restart 4 at `context_window = 131072` (flip back from 24000;
+   record the config diff);
+2. Context 10 at `context_window = 24000` (flip; record the diff — the sole
+   intended scalar change, per the standing 24k proof).
+
+**F3. Sequence:** Freeform canary 1/1 → AppKit canary 1/1 → mixed pilot 10/10 →
+promotion at 0/100. Main: 86 trials, max 4 concurrent, cohort stop-first, exact
+allocation table in CAMPAIGN-PLAN Epic 6. Restart: 4 serial, seeds
+450000-450003. Context: 10, two workers, seeds 460000-460009. **100 PASS / 0
+non-PASS on one unchanged candidate**; any source/config change resets to zero.
+Before starting: prove provider capacity and disk/RAM headroom; preserve every
+non-PASS attempt.
+
+## G. Epic 7 — same-byte closeout
+
+No repo changes after 100/100. Offline-revalidate every counted dossier +
+manifest (`verify_evidence_unchanged`); prove each of the 100 cells occurs
+exactly once and no diagnostic was counted; final report OUTSIDE the checkout;
+then `git merge --ff-only` `disclaude/stable-main` → certified commit
+(pre-check: `git merge-base --is-ancestor f55efb03 <candidate>`); nonmutating
+health checks only, afterwards.
+
+## H. Trap index — each already cost one failed launch or a false claim
+
+1. Import-fixture scenarios refuse `--autonomous` (`disco_api.py:1849`) — the
+   context lane runs interactive.
+2. The soak refuses to start without `DISCO_PROVIDER_LEDGER` (or relay log) —
+   and the AGENT-SERVER must carry the same env, since it writes the ledger.
+3. The soak refuses without `DISCO_INSPECT=1` — also a server-side env.
+4. The `sidecar` cleanup slice needs a reachable container backend — sandbox
+   config must be `podman` here (`PUT /api/sandbox/config`); the `local` docker
+   socket does not exist on this host.
+5. Import-path conversations take the server `default_model`, NOT `--model` —
+   which is why `default_model` now names the frozen driver.
+6. `/v1/models` on providers is often PUBLIC — never validate a credential with
+   it; only a real completion proves a key (P9).
+7. The events route returns `{"events": [...]}` — reading `ev["_"]` silently
+   yields nothing (P9 again).
+8. Provider-credential writes go to their OWNING route
+   (`PUT /api/providers/opencode-go` / `PUT /api/openrouter/key`) — the generic
+   secrets route rejects hyphenated refs.
+9. Bash heredocs in this harness truncate unpredictably mid-command and can
+   splice shell-wrapper lines into the target file — prefer the Edit/Write
+   tools for ledger appends; if a heredoc must be used, verify the file tail
+   afterwards (it bit three times today).
+10. `ruff format` must never touch the frozen closeout dirs (now excluded in
+    `pyproject.toml`) — their bytes are a ratified campaign's acceptance record.
+
+## I. Owner items (not blockers, for the record)
+
+- The `opencode-go` key was pasted into the chat transcript — rotate it once
+  the campaign no longer needs it.
+- `default_model` and `roles.summarizer` were repointed for the campaign;
+  restoring them to the local models afterwards is the owner's call.
+- Whether the export-track1 acceptance should be re-ratified against this
+  lineage (the two unsatisfiable lanes) is that campaign's decision.
+
+*End of handoff. Next concrete action: pre-flight P1, then seed 460000.*
+
