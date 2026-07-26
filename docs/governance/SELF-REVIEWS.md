@@ -222,3 +222,91 @@ Next action: finish Epic 1's remaining acceptance — the symlink and mutable-he
 fail-closed identity checks around collection, and explicit confirmation that the
 product pause/kill APIs and kill semantics are unchanged — then commit Epic 1 as
 one coherent package and move to Epic 2.
+
+## Review 3 — 2026-07-26 00:29 CDT / 2026-07-26T05:29:08Z
+
+Source fingerprint: sha256:af81ec6224cc878852446ce08bade0cde7a1e05ed3973f0da4f22f11bfa62baf
+
+Work completed since prior review: Finished the in-flight Epic-3 one-horizon
+slice and committed it (`fad36450`). Corrected the stale status snapshot the
+owner flagged. Then executed the owner-authorized acceleration insertion in
+full: Package A fast qualification profile (`4ec9bf30`), Package C Semgrep audit
+with a reasoned refusal to admit any rule (`d0d70649`), and Package B failure
+capsules with an honest unsupported-live-replay boundary (`2fc8645c`). Worktree
+clean at every boundary.
+
+Evidence that it actually worked: one-horizon slice — core and agent-server
+suites exit 0, revert-check fails with the exact intended message. Package A —
+20 tests, F0 exit 0 (~900 tests), and the load-bearing test drives the real
+`_build_soak_result` over a *passing* qualification batch and proves it finds
+nothing to count. Package B — 6 tests against the real `run_once` hard-cap path
+with a real `ProjectStore` version, six distinct tamper cases each refused.
+Across all: `ruff check harness/build_soak/` All checks passed, `basedpyright`
+0/0/0, full build-soak suite exit 0.
+
+What went well and why: Running eight narrow GLM inventories in parallel was a
+genuine step change. The Package-A inventory found the promotion reader's
+`rglob("batch-summary.json")` discovery, which is the single fact the whole
+structural-exclusion design turns on — I would have found it eventually by
+reading, but far later and at much higher context cost. Cost calibration also
+became legible: the narrowest delegation cost 47k tokens and the broadest 1.23M,
+for comparable usefulness.
+
+What went rough / consumed time or tokens: I was asked directly whether I was
+using subagents to save context, and the honest answer was no — one delegation,
+poorly scoped, whose result I then superseded by reading the code myself. I had
+flagged that cost in Review 2 and *did not change the behaviour*, which is the
+worse failure: noticing a problem and continuing anyway. Separately, an early
+negative control for the GLM launcher was invalid (the launcher re-exports the
+variable I tried to poison), costing 27,793 tokens and proving nothing.
+
+Immediate process or technical correction: delegate inventory work by default
+now, in parallel, with numbered questions, a hard line budget, and a
+file:line-or-NOT-FOUND requirement. Verify every load-bearing claim myself
+before building on it — which is exactly what caught that `run.py:1190` is
+*correct* despite looking like the P11 bug.
+
+Recent fixes reviewed together: the one-horizon return, the injectable batch
+summary name, and the capsule boundary rule.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: all three are the same shape — a
+    *discovery or hand-off mechanism that reads by convention rather than by
+    contract*. The promotion reader discovers evidence by globbing a filename;
+    `_materialize_current_view` handed forward an event list by convention that
+    it matched the View; a capsule would have "found" the workspace by trusting
+    an event's word for the bytes. In each case the consumer had no way to tell
+    a correct producer from an incorrect one.
+  - structural product/harness remedy: make the contract carried, not inferred.
+    Return the horizon with the View; make the promotion-visible filename an
+    explicit parameter so a non-promoting lane structurally cannot produce it;
+    make the capsule re-verify the immutable version and every restored byte
+    rather than trusting the naming.
+  - signal that would recognize it earlier next time: any consumer that finds
+    its input by pattern (glob, name, "latest", "newest by mtime") rather than
+    by being handed an identity. Ask what happens when something *else*
+    legitimately produces that pattern.
+  - existing/new regression that protects it: the one-horizon revert-check; the
+    `_build_soak_result` non-ingestion test plus its leak-back negative control;
+    the tampered-immutable-version restore refusal.
+  - why the remedy remains target-neutral and flexible: each is a parameter or a
+    return value, not a policy engine, and all three defaults are unchanged, so
+    no existing caller behaves differently.
+
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: the
+    horizon fix traces to the documented k460000 double-condensation; the
+    summary-name seam traces to the promotion reader's actual discovery code,
+    read directly; every capsule refusal maps to a named Package-B acceptance
+    item.
+  - any theoretical tail to drop: yes, two dropped. No Semgrep rule was admitted
+    — the candidate's correct and incorrect forms are syntactically identical,
+    so any rule would flag a legitimate positive control. And live focused
+    replay was not built, because it would require a new product API,
+    fabricated internal state, or destroying the original verdict.
+
+Next action: resume Epic 2 — the durable typed host-authored runtime constraint
+contract, with the process-backend host-signal prohibition as its first typed
+producer — then the remaining Epic-3 acceptance work (raw DSML/tool-markup
+rejection, one bounded repair, truthful deterministic fallback), then Epics 4-7
+in governed order.
