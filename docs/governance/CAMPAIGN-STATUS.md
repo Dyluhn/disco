@@ -442,3 +442,59 @@ discovered late and quietly waived. Classification: harness/gate truth, not a
 product defect. Earliest broken contract: a required gate that does not pass
 cannot be treated as "pre-existing therefore green"
 (ENGINEERING-STANDARDS §3).
+
+## 2026-07-26 — Owner-authorized acceleration insertion, Package A (F0/F1)
+
+Non-promoting development tooling, authorized by the owner. `CAMPAIGN-PLAN.md`
+is deliberately unchanged: this adds no acceptance count and no promotion
+requirement.
+
+**Reconciled against Epic 6 first, as instructed.** Delegated inventory plus my
+own verification found **no existing canary/pilot/profile mechanism** — Epic 6's
+Freeform canary, AppKit canary, and mixed pilot are not implemented as named
+mechanisms today; they would be assembled by hand as `--scenario` comma-lists.
+So there was nothing to generalize and nothing to supersede. The profile is a
+preflight convenience that reuses the governed runner; Epic 6's sequence is
+untouched.
+
+**The structural-exclusion problem, found by reading the promotion reader.**
+`harness/reliability/run.py::_build_soak_result` discovers evidence with
+`sorted(out.rglob("batch-summary.json"), key=mtime)` and reads **the newest
+match**. A qualification batch written under that filename, anywhere beneath a
+searched root, would therefore be read as governed promotion evidence — and a
+*passing* qualification batch is the most dangerous shape, because it looks
+like clean evidence. A label or a directory name would not have helped: the
+reader never looks at labels.
+
+**Correction:** the batch report filename is now injectable
+(`--summary-name`, default unchanged at `batch-summary.json`, validated to
+reject separators so `../batch-summary.json` cannot re-enter a parent tree). The
+qualification lane passes `profile-summary.json`, so **the name the promotion
+reader globs for is never created**. `assert_not_promotion_visible()` re-checks
+the tree afterwards, and the receipt records `counts_toward_promotion: false`
+for humans.
+
+**Reuse, not a fork.** Selection is a versioned manifest of scenario ids that
+already exist in `scenarios_phase4.yaml`; execution is
+`harness.build_soak.run`, keeping its oracles, evidence collection,
+classification, cleanup, resource admission, and — already present —
+`_run_stop_on_non_pass_cohorts` stop-first behaviour. The profile defines no
+scenario, assertion, threshold, or oracle of its own, so it cannot drift from
+the lane it previews.
+
+**Gates:** `test_qualification_profile.py` **20 passed**; F0 with the freeze
+overlay **exit 0** (~900 tests, 1 skipped); `ruff check harness/build_soak/`
+**All checks passed**; formatted; `basedpyright` **0 errors, 0 warnings, 0
+notes**.
+
+**Acceptance:** deterministic selection+order; unknown / duplicate / missing /
+schema-tampered / promotion-claiming manifests all refused **before** provider
+spend (exit 78); dry-run makes zero provider calls and still writes a receipt;
+same runner path as the full lane; qualification evidence proven un-ingestable
+by the real `_build_soak_result`; negative control proves the guard fires if the
+promotion name ever leaks back in.
+
+**Not run, deliberately:** no live F1. Per the owner instruction its first live
+execution is scheduled on the first clean candidate after Epic 5, immediately
+before Epic 6's governed canaries, still at zero promotion credit. Spending it
+against knowingly pre-candidate Epic-2/3/4 bytes would prove nothing.

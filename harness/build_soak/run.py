@@ -95,6 +95,33 @@ from .resources import (
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_OUT = "test-record/build-soak"
 _SCENARIOS = Path(__file__).resolve().parent / "scenarios.yaml"
+
+# The ONE filename the promotion reader discovers. `_build_soak_result` in
+# harness/reliability/run.py does `sorted(out.rglob("batch-summary.json"), key=mtime)`
+# and reads the NEWEST match, so any batch written under this name -- anywhere
+# beneath a searched root -- can be counted as governed promotion evidence.
+# Non-promoting lanes therefore write a DIFFERENT name, which makes their
+# exclusion structural: the file the reader looks for is never created.
+_BATCH_SUMMARY_NAME = "batch-summary.json"
+
+
+def batch_summary_name(requested: str | None) -> str:
+    """Validate a batch-report filename. A bare, safe filename only.
+
+    Rejecting separators matters: a name like ``../batch-summary.json`` would put
+    a promotion-visible report back into a parent tree, quietly undoing the
+    structural exclusion a non-promoting lane is relying on.
+    """
+
+    if requested is None or requested == "":
+        return _BATCH_SUMMARY_NAME
+    if "/" in requested or "\\" in requested or requested in {".", ".."}:
+        raise ValueError(f"batch summary name must be a bare filename, got {requested!r}")
+    if not requested.endswith(".json"):
+        raise ValueError(f"batch summary name must end in .json, got {requested!r}")
+    return requested
+
+
 _MAX_GATES = 8  # bound the approve loop so a gate flap can't spin forever
 _MAX_RESUMES = 3  # bound PAUSED-resume so an actionless-paused build can't spin forever
 _MAX_CLARIFY = 3  # bound clarify/confirm answers so an endlessly-asking model is let go (Bug 17)
@@ -3949,7 +3976,7 @@ async def _amain(args: argparse.Namespace) -> int:
         "failure_code_counts": dict(sorted(failure_counts.items())),
         "runs": runs,
     }
-    summary_path = batch_dir / "batch-summary.json"
+    summary_path = batch_dir / batch_summary_name(getattr(args, "summary_name", None))
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     print(f"[build-soak] batch report -> {summary_path}")
     return max((_exit_code(str(item.get("status"))) for item in runs), default=0)
@@ -3986,6 +4013,17 @@ def main(argv: list[str] | None = None) -> int:
         help="exact model id required in every observed provider-ledger record",
     )
     p.add_argument("--out", default=_DEFAULT_OUT, help="output root for run folders")
+    p.add_argument(
+        "--summary-name",
+        default=_BATCH_SUMMARY_NAME,
+        help=(
+            "filename of the batch report (default batch-summary.json). "
+            "Non-promoting lanes MUST pass a different name: the promotion reader "
+            "discovers evidence with rglob('batch-summary.json') and reads the "
+            "newest match, so a qualification batch written under that name would "
+            "be counted as governed promotion evidence."
+        ),
+    )
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")
     p.add_argument("--base-url", default=_DEFAULT_BASE_URL)
     p.add_argument(

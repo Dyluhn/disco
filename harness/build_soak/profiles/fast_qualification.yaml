@@ -1,0 +1,67 @@
+# Fast qualification profile — a preflight CONVENIENCE, never a certification.
+#
+# This manifest only REFERENCES scenario ids that already exist in
+# scenarios_phase4.yaml. It defines no scenario, no assertion, no oracle and no
+# threshold of its own, so it cannot drift from the governed lane it previews.
+#
+# It earns ZERO promotion credit. That exclusion is structural, not a label:
+# the runner writes its report under `profile-summary.json`, and the promotion
+# reader only ever discovers `batch-summary.json`
+# (harness/reliability/run.py `_build_soak_result`).
+#
+# Extending this for a future target means adding a scenario id here. It must
+# never mean adding a target check to Core.
+
+schema_version: 1
+id: fast_qualification
+version: 1
+counts_toward_promotion: false
+
+# Scenario ids are resolved against this file; the profile never inlines a
+# scenario body.
+scenarios_file: scenarios_phase4.yaml
+
+description: >-
+  Smallest application-shape-diverse slice that can falsify a candidate quickly.
+  Deliberately spans static, React, Node, Python, import/rollback and AppKit so a
+  regression cannot hide behind one framework shape.
+
+# Deterministic selection AND order. The runner preserves this order exactly.
+base:
+  - p4_ff_static_basic          # static, plain build
+  - p4_ff_react_steer           # React, mid-run steer
+  - p4_ff_react_continue        # React, continuation
+  - p4_ff_node_pause            # Node, pause lifecycle
+  - p4_ff_python_cancel_recovery  # Python, cancel + recovery
+  - p4_ff_import_rollback       # import, rollback
+  - p4_appkit_create            # AppKit, strict create
+  - p4_appkit_semantic_edit     # AppKit, semantic edit
+
+# Named overlays, chosen explicitly by the operator. There is deliberately no
+# automatic detector that decides when to add one.
+overlays:
+  context:
+    kind: live
+    description: >-
+      The two governed context-pressure scenarios at the 24k driver context
+      window. Uses the governed setting; this profile does not define it.
+    scenarios:
+      - p4_ff_context_catalog
+      - p4_ff_context_ledger
+
+  freeze:
+    kind: provider_free
+    description: >-
+      The provider-free progressing-hard-cap positive and the bounded
+      pause-timeout reproduction committed in Epic 1. No provider calls.
+    pytest:
+      - "packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"
+      - "harness/build_soak/tests/test_freeze_before_kill.py"
+
+# F0 — provider-free deterministic checks. These are the existing suites; the
+# profile runs them, it does not define new ones.
+f0:
+  pytest:
+    - "harness/build_soak/tests"
+    - "packages/core/tests/test_loop_condensation.py"
+    - "packages/agent-server/tests/test_progressing_hardcap_freeze_order.py"
