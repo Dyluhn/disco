@@ -116,6 +116,42 @@ _SERVE_DUPLICATE_GUIDANCE = (
     "call `finish` now; otherwise perform the remaining work, then call `finish`.\n"
     "</system-reminder>"
 )
+
+
+def _serve_duplicate_guidance(repeats: int) -> str:
+    """Duplicate-serve guidance that ESCALATES instead of repeating verbatim.
+
+    Counted-promotion failure 2026-07-27 (`p4_ff_static_continue` seed 600002,
+    ACTIONLESS_THRASH). The agent handed off, then called `serve` twice more and
+    received a BYTE-IDENTICAL reminder each time. `serve` is non-productive, so
+    each attempt was an actionless turn, and the third tripped the actionless
+    valve — on a run that went on to FINISH successfully.
+
+    The first reminder was correct and actionable, so this is not a broken
+    contract. But repeating the same sentence gives a model that already
+    mis-read it nothing new to act on, and never says that the next repeat ends
+    the run. Naming the remaining move and the cost is information the host
+    already has; withholding it is what turns one misread into a terminal.
+
+    Deliberately NOT a threshold change: the actionless cap is untouched, and a
+    genuinely stuck agent still lands in the same valve at the same count.
+    """
+    if repeats <= 1:
+        return _SERVE_DUPLICATE_GUIDANCE
+    return (
+        "<system-reminder>\n"
+        f"STOP — `serve` has now been ignored as a duplicate {repeats} times. "
+        "The handoff is already recorded; serving cannot change anything and is "
+        "not counted as work, so each attempt spends one turn toward the "
+        "no-progress limit that ENDS this run.\n"
+        "There are exactly two moves left: call `finish` if the plan and its "
+        "verification are complete, or perform a concrete remaining step "
+        "(file_write / file_edit / shell) and then call `finish`. "
+        "Do not call `serve` again.\n"
+        "</system-reminder>"
+    )
+
+
 _SERVE_TARGET_SHAPE_DIAGNOSTIC = "serve_target_shape_refused"
 _SERVE_TARGET_SHAPE_GUIDANCE = (
     "serve refused: this handoff kind does not match the current target-owned "
@@ -475,11 +511,20 @@ async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # 
     if duplicate:
         _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
         loop._invisible_steps += 1
+        # Count prior duplicate refusals from the DURABLE log rather than an
+        # instance counter, so the escalation survives a restart or condensation
+        # exactly as the run's own evidence does.
+        repeats = 1 + sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent)
+            and event.meta.get("diagnostic") == _SERVE_DUPLICATE_DIAGNOSTIC
+        )
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_SERVE_DUPLICATE_GUIDANCE),
-                meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC},
+                message=LLMMessage(role="user", content=_serve_duplicate_guidance(repeats)),
+                meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC, "duplicate_serves": repeats},
             )
         )
     elif await _serve_path_missing(loop, path):
