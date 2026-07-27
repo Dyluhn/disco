@@ -49,7 +49,16 @@ def test_verdict_pass_clean_page():
     assert v["verdict"] == "pass"
     assert v["http_status"] == 200
     assert v["console_errors"] == [] and v["network_failures"] == []
-    assert v["next_action"] == ""
+    # A PASS used to carry `next_action: ""` — the one branch that said nothing,
+    # in the one situation where the agent most needs to know its proof is
+    # durable. Counted-promotion evidence 2026-07-27 (p4_ff_react_continue seeds
+    # 400006/400023): verification passed at action #16 and 33-35 further actions
+    # followed, re-proving the same URL. It now states what the verifier knows —
+    # and deliberately does NOT say "finish", because this tool cannot see the
+    # plan; only the finish gate knows whether steps remain.
+    assert v["next_action"], "a passing verdict must still tell the agent where it stands"
+    assert "finish" in v["next_action"]
+    assert "material change" in v["next_action"]
     assert v["meaningful_content"] is True
     # clean fingerprint is stable + non-empty
     assert v["failure_fingerprint"] == _failure_fingerprint([], [])

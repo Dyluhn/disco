@@ -726,7 +726,32 @@ def _updated_region_success_content(
     if numbered:
         parts.append(numbered)
     if file_write_head:
+        # A WHOLE-FILE write is the one case where the host can honestly certify
+        # the entire artifact: the committed bytes ARE the content the model
+        # supplied, and they are digested right here. Say so.
+        #
+        # Counted-promotion evidence 2026-07-27 (p4_ff_react_steer seed 400005):
+        # every file_write was immediately followed by a file_read of the same
+        # path — write 1777 chars / read back 7320, write 1050 / read back 8831.
+        # The receipt showed only a head window and a line count, so it never
+        # confirmed the TAIL landed; re-reading was the rational way to find out.
+        # The host already knew. This states the fact instead of making the model
+        # spend a turn rediscovering it.
+        #
+        # Deliberately scoped to whole-file writes: after a TARGETED edit the
+        # model did not supply the whole file, so the same claim would be false.
+        # This is a statement of fact, not a prohibition — re-reading remains
+        # correct whenever external mutation, truncation, or verification calls
+        # for it.
+        import hashlib
+
         parts.append(f"[total lines: {total}]")
+        parts.append(
+            f"[complete — {len(post_write_bytes)} bytes, sha256 "
+            f"{hashlib.sha256(post_write_bytes).hexdigest()[:12]}. The file now contains "
+            f"EXACTLY the content you supplied, verbatim; only the head is echoed above "
+            f"to save context. A read-back to confirm this write is unnecessary.]"
+        )
     raw_view = "\n".join(parts)
     view = _bounded_updated_region_view(raw_view)
     delivered_end = end

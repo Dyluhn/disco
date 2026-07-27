@@ -297,7 +297,28 @@ def compute_verdict(
             f"{url} served HTTP {http_status} with {visible_text_chars} chars of visible "
             f"content, {elements_count} interactive elements, and no console/network errors."
         )
-        next_action = ""
+        # Every FAILING branch above tells the agent what to do next. The passing
+        # branch used to say nothing at all, which is the one case where silence
+        # is most expensive: the agent has just proven the thing it was asked to
+        # prove and has no signal that the proof is durable.
+        #
+        # Counted-promotion evidence 2026-07-27 (p4_ff_react_continue seeds
+        # 400006 / 400023): verification PASSED at action #16 with
+        # `next_action: ""`, and 33-35 further actions followed — five rebuilds,
+        # three browser checks, two more verifications of the SAME url, and a
+        # replan that reset plan progress from 5/5 to 0/5 before re-walking it.
+        #
+        # This states what the verifier actually knows and nothing more. It does
+        # NOT say "finish": this tool cannot see the plan, and only the finish
+        # gate knows whether the remaining steps are satisfied. Re-verifying is
+        # still correct after a MATERIAL change — the claim is durable against
+        # re-proof, not against real mutation.
+        next_action = (
+            "Verified — this claim is now proven and recorded for this URL. "
+            "Re-running the same verification without changing the app proves "
+            "nothing new. Move to your remaining plan steps, and if none are "
+            "outstanding, finish; re-verify only after a material change."
+        )
 
     result: dict[str, Any] = {
         "passed": passed,

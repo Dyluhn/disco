@@ -1589,8 +1589,7 @@ def test_document_scope_is_clause_bound_not_sentence_bound():
     inverted. Each literal keeps the artifact ITS OWN clause names."""
     events = [
         _user(
-            "Write notes.txt containing 'internal only' and show 'Public View' "
-            "on the page.",
+            "Write notes.txt containing 'internal only' and show 'Public View' on the page.",
             1,
         ),
         _plan(1, 2),
