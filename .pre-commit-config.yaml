@@ -3,6 +3,14 @@
 repos:
   - repo: local
     hooks:
+      # Runs FIRST: if a counted lane is live, nothing else about this commit
+      # matters — landing it would split one campaign across two SHAs.
+      - id: soak-freeze
+        name: no commits while a build-soak batch is running
+        entry: python scripts/check_soak_freeze.py
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: arch-budget
         name: architecture size budget (no god-objects)
         entry: python scripts/check_arch_budget.py
