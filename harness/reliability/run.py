@@ -268,14 +268,97 @@ def _vitest_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int,
     return PASS, units, f"{passed} Vitest test(s) passed"
 
 
-def _build_soak_result(out: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:
-    summaries = sorted(out.rglob("batch-summary.json"), key=lambda path: path.stat().st_mtime)
-    if not summaries:
-        return INFRA, 0, "build soak produced no batch-summary.json"
+_PROMOTION_SUMMARY_NAME = "batch-summary.json"
+
+
+def _select_build_soak_summary(
+    out: Path, *, expected_batch_id: str | None = None
+) -> tuple[Path | None, str]:
+    """The ONE promotion summary bound to this invocation, or a refusal reason.
+
+    Selection is by IDENTITY, never by recency. The previous rule took the
+    newest `batch-summary.json` under ``out`` by mtime, which infers intent from
+    a filename plus a clock. Diagnostic and promotion campaigns write the same
+    filename, so a root containing both silently resolved to whichever ran last.
+
+    Observed 2026-07-27: 26 promotion-named summaries sit under the Epic-4
+    DIAGNOSTIC tree (correctly preserved — a diagnostic attempt is history and is
+    never renamed or deleted to tidy an audit). A reader rooted at their shared
+    ancestor resolved to one of THOSE while the counted lanes had not yet written
+    theirs. It would have flipped to the counted lane later purely by ordering.
+    A certification must not rest on which file was touched last.
+
+    So: ambiguity is REFUSED rather than guessed. Bind ``expected_batch_id`` to
+    disambiguate deliberately; otherwise exactly one candidate must exist.
+    """
     try:
-        report = json.loads(summaries[-1].read_text(encoding="utf-8"))
+        root = out.resolve()
+    except OSError as exc:
+        return None, f"build-soak output root is unreadable: {exc}"
+
+    candidates: list[Path] = []
+    for path in sorted(out.rglob(_PROMOTION_SUMMARY_NAME)):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        # Path escape: a symlink pointing outside the bound root is not this
+        # invocation's evidence, whatever it is named.
+        if root != resolved and root not in resolved.parents:
+            continue
+        candidates.append(resolved)
+
+    if not candidates:
+        return None, f"build soak produced no {_PROMOTION_SUMMARY_NAME} under {out}"
+
+    if expected_batch_id is not None:
+        matched: list[Path] = []
+        for path in candidates:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(payload, dict) and payload.get("batch_id") == expected_batch_id:
+                matched.append(path)
+        if not matched:
+            return None, (
+                f"no {_PROMOTION_SUMMARY_NAME} under {out} declares batch_id "
+                f"{expected_batch_id!r} — refusing to adjudicate evidence that is not "
+                "provably this invocation's"
+            )
+        if len(matched) > 1:
+            return None, (
+                f"{len(matched)} summaries declare batch_id {expected_batch_id!r}: "
+                + ", ".join(str(p) for p in matched[:4])
+            )
+        return matched[0], ""
+
+    if len(candidates) > 1:
+        return None, (
+            f"{len(candidates)} {_PROMOTION_SUMMARY_NAME} files under {out} — ambiguous, "
+            "and recency is not intent. Bind the invocation's batch_id, or point the "
+            "reader at the single campaign root it should adjudicate. Found: "
+            + ", ".join(str(p) for p in candidates[:4])
+        )
+    return candidates[0], ""
+
+
+def _build_soak_result(
+    out: Path, *, exit_code: int, units: int, expected_batch_id: str | None = None
+) -> tuple[str, int, str]:
+    summary_path, refusal = _select_build_soak_summary(out, expected_batch_id=expected_batch_id)
+    if summary_path is None:
+        return INFRA, 0, refusal
+    try:
+        report = json.loads(summary_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         return INFRA, 0, f"build-soak summary is unreadable: {exc}"
+    if not isinstance(report, dict):
+        return INFRA, 0, "build-soak summary is not an object"
+    # Missing identity is refused, not defaulted: a summary that cannot say which
+    # invocation produced it cannot be proven to be this one's.
+    if not str(report.get("batch_id") or "").strip():
+        return INVALID, 0, f"build-soak summary {summary_path} declares no batch_id"
     runs = report.get("runs") or []
     statuses = Counter(str(run.get("status")) for run in runs if isinstance(run, dict))
     if statuses["FAIL"]:
