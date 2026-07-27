@@ -404,12 +404,51 @@ async def preflight_plan_revision(
     return None
 
 
+def user_steer_authorizes_weakening(events: list[Event]) -> bool:
+    """A durable USER steer since the last approval IS the owner's weakening decision.
+
+    The weakening guard refuses a revision that drops an approved acceptance
+    condition and tells the agent that "removing an acceptance condition requires
+    a separate explicit owner weakening decision". That is the right invariant —
+    an agent must never silently lower its own bar — but until now there was no
+    way for the agent to OBTAIN such a decision, so the refusal named a rule
+    without naming an achievable action.
+
+    Counted-promotion failure 2026-07-27 (`p4_ff_react_steer` seed 700022,
+    FALSE_FINISH_NO_OUTPUT). A mid-run user steer changed the build's direction,
+    which legitimately obsoleted `file_exists:package.json`,
+    `file_exists:src/App.tsx` and `command:test -f dist/index.html`. Every
+    revision that dropped them was blocked — SIXTEEN times, driving 29 planning
+    turns against an all-time observed maximum of 14 — until the agent gave up
+    and carried `package.json` into a plan whose new direction never produces it.
+    The run was then guaranteed to fail the output-truth gate whatever it did.
+
+    The steer WAS the owner decision the refusal demanded. `revision_steer_pending`
+    is appended by the kernel ingress (`DiscoKernel.send_user_turn`), never by the
+    model, so it is host-authored authority the agent cannot forge.
+
+    Deliberately narrow: the marker must post-date the latest `plan_approved`, so
+    this authorizes exactly one revision cycle per steer. A spontaneous
+    agent-initiated drop with no steer behind it is still blocked, and a generic
+    plan approval still cannot remove a condition.
+    """
+    for event in reversed(events):
+        if not isinstance(event, StatusEvent):
+            continue
+        if event.detail == "plan_approved":
+            return False  # reached the approval without finding a newer steer
+        if event.detail == "revision_steer_pending":
+            return True
+    return False
+
+
 def assert_plan_revision_approvable(events: list[Event], candidate: PlanEvent) -> None:
     """Approval-funnel backstop for every persisted revision route."""
     diff = predicate_diff_for_revision(events, candidate)
     if (
         diff is None
         or diff.is_monotonic
+        or user_steer_authorizes_weakening(events)
         or failed_verifier_replacement_allowed(events, candidate)
         or demonstrated_command_replacement_allowed(events, candidate)
         or (
