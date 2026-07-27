@@ -1054,6 +1054,7 @@ async def drive_scenario(
     autonomous: bool,
     timeout_s: float = _DEFAULT_INACTIVITY_S,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
+    seed: int | None = None,
 ) -> CollectedRun:
     """Create + drive one scenario end-to-end, then COLLECT all evidence
     (events from the DB race-free, state, workspace, preview).
@@ -1065,8 +1066,15 @@ async def drive_scenario(
     client.enable_efficiency_progress(
         LiveEfficiencyProgress(
             scenario_id=str(scenario.get("id") or "?"),
-            seed=scenario.get("seed"),
-        )
+            # The task seed is the RUNNER's, not the scenario's — a scenario dict
+            # carries no `seed` key, so reading one off it printed "seed None"
+            # and made the live line unusable for identifying which trial it was.
+            seed=seed,
+        ),
+        # The live provider-call count needs the same ledger the oracles read.
+        # Resolved through `_relay_log_path()` so the readout can never key on a
+        # different env var than the evidence does.
+        ledger_path=_relay_log_path(),
     )
     prompt = str(scenario["prompt"])
     appkit = bool(scenario.get("appkit"))
@@ -3080,6 +3088,7 @@ async def run_once(
                 autonomous=autonomous,
                 timeout_s=timeout_s,
                 hard_cap_s=hard_cap_s,
+                seed=seed,
             )
         except InconclusiveRunError as exc:
             # Bug 15: the build was STILL PROGRESSING when the hard cap hit — the runner could

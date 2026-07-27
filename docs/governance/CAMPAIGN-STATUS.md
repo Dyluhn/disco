@@ -2201,6 +2201,101 @@ both now are.
 
 ---
 
+## 2026-07-27 — F1 is 8/8 PASS, and on its first live run the new telemetry found the thing it was built to find
+
+### The result the old artifacts could not have shown
+
+F1 on candidate `42ff0f14` (`repo_dirty: false`), 8 scenarios, 8 workers,
+`context_window` flipped to 131072: **8/8 PASS**, zero repairs, zero
+condensations, nothing `unavailable`.
+
+```
+scenario                            seed  status  act  plan  exec  calls  cmpct  rep   elapsed
+p4_ff_static_basic                470000    PASS   16     2    16     19      0    0    634.6s
+p4_ff_react_steer                 470001    PASS   53     6    54     62      0    0   1408.5s
+p4_ff_react_continue              470002    PASS   50     9    54     66      0    0   1317.5s
+p4_ff_node_pause                  470003    PASS   19     2    24     27      0    0    768.8s
+p4_ff_python_cancel_recovery      470004    PASS   13     5    11     17      0    0    413.6s
+p4_ff_import_rollback             470005    PASS   26     7    25     33      0    0    854.3s
+p4_appkit_create                  470006    PASS    7     2     6      8      0    0    665.2s
+p4_appkit_semantic_edit           470007    PASS   13     4    11     16      0    0   1132.7s
+```
+
+Every one of those is a PASS, and until today every one of them would have been
+recorded identically as a PASS and nothing else. The spread is **7.6× in
+actions** (7 → 53), **9× in execution turns** (6 → 54) and **3.4× in wall-clock**
+(414 s → 1409 s). `p4_ff_react_steer` spent 62 conversation-bound provider calls
+and 1.95 M input tokens to reach the same verdict `p4_appkit_create` reached in
+8 calls. That is exactly the difference the package exists to surface, and it
+was invisible before.
+
+No claim is made here that the React runs are *wrong*. They passed, their
+oracles are unchanged, and a steer/continue scenario legitimately costs more
+than a strict AppKit create. The point is only that the cost is now on the
+record instead of being averaged into a green count.
+
+Two further observations worth keeping:
+
+- **`planning_turns: 6` is not a universal.** The Epic-4 context lane showed 6
+  on all ten runs; here planning ranges 2–9. The constant was a property of that
+  lane, not of the loop. A reader of the retrospective table alone could easily
+  have drawn the wrong general conclusion.
+- **`compactions: 0` across all eight** independently confirms the 24000 →
+  131072 config flip actually took effect: at a 131 k window these builds never
+  reach the condensation trigger, whereas the same machinery produced 6–12
+  compactions per run at 24 k.
+- **Polling dwarfs work by ~100×.** `p4_ff_react_steer` recorded 6434 polling
+  samples against 60 model turns. Any metric that conflated the two would be
+  meaningless.
+
+### Two real defects in the live readout, found by running it
+
+The first live F1 attempt refused before spending a cent:
+`INFRA_FAILURE: live provider evidence requires nonempty expected host and
+model` — the fail-closed provider binding working as designed. Bound via
+`DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST=opencode.ai` and
+`DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL=deepseek-v4-flash`, which are
+launch parameters with env defaults, not a source change.
+
+The run that followed then exposed two genuine gaps in my own live readout,
+against the required field list:
+
+1. **`seed None` on every line.** I read `scenario.get("seed")`, but a scenario
+   dict carries no seed — the runner owns `task_seed` separately. With eight
+   workers interleaving, a line that cannot name its trial is close to useless.
+   Fixed by threading the runner's real seed through `drive_scenario`.
+2. **`calls n/a` on every line.** The live path was never given a ledger to
+   read. Fixed by passing `_relay_log_path()` in — the same resolver the oracles
+   use, so the readout can never key on a different variable than the evidence.
+
+The ledger is append-only and shared by every concurrent worker, so it is read
+**incrementally** (byte offset + running total) rather than re-parsed whole each
+sample, and the offset advances only past the last COMPLETE line so a record
+mid-append is picked up next sample instead of being half-parsed and lost
+forever. Only records carrying this conversation's id are counted; unscoped ones
+are excluded, because under concurrency they may belong to another worker and a
+live readout must not overstate what a run cost.
+
+Tests added for both: incremental counting with no double-count, partial-line
+recovery, and unavailable-not-zero when no ledger is configured.
+
+### Why F1 is not re-run on the new SHA
+
+The fix touches the harness's live logging only. `git diff HEAD~1 HEAD --
+packages/` is empty, no oracle or verdict changed, and F1 earns
+`counts_toward_promotion: false` by construction. Its falsification value — "the
+candidate is not broken" — attaches to the product bytes, which are unchanged.
+The canaries, pilot and the counted 100 will all run on the single final SHA;
+that is where same-byte discipline actually matters.
+
+### Next concrete action
+
+Re-run F0 on the new SHA, re-sign the manifest, then Freeform canary 1/1 →
+AppKit canary 1/1 → mixed pilot 10/10 → the exact 100. Promotion remains
+**0/100**.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving

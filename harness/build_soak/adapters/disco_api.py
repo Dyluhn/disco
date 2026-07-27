@@ -1541,18 +1541,67 @@ class DiscoApiClient:
         self._efficiency_sample_interval_s = 5.0
         self._efficiency_last_sample = 0.0
         self._efficiency_started_at = 0.0
+        self._efficiency_ledger_path: str | None = None
+        self._efficiency_ledger_offset = 0
+        self._efficiency_ledger_calls = 0
 
-    def enable_efficiency_progress(self, progress: LiveEfficiencyProgress) -> None:
+    def enable_efficiency_progress(
+        self, progress: LiveEfficiencyProgress, *, ledger_path: str | None = None
+    ) -> None:
         """Attach a bounded live work-cost readout to the terminal wait.
 
         Observability only: it reads the evidence the poll loop already writes
-        (durable events + the in-memory inspect trace) and makes ZERO provider
-        calls. Sampling is rate-limited here and emission is rate-limited again
-        inside the progress object, so a sub-second poll cannot flood the log.
+        (durable events + the in-memory inspect trace + the append-only provider
+        ledger) and makes ZERO provider calls. Sampling is rate-limited here and
+        emission is rate-limited again inside the progress object, so a
+        sub-second poll cannot flood the log.
         """
         self._efficiency_progress = progress
         self._efficiency_last_sample = 0.0
         self._efficiency_started_at = time.monotonic()
+        self._efficiency_ledger_path = ledger_path
+        self._efficiency_ledger_offset = 0
+        self._efficiency_ledger_calls = 0
+
+    def _live_provider_calls(self, conversation_id: str) -> int | None:
+        """Conversation-bound provider calls so far, read INCREMENTALLY.
+
+        The ledger is append-only and shared by every concurrent worker, so it
+        grows without bound; re-parsing it whole on each sample would make the
+        readout more expensive than the run. Only the bytes appended since the
+        last sample are parsed, and the running total is kept here.
+
+        Counts ONLY records carrying this conversation's id. Unscoped records are
+        deliberately excluded: under concurrency they may belong to another
+        worker, and a live readout must not overstate what this run cost.
+        """
+        path = self._efficiency_ledger_path
+        if not path:
+            return None
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(self._efficiency_ledger_offset)
+                chunk = handle.read()
+        except OSError:
+            return self._efficiency_ledger_calls or None
+        # Stop at the last COMPLETE line. A record still being appended would
+        # otherwise be half-parsed now and skipped forever after, permanently
+        # under-counting; leaving it unconsumed picks it up on the next sample.
+        cut = chunk.rfind(b"\n") + 1
+        if cut <= 0:
+            return self._efficiency_ledger_calls or None
+        self._efficiency_ledger_offset += cut
+        for raw in chunk[:cut].decode("utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and record.get("conversation_id") == conversation_id:
+                self._efficiency_ledger_calls += 1
+        return self._efficiency_ledger_calls
 
     async def _emit_efficiency_progress(self, conversation_id: str, *, state: str) -> None:
         progress = self._efficiency_progress
@@ -1576,14 +1625,13 @@ class DiscoApiClient:
             events=events,
             trace=trace if isinstance(trace, dict) else None,
         )
-        calls = record.get("provider_calls") or {}
         progress.update(
             now=now,
             elapsed_s=now - started,
             actions=record.get("actions"),
             planning_turns=record.get("planning_turns"),
             execution_turns=record.get("execution_turns"),
-            provider_calls=calls.get("conversation_bound") if isinstance(calls, dict) else None,
+            provider_calls=self._live_provider_calls(conversation_id),
             compactions=record.get("compactions"),
             repairs=record.get("model_repairs"),
             state=state,

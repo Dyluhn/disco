@@ -592,6 +592,74 @@ def test_live_progress_line_carries_every_required_field():
         assert fragment in line
 
 
+def test_live_provider_calls_are_read_incrementally_and_conversation_bound(tmp_path):
+    """The shared ledger is append-only, so only new bytes are parsed each sample.
+
+    Observed in the first live F1: the readout printed `calls n/a` because it was
+    never given a ledger. It must count THIS conversation's records only —
+    unscoped ones may belong to another concurrent worker.
+    """
+    from harness.build_soak.adapters.disco_api import DiscoApiClient
+
+    ledger = tmp_path / "provider-ledger.jsonl"
+    ledger.write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in (
+                {"host": "opencode.ai", "conversation_id": "conv_mine"},
+                {"host": "opencode.ai", "conversation_id": "conv_other"},
+                {"host": "opencode.ai", "conversation_id": None},
+                {"host": "opencode.ai", "conversation_id": "conv_mine"},
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    client = DiscoApiClient.__new__(DiscoApiClient)
+    client._efficiency_ledger_path = str(ledger)
+    client._efficiency_ledger_offset = 0
+    client._efficiency_ledger_calls = 0
+
+    assert client._live_provider_calls("conv_mine") == 2
+
+    # Nothing appended -> no double counting.
+    assert client._live_provider_calls("conv_mine") == 2
+
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"host": "opencode.ai", "conversation_id": "conv_mine"}) + "\n")
+    assert client._live_provider_calls("conv_mine") == 3
+
+
+def test_a_partially_written_ledger_line_is_not_lost(tmp_path):
+    # A record still being appended must be picked up on the NEXT sample, not
+    # half-parsed now and skipped forever (a permanent under-count).
+    from harness.build_soak.adapters.disco_api import DiscoApiClient
+
+    ledger = tmp_path / "provider-ledger.jsonl"
+    complete = json.dumps({"host": "opencode.ai", "conversation_id": "conv_mine"})
+    ledger.write_text(complete + "\n" + '{"host": "opencode.ai", "conversa', encoding="utf-8")
+
+    client = DiscoApiClient.__new__(DiscoApiClient)
+    client._efficiency_ledger_path = str(ledger)
+    client._efficiency_ledger_offset = 0
+    client._efficiency_ledger_calls = 0
+    assert client._live_provider_calls("conv_mine") == 1
+
+    # The writer finishes that line.
+    ledger.write_text(complete + "\n" + complete + "\n", encoding="utf-8")
+    assert client._live_provider_calls("conv_mine") == 2
+
+
+def test_no_ledger_path_reports_unavailable_not_zero(tmp_path):
+    from harness.build_soak.adapters.disco_api import DiscoApiClient
+
+    client = DiscoApiClient.__new__(DiscoApiClient)
+    client._efficiency_ledger_path = None
+    client._efficiency_ledger_offset = 0
+    client._efficiency_ledger_calls = 0
+    assert client._live_provider_calls("conv_mine") is None
+
+
 def test_a_polling_burst_cannot_flood_the_log():
     lines: list[str] = []
     progress = LiveEfficiencyProgress(scenario_id="s", seed=1, emit=lines.append, interval_s=30.0)
