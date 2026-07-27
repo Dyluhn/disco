@@ -176,7 +176,17 @@ def _host_verification_claims(
                     source_authority=f"user_event:{condition.source_event_id}",
                 )
             )
-        if VerificationClaimKind.VISIBLE_TEXT in accepted:
+        # A literal the user assigned to a WRITTEN document (REPORT.md, notes.txt)
+        # is not a claim about the SERVED page, and demanding it in the rendered DOM
+        # makes the build unsatisfiable for an agent that obeys the instruction.
+        # Epic-4 seed 460009: "Create REPORT.md headed exactly 'Ledger Audit 460009'
+        # ... Update index.html to show 'Ledger Audited 460009'" required both
+        # strings in the page; the agent oscillated (fix one, break the other) until
+        # the no-progress detector gave up, and the runs that passed passed only
+        # because they happened to put the report heading on the page too. Exactly
+        # the mutually-exclusive-claims failure the application.title slot above
+        # already guards (seed 406431), one slot over.
+        if VerificationClaimKind.VISIBLE_TEXT in accepted and condition.document_artifact is None:
             claims.append(
                 HostVerificationClaim(
                     claim_id=f"web.visible_text:{digest}",

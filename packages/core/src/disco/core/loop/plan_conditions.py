@@ -63,6 +63,10 @@ class DictatedContentCondition:
     source_seq: int | None = None
     requirement_slot: str | None = None
     supersedes_source_event_id: str | None = None
+    # The non-served document the user assigned this literal to (e.g. "REPORT.md"),
+    # or None when it belongs to the served deliverable. Consumers that verify the
+    # RENDERED page must not demand a literal that was scoped to a written file.
+    document_artifact: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,7 @@ class _DictatedContentLiteral:
     quote_start: int
     requirement_slot: str | None
     replaces_slot: bool
+    document_artifact: str | None = None
 
 
 # (?<!\w) blocks apostrophe-contractions from OPENING a match ("don't ... 'X'"
@@ -272,6 +277,61 @@ def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | N
     return None, False
 
 
+# Documents that are WRITTEN but not SERVED. A literal the user assigns to one of
+# these belongs in that file, not in the rendered DOM of the web deliverable.
+# `.html`/`.htm` are deliberately absent: those ARE the served page.
+_DOCUMENT_ARTIFACT_RE = re.compile(
+    r"\b([\w./-]+\.(?:md|markdown|txt|rst|csv|tsv|json|ya?ml|log|ini|toml))\b",
+    re.IGNORECASE,
+)
+
+
+def _dictated_content_literal_document(text: str, quote_start: int) -> str | None:
+    """The non-served document this literal was assigned to, if the user named one.
+
+    Syntactic and sentence-bound, exactly like ``_dictated_content_literal_slot``:
+    only an explicit filename in the SAME sentence as the quote binds it, because a
+    prior sentence cannot supply this literal's destination.
+
+    Why this exists. Quoted user literals were collected without any notion of WHICH
+    artifact each was assigned to, and every one of them was minted into a
+    ``web.visible_text`` claim -- so a heading the user put in a markdown file was
+    demanded in the browser DOM of the served page. A build that obeys the
+    instruction literally then cannot finish, and one that satisfies the verifier has
+    disobeyed the instruction.
+
+    Live at Epic-4 seed 460009: "Create REPORT.md headed exactly 'Ledger Audit
+    460009' ... Update index.html to show 'Ledger Audited 460009', serve it, and
+    browser-verify it." The verifier required BOTH strings in the page, the agent
+    oscillated (fix one, break the other, flip back), and the no-progress detector
+    correctly gave up. The runs that passed passed only because the agent happened to
+    ALSO put the report heading on the page -- luck, not correctness.
+
+    This is the same failure the ``application.title`` slot already guards against:
+    "two mutually exclusive identity claims ... the build could never finish however
+    correctly the model behaved" (seed 406431). Same shape, different slot.
+
+    Deliberately conservative: it only suppresses the WEB claim when the user named a
+    non-served document in the literal's own sentence. Naming nothing, or naming the
+    page itself, keeps the existing accumulating behaviour untouched.
+    """
+
+    prefix = text[max(0, quote_start - 320) : quote_start]
+    # CLAUSE-bound, not sentence-bound. One sentence routinely assigns literals to
+    # two different places -- "Write notes.txt containing 'internal only' and show
+    # 'Public View' on the page" -- and a sentence-wide scan bound BOTH literals to
+    # notes.txt, silently dropping a legitimate page requirement. Splitting on
+    # coordinators keeps each literal with the artifact its own clause names.
+    #
+    # Every ambiguity resolves toward NOT scoping: an unrecognised phrasing simply
+    # yields None and the literal stays a web claim, which is the pre-existing
+    # behaviour. A false scope would DELETE a real verification requirement; a false
+    # miss only leaves one demanding what it always demanded.
+    clause = re.split(r"[.!?]\s|;\s*|\s+and\s+|\s+then\s+|\s+but\s+", prefix)[-1]
+    matches = _DOCUMENT_ARTIFACT_RE.findall(clause)
+    return matches[-1] if matches else None
+
+
 def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
     """Extract bounded literal records with exact replacement metadata."""
 
@@ -296,6 +356,7 @@ def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
                 quote_start=mt.start(),
                 requirement_slot=slot,
                 replaces_slot=replaces,
+                document_artifact=_dictated_content_literal_document(text, mt.start()),
             )
         )
     return out
@@ -428,6 +489,7 @@ def dictated_content_conditions_from_events(
                         source_seq=user.seq,
                         requirement_slot=candidate.requirement_slot,
                         supersedes_source_event_id=supersedes_source_event_id,
+                        document_artifact=candidate.document_artifact,
                     )
                 )
         prev_plan_idx = plan_idx
