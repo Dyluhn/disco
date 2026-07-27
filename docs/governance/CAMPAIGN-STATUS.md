@@ -1924,6 +1924,87 @@ before Epic 4 closes.
 
 ---
 
+## 2026-07-27 — EPIC 4 CLOSED: ten of ten on `a3b58feb`, and the fix is visible in the numbers
+
+Artifact-scoped verification claims shipped (`a3b58feb`), stack restarted on
+those bytes, clean tree, and the FULL context set rerun from 460000 per the
+source-change rule. **Ten of ten PASS, zero issues on every acceptance check.**
+
+The set is not merely green — it is a different system:
+
+| metric | before (`f0498c3a`) | after (`a3b58feb`) |
+|---|---|---|
+| actions per run | 28 – 107 | **10 – 19** |
+| condensations per run | 18 – 90 | **6 – 12** |
+| wall per seed | 5 – 47 min | **3.7 – 6.0 min** |
+| whole set | ~4 hours | **51 minutes** |
+| non-PASS | 1 of 10 | **0 of 10** |
+
+That collapse is the proof the defect was real. The agent was not slow; it was
+being asked for something it could not deliver, and every extra round was an
+attempt to satisfy a page requirement whose literal belonged in a markdown file.
+Remove the impossible requirement and the same model, same seeds, same bytes
+converge in a third of the actions and a fifth of the wall time. A performance
+number is rarely a correctness proof — this one is.
+
+Acceptance, checked from dossiers on all ten: `status: PASS`; `repo_dirty:
+false`; `repo_revision a3b58feb` on every run (the repository was NOT committed
+to mid-set this time — manifest §8b applied); ≥1 durable condensation each; **0
+protocol residue**; `driver_context_window: 24000`, host `opencode.ai`, wire
+`deepseek-v4-flash` on all 189 provider calls; no fallback; no call after
+terminal; no non-PASS oracle anywhere.
+
+Counted evidence: `seed-46000{0..9}-scoped/`. Every pre-fix attempt is preserved
+beside it — `seed-460000-attempt{2..7}`, `seed-46000{1..8}`, `seed-460009`,
+`seed-460009-attempt2` — and **none of them counts**, including the
+`seed-460009-attempt2` PASS that I had wrongly proposed to count before the
+owner blocked promotion. That block was correct: it forced the root cause out of
+a run I had already written off as infrastructure.
+
+**What this cost, honestly.** I closed Epic 4 once on nine passes plus an
+invalidated run I had classified as an infra rerun, on the strength of a
+mechanism I had invented — preview restart deleting screenshots — from two
+adjacent facts that belonged to a different seed. The invalidation was the
+product's no-progress detector correctly refusing to loop on an unsatisfiable
+requirement, and the fail-closed evidence refusal was the harness correctly
+declining to certify what it could not prove. Both subsystems were telling the
+truth; the only thing wrong was my reading, and a campaign that certifies on my
+reading rather than on the evidence certifies nothing.
+
+**Epic 4 is CLOSED.** Epic 2's live acceptance remains honestly vacuous (zero
+`runtime_constraint` events — no refusal fired), Epic 3's is genuinely met (0
+residue across all ten, adjudicated by the product's own predicate and enforced
+per-run by `CONDENSATION_SUMMARY_UNUSABLE`).
+
+---
+
+## 2026-07-27 — EPIC 5 CLOSED on the final candidate
+
+The last two open Epic-5 items are done on `a3b58feb`:
+
+1. **Recorded full-suite pass.** `pytest packages/core packages/tools
+   packages/agent-server harness/build_soak/tests -m "not integration"` —
+   **EXIT CODE 0**, zero FAILED/ERROR lines, run against a **clean tree**
+   (`0 modified files`, verified in the log header, not asserted afterwards).
+   Log kept outside the repo:
+   `<evidence>/2026-07-26/epic5/FINAL-CANDIDATE-full-suite.log`. The earlier
+   recorded run was discarded rather than reused: it predated the
+   artifact-scoping fix, and a suite pass on superseded bytes certifies nothing.
+2. **Checklist flip.** Epic 5 is COMPLETE, evidenced by that log path.
+
+Already closed earlier and not redone: eight gates green, whole-diff review
+APPROVE with spot-verified claims, test-inventory violations fixed (`6e920287`),
+Export Track-1 focused + Docker 8/8 + Firefox lane green, and the two
+cross-lineage lanes documented as unsatisfiable by construction (`e6ba20b6`).
+
+**Candidate for Epic 6: `a3b58feb`.** Gates re-run green on exactly these bytes
+(ruff, basedpyright 0 errors, arch budget, lint-imports, diagram freshness,
+governance seal). The repository freezes here: per manifest §8b, no commits
+while the 100 are running, and promotion-run ledger entries are written outside
+the checkout and folded back in during Epic 7.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
