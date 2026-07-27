@@ -2364,6 +2364,117 @@ serial (seeds 450000–450003), context 10 at 24000 with `--hard-cap 2400` (seed
 
 ---
 
+## 2026-07-27 — The counted 100 FAILED at 27 PASS / 1 FAIL, and the model was not the cause
+
+### The attempt, recorded honestly
+
+Promotion on candidate `e5cd780a` reached **27 PASS / 1 FAIL** and stopped at the
+cohort boundary. `p4_ff_node_pause` seed 400025 → `TOOL_ERROR_THRASH`.
+
+**This is not partial promotion credit.** The count is invalid for certification
+and restarts from zero. All 28 dossiers are sealed and preserved exactly as
+written; nothing was deleted, renamed, relocked, reclassified, or rerun for luck.
+
+### Three chained host defects. The agent behaved correctly throughout.
+
+From the sealed 81-event stream:
+
+```
+seq 48  preview_start   -> generation pv_ad5f8a…, port 8000, url http://127.0.0.1:44889
+seq 51  browser navigate http://127.0.0.1:44889  -> "freshness protocol error"
+seq 54  verify_web_app  -> SUCCESS against http://127.0.0.1:8000/  (epoch 3 synced)
+seq 66  preview_stop    -> ports_still_served [8000]
+seq 72  preview_start   -> generation pv_c1b9fd…, port 8000, url http://127.0.0.1:44889
+seq 75  shell curl http://localhost:8000/         -> SUCCESS (service proven)
+seq 78  browser navigate http://127.0.0.1:44889  -> same error
+seq 81  STATUS IDLE killed
+```
+
+The agent used the URL **the product gave it**, obeyed the recovery recipe after
+the first failure, stopped the wrong static preview, started the real Node
+service, proved it with curl, and only then retried against a **new** generation.
+It never repeated a call blindly.
+
+**D3 — earliest broken contract (information).** `PreviewSession.to_dict()`
+published `url` (the HOST address `127.0.0.1:44889`) and `port` (the in-sandbox
+port 8000) but **no in-sandbox URL field**. That address lived only in prose
+warning about `curl`, describing the host URL as "for the USER's browser" — which
+reads as an endorsement. The agent's own `browser` tool also runs in-sandbox, so
+the one structured field it would naturally pass to `navigate` was the one that
+cannot work. `verify_web_app` escaped only because it resolves the port itself
+and probes in-sandbox.
+
+**D1 — the real error was destroyed (P11).** `navigate` is not in the daemon's
+`_SYNC_ACTIONS`, so its lane epoch is assigned only *after* a successful `goto`.
+On failure the client rejected the response as a **protocol** error, discarding
+the daemon's true `navigation_failed`. Unsatisfiable by construction: a
+navigation that loaded no document cannot claim synchronization. The agent was
+told the protocol was broken and never learned the address was unreachable.
+
+**D2 — the oracle then grouped the masked signatures.** Both failures carried the
+same *masked* text, so `ThrashOracle` counted them in one progress epoch despite
+an intervening `preview_stop`, a replacement `preview_start`, a successful
+`verify_web_app`, and a curl proving the service.
+
+Hypotheses as posed: **H1, H3, H5, H6 confirmed. H2 and H4 refuted** — the
+generation rotated correctly and the browser lane was never stranded on stale
+authority (`executor_generation` matched; epoch 3 synchronized cleanly).
+
+### Fixes — four packages, committed separately by contract family
+
+| commit | package |
+|---|---|
+| `dcdacf37` | preview/browser authority — D1 + D2 + D3 |
+| `b61e09e6` | write-receipt completeness + passing-verdict `next_action` |
+| `339668f7` | promotion evidence by identity, not recency |
+| `f49f38cf` | pre-commit gate: no commits while a soak is live |
+
+The D1 waiver is **narrow**: only `navigation_failed`. Every `_SYNC_ACTIONS`
+member runs the pre-sync block before acting, so one of those failing on a stale
+epoch is a real violation and still fails closed — an existing test caught a
+first attempt that waived too broadly, and that was the single correction pass.
+
+**Decisive verification:** replaying the SEALED failing dossier through the fixed
+oracle now yields **PASS** with `largest_same_tool_error_group: 1` (was 2).
+
+### The two efficiency shapes were the same class of defect
+
+Two candidate causes were **refuted by the code before implementing anything**:
+the F1 read-before-rewrite guard does not clear grounding on a write, and
+`file_write` already re-grounds. The actual mechanism in both: *the host holds a
+fact the model needs and does not state it.*
+
+- **Shape A** — the whole-file write receipt showed a head window and a line
+  count but never confirmed the tail landed (receipt 1777 chars vs read-back
+  7320; 1050 vs 8831). It now certifies completeness verbatim, scoped to
+  whole-file writes because after a targeted edit the claim would be false.
+- **Shape B** — `compute_verdict` guided on every failing branch and said `""`
+  on the pass branch. It now states the claim is proven and durable, and
+  deliberately does **not** say "finish": the tool cannot see the plan.
+
+**Open, recorded, not bundled:** the Shape B evidence also shows plan progress
+going 5/5 → `submit_plan` → 0/5 → re-walked to 5/5. Already-proven completion did
+not survive a replan. That is a separate contract and remains open.
+
+### Gates on the new candidate `f49f38cf`
+
+Complete non-integration battery **9446 collected, exit 0**. ruff clean; arch
+budget OK (the `navigate` extraction was the honest fix when the gate caught
+`_handle_action` exceeding its cap — no cap was raised); lint-imports 2/0;
+diagram fresh; **basedpyright 0 errors**.
+
+Note: unlike the observability commits, `git diff a3b58feb HEAD -- packages/` is
+now **non-empty**. This candidate genuinely changes product code, so it earns no
+inheritance from the Epic-4/5 evidence and must qualify from scratch.
+
+### Next concrete action
+
+F0 → re-sign the manifest on `f49f38cf` → F1 → Freeform canary → AppKit canary →
+mixed pilot 10/10 → promotion **0/100**, repeating this evidence-first protocol
+on any new non-PASS.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
