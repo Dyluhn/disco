@@ -926,6 +926,51 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 freshness,
             )
 
+    def _navigate(
+        self,
+        page,
+        state,
+        lane,
+        url,
+        *,
+        lane_name,
+        generation,
+        nonce,
+        requested_epoch,
+    ):
+        """Load `url` into this lane. Returns an error payload, or None on success.
+
+        Split out of `_handle_action` so the dispatcher stays under its size cap
+        and so the one action OUTSIDE `_SYNC_ACTIONS` has its epoch handling in
+        one readable place.
+        """
+        if not url:
+            return self._error(
+                "browser_action_failed",
+                "navigation_failed",
+                "URL required for navigate",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
+            )
+        try:
+            state.clear_lane_diagnostics(lane_name)
+            page.goto(url, wait_until="load")
+            page.wait_for_timeout(500)  # Settle time
+        except Exception:
+            # Nothing loaded, so this lane's content is of UNKNOWN vintage. A
+            # stale epoch here would read as a synchronized lane; clearing it
+            # makes the next sync action reload, so the lane self-heals. The
+            # client waives the synchronized claim for THIS reason only — see
+            # `browser.py::_freshness_response_error`.
+            lane.synchronized_epoch = None
+            return self._error(
+                "browser_action_failed",
+                "navigation_failed",
+                f"browser navigation failed: could not load {str(url)[:200]}",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
+            )
+        lane.synchronized_epoch = requested_epoch
+        return None
+
     def _handle_action(self, action, params):
         if not isinstance(params, dict):
             return self._error(
@@ -1021,26 +1066,18 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 lane.synchronized_epoch = requested_epoch
 
         if action == "navigate":
-            url = params.get("url")
-            if not url:
-                return self._error(
-                    "browser_action_failed",
-                    "navigation_failed",
-                    "URL required for navigate",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
-                )
-            try:
-                state.clear_lane_diagnostics(lane_name)
-                page.goto(url, wait_until="load")
-                page.wait_for_timeout(500)  # Settle time
-                lane.synchronized_epoch = requested_epoch
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "navigation_failed",
-                    "browser navigation failed",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
-                )
+            failure = self._navigate(
+                page,
+                state,
+                lane,
+                params.get("url"),
+                lane_name=lane_name,
+                generation=generation,
+                nonce=nonce,
+                requested_epoch=requested_epoch,
+            )
+            if failure is not None:
+                return failure
         elif action == "screenshot":
             pass  # Just take a screenshot at the end
         elif action == "click":

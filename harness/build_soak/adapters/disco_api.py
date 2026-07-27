@@ -78,7 +78,7 @@ from ..events import (
     seq_of,
     tool_name_of,
 )
-from ..oracles.thrash import ThrashOracle, progress_epoch_boundary
+from ..oracles.thrash import ProgressEpochs, ThrashOracle
 
 # Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
 # with built-in OSError/ConnectionError/TimeoutError (fake transport, raw sockets) OR,
@@ -1467,13 +1467,15 @@ def _live_thrash_finding_is_current(
         for event in events
         if kind_of(event) == KIND_ACTION and action_id_of(event)
     )
+    # The tracker must see EVERY event in order — a preview-generation
+    # replacement is only visible as a change from the previously established
+    # generation, so skipping the earlier events would hide the transition. Only
+    # crossings AFTER the watermark count, which is what the filter below does.
+    epochs = ProgressEpochs()
     for event in events:
+        crossed = epochs.crosses(event, action_ids=known_action_ids)
         seq = event.get("seq")
-        if (
-            type(seq) is int
-            and seq > latest_referenced
-            and progress_epoch_boundary(event, action_ids=known_action_ids)
-        ):
+        if crossed and type(seq) is int and seq > latest_referenced:
             return False
     return True
 

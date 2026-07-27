@@ -353,7 +353,21 @@ class PreviewSession:
             "name": self.name,
             "port": self.port,
             "status": self.status.value,
+            # `url` is the HOST-published address, for the USER's browser. It is
+            # NOT reachable from inside the sandbox.
             "url": self.url,
+            # …and this is the one every IN-SANDBOX consumer must use: the agent's
+            # shell (curl), and equally the agent's own `browser` tool, which also
+            # runs inside the sandbox.
+            #
+            # Counted-promotion failure 2026-07-27 (p4_ff_node_pause seed 400025):
+            # only `url` was published structurally, so the agent passed the host
+            # address to `browser navigate` and the navigation could not connect.
+            # The in-sandbox address existed only in prose that warned about
+            # `curl` alone, which read as an endorsement for the browser. Both
+            # addresses are now first-class fields so neither consumer has to
+            # infer which one it is entitled to.
+            "in_sandbox_url": f"http://localhost:{self.port}/",
             "command": self.command,
             "exec_dir": self.exec_dir,
             "intent": self.intent,

@@ -329,6 +329,63 @@ def progress_epoch_boundary(
     return event.get("source") == "environment" and isinstance(blocking, str) and bool(blocking)
 
 
+# A durable preview generation id, as minted by PreviewSession.projection_id.
+_PREVIEW_GENERATION_RE = re.compile(r"^pv_[0-9a-f]{32}$")
+
+
+def preview_generation_of(event: dict[str, Any]) -> str | None:
+    """The preview generation a successful, typed preview receipt establishes.
+
+    Keyed on the RECEIPT SHAPE, not on a tool name: a host-authored preview
+    projection carries both a `generation` (`pv_<32 hex>`) and the matching
+    `projection_id`. Prose mentioning a generation cannot forge that pair.
+    """
+    if kind_of(event) != KIND_OBSERVATION:
+        return None
+    result = event.get("tool_result") or {}
+    if result.get("success") is not True:
+        return None
+    structured = result.get("structured")
+    if not isinstance(structured, dict):
+        return None
+    generation = structured.get("generation")
+    if not isinstance(generation, str) or _PREVIEW_GENERATION_RE.fullmatch(generation) is None:
+        return None
+    if structured.get("projection_id") != generation:
+        return None
+    return generation
+
+
+class ProgressEpochs:
+    """Stateful progress-epoch boundaries: typed events AND authority replacement.
+
+    :func:`progress_epoch_boundary` is stateless, so it can recognize a boundary
+    that one event carries on its own but not one that only exists as a CHANGE
+    between two events. A preview generation replacement is the latter kind.
+
+    Counted-promotion failure 2026-07-27 (`p4_ff_node_pause` seed 400025): two
+    browser failures separated by a `preview_stop`, a replacement `preview_start`
+    (`pv_ad5f…` → `pv_c1b9…`), a successful `verify_web_app` and a curl proving
+    the new service were still grouped into one epoch and adjudicated
+    TOOL_ERROR_THRASH. Replacing the serving authority IS progress.
+
+    An idempotent restart that returns the SAME generation is deliberately NOT a
+    boundary — otherwise re-calling `preview_start` would launder any repeat.
+    """
+
+    def __init__(self) -> None:
+        self._preview_generation: str | None = None
+
+    def crosses(self, event: dict[str, Any], *, action_ids: frozenset[str] | None = None) -> bool:
+        generation = preview_generation_of(event)
+        if generation is not None:
+            previous, self._preview_generation = self._preview_generation, generation
+            # The FIRST generation establishes authority; it replaces nothing.
+            if previous is not None and previous != generation:
+                return True
+        return progress_epoch_boundary(event, action_ids=action_ids)
+
+
 def _action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str, str]]:
     outcomes: dict[str, tuple[bool, str, str]] = {}
     for event in events:
@@ -406,6 +463,7 @@ def _longest_identical_streak(
     best_count, best_fp, best_seqs = 0, "", []
     current_fp, current_seqs = "", []
     approved_scope: tuple[str, ...] | None = None
+    epochs = ProgressEpochs()
     for event in events:
         next_scope = _approved_plan_predicate_scope(event)
         if next_scope is not None:
@@ -413,7 +471,7 @@ def _longest_identical_streak(
                 current_fp, current_seqs = "", []
                 approved_scope = next_scope
             continue
-        if progress_epoch_boundary(event, action_ids=action_ids):
+        if epochs.crosses(event, action_ids=action_ids):
             current_fp, current_seqs = "", []
             continue
         if kind_of(event) != KIND_ACTION:
@@ -895,8 +953,9 @@ class ThrashOracle:
             for event in events
             if kind_of(event) == KIND_ACTION and action_id_of(event)
         )
+        epochs = ProgressEpochs()
         for index, event in enumerate(events):
-            if progress_epoch_boundary(event, action_ids=known_action_ids):
+            if epochs.crosses(event, action_ids=known_action_ids):
                 epoch += 1
             epoch_by_index[index] = epoch
         action_epochs = {

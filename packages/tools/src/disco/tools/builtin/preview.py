@@ -77,24 +77,29 @@ def _render(session: Any) -> str:
     # even before the preview is health-verified — stops the model falling back to guessing
     # :8000 (which serves nothing) while the server is still coming up.
     insandbox = f"http://localhost:{session.port}/"
+    # The earlier wording named `curl` as the only in-sandbox consumer, which read
+    # as an endorsement of the host url for everything else — including the agent's
+    # own `browser` tool, which ALSO runs inside the sandbox. That cost a counted
+    # promotion trial (p4_ff_node_pause seed 400025, 2026-07-27): the agent
+    # navigated to the host url and could not connect. Name the consumers by what
+    # they are — everything the agent runs — rather than by one example.
+    use_it_for = "use THIS for every tool that runs inside the sandbox — your shell AND browser"
     if running:
         # `running` means the platform already health-probed it (HTTP 200, in-sandbox) — so
         # say it's verified and hand over the in-sandbox URL for any further check.
         verify = (
             f"\n  status: ALREADY platform-health-verified (HTTP 200, probed in-sandbox) — it IS "
             f"serving; you do NOT need to curl it.\n"
-            f"  in-sandbox url (curl THIS from your shell, NOT the browser url): {insandbox}"
+            f"  in-sandbox url ({use_it_for}): {insandbox}"
         )
     else:
         # Not yet health-verified — but still give the correct in-sandbox URL so the model
         # checks the RIGHT port once it's up, never a guessed :8000.
-        verify = (
-            f"\n  in-sandbox url (once it's up, curl THIS from your shell, NOT the browser url): "
-            f"{insandbox}"
-        )
+        verify = f"\n  in-sandbox url (once it's up, {use_it_for}): {insandbox}"
     return (
         f"preview '{session.name}': {session.status.value}\n"
-        f"  browser url: {url}  (for the USER's browser — NOT reachable from inside the sandbox)\n"
+        f"  browser url: {url}  (the USER's browser only — NOT reachable from inside the "
+        f"sandbox, so do NOT pass it to your own browser tool)\n"
         f"  port:   {session.port}  (platform-assigned)\n"
         f"  detail: {session.detail or 'ok'}"
         f"{verify}"

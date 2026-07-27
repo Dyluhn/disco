@@ -451,10 +451,18 @@ class BrowserTool:
             if freshness_error is not None:
                 return self._freshness_protocol_failure(freshness_error)
             if data["ok"] is False:
+                # The daemon's own classification reaches the agent intact. Any
+                # resulting lane staleness is DISCLOSED beside it rather than
+                # replacing it — the failure is the finding, and the daemon
+                # re-synchronizes on the next sync action.
+                failure_structured: dict[str, Any] = {
+                    **data,
+                    "lane_synchronized": not self._action_failure_is_stale(data, ctx),
+                }
                 return fail_outcome(
                     f"browser error: {str(data.get('error') or 'unknown error')[:512]}"
                     f"\n{_BROWSER_FAILURE_RECIPE}",
-                    structured=data,
+                    structured=failure_structured,
                 )
 
             content = self._render_observation(data)
@@ -531,6 +539,20 @@ class BrowserTool:
             },
         )
 
+    @staticmethod
+    def _action_failure_is_stale(data: dict[str, Any], ctx: ToolContext) -> bool:
+        """Whether a classified action failure left the lane unsynchronized.
+
+        Disclosed rather than enforced: the failure itself is the finding, and a
+        lane that never loaded the requested document is legitimately behind. The
+        daemon re-synchronizes on the next sync action, so this is diagnostic
+        context for the agent, not a verdict.
+        """
+        raw = data.get("freshness")
+        if not isinstance(raw, dict) or ctx.browser_workspace_epoch is None:
+            return False
+        return raw.get("synchronized_epoch") != ctx.browser_workspace_epoch
+
     @classmethod
     def _freshness_response_error(
         cls,
@@ -587,9 +609,38 @@ class BrowserTool:
             return "performed synchronization did not acknowledge the requested epoch"
         if data["ok"] is True and expected is not None and synchronized != expected:
             return "successful browser action did not acknowledge the requested epoch"
+        # A failed NAVIGATION deliberately does not have to claim synchronization.
+        #
+        # Counted-promotion failure 2026-07-27 (p4_ff_node_pause seed 400025): a
+        # `navigate` whose `page.goto` raised was rejected here as a PROTOCOL
+        # error, which DESTROYED the daemon's real, already-classified failure
+        # ("browser navigation failed" — nothing listening at that URL) and told
+        # the agent the protocol was broken instead. The agent then had nothing
+        # actionable to route around, and two such maskings a full recovery apart
+        # shared one error signature and adjudicated as TOOL_ERROR_THRASH.
+        #
+        # The demand was unsatisfiable by construction: `navigate` is not in the
+        # daemon's `_SYNC_ACTIONS`, so its lane epoch is assigned only AFTER a
+        # successful `goto`. A navigation that never loaded a document cannot
+        # honestly claim to have synchronized to anything.
+        #
+        # The waiver is NARROW, and deliberately so. Every action in the daemon's
+        # `_SYNC_ACTIONS` (click / press / fill / submit / screenshot /
+        # console_view) runs the pre-sync block BEFORE acting, so if one of those
+        # fails with a stale epoch the daemon really did skip synchronization —
+        # a genuine protocol violation that must still be caught. `navigate` is
+        # the only action outside that block, so it is the only one that can
+        # honestly fail unsynchronized.
+        #
+        # Every other invariant still holds — schema, daemon identity, executor
+        # generation, lane, nonce, and the REQUESTED epoch must all match, so a
+        # daemon operating on the wrong epoch is still caught. The staleness is
+        # not swallowed either: `_action_failure_is_stale` reports it so the
+        # caller discloses an unsynchronized lane.
         if (
             data["ok"] is False
             and data.get("error_class") == "browser_action_failed"
+            and data.get("error_reason") != "navigation_failed"
             and expected is not None
             and synchronized != expected
         ):
