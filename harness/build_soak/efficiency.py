@@ -42,6 +42,18 @@ Honesty rules enforced here
 * ``actions_per_verified_requirement`` is emitted only when the denominator is
   authoritative — i.e. the governed verification oracle actually PASSED with a
   positive required-check count. Otherwise it is omitted entirely.
+
+Reading ``elapsed_s`` honestly
+-----------------------------
+``elapsed_s`` is wall-clock and is therefore **confounded by worker count**.
+Observed 2026-07-27: two canaries at 1 worker read 72–75% "faster" than the same
+scenarios in an 8-worker batch on a 12-core host, while their action counts moved
+only −14% and −25%. The machine was contended, not the agent improved.
+
+So: ``actions``, ``model_turns``, ``provider_calls`` and ``compactions`` are the
+concurrency-independent measures of work, and they are what a regression claim
+should rest on. ``elapsed_s`` is reported because operators need it, and compared
+only against a baseline collected at the same concurrency.
 """
 
 from __future__ import annotations
@@ -738,6 +750,13 @@ def render_report(
         out.append("## Baseline comparison")
         out.append("")
         out.append(f"Explicitly supplied baseline of {baseline.get('baseline_run_count')} run(s).")
+        out.append("")
+        out.append(
+            "> `elapsed_s` is wall-clock and is confounded by worker count — a batch run "
+            "at lower concurrency looks faster without doing less work. Rest a regression "
+            "claim on `actions`, `model_turns`, `provider_calls` or `compactions`, and "
+            "compare elapsed only against a baseline collected at the same concurrency."
+        )
         out.append("")
         abnormal = baseline.get("passing_but_abnormal") or []
         if abnormal:

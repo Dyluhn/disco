@@ -2296,6 +2296,74 @@ AppKit canary 1/1 → mixed pilot 10/10 → the exact 100. Promotion remains
 
 ---
 
+## 2026-07-27 — Epic 6 qualification COMPLETE: F0 + F1 8/8 + both canaries + pilot 10/10, all PASS
+
+### Qualification results
+
+| stage | result | evidence |
+|---|---|---|
+| F0 (provider-free) | 1050 collected, **exit 0** on `777bd2af` | `epic6/f0-777bd2af.log` |
+| F1 (live, 8 scenarios) | **8/8 PASS** | `epic6/f1/`, `f1-run.log` |
+| Freeform canary 1/1 | **PASS** (seed 480000) | `epic6/canary-freeform/` |
+| AppKit canary 1/1 | **PASS** (seed 480001) | `epic6/canary-appkit/` |
+| mixed pilot 10/10 | **10/10 PASS**, 4 workers | `epic6/pilot-mixed/` |
+
+Pilot table — six families, `repo_revision 777bd2af`, `repo_dirty false`, nothing
+`unavailable` on any run:
+
+```
+scenario                            seed  status  act  plan  exec  calls  cmpct  rep   elapsed
+p4_ff_static_basic                481000    PASS   11     2    12     14      0    0    197.7s
+p4_ff_static_steer                481001    PASS   20     4    21     27      0    0    272.9s
+p4_ff_react_basic                 481002    PASS   18     2    18     20      0    0    215.4s
+p4_ff_node_basic                  481003    PASS   10     2    10     12      0    0    136.3s
+p4_ff_python_basic                481004    PASS   10     3    11     15      0    0    140.1s
+p4_ff_import_basic                481005    PASS   12     4    11     15      0    0    190.3s
+p4_appkit_create                  481006    PASS    9     4     6     10      0    0    294.8s
+p4_appkit_semantic_edit           481007    PASS   15     7    11     19      0    0    444.4s
+p4_appkit_rollback                481008    PASS   16     5    13     20      0    0    379.4s
+p4_appkit_strict                  481009    PASS    7     2     6      8      0    0    185.3s
+```
+
+Canaries and pilot were launched with `--summary-name qualification-summary.json`,
+so they are excluded from promotion by the SAME structural mechanism as F0/F1
+rather than by a label. Verified: `find epic6 -name batch-summary.json` returns
+**0** results.
+
+### A caveat found in real data, not derived from theory
+
+Smoke-testing the baseline comparator against real evidence (canaries vs the F1
+batch) reported the canaries as 72–75% "faster" — while their action counts moved
+only −14% and −25%. The canaries ran 1 worker; F1 ran 8 on a 12-core host. The
+machine was contended, not the agent improved.
+
+`elapsed_s` is therefore **confounded by worker count**, and a reader comparing
+it across concurrency levels would draw a false conclusion. `actions`,
+`model_turns`, `provider_calls` and `compactions` are the concurrency-independent
+measures. This is now stated in the module docstring and printed inside every
+baseline section of the report, so the caveat travels with the number.
+
+### A discipline lapse worth recording
+
+I edited `efficiency.py` while the pilot was still running. It happened to be
+harmless — `repo_revision`/`repo_dirty` are stamped once at batch start, so the
+pilot correctly recorded `777bd2af` / `false`, and the pilot is not counted
+anyway. But it is the same failure mode as the Epic-4 ledger commit that landed
+25 seconds into seed 460001, and §8b exists precisely to prevent it. Recording it
+rather than quietly relying on the lucky ordering.
+
+From the moment the counted 100 begin, the repository is frozen: no edits, no
+commits, ledger entries written outside the checkout.
+
+### Next concrete action
+
+Commit the caveat, re-run F0, re-sign the manifest on the final SHA, then run the
+exact 100: main 86 at 131072 (max 4 concurrent, cohort stop-first), restart 4
+serial (seeds 450000–450003), context 10 at 24000 with `--hard-cap 2400` (seeds
+460000–460009). Promotion is **0/100** and opens only on the frozen candidate.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving
