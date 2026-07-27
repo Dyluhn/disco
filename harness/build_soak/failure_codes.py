@@ -85,6 +85,18 @@ PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
 # P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
 # evidence streams). These prove the REAL UI path — not just that the engine built files.
 BROWSER_WS_NOT_CONNECTED = "BROWSER_WS_NOT_CONNECTED"  # UI never opened the build WS
+# The HARNESS's own control plane was missing, so a declared lifecycle action
+# could not be attempted at all. Distinct from LIFECYCLE_SEQUENCE_INVALID, which
+# means the product produced a bad sequence.
+#
+# Counted-promotion failure 2026-07-27 (`p4_ff_react_restart` seed 450000): the
+# build reached FINISHED twice, but the disposable stack's private /restart
+# control was unbound, and the run was recorded as the build platform failing a
+# restart lifecycle. It did not. `run.py` now refuses to START such a lane
+# without the control; this code exists so that if one is ever discovered
+# mid-run, the dossier says what actually happened.
+LIFECYCLE_CONTROL_UNAVAILABLE = "LIFECYCLE_CONTROL_UNAVAILABLE"
+
 LIFECYCLE_SEQUENCE_INVALID = (
     "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
 )
@@ -223,6 +235,10 @@ SEVERITY_BY_CODE: dict[str, str] = {
     PROVIDER_CALL_AFTER_TERMINAL: P0,
     BROWSER_WS_NOT_CONNECTED: P0,
     LIFECYCLE_SEQUENCE_INVALID: P0,
+    # P1, not P0: the product did not misbehave — the harness could not attempt
+    # the action. It still fails the trial (an unattempted lifecycle proves
+    # nothing), but it must not be read as a product sequence defect.
+    LIFECYCLE_CONTROL_UNAVAILABLE: P1,
     SIDECAR_NOT_STOPPED: P0,
     PREVIEW_OWNERSHIP_VIOLATION: P0,
     ARTIFACT_NOT_SHOWN_TO_USER: P0,

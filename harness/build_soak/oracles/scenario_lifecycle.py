@@ -112,6 +112,33 @@ class ScenarioLifecycleOracle:
                 failed.append("rollback")
 
         if failed:
+            # A lifecycle action the HARNESS could not attempt is not a product
+            # sequence defect. `_restart_isolated_stack` reports exactly this
+            # when the disposable stack's private control is unbound, and the
+            # 2026-07-27 counted failure recorded it as the build platform
+            # failing a restart lifecycle while the build itself FINISHED twice.
+            # `run.py` now refuses to start such a lane; this keeps the dossier
+            # truthful if one is ever discovered mid-run.
+            unavailable = sorted(
+                action
+                for action in failed
+                if str((facts.get(action) or {}).get("reason") or "").endswith(
+                    "control_unavailable"
+                )
+            )
+            if unavailable and len(unavailable) == len(failed):
+                return [
+                    failing(
+                        _LIFECYCLE,
+                        fc.LIFECYCLE_CONTROL_UNAVAILABLE,
+                        first_broken_link="harness_control -> lifecycle_action",
+                        facts={
+                            "failed_actions": failed,
+                            "unattempted_actions": unavailable,
+                            **facts,
+                        },
+                    )
+                ]
             return [
                 failing(
                     _LIFECYCLE,

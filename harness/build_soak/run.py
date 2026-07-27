@@ -3787,6 +3787,49 @@ async def _amain(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(f"[build-soak] INFRA_FAILURE: {exc}", file=sys.stderr)
             return 3
+    # A scenario that RESTARTS the stack mid-run needs the disposable App+Agent
+    # pair's private control (harness/reliability/isolated_stack.py provisions it
+    # and exports the two vars below). Without it `_restart_isolated_stack`
+    # returns `isolated_stack_control_unavailable` and the run fails — as a
+    # PRODUCT lifecycle failure, in a COUNTED lane.
+    #
+    # Counted-promotion failure 2026-07-27 (`p4_ff_react_restart` seed 450000,
+    # LIFECYCLE_SEQUENCE_INVALID): the build itself reached FINISHED twice; only
+    # the harness's own restart control was missing, because the stack had been
+    # launched manually rather than through the isolated-stack harness. A missing
+    # infrastructure control must never be recorded as the build platform failing
+    # a restart lifecycle.
+    #
+    # This is knowable BEFORE any spend — the same fail-closed shape already
+    # applied to DISCO_INSPECT and the provider host/model above. Checking it
+    # here also keeps the restart lane from destructively restarting a SHARED
+    # stack it does not own.
+    # Keyed on the EXACT declaration the ScenarioLifecycleOracle adjudicates
+    # (`restart_after_terminal`), not on a substring: a predicate that matched
+    # nothing would leave this preflight silently inert — which is precisely the
+    # class of bug it exists to prevent.
+    restart_scenarios = sorted(
+        scenario_id
+        for scenario_id, scenario in selected.items()
+        if isinstance(scenario, dict)
+        and (scenario.get("lifecycle") or {}).get("restart_after_terminal")
+    )
+    if restart_scenarios and not (
+        os.environ.get("DISCO_RELIABILITY_STACK_CONTROL_URL")
+        and os.environ.get("DISCO_RELIABILITY_STACK_CONTROL_TOKEN")
+    ):
+        print(
+            "[build-soak] INFRA_FAILURE: "
+            f"{', '.join(restart_scenarios)} declare a restart lifecycle, but "
+            "DISCO_RELIABILITY_STACK_CONTROL_URL / _TOKEN are unset. That control is "
+            "provisioned by harness/reliability/isolated_stack.py for a DISPOSABLE "
+            "App+Agent pair; a manually launched shared stack cannot serve it, and "
+            "restarting a shared stack mid-run would be destructive. Refusing to run "
+            "rather than record a missing control as a product lifecycle failure.",
+            file=sys.stderr,
+        )
+        return 3
+
     repo_root = Path(__file__).resolve().parents[2]
     try:
         repo_revision, commit, repo_dirty = _source_revision(repo_root)
