@@ -608,7 +608,61 @@ def finish_intent_replan_after_prior_productive_work(events: list[Event]) -> boo
     remaining = [
         step for index, step in enumerate(plan.steps, start=1) if states.get(index) != "done"
     ]
-    return bool(remaining) and all(_step_is_finish_intent(step) for step in remaining)
+    if bool(remaining) and all(_step_is_finish_intent(step) for step in remaining):
+        return True
+
+    # Second, INDEPENDENT route — a replan that adds no new completion obligation.
+    #
+    # The rule above reads `states`, which is populated only by the model's own
+    # `update_plan_progress` / `plan_step` reports. Those tools are optional, and
+    # a model that never calls them leaves `states` empty forever — so every step
+    # reads as remaining, real work steps are not finish-intent, and this guard
+    # can NEVER fire for that model no matter how much work it actually did.
+    #
+    # F1 failure 2026-07-27 (`p4_appkit_semantic_edit` seed 490007): zero progress
+    # reports across all 151 events and three plan revisions. The agent created
+    # the app, retitled it, and passed `verify_appkit_app` three times — then a
+    # restatement replan landed, this guard could not fire, and the execution
+    # nudge cap terminalized STUCK/approve_plan_no_execution on a build that was
+    # finished and verified.
+    #
+    # So use evidence the HOST owns instead of a report the model may never send:
+    # the plans' own declarative `done_condition` predicates. If the latest plan
+    # introduces no predicate the previously approved plan did not already carry,
+    # it is a restatement — it cannot represent new work — and the prior segment's
+    # productive work still stands.
+    #
+    # Conservative by construction: a replan that adds ANY new predicate is
+    # genuinely new work and still fails here, and a plan that was never executed
+    # already failed the `prior_productive` check above. Steps without a predicate
+    # contribute nothing either way, so an all-predicate-free replan cannot use
+    # this route.
+    previous_plan = _approved_plan_at(events, previous_approval_seq)
+    if previous_plan is None:
+        return False
+    known = _done_condition_identities(previous_plan)
+    introduced = _done_condition_identities(plan) - known
+    return bool(known) and not introduced
+
+
+def _done_condition_identities(plan: PlanEvent) -> set[str]:
+    """Stable identities of a plan's declarative completion predicates."""
+    identities: set[str] = set()
+    for step in plan.steps:
+        predicate = step.done_condition
+        if predicate is not None:
+            identities.add(predicate.model_dump_json())
+    return identities
+
+
+def _approved_plan_at(events: list[Event], approval_seq: int) -> PlanEvent | None:
+    """The PlanEvent that the approval marker at ``approval_seq`` approved."""
+    best: PlanEvent | None = None
+    for event in events:
+        if isinstance(event, PlanEvent) and (event.seq or 0) <= approval_seq:
+            if best is None or (event.seq or 0) >= (best.seq or 0):
+                best = event
+    return best
 
 
 def _is_successful_productive_action(event: Event, successful_actions: set[str]) -> bool:
