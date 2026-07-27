@@ -2005,6 +2005,202 @@ the checkout and folded back in during Epic 7.
 
 ---
 
+## 2026-07-27 — F0 was not a gate: it inherited the operator's shell. Plus build-soak efficiency observability, before any paid run
+
+### 1. The F0 diagnosis — a provider-free gate whose verdict depended on who launched it
+
+The Epic-6 F0 run recorded at `epic6/f0-run.log` showed five failures and was
+then interrupted. Re-running the identical target set passed cleanly, which is
+exactly the shape that invites a "flaky, re-run it" conclusion. That conclusion
+would have been wrong.
+
+Mapping the failure positions in the log to collection order named all five,
+every one in `test_api_runner.py`:
+
+```
+test_terminal_driver_preflight_failure_is_not_masked_by_missing_agent_span
+test_terminal_sandbox_preflight_failure_is_not_masked_by_missing_agent_span
+test_paused_forever_is_bounded_then_build_did_not_finish
+test_unhandled_gate_does_not_hang_and_fails_closed
+test_endless_clarify_is_bounded_then_classified
+```
+
+Their sub-second `timeout_s` values (0.2/0.3/2) suggested a wall-clock race.
+**That hypothesis was tested and refused:** 24 spinning CPU workers on a 12-core
+host did not reproduce a single failure. Rather than build a story out of a
+plausible mechanism — the error this campaign already made once — the original
+invocation was recovered from the session transcript. It exported the live
+campaign environment, including:
+
+```
+DISCO_PROVIDER_LEDGER=<evidence>/2026-07-26/epic4/provider-ledger.jsonl
+```
+
+Re-running the five tests with that environment reproduced **5/5 failures
+deterministically**. Bisecting the eight exported variables isolated
+`DISCO_PROVIDER_LEDGER` as the sole cause.
+
+**Mechanism, verified end to end.** `run.py::_relay_log_path()` resolves that env
+var for *every* run, including the synthetic ones in the deterministic suite.
+`provider_ledger.record_applies_to_conversation` treats a record carrying **no**
+conversation id as applying to *every* conversation — correct fail-closed
+behaviour for a serial relay log. The real Epic-4 ledger holds 2240 records, of
+which **1068 carry `conversation_id: None`** (all `has_tools: False` summarizer
+calls). Those 1068 real provider calls were therefore adjudicated as the
+synthetic tests' own traffic, flipping `BUILD_DID_NOT_FINISH`/`FAIL` into
+`RUN_INTERRUPTED`/`INVALID_RUN`.
+
+The oracle verdicts were never wrong. **The input was.** A provider-free
+deterministic gate whose result depends on the operator's ambient shell is not a
+gate, and this one had been signed off as "green" in exactly that state.
+
+**Fix:** an autouse fixture in `harness/build_soak/tests/conftest.py` clears the
+whole variable family `_relay_log_path()` consults — `DISCO_PROVIDER_LEDGER`,
+`MINIMAX_RELAY_LOG`, `PMX_RELAY_LOG`, `DISCO_RELAY_LOG` — so the suite starts
+from a known-empty ledger environment. The fix is attached to the *resolver*,
+not to the one variable that bit us, and a test asserts the fixture's list still
+equals the resolver's list so a future variable cannot silently reopen the hole.
+Tests that need a ledger still set one explicitly; the fixture runs first, so
+opt-in still works. **No oracle, threshold, or product verdict changed.**
+
+Note for the counted 100: the same unscoped-record property means that under
+4-way concurrency a cid-less ledger record is not reliably attributable to one
+trial. That is why the new telemetry never merges those two populations (§3).
+
+### 2. Files changed
+
+| file | change |
+|---|---|
+| `harness/build_soak/tests/conftest.py` | autouse hermeticity fixture + `_LEDGER_ENV_VARS` |
+| `harness/build_soak/tests/test_deterministic_suite_hermeticity.py` | **new** — 6 regression tests |
+| `harness/build_soak/efficiency.py` | **new** — the whole observability package |
+| `harness/build_soak/tests/test_efficiency.py` | **new** — 49 tests |
+| `harness/build_soak/oracles/tool_scope.py` | extracted `PLANNING_MODE`/`EXECUTION_MODES`/`VALID_TURN_MODES` + `turn_mode_counts()`; oracle now uses them (behaviour-identical) |
+| `harness/build_soak/oracles/thrash.py` | extracted `repair_spans()`; oracle now calls it (behaviour-identical) |
+| `harness/build_soak/run.py` | per-run `efficiency` in the batch item; `efficiency_summary` + `efficiency-report.md` + terminal table; `--efficiency-baseline` |
+| `harness/build_soak/adapters/disco_api.py` | `enable_efficiency_progress()` + a rate-limited emit in the terminal-wait loop |
+
+### 3. The telemetry schema
+
+One `efficiency` record per run, inside the promotion-visible batch summary:
+
+```
+scenario_id, scenario_family, seed, status, failure_code
+elapsed_s, elapsed_source          # conversation_event_span | runner_wall_clock
+actions                            # events.KIND_ACTION
+planning_turns, execution_turns, model_turns, unrecognized_turn_modes
+provider_calls: { conversation_bound, unattributed_in_window,
+                  foreign_excluded, total_attributed }
+compactions                        # kind == "condensation"
+model_repairs, model_repair_categories
+repeated_action_max, repeated_error_max,
+repeated_shell_verification_max, repeated_script_restart_max
+actionless_pauses, no_progress_events
+polling_samples                    # reported so it is visibly NOT a turn
+tokens: {in,out,cached} | "unavailable"
+actions_per_verified_requirement   # emitted ONLY when authoritative
+unavailable: [names that could not be proven]
+```
+
+Batch level adds `efficiency_summary` (count/median/p90/p95/max/worst-run per
+metric, overall **and partitioned by scenario family**) and, when an operator
+names one, `efficiency_baseline_comparison`.
+
+Design rules that are load-bearing, not decoration:
+
+- **Canonical calculations are reused, not restated.** Turn counts come from
+  `tool_scope.turn_mode_counts()` — the same mode constants ToolScopeOracle
+  adjudicates. Repairs come from `thrash.repair_spans()` — the same spans the
+  thrash gate counts. Compactions use the identical predicate
+  `ScenarioLifecycleOracle` uses. Actions use the shared `events.py` layer.
+- **`null` never means zero.** A metric that cannot be proven is `None` and its
+  name lands in `unavailable`. A *readable* trace with no repair spans does
+  report `0` — that zero is earned.
+- **Polling is never work.** `polling_samples` sits beside the turn counts
+  precisely so the two cannot be confused. In the Epic-4 lane the ratio is
+  947–1660 polls against 13–21 model turns.
+- **Provider-call attribution is never merged.** See §1.
+- **No thresholds.** Nothing here fails a run or touches an exit code.
+- **Baselines are named, never guessed.** `--efficiency-baseline <path>` or no
+  comparison at all; an unreadable baseline is reported as an error rather than
+  degrading into "no regression found".
+- **A worst run is named only when the metric has spread**, so an all-tied
+  `model_repairs: 0` does not finger an innocent run as an outlier.
+
+### 4. Retrospective Epic-4 efficiency table (sealed evidence, ZERO model calls)
+
+Replayed from the ten `seed-4600NN-scoped` dossiers, which were read only and
+neither mutated nor re-locked. This reproduces the known final-candidate range
+exactly — actions 10–19, execution turns 7–15, planning turns 6 each,
+compactions 6–12, all ten PASS:
+
+```
+scenario                            seed  status  act  plan  exec  calls  cmpct  rep   elapsed
+p4_ff_context_catalog             460000    PASS   12     6     9     16      6    0    198.5s
+p4_ff_context_ledger              460001    PASS   10     6     7     14      6    0    201.4s
+p4_ff_context_catalog             460002    PASS   16     6    12     19      9    0    268.2s
+p4_ff_context_ledger              460003    PASS   17     6    14     21     10    0    293.5s
+p4_ff_context_catalog             460004    PASS   17     6    14     21     12    0    348.7s
+p4_ff_context_ledger              460005    PASS   13     6    10     17      7    0    246.8s
+p4_ff_context_catalog             460006    PASS   19     6    15     22     10    0    310.3s
+p4_ff_context_ledger              460007    PASS   14     6    11     18      8    0    339.7s
+p4_ff_context_catalog             460008    PASS   15     6    13     20     11    0    319.7s
+p4_ff_context_ledger              460009    PASS   17     6    14     21     10    0    334.9s
+```
+
+Family `context_pressure`, n=10: actions median 15.5 / p90 17 / p95 19 / max 19
+(seed 460006); model turns median 18.5 / max 21; compactions median 9.5 / max 12
+(seed 460004); elapsed median 301.9 s / max 348.7 s. Zero repairs across the
+lane. Nothing was `unavailable`. Full report:
+`epic6/epic4-retrospective-efficiency.md` (+ `.json`).
+
+An independent consistency check that the definitions are not drifting:
+`planning_turns + execution_turns == model_turns == the agent.step end-span
+count == len(tool_scopes)` on all ten runs.
+
+### 5. Tests and gates
+
+- `test_efficiency.py` — **49** tests: exact counting; actions vs turns vs
+  provider calls vs polling samples vs compactions kept distinct; unavailable-
+  not-zero on every optional slice; deterministic median/nearest-rank
+  percentiles on odd, even, single-element and empty batches; family
+  partitioning; explicit scenario-matched baseline comparison; bounded live
+  logging (300 polls with no change emit exactly one line); and two tests that
+  replay the sealed Epic-4 dossiers and assert the published range plus
+  replay-identical output.
+- `test_deterministic_suite_hermeticity.py` — **6** tests pinning the F0 fix.
+- **F0: 1050 collected, exit 0** (was 995 before this package), re-run under the
+  *original contaminated environment* — the one that produced the five failures
+  — and green. That is the acceptance evidence, not a clean-shell pass. Logs:
+  `epic6/f0-rerun.log` and `epic6/f0-final.log` (the latter on the final
+  post-format bytes), receipts beside each.
+- **Complete non-integration suite: 9434 collected, exit 0.**
+- Gates green on these bytes: `ruff check` all passed; `ruff format` 139 files
+  already formatted; arch budget OK; lint-imports 2 contracts kept, 0 broken;
+  diagram fresh; governance seal OK; **basedpyright 0 errors**.
+
+### 6. Practical review (one pass, applied)
+
+Four fixes came out of it and are in the committed bytes: `total_in_slice`
+renamed to an honest `total_attributed` with a new `foreign_excluded` so
+explicitly-foreign records are disclosed rather than vanishing into a
+difference; live repairs now reuse `repair_spans()` instead of reading `n/a`
+mid-run; the redundant double `max` assignment removed; and the worst-run
+suppression on tied metrics described in §3. No adversarial correction loops
+were run.
+
+### 7. Next concrete action
+
+Promotion remains **0/100**. The candidate SHA changes with this commit, so the
+Epic-6 qualification manifest is re-signed against the new bytes and every
+`«bind»` field re-read live before F1. Then, in order: one live F1 → Freeform
+canary 1/1 → AppKit canary 1/1 → mixed pilot 10/10 → the exact 100 (main 86 at
+131072 max-4-concurrent, restart 4 serial, context 10 at 24000 with
+`--hard-cap 2400`). No paid run starts before this package and F0 are green —
+both now are.
+
+---
+
 # HANDOFF — execution breakdown (Fable → Opus, 2026-07-26)
 
 Written at a model switch so the next session executes without re-deriving

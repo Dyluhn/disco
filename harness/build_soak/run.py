@@ -66,6 +66,18 @@ from .adapters.disco_api import (
     validate_browser_evidence_relpath,
 )
 from .classify import CLASSIFICATION_NAME, classify
+from .efficiency import (
+    LiveEfficiencyProgress,
+    efficiency_record_from_dossier,
+    render_report,
+    render_table,
+)
+from .efficiency import (
+    aggregate as aggregate_efficiency,
+)
+from .efficiency import (
+    compare_to_baseline as compare_efficiency_to_baseline,
+)
 from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, compute_evidence_hashes, sha256_file, write_manifest
 from .oracles.governed_admission import GovernedAdmissionOracle
@@ -1050,6 +1062,12 @@ async def drive_scenario(
     blind wall-clock; `hard_cap_s` is the generous safety ceiling (Bug 15)."""
     timeline: list[str] = []
     client.enable_live_thrash_monitor(scenario)
+    client.enable_efficiency_progress(
+        LiveEfficiencyProgress(
+            scenario_id=str(scenario.get("id") or "?"),
+            seed=scenario.get("seed"),
+        )
+    )
     prompt = str(scenario["prompt"])
     appkit = bool(scenario.get("appkit"))
     surface = str(scenario.get("surface") or "build")
@@ -3639,6 +3657,10 @@ def _run_batch_item(
             "failure_reasons": aggregation.get("failure_reasons"),
         },
         "thrash_oracle": thrash,
+        # Work-cost observability (diagnostic only — no threshold here changes a
+        # verdict). Derived from this run's own sealed dossier, so it replays
+        # offline to identical numbers.
+        "efficiency": efficiency_record_from_dossier(base / run_id, classification),
     }
 
 
@@ -3976,10 +3998,67 @@ async def _amain(args: argparse.Namespace) -> int:
         "failure_code_counts": dict(sorted(failure_counts.items())),
         "runs": runs,
     }
+
+    # ---- efficiency observability (diagnostic; never changes the exit code) ----
+    efficiency_records = [
+        {**(item.get("efficiency") or {}), "run_id": item.get("run_id")} for item in runs
+    ]
+    baseline_comparison = _efficiency_baseline_comparison(
+        efficiency_records, getattr(args, "efficiency_baseline", "")
+    )
+    summary["efficiency_summary"] = aggregate_efficiency(efficiency_records)
+    if baseline_comparison is not None:
+        summary["efficiency_baseline_comparison"] = baseline_comparison
+
     summary_path = batch_dir / batch_summary_name(getattr(args, "summary_name", None))
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     print(f"[build-soak] batch report -> {summary_path}")
+
+    report_path = batch_dir / "efficiency-report.md"
+    report_path.write_text(
+        render_report(
+            efficiency_records,
+            summary["efficiency_summary"],
+            baseline=baseline_comparison,
+        ),
+        encoding="utf-8",
+    )
+    print(f"[build-soak] efficiency report -> {report_path}")
+    print()
+    print(render_table(efficiency_records))
+    print()
+
     return max((_exit_code(str(item.get("status"))) for item in runs), default=0)
+
+
+def _efficiency_baseline_comparison(
+    records: list[dict[str, Any]], baseline_path: str
+) -> dict[str, Any] | None:
+    """Compare against an operator-named baseline summary, or return None.
+
+    Never auto-selects a historical batch: an unspecified baseline means no
+    comparison, and an unreadable one is reported as an error rather than
+    silently degrading into "no regression found".
+    """
+    if not baseline_path:
+        return None
+    try:
+        loaded = json.loads(Path(baseline_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[build-soak] efficiency baseline unreadable ({baseline_path}): {exc}")
+        return {"error": f"baseline unreadable: {exc}", "baseline_path": baseline_path}
+    baseline_records = [
+        {**(item.get("efficiency") or {}), "run_id": item.get("run_id")}
+        for item in (loaded.get("runs") or [])
+        if isinstance(item, dict)
+    ]
+    baseline_records = [r for r in baseline_records if r.get("scenario_id")]
+    if not baseline_records:
+        print(f"[build-soak] efficiency baseline carries no efficiency records: {baseline_path}")
+        return {"error": "baseline carries no efficiency records", "baseline_path": baseline_path}
+    comparison = compare_efficiency_to_baseline(records, baseline_records)
+    comparison["baseline_path"] = baseline_path
+    return comparison
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4022,6 +4101,17 @@ def main(argv: list[str] | None = None) -> int:
             "discovers evidence with rglob('batch-summary.json') and reads the "
             "newest match, so a qualification batch written under that name would "
             "be counted as governed promotion evidence."
+        ),
+    )
+    p.add_argument(
+        "--efficiency-baseline",
+        default="",
+        help=(
+            "path to a PRIOR ACCEPTED batch summary to compare work-cost against. "
+            "Must be named explicitly — the runner never auto-selects a historical "
+            "batch, because a silently chosen baseline makes the comparison mean "
+            "whatever the directory happened to contain. Comparison is diagnostic: "
+            "it never changes a verdict or the exit code."
         ),
     )
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")

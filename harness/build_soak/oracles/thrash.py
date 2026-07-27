@@ -105,6 +105,30 @@ def _limits(scenario: dict[str, Any] | None) -> dict[str, int] | None:
     return out
 
 
+def repair_spans(spans: Any) -> list[dict[str, Any]]:
+    """The model-repair point spans in an inspect trace.
+
+    Repairs happen BEFORE an ActionEvent is committed, so they are invisible to
+    the durable event log; DISCO_INSPECT records a bounded, redacted
+    ``agent.repair`` point span for unknown-tool guesses, degenerate turns,
+    tool-history repairs, and provider request rejections.
+
+    Shared so the thrash gate and the efficiency readout agree on what a repair
+    IS. A span with no usable ``repair_kind`` is not a repair — it carries no
+    attributable behaviour to count.
+    """
+    if not isinstance(spans, list):
+        return []
+    return [
+        span
+        for span in spans
+        if isinstance(span, dict)
+        and span.get("span") == "agent.repair"
+        and span.get("event") == "point"
+        and str(span.get("repair_kind") or "")
+    ]
+
+
 def _fingerprint(event: dict[str, Any]) -> str:
     call = event.get("tool_call") or {}
     args = call.get("arguments") or {}
@@ -797,23 +821,9 @@ class ThrashOracle:
                 )
             ]
 
-        # Repairs happen before an ActionEvent is committed and were historically
-        # invisible to the durable event log. DISCO_INSPECT now records a bounded,
-        # redacted `agent.repair` point span for unknown-tool guesses, degenerate
-        # turns, tool-history repairs, and provider request rejections.
-        spans = (inspect_trace or {}).get("spans")
-        repairs = (
-            [
-                span
-                for span in spans or []
-                if isinstance(span, dict)
-                and span.get("span") == "agent.repair"
-                and span.get("event") == "point"
-                and str(span.get("repair_kind") or "")
-            ]
-            if isinstance(spans, list)
-            else []
-        )
+        # See `repair_spans` for what counts as a repair and why it lives outside
+        # this oracle (the efficiency readout must not restate the rule).
+        repairs = repair_spans((inspect_trace or {}).get("spans"))
         repair_counts = Counter(str(span["repair_kind"]) for span in repairs)
         # Every `_record_model_repair` call site passes a 1-based `attempt` taken from a
         # counter initialised inside `drive_step` — so `attempt` is escalation depth

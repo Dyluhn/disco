@@ -58,6 +58,43 @@ PLANNING_SAFE_TOOLS = frozenset(
     }
 )
 
+# ---- the ONE definition of what a captured turn's `mode` means ---------------
+#
+# A DISCO_INSPECT tool-scope snapshot is written once per MODEL TURN, so counting
+# them by mode is the canonical turn count. Both this oracle (which adjudicates
+# scope leakage per mode) and the efficiency reporter (which only counts) key on
+# the constants below, so an added or renamed operating mode can never mean one
+# thing to the gate and another to the report.
+#
+# `interactive` and `long_horizon` are the two EXECUTION modes the loop drives
+# after plan approval; `planning` is the pre-approval read-only mode.
+PLANNING_MODE = "planning"
+EXECUTION_MODES = frozenset({"interactive", "long_horizon"})
+VALID_TURN_MODES = frozenset({PLANNING_MODE}) | EXECUTION_MODES
+
+
+def turn_mode_counts(tool_scopes: Any) -> dict[str, int]:
+    """Planning/execution turn counts over captured tool-scope snapshots.
+
+    Counting only — it makes NO judgement and returns no verdict, so it is safe
+    to call on a failing run whose oracle result stopped early. Entries whose
+    `mode` is not a recognized turn mode (malformed or a future mode) are counted
+    under ``unrecognized`` rather than silently folded into either bucket: an
+    unreadable capture must never read as "zero turns".
+    """
+    counts = {"planning": 0, "execution": 0, "unrecognized": 0}
+    if not isinstance(tool_scopes, list):
+        return counts
+    for turn in tool_scopes:
+        mode = turn.get("mode") if isinstance(turn, dict) else None
+        if mode == PLANNING_MODE:
+            counts["planning"] += 1
+        elif mode in EXECUTION_MODES:
+            counts["execution"] += 1
+        else:
+            counts["unrecognized"] += 1
+    return counts
+
 
 def _is_plan_gated(events: list[dict[str, Any]], scenario: dict[str, Any] | None) -> bool:
     if any(kind_of(e) == KIND_PLAN for e in events):
@@ -181,7 +218,7 @@ class ToolScopeOracle:
             allowed_count = turn.get("allowed_count")
             if (
                 malformed
-                or mode not in {"planning", "interactive", "long_horizon"}
+                or mode not in VALID_TURN_MODES
                 or not isinstance(offered, list)
                 or not all(isinstance(name, str) and name for name in offered)
                 or len(set(offered)) != len(offered)
@@ -214,7 +251,7 @@ class ToolScopeOracle:
                     first_broken_link="offered_tools -> allowed_tools",
                     facts={"offered_but_not_callable": sorted(set(offered) - set(allowed))},
                 )
-            if mode != "planning":
+            if mode != PLANNING_MODE:
                 execution_turns += 1
                 leaked_execution = [name for name in allowed if name in execution_denied]
                 if leaked_execution:

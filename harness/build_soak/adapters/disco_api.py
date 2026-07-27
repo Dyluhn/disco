@@ -66,6 +66,7 @@ from disco.core.workspace_paths import strip_redundant_workspace_prefix
 from disco.tools.projects.store import tree_digest as project_tree_digest
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 
+from ..efficiency import LiveEfficiencyProgress, efficiency_record
 from ..events import (
     KIND_ACTION,
     KIND_AGENT_ERROR,
@@ -1536,6 +1537,57 @@ class DiscoApiClient:
         self._inspect_stop_events: dict[str, asyncio.Event] = {}
         self._inspect_sample_locks: dict[str, asyncio.Lock] = {}
         self._inspect_finish_tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._efficiency_progress: LiveEfficiencyProgress | None = None
+        self._efficiency_sample_interval_s = 5.0
+        self._efficiency_last_sample = 0.0
+        self._efficiency_started_at = 0.0
+
+    def enable_efficiency_progress(self, progress: LiveEfficiencyProgress) -> None:
+        """Attach a bounded live work-cost readout to the terminal wait.
+
+        Observability only: it reads the evidence the poll loop already writes
+        (durable events + the in-memory inspect trace) and makes ZERO provider
+        calls. Sampling is rate-limited here and emission is rate-limited again
+        inside the progress object, so a sub-second poll cannot flood the log.
+        """
+        self._efficiency_progress = progress
+        self._efficiency_last_sample = 0.0
+        self._efficiency_started_at = time.monotonic()
+
+    async def _emit_efficiency_progress(self, conversation_id: str, *, state: str) -> None:
+        progress = self._efficiency_progress
+        if progress is None:
+            return
+        now = time.monotonic()
+        if self._efficiency_last_sample and (
+            now - self._efficiency_last_sample < self._efficiency_sample_interval_s
+        ):
+            return
+        started = self._efficiency_started_at or now
+        self._efficiency_last_sample = now
+        try:
+            events = self.collect_events(conversation_id)
+            trace = await self.collect_inspect_trace(conversation_id)
+        except Exception:  # noqa: BLE001 — a readout must never break the wait
+            return
+        record = efficiency_record(
+            scenario_id="",
+            conversation_id=conversation_id,
+            events=events,
+            trace=trace if isinstance(trace, dict) else None,
+        )
+        calls = record.get("provider_calls") or {}
+        progress.update(
+            now=now,
+            elapsed_s=now - started,
+            actions=record.get("actions"),
+            planning_turns=record.get("planning_turns"),
+            execution_turns=record.get("execution_turns"),
+            provider_calls=calls.get("conversation_bound") if isinstance(calls, dict) else None,
+            compactions=record.get("compactions"),
+            repairs=record.get("model_repairs"),
+            state=state,
+        )
 
     def enable_live_thrash_monitor(self, scenario: dict[str, Any]) -> None:
         self._live_thrash_scenario = scenario
@@ -2287,6 +2339,7 @@ class DiscoApiClient:
         while True:
             state = await self.get_state(conversation_id)
             last = self._status_of(state)
+            await self._emit_efficiency_progress(conversation_id, state=last)
             thrash_crossed = await self._sample_live_thrash(conversation_id, terminal_status=last)
             if thrash_crossed and last not in TERMINAL_STATES:
                 # A confirmed oracle failure is a spend/reliability stop, not a
