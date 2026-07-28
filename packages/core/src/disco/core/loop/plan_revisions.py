@@ -33,6 +33,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
     StatusEvent,
+    WorkspaceRestoredEvent,
 )
 from . import signals
 from .control import Disp
@@ -442,6 +443,49 @@ def user_steer_authorizes_weakening(events: list[Event]) -> bool:
     return False
 
 
+def workspace_restore_authorizes_weakening(events: list[Event]) -> bool:
+    """A workspace RESTORE since the last approval is the same class of authority.
+
+    Sibling of `user_steer_authorizes_weakening`, and found the same way. That one
+    taught the guard that a user steer legitimately obsoletes the conditions it
+    supersedes. A rollback obsoletes them at least as hard: the platform itself
+    destroyed the state the condition describes, so the condition is not being
+    lowered, it is being made unsatisfiable by an authority above the agent.
+
+    Certified-lane evidence 2026-07-27 (`p4_ff_import_rollback` seed 900029, PASS
+    at 36 planning turns against an all-time maximum of 8). An approved condition
+    `command:grep -q 'First revision 900029' index.html` survived a
+    `workspace_restored` that deleted the string it greps for. Every revision
+    dropping it was refused — TWENTY-FIVE times, twenty-three of them
+    byte-identical — because "removing an acceptance condition requires a
+    separate explicit owner weakening decision", which an autonomous agent has no
+    way to obtain. Corroborated by `p4_appkit_rollback` seed 900044 (18 planning
+    turns vs max 12) blocking on a `file_exists:` condition, so it is not
+    specific to one predicate type.
+
+    Condition identities are keys — `command:{cmd}`, `file_exists:{path}` — and a
+    key outlives the state it describes. That is precisely why the deadlock is
+    total rather than merely awkward: no revision can satisfy the guard, so the
+    loop ends only if the agent stumbles onto a plan it tolerates.
+
+    `WorkspaceRestoredEvent` is emitted by the agent-server's workspace service
+    and is documented as "a user-requested workspace rollback"; there is no
+    agent-callable restore tool. So this is host-authored authority the model
+    cannot forge, exactly like `revision_steer_pending`.
+
+    Deliberately narrow, mirroring the steer route: the restore must post-date the
+    latest `plan_approved`, authorizing exactly one revision cycle. A spontaneous
+    drop with no restore behind it is still blocked, and a generic plan approval
+    still cannot remove a condition.
+    """
+    for event in reversed(events):
+        if isinstance(event, StatusEvent) and event.detail == "plan_approved":
+            return False  # reached the approval without finding a newer restore
+        if isinstance(event, WorkspaceRestoredEvent):
+            return True
+    return False
+
+
 def assert_plan_revision_approvable(events: list[Event], candidate: PlanEvent) -> None:
     """Approval-funnel backstop for every persisted revision route."""
     diff = predicate_diff_for_revision(events, candidate)
@@ -449,6 +493,7 @@ def assert_plan_revision_approvable(events: list[Event], candidate: PlanEvent) -
         diff is None
         or diff.is_monotonic
         or user_steer_authorizes_weakening(events)
+        or workspace_restore_authorizes_weakening(events)
         or failed_verifier_replacement_allowed(events, candidate)
         or demonstrated_command_replacement_allowed(events, candidate)
         or (
