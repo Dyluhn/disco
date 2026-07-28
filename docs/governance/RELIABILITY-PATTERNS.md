@@ -396,3 +396,32 @@ typed-disclosure pair in `test_final_workspace_commit.py`, the harness split
 tests (both directions + superseded-refusal + a recovery/pause version cut
 never supersedes a refused finish seal), and the F-26 paused-terminal
 suites on the same bytes.
+
+### P7 — campaign-observed member (2026-07-28, counted P1 at seed 600041 → F-29)
+
+**Evidence.** Counted main-86 cell (replay of seed 600041, candidate
+049329c7) FAILed TOOL_ERROR_THRASH: the in-sandbox browser daemon's
+internal-error path replies `ok:false` without its freshness acknowledgement
+(`_browser_daemon.py` `do_POST` except-path, `_error(..., freshness=None)`),
+and the host validates freshness BEFORE honoring `ok:false`
+(`browser.py:445–453`), so the daemon's primary verdict
+(`browser_daemon_unavailable / internal_error`) was replaced by the
+subordinate gate's "freshness acknowledgement schema mismatch — do not retry
+the identical call". The model then had no honest signal that the browser
+transport was dead (its `pkill -f node` had killed Playwright's node driver),
+exhausted the recommended alternatives through the same dead daemon, and was
+correctly thrash-stopped. Dossier:
+`epic6/f27-fix/main/fail-600041-p1-rootcause.md`.
+
+**Family membership.** Third live member beside F-27 (seal refusal replacing
+an affirmative FINISHED) and F-28 (silent 503 replacing the restore error
+body): a subordinate validator/wrapper overwrote the producer's primary
+verdict on a failure path.
+
+**Choke point + family regression (F-29).** Consumers surface the producer's
+own `ok`/`error` verdict first; subordinate protocol validation on FAILURE
+responses becomes a disclosed annotation ("freshness unverifiable"), while
+remaining fully authoritative for SUCCESS evidence (stale success stays
+refused). Regression pair: daemon internal error must reach the agent as
+`browser daemon internal error` / `browser_daemon_unavailable` (negative);
+malformed/stale-freshness SUCCESS must still be refused (positive control).

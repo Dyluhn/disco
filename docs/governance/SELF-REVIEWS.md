@@ -933,3 +933,88 @@ Overhardening check:
 Next action: hermetic RED reproduction of the F-28 race (registered-dying
 and absent-session restore), then the narrow fix + regression pair, gates,
 one commit, manifest attempt 9, fresh ladder from F0.
+
+## Review 24 — 2026-07-28 16:31 CDT / 2026-07-28T21:31:29Z UTC
+
+Source fingerprint: sha256:fe50efa2bc338bb17eefa8c741d3a8e13da48bd37a9a169f99dcad23e99cfcf4
+Work completed since prior review: In-repo reviews paused at 15 under the
+frozen-candidate standing ruling; externals 13/14/16–23 lived in
+f27-fix/LEDGER.md and are hereby reconciled: attempt-9 qualification (F0,
+four-suite, F1 8/8, FF+AK canaries, pilot 10/10), counted main-86 stream on
+candidate 049329c7 reached 44 adjudicated cells = 43 PASS (commit-bound) +
+cell 041 INVALID_RUN (RUN_TIMEOUT_WHILE_PROGRESSING, §8 harness-validity,
+dossier before rerun) → §17 exact-seed replay of 600041 launched 21:05:31Z.
+This cycle: replay adjudicated FAIL / TOOL_ERROR_THRASH severity P1
+(commit-bound 049329c7, manifest seed 600041), full event-level root cause
+completed, P1 dossier written, stream declared ENDED (43 PASS + 1 P1 FAIL;
+remainder 42 never launched), F-29 opened. Zero source mutations during the
+stream; this review is the first repo mutation after stream end.
+Evidence that it actually worked: replay cell
+f27-fix/main/batch_p4_ff_react_continue_20260728_210532_112531/…_000
+(classification.json status=FAIL code=TOOL_ERROR_THRASH severity=P1,
+commit 049329c7, seed 600041; EXIT-RERUN41=1 in f27-fix/main.log); root-cause
+dossier f27-fix/main/fail-600041-p1-rootcause.md with event seqs
+(256 pkill -f node; 282 honest navigation failure WITH freshness; 291/300
+masked "freshness acknowledgement schema mismatch"; 294 verify_web_app render
+probe dead after HTTP 200; 297 sandbox HTTP probe exit 0); source pins
+browser.py:445–452/453/531–540/565–574, _browser_daemon.py:791–800/809–818.
+43 PASS sweep on canonical keys at 21:00Z (prior cycle, LEDGER.md Review 23).
+What went well and why: stop-first + deferred-armer discipline held; the
+replay ran alone so the P1 surfaced before the 42-cell remainder spent ~2h on
+a doomed candidate; oracles separated harness validity (all PASS) from product
+failure cleanly; event log + thrash monitor + provider ledger were sufficient
+to root-cause to exact source lines with zero reruns.
+What went rough / consumed time or tokens: single-scenario runner names its
+batch dir batch_<scenario>_* not batch_scenario_matrix_*, so my prebatch-diff
+glob and the deferred armer's pattern both missed it (watchdog2 never armed —
+benign here because the runner self-terminated on non-PASS, but the armer
+pattern must be fixed before any future single-cell lane); first event
+extraction used the wrong key (action.tool vs tool_call.tool_name) and
+returned an empty browser-call list once.
+Immediate process or technical correction: any future single-cell or
+non-matrix lane must arm watchdog2 with the generic batch_* prefix diff, not
+batch_scenario_matrix_*; recorded in ACTIVE-PLAN binding rules.
+Recent fixes reviewed together: F-26 (paused-terminal adjudication), F-27
+(affirmative FINISHED must be sealable; refused seal is a product outcome),
+F-28 (post-terminal restore reacquires its session once, never fails
+silently), and new F-29 target (daemon error path omits freshness ack; host
+freshness gate masks the daemon's primary verdict).
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: P7 — the primary verdict is
+    authoritative; subordinate facts are recorded alongside it, never in place
+    of it. F-27 (seal refusal replacing FINISHED outcome), F-28 (silent 503
+    replacing the product error body), and F-29 (freshness-protocol gate
+    replacing the daemon's browser_daemon_unavailable internal-error verdict)
+    are all P7 members: a subordinate validator/wrapper overwrote the primary
+    outcome.
+  - structural product/harness remedy: order-of-authority in every response
+    consumer — classify and surface the producer's own ok/error verdict first;
+    validate subordinate protocols (freshness, seal, session) as disclosed
+    annotations on failures, enforcing them as gates only where they protect
+    the specific trust the caller is about to place (fresh SUCCESS evidence).
+  - signal that would recognize it earlier next time: any code path where a
+    validation error string replaces (rather than wraps) a producer-supplied
+    error/verdict field; grep-able shape: return <protocol>_failure(...)
+    reachable while data.get("error")/["ok"] is False is still unread.
+  - existing/new regression that protects it: F-29 will add the pair — daemon
+    internal error must surface as browser_daemon_unavailable (negative), and
+    stale/malformed-freshness SUCCESS must still be refused (positive control
+    for the protocol's real purpose). F-27/F-28 regressions already in tree.
+  - why the remedy remains target-neutral and flexible: it constrains how
+    verdicts propagate (producer verdict outranks subordinate validation on
+    failures), not what any target builds; freshness enforcement on success
+    evidence is unchanged, no scenario/threshold/oracle text is touched, and
+    no web-specific rule leaks into the engine.
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: F-29
+    items 1–4 each trace to the live counted P1 (dossier); the ThrashOracle,
+    caps, seeds, and scenario set remain untouched — the oracle correctly
+    caught a real dead end.
+  - any theoretical tail to drop: dropped — no attempt to make the daemon
+    survive arbitrary in-sandbox process kills (e.g. kill -9 storms) beyond
+    one transport self-heal per request; no speculative hardening of other
+    tools' error paths without an observed failure.
+Next action: implement F-29 narrowly (daemon ack-on-error + one-shot
+transport self-heal + host unmasking of ok:false), regression pair, four
+gates + focused suites, one commit, then fresh qualification fingerprint and
+a fresh counted main-86 per work order.

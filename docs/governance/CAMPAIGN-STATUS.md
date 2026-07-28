@@ -3058,3 +3058,60 @@ the governance SHA with tree clean → stack restart → fresh ladder (F0 →
 four-suite → F1 630000 → canaries 640000/640001 → pilot 640100–640109,
 which re-covers the unrun `appkit_strict` cell) → counted main 0/100
 detached (seeds 600000–600085, never launched on attempt 8).
+
+---
+
+## 2026-07-28 21:31Z — Counted main-86 ENDED on 049329c7: 43 PASS + 1 P1 FAIL; F-29 opened
+
+External-ledger interval reconciled by in-repo Review 24 (SELF-REVIEWS.md;
+externals 13/14/16–23 in `epic6/f27-fix/LEDGER.md` per the freeze-rule path).
+
+**Stream record (candidate 049329c7, attempt 9, seeds 600000+):** 44 cells
+adjudicated of 86: **43 PASS**, all commit-bound to 049329c7, severity NONE
+(canonical-key sweep 21:00Z); cell 041 (p4_ff_react_continue, seed 600041)
+INVALID_RUN RUN_TIMEOUT_WHILE_PROGRESSING (harness-validity §8, dossier
+`f27-fix/main/invalid-600041-rootcause.md` written BEFORE rerun); §17
+exact-seed replay launched alone 21:05:31Z, adjudicated **FAIL /
+TOOL_ERROR_THRASH severity P1** at 21:23Z (EXIT-RERUN41=1; manifest binds
+repo_revision 049329c7 seed 600041). Product FAIL is never rerun; remainder
+42 was NOT launched; **the counted stream on these bytes is ENDED and cannot
+be credited toward the 86.** Both non-PASS cells preserved in place, zero
+credit. Zero repo mutations occurred during the stream (fingerprint
+fe50efa2… intact through 21:31Z; Review 24 is the first post-stream
+mutation).
+
+**P1 root cause (dossier `f27-fix/main/fail-600041-p1-rootcause.md`):** model
+cleanup `pkill -f node` inside its own sandbox killed Playwright's node
+driver used by the in-sandbox browser daemon (:8901). Daemon's internal-error
+path replies ok:false WITHOUT its freshness acknowledgement
+(`_browser_daemon.py` do_POST except-path, `_error(..., freshness=None)`);
+host validates freshness BEFORE honoring ok:false (`browser.py:445–453`) and
+so replaced the daemon's honest `browser_daemon_unavailable /
+internal_error` verdict with caller-blaming "freshness acknowledgement
+schema mismatch — do not retry the identical call". Model behaved well
+(raw-HTTP verified exit 0; ran every recommended diagnostic; one careful
+retry); ThrashOracle correctly stopped a genuine dead end (2 identical
+errors, allowed 1, epoch 22). Pattern: **P7 member** (subordinate gate
+overwrote primary verdict) — alongside F-27 (seal vs FINISHED) and F-28
+(silent 503 vs restore error body); member added to RELIABILITY-PATTERNS P7.
+
+**F-29 scope (opened):** (1) daemon attaches freshness ack on error paths
+whenever request protocol fields parsed; (2) daemon one-shot transport
+self-heal (restart playwright/browser) on dead-transport before failing;
+(3) host honors ok:false + daemon error_class even with absent/malformed
+freshness (disclosed "freshness unverifiable" annotation), freshness stays
+fully authoritative for ok:true success evidence; (4) regression pair
+(internal-error surfaces browser_daemon_unavailable; stale/malformed-fresh
+SUCCESS still refused). NO change to ThrashOracle, caps, seeds, scenarios.
+
+**Consequence for acceptance:** heterogeneous live soak must restart as a
+fresh counted 86 on the post-F-29 qualification fingerprint (new candidate,
+fresh ladder from F0 per work order). Harness note carried into ACTIVE-PLAN:
+single-cell lanes create `batch_<scenario>_*` dirs, so armer/prebatch globs
+must diff generic `batch_*`, not `batch_scenario_matrix_*` (watchdog2 never
+armed on the replay; benign only because the runner self-stopped on
+non-PASS).
+
+**Next:** F-29 implementation on a fresh working commit → gates + focused
+suites → one commit → manifest attempt 10 → fresh ladder → counted main-86
+restart.
