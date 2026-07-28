@@ -21,28 +21,33 @@ handoff.
 
 # CURRENT SNAPSHOT
 
-**Last updated (local + UTC):** 2026-07-26 11:56 CDT / 2026-07-26T16:56:18Z
-(Fable handoff checkpoint — execution breakdown for Opus is the HANDOFF section
-at the end of this file.)
+**Last updated (local + UTC):** 2026-07-28 03:25 CDT / 2026-07-28T08:25:00Z
+(Fable continuity cycle 1 — Review 6 reconciliation. Older snapshot detail
+below this block is historical record from its own dates; the dated log at the
+end of this file is authoritative for the interval since.)
 
 **Current branch / HEAD / source fingerprint:**
-`disclaude/build-platform-core-v1` / `b47e6f9c` /
-`source sha256:e17dfc0582653da565ce4f6e85a37d2f06b5172227126817a0e641e3830d757a`
-(tree `sha256:2fdff8012c707745ea044ee96d6f9c8840cd82cbdd39b6afc9d94cda37e938b5`)
+`disclaude/build-platform-core-v1` / `02ef30c0` /
+`source sha256:68e6267c17dd8e3ffe997a29666dbd5b7afc9bc51eecddb7c1e4fe3b444dee7d`
+(tree `sha256:5c4c8786034f8016c5a3f48d33b42ad65218d37c8398b837d9a9c7a8aab4d30c`
+after the Review 6 governance writes)
 
-**Tree cleanliness and every intentional dirty path:** CLEAN. Epics 0-3 and the
-acceleration insertion are all committed; there are no dirty paths.
+**Tree cleanliness and every intentional dirty path:** CLEAN. F-21/F-25 fixes
+and the F-26 diagnostic telemetry are committed; there are no dirty paths.
 
-**Current epic and package:** Epic 4 — context diagnostics. Infrastructure is
-fully staged (stack from this checkout on 8010/8810, frozen driver live at 24k,
-podman backend, provider ledger + INSPECT bound). Seed 460000 has NOT yet had a
-counted attempt on the correct driver: the last attempt failed on the
-`driver-local` default (fixed) and the relaunch was interrupted by the model
-switch. **One pre-flight item is outstanding and mandatory: reassign the
-summarizer role — see HANDOFF pre-flight P1.**
+**Current epic and package:** Epic 6 — blocked on open finding **F-26**
+(harness browser-evidence readiness: a live cert10 `p4_ff_react_steer`
+collection refused a referenced screenshot while a later provider-free replay
+of immutable version `003-bc7ae1f7396f` at horizon_seq=321 found all nine and
+succeeded). Mechanism per FINDINGS §2498: `_await_ready_snapshot` settles per
+DECLARED file; event-referenced screenshots contribute nothing to readiness.
+Strict-mode reconciliation (soak runs `require_workspace_commit=True`) is the
+current investigation. Epic 4 closed 10/10 on the 24k lane. Epic 5 preflight
+ran on earlier bytes and must be reconciled on the final candidate bytes after
+F-26.
 
-**Current operation:** none running. Servers up (agent 8010, app 8810, this
-checkout). No soak in flight. Watchdog restarted at handoff.
+**Current operation:** none running. No agent/app servers up, no soak in
+flight. Only the host proxy (:18090) and the continuity controller are live.
 
 **Promotion count on current bytes:** **0 / 100.**
 
@@ -2792,4 +2797,48 @@ capacity during counted runs.
 
 *End of handoff. Next concrete action: pre-flight P1 (done at handoff), then
 seed 460000 (attempt3 in flight at handoff — platform-route flag on).*
+
+---
+
+## 2026-07-28 03:25 CDT — Fable continuity cycle 1: Review 6 reconciliation
+
+The interval 2026-07-26 11:56 → now was worked by predecessor sessions; state
+re-derived from git, `…/epic6/promotion/FINDINGS.md`, and the evidence tree.
+
+**Where the campaign actually is.** Epic 4 closed (10/10, 24k lane, durable
+condensations). Epic 6 qualification was attempted six times (F0/F1/canary/
+pilot v1–v6) and certification attempts cert1–cert10 produced findings
+F-1..F-26. Committed fixes since Review 5: F-21 capture-authority family
+(`c595d289`, `1f7193c6`, `20e4873b`, `25ac71d0`, `c6deab87`), F-25
+(`a632dde2`), F-26 diagnostic telemetry (`02ef30c0`, HEAD). Promotion honestly
+0/100 on current bytes; six resets were the cost of fixing source mid-Epic-6.
+
+**F-26 state (the single open finding).** Live cert10 `p4_ff_react_steer`
+(`conv_4c025e93e7ad47bfb8ce665658d52ef6`) refused
+`.pmx/screenshots/0001-navigate.png` as absent from the workspace manifest; a
+later provider-free replay of immutable version `003-bc7ae1f7396f` at
+horizon_seq=321 read 43 manifest entries including all nine screenshots and
+captured them successfully. The first diagnosis ("manifest built from declared
+paths only") was falsified by that replay and is retracted (FINDINGS §2396);
+the confirmed mechanism (FINDINGS §2498) is that `_await_ready_snapshot`
+settles per DECLARED file and event-referenced screenshots contribute nothing
+to readiness, while the `_maybe_snapshot` mirror flushes them after the
+terminal event. Open question this cycle: the counted soak constructs the
+client with `require_workspace_commit=True` (run.py:3954), whose readiness
+also gates on the schema-v1 final seal digest/count/bytes over the whole
+immutable tree — so declared-only settle alone cannot yet explain a
+strict-mode early read. Candidate mechanism to verify from bytes:
+`_verified_workspace_version` trusting recorded identity metadata rather than
+recomputing published bytes, admitting a partially-published version.
+
+**Pattern recorded.** P12 — a fail-closed refusal that names the rule but not
+the state it judged (F-21 diagnosis ×3 passes; F-26 irreconcilable dossier).
+Remedy shipped in `02ef30c0`; see RELIABILITY-PATTERNS.md.
+
+**Next actions.** (1) Pin the strict-mode mechanism from
+`_verified_workspace_version` + `_strict_final_workspace_seal` bytes. (2) Build
+the provider-free staged-snapshot reproduction per ACTIVE-PLAN F-26 acceptance
+(no absolute fixture, no skip, no union assertion). (3) Smallest target-neutral
+readiness correction + negative regression + positive control, then focused →
+broad gates → one targeted live reproduction.
 

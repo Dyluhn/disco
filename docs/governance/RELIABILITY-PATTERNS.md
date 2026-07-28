@@ -284,3 +284,46 @@ codebase already treats as canonical.
 and confirm the new test fails for the right reason. That converts "I wrote a
 test" into "I proved this test protects this fix", and it is what exposed the
 blindness of the fake-based suite here.
+
+### P12 — A fail-closed refusal names the rule but not the state it judged
+
+**Evidence (two instances, both in the harness's own evidence chain).**
+
+1. *F-21 (2026-07-27).* Capture-authority refusals at non-FINISHED lifecycle
+   boundaries reported only that capture was denied; establishing WHICH boundary
+   state had been consulted took **three diagnosis passes** before the fix
+   (`c595d289`) could even be aimed.
+2. *F-26 (2026-07-28, cert10 `p4_ff_react_steer`).* The browser-evidence
+   collector refused `.pmx/screenshots/0001-navigate.png` with a payload of
+   exactly `{conversation_id, path}`. A later provider-free replay of immutable
+   version `003-bc7ae1f7396f` at `horizon_seq=321` found all nine referenced
+   screenshots and succeeded. Both observations were correct, and the dossier
+   could not reconcile them — the refusal never recorded which workspace
+   directory, version, horizon, or manifest it had judged. A wrong mechanism
+   ("manifest built from declared paths only") survived a full session because
+   the evidence needed to falsify it was structurally absent.
+
+**Earliest broken invariant.** A refusal at an authority boundary is itself
+evidence, and evidence must be attributable: any error that consulted versioned
+state (workspace, immutable version, manifest, event horizon) must carry that
+state's identity in its payload. A rule citation without the judged state makes
+every future occurrence equally undiagnosable and any proposed fix
+unfalsifiable from the dossier.
+
+**Structural remedy.** Enrich the refusal payload at the point of judgment with
+the identity actually consulted — workspace dir, manifest entry counts, and the
+referenced paths under judgment (`02ef30c0`); same shape as the existing
+`SnapshotNotReadyError` payload, which already names seal/digest/count facts.
+
+**Signal to recognise it earlier.** Any `raise` at a boundary that read
+versioned or snapshotted state whose payload names only the missing thing plus
+an id. If a live failure and a later replay of "the same" state could disagree
+without the payload telling you which state each saw, the payload is too thin.
+
+**Regression that protects it.**
+`harness/build_soak/tests/test_missing_screenshot_names_the_state_judged.py` —
+hermetic, asserts the refusal carries the workspace it judged.
+
+**Why it stays target-neutral.** Payload enrichment only: no threshold,
+ordering, acceptance, or classification change; the refusal fails closed
+identically for every target and scenario shape.

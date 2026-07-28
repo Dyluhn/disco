@@ -471,3 +471,195 @@ Next action: append the model-handoff execution breakdown to CAMPAIGN-STATUS.md
 (pre-flight checklist, per-seed commands, failure protocol, Epics 5-7 ordering),
 restart the dead watchdog, commit, and hand to Opus to execute Epic 4 starting
 at seed 460000.
+
+## Review 6 — 2026-07-28 03:22 CDT / 2026-07-28T08:22:23Z
+
+Source fingerprint: sha256:68e6267c17dd8e3ffe997a29666dbd5b7afc9bc51eecddb7c1e4fe3b444dee7d
+
+Written by a fresh Fable continuity owner reconciling a 38h interval worked by
+predecessor sessions; every claim below is re-derived from git, the findings
+ledger, and the evidence tree, not from any predecessor transcript.
+
+Work completed since prior review: Epic 4 closed at 10/10 on the 24k diagnostic
+lane. Epic 5 preflight ran on then-current bytes. Epic 6 qualification was
+attempted six times (F0/F1/canary/pilot v1–v6) and certification attempts
+cert1–cert10 produced findings F-1..F-26 recorded in
+`…/epic6/promotion/FINDINGS.md`. Committed since Review 5: F-21 capture
+authority retained at every non-FINISHED boundary (`c595d289` + proofs
+`20e4873b`, `25ac71d0`, `c6deab87`, and `1f7193c6` skipped-capture loudness),
+F-25 no redundant post-seal recovery capture (`a632dde2`), and F-26 step 1
+diagnostic telemetry — a screenshot refusal now names the workspace dir,
+manifest counts, and referenced paths it judged (`02ef30c0`, HEAD). An earlier
+F-26 diagnosis ("manifest is built from declared paths only") was proven FALSE
+by a provider-free replay and retracted at equal prominence; its union patch was
+reverted uncommitted and its set-union tests deleted as arithmetic-proving.
+
+Evidence that it actually worked: git log `02ef30c0..aef4c3c8` on clean tree;
+FINDINGS.md §2396 (retraction), §2464 (dossier records neither version nor
+horizon), §2498 (mechanism confirmed from code: `_await_ready_snapshot` settles
+per DECLARED file; screenshots are never declared); replay of
+`conv_4c025e93e7ad47bfb8ce665658d52ef6` against immutable version
+`003-bc7ae1f7396f` at horizon_seq=321 returned 43 manifest entries including
+all nine `.pmx/screenshots/*` and captured them successfully, while the live
+cert10 trial `p4_ff_react_steer` failed collection; promotion honestly reset to
+0/100 after source changes. Hook-verified: governance seal OK this session.
+
+What went well and why: the retraction discipline worked — a wrong diagnosis
+was falsified by replay, recorded at the same prominence as the claim, and its
+plausible-but-wrongly-justified patch was NOT committed. Telemetry-first
+ordering (02ef30c0 before any behavioural fix) means the next occurrence and
+the reproduction can assert against recorded identifiers instead of guessing.
+F-21/F-25 closed with revert-proven regressions.
+
+What went rough / consumed time or tokens: F-26 consumed multiple sessions on a
+false mechanism because a single call-site argument was read as scope without
+reading the callee body — the catalogued "check that cannot fail treated as a
+check that passed" shape, again. Its first test package proved set arithmetic
+(`A|B ⊇ B`) with an absolute campaign path plus skip — worthless as
+certification (P9/P11 instances). Six qualification resets were the honest cost
+of fixing source mid-Epic-6; the reviews themselves lapsed 38h because counted
+runs and hook cadence disagreed — this review re-establishes cadence.
+
+Immediate process or technical correction: before any behavioural edit, resolve
+the strict-mode question from bytes: the counted soak constructs
+`DiscoApiClient(require_workspace_commit=True)` (run.py:3954), whose readiness
+ALSO gates on the schema-v1 final seal digest/count/bytes over the whole
+immutable tree — so the confirmed declared-only settle mechanism alone does not
+yet explain a strict-mode early read. Next step is reading
+`_verified_workspace_version` and `_strict_final_workspace_seal` to establish
+how a seal-verified read can lack event-referenced screenshots (candidate:
+identity verification trusts recorded metadata rather than recomputing the
+published bytes, admitting a partially-published version). The hermetic staged
+reproduction then encodes the mechanism actually found, with no absolute
+fixture, no skip, no union assertion.
+
+Recent fixes reviewed together: F-21 group + F-25 + F-26 telemetry. All three
+are lifecycle-boundary authority defects in the harness's own evidence chain:
+capture authority lost at non-FINISHED boundaries, a second capture after the
+authority was sealed, and a refusal that cited a rule without recording the
+authoritative state it consulted.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: a fail-closed refusal at an authority
+    boundary reports the rule it applied but not the state it judged
+    (F-21 diagnosis took three passes for this reason; F-26's dossier carried
+    only `{conversation_id, path}`, making the live failure and a successful
+    replay irreconcilable from evidence).
+  - structural product/harness remedy: every refusal that consulted versioned
+    authority must carry that authority's identity (workspace dir, version,
+    horizon, manifest counts) in its payload — recorded as new P12.
+  - signal that would recognize it earlier next time: any raise/refusal whose
+    payload names only the missing thing and an id, at a boundary that read
+    versioned state.
+  - existing/new regression that protects it:
+    `harness/build_soak/tests/test_missing_screenshot_names_the_state_judged.py`
+    (committed in `02ef30c0`).
+  - why the remedy remains target-neutral and flexible: payload enrichment
+    only — no threshold, ordering, or acceptance change; refusals still fail
+    closed identically for every target.
+
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: the
+    single open item is F-26, required by the observed cert10
+    `p4_ff_react_steer` collection failure and by Epic 6's browser-evidence
+    acceptance; the reproduction+fix+controls package maps 1:1 to
+    ACTIVE-PLAN's acceptance list.
+  - any theoretical tail to drop: yes — no general filesystem-settlement
+    framework, no enumeration of every partial-publish interleaving, no
+    additional screenshot formats or scenario families; one staged reproduction
+    of the observed family, one negative regression, one positive control.
+
+Next action: read `_verified_workspace_version` and `_strict_final_workspace_seal`,
+pin the exact strict-mode early-read mechanism from bytes, then build the
+provider-free staged-snapshot reproduction per ACTIVE-PLAN F-26 acceptance.
+
+## Review 7 — 2026-07-28 04:23 CDT / 2026-07-28T09:23:13Z
+
+Source fingerprint: sha256:a4f62f4536c75d88662e41ef304942c1a9a1a57a98d6176dd824de845456c394
+(working tree, F-26 package applied, not yet committed)
+
+Work completed since prior review: F-26 fully root-caused from the sealed
+cert10 dossier — NOT the §2498 settle race: the drive returns a terminal
+PAUSED by design after `_MAX_RESUMES=3`, the evidence gate had no PAUSED
+class, strict collection honestly returned empty (H339), and the
+browser-evidence check converted the designed BUILD_DID_NOT_FINISH into
+INVALID_RUN / MISSING_REQUIRED_EVIDENCE while the sealed PAUSED version
+(v3 `bc7ae1…`, horizon 321) held all nine screenshots. Fix implemented:
+`collect_paused_workspace` (freeze-machinery reuse) + gate routing for the
+PAUSED work terminal only; hermetic reproduction red→green
+(`test_paused_terminal_evidence.py`, real run_once + SQLite + ProjectStore
+version, delegated authoring to sonnet-worker, red output captured pre-fix);
+live targeted reproduction on the EXACT surviving cert10 durable state
+captured 9/9 screenshots byte-verified. Also: F-23 closed as no-defect from
+walker/backend bytes; subagent-gate infra defect fixed (read the CALLING
+agent's type, denied all delegation); Review 6 + P12 + status reconciliation
+written earlier this cycle.
+
+Evidence that it actually worked: worker red output (INVALID_RUN /
+MISSING_REQUIRED_EVIDENCE / 0001-navigate.png, manifest_entry_count 0); both
+repro tests green post-fix exit 0; H302 + freeze suite + repro = 14 passed;
+`…/epic6/f26-fix/live-reproduction.txt` (frozen v3/horizon 321/43 entries,
+9/9 captured, 702,666 bytes); basedpyright 0 errors; lint-imports 2 kept;
+arch budget OK; diagram fresh; tool schemas OK; ruff clean; packages
+core/agent-server/tools suites exit 0 on fixed tree; definitive full harness
+suite running on frozen bytes at review time.
+
+What went well and why: the sealed dossier decided everything — reading
+`events.jsonl` overturned a wrong-but-confirmed mechanism (§2498) before any
+code was written on it; the reproduction was delegated with exact reusable
+fixtures and came back faithful; the live proof reused the surviving product
+store, costing zero provider spend.
+
+What went rough / consumed time or tokens: my first gate cut generalized
+availability to FINISHED/VERIFIED-only and broke H302 — the unconfirmed
+harness-initiated stop must keep surfacing evidence gaps as INVALID; narrowed
+to the proven PAUSED family only. Running `ruff format` while the first full
+suite executed produced a false hermeticity red (`inspect.getsource` reads
+current bytes at import-time line numbers). A GLM findings sweep was wasted
+(sandbox refused the external dir; 26k tokens, no answer). A background
+pipeline's "exit 0" notification was the echo's exit, not pytest's — the
+ledger's exit-code gotcha, live.
+
+Immediate process or technical correction: (1) never mutate repo files while
+a verification suite is executing — frozen-bytes rule now recorded in the
+continuity draft; (2) always read `EXIT=`/`PIPESTATUS[0]` from the log body,
+never the task notification; (3) fix generalizations must stop at the proven
+family — H302 was the boundary the evidence had already drawn.
+
+Recent fixes reviewed together: F-21 group, F-25, F-26 telemetry (02ef30c0),
+F-26 routing (this package). All four are the harness's own evidence chain
+disagreeing with the product lifecycle at a non-FINISHED boundary; F-26
+routing closes the last observed member: the boundary's EVIDENCE now comes
+from the same sealed authority the product created at that boundary.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: evidence handling at non-FINISHED
+    lifecycle boundaries assumed FINISHED-shaped authority (capture authority
+    lost at non-FINISHED boundaries in F-21; finish-seal demanded from a
+    PAUSED terminal in F-26).
+  - structural product/harness remedy: boundary evidence must bind to the
+    authority the product sealed AT that boundary (PAUSED-triggered version +
+    horizon), never to a different boundary's seal — implemented in
+    `collect_paused_workspace` mirroring `freeze_progressing_workspace`.
+  - signal that would recognize it earlier next time: any collection path
+    whose precondition names a status the current lifecycle cannot reach
+    (demanding FINISHED evidence from a run whose terminal is PAUSED).
+  - existing/new regression that protects it: test_paused_terminal_evidence
+    (both directions) + test_freeze_before_kill (11) + H302 (unconfirmed-stop
+    invariant) + H190/H191 (finished-path raise unchanged).
+  - why the remedy remains target-neutral and flexible: it adds no scenario
+    or framework knowledge — it reads the product's own event-sealed version
+    for whatever tree shape it carries; only the PAUSED family is rerouted.
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item: the
+    definitive full-suite run (required by ACTIVE-PLAN acceptance 6 and Epic
+    5) is the only open verification; both commits and the Epic-5 recorded
+    pass follow it.
+  - any theoretical tail to drop: yes — no rerouting of clarify-cap /
+    unconfirmed-stop / unenumerated shapes without an observed failure (H302
+    proved the broad cut wrong); no bounded-poll insurance in
+    collect_paused_workspace without an observed WV-append race.
+
+Next action: definitive full harness suite completes on frozen bytes → commit
+governance ledgers, then the F-26 package → Epic-5 recorded four-suite pass
+on the committed candidate → re-sign the Epic-6 qualification manifest.
