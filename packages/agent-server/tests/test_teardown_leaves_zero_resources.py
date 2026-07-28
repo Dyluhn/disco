@@ -44,6 +44,19 @@ class _Rt:
     def _sandbox_service_now(self):
         return None
 
+    # `_maybe_snapshot` declines when the terminal is already sealed (F-25). An
+    # empty event log has no canonical head, so `resolve_committed_workspace`
+    # raises and this fixture exercises the UNSEALED path — the one where the
+    # F-21 pin is taken, which is what this test is about.
+    def _project_store_now(self):
+        return None
+
+    class _Store:
+        async def get_events(self, _cid: str) -> list[object]:
+            return []
+
+    _store = _Store()
+
 
 def _manager(rt: _Rt) -> LifecycleManager:
     manager = LifecycleManager.__new__(LifecycleManager)

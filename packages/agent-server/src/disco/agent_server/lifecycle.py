@@ -766,6 +766,29 @@ class LifecycleManager:
         generation. It removes the WINDOW, nothing more.
         """
 
+        # DECLINE when this terminal is already sealed. A FINISHED run is captured
+        # and sealed synchronously by the loop's terminal hook and THEN rides the
+        # idle sweep into `_suspend`, which lands here. Its workspace is already
+        # immutably persisted, so a recovery capture adds nothing — and cutting a
+        # `trigger="suspend"` version AFTER the terminal displaces the finish
+        # marker for any reader that takes the latest version event.
+        #
+        # cert9 F1 2026-07-28: `WORKSPACE_SNAPSHOT_NOT_READY` /
+        # "workspace version is not finish-triggered". Before the F-21 pin this
+        # capture was skipped (no executor), cut no version, and the seal stayed
+        # latest; with the pin it succeeds. The pin is right — this is the
+        # redundant capture it exposed.
+        try:
+            resolve_committed_workspace(
+                await self._rt._store.get_events(conversation_id),
+                self._rt._project_store_now(),
+                conversation_id,
+            )
+        except WorkspaceCommitUnavailable:
+            pass  # no sealed terminal — this recovery capture is the real one
+        else:
+            return
+
         executor = self._rt._executors.get(conversation_id)
         await self._capture_workspace(
             conversation_id,

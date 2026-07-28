@@ -32,9 +32,22 @@ class _Executor:
         self._sandbox = sandbox
 
 
+class _EmptyStore:
+    async def get_events(self, _cid: str) -> list[object]:
+        return []
+
+
 class _Rt:
     def __init__(self, executor: object | None) -> None:
         self._executors = {"conv_621005": executor} if executor is not None else {}
+        # `_maybe_snapshot` declines when the terminal is already sealed (F-25).
+        # An empty event log has no canonical head, so `resolve_committed_workspace`
+        # raises `WorkspaceCommitUnavailable` and these tests exercise the
+        # UNSEALED path — which is where the F-21 pin matters.
+        self._store = _EmptyStore()
+
+    def _project_store_now(self):
+        return None
 
 
 class _Persistence:
@@ -138,3 +151,60 @@ async def test_the_pin_does_not_make_capture_happen_that_otherwise_would_not():
     persistence._do_capture_workspace = _counting  # type: ignore[method-assign]
     await manager._maybe_snapshot("conv_621005", trigger="suspend")
     assert calls == ["conv_621005"], "exactly one capture, pinned or not"
+
+
+# ---- F-25: an already-sealed terminal must not get a redundant capture --------
+
+
+class _Store:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    async def get_events(self, _cid: str) -> list[object]:
+        return self._events
+
+
+def _manager_with_store(executor: object | None, sealed: bool):
+    import disco.agent_server.lifecycle as lifecycle_mod
+
+    rt = _Rt(executor)
+    rt._store = _Store([])  # type: ignore[attr-defined]
+    rt._project_store_now = lambda: None  # type: ignore[attr-defined]
+    manager = LifecycleManager.__new__(LifecycleManager)
+    manager._rt = rt  # type: ignore[attr-defined]
+    persistence = _Persistence(rt)
+    manager._persistence = persistence  # type: ignore[attr-defined]
+
+    def _resolve(_events, _store, _cid):
+        if sealed:
+            return object()
+        raise lifecycle_mod.WorkspaceCommitUnavailable("no seal")
+
+    return manager, persistence, _resolve
+
+
+@pytest.mark.asyncio
+async def test_a_sealed_terminal_gets_NO_recovery_capture(monkeypatch):
+    """The redundant capture the F-21 pin exposed: it must not run."""
+    import disco.agent_server.lifecycle as lifecycle_mod
+
+    manager, persistence, resolve = _manager_with_store(_Executor(_Sandbox()), sealed=True)
+    monkeypatch.setattr(lifecycle_mod, "resolve_committed_workspace", resolve)
+    await manager._maybe_snapshot("conv_621005", trigger="suspend")
+    assert persistence.seen == {}, (
+        "a FINISHED run is already sealed; cutting a suspend version after the "
+        "terminal displaces the finish marker"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_UNSEALED_terminal_still_gets_its_pinned_capture(monkeypatch):
+    """The control: F-21's fix must keep working where no seal exists."""
+    import disco.agent_server.lifecycle as lifecycle_mod
+
+    sandbox = _Sandbox()
+    manager, persistence, resolve = _manager_with_store(_Executor(sandbox), sealed=False)
+    monkeypatch.setattr(lifecycle_mod, "resolve_committed_workspace", resolve)
+    await manager._maybe_snapshot("conv_621005", trigger="stuck")
+    assert persistence.seen["pinned_session"] is sandbox
+    assert persistence.seen["resolved_session"] is sandbox
