@@ -3601,6 +3601,115 @@ class DiscoApiClient:
         )
         return result
 
+    def collect_paused_workspace(self, conversation_id: str, declared: list[str]) -> dict[str, Any]:
+        """Read the immutable version a TERMINAL PAUSED run already sealed (F-26).
+
+        cert10 `p4_ff_react_steer` (conv_4c025e93e7ad47bfb8ce665658d52ef6): the
+        drive exhausted its resume budget and honestly returned PAUSED so the
+        oracle could classify the non-finished run — but the evidence gate
+        funneled the run into the FINISHED-seal demand. Strict collection
+        honestly returned an empty manifest (no SYSTEM FINISHED exists), and the
+        mandatory browser references then converted the designed
+        BUILD_DID_NOT_FINISH adjudication into INVALID_RUN /
+        MISSING_REQUIRED_EVIDENCE — while the truthful bytes sat in the
+        PAUSED-triggered immutable version (event seq 321, version
+        003-bc7ae1f7396f; a provider-free replay at that horizon captured 9/9
+        referenced screenshots).
+
+        The product's own pause end-gate (`_run_with_persistence`, under the
+        product `workspace_lock`) emits a durable
+        WorkspaceVersionEvent(trigger=PAUSED) plus an immutable ProjectStore
+        version for every Build run that ends PAUSED — the same authority
+        `freeze_progressing_workspace` relies on, minus the pause control (the
+        pause already happened) and minus polling (the run is stopped and the
+        log durable, so one read decides).
+
+        Returns the same disclosure shape as `freeze_progressing_workspace`:
+        `status="frozen"` only when every step held; any failure returns a
+        fail-closed disclosure with an EMPTY manifest and a reason — never
+        fabricated evidence, never the mutable head.
+        """
+
+        result: dict[str, Any] = {
+            "status": "PAUSED_VERSION_UNAVAILABLE",
+            "manifest": {},
+            "horizon_seq": None,
+            "version_seq": None,
+            "paused_seq": None,
+            "reason": None,
+        }
+        try:
+            events = normalize_events(self.collect_events(conversation_id))
+        except Exception as exc:  # noqa: BLE001 — disclosed, never fabricated
+            result["reason"] = f"durable event read failed: {type(exc).__name__}"
+            return result
+
+        paused_seq: int | None = None
+        for event in events:
+            seq_raw = event.get("seq")
+            if (
+                type(seq_raw) is int
+                and seq_raw > 0
+                and _event_status_value(event) == PAUSED_STATE
+                and (paused_seq is None or seq_raw > paused_seq)
+            ):
+                paused_seq = seq_raw
+        if paused_seq is None:
+            result["reason"] = "no durable PAUSED status in the event log"
+            return result
+        result["paused_seq"] = paused_seq
+
+        version_event = next(
+            (
+                event
+                for event in events
+                if event.get("kind") == "workspace_version"
+                and int(event.get("seq", -1)) > paused_seq
+                and str(event.get("trigger") or "") == "PAUSED"
+            ),
+            None,
+        )
+        if version_event is None:
+            result["reason"] = "no PAUSED WorkspaceVersionEvent after the terminal pause"
+            return result
+        horizon_seq = int(version_event.get("seq", -1))
+        raw_version_seq = version_event.get("version_seq")
+        version_seq = raw_version_seq if type(raw_version_seq) is int else None
+
+        pre = [event for event in events if int(event.get("seq", -1)) <= paused_seq]
+        violation = _freeze_horizon_violation(
+            events,
+            pre_seq=paused_seq,
+            paused_seq=paused_seq,
+            horizon_seq=horizon_seq,
+            pre_intent=_latest_run_intent_id(pre),
+            pre_view=_latest_agent_view_id(pre),
+        )
+        if violation is not None:
+            result["reason"] = violation
+            return result
+
+        verified = self._verified_workspace_version(conversation_id, version_seq)
+        if verified is None:
+            result["reason"] = "the PAUSED immutable version could not be freshly verified"
+            return result
+        self._collected_workspace_dirs[conversation_id] = verified.workspace
+        result.update(
+            {
+                "status": "frozen",
+                "manifest": self._read_snapshot_manifest(
+                    conversation_id, declared, verified.workspace
+                ),
+                "horizon_seq": horizon_seq,
+                "version_seq": version_seq,
+                "workspace_dir": str(verified.workspace),
+                "tree_digest": verified.tree_digest,
+                "file_count": verified.file_count,
+                "total_bytes": verified.total_bytes,
+            }
+        )
+        return result
+
     def _snapshot_workspace_dir(self, conversation_id: str) -> Path | None:
         """The host ProjectStore ``workspace/`` directory for this conversation, or None
         when no projects_root is configured/valid or the snapshot isn't on disk yet.

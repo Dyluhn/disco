@@ -35,16 +35,20 @@ after the Review 6 governance writes)
 **Tree cleanliness and every intentional dirty path:** CLEAN. F-21/F-25 fixes
 and the F-26 diagnostic telemetry are committed; there are no dirty paths.
 
-**Current epic and package:** Epic 6 — blocked on open finding **F-26**
-(harness browser-evidence readiness: a live cert10 `p4_ff_react_steer`
-collection refused a referenced screenshot while a later provider-free replay
-of immutable version `003-bc7ae1f7396f` at horizon_seq=321 found all nine and
-succeeded). Mechanism per FINDINGS §2498: `_await_ready_snapshot` settles per
-DECLARED file; event-referenced screenshots contribute nothing to readiness.
-Strict-mode reconciliation (soak runs `require_workspace_commit=True`) is the
-current investigation. Epic 4 closed 10/10 on the 24k lane. Epic 5 preflight
-ran on earlier bytes and must be reconciled on the final candidate bytes after
-F-26.
+**Current epic and package:** Epic 6 — **F-26 CORRECTED** on this candidate
+(dated 2026-07-28 entries below carry the proof chain). The failing family was
+the PAUSED work terminal: the drive's bounded resume valve returns PAUSED by
+design, the evidence gate demanded the impossible FINISHED seal, and the
+browser-evidence check converted the designed BUILD_DID_NOT_FINISH into
+INVALID_RUN. The gate now routes a PAUSED work terminal to the immutable
+version the product's own pause end-gate sealed (`collect_paused_workspace`;
+browser evidence bound to the pause horizon). The earlier §2498
+"declared-only readiness" mechanism did not describe the live path and is
+superseded by the dossier-proven chain. `packages/` is byte-identical to the
+cert8-10 candidate `a632dde2` (harness-evidence-chain delta only). Epic 4
+closed 10/10 on the 24k lane. Next: Epic-5 recorded four-suite pass on the
+committed candidate, then re-sign the qualification manifest and qualify from
+scratch (F0 → F1 → canaries → pilot 10/10 → exact 100 at 0/100).
 
 **Current operation:** none running. No agent/app servers up, no soak in
 flight. Only the host proxy (:18090) and the continuity controller are live.
@@ -2841,4 +2845,52 @@ the provider-free staged-snapshot reproduction per ACTIVE-PLAN F-26 acceptance
 (no absolute fixture, no skip, no union assertion). (3) Smallest target-neutral
 readiness correction + negative regression + positive control, then focused →
 broad gates → one targeted live reproduction.
+
+---
+
+## 2026-07-28 04:35 CDT — F-26 corrected: a PAUSED work terminal reads its own sealed version
+
+Root cause (sealed cert10 dossier `build_soak_p4_ff_react_steer_20260728_055429_825271_003`,
+`conv_4c025e93e7ad47bfb8ce665658d52ef6`): the drive returned PAUSED after
+`_MAX_RESUMES=3` — by design, so the oracle could classify the non-finished
+run — but the evidence gate had no PAUSED class, demanded the strict
+FINISHED seal, honestly got an EMPTY manifest (H339 carve-out; latest durable
+status IDLE(killed), never FINISHED), and the browser-evidence check then
+raised on the first of nine referenced screenshots →
+INVALID_RUN / MISSING_REQUIRED_EVIDENCE — while the product's PAUSED-sealed
+immutable version v3 `bc7ae1f7396f` @ horizon 321 held all nine. The earlier
+"declared-only readiness" mechanism (FINDINGS §2498) did not describe this
+live path and is superseded by the dossier-proven chain.
+
+Fix: `DiscoApiClient.collect_paused_workspace` — latest durable PAUSED → its
+PAUSED-triggered WorkspaceVersionEvent → `_freeze_horizon_violation`
+authority fence → fresh immutable verification → registered workspace dir →
+full-scan manifest; fail-closed disclosure (empty manifest + named reason)
+otherwise — plus gate rerouting of ONLY the PAUSED family, browser evidence
+bound to the pause horizon with hard-cap-lane error containment. A first
+broader cut (availability ⇔ FINISHED/VERIFIED) broke H302 — an unconfirmed
+harness-initiated stop must keep surfacing evidence gaps as the invalidating
+exception — and was narrowed to the proven family.
+
+Proof chain, all preserved under `…/epic6/f26-fix/`:
+
+| item | result |
+|---|---|
+| hermetic reproduction (real `run_once` + SQLite + ProjectStore version) | pre-fix RED with the exact live signature (INVALID_RUN / MISSING_REQUIRED_EVIDENCE / `0001-navigate.png`, manifest_entry_count 0); post-fix FAIL / BUILD_DID_NOT_FINISH with exact screenshot bytes captured |
+| negative regression (no version event) | fail-closed, nothing fabricated, honest adjudication preserved |
+| targeted live reproduction on the surviving cert10 durable state | `frozen`, v3 / horizon 321 / 43 entries; **9/9 screenshots byte-verified** (`live-reproduction.txt`) |
+| full harness suite on frozen fixed bytes | **1068 passed, 1 skipped (pre-existing), 0 failed — EXIT=0 in-body** (`full-harness-suite.log`; 1069 collected cross-checked) |
+| packages core / agent-server / tools (`-m "not integration"`) | exit 0 each on the fixed tree |
+| basedpyright / lint-imports / arch budget / diagram / tool schemas / ruff | all green |
+| H302 unconfirmed-stop invariant + freeze suite + H190/H191 finished-path raise | green (positive controls) |
+| product delta | `git diff a632dde2..HEAD -- packages/` = **0 lines** — product bytes identical to the cert8-10 candidate |
+
+Also this cycle: F-23 closed as no-defect from walker/backend bytes (FINDINGS
+closure appended); the empty `cert10/broad-pytest-during-f26.log` disclosed
+in FINDINGS; continuity subagent-gate defect fixed (caller-type misread
+denied all delegation); Reviews 6–7; pattern P12 recorded.
+
+**Promotion remains 0/100.** The commit carrying this entry is the new
+qualification candidate; qualification restarts from scratch on it
+(`f26-fix/RESIGN-CHECKLIST.md`).
 

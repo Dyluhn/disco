@@ -1643,12 +1643,61 @@ async def drive_scenario(
         "ERROR",
         "STUCK",
     }
+    # F-26 (cert10 `p4_ff_react_steer`, conv_4c025e93e7ad47bfb8ce665658d52ef6): a
+    # run whose latest WORK status is PAUSED (the _MAX_RESUMES valve returns
+    # PAUSED by design so the oracle can classify the non-finished run) has NO
+    # route to the strict FINISHED-only final seal — yet it fell through this
+    # gate to the finish-seal demand. Strict collection then honestly returned
+    # an EMPTY manifest (the H339 carve-out), and the browser-evidence check
+    # converted a run that had really taken screenshots into INVALID_RUN /
+    # MISSING_REQUIRED_EVIDENCE — destroying the designed BUILD_DID_NOT_FINISH
+    # product adjudication. A PAUSED work terminal now routes to the immutable
+    # version the product's own pause end-gate sealed for exactly this
+    # boundary. Deliberately ONLY the PAUSED family: an unconfirmed
+    # harness-initiated stop must keep attempting collection so its evidence
+    # gaps still surface as the invalidating exception (H302 — a harness kill
+    # without strict confirmation must never be laundered into a product FAIL),
+    # and the two enumerated nonterminal shapes keep their preserved wrappers.
+    paused_work_terminal = (
+        latest_status_event is not None
+        and latest_frozen_status == PAUSED_STATE
+        and (
+            drive_terminal_baseline_seq is None
+            or int(latest_status_event["seq"]) > drive_terminal_baseline_seq
+        )
+    )
     strict_snapshot_unavailable = (
-        nonterminal_without_snapshot or failed_terminal_without_success_seal
+        nonterminal_without_snapshot or failed_terminal_without_success_seal or paused_work_terminal
     )
     terminal_snapshot_available = not strict_snapshot_unavailable
+    paused_capture: dict[str, Any] | None = None
     if terminal_snapshot_available:
         workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
+    elif paused_work_terminal:
+        # The product's pause end-gate sealed an immutable version for this exact
+        # terminal; read THAT, bound to its event horizon — never the mutable
+        # head, and never the impossible finish seal.
+        paused_capture = client.collect_paused_workspace(cid, _declared_workspace_paths(scenario))
+        if paused_capture.get("status") == "frozen":
+            workspace = paused_capture.get("manifest") or {}
+            timeline.append(
+                "collected PAUSED-terminal workspace from the immutable version "
+                f"(version_seq={paused_capture.get('version_seq')}, "
+                f"horizon_seq={paused_capture.get('horizon_seq')})"
+            )
+        else:
+            workspace = {
+                "files": {},
+                "_capture": {
+                    "status": "not_collected_paused_terminal",
+                    "drive_status": drive_status,
+                    "reason": str(paused_capture.get("reason")),
+                },
+            }
+            timeline.append(
+                "PAUSED-terminal immutable version unavailable "
+                f"({paused_capture.get('reason')}); preserving product adjudication"
+            )
     else:
         failed_terminal = failed_terminal_without_success_seal
         workspace = {
@@ -1678,7 +1727,28 @@ async def drive_scenario(
         )
     browser_evidence_collection_exc: BrowserEvidenceCollectionError | None = None
     browser_collection_diagnostic: dict[str, Any] | None = None
-    if not terminal_snapshot_available:
+    paused_frozen = paused_capture is not None and paused_capture.get("status") == "frozen"
+    if paused_frozen and paused_capture is not None:
+        # Bound to the PAUSED WorkspaceVersionEvent horizon: a screenshot
+        # referenced AFTER the pause seal is not in the frozen version and must
+        # not be certifiable. Collection errors mirror the hard-cap freeze
+        # lane's containment — the run is being adjudicated as its non-finished
+        # product outcome, and an evidence gap here must not erase that verdict.
+        raw_paused_horizon = paused_capture.get("horizon_seq")
+        try:
+            browser_evidence = client.collect_browser_evidence(
+                cid,
+                events,
+                workspace,
+                require_verified_host_screenshot=_browser_verification_required(scenario),
+                horizon_seq=raw_paused_horizon if type(raw_paused_horizon) is int else None,
+            )
+        except Exception as browser_exc:  # noqa: BLE001 — mirror the hard-cap freeze lane
+            browser_evidence = {}
+            timeline.append(
+                f"PAUSED-terminal browser-evidence collection failed: {type(browser_exc).__name__}"
+            )
+    elif not terminal_snapshot_available:
         browser_evidence = {}
         referenced_paths = _referenced_screenshot_paths(
             events,
@@ -1690,7 +1760,11 @@ async def drive_scenario(
                 "kind": (
                     "browser_evidence_not_collected_failed_terminal"
                     if failed_terminal_without_success_seal
-                    else "browser_evidence_not_collected_nonterminal"
+                    else (
+                        "browser_evidence_not_collected_paused_terminal"
+                        if paused_work_terminal
+                        else "browser_evidence_not_collected_nonterminal"
+                    )
                 ),
                 "reason": "strict browser bytes require the unavailable terminal snapshot",
                 "facts": {"referenced_paths": referenced_paths},
@@ -1701,7 +1775,11 @@ async def drive_scenario(
                     else (
                         "confirmed_live_thrash_adjudication"
                         if confirmed_live_thrash_without_terminal
-                        else "nonterminal_product_adjudication"
+                        else (
+                            "paused_terminal_product_adjudication"
+                            if paused_work_terminal
+                            else "nonterminal_product_adjudication"
+                        )
                     )
                 ),
                 "admissible_as_browser_evidence": False,
@@ -1789,6 +1867,17 @@ async def drive_scenario(
                 }
             )
         nonterminal_product_evidence["nonterminal_adjudication"] = nonterminal_adjudication
+    if paused_work_terminal and paused_capture is not None:
+        # F-26 disclosure: name the paused-version authority this run's
+        # workspace/browser evidence was (or honestly was not) bound to.
+        nonterminal_product_evidence["paused_terminal_adjudication"] = {
+            "schema_version": 1,
+            "drive_status": drive_status,
+            "capture_status": paused_capture.get("status"),
+            "version_seq": paused_capture.get("version_seq"),
+            "horizon_seq": paused_capture.get("horizon_seq"),
+            "reason": paused_capture.get("reason"),
+        }
     run = CollectedRun(
         conversation_id=cid,
         events=events,
