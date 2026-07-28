@@ -663,3 +663,195 @@ Overhardening check:
 Next action: definitive full harness suite completes on frozen bytes → commit
 governance ledgers, then the F-26 package → Epic-5 recorded four-suite pass
 on the committed candidate → re-sign the Epic-6 qualification manifest.
+
+## Review 11 — 2026-07-28 08:00 CDT / 2026-07-28T13:00:10Z
+
+Source fingerprint: sha256:2b2c6437f3410a1bf688d20cc5bcafdb215206325a53e4c5f452bb590c14db41
+(working tree on base `95c4bfa6`, F-27 fix in progress — 17 modified + 1 new
+test file; candidate not yet cut)
+
+Work completed since prior review: F-27 fix designed (owner-finalized from
+byte audit; the cycle-3 opus review died unreturned with its session) and
+implemented across all three layers. Product core: `SealabilityProbeResult`
+seam + `AgentLoop.finish_sealability_probe`; one
+`FinishGate.seal_gate_allows_finish()` at all THREE affirmative FINISHED
+sites found by byte audit (finalize_finish, completed_via_notify,
+browserless honest-static valve); refusal names exact blocking entries +
+remedy; cap 3 → loud `unsealed_release`; probe error → log+proceed; forced
+`noop_limit` untouched. Agent-server: module-level `probe_finish_sealability`
+runs the REAL `snapshot_workspace` to a throwaway dest (zero walker drift);
+content/transient skip split (`content_blocking_skips` vs
+`strict_blocking_skips`); typed `FinalSealIncompleteContent`; persistence
+reminder gains typed meta `persistence_failure.kind=seal_incomplete_content`.
+Harness: `FinishUnsealableContentError` raised at the snapshot-wait deadline
+when the run FINISHED and the PRODUCT disclosed (typed) a content-refused
+seal → product FAIL `FINISH_UNSEALABLE_CONTENT` (P1, not §17-rerunnable);
+lag without disclosure stays INVALID_RUN. Tests: 7 new core (red→green on
+the exact 590005 signature, cap release, sealable control, no-probe
+byte-identity, probe-error anti-cage, forced-terminal control, notify-path
+gating), 3 new agent-server (typed disclosure both directions, probe unit),
+4 new harness (adapter split both directions, superseded-refusal, helper
+unit). Arch-budget remediation in progress (probe moved to module level).
+
+Evidence that it actually worked: test_finish_seal_gate.py 7/7 EXIT=0;
+test_final_workspace_commit.py 41/41 EXIT=0; harness targeted split tests
+4/4 EXIT=0; full core+agent-server unit suites EXIT=0 (/tmp/f27-core-as.log;
+summary line suppressed by config — exit code read from $?); preserved
+repro rerun captured to
+`…/epic6/f27-fix/repro-postfix-backstop.log` (commit-path backstop unchanged
+by design, typed FinalSealIncompleteContent now visible). Full harness suite
+running in background (task bspt0rb5f). lint-imports EXIT=0 (2 kept / 0
+broken). check_arch_budget EXIT=1 — 7 capped coordinators grew past
+frozen-at-size caps; remediation underway.
+
+What went well and why: the byte audit before design found a third
+affirmative FINISHED site (the browserless actionless valve) that the
+cycle-3 "LAST in battery" placement would have missed — reading the emitters
+instead of trusting the design note changed the shape of the fix. The new
+core test immediately caught a REAL crash: my refusal meta reused the
+loop-wide `meta["blocking"]` key (a string-tag convention consumed by
+signals.py) with a list value — TypeError in `superseded_plan_owned_failure`
+on any run containing a refusal. Fixed to the convention (string tag +
+`seal_blocking` list) before it ever reached a live run.
+
+What went rough / consumed time or tokens: a stray `cd` into the evidence
+dir poisoned the persistent shell cwd; four MCP stdio tests failed as pure
+cwd artifacts and the sandbox strips bare `cd` recovery — several wasted
+cycles until `env --chdir` (now the standing invocation). The arch-budget
+gate failure at 7 frozen caps was foreseeable and I did not pre-measure.
+
+Immediate process or technical correction: (1) all repo commands run under
+`env --chdir=<repo>` from now on; (2) before adding lines to known capped
+coordinators, put new logic at module level first (the probe belonged there
+anyway) and pre-run the budget gate.
+
+Recent fixes reviewed together: F-26 (PAUSED terminal reads its own
+pause-sealed version) + F-27 (FINISHED terminal must be refusable BEFORE
+acceptance when its content cannot be sealed; typed disclosure when refused
+after). Same family from the two sides of the terminal boundary.
+
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: a terminal state claimed (or was
+    judged by) a version authority it never bound: F-26 judged PAUSED work
+    against the finish seal; F-27 accepted FINISHED while the finish seal was
+    about to refuse the very content it was finishing, and told the model
+    only after it could no longer act.
+  - structural product/harness remedy: every terminal binds to the version
+    authority it claims, and any constraint that can void a terminal reaches
+    the model BEFORE the last point it can act (the finish-time probe runs
+    the same walker + same skip rule as the seal — one content model); the
+    harness adjudicates from the product's typed disclosure, never a private
+    re-derivation.
+  - signal that would recognize it earlier next time: any acceptance path
+    whose authority check runs only AFTER the acceptance is durable; any
+    classifier code that maps "the product refused" and "the evidence is
+    late" to the same rerunnable outcome.
+  - existing/new regression that protects it: test_finish_seal_gate.py (7),
+    test_final_workspace_commit typed-disclosure pair, harness split tests
+    (4) including the superseded-refusal direction; F-26's
+    paused-terminal suites remain green on the same bytes.
+  - why the remedy remains target-neutral and flexible: the probe reuses the
+    per-backend snapshot machinery for whatever tree shape it carries; no
+    framework or scenario knowledge; refusal is bounded (cap 3) with an
+    honest loud release, so unusual-but-legitimate builds still terminate.
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item:
+    arch-budget remediation ← failing required gate; remaining suites/gates ←
+    Epic 5 preflight contract on the new candidate; requalify from F0 +
+    recount 0/100 ← CAMPAIGN-PLAN failure protocol on source change.
+  - any theoretical tail to drop: yes — no symlink SUPPORT in the seal
+    content model; no per-mutation sandbox symlink warnings (the finish-gate
+    refusal is the affordance); no gate on forced terminals; no
+    early-deadline short-circuit in the harness wait (same decision point,
+    different classification only).
+Next action: finish arch-budget remediation (module-level moves + minimal
+justified cap entries), complete lifecycle import fix, rerun all four
+gates + suites, ingest background harness suite result.
+
+Addendum (same review, 13:14Z): the background `pytest harness` sweep
+(EXIT=1) collected a BROADER net than the governed suite — its 5 failures are
+harness/marathon (live-browser playwright lane, e2e-live territory) and
+harness/tests (`test_event_kinds_have_ts_mirrors`: `runtime_constraint`, an
+Epic-2 kind, has no TS mirror — predates this diff, which touches no event
+kind; plus test_replay_runner). The governed Epic-5 build-soak suite
+(`pytest harness/build_soak`, the 1068/1069 f26 baseline scope) is running
+now as task bgx2v2ha8. The harness/tests TS-mirror gap will be dispositioned
+against base bytes before the candidate is cut. This addendum also exists
+because the review hook advances only on Edit/Write to this file — the
+original Review 11 was appended via shell heredoc, which the hook cannot see;
+correction adopted: reviews land via the Write/Edit tools from now on.
+
+## Review 12 — 2026-07-28 09:17 local / 2026-07-28T14:17:58Z UTC
+
+Source fingerprint: sha256:a4436f1aa5c1779d9773bfcf24fa496af01d0a45e4375b7eca9e2d63e1c23691
+Work completed since prior review: cycle-7 reconciliation (cycle-6 boundary
+killed the 3rd opus attempt, the build_soak rerun at 26%, and the gates log
+after gate 3; diff had moved 76276→78682 bytes post-export). Fresh export
+`/tmp/f27-diff-cycle7.patch`; full `pytest harness/build_soak` rerun on
+CURRENT bytes (items 1+2 included) → EXIT=0; opus practical review finally
+completed on the 4th attempt by running it SYNCHRONOUSLY instead of as a
+background agent (three consecutive boundary deaths were process losses, not
+review verdicts).
+Evidence that it actually worked: `/tmp/f27-buildsoak-cycle7.log`
+BUILDSOAK_EXIT=0 (100%); opus report in-session (subagent afec70648fbda4cb5,
+~224k tokens, 116 tool uses): NO BLOCKING finding; independently re-ran all
+four gates + core/agent-server suites EXIT=0 on these bytes and verified
+mutation sensitivity of the notify-site and valve-site gates.
+What went well and why: synchronous consultation matched the tool to the
+constraint (boundary-mortal background agents); the review paid for itself —
+it measured, not just read (mutation probes; cap-release reachability per
+site; end-to-end typed-disclosure hop check).
+What went rough / consumed time or tokens: three cycles carried a dead
+background review; the diff export went stale twice because exports were cut
+before the correction pass settled.
+Immediate process or technical correction: (1) long consultations run
+synchronously in a fresh-context cycle, never as boundary-mortal background
+agents; (2) diff exports for external review are cut only from settled bytes,
+and staleness is checked by byte-compare before use (done this cycle).
+Recent fixes reviewed together: opus findings on the F-27 family as a group —
+0 BLOCKING, 2 SHOULD-FIX (#5 cross-layer literal "seal_incomplete_content"
+duplicated with no pin; #8 boundaries.py normative docstring claims
+"unreadable files" block, but transients are deliberately non-blocking —
+reverse-laundering risk for a future implementer), 8 NOTE (#1 workflow_skipped
+undocumented as ungated; #2 cap-release unreachable at valve site → doc claim
+broader than code; #3 probe timeout 60s < export timeout 120s → gate silently
+self-disables on the largest workspaces; #4 probe tmp copy + sync rmtree on
+loop = perf only; #6 split docstring says "waiting cannot help" but code
+splits only at deadline; #7 supersede boundary skips _valid_workspace_version
+shape checks; #9 _strict_snapshot_complete dead; #10 one prose assert where a
+typed one exists).
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: a contract stated in prose (docstring,
+    pattern doc, duplicated literal) drifted from the bytes that enforce it —
+    #2, #5, #6, #8 are all prose-vs-bytes divergences on the SAME family the
+    fix just closed; nothing pins them together.
+  - structural product/harness remedy: pin cross-layer literals with an
+    import-equality test (accepting #5); make normative docstrings state the
+    implemented rule (#8, #6, #1); scope pattern-doc claims to the sites where
+    they were measured (#2).
+  - signal that would recognize it earlier next time: any classifier or gate
+    keyed on a string literal that appears in two packages without a test
+    importing one side into the other.
+  - existing/new regression that protects it: new test asserting harness
+    literal == product SEAL_INCOMPLETE_CONTENT_KIND (this pass); mutation
+    sensitivity of gate sites already pinned by test_finish_seal_gate.py and
+    test_bug6 valve pair.
+  - why the remedy remains target-neutral and flexible: literal pinning and
+    docstring truth impose no scenario or framework constraint; no new
+    thresholds; no behavior narrowed except supersede shape validation (#7)
+    which reuses the harness's existing single validator.
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item:
+    each accepted finding traces to an opus-measured divergence on current
+    bytes (cited file:line in the report); the correction budget was
+    pre-declared "opus findings only".
+  - any theoretical tail to drop: yes — #4 (probe tmp-dest perf) recorded,
+    not changed (no observed failure; finish-time I/O doubling is inherent to
+    the real-walker design choice); no early-deadline short-circuit (#6 code
+    move) — docstring reword only; no new gates on forced terminals.
+Next action: apply the accepted opus findings as the tail of the ONE
+correction pass (#1,2,3,5,6-doc,7,8,9,10; #3 = raise finish_seal_timeout_s
+default above the 120s export timeout), then authoritative four gates +
+core/agent-server/build_soak on settled bytes, then the single F-27 source
+commit + governance commit, freeze + manifest attempt 8, stack restart,
+requalify from F0.

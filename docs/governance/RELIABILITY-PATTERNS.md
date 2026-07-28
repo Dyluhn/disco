@@ -327,3 +327,57 @@ hermetic, asserts the refusal carries the workspace it judged.
 **Why it stays target-neutral.** Payload enrichment only: no threshold,
 ordering, acceptance, or classification change; the refusal fails closed
 identically for every target and scenario shape.
+
+### P13 — A terminal bound to a version authority it never verified, disclosed too late to act
+
+**Evidence (two members, both counted-lane failures on qualified candidates).**
+
+1. **F-26 (pause side, cert10).** The soak's PAUSED work terminal was judged
+   against the *finish* seal — an authority a PAUSED run can never produce —
+   so honest paused work surfaced as INVALID_RUN evidence gaps. Fixed by
+   `collect_paused_workspace`: the boundary's evidence now comes from the
+   pause-sealed immutable version the product actually created (`8f249c7a`).
+2. **F-27 (finish side, counted trial 590005).** The model symlinked root
+   paths; sandbox wrote them, the done-condition checker rejected them (the
+   model honestly re-planned but left the inert links), build + live web
+   verification resolved them, and the FINISHED terminal was accepted — then
+   the strict final seal refused the content, and the only disclosure landed
+   POST-terminal (seq 305), where nobody could act. The finished build was
+   unattributable and unexportable, and the harness classifier mapped the
+   product's refusal to the same rerunnable INVALID_RUN as snapshot lag.
+
+**Shared earliest broken invariant.** A terminal state was accepted (or
+adjudicated) under a version authority that was never bound at that boundary
+— and the constraint that voided the terminal reached the model only after
+the last point it could act.
+
+**Structural remedy.** (a) Every terminal binds to the version authority it
+claims: PAUSED work reads its pause seal; an affirmative FINISH is gated by a
+dry-run of the *same* snapshot walker + skip rule the final seal will apply
+(one content model, zero drift), with the refusal naming the exact blocking
+entries and remedy while the model can still act. At the two finish-battery
+sites (finalize, completed-via-notify) a bounded cap (3) releases loudly
+(`unsealed_release`) so no legitimate build is caged — measured: 3 refusals →
+1 release → FINISHED. At the browserless valve a refusal instead degrades to
+the pre-existing safe PAUSE/actionless terminal (the per-run-segment streak
+reset makes the cap unreachable there; the route to a valid terminal is
+preserved either way). (b) The product
+discloses a refused seal as TYPED evidence (`persistence_failure.kind =
+"seal_incomplete_content"`), and the harness adjudicates product-vs-lag from
+that product-owned disclosure — never a private re-derivation, never one
+bucket for both.
+
+**Signal to recognise it earlier.** Any acceptance path whose authority check
+runs only after the acceptance is durable; any refusal surfaced only
+post-terminal; any classifier that maps "the product refused" and "the
+evidence is late" to the same rerunnable outcome.
+
+**Regression that protects it.** `test_finish_seal_gate.py` (7: red→green on
+the live 590005 signature, cap release, controls incl. probe-error anti-cage
+and forced-terminal bypass), the browserless-valve pair in
+`test_bug6_actionless_honest_finish.py` (a blocking probe never lands the
+valve's FINISHED; a sealable probe leaves it byte-identical), the
+typed-disclosure pair in `test_final_workspace_commit.py`, the harness split
+tests (both directions + superseded-refusal + a recovery/pause version cut
+never supersedes a refused finish seal), and the F-26 paused-terminal
+suites on the same bytes.

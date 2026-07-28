@@ -2927,3 +2927,89 @@ authorized closeout. Next: re-sign `QUALIFICATION-MANIFEST.md` +
 `.frozen-candidate` to this commit, stack up, then F0 → F1 → canaries →
 pilot → exact 100 at 0/100.
 
+
+## 2026-07-28 ~13:02Z — F-27: candidate 95c4bfa6 DEAD for promotion; fix implemented, new candidate pending
+
+**Counted stream on `95c4bfa6` CLOSED 11:45:41Z** by designed cohort
+stop-first at part-2 wave 1: trial 590005 (react_steer) non-PASS. 8 counted
+PASS dossiers (590000–590004, 590006–590008) remain preserved historical
+evidence; promotion credit on `95c4bfa6` is VOID for counting per the failure
+protocol (new candidate requalifies from F0, recounts 0/100).
+
+**F-27 (product, finish-seal unsealable-content family).** Dossier-proven:
+the model symlinked root paths (seq 200); no tool warning; the done-condition
+checker rejected them (honest re-plan, links left inert); build +
+web_functional verification PASSED against the live FS; FINISHED accepted
+(seq 304); the strict final seal then refused (`symlink excluded` ×4); the
+only disclosure landed post-terminal (seq 305). Additionally the harness
+classifier conflated the product's seal REFUSAL with snapshot LAG
+(INVALID_RUN `WORKSPACE_SNAPSHOT_NOT_READY`, §17-rerunnable) — a laundering
+hazard. Pattern P13 recorded (F-26 pause-side + F-27 finish-side).
+
+**Fix implemented on the working tree (Review 11, fingerprint
+`2b2c6437…`):** finish-time sealability gate at all three affirmative
+FINISHED sites (dry-run of the real snapshot walker, same skip rule as the
+seal; exact-paths refusal while the model can act; cap-3 loud
+`unsealed_release`; forced terminals untouched); typed
+`seal_incomplete_content` disclosure at the refused seal;
+content-vs-transient skip split; harness records product FAIL
+`FINISH_UNSEALABLE_CONTENT` (P1, not rerunnable) on the product's typed
+disclosure, lag stays INVALID_RUN; only a later finish-triggered seal
+supersedes a refusal (a post-refusal recovery/pause version cut never
+launders it back to rerunnable, cycle 6). New tests: 9 core (7 seal-gate +
+the browserless-valve blocking/sealable pair, cycle 5) + 3 agent-server +
+4 harness. Gates on the final tree: arch budget, lint-imports, diagram,
+basedpyright — all green; core+agent-server and build_soak suites EXIT=0.
+
+**Next:** commit the F-27 candidate → re-sign the qualification manifest
+(attempt 8; product delta NON-EMPTY, everything requalifies) → restart the
+stack on the committed bytes → requalify from F0 (ladder, canaries, pilot) →
+reopen counted main at 0/100 detached.
+
+
+## 2026-07-28 ~15:00Z — F-27 candidate COMMITTED at `729316e1` after external review + one closed correction pass
+
+**External practical review (opus, max effort) of the full working diff:
+0 BLOCKING findings.** Three background attempts died at continuity-cycle
+boundaries; the fourth ran synchronously and completed (~225k tokens, 116
+tool uses). It independently re-ran all four gates + core/agent-server
+suites green on the reviewed bytes and *measured* (not just read) the
+mutation sensitivity of the notify-site and valve-site gate calls, cap
+release reachability per site (finalize/notify: 3 refusals → 1 loud release
+→ FINISHED; valve: refusal degrades to the pre-existing safe
+PAUSED/actionless — cap unreachable there by streak reset), and the
+end-to-end typed-disclosure hops.
+
+**Correction pass (one, now CLOSED):** item 1 (valve gating test pair,
+cycle 5), item 2 (supersede tightening to finish-triggered versions,
+cycle 6), opus tail (cycle 7): timeout floor 150 s > the 120 s export
+timeout so the probe cannot silently self-disable on large workspaces;
+supersede boundary now requires the harness's single
+`_valid_workspace_version` shape rule (a malformed version event has no
+authority over a typed refusal) and null-seq events are never adjudicated;
+the adapter's split literal became a named constant pinned equal to the
+product's `SEAL_INCOMPLETE_CONTENT_KIND` by a cross-package test; typed (not
+prose) assertions in the valve negative; dead `_strict_snapshot_complete`
+deleted; normative docstrings made truthful (`workflow_skipped` bypass named;
+transients-never-blocking; deadline-window supersession is deliberate).
+Declined with reasons: probe tmp-dest perf (no observed failure) and an
+early-deadline code move (the wait window IS the supersession affordance).
+
+**Authoritative verification on the exact committed bytes**
+(`f27-fix/f27-authoritative-verification.log`, SOURCE_FP `b55eac39…`):
+budget/lint-imports/diagram/basedpyright all EXIT=0; `pytest packages/core
+packages/agent-server -m "not integration"` EXIT=0; `pytest
+harness/build_soak -m "not integration"` EXIT=0. Format check: only the two
+pre-existing 0-diff-vs-base files (dispositioned cycle 4). Evidence also
+holds `f27-diff-committed.patch` (the staged bytes that became `729316e1`)
+and `repro-noprobe-identity-final.log` (no-probe legacy identity control +
+the typed `FinalSealIncompleteContent` backstop firing on final bytes).
+
+**Candidate `729316e1` is the qualification candidate for manifest
+attempt 8.** Product delta vs `95c4bfa6` is NON-EMPTY (core + agent-server +
+harness): per the failure protocol everything requalifies from F0 and the
+count reopens at 0/100; the 8 preserved PASS dossiers on `95c4bfa6` remain
+history, never credit. Next: governance commit → `.frozen-candidate` +
+manifest attempt 8 on the governance SHA with tree clean → stack restart
+onto the committed bytes → F0 → F1 → canaries → pilot → counted main
+0/100 detached.
