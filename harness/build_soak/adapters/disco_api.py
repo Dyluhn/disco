@@ -2970,9 +2970,31 @@ class DiscoApiClient:
             source = _jailed_browser_evidence_path(ws, rel, conversation_id=conversation_id)
             entry = workspace_manifest.get(rel)
             if not isinstance(entry, dict) or entry.get("present") is not True:
+                # Record WHICH authoritative state was judged, not just what was
+                # missing from it. cert10 (`p4_ff_react_steer`,
+                # conv_4c025e93e7ad47bfb8ce665658d52ef6) refused with only
+                # {conversation_id, path}, so the dossier could not say whether the
+                # read saw the final version, an earlier one, or a partially
+                # published tree — while a later provider-free replay against
+                # version 003-bc7ae1f7396f at horizon_seq=321 found all nine
+                # screenshots and succeeded. Both observations were correct and
+                # could not be reconciled, because the refusal named a rule without
+                # naming the state it judged.
+                #
+                # Diagnostic only: no threshold, ordering or acceptance rule
+                # changes here.
                 raise BrowserEvidenceCollectionError(
                     "referenced browser screenshot is absent from the workspace manifest",
-                    {"conversation_id": conversation_id, "path": rel},
+                    {
+                        "conversation_id": conversation_id,
+                        "path": rel,
+                        "workspace_dir": str(ws),
+                        "manifest_entry_count": len(workspace_manifest),
+                        "manifest_has_pmx_entries": sum(
+                            1 for key in workspace_manifest if str(key).startswith(".pmx/")
+                        ),
+                        "referenced_paths": list(references),
+                    },
                 )
             try:
                 data = source.read_bytes()
