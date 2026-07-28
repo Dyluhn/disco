@@ -98,3 +98,43 @@ async def test_the_trigger_label_is_preserved():
     manager, persistence = _manager(_Executor(_Sandbox()))
     await manager._maybe_snapshot("conv_621005", trigger="paused")
     assert persistence.seen["trigger"] == "paused"
+
+
+@pytest.mark.asyncio
+async def test_an_executor_with_no_sandbox_pins_nothing():
+    """Proof 7 at this seam: the pin must not FABRICATE authority.
+
+    An executor can exist while its `_sandbox` is already None — killed, or
+    between generations. `getattr(executor, "_sandbox", None)` must then yield
+    None so capture still fails closed, rather than passing a truthy placeholder
+    that would let `_resolve_capture_session` believe it has a session.
+    """
+
+    class _Killed:
+        _sandbox = None
+
+    manager, persistence = _manager(_Killed())
+    await manager._maybe_snapshot("conv_621005", trigger="stuck")
+    assert persistence.seen["pinned_session"] is None
+    assert persistence.seen["resolved_session"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_pin_does_not_make_capture_happen_that_otherwise_would_not():
+    """Pinning changes WHICH session capture sees, never WHETHER it runs.
+
+    `_maybe_snapshot` delegates exactly once either way; the pin must not add a
+    second capture, nor a version for work that does not exist.
+    """
+    calls: list[str] = []
+
+    manager, persistence = _manager(_Executor(_Sandbox()))
+    original = persistence._do_capture_workspace
+
+    async def _counting(conversation_id: str, **kwargs: object):
+        calls.append(conversation_id)
+        return await original(conversation_id, **kwargs)
+
+    persistence._do_capture_workspace = _counting  # type: ignore[method-assign]
+    await manager._maybe_snapshot("conv_621005", trigger="suspend")
+    assert calls == ["conv_621005"], "exactly one capture, pinned or not"
