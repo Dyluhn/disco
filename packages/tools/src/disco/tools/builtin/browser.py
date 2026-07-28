@@ -449,6 +449,9 @@ class BrowserTool:
                 expected_daemon_id=expected_daemon_id,
             )
             if freshness_error is not None:
+                unmasked = self._daemon_failure_despite_missing_freshness(data, freshness_error)
+                if unmasked is not None:
+                    return unmasked
                 return self._freshness_protocol_failure(freshness_error)
             if data["ok"] is False:
                 # The daemon's own classification reaches the agent intact. Any
@@ -525,6 +528,59 @@ class BrowserTool:
                 "error_class": error_class,
                 "error_reason": error_reason,
             },
+        )
+
+    @staticmethod
+    def _daemon_failure_despite_missing_freshness(
+        data: dict[str, Any], freshness_error: str
+    ) -> ToolOutcome | None:
+        """A declared daemon failure without ANY acknowledgement keeps its verdict.
+
+        Counted P1 2026-07-28 (p4_ff_react_continue seed 600041): the daemon's
+        internal-error path replied ok:false WITHOUT a freshness dict; this
+        client reported "freshness acknowledgement schema mismatch" instead,
+        destroying the daemon's real `browser_daemon_unavailable` verdict and
+        telling the agent its well-formed call was malformed — with "do not
+        retry the identical call" advice pointing at alternatives that rode the
+        same dead daemon. Two such maskings shared one signature and the run
+        was correctly thrash-stopped; the oracle was right, the report was
+        wrong. Same P7 family as the 2026-07-27 navigate waiver below, one
+        layer earlier.
+
+        The unmasking is deliberately NARROWER than the ok:false path for
+        well-formed acknowledgements: it applies only when the daemon did not
+        emit an acknowledgement AT ALL yet did classify its own failure. A
+        PRESENT acknowledgement with wrong keys or wrong values keeps failing
+        closed — a wrong daemon / nonce / epoch may not even be answering this
+        request — and ok:true NEVER bypasses freshness, so stale success
+        evidence stays refused. The anomaly is disclosed beside the verdict,
+        never swallowed.
+        """
+        if data.get("ok") is not False:
+            return None
+        if isinstance(data.get("freshness"), dict):
+            return None
+        error_text = str(data.get("error") or "").strip()
+        if not error_text:
+            return None
+        # The generic recipe says "do not retry the identical call" — on THIS
+        # path that advice is wrong and was exactly what stranded the live
+        # run: the daemon heals its own transport, so one retry is the sane
+        # recovery for an unavailable daemon. Every other failure path keeps
+        # the standard recipe unchanged.
+        if str(data.get("error_class") or "") == "browser_daemon_unavailable":
+            recovery = (
+                "The browser daemon recovers its own stack after a transport "
+                "failure: retry this call once; if it still fails, check the "
+                "preview with preview_status / preview_logs."
+            )
+        else:
+            recovery = _BROWSER_FAILURE_RECIPE
+        return fail_outcome(
+            f"browser error: {error_text[:512]}"
+            f"\n[freshness unverified: {freshness_error}]"
+            f"\n{recovery}",
+            structured={**data, "freshness_unverified": freshness_error},
         )
 
     @staticmethod

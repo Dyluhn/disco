@@ -1018,3 +1018,6 @@ Next action: implement F-29 narrowly (daemon ack-on-error + one-shot
 transport self-heal + host unmasking of ok:false), regression pair, four
 gates + focused suites, one commit, then fresh qualification fingerprint and
 a fresh counted main-86 per work order.
+Schedule note: this block was appended 21:31Z via a shell append, which the
+schedule hook does not observe (it registers Edit/Write tools only); this
+editor-tool touch re-registers the same already-committed review (a34deddf).

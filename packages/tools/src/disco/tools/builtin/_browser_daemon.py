@@ -857,6 +857,14 @@ class BrowserHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _freshness(lane_name, generation, nonce, requested_epoch, sync_performed):
         lane = state.lane(lane_name)
+        # F-29: `page.url` is a live Playwright property and raises once the
+        # transport is dead. The acknowledgement must survive exactly that
+        # state — it is how an internal-error reply stays protocol-valid. An
+        # unreadable page has content of unknown vintage: "uninitialized".
+        try:
+            page_kind = _page_kind(getattr(lane.page, "url", ""))
+        except Exception:
+            page_kind = "uninitialized"
         return {
             "schema_version": 1,
             "daemon_instance_id": DAEMON_INSTANCE_ID,
@@ -866,7 +874,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             "requested_epoch": requested_epoch,
             "synchronized_epoch": lane.synchronized_epoch,
             "sync_performed": sync_performed,
-            "page_kind": _page_kind(getattr(lane.page, "url", "")),
+            "page_kind": page_kind,
         }
 
     @staticmethod
@@ -985,11 +993,76 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "invalid_request",
                 protocol_error,
             )
+        # F-29 (counted P1, seed 600041): an exception past this point used to
+        # bubble to do_POST's generic catch and reply WITHOUT the freshness
+        # acknowledgement, which the client then reported as a caller-side
+        # "freshness acknowledgement schema mismatch" — destroying this
+        # daemon's real verdict. The protocol fields are parsed now, so every
+        # reply from here on can and must acknowledge. A dead Playwright
+        # transport (e.g. the workspace's own process cleanup killed the
+        # driver) is additionally healed ONCE per request by restarting the
+        # browser stack: the workspace owns its processes; the daemon owns
+        # recovering its own transport.
+        try:
+            return self._dispatch_parsed(action, params, lane_name, generation, nonce, requested_epoch)
+        except Exception as first_error:
+            error = first_error
+            if self._heal_dead_transport():
+                try:
+                    return self._dispatch_parsed(
+                        action, params, lane_name, generation, nonce, requested_epoch
+                    )
+                except Exception as retry_error:
+                    error = retry_error
+            return self._error(
+                "browser_daemon_unavailable",
+                "internal_error",
+                f"browser daemon internal error: {type(error).__name__}",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
+            )
+
+    @staticmethod
+    def _heal_dead_transport():
+        """Restart the browser stack once if the Playwright transport is dead.
+
+        Returns True only when the transport was actually down AND a fresh
+        stack started. An exception thrown over a LIVE transport is a genuine
+        action bug and must surface as itself, never trigger a restart — the
+        restart exists for exactly one observed family: the workspace killed
+        the driver/browser processes out from under the daemon.
+        """
+        global _live_headed
+        try:
+            alive = state.browser is not None and state.browser.is_connected()
+        except Exception:
+            alive = False
+        if alive:
+            return False
+        try:
+            state.stop()
+        except Exception:
+            pass
+        try:
+            state.start()
+        except Exception as exc:
+            # Leave an honest terminal state: later requests report the
+            # renderer unavailable instead of raising through do_POST.
+            state.render_ready = False
+            if not state.render_error:
+                state.render_error = f"browser stack restart failed: {type(exc).__name__}"
+            return False
+        # A heal restarts headless; a previously headed live view degrades
+        # honestly until the next explicit live_start.
+        _live_headed = False
+        return True
+
+    def _dispatch_parsed(self, action, params, lane_name, generation, nonce, requested_epoch):
         if not state.render_ready:
             return self._error(
                 "browser_daemon_unavailable",
                 "renderer_unavailable",
                 state.render_error or "Browser renderer not initialized",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
             )
         if action == "_close_lane":
             if lane_name != "host_verifier":
@@ -1012,6 +1085,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "browser_daemon_unavailable",
                 "renderer_unavailable",
                 "Browser renderer not initialized",
+                self._freshness(lane_name, generation, nonce, requested_epoch, False),
             )
         if lane.synchronized_epoch is not None and (
             requested_epoch is None or requested_epoch < lane.synchronized_epoch

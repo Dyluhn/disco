@@ -114,7 +114,9 @@ ALLOW_FUNCS = {
     ("retrieval/deep_research/synthesis.py", "synthesize_section"): 267,
     ("agent_server/host_proxy.py", "__call__"): 429,  # stable-main 204, +225 on this branch
     ("security/analyzers.py", "_balanced_substitution_end"): 211,  # stable-main 211
-    ("builtin/_browser_daemon.py", "_handle_action"): 382,  # stable-main 373, +9 on this branch
+    # F-29: _handle_action split into a small protocol/heal wrapper (under the
+    # default cap) + the capped action dispatcher body it used to be.
+    ("builtin/_browser_daemon.py", "_dispatch_parsed"): 382,  # stable-main 373 as _handle_action
     ("release/detect.py", "_js_executable_view"): 345,  # stable-main 345
     ("agent_server/runtime.py", "_sealed_run_execute"): 223,  # stable-main 223
     ("loop/progress.py", "reduce_progress"): 522,  # stable-main 522
