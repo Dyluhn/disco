@@ -330,7 +330,10 @@ identically for every target and scenario shape.
 
 ### P13 — A terminal bound to a version authority it never verified, disclosed too late to act
 
-**Evidence (two members, both counted-lane failures on qualified candidates).**
+**Evidence (three members: two counted-lane failures on qualified
+candidates, one qualification-pilot failure — the third generalizes the
+family from version authority to any terminal-boundary resource assumed
+rather than bound).**
 
 1. **F-26 (pause side, cert10).** The soak's PAUSED work terminal was judged
    against the *finish* seal — an authority a PAUSED run can never produce —
@@ -345,6 +348,18 @@ identically for every target and scenario shape.
    POST-terminal (seq 305), where nobody could act. The finished build was
    unattributable and unexportable, and the harness classifier mapped the
    product's refusal to the same rerunnable INVALID_RUN as snapshot lag.
+3. **F-28 (session side, qualification pilot seed 620108).** A workspace
+   restore 1.7 s after FINISHED acquired the just-terminal executor's
+   session while the teardown was racing it; the apply stage died mid-flight,
+   the product logged nothing, the client saw a bare 503 whose body the
+   harness did not retain — and the identical restore replayed moments later
+   succeeded. The assumed resource was a live SESSION rather than a version,
+   but the invariant broken is the same: a post-terminal operation trusted a
+   moments-old authority instead of binding or deterministically reacquiring
+   it at the point of use. Fixed by a bounded reacquire-once through the
+   existing wake/create chain (never the same failed object), loud logging
+   on every failed restore, and verbatim retention of the product's error
+   body in harness evidence.
 
 **Shared earliest broken invariant.** A terminal state was accepted (or
 adjudicated) under a version authority that was never bound at that boundary

@@ -855,3 +855,81 @@ default above the 120s export timeout), then authoritative four gates +
 core/agent-server/build_soak on settled bytes, then the single F-27 source
 commit + governance commit, freeze + manifest attempt 8, stack restart,
 requalify from F0.
+
+## Review 15 — 2026-07-28 12:20 local / 2026-07-28T17:20:00Z UTC
+
+(Reviews 13 and 14 were taken on cadence at 15:25Z and 16:10Z in
+`…/epic6/f27-fix/LEDGER.md` under the freeze rule while repository bytes
+were frozen at candidate `604df620`; this in-repo review resumes because
+the freeze just ended — the pilot found a product defect requiring source
+work.)
+
+Source fingerprint: sha256:b55eac399fa8bf2b42319799d44f51a6c67f2c7b247cabffdd8acf47a8d27b93
+Work completed since prior review: F-27 candidate committed (`729316e1` +
+governance `604df620`); stack relaunched onto it; manifest attempt 8 signed
+with live-read fields; qualification ladder executed: F0 EXIT=0, four-suite
+EXIT=0, F1 dry receipt + LIVE F1 8/8 PASS (incl. react_steer — the F-27
+family — and node_pause with export workspace_match=True), FF canary 1/1,
+AK canary 1/1, mixed pilot stopped by design at 8 PASS + 1 FAIL:
+`p4_appkit_rollback` seed 620108, LIFECYCLE_SEQUENCE_INVALID (P0). F-28
+opened and root-caused to a first broken product interaction.
+Evidence that it actually worked: f27-fix/{f0.log, epic5-full-suite-604df620.log,
+f1.log, canary-ff.log, canary-ak.log, pilot.log, ladder-2-4.log}; dossier
+…_appkit_rollback_…_008/{classification.json,timeline.md}; live disco.db
+events seq 63–68 (mutation record landed, no restore events); product log
+11:17:13–16 (finish seal OK, restore logged NOTHING); authenticated replay
+of the identical restore on identical bytes → HTTP 200 restored:1
+new_version:3.
+What went well and why: the ladder did exactly its job — a real,
+nondeterministic product reliability defect was caught by ten mixed trials
+before a single counted trial was spent; stop-first preserved the evidence
+unpolluted; the replay technique (mint session, re-POST the failed call)
+turned a bodyless 503 into a decisive moment-conditional proof.
+What went rough / consumed time or tokens: the dossier retains only the
+restore's HTTP status, not its body — the exact WorkspaceRestoreStorageError
+string is unrecoverable for the original moment; the product's restore
+route logs nothing on failure, so the log had to be bracketed by
+surrounding lines; hourly-hook nags continued against the external reviews
+all through the freeze.
+Immediate process or technical correction: the F-28 fix family includes the
+observability halves (product logs every failed restore with cause; harness
+retains the restore response body) so no future restore failure is bodyless.
+Recent fixes reviewed together: F-26 (paused terminal reads its pause seal),
+F-27 (finish must be sealable; refusal typed), F-28 (post-terminal restore
+races executor teardown and fails silently) — all three are terminal-boundary
+lifecycle races where an authority (version, seal, session) was assumed
+rather than bound at the moment of use.
+Repeated pattern detected? (yes/no): yes
+  - shared earliest broken invariant: an operation at or after a terminal
+    assumed a resource/authority (finish seal, pause seal, live session)
+    was still what it was moments earlier, instead of binding or
+    (re)acquiring it deterministically at the point of use — P13's family,
+    now with a third member on the session axis.
+  - structural product/harness remedy: post-terminal operations must
+    deterministically acquire what they need (create/wake and await a
+    session; read the bound seal) or fail LOUDLY with a typed, logged cause;
+    the harness must retain the product's stated cause verbatim.
+  - signal that would recognize it earlier next time: any code path where a
+    `live_*()` accessor's None/stale result is followed by a fast typed
+    refusal without either a bounded acquisition attempt or a log line.
+  - existing/new regression that protects it: the F-28 red repro + fix
+    tests (to be written this cycle): registered-but-dead session and
+    no-session cases both end in a successful restore or a loud logged
+    refusal; harness fixture asserting the retained error body.
+  - why the remedy remains target-neutral and flexible: session acquisition
+    and failure logging are engine/lifecycle concerns — no scenario,
+    framework, or target knowledge; no thresholds change; the classifier
+    contract is untouched (the FAIL stands as the honest verdict for the
+    original moment).
+Overhardening check:
+  - observed failure or authoritative contract requiring each open item:
+    F-28 fix ← observed pilot FAIL 620108; requalify from F0 ← failure
+    protocol on source change; nothing else opened.
+  - any theoretical tail to drop: yes — no redesign of restore semantics
+    (mirror-only restore for terminal conversations is out of scope; the
+    narrow fix is deterministic session acquisition + observability); no
+    speculative hardening of other live_* accessors without an observed
+    failure.
+Next action: hermetic RED reproduction of the F-28 race (registered-dying
+and absent-session restore), then the narrow fix + regression pair, gates,
+one commit, manifest attempt 9, fresh ladder from F0.

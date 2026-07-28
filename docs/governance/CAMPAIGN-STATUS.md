@@ -3013,3 +3013,48 @@ history, never credit. Next: governance commit → `.frozen-candidate` +
 manifest attempt 8 on the governance SHA with tree clean → stack restart
 onto the committed bytes → F0 → F1 → canaries → pilot → counted main
 0/100 detached.
+
+
+## 2026-07-28 ~18:45Z — attempt 8 stopped by the pilot; F-28 root-caused and fixed at `899907da`
+
+**Attempt-8 ladder on `604df620` (all preserved in `f27-fix/`, zero
+credit):** F0 EXIT=0; recorded four-suite EXIT=0; F1 dry receipt + live F1
+**8/8 PASS** — including `p4_ff_react_steer`, the exact family that killed
+attempt 7, and `p4_ff_node_pause` with a live-verified export
+(`workspace_match=True`); Freeform canary **1/1**; AppKit canary **1/1**;
+mixed pilot stopped by designed stop-first at **8 PASS + 1 FAIL**
+(`p4_appkit_rollback` seed 620108, LIFECYCLE_SEQUENCE_INVALID, P0;
+`appkit_strict` unrun).
+
+**F-28 (product, post-terminal restore vs executor teardown).** Proven from
+the dossier + live event log + product log + an authenticated replay: the
+restore arrived 1.7 s after FINISHED, acquired the just-terminal session
+while teardown raced it, and the apply stage died after the mutation record
+(seq 66) — no restore events, no version cut, NOTHING logged by the
+product, and only a bodyless 503 in harness evidence. The identical restore
+replayed on the same bytes succeeded (200, restored:1 → new_version:3),
+proving moment-conditionality. The restore path was byte-identical to
+attempt 7 (`729316e1` never touched it): a pre-existing terminal-boundary
+race, exposed honestly by the wider pilot. Pattern P13 gains its third
+member (the assumed authority this time is a live SESSION).
+
+**Fix at `899907da` (red→green in one cycle):** the session-dependent apply
+stage is one idempotent module-level unit fed from the immutable verified
+stage; on failure the service logs the cause and reacquires exactly ONE
+fresh session through the existing wake/create chain — never the failed
+object (`exclude`) — and re-applies; a second failure raises typed and
+logged with no partial state. Every failed-restore path now logs the
+conversation. The harness retains the product's restore error body verbatim
+(`error`) — the 620108 cause was unrecoverable, and that never happens
+again. Tests: two RED-on-pre-fix tests (survive-by-reacquiring; bounded +
+logged + no-partial-state), a never-reuse-the-failed-session control, the
+harness retention pin, and the 8 pre-existing restore/version tests
+unchanged. Verification on the exact committed bytes
+(`f27-fix/f28-authoritative-verification.log`): four gates EXIT=0,
+core+agent-server EXIT=0, build_soak EXIT=0.
+
+**Next:** governance commit → `.frozen-candidate` + manifest attempt 9 on
+the governance SHA with tree clean → stack restart → fresh ladder (F0 →
+four-suite → F1 630000 → canaries 640000/640001 → pilot 640100–640109,
+which re-covers the unrun `appkit_strict` cell) → counted main 0/100
+detached (seeds 600000–600085, never launched on attempt 8).
