@@ -745,9 +745,33 @@ class LifecycleManager:
             )
 
     async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
-        """Best-effort recovery snapshot for a non-FINISHED boundary."""
+        """Best-effort recovery snapshot for a non-FINISHED boundary.
 
-        await self._capture_workspace(conversation_id, trigger=trigger)
+        PIN the sandbox here, while this boundary still owns the executor.
+
+        `commit_finished_workspace` has pinned since pilot seed 406546, because
+        by capture time the executor may already be gone. Every OTHER ended state
+        re-resolved it inside `_resolve_capture_session` and lost the race —
+        certified-lane seed 621005 (2026-07-27) ended after 1104s with no
+        `<projects_root>/<cid>/` at all: no tree, no versions, no manifest.
+
+        The window is already known here: `_suspend` re-validates
+        `conversation_id not in self._rt._executors` immediately AFTER this
+        await, because the executor can vanish across it. The snapshot simply was
+        not given the same protection.
+
+        Holding the reference does not keep a dead box alive — capture still
+        fails closed when the session is gone, and `_resolve_capture_session`
+        still prefers the live session when the pin turns out to be a previous
+        generation. It removes the WINDOW, nothing more.
+        """
+
+        executor = self._rt._executors.get(conversation_id)
+        await self._capture_workspace(
+            conversation_id,
+            trigger=trigger,
+            pinned_session=getattr(executor, "_sandbox", None) if executor is not None else None,
+        )
 
     async def _capture_workspace(
         self,
@@ -757,6 +781,7 @@ class LifecycleManager:
         version_label: str = "",
         seal_fence: tuple[int, int | None] | None = None,
         journal: dict[str, Any] | None = None,
+        pinned_session: Any | None = None,
     ) -> WorkspaceVersionEvent | None:
         """Mirror live bytes and optionally publish a strict immutable seal."""
         return await self._persistence._do_capture_workspace(
@@ -764,6 +789,7 @@ class LifecycleManager:
             trigger=trigger,
             version_label=version_label,
             seal_fence=seal_fence,
+            pinned_session=pinned_session,
             journal=journal,
             snapshot_fn=snapshot_workspace,
         )
