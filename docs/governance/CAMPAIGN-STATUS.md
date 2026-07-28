@@ -3115,3 +3115,48 @@ non-PASS).
 **Next:** F-29 implementation on a fresh working commit → gates + focused
 suites → one commit → manifest attempt 10 → fresh ladder → counted main-86
 restart.
+
+---
+
+## 2026-07-28 22:20Z — F-29 fixed at c6b00f78; this governance commit is the attempt-10 candidate
+
+**Fix (one commit, `c6b00f78`, 5 files +402/−2):** client
+`_daemon_failure_despite_missing_freshness` — an ok:false daemon reply with a
+declared error and NO freshness dict surfaces the daemon's verdict verbatim
+with `[freshness unverified: …]` disclosed beside it (and, per opus advisory,
+invites ONE retry for `browser_daemon_unavailable` instead of forbidding it);
+a PRESENT-but-wrong acknowledgement still fails closed and ok:true never
+bypasses freshness. Daemon `_handle_action` split into a protocol/heal
+wrapper + capped `_dispatch_parsed` (budget entry transferred): every
+post-protocol reply acknowledges (internal error, renderer-unavailable,
+page-None), `_freshness` survives a dead `page.url`, and a dead Playwright
+transport heals at most once per request (`_heal_dead_transport`; a
+live-transport exception never restarts). ThrashOracle, caps, seeds,
+scenarios untouched.
+
+**Evidence:** regression `test_browser_daemon_error_verdict.py` — wire-level
+mask proven RED on pre-fix bytes reproducing the live P1's exact first line,
+7/7 GREEN post-fix incl. the end-to-end pin (daemon internal-error reply
+passes client freshness validation) and fail-closed controls. Four gates
+EXIT=0; tools / core / agent-server / retrieval / app-server unit suites
+EXIT=0; build_soak green. Opus consultant: 0 blocking, 3 advisory
+(ADVISORY-2 recipe correction applied; 1 and 3 deferred as overhardening —
+recorded in Review 24's overhardening check lineage). The 2026-07-27
+navigate-waiver pins (10 tests) unchanged and green.
+
+**Honest disclosures:** (1) `harness/marathon/*` + `harness/tests/
+test_contract.py::test_event_kinds_have_ts_mirrors` +
+`harness/tests/test_replay_runner.py` fail PRE-EXISTING on a34deddf
+(verified via baseline worktree, identical failures) — advisory-scope (CI
+required pytest does not collect `harness/`), unrelated to F-29 bytes; noted
+for a post-Epic-7 sweep, not chased mid-campaign. (2) The hourly-review hook
+registers only editor-tool writes to SELF-REVIEWS.md; a shell append is
+invisible to it — Review 24 required an editor-tool re-registration
+(schedule note recorded in the review block).
+
+**Consequence:** the counted 100 restarts from zero on the attempt-10
+candidate (THE COMMIT CARRYING THIS ENTRY). Ladder: verification log on the
+committed bytes → stack restart onto candidate → manifest attempt-10
+re-signing (all 1-R fields live-read) → F0 → four-suite → F1 (630000) →
+canaries (640000/640001) → pilot 10 (640100–640109) → main 86 (600000–600085)
++ restart 4 + context 10. `.frozen-candidate` updates to this SHA.
