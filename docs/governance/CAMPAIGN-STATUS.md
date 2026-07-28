@@ -15,7 +15,11 @@ handoff.
 > standing ledger continues at that external path, with the same schema and
 > frequency, and the hourly hook switches to it.
 >
-> External continuation path: **not yet assigned — candidate not frozen.**
+> External continuation path:
+> **`/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic6/f26-fix/LEDGER.md`**
+> — assigned 2026-07-28. The commit carrying this assignment IS the frozen
+> qualification candidate; repository bytes stop moving here. Every ledger
+> update during qualification/certification continues at that external path.
 
 ---
 
@@ -163,7 +167,7 @@ closeout.
 | 2 — durable typed runtime constraints | **COMPLETE** except the live k460000 confirmation, which Epic 4's seed 460000 provides |
 | 3 — coherent, safe condensation | **COMPLETE** — one-horizon fix + summary validation/repair/fallback, all revert-checked |
 | 4 — context diagnostics on final bytes | IN PROGRESS — staged; blocked only on HANDOFF pre-flight P1, then seeds 460000+ |
-| 5 — deterministic/integration preflight | NEARLY COMPLETE — see HANDOFF E2 for the two remaining items |
+| 5 — deterministic/integration preflight | **COMPLETE** — E2's recorded four-suite pass landed on the F-26 candidate: `10190 passed, 2 skipped (pre-existing; candidate delta adds 0 skip constructs), 104 deselected (integration marker), EXIT=0 in-body`, log with SHA+fingerprint header at `…/epic6/f26-fix/epic5-full-suite-8f249c7a.log`; all other Epic-5 items were completed earlier and not redone per E2 |
 | 6 — qualification and exact 100 | not started |
 | 7 — same-byte closeout and local integration | not started |
 
@@ -2893,4 +2897,33 @@ denied all delegation); Reviews 6–7; pattern P12 recorded.
 **Promotion remains 0/100.** The commit carrying this entry is the new
 qualification candidate; qualification restarts from scratch on it
 (`f26-fix/RESIGN-CHECKLIST.md`).
+
+## 2026-07-28 04:57 CDT — Epic 5 COMPLETE; candidate FROZEN at this commit
+
+E2's two remaining items are closed on the F-26 candidate lineage:
+
+1. **Recorded four-suite pass** — `pytest packages/core packages/tools
+   packages/agent-server harness/build_soak/tests -m "not integration"` on
+   `8f249c7a`: **10190 passed, 2 skipped, 104 deselected in 17:45, EXIT=0
+   in-body**, header binds SHA + source fingerprint
+   `a4f62f45…`. Log kept outside the repo:
+   `…/epic6/f26-fix/epic5-full-suite-8f249c7a.log`. The two skips predate the
+   candidate (`git diff a632dde2..HEAD` contains zero skip constructs); the
+   104 deselected are the integration marker, excluded by design in the
+   required lane and covered by the earlier accepted Epic-5 integration
+   evidence (Docker 8/8, Export Track-1, frozen Firefox lane — not redone per
+   E2). The changed harness paths carry their own integration-grade proof:
+   the live 9/9 reproduction against the real surviving product store.
+2. **Ledger flip** — the epic table above now records Epic 5 COMPLETE with
+   that evidence.
+
+**Candidate freeze.** The commit carrying this entry is the frozen
+qualification candidate (it appends governance bytes only on top of
+`8f249c7a`; `packages/` remains byte-identical to `a632dde2`, and the source
+fingerprint that governs counted credit is unchanged by governance files).
+The standing ledger continues at
+`…/epic6/f26-fix/LEDGER.md`; repository bytes stop moving until Epic 7's
+authorized closeout. Next: re-sign `QUALIFICATION-MANIFEST.md` +
+`.frozen-candidate` to this commit, stack up, then F0 → F1 → canaries →
+pilot → exact 100 at 0/100.
 
