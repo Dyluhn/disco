@@ -77,7 +77,9 @@ ALLOW_CLASSES = {
     (
         "agent_server/workspace_service.py",
         "WorkspaceCoordinator",
-    ): 807,  # was at the 800 default; +7 REL-27 (finish_sealability_probe binder)
+    ): 817,  # was at the 800 default; +7 REL-27 (probe binder); +10 REL-28
+    # (F-28 pilot 620108: bounded dying-session reacquire + logged restore
+    # failures; the apply stage itself is module-level, not class LOC)
     ("finish/content_gates.py", "_ContentGateMixin"): 1087,  # stable-main 1087
 }
 ALLOW_FUNCS = {

@@ -2286,7 +2286,7 @@ class DiscoApiClient:
         restore_status, result = await self._t.post_json(
             f"/conversations/{conversation_id}/versions/{selected_seq}/restore", {}
         )
-        return {
+        evidence: dict[str, Any] = {
             "ok": 200 <= restore_status < 300 and result.get("restored") == selected_seq,
             "http_status": restore_status,
             "selected_seq": selected_seq,
@@ -2294,6 +2294,12 @@ class DiscoApiClient:
             "new_version": result.get("new_version"),
             "tree_digest": result.get("tree_digest"),
         }
+        if restore_status >= 400:
+            # F-28 (pilot 620108): the dossier held only a bare 503 — the
+            # product's stated cause was unrecoverable. Retain the response
+            # body verbatim; never adjudicate on it, never parse it.
+            evidence["error"] = result.get("detail", result or None)
+        return evidence
 
     async def download_project(self, conversation_id: str) -> tuple[int, bytes]:
         status, content, _headers = await self._t.get_bytes(

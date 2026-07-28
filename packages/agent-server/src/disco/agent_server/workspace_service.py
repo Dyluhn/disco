@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import logging
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -65,6 +66,53 @@ class WorkspaceVersionNotFound(LookupError):
 
 class WorkspaceRestoreStorageError(RuntimeError):
     """Workspace restore failed because storage or sandbox I/O failed."""
+
+
+_LOG = logging.getLogger(__name__)
+
+
+async def _apply_restore_to_session(
+    session: Any,
+    entries: Any,
+    stage: Path,
+    store: Any,
+    conversation_id: str,
+) -> None:
+    """Apply staged verified bytes to one session and re-mirror the live store.
+
+    Everything session-dependent lives here so a dying-session failure can be
+    retried ONCE on a reacquired session (F-28, pilot seed 620108: a restore
+    1.7 s after FINISHED raced the executor teardown and died mid-apply). The
+    stage is immutable input; a re-run re-clears and re-writes, so a partial
+    first attempt cannot corrupt the second.
+    """
+
+    clear = await session.exec_shell(
+        "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+        timeout_s=30,
+    )
+    if clear.exit_code != 0:
+        detail = (clear.stderr or clear.stdout or "workspace clear failed").strip()
+        raise WorkspaceRestoreStorageError(detail[:300])
+    for entry in entries:
+        data = (stage / entry.path).read_bytes()
+        if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
+            raise WorkspaceRestoreStorageError(
+                f"verified restore stage changed before consumption: {entry.path}"
+            )
+        await session.write_file(entry.path, data)
+
+    live_workspace = store.path_for(conversation_id)
+    result = await snapshot_workspace(session, live_workspace)
+    project_record = store.get(conversation_id)
+    store.write_manifest(
+        conversation_id,
+        title=project_record.title if project_record is not None else None,
+        owner_id=project_record.owner_id if project_record is not None else None,
+        created_at=project_record.created_at if project_record is not None else None,
+        file_count=result.file_count,
+        total_bytes=result.total_bytes,
+    )
 
 
 _OWNED_WORKSPACE_FENCES: ContextVar[frozenset[tuple[str, asyncio.Task[Any]]]] = ContextVar(
@@ -722,37 +770,30 @@ class WorkspaceCoordinator:
                     "version.restore",
                     paths=(".",),
                 )
-                clear = await session.exec_shell(
-                    "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
-                    timeout_s=30,
-                )
-                if clear.exit_code != 0:
-                    detail = (clear.stderr or clear.stdout or "workspace clear failed").strip()
-                    raise WorkspaceRestoreStorageError(detail[:300])
-                for entry in entries:
-                    data = (stage / entry.path).read_bytes()
-                    if len(data) != entry.size or hashlib.sha256(data).hexdigest() != entry.sha256:
-                        raise WorkspaceRestoreStorageError(
-                            f"verified restore stage changed before consumption: {entry.path}"
-                        )
-                    await session.write_file(entry.path, data)
-
-                live_workspace = store.path_for(conversation_id)
-                result = await snapshot_workspace(session, live_workspace)
-                project_record = store.get(conversation_id)
-                store.write_manifest(
-                    conversation_id,
-                    title=project_record.title if project_record is not None else None,
-                    owner_id=project_record.owner_id if project_record is not None else None,
-                    created_at=project_record.created_at if project_record is not None else None,
-                    file_count=result.file_count,
-                    total_bytes=result.total_bytes,
-                )
-        except WorkspaceRestoreStorageError:
+                try:
+                    await _apply_restore_to_session(session, entries, stage, store, conversation_id)
+                except Exception:  # noqa: BLE001 — F-28: dying-session race
+                    # The session was acquired moments ago but a post-terminal
+                    # teardown can kill it mid-apply (pilot 620108: FINISHED
+                    # +1.7s, apply died, bare 503, nothing logged, and the
+                    # identical replay succeeded). Reacquire ONCE through the
+                    # existing wake/create chain — never the same object — and
+                    # re-run the idempotent apply from the immutable stage.
+                    _LOG.warning(
+                        "workspace restore apply failed for %s; reacquiring a session once",
+                        conversation_id,
+                        exc_info=True,
+                    )
+                    fresh = await self._restore_session(conversation_id, exclude=session)
+                    await _apply_restore_to_session(fresh, entries, stage, store, conversation_id)
+        except WorkspaceRestoreStorageError as exc:
+            _LOG.error("workspace restore failed for %s: %s", conversation_id, exc)
             raise
         except StorageError as exc:
+            _LOG.error("workspace restore failed for %s: %s", conversation_id, exc)
             raise WorkspaceRestoreStorageError(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
+            _LOG.error("workspace restore failed for %s: %s", conversation_id, exc, exc_info=True)
             raise WorkspaceRestoreStorageError(str(exc)) from exc
 
         await self._append_restore_events(conversation_id, seq, record.tree_digest, record.label)
@@ -766,22 +807,31 @@ class WorkspaceCoordinator:
             "tree_digest": record.tree_digest,
         }
 
-    async def _restore_session(self, conversation_id: str) -> Any:
-        session = self._rt.live_session(conversation_id)
+    async def _restore_session(self, conversation_id: str, *, exclude: Any = None) -> Any:
+        """Acquire a session for restore; ``exclude`` marks one that just
+        failed (F-28) — the registry may still return that dying object, and
+        handing it back would retry a dead container as if it were fresh."""
+
+        def _usable(candidate: Any) -> Any:
+            return None if candidate is None or candidate is exclude else candidate
+
+        session = _usable(self._rt.live_session(conversation_id))
         if session is None:
             cid8 = conversation_id.removeprefix("conv_")[:8]
             with contextlib.suppress(Exception):
                 await self._rt.wake_for_preview(cid8, PREVIEW_PORT)
-            session = self._rt.live_session(conversation_id)
+            session = _usable(self._rt.live_session(conversation_id))
         if session is None:
             try:
                 self._rt._loop_for(conversation_id)
             except Exception as exc:  # noqa: BLE001 — mapped to a named storage error
+                _LOG.error("could not create sandbox for restore of %s: %s", conversation_id, exc)
                 raise WorkspaceRestoreStorageError(
                     f"could not create sandbox for restore: {exc}"
                 ) from exc
-            session = self._rt.live_session(conversation_id)
+            session = _usable(self._rt.live_session(conversation_id))
         if session is None:
+            _LOG.error("sandbox unavailable for restore of %s", conversation_id)
             raise WorkspaceRestoreStorageError("sandbox unavailable for restore")
         return session
 

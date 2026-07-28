@@ -10835,6 +10835,33 @@ async def test_restore_version_still_fails_closed_when_never_published(tmp_path)
     assert transport.restores == []
 
 
+class _FailingRestoreTransport:
+    """The versions publish, but the restore itself fails with a typed body
+    (F-28, pilot seed 620108: the dossier kept only the bare 503 and the
+    product's stated cause was unrecoverable)."""
+
+    async def get_json(self, path):
+        return 200, {"versions": [{"seq": 1}, {"seq": 2}]}
+
+    async def post_json(self, path, body):
+        return 503, {"detail": {"reason": "storage_error", "message": "sandbox unavailable"}}
+
+
+async def test_restore_version_failure_retains_product_error_body(tmp_path):
+    """EVIDENCE PIN (F-28) — a failed restore keeps the product's response
+    body verbatim under `error` so a future dossier names the cause. Never
+    parsed, never adjudicated on — retention only."""
+    client = DiscoApiClient(
+        _FailingRestoreTransport(), db_path=str(tmp_path / "disco.db"), snapshot_wait_s=1.0
+    )
+    out = await client.restore_workspace_version("conv_x", selector="previous")
+    assert out["ok"] is False
+    assert out["http_status"] == 503
+    assert out["error"] == {"reason": "storage_error", "message": "sandbox unavailable"}
+    # The success shape is unchanged: no `error` key on 2xx (pinned by
+    # test_restore_version_waits_for_post_terminal_publication asserting ok).
+
+
 # ---- parked-IDLE recognition across poll invocations (seed 405414) ----------
 
 
