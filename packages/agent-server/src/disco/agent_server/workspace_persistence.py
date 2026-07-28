@@ -145,6 +145,33 @@ async def _require_seal_publication_stable(
         raise RuntimeError("host mirror changed during finalization")
 
 
+def _skipped_capture(conversation_id: str, trigger: str) -> None:
+    """Report a workspace capture that never ran, and return the skip value.
+
+    A bare ``return None`` is indistinguishable from "captured nothing because
+    there was nothing to capture", and the difference is a conversation's entire
+    durable workspace — no tree, no versions, no manifest.
+
+    Certified-lane evidence 2026-07-27 (`p4_ff_react_steer` seed 621005,
+    INVALID_RUN / MISSING_REQUIRED_EVIDENCE): 68 actions over 1104s, then the run
+    terminated with no ``<projects_root>/<cid>/`` at all. Its browser screenshots
+    were referenced as durable evidence and had nowhere to live, and nothing in
+    the log said a capture had been skipped.
+
+    Best-effort on this path is deliberate — the strict ``seal_fence`` path
+    raises instead — but silence is not. Lives at module level so reporting the
+    skip costs :class:`WorkspacePersistence` no lines against its size budget.
+    """
+
+    _LOG.warning(
+        "workspace capture SKIPPED for %s (trigger=%s): no capture session could be "
+        "resolved; nothing was persisted for this conversation",
+        conversation_id,
+        trigger,
+    )
+    return None
+
+
 class WorkspacePersistence:
     """Collaborator owned by ``LifecycleManager`` — all workspace durability logic.
 
@@ -784,7 +811,7 @@ class WorkspacePersistence:
                 pinned_session=pinned_session,
             )
             if resolved is None:
-                return None
+                return _skipped_capture(conversation_id, trigger)
             session, store = resolved
         title, created_at, owner_id = await self._conversation_manifest_metadata(conversation_id)
         started = time.monotonic()
