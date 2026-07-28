@@ -53,12 +53,17 @@ ALLOW_CLASSES = {
     # wiring + lock-holding control ops + thin delegators; all methods are small.
     # Existing coordinator growth predates this integration; freeze the measured
     # post-campaign sizes so the zero-baseline gate regains signal.
-    ("core/loop/engine.py", "AgentLoop"): 2225,
-    ("agent_server/runtime.py", "ConversationRuntime"): 4567,
+    # REL-27 (F-27, counted trial 590005): the finish-time sealability gate must
+    # touch exactly these coordinator seams (loop params/counters, runtime probe
+    # wiring, notify-path gate call, probe binder, typed seal disclosure). Each
+    # was frozen AT size; the residues below are the post-compression minimum
+    # (probe logic itself lives at module level / in the uncapped FinishGate).
+    ("core/loop/engine.py", "AgentLoop"): 2233,  # was 2225, +8 REL-27
+    ("agent_server/runtime.py", "ConversationRuntime"): 4574,  # was 4567, +7 REL-27
     ("agent_server/deep_research_service.py", "DeepResearchService"): 1244,
     # Ratchet additions — long-standing coordinators that predate the gate's caps.
     ("app_server/config_state.py", "ConfigState"): 918,
-    ("core/loop/turn_control.py", "Valve"): 1129,
+    ("core/loop/turn_control.py", "Valve"): 1134,  # was 1129, +5 REL-27
     ("core/loop/turn_control.py", "MetaToolHandlers"): 830,
     ("loop/driver.py", "Driver"): 1306,  # stable-main 1306
     (
@@ -68,13 +73,17 @@ ALLOW_CLASSES = {
     (
         "agent_server/workspace_persistence.py",
         "WorkspacePersistence",
-    ): 970,  # stable-main 844, +126 on this branch
+    ): 977,  # stable-main 844, +126 branch, +7 REL-27 (content split + typed raise)
+    (
+        "agent_server/workspace_service.py",
+        "WorkspaceCoordinator",
+    ): 807,  # was at the 800 default; +7 REL-27 (finish_sealability_probe binder)
     ("finish/content_gates.py", "_ContentGateMixin"): 1087,  # stable-main 1087
 }
 ALLOW_FUNCS = {
     ("core/loop/engine.py", "run"): 330,  # the agent-loop dispatcher
     ("builtin/run_script.py", "run"): 284,  # stable-main 284, one linear script tool
-    ("core/loop/engine.py", "__init__"): 285,  # collaborator wiring + comments
+    ("core/loop/engine.py", "__init__"): 292,  # collaborator wiring + comments, +7 REL-27
     ("deep_research_service.py", "_execute_deep_research"): 295,
     ("agent_server/runtime.py", "__init__"): 335,
     # B5 Epic-O port (verbatim from nightly's 11-wave-audited deploy code): the
@@ -87,7 +96,7 @@ ALLOW_FUNCS = {
         "make_cloudflare_router",
     ): 245,  # flat endpoint registrations (router-factory class, like siblings)
     # Ratchet additions (frozen at current size, see block comment above).
-    ("agent_server/runtime.py", "_compose_build_loop"): 443,
+    ("agent_server/runtime.py", "_compose_build_loop"): 446,  # +3 REL-27 probe wiring
     ("core/loop/engine.py", "_gate_planning_mode"): 263,
     ("core/loop/engine.py", "_run_drive"): 368,
     ("core/loop/driver.py", "drive_step"): 261,

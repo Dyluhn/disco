@@ -32,6 +32,7 @@ from harness.build_soak.adapters.disco_api import (
     BrowserEvidenceCollectionError,
     CollectedRun,
     DiscoApiClient,
+    FinishUnsealableContentError,
     HttpTransport,
     SnapshotNotReadyError,
 )
@@ -3518,6 +3519,217 @@ async def test_snapshot_timeout_fail_fast_when_never_ready(tmp_path, monkeypatch
 
     assert "index.html" in [u["path"] for u in ei.value.facts["unsatisfied"]]
     assert clock.polls <= 6  # bounded by snapshot_wait_s / poll cadence — never hangs
+
+
+def _seal_refusal_disclosure(seq, blocking):
+    """The PRODUCT's typed content-seal-refusal disclosure event (REL-27)."""
+    return {
+        "id": f"m{seq}",
+        "seq": seq,
+        "kind": "message",
+        "source": "environment",
+        "message": {
+            "role": "user",
+            "content": (
+                "<system-reminder>\nProject persistence note: snapshot failed: "
+                "final workspace snapshot was incomplete: "
+                + "; ".join(blocking)
+                + "\n</system-reminder>"
+            ),
+        },
+        "meta": {
+            "persistence_failure": {
+                "kind": "seal_incomplete_content",
+                "blocking": list(blocking),
+            }
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_typed_seal_refusal_is_product_fail_not_snapshot_lag(tmp_path, monkeypatch):
+    """F-27 split (590005) — same never-ready snapshot as the fail-fast case,
+    but the run FINISHED and the PRODUCT disclosed (typed) that the strict seal
+    refused on deterministic content. That must classify as the product failure
+    it is (FinishUnsealableContentError → FAIL FINISH_UNSEALABLE_CONTENT), not
+    as rerunnable WORKSPACE_SNAPSHOT_NOT_READY — §17 re-running it is exactly
+    how a product defect gets laundered into an invisible retry."""
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE rev-1</h1>"})  # never updated
+    blocking = [
+        "dist: symlink excluded",
+        "index.html: symlink excluded",
+        "package.json: symlink excluded",
+        "src/App.jsx: symlink excluded",
+    ]
+    events = _file_write_log("index.html", "<h1>final rev-2</h1>")
+    events.append(_seal_refusal_disclosure(5, blocking))
+    _seed_db(db, _CID, events)
+
+    clock = _FakeClock()  # disk stays stale — the seal was refused, not slow
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.5,
+    )
+
+    with pytest.raises(FinishUnsealableContentError) as ei:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert ei.value.facts["seal_refused_blocking"] == blocking
+    assert ei.value.facts["finished_live"] is True
+    # And the lag path stayed a lag path: the sibling fail-fast test above
+    # (no disclosure) still raises SnapshotNotReadyError.
+
+
+@pytest.mark.asyncio
+async def test_seal_refusal_superseded_by_later_seal_stays_snapshot_lag(tmp_path, monkeypatch):
+    """A refused seal that the model REPAIRED (a later workspace_version event
+    seals the re-finish) no longer governs: a subsequent never-ready collect is
+    ordinary snapshot lag, not FINISH_UNSEALABLE_CONTENT."""
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE rev-1</h1>"})
+    events = _file_write_log("index.html", "<h1>final rev-2</h1>")
+    events.append(_seal_refusal_disclosure(5, ["dist: symlink excluded"]))
+    events.append(
+        {
+            "id": "wv6",
+            "seq": 6,
+            "kind": "workspace_version",
+            "source": "system",
+            "version_seq": 1,
+            "tree_digest": "a" * 64,
+            "trigger": "finish",
+        }
+    )
+    _seed_db(db, _CID, events)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.5,
+    )
+
+    with pytest.raises(SnapshotNotReadyError):
+        await client.collect_workspace(_CID, ["index.html"])
+
+
+@pytest.mark.asyncio
+async def test_seal_refusal_not_superseded_by_recovery_version_cut(tmp_path, monkeypatch):
+    """NEGATIVE (F-27 side door) — a post-refusal RECOVERY/PAUSE version cut is
+    not a repaired finish seal. The typed content refusal still governs and the
+    trial stays the product failure it is, never rerunnable snapshot lag."""
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    _plant_snapshot(proj, _CID, {"index.html": "<h1>STALE rev-1</h1>"})
+    blocking = ["dist: symlink excluded"]
+    events = _file_write_log("index.html", "<h1>final rev-2</h1>")
+    events.append(_seal_refusal_disclosure(5, blocking))
+    events.append(
+        {
+            "id": "wv6",
+            "seq": 6,
+            "kind": "workspace_version",
+            "source": "system",
+            "version_seq": 1,
+            "tree_digest": "a" * 64,
+            "trigger": "paused",
+        }
+    )
+    _seed_db(db, _CID, events)
+
+    clock = _FakeClock()
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db),
+        poll_interval_s=0.0,
+        projects_root=str(proj),
+        snapshot_wait_s=1.5,
+    )
+
+    with pytest.raises(FinishUnsealableContentError) as ei:
+        await client.collect_workspace(_CID, ["index.html"])
+
+    assert ei.value.facts["seal_refused_blocking"] == blocking
+
+
+def test_typed_content_seal_refusal_helper_directions():
+    """Unit — the disclosure detector: typed meta governs, prose never does,
+    and a later seal supersedes."""
+    from harness.build_soak.adapters.disco_api import _typed_content_seal_refusal
+
+    disclosure = _seal_refusal_disclosure(5, ["dist: symlink excluded"])
+    assert _typed_content_seal_refusal([disclosure]) == ["dist: symlink excluded"]
+    # Prose-only (no typed meta) → never governs.
+    prose_only = dict(disclosure)
+    prose_only["meta"] = {}
+    assert _typed_content_seal_refusal([prose_only]) is None
+    # A LATER workspace_version supersedes the refusal.
+    version = {
+        "id": "wv9",
+        "seq": 9,
+        "kind": "workspace_version",
+        "source": "system",
+        "version_seq": 1,
+        "tree_digest": "b" * 64,
+        "trigger": "finish",
+    }
+    assert _typed_content_seal_refusal([disclosure, version]) is None
+    # An EARLIER version (a paused recovery cut, say) does not mask a refusal
+    # that came after it.
+    early_version = dict(version)
+    early_version["seq"] = 2
+    assert _typed_content_seal_refusal([early_version, disclosure]) == ["dist: symlink excluded"]
+    # A LATER version that is NOT finish-triggered (a post-refusal recovery or
+    # pause cut) has no supersession authority — only the finish seal judges a
+    # refused finish seal. Anything else re-opens the F-27 laundering side door.
+    recovery_version = dict(version)
+    recovery_version["seq"] = 9
+    recovery_version["trigger"] = "paused"
+    assert _typed_content_seal_refusal([disclosure, recovery_version]) == ["dist: symlink excluded"]
+    # A later "finish" version that fails the harness's single workspace_version
+    # shape validator has NO supersession authority — a malformed event cannot
+    # launder a typed refusal back into rerunnable snapshot lag (opus #7).
+    malformed_version = dict(version)
+    malformed_version["tree_digest"] = "not-a-sha"
+    assert _typed_content_seal_refusal([disclosure, malformed_version]) == [
+        "dist: symlink excluded"
+    ]
+    foreign_version = dict(version)
+    foreign_version["source"] = "agent"
+    assert _typed_content_seal_refusal([disclosure, foreign_version]) == ["dist: symlink excluded"]
+    # An unorderable (null-seq) disclosure never governs — the harness cannot
+    # place it relative to the supersession boundary.
+    unordered = dict(disclosure)
+    unordered["seq"] = None
+    assert _typed_content_seal_refusal([unordered]) is None
+
+
+def test_seal_incomplete_content_kind_pinned_to_product_constant():
+    """CONTRACT PIN (F-27) — the adapter splits product-FAIL vs snapshot-lag on
+    the product's typed disclosure kind. The two halves of that cross-layer
+    contract are separate constants in separate packages; a rename on either
+    side must fail HERE, loudly — never silently revert F-27 adjudication to
+    rerunnable INVALID_RUN."""
+    from disco.agent_server.workspace_persistence import (
+        SEAL_INCOMPLETE_CONTENT_KIND as PRODUCT_KIND,
+    )
+
+    from harness.build_soak.adapters.disco_api import (
+        SEAL_INCOMPLETE_CONTENT_KIND as HARNESS_KIND,
+    )
+
+    assert HARNESS_KIND == PRODUCT_KIND
 
 
 @pytest.mark.asyncio

@@ -269,6 +269,8 @@ def build_loop(
     finish_alias: str | None = None,
     quiet: bool = False,
     strict_appkit_active=None,
+    finish_sealability_probe=None,
+    finish_seal_timeout_s: float = 150.0,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -309,6 +311,8 @@ def build_loop(
         finish_alias=finish_alias,
         quiet=quiet,
         strict_appkit_active=strict_appkit_active,
+        finish_sealability_probe=finish_sealability_probe,
+        finish_seal_timeout_s=finish_seal_timeout_s,
     )
     return loop, store
 

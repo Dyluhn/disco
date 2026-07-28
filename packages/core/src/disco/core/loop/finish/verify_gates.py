@@ -3248,6 +3248,13 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             return False
         if _real_web_failure_evidence(events):
             return False
+        # REL-27 — the honest static finish is still an affirmative delivery of
+        # workspace files, so it must clear the finish-time sealability gate. On
+        # refusal (exact-paths reminder already emitted) return False: the valve
+        # keeps its existing pause/stuck behavior and never lands a FINISHED
+        # whose deliverable cannot be sealed.
+        if not await self.seal_gate_allows_finish():
+            return False
         # All guards hold — finish honestly instead of pausing actionless. Same honest
         # marker as the finish-gate path, then a clean terminal FINISHED (NOT PAUSED).
         await self._loop._emit(

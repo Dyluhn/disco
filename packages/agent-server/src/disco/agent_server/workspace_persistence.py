@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections.abc import Callable
@@ -41,6 +42,7 @@ from disco.core import (
     workspace_terminal_matches_current_run,
 )
 from disco.core.context.artifact_projection import manifest_shadow_enabled
+from disco.core.loop import SealabilityProbeResult
 from disco.tools import APPKIT_MUTATORS
 from disco.tools.projects import (
     ProjectStore,
@@ -102,19 +104,123 @@ def _write_json_durable(path: Path, payload: dict[str, Any]) -> None:
             tmp.unlink()
 
 
-def _strict_snapshot_complete(skipped: list[str]) -> bool:
-    """True only when skips are deliberate non-deliverable exclusions.
+# The two deliberate non-deliverable exclusions the strict seal accepts.
+# Dependency caches and runtime secret paths are outside the workspace-seal
+# scope by design; every other skip makes final-byte attribution incomplete.
+_ALLOWED_SKIP_SUFFIXES = (
+    "dependency/cache path excluded",
+    "runtime secret path excluded",
+)
 
-    Dependency caches and runtime secret paths are outside the workspace-seal
-    scope by design. Unreadable, oversized, or otherwise preserved entries make
-    final-byte attribution incomplete and therefore cannot be sealed.
+# REL-27 — the typed disclosure kind for a strict seal refused on CONTENT.
+# The soak harness adjudicates on this product-owned value (never a private
+# re-derivation of the rule), so it is a contract constant: changing it is a
+# cross-repo classifier change.
+SEAL_INCOMPLETE_CONTENT_KIND = "seal_incomplete_content"
+
+
+# Deterministic CONTENT judgments of the snapshot walkers (both the Podman
+# guest script and the portable fallback): stable properties of the workspace
+# the model can act on. Transient capture failures (read/lstat/list failures,
+# changed-while-archiving races) are deliberately NOT here — refusing a finish
+# or branding a product failure on a transient would launder infra into
+# product exactly the way F-27's classifier laundered product into infra.
+_CONTENT_SKIP_SUFFIXES = (
+    "symlink excluded",
+    "non-regular entry excluded",
+    "hardlinked entry excluded",
+    "-byte cap",  # "<n> bytes exceeds the <m>-byte cap" (both walkers)
+)
+
+
+def strict_blocking_skips(skipped: list[str]) -> list[str]:
+    """The skip entries the strict final seal refuses (all non-allowed skips).
+
+    Single source of truth for "what blocks a seal" — the commit-time strict
+    seal judges with exactly this rule.
     """
 
-    allowed_suffixes = (
-        "dependency/cache path excluded",
-        "runtime secret path excluded",
-    )
-    return all(item.endswith(allowed_suffixes) for item in skipped)
+    return [item for item in skipped if not item.endswith(_ALLOWED_SKIP_SUFFIXES)]
+
+
+def content_blocking_skips(skipped: list[str]) -> list[str]:
+    """The blocking subset that is a DETERMINISTIC content judgment (REL-27).
+
+    Shared verbatim by the finish-time sealability gate (refuse only what the
+    model can actually fix) and the typed ``seal_incomplete_content``
+    disclosure (attribute to the product only what was deterministically
+    unsealable), so gate, seal, and disclosure can never disagree.
+    """
+
+    return [
+        item for item in strict_blocking_skips(skipped) if item.endswith(_CONTENT_SKIP_SUFFIXES)
+    ]
+
+
+class FinalSealIncompleteContent(RuntimeError):
+    """The strict final seal refused, and at least one refusal is a
+    deterministic CONTENT judgment (symlink, hardlinked/non-regular entry,
+    oversized file) — as distinct from storage/session unavailability or a
+    transient capture failure. Carries both the full blocking list (the honest
+    message) and the content subset (the typed disclosure) for F-27."""
+
+    def __init__(self, blocking: list[str], content: list[str]) -> None:
+        super().__init__("final workspace snapshot was incomplete: " + "; ".join(blocking[:8]))
+        self.blocking = list(blocking)
+        self.content_blocking = list(content)
+
+
+def _seal_refusal_meta(exc: BaseException) -> dict[str, Any] | None:
+    """REL-27 — the typed half of a content-refused strict-seal disclosure.
+
+    The soak harness (and any auditor) distinguishes "the product refused to
+    attribute unsealable content" from mere snapshot lag by this meta, never by
+    parsing the English prose."""
+
+    if not isinstance(exc, FinalSealIncompleteContent):
+        return None
+    return {
+        "persistence_failure": {
+            "kind": SEAL_INCOMPLETE_CONTENT_KIND,
+            "blocking": exc.content_blocking[:32],
+        }
+    }
+
+
+async def probe_finish_sealability(
+    rt: Any,
+    conversation_id: str,
+    *,
+    snapshot_fn: Callable[..., Any] | None,
+) -> SealabilityProbeResult:
+    """REL-27 — dry-run the REAL final-seal snapshot; report strict refusals.
+
+    Runs the exact per-backend snapshot machinery (`snapshot_fn` — the same
+    callable the FINISHED commit passes) against a throwaway destination under
+    a private temp directory, then judges the skip list with the SAME
+    `content_blocking_skips` rule the typed seal disclosure uses. Zero
+    content-model drift by construction; side-effect-free on durable storage.
+
+    Refuses ONLY on deterministic content judgments the model can act on;
+    transient capture failures stay advisory here (the commit-time seal still
+    refuses them honestly, and the harness keeps classifying them as
+    rerunnable evidence gaps, not product). No live sandbox / no snapshot
+    function → sealable ("nothing to judge"): the commit-time seal and the
+    skipped-capture disclosure remain the publication authority. Transport
+    failures propagate — the core gate treats a probe error as advisory.
+    """
+
+    executor = rt._executors.get(conversation_id)
+    session = getattr(executor, "_sandbox", None) if executor is not None else None
+    if session is None or snapshot_fn is None:
+        return SealabilityProbeResult(sealable=True, detail="no live workspace to probe")
+    tmp = Path(tempfile.mkdtemp(prefix=".disco-seal-probe-"))
+    try:
+        result = await snapshot_fn(session, tmp / "tree")
+        blocking = content_blocking_skips(list(result.skipped))
+        return SealabilityProbeResult(sealable=not blocking, blocking=tuple(blocking[:64]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _facts_match_record(facts: WorkspaceTreeFacts, record: VersionRecord) -> bool:
@@ -834,10 +940,15 @@ class WorkspacePersistence:
                 if snapshot_fn is None:
                     raise RuntimeError("sandbox capture function is unavailable")
                 result = await snapshot_fn(session, store.path_for(conversation_id))
-                if seal_fence is not None and not _strict_snapshot_complete(result.skipped):
-                    raise RuntimeError(
-                        "final workspace snapshot was incomplete: " + "; ".join(result.skipped[:8])
-                    )
+                if seal_fence is not None:
+                    blocking = strict_blocking_skips(list(result.skipped))
+                    if blocking:
+                        content = content_blocking_skips(list(result.skipped))
+                        if content:
+                            raise FinalSealIncompleteContent(blocking, content)
+                        raise RuntimeError(
+                            "final workspace snapshot was incomplete: " + "; ".join(blocking[:8])
+                        )
                 if callable(inspect_workspace):
                     facts = cast(WorkspaceTreeFacts, inspect_workspace(conversation_id))
                 elif seal_fence is not None:
@@ -927,6 +1038,7 @@ class WorkspacePersistence:
             await self._rt._emit_persistence_reminder(
                 conversation_id,
                 f"snapshot failed: {exc}",
+                meta=_seal_refusal_meta(exc),
             )
             if seal_fence is not None:
                 raise

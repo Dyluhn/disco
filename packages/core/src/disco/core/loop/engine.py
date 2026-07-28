@@ -74,6 +74,7 @@ from .boundaries import (
     AgentStep,
     ConfirmationPolicy,
     HostVerifier,
+    SealabilityProbe,
     SecurityAnalyzer,
     StopHook,
     ToolExecutor,
@@ -872,6 +873,10 @@ class AgentLoop:
         host_verify_authoritative: bool | None = None,
         verifier_judge: VerifierJudge | None = None,
         verifier_judge_timeout_s: float = 30.0,
+        # REL-27 finish-time sealability probe (None ⇒ byte-identical legacy;
+        # semantics + the 150s>120s timeout floor in seal_gate_allows_finish).
+        finish_sealability_probe: SealabilityProbe | None = None,
+        finish_seal_timeout_s: float = 150.0,
         workflow_run: WorkflowRun | None = None,
         terminal_commit_hook: TerminalCommitHook = None,
         control_fence: ControlFenceFactory = None,
@@ -936,6 +941,7 @@ class AgentLoop:
         # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
+        self._finish_seal_refusals = 0  # REL-27 sealability refusals (cap-3 loud release)
         self._workflow_output_contract_refusals = 0
         # C20 — `delegate_explore` count, per run segment. Reset in run() so a
         # resume/steer gets a fresh budget (mirror `_finish_verify_refusals`).
@@ -1012,6 +1018,8 @@ class AgentLoop:
         )
         self._verifier_judge = verifier_judge
         self._verifier_judge_timeout_s = float(verifier_judge_timeout_s)
+        self._finish_sealability_probe = finish_sealability_probe  # REL-27
+        self._finish_seal_timeout_s = float(finish_seal_timeout_s)
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).
@@ -1862,6 +1870,7 @@ class AgentLoop:
         self._invisible_steps = 0
         self._finish_verify_refusals = 0  # fresh segment → fresh verify-cap streak
         self._finish_verify_strips = 0
+        self._finish_seal_refusals = 0  # REL-27 — fresh segment → fresh seal streak
         self._workflow_output_contract_refusals = 0
         # C1c — fresh segment → fresh DoD-refusal streak (telemetry; the gate
         # has no cap, but a resume/steer should not carry a streak across).

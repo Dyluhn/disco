@@ -2574,6 +2574,7 @@ class ConversationRuntime:
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
                 terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+                finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
                 control_fence=lambda: self._workspace.fence(conversation_id),
             )
         if _art_mode:
@@ -2611,6 +2612,7 @@ class ConversationRuntime:
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
                 terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+                finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
                 control_fence=lambda: self._workspace.fence(conversation_id),
             )
         if _appkit_mode:
@@ -2663,6 +2665,7 @@ class ConversationRuntime:
             host_verifier_verdict_hook=host_verify_canary_hook,
             host_verify_authoritative=host_verify_authoritative_enabled(),
             terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
+            finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
             control_fence=lambda: self._workspace.fence(conversation_id),
             strict_appkit_active=(
                 (lambda phase=_appkit_phase: phase.phase != AppKitPhase.CUSTOM_BUILD)
@@ -4299,10 +4302,13 @@ class ConversationRuntime:
     async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
         return await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
 
-    async def _emit_persistence_reminder(self, conversation_id: str, body: str) -> None:
+    async def _emit_persistence_reminder(
+        self, conversation_id: str, body: str, *, meta: dict[str, Any] | None = None
+    ) -> None:
         """Surface a project-persistence problem on the event log as an implicit
         system-reminder — same pattern as the loop's other gates, so the model
-        and the UI both see what went wrong, named."""
+        and the UI both see what went wrong, named. ``meta`` carries the typed
+        half of a disclosure (REL-27 seal refusals are adjudicated on it)."""
         await self._store.append(
             conversation_id,
             MessageEvent(
@@ -4313,6 +4319,7 @@ class ConversationRuntime:
                         f"<system-reminder>\nProject persistence note: {body}\n</system-reminder>"
                     ),
                 ),
+                meta=meta or {},
             ),
         )
 

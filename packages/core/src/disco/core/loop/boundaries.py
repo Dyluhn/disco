@@ -154,6 +154,37 @@ class TypedVerifierVerdict(BaseModel):
     failure_fingerprint: str = ""
 
 
+class SealabilityProbeResult(BaseModel):
+    """Result of the host's finish-time workspace sealability probe (F-27).
+
+    Produced by running the SAME snapshot machinery the final workspace seal
+    runs, against a throwaway destination. ``blocking`` carries the walker's
+    exact per-entry skip strings ("<path>: <reason>") that the strict final
+    seal would refuse — symlinks, hardlinked/non-regular entries, and
+    oversized files: DETERMINISTIC content judgments only. Transient capture
+    failures (read/lstat/list races) are never blocking — reporting them
+    would launder infrastructure noise into a product refusal, the reverse of
+    the laundering F-27 fixed. Deliberate non-deliverable exclusions
+    (dependency caches, runtime secret paths) are never blocking either.
+    ``sealable=True`` with an empty ``blocking`` also covers "nothing to
+    probe" (no live workspace) — the commit-time seal remains the sole
+    publication authority either way.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sealable: bool
+    blocking: tuple[str, ...] = ()
+    detail: str = ""
+
+
+# REL-27 — host-injected finish-time sealability probe. Injected by the runtime
+# for build-like loops; None means no probe exists and every finish path is
+# byte-identical to the pre-seam behavior. The probe must be side-effect-free
+# on durable storage (throwaway destination) and bounded by the loop's timeout.
+SealabilityProbe = Callable[[], Awaitable[SealabilityProbeResult]]
+
+
 @runtime_checkable
 class HostVerifier(Protocol):
     """Host-owned target verifier dispatcher seam.

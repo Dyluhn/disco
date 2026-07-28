@@ -56,6 +56,7 @@ from .adapters.disco_api import (
     BrowserEvidenceCollectionError,
     CollectedRun,
     DiscoApiClient,
+    FinishUnsealableContentError,
     FollowupPickupError,
     InconclusiveRunError,
     InfraProbeError,
@@ -2485,6 +2486,48 @@ def _invalidation_conversation_id(
     return client.last_conversation_id
 
 
+def _finish_unsealable_fail_record(
+    out_root: str | Path,
+    run_id: str,
+    scenario: dict[str, Any],
+    reason: str,
+    *,
+    facts: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
+    timeline_markdown: str | None = None,
+) -> dict[str, Any]:
+    """Write the F-27 product-FAIL record: a CONFIRMED FINISHED build whose final
+    strict seal the PRODUCT refused on deterministic content (typed
+    ``seal_incomplete_content`` disclosure). Unlike `_invalid_run_record` this IS
+    an adjudicated product outcome — the required evidence (the product's own
+    typed disclosure on the durable log) is present, the failure counts, and §17
+    must NOT re-run it."""
+    base = Path(out_root) / run_id
+    base.mkdir(parents=True, exist_ok=True)
+    record_facts: dict[str, Any] = {"reason": reason, **(facts or {})}
+    record = {
+        "status": fc.FAIL,
+        "severity": fc.severity_for(fc.FINISH_UNSEALABLE_CONTENT),
+        "code": fc.FINISH_UNSEALABLE_CONTENT,
+        "first_broken_link": "finish_accepted -> final_seal_refused_on_content",
+        "scenario_id": scenario.get("id"),
+        "run_id": run_id,
+        "conversation_id": conversation_id,
+        "facts": record_facts,
+        "required_evidence_present": True,
+        "accepted_by": "oracle",
+        "agent_comments_ignored_for_adjudication": True,
+    }
+    (base / CLASSIFICATION_NAME).write_text(
+        json.dumps(record, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    (base / "timeline.md").write_text(
+        timeline_markdown or f"# FAIL ({fc.FINISH_UNSEALABLE_CONTENT})\n\nreason: {reason}\n",
+        encoding="utf-8",
+    )
+    return record
+
+
 async def _freeze_invalidation_evidence(
     client: DiscoApiClient,
     out_root: str | Path,
@@ -3312,6 +3355,40 @@ async def run_once(
                 exc.reason,
                 code=fc.CANCEL_MISSED_WINDOW,
                 first_broken_link="cancel_at -> terminal_before_kill",
+                facts={**exc.facts, **freeze_facts},
+                conversation_id=cid,
+                timeline_markdown=freeze_timeline,
+            )
+        except FinishUnsealableContentError as exc:
+            # F-27 — the run CONFIRMED FINISHED and the PRODUCT disclosed (typed)
+            # that the strict final seal refused on deterministic content. This is
+            # an adjudicated PRODUCT FAIL (FINISH_UNSEALABLE_CONTENT, P1): waiting
+            # longer cannot produce a version the product refused to cut, and a
+            # §17 re-run would launder the defect into an invisible retry. The
+            # durable evidence is frozen exactly like an invalidation dossier.
+            cid = _invalidation_conversation_id(exc.facts, client)
+            freeze_facts, freeze_timeline = await _freeze_invalidation_evidence(
+                client,
+                out_root,
+                run_id,
+                scenario,
+                model=model,
+                autonomous=autonomous,
+                commit=commit,
+                repo_revision=repo_revision,
+                repo_dirty=repo_dirty,
+                kernel=kernel,
+                started_at=run_started_at,
+                seed=seed,
+                conversation_id=cid,
+                invalidation_code=fc.FINISH_UNSEALABLE_CONTENT,
+                invalidation_reason=exc.reason,
+            )
+            return _finish_unsealable_fail_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
                 facts={**exc.facts, **freeze_facts},
                 conversation_id=cid,
                 timeline_markdown=freeze_timeline,

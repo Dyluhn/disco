@@ -121,6 +121,14 @@ _FINISH_VERIFY_CAP = 3
 # review without weakening the acceptance boundary or looping forever.
 _DOD_REFUSAL_CAP = 3
 
+# REL-27 — finish-time sealability refusal cap. The probe refusal is trivially
+# actionable (it names the exact blocking entries and the remedy), so a capable
+# model clears it in one step; a model that cannot must still reach a terminal.
+# After N refusals the finish RELEASES LOUDLY (unsealed_release marker + visible
+# warning) and the commit-time strict seal + post-terminal disclosure carry the
+# honest unsealed truth — the cap breaks the loop, never the honesty.
+_FINISH_SEAL_CAP = 3
+
 # REL-RC-O — quoted user literals are hard content floors at finish, but the
 # refusal must be bounded so a model that cannot repair does not deadlock.
 _DICTATED_CONTENT_REFUSAL_CAP = 3
@@ -1237,6 +1245,8 @@ class _FinishGateProto:
         async def dictated_content_gate_passed(self, events: list[Event]) -> bool: ...
 
         async def run_finish_verify_gates(self, step: AgentStep, events: list[Event]) -> Disp: ...
+
+        async def seal_gate_allows_finish(self) -> bool: ...
 
         async def normalize_finish_step(
             self, step: AgentStep, events: list[Event]

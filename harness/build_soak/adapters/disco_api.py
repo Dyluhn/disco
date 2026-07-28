@@ -342,6 +342,104 @@ class SnapshotNotReadyError(Exception):
         self.facts = facts or {}
 
 
+class FinishUnsealableContentError(Exception):
+    """The run reached FINISHED and the PRODUCT itself disclosed — typed
+    (`meta.persistence_failure.kind == "seal_incomplete_content"`), on the durable
+    log — that the strict final seal refused on DETERMINISTIC content (symlinks,
+    hardlinked/non-regular entries, oversized files). This is a PRODUCT outcome,
+    not an evidence gap: no amount of waiting turns the refused version into a
+    valid one — only the product repairing and RE-finishing can, which is why
+    the adapter still observes the full snapshot-wait window before classifying
+    (a later valid finish seal supersedes the refusal) and only raises this at
+    the deadline. A §17 re-run would launder a product defect into an invisible
+    retry (F-27, counted trial 590005: WORKSPACE_SNAPSHOT_NOT_READY conflated
+    seal-REFUSED-on-content with snapshot lag). The runner records
+    FAIL / FINISH_UNSEALABLE_CONTENT — never INVALID_RUN. Adjudicated on the
+    product-owned typed meta, never by parsing the English (the
+    CONDENSATION_SUMMARY_UNUSABLE precedent). `facts` carries the product's own
+    blocking list plus the seal evidence for the dossier."""
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
+
+
+# The product-owned typed disclosure kind this adapter splits on. Pinned equal
+# to disco.agent_server.workspace_persistence.SEAL_INCOMPLETE_CONTENT_KIND by
+# a test — a rename on either side must fail loudly, never silently revert
+# F-27 adjudication to rerunnable snapshot lag.
+SEAL_INCOMPLETE_CONTENT_KIND = "seal_incomplete_content"
+
+
+def _exact_seq(event: dict[str, Any]) -> int | None:
+    """The event's positive int seq, or None (bool/str/absent never count)."""
+
+    raw = event.get("seq")
+    return raw if type(raw) is int and raw > 0 else None
+
+
+def _valid_workspace_version(event: dict[str, Any]) -> bool:
+    """Single shape validator for a workspace_version event the harness will
+    treat as evidence: system-sourced, exact positive seq, positive int
+    version_seq, sha256 tree_digest, string trigger."""
+
+    version_seq = event.get("version_seq")
+    digest = event.get("tree_digest")
+    return (
+        event.get("source") == "system"
+        and _exact_seq(event) is not None
+        and type(version_seq) is int
+        and version_seq > 0
+        and isinstance(digest, str)
+        and _RAW_SHA256_RE.fullmatch(digest) is not None
+        and isinstance(event.get("trigger"), str)
+    )
+
+
+def _typed_content_seal_refusal(events: list[dict[str, Any]]) -> list[str] | None:
+    """The product's typed content-seal-refusal disclosure, if it governs.
+
+    Returns the product-disclosed blocking entries when a
+    ``seal_incomplete_content`` persistence disclosure exists AFTER the latest
+    FINISH-triggered workspace_version event (a later successful finish seal
+    supersedes an older refusal — a run that repaired and re-finished is judged
+    on its real seal).  Only the finish seal holds that authority: a
+    recovery/pause version cut after the refusal must not launder the typed
+    content refusal back into rerunnable snapshot lag. The superseding version
+    must pass ``_valid_workspace_version`` — a malformed version event has no
+    authority over a typed refusal — and only exact-seq messages participate
+    in the scan (the harness never adjudicates on events it cannot order).
+    Returns None otherwise.
+    """
+
+    latest_version_seq = -1
+    for event in events:
+        if event.get("kind") != "workspace_version":
+            continue
+        if not _valid_workspace_version(event) or event.get("trigger") != "finish":
+            continue
+        seq = _exact_seq(event)
+        if seq is not None and seq > latest_version_seq:
+            latest_version_seq = seq
+    for event in reversed(events):
+        if event.get("kind") != "message":
+            continue
+        seq = _exact_seq(event)
+        if seq is None:
+            continue
+        if seq <= latest_version_seq:
+            break
+        meta = event.get("meta")
+        if not isinstance(meta, dict):
+            continue
+        failure = meta.get("persistence_failure")
+        if isinstance(failure, dict) and failure.get("kind") == SEAL_INCOMPLETE_CONTENT_KIND:
+            raw = failure.get("blocking")
+            return [str(item) for item in raw] if isinstance(raw, list) else []
+    return None
+
+
 @dataclass(frozen=True)
 class _FinalWorkspaceSealEvidence:
     """Strictly validated event-log half of one final workspace seal.
@@ -3127,10 +3225,8 @@ class DiscoApiClient:
             except (sqlite3.Error, NormalizationError):
                 current_events = []
 
-            def _exact_seq(event: dict[str, Any]) -> int | None:
-                raw = event.get("seq")
-                return raw if type(raw) is int and raw > 0 else None
-
+            # _exact_seq and _valid_workspace_version are module-level (shared
+            # with _typed_content_seal_refusal — one shape rule, REL-27 #7).
             def _sort_seq(event: dict[str, Any]) -> int:
                 seq = _exact_seq(event)
                 return seq if seq is not None else -1
@@ -3140,19 +3236,6 @@ class DiscoApiClient:
                     event.get("source") == "system"
                     and _exact_seq(event) is not None
                     and isinstance(event.get("status"), str)
-                )
-
-            def _valid_workspace_version(event: dict[str, Any]) -> bool:
-                version_seq = event.get("version_seq")
-                digest = event.get("tree_digest")
-                return (
-                    event.get("source") == "system"
-                    and _exact_seq(event) is not None
-                    and type(version_seq) is int
-                    and version_seq > 0
-                    and isinstance(digest, str)
-                    and _RAW_SHA256_RE.fullmatch(digest) is not None
-                    and isinstance(event.get("trigger"), str)
                 )
 
             commit_required = self._require_workspace_commit
@@ -3349,6 +3432,27 @@ class DiscoApiClient:
                 if final_seal_error == _NO_SYSTEM_FINISHED_TERMINAL and not _finished_live:
                     break
                 if blocking or not commit_ready:
+                    # F-27 split: a FINISHED run whose PRODUCT disclosed (typed)
+                    # that the strict seal refused on deterministic CONTENT is a
+                    # product FAIL, not a snapshot-readiness gap — no wait, no
+                    # §17 re-run. Genuine lag (no such disclosure) stays below.
+                    seal_refused = _typed_content_seal_refusal(current_events)
+                    if seal_refused is not None:
+                        raise FinishUnsealableContentError(
+                            "the product refused the final workspace seal on "
+                            "deterministic content it could not attribute "
+                            "(typed seal_incomplete_content disclosure)",
+                            {
+                                "conversation_id": conversation_id,
+                                "seal_refused_blocking": seal_refused,
+                                "finished_live": _finished_live,
+                                "terminal_seq": terminal_seq,
+                                "event_evidence_valid": event_evidence_valid,
+                                "workspace_version_seq": commit_seq,
+                                "final_seal_error": final_seal_error,
+                                "latest_effect_seq": latest_effect_seq,
+                            },
+                        )
                     raise SnapshotNotReadyError(
                         "workspace snapshot never reached the agent's final state within "
                         f"{self._snapshot_wait_s:g}s",

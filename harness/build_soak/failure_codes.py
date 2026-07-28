@@ -124,6 +124,14 @@ WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
 # finished". Fail-closed: a build that does not complete is not a PASS even if some
 # files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
 BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
+# F-27 (counted trial 590005): the run reached a CONFIRMED FINISHED terminal, but the
+# PRODUCT disclosed — typed (`persistence_failure.kind == "seal_incomplete_content"`),
+# on the durable log — that the strict final workspace seal refused on DETERMINISTIC
+# content (symlinks / hardlinked or non-regular entries / oversized files). The
+# finished build is unattributable/unexportable: a product outcome, judged from the
+# product's own disclosure, NEVER a snapshot-readiness gap (that stays
+# WORKSPACE_SNAPSHOT_NOT_READY → INVALID_RUN → §17 re-run). Not rerunnable.
+FINISH_UNSEALABLE_CONTENT = "FINISH_UNSEALABLE_CONTENT"
 # The model repeatedly issued the same call, hit the same tool/schema error, or
 # paused without taking an action. These are product-quality failures even when a
 # later lucky guess lets the run reach FINISHED: the soak is meant to remove the
@@ -270,6 +278,7 @@ SEVERITY_BY_CODE: dict[str, str] = {
     OBSERVATION_WITHOUT_ACTION: P1,
     WRITE_BEFORE_REVISION_APPROVAL: P1,
     BUILD_DID_NOT_FINISH: P1,
+    FINISH_UNSEALABLE_CONTENT: P1,
     TOOL_CALL_THRASH: P1,
     TOOL_ERROR_THRASH: P1,
     ACTIONLESS_THRASH: P1,

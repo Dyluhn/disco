@@ -20,10 +20,12 @@ zero-work run never honest-finish.
 import pytest
 from disco.core import (
     ConversationStatus,
+    MessageEvent,
     StatusEvent,
     ToolResult,
 )
 from disco.core.llm import OperatingMode, ToolSpec
+from disco.core.loop import SealabilityProbeResult
 from disco.tools.builtin.browser import BROWSER_UNAVAILABLE_MSG
 from loop_fakes import (
     FakeExecutor,
@@ -239,9 +241,12 @@ def _deliver_then_idle_steps(
     return steps
 
 
-async def _approve_and_run(executor, agent):
+async def _approve_and_run(executor, agent, *, probe=None):
     loop, store = build_loop(
-        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+        executor=executor,
+        agent=agent,
+        planning_tools=frozenset(["file_read"]),
+        finish_sealability_probe=probe,
     )
     loop.mode = OperatingMode.PLANNING
     await loop.send_message("Create a simple landing page for a local bakery")
@@ -425,3 +430,67 @@ async def test_negative_echoed_validation_word_is_not_a_validation(cmd):
     assert not _has_honest_marker(events), sts
     assert state.execution_status != ConversationStatus.FINISHED, sts
     assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
+
+
+class _SealProbe:
+    """Constant-result sealability probe with a call counter."""
+
+    def __init__(self, result: SealabilityProbeResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    async def __call__(self) -> SealabilityProbeResult:
+        self.calls += 1
+        return self.result
+
+
+@pytest.mark.asyncio
+async def test_negative_seal_blocking_probe_valve_never_lands_unsealed_finished():
+    """NEGATIVE (REL-27 / F-27 — the valve is an affirmative FINISHED site) — the
+    exact positive honest-finish scenario, but the workspace cannot be sealed
+    (symlinked deliverable, the 590005 signature). The valve must consult the
+    finish-time seal gate and DECLINE: the refusal reminder names the blocking
+    entry, no FINISHED lands, and the preexisting safe PAUSE/actionless terminal
+    is preserved. Deleting the valve's gate call would land an unsealed FINISHED
+    and fail this test."""
+    probe = _SealProbe(
+        SealabilityProbeResult(sealable=False, blocking=("index.html: symlink excluded",))
+    )
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(_deliver_then_idle_steps())
+    state, events = await _approve_and_run(execu, agent, probe=probe)
+
+    sts = _statuses(events)
+    assert probe.calls >= 1, "the valve never consulted the sealability gate"
+    refusals = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent) and e.meta.get("blocking") == "finish_seal_refused"
+    ]
+    assert refusals, sts
+    # Typed field first (the contract), prose only for the human remedy.
+    assert tuple(refusals[0].meta["seal_blocking"]) == ("index.html: symlink excluded",)
+    assert "finish again" in refusals[0].message.content
+    assert not _has_honest_marker(events), sts
+    assert state.execution_status != ConversationStatus.FINISHED, sts
+    assert any(s == ConversationStatus.PAUSED and d == "actionless" for s, d in sts), sts
+
+
+@pytest.mark.asyncio
+async def test_positive_sealable_probe_valve_still_honest_finishes():
+    """POSITIVE (REL-27 control) — with a live probe reporting SEALABLE, the valve
+    behaves byte-for-byte like the probe-less positive: honest
+    `unverifiable_static_finish` marker + FINISHED, no refusal, no pause."""
+    probe = _SealProbe(SealabilityProbeResult(sealable=True))
+    execu = _BrowserlessStaticExecutor(index_exists=True, validation_ok=True)
+    agent = ScriptedAgent(_deliver_then_idle_steps())
+    state, events = await _approve_and_run(execu, agent, probe=probe)
+
+    sts = _statuses(events)
+    assert probe.calls >= 1, "the valve never consulted the sealability gate"
+    assert _has_honest_marker(events), sts
+    assert state.execution_status == ConversationStatus.FINISHED, sts
+    assert not any(
+        isinstance(e, MessageEvent) and e.meta.get("blocking") == "finish_seal_refused"
+        for e in events
+    ), sts

@@ -149,6 +149,166 @@ async def test_incomplete_capture_leaves_finished_honestly_unsealed(
     assert json.loads(journal.read_text())["phase"] == "capturing"
 
 
+async def test_content_refused_seal_discloses_typed_evidence(
+    event_store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REL-27 (F-27) — a strict seal refused on deterministic CONTENT must say
+    so in TYPED meta, on the durable log, with the exact blocking entries.
+
+    This is the product half of the harness classifier split: counted trial
+    590005 was laundered into rerunnable INVALID_RUN because the only durable
+    disclosure was post-terminal English prose."""
+    cid = "conv-content-refused-seal"
+    rt, _projects = _runtime(event_store, tmp_path)
+    await _seed_running(event_store, cid)
+    rt._executors[cid] = MagicMock(
+        _sandbox=_Workspace({"steer-dashboard/index.html": b"<h1>built</h1>"})
+    )
+    live_skips = [
+        "dist: symlink excluded",
+        "index.html: symlink excluded",
+        "package.json: symlink excluded",
+        "src/App.jsx: symlink excluded",
+    ]
+
+    async def symlink_snapshot(session, dest):  # noqa: ANN001
+        del session
+        dest.mkdir(parents=True)
+        (dest / "steer-dashboard").mkdir()
+        (dest / "steer-dashboard" / "index.html").write_bytes(b"<h1>built</h1>")
+        return SnapshotResult(
+            file_count=1,
+            total_bytes=14,
+            paths=["steer-dashboard/index.html"],
+            skipped=list(live_skips),
+        )
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", symlink_snapshot)
+    terminal = await rt._lifecycle.commit_finished_workspace(
+        cid,
+        StatusEvent(status=ConversationStatus.FINISHED),
+    )
+
+    events = await event_store.get_events(cid)
+    assert terminal.status is ConversationStatus.FINISHED
+    assert not any(isinstance(event, WorkspaceVersionEvent) for event in events)
+    disclosures = [
+        e for e in events if isinstance(e, MessageEvent) and "persistence_failure" in e.meta
+    ]
+    assert len(disclosures) == 1
+    failure = disclosures[0].meta["persistence_failure"]
+    assert failure["kind"] == "seal_incomplete_content"
+    assert failure["blocking"] == live_skips
+    assert "snapshot failed" in disclosures[0].message.content
+
+
+async def test_transient_refused_seal_never_claims_content(
+    event_store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The split's other direction — a transient capture failure (read error)
+    still refuses the seal but must NOT emit the typed content disclosure:
+    branding an infra hiccup as a non-rerunnable product failure would be the
+    same laundering as F-27, reversed."""
+    cid = "conv-transient-refused-seal"
+    rt, _projects = _runtime(event_store, tmp_path)
+    await _seed_running(event_store, cid)
+    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"lost.txt": b"bytes"}))
+
+    async def transient_snapshot(session, dest):  # noqa: ANN001
+        del session
+        dest.mkdir(parents=True)
+        return SnapshotResult(
+            file_count=0,
+            total_bytes=0,
+            paths=[],
+            skipped=["lost.txt: read failed: [Errno 5] I/O error"],
+        )
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", transient_snapshot)
+    terminal = await rt._lifecycle.commit_finished_workspace(
+        cid,
+        StatusEvent(status=ConversationStatus.FINISHED),
+    )
+
+    events = await event_store.get_events(cid)
+    assert terminal.status is ConversationStatus.FINISHED
+    assert not any(isinstance(event, WorkspaceVersionEvent) for event in events)
+    # The seal refusal is still disclosed — but never as a content judgment.
+    assert not any(isinstance(e, MessageEvent) and "persistence_failure" in e.meta for e in events)
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.message is not None
+        and "snapshot failed" in (e.message.content or "")
+        for e in events
+    )
+
+
+async def test_finish_sealability_probe_judges_content_only(
+    event_store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REL-27 probe unit — the probe runs the real snapshot seam against a
+    throwaway destination and reports ONLY deterministic content blockers:
+    allowed skips and transient failures never refuse a finish, symlinks do.
+    No live sandbox ⇒ sealable (nothing to judge)."""
+    cid = "conv-seal-probe"
+    rt, projects = _runtime(event_store, tmp_path)
+    await _seed_running(event_store, cid)
+    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"ok"}))
+    seen_dests: list[Path] = []
+
+    async def scripted_snapshot(session, dest):  # noqa: ANN001
+        del session
+        seen_dests.append(Path(dest))
+        dest.mkdir(parents=True)
+        return SnapshotResult(
+            file_count=1,
+            total_bytes=2,
+            paths=["index.html"],
+            skipped=[
+                "node_modules/x: dependency/cache path excluded",
+                ".env: runtime secret path excluded",
+                "flaky.txt: read failed: transport reset",
+                "dist: symlink excluded",
+            ],
+        )
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", scripted_snapshot)
+    result = await rt._lifecycle.probe_finish_sealability(cid)
+    assert result.sealable is False
+    assert result.blocking == ("dist: symlink excluded",)
+    # Side-effect-free on durable storage: the probe never wrote into the
+    # ProjectStore authority, and its throwaway destination is gone.
+    assert seen_dests and not seen_dests[0].exists()
+    assert not projects.path_for(cid).exists()
+
+    async def clean_snapshot(session, dest):  # noqa: ANN001
+        del session
+        dest.mkdir(parents=True)
+        return SnapshotResult(
+            file_count=1,
+            total_bytes=2,
+            paths=["index.html"],
+            skipped=["node_modules/x: dependency/cache path excluded"],
+        )
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", clean_snapshot)
+    result = await rt._lifecycle.probe_finish_sealability(cid)
+    assert result.sealable is True
+    assert result.blocking == ()
+
+    # No live sandbox ⇒ sealable, "nothing to judge" (commit-time authority).
+    del rt._executors[cid]
+    result = await rt._lifecycle.probe_finish_sealability(cid)
+    assert result.sealable is True
+    assert "no live workspace" in result.detail
+
+
 async def test_finalizer_and_host_mutation_share_one_barrier(
     event_store: SqliteEventStore,
     tmp_path: Path,

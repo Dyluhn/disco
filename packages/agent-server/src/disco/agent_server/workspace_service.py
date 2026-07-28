@@ -34,6 +34,7 @@ from disco.core import (
     current_workspace_agent_view_id,
     latest_workspace_run_intent,
 )
+from disco.core.loop import SealabilityProbeResult
 from disco.tools.projects import (
     StorageError,
     StorageStatus,
@@ -512,6 +513,17 @@ class WorkspaceCoordinator:
                 await self.record_run_intent_locked(conversation_id, "stranded-followup")
                 self._rt.kick(conversation_id, claimed_user_seq=claimed_user_seq)
                 self.claim_registered_run_locked(conversation_id)
+
+    def finish_sealability_probe(
+        self,
+        conversation_id: str,
+    ) -> Callable[[], Awaitable[SealabilityProbeResult]]:
+        """Bind one loop's REL-27 probe (lifecycle-resolved: same seam as the seal)."""
+
+        async def probe() -> SealabilityProbeResult:
+            return await self._rt._lifecycle.probe_finish_sealability(conversation_id)
+
+        return probe
 
     def terminal_commit_hook(
         self,

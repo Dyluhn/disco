@@ -1221,6 +1221,11 @@ class Valve:
         # (3) external Definition-of-Done gate (no spec → no-op pass-through).
         if not await finish.finish_dod_gate_passed():
             return False
+        # (4) REL-27 — a notify-signaled "done" is an affirmative delivery claim
+        # and clears the same seal gate a real finish() clears (refusal reminder
+        # already injected; False ⇒ CONTINUE so the model can act on it).
+        if not await finish.seal_gate_allows_finish():
+            return False
         # All gates passed → land a clean FINISHED (same message + detail as the
         # pre-W-32 force-finish, now EARNED rather than bypassed).
         await self._loop._emit(

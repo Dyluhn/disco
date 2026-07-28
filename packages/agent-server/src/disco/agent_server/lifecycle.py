@@ -45,6 +45,7 @@ from disco.core import (
     WorkspaceVersionEvent,
 )
 from disco.core.env import disco_env
+from disco.core.loop import SealabilityProbeResult
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import (
     StorageStatus,
@@ -53,7 +54,7 @@ from disco.tools.projects import (
 )
 
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
-from .workspace_persistence import WorkspacePersistence
+from .workspace_persistence import WorkspacePersistence, probe_finish_sealability
 
 _LOG = logging.getLogger(__name__)
 _DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
@@ -92,6 +93,19 @@ class LifecycleManager:
             conversation_id,
             terminal_event,
             require_inactive_finished_head=require_inactive_finished_head,
+            snapshot_fn=snapshot_workspace,
+        )
+
+    async def probe_finish_sealability(self, conversation_id: str) -> SealabilityProbeResult:
+        """REL-27 — dry-run the final-seal snapshot; report strict-seal refusals.
+
+        Resolves ``snapshot_workspace`` from this module at call time, exactly
+        like ``commit_finished_workspace`` — the probe and the seal share one
+        snapshot seam (and one monkeypatch point) by construction.
+        """
+        return await probe_finish_sealability(
+            self._rt,
+            conversation_id,
             snapshot_fn=snapshot_workspace,
         )
 
