@@ -1758,3 +1758,65 @@ async def test_extra_unauthenticated_lead_route_fails_worker_contract(stub_brows
     checks = _checks_by_name(out.structured)
     assert out.structured["passed"] is False
     assert checks["worker_contract"]["passed"] is False
+
+
+# ---- a passing verdict must say what it settled -------------------------------
+#
+# Counted-promotion failure 2026-07-27 (`p4_appkit_semantic_edit` seed 900065,
+# TOOL_CALL_THRASH). The same call returned FAIL (a transient sub-resource
+# ERR_CONNECTION_REFUSED tripped route_coverage), then PASS. With an empty
+# `next_action` the agent had nothing saying the claim was settled, re-verified,
+# and hit the identical-call limit of 2. `web_app_probe.compute_verdict` already
+# carried this guidance (b61e09e6); this sibling module never received it.
+
+from disco.tools.builtin.verify_appkit_app import build_verdict as _build_verdict
+
+
+def _check(name: str, passed: bool) -> dict:
+    return {"name": name, "passed": passed, "evidence": f"{name} evidence"}
+
+
+def test_a_passing_appkit_verdict_states_that_re_running_proves_nothing():
+    verdict = _build_verdict([_check("design_lint_clean", True)], {})
+    assert verdict["passed"] is True
+    assert verdict["next_action"], "a passing verdict must not carry an empty next_action"
+    assert "proves nothing new" in verdict["next_action"]
+
+
+def test_it_names_the_transient_case_that_caused_the_failure():
+    # The agent re-verified because a FAIL had just become a PASS. The guidance
+    # has to cover that specific situation, not only the steady-state one.
+    verdict = _build_verdict([_check("design_lint_clean", True)], {})
+    assert "transient" in verdict["next_action"]
+
+
+def test_it_does_NOT_tell_the_agent_to_finish():
+    # This tool cannot see the plan; only the finish gate knows whether steps
+    # remain. Same restraint as the web-app verifier.
+    verdict = _build_verdict([_check("design_lint_clean", True)], {})
+    text = verdict["next_action"].lower()
+    assert "if none are outstanding" in text
+    assert not text.startswith("finish")
+
+
+def test_it_scopes_the_claim_to_STRUCTURE_not_runtime():
+    verdict = _build_verdict([_check("design_lint_clean", True)], {})
+    assert "structural" in verdict["next_action"].lower()
+
+
+def test_a_FAILING_verdict_still_reports_the_failure_evidence():
+    # The guard must not erode the failing branch it sits beside.
+    verdict = _build_verdict(
+        [_check("design_lint_clean", True), _check("route_coverage", False)], {}
+    )
+    assert verdict["passed"] is False
+    assert verdict["next_action"] == "route_coverage evidence"
+
+
+def test_the_rendered_output_carries_the_guidance():
+    # `_render` only emits the line when next_action is truthy, which is why an
+    # empty string made the guidance invisible rather than merely terse.
+    from disco.tools.builtin.verify_appkit_app import _render
+
+    rendered = _render(_build_verdict([_check("design_lint_clean", True)], {}))
+    assert "next_action:" in rendered

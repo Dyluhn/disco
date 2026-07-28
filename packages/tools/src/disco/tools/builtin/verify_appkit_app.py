@@ -378,7 +378,31 @@ def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None)
             "sections covered. STRUCTURE verified — local runtime proof lives in "
             "packages/core/tests/test_workerd_persistence.py."
         )
-        next_action = ""
+        # Counted-promotion failure 2026-07-27 (`p4_appkit_semantic_edit` seed
+        # 900065, TOOL_CALL_THRASH). An identical call returned FAIL at seq 72 —
+        # route_coverage tripped on a transient sub-resource
+        # ERR_CONNECTION_REFUSED — then PASS at seq 75. Handed a contradictory
+        # pair and an EMPTY next_action, the agent re-verified at seq 81 and hit
+        # the identical-call limit of 2. Re-checking was the rational move: the
+        # verdict had just changed under it and nothing said the claim was
+        # settled.
+        #
+        # `web_app_probe.compute_verdict` already carries this guidance
+        # (b61e09e6), and its own comment records the same symptom — a PASS with
+        # `next_action: ""` followed by 33-35 further actions. That fix never
+        # reached this sibling module, which is what the AppKit scenarios verify
+        # through.
+        #
+        # Scoped to what THIS verifier actually establishes: structure. It does
+        # not claim runtime behaviour, and it does not say "finish" — only the
+        # finish gate knows whether plan steps remain.
+        next_action = (
+            "Verified — the structural checks are now proven for this app and "
+            "recorded. Re-running the same verification without changing the app "
+            "proves nothing new, including after a transient failure that has "
+            "since cleared. Move to your remaining plan steps, and if none are "
+            "outstanding, finish; re-verify only after a material change."
+        )
     else:
         summary = f"verify_appkit_app: {first_fail['name']} FAILED — {first_fail['evidence']}"
         next_action = str(first_fail["evidence"])
