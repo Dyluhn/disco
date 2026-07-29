@@ -1,16 +1,12 @@
 name: CI
 
-# Minimal HONEST CI (backlog A3). The `required` job runs only deterministic
-# gates that are green today: the unit test suite (integration tests that need a
-# real browser / shell / docker are EXCLUDED via `-m "not integration"` — they
-# are not hidden, they run in the advisory job below), the frontend SHIPPING-file
-# typecheck (tsconfig.build.json, which excludes test files), the production vite
-# build, and the vitest suite.
-#
-# The `advisory` job runs the broader, environment-dependent checks
-# (full pytest incl. integration, eslint, full `tsc -b` over tests). It is
-# `continue-on-error` so it informs without blocking — those carry known debt /
-# need external services not present on a vanilla runner.
+# Deterministic required gate. The `required` job runs the exact ordered
+# architecture/governance gates followed by the persistent non-web conformance
+# test and the deterministic suites. The `advisory` job runs broader,
+# environment-dependent checks (full pytest incl. integration, eslint, full
+# `tsc -b` over tests). It is `continue-on-error` so it informs without
+# blocking — those carry known debt / need external services not present on a
+# vanilla runner.
 
 on:
   push:
@@ -18,7 +14,7 @@ on:
 
 jobs:
   required:
-    name: required (unit + build + vitest)
+    name: required (gates + unit + build + vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,20 +26,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Sync Python deps
-        run: uv sync
-
-      - name: Architecture fitness (size budget + tool schemas + layering + diagram freshness)
-        run: |
-          uv run python scripts/check_arch_budget.py
-          uv run python scripts/check_tool_schemas.py
-          uv run lint-imports
-          uv run python scripts/gen_arch_diagram.py --check
-
-      - name: Python type-check (basedpyright — strict, zero type errors tree-wide)
-        run: uv run basedpyright
-
-      - name: Unit tests (excludes integration — see advisory job)
-        run: uv run pytest -m "not integration"
+        run: uv sync --all-packages --frozen
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -55,6 +38,45 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
+
+      - name: Soak freeze
+        run: uv run python scripts/check_soak_freeze.py
+
+      - name: Governance seal
+        run: uv run python scripts/check_governance_seal.py
+
+      - name: Architecture budget
+        run: uv run python scripts/check_arch_budget.py
+
+      - name: Architecture debt
+        run: uv run python scripts/check_arch_debt.py
+
+      - name: Architecture imports
+        run: uv run python scripts/check_arch_imports.py
+
+      - name: Architecture diagram freshness
+        run: uv run python scripts/gen_arch_diagram.py --check
+
+      - name: Public API
+        run: uv run python scripts/check_public_api.py
+
+      - name: Test inventory
+        run: uv run python scripts/check_test_inventory.py
+
+      - name: CI contract
+        run: uv run python scripts/check_ci_contract.py
+
+      - name: Tool schemas
+        run: uv run python scripts/check_tool_schemas.py
+
+      - name: Persistent non-web conformance
+        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
+
+      - name: Python type-check (basedpyright — strict, zero type errors tree-wide)
+        run: uv run basedpyright
+
+      - name: Unit tests (excludes integration — see advisory job)
+        run: uv run pytest -m "not integration"
 
       - name: Frontend shipping-file typecheck (honest gate)
         working-directory: frontend
@@ -82,7 +104,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Sync Python deps
-        run: uv sync
+        run: uv sync --all-packages --frozen
 
       - name: Full pytest (incl. integration — needs browser/shell/docker)
         run: uv run pytest

@@ -71,12 +71,27 @@ class _FakeImages:
         return True
 
 
+class _FakeVolume:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.removed = False
+
+    def remove(self, force: bool = True) -> None:
+        self.removed = force
+
+
 class _FakeVolumes:
     def __init__(self) -> None:
-        self.created: list[str] = []
+        self.created: list[dict] = []
 
-    def create(self, *, name: str) -> None:
-        self.created.append(name)
+    def create(self, *, name: str, **kwargs) -> _FakeVolume:
+        self.created.append({"name": name, **kwargs})
+        return _FakeVolume(name)
+
+
+class _FakeLoopbackTunnel:
+    def forward(self, remote_port: int) -> tuple[str, int]:
+        return "203.0.113.47", remote_port
 
 
 class _FakeNetworks:
@@ -101,7 +116,10 @@ class _FakeContainers:
         self.created.append(kwargs)
         name = kwargs["name"]
         if kwargs.get("ports"):
-            ports = {f"{p}/tcp": [{"HostPort": str(20_000 + p)}] for p in sorted(PUBLISHED_PORTS)}
+            ports = {
+                f"{p}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(20_000 + p)}]
+                for p in sorted(PUBLISHED_PORTS)
+            }
             self.sidecar = _FakeContainer(name, ports=ports, ip="10.89.0.2")
             return self.sidecar
         self.sandbox = _FakeContainer(name, ip="10.89.0.3")
@@ -138,7 +156,7 @@ def test_pb_remote_podman_filtered_session_publishes_and_forwards_preview_port()
     service = PodmanSandboxService(cfg, client=client, cli_runner=cli_runner)
 
     spec = SandboxSpec(egress_allow=frozenset({"example.test"}))
-    container, name, _network, sidecar = service._start_container(
+    container, name, _network, sidecar, volume, relay_url = service._start_container(
         spec, "sbx_unbiased", "conv_podman"
     )
     instance = PodmanSandboxInstance(
@@ -153,11 +171,25 @@ def test_pb_remote_podman_filtered_session_publishes_and_forwards_preview_port()
         container_name=name,
         cli_runner=cli_runner,
         preview_host="203.0.113.47",
+        workspace_volume=volume,
+        loopback_tunnel=_FakeLoopbackTunnel(),  # type: ignore[arg-type]
     )
     instance._egress_sidecar = sidecar
 
+    volume_create = client.volumes.created[0]
     sidecar_create = client.containers.created[0]
     sandbox_create = client.containers.created[1]
+    assert volume_create == {
+        "name": "disco-ws-sbx_unbiased",
+        "labels": {"disco.conversation_id": "conv_podman"},
+        "driver": "local",
+        "driver_opts": {
+            "type": "tmpfs",
+            "device": "tmpfs",
+            "o": "size=4096m,uid=1000,gid=1000,mode=0750,nosuid,nodev",
+        },
+    }
+    assert relay_url is None
     assert set(sidecar_create["ports"]) == {f"{p}/tcp" for p in PUBLISHED_PORTS}
     assert sandbox_create.get("ports") is None
     assert sandbox_create["networks"], "filtered sandbox must attach to the internal net"
@@ -227,6 +259,15 @@ def test_w46_browser_launch_uses_anti_fingerprint_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class FakePage:
+        def set_content(self, _html: str) -> None:
+            return None
+
+        def evaluate(self, _script: str) -> bool:
+            return True
+
+        def close(self) -> None:
+            captured["closed_pages"] = int(captured.get("closed_pages", 0)) + 1
+
         def on(self, *_args, **_kwargs) -> None:
             return None
 
@@ -274,9 +315,12 @@ def test_w46_browser_launch_uses_anti_fingerprint_context(monkeypatch) -> None:
     assert "navigator" in script
     assert "webdriver" in script
     assert "undefined" in script
+    assert captured["closed_pages"] == 1
 
 
 class _LiveReadySession:
+    supports_live_view = True
+
     def __init__(self) -> None:
         self.commands: list[str] = []
 

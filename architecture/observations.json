@@ -1,0 +1,186 @@
+[
+  {
+    "id": "DM-001",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:809-5382",
+    "concern": "distributed service locator/shared mutable caches",
+    "owner_package": "PKG-06-RUNTIME",
+    "source_disposition_id": "DM-001"
+  },
+  {
+    "id": "DM-002",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py + packages/agent-server/src/disco/agent_server/workspace_persistence.py + packages/agent-server/src/disco/agent_server/lifecycle.py",
+    "concern": "workspace authority distributed through runtime back-reference",
+    "owner_package": "PKG-07-WORKSPACE",
+    "source_disposition_id": "DM-002"
+  },
+  {
+    "id": "DM-003",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/preview_manager.py + packages/agent-server/src/disco/agent_server/preview_projection.py",
+    "concern": "bidirectional preview resource/projection coupling",
+    "owner_package": "PKG-07-PREVIEW",
+    "source_disposition_id": "DM-003"
+  },
+  {
+    "id": "DM-004",
+    "kind": "distributed_concern",
+    "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState",
+    "concern": "settings/provider/persistence service locator",
+    "owner_package": "PKG-11-SETTINGS",
+    "source_disposition_id": "DM-004"
+  },
+  {
+    "id": "DM-005",
+    "kind": "distributed_concern",
+    "location": "packages/tools/src/disco/tools/builtin/preview.py + packages/tools/src/disco/tools/builtin/audio_overview.py",
+    "concern": "three upward lazy imports hidden by exemptions",
+    "owner_package": "PKG-10-EXECUTOR",
+    "source_disposition_id": "DM-005"
+  },
+  {
+    "id": "DM-006",
+    "kind": "distributed_concern",
+    "location": "harness/build_soak/adapters/disco_api.py:DiscoApiClient + harness/build_soak/oracles/output_truth.py",
+    "concern": "harness imports product internals; oracle independence gap",
+    "owner_package": "PKG-03-HARNESS-ORACLES",
+    "source_disposition_id": "DM-006"
+  },
+  {
+    "id": "DM-007",
+    "kind": "distributed_concern",
+    "location": "frontend/src/components/BuildSurface.tsx + frontend/src/hooks/useBuild.ts + frontend/src/hooks/useDeepResearch.ts + frontend/src/hooks/useBuildStream.ts",
+    "concern": "transport and conversation state cross feature boundaries",
+    "owner_package": "PKG-12-FE-BUILD",
+    "source_disposition_id": "DM-007"
+  },
+  {
+    "id": "DM-008",
+    "kind": "distributed_concern",
+    "location": "packages/retrieval/src/disco/retrieval/streaming.py + packages/retrieval/src/disco/retrieval/deep_research/claims.py + packages/retrieval/src/disco/retrieval/deep_research/synthesis.py",
+    "concern": "duplicated citation grammar/private sibling coupling",
+    "owner_package": "PKG-11-RETRIEVAL",
+    "source_disposition_id": "DM-008"
+  },
+  {
+    "id": "DM-009",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/appkit/models.py:AppSpec + packages/core/src/disco/core/appkit/spec.py:AppSpec + packages/core/src/disco/core/appkit/__init__.py",
+    "concern": "two public AppSpec contracts behind transitional export",
+    "owner_package": "PKG-11-BUILD-SPECS",
+    "source_disposition_id": "DM-009"
+  },
+  {
+    "id": "DM-011",
+    "kind": "distributed_concern",
+    "location": "packages/retrieval/src/disco/retrieval/vectorstore.py:DefaultCorpusService._owner",
+    "concern": "persisted vectors with process-only ownership",
+    "owner_package": "PKG-11-RETRIEVAL",
+    "source_disposition_id": "DM-011"
+  },
+  {
+    "id": "DM-012",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:234-253 + harness/build_soak/adapters/disco_api.py:collect_browser_evidence:3010-3045",
+    "concern": "product preview evidence binds FINISHED while harness PAUSED freeze uses a WorkspaceVersionEvent horizon",
+    "owner_package": "PKG-07-PREVIEW",
+    "source_disposition_id": "DM-012"
+  },
+  {
+    "id": "DM-013",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/verify/host.py:HostWebAppVerifier._verify_via_client:230-275",
+    "concern": "executor-less fallback performs direct httpx verification outside the sandbox browser effect lane",
+    "owner_package": "PKG-08-VERIFY",
+    "source_disposition_id": "DM-013"
+  },
+  {
+    "id": "DM-014",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/store/sqlite.py:441-477 + packages/core/src/disco/core/migration.py:migrate_event:14-32",
+    "concern": "additive SQLite/event migration has no database version or downgrade-write proof",
+    "owner_package": "PKG-04-STORES",
+    "source_disposition_id": "DM-014"
+  },
+  {
+    "id": "DM-015",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
+    "concern": "settings duplicated between process dictionaries and schemaless JSON sidecars with corruption-to-default recovery",
+    "owner_package": "PKG-11-SETTINGS",
+    "source_disposition_id": "DM-015"
+  },
+  {
+    "id": "DM-016",
+    "kind": "distributed_concern",
+    "location": "packages/agent-server/src/disco/agent_server/control_ops.py:_run_generation:205-214",
+    "concern": "process-local kill generation competes with durable run_intent_id/agent_view_id authority across restart",
+    "owner_package": "PKG-06-LIFECYCLE",
+    "source_disposition_id": "DM-016"
+  },
+  {
+    "id": "DM-017",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/events.py:Event:1594-1624 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",
+    "concern": "backend/frontend event and WS discriminator sets drift (three event kinds and token frame absent from TS; connection is UI-local)",
+    "owner_package": "PKG-12-FE-SHELL",
+    "source_disposition_id": "DM-017"
+  },
+  {
+    "id": "DM-018",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/llm/config.py:RouterConfig:450-542 + packages/core/src/disco/core/llm/config_store.py:124-187",
+    "concern": "persisted router configuration is unversioned and legacy values are silently coerced by load validators",
+    "owner_package": "PKG-11-SETTINGS",
+    "source_disposition_id": "DM-018"
+  },
+  {
+    "id": "DM-019",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "concern": "secret-key rotation has no re-encryption migration and can lock all stored secrets",
+    "owner_package": "PKG-11-SETTINGS",
+    "source_disposition_id": "DM-019"
+  },
+  {
+    "id": "DM-020",
+    "kind": "distributed_concern",
+    "location": "packages/core/src/disco/core/store/sqlite.py:198-233 + packages/tools/src/disco/tools/mcp/migrations.py:39-67",
+    "concern": "MCP approval tables have duplicate CREATE authorities that can drift",
+    "owner_package": "PKG-04-STORES",
+    "source_disposition_id": "DM-020"
+  },
+  {
+    "id": "DM-021",
+    "kind": "distributed_concern",
+    "location": "packages/tools/src/disco/tools/registry.py:AGENT_TOOLS/ARTIFACT_TOOLS/RESEARCH_TOOLS:84-213",
+    "concern": "unversioned tool scope sets are a model-facing authorization contract",
+    "owner_package": "PKG-10-EXECUTOR",
+    "source_disposition_id": "DM-021"
+  },
+  {
+    "id": "DM-022",
+    "kind": "distributed_concern",
+    "location": "packages/tools/src/disco/tools/projects/store.py:ProjectStore manifest/version layout:68-82,1152-1208",
+    "concern": "project manifest is unversioned while version allocator/digests are serialized compatibility boundaries",
+    "owner_package": "PKG-10-PROJECTS",
+    "source_disposition_id": "DM-022"
+  },
+  {
+    "id": "PY-0188",
+    "kind": "typed_non_violation",
+    "location": "packages/agent-server/src/disco/agent_server/build_kernel/base.py:BuildKernel:54-145",
+    "classification": "typed protocol contract (not a concrete service)",
+    "owner_package": "PKG-06-RUNTIME",
+    "source_disposition_id": "PY-0188"
+  },
+  {
+    "id": "PY-0664",
+    "kind": "typed_non_violation",
+    "location": "packages/core/src/disco/core/store/base.py:EventStore:56-177",
+    "classification": "typed protocol contract (not a concrete service)",
+    "owner_package": "PKG-04-STORES",
+    "source_disposition_id": "PY-0664"
+  }
+]

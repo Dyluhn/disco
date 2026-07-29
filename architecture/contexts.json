@@ -1,0 +1,171 @@
+{
+  "schema": "disclaude-architecture-contexts-v1",
+  "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc",
+  "package_layering": {
+    "layers": [
+      ["disco.app_server", "disco.agent_server"],
+      ["disco.tools"],
+      ["disco.retrieval"],
+      ["disco.core"]
+    ],
+    "rule": "dependencies point downward only; a lower layer never reaches up",
+    "top_siblings_independent": ["disco.app_server", "disco.agent_server"]
+  },
+  "bounded_contexts": {
+    "packages": {
+      "core": {
+        "module_prefix": "disco.core",
+        "contexts": [
+          "events, state/loop, verification, AppKit, release",
+          "build platform contracts and resolver",
+          "llm, context, prompts"
+        ]
+      },
+      "retrieval": {
+        "module_prefix": "disco.retrieval",
+        "contexts": ["retrieval, research, citations, synthesis"]
+      },
+      "tools": {
+        "module_prefix": "disco.tools",
+        "contexts": ["effects, sandbox, browser/media, projects, executor"]
+      },
+      "agent_server": {
+        "module_prefix": "disco.agent_server",
+        "contexts": [
+          "lifecycle, workspace, preview, routes, runtime",
+          "MCP, settings, auth/quota, workflows, build platform"
+        ]
+      },
+      "app_server": {
+        "module_prefix": "disco.app_server",
+        "contexts": ["host API, config/admin, settings/providers"]
+      }
+    },
+    "harness": {
+      "module_prefix": "",
+      "contexts": ["build-soak runner, transport, evidence", "oracles", "reliability tests"]
+    },
+    "frontend": {
+      "root": "frontend/src",
+      "contexts": {
+        "build": {
+          "description": "Build UI controller/projection",
+          "modules": ["api/agent", "components/BuildSurface", "hooks/useBuild", "hooks/useBuildStream"]
+        },
+        "research": {
+          "description": "Research UI controller/projection",
+          "modules": ["hooks/useDeepResearch", "browseprovider"]
+        },
+        "preview": {
+          "description": "Preview/browser UI controller",
+          "modules": ["preview", "browser"]
+        },
+        "settings": {
+          "description": "settings/provider UI",
+          "modules": ["setting", "provider", "api/models"]
+        },
+        "shell": {
+          "description": "frontend composition/shared UI",
+          "modules": ["App", "components (shared)"]
+        }
+      },
+      "dm007_legacy": {
+        "observation_id": "DM-007",
+        "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc",
+        "owner_package": "PKG-12-FE-BUILD",
+        "edge_fields": ["source", "source_context", "import", "target", "target_context"],
+        "edges": [
+          ["frontend/src/App.tsx", "shell", "@/components/BuildSurface", "frontend/src/components/BuildSurface.tsx", "build"],
+          ["frontend/src/components/build/BuildSurface.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/build/DeckEditorPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/build/canvas/PreviewPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/research/NeedMoreCard.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/hooks/useDeepResearch.ts", "research", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/settings/AudioSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
+          ["frontend/src/components/settings/DataSourcesSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
+          ["frontend/src/components/settings/ImageGenSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
+          ["frontend/src/components/settings/OpenRouterSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
+          ["frontend/src/components/AgentSurface.tsx", "shell", "@/components/BuildSurface", "frontend/src/components/BuildSurface.tsx", "build"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/Markdown", "frontend/src/components/Markdown.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/QueryInput", "frontend/src/components/QueryInput.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/SuggestionChips", "frontend/src/components/SuggestionChips.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ActivityFeed", "frontend/src/components/build/ActivityFeed.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/AgentCanvas", "frontend/src/components/build/AgentCanvas.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/AgentStageCard", "frontend/src/components/build/AgentStageCard.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/AgentStatusBar", "frontend/src/components/build/AgentStatusBar.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/AlternativesGate", "frontend/src/components/build/AlternativesGate.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/AskPanel", "frontend/src/components/build/AskPanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/BuildModelPicker", "frontend/src/components/build/BuildModelPicker.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/BuildSurface", "frontend/src/components/build/BuildSurface.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ClarifyPanel", "frontend/src/components/build/ClarifyPanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ConfirmationPanel", "frontend/src/components/build/ConfirmationPanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ConnectionsStrip", "frontend/src/components/build/ConnectionsStrip.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/DeliverablePanel", "frontend/src/components/build/DeliverablePanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/DriverOutageBanner", "frontend/src/components/build/DriverOutageBanner.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ElementMentionChip", "frontend/src/components/build/ElementMentionChip.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ExecutionCanvas", "frontend/src/components/build/ExecutionCanvas.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ImportProjectDialog", "frontend/src/components/build/ImportProjectDialog.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/LiveSignalBar", "frontend/src/components/build/LiveSignalBar.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/PlanPanel", "frontend/src/components/build/PlanPanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/QuestionsV2Panel", "frontend/src/components/build/QuestionsV2Panel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ReplayScrubber", "frontend/src/components/build/ReplayScrubber.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/ResizableSplit", "frontend/src/components/build/ResizableSplit.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/SelfHostPanel", "frontend/src/components/build/SelfHostPanel.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/build/SteerInput", "frontend/src/components/build/SteerInput.tsx", "shell"],
+          ["frontend/src/api/agent.ts", "build", "@/components/build/editor/types", "frontend/src/components/build/editor/types.ts", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/settings/ScheduleSection", "frontend/src/components/settings/ScheduleSection.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/states", "frontend/src/components/states.tsx", "shell"],
+          ["frontend/src/components/BuildSurface.tsx", "build", "@/components/toastApi", "frontend/src/components/toastApi.ts", "shell"],
+          ["frontend/src/components/build/DriverOutageBanner.tsx", "shell", "@/hooks/useBuildStream", "frontend/src/hooks/useBuildStream.ts", "build"],
+          ["frontend/src/components/build/ExecutionCanvas.tsx", "shell", "@/hooks/useBuildStream", "frontend/src/hooks/useBuildStream.ts", "build"],
+          ["frontend/src/components/build/canvas/FilesPane.tsx", "shell", "@/hooks/useBuildStream", "frontend/src/hooks/useBuildStream.ts", "build"],
+          ["frontend/src/components/research/DeepResearchSurface.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"]
+        ],
+        "cycles": [
+          ["build", "shell", "build"],
+          ["build", "shell", "research", "build"]
+        ]
+      },
+      "cross_feature_imports_rejected": true
+    }
+  },
+  "permitted_edges": [
+    {"from": "disco.agent_server", "to": "disco.tools", "kind": "import"},
+    {"from": "disco.agent_server", "to": "disco.retrieval", "kind": "import"},
+    {"from": "disco.agent_server", "to": "disco.core", "kind": "import"},
+    {"from": "disco.app_server", "to": "disco.tools", "kind": "import"},
+    {"from": "disco.app_server", "to": "disco.retrieval", "kind": "import"},
+    {"from": "disco.app_server", "to": "disco.core", "kind": "import"},
+    {"from": "disco.tools", "to": "disco.retrieval", "kind": "import"},
+    {"from": "disco.tools", "to": "disco.core", "kind": "import"},
+    {"from": "disco.retrieval", "to": "disco.core", "kind": "import"}
+  ],
+  "dm005_upward_edge_observations": [
+    {
+      "observation_id": "DM-005",
+      "edge": "disco.tools.builtin.audio_overview -> disco.agent_server.audio_config",
+      "kind": "upward_lazy_import",
+      "owner_package": "PKG-10-EXECUTOR",
+      "tracked_in_importlinter": true
+    },
+    {
+      "observation_id": "DM-005",
+      "edge": "disco.tools.builtin.audio_overview -> disco.agent_server.tts_local",
+      "kind": "upward_lazy_import",
+      "owner_package": "PKG-10-EXECUTOR",
+      "tracked_in_importlinter": true
+    },
+    {
+      "observation_id": "DM-005",
+      "edge": "disco.tools.builtin.preview -> disco.agent_server.preview_manager",
+      "kind": "upward_lazy_import",
+      "owner_package": "PKG-10-EXECUTOR",
+      "tracked_in_importlinter": true
+    }
+  ],
+  "runtime_edges": [
+    {"from": "frontend", "to": "agent_server", "kind": "http", "label": "HTTP"},
+    {"from": "frontend", "to": "app_server", "kind": "http", "label": "HTTP"},
+    {"from": "agent_server", "to": "sandbox", "kind": "spawn", "label": "spawns"}
+  ]
+}

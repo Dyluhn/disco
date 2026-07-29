@@ -4,6 +4,7 @@ import pytest
 from disco.app_server.config_state import ConfigState
 from disco.core.llm.config import ImageGenSettings, ModelEntry, default_config
 from disco.core.llm.config_store import ConfigStore
+from disco.core.llm.types import ModelRole
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin.image_gen import (
     ImageGenArgs,
@@ -19,8 +20,22 @@ def _write_config(tmp_path, monkeypatch, cfg):
     config_path.write_text(json.dumps(cfg.model_dump(mode="json")))
     monkeypatch.setenv("DISCO_CONFIG", str(config_path))
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "disco-secrets.json"))
+    monkeypatch.setenv("DISCO_APPROVALS", str(tmp_path / "disco-approved-origins.json"))
+    monkeypatch.setenv("DISCO_SECRET_KEY", "authorb-origin-approval-test-secret")
     monkeypatch.delenv("DISCO_OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("PMX_OPENROUTER_API_KEY", raising=False)
+    store = ConfigStore(config_path)
+    store.approve_origin(
+        "https://openrouter.ai/api/v1",
+        "image:openrouter",
+        "openrouter",
+    )
+    driver = cfg.models[cfg.model_for(ModelRole.AGENT_DRIVER)]
+    store.approve_origin(
+        driver.base_url,
+        f"model:{driver.provider}",
+        driver.api_key_env,
+    )
     return config_path
 
 
