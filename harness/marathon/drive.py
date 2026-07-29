@@ -187,6 +187,90 @@ def _text_has_number(text: str, val: str, tol: float = 0.051) -> bool:
     return any(abs(float(m.group()) - target) <= tol for m in re.finditer(r"-?\d+(?:\.\d+)?", text))
 
 
+def _battery_live_view(page) -> None:
+    """Attempt-6 lesson: the pills + live iframe live INSIDE the PreviewPane."""
+    page.get_by_role("tab", name="Preview").click(timeout=30_000)
+    live_iframe = page.locator('iframe[title="Live preview"]')
+    toggle = page.get_by_role("button", name=re.compile(r"Live server", re.I))
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline and not live_iframe.count():
+        try:
+            if toggle.count():
+                toggle.click(timeout=5_000)
+        except Exception:  # noqa: BLE001 — pane may re-render mid-click
+            pass
+        time.sleep(2)
+    assert live_iframe.count(), "PreviewPane never reached the live-server view"
+
+
+def _battery_port_pills(page) -> dict:
+    """Port pills (BP-10): 8000 + 3000 both bound (live mode, >1 user port)."""
+    pills = page.get_by_role("tablist", name="Bound ports")
+    for port in ("8000", "3000"):
+        pills.get_by_role("tab", name=re.compile(rf":{port}")).wait_for(
+            state="visible", timeout=90_000
+        )
+    return {"ports": ["8000", "3000"]}
+
+
+def _battery_api_json(cid: str, known: dict) -> dict:
+    """API through the BP-10 proxy: real JSON, all 200 real rows."""
+    r = api_get(f"/conversations/{cid}/port/3000/api/readings", timeout=60)
+    assert r.status_code == 200, f"/port/3000/api/readings → {r.status_code}"
+    data = r.json()
+    rows = data if isinstance(data, list) else data.get("readings") or data.get("data")
+    assert isinstance(rows, list), f"unexpected JSON shape: {str(data)[:200]}"
+    assert len(rows) == known["count"], f"API rows {len(rows)} != csv {known['count']}"
+    return {"rows": len(rows)}
+
+
+def _battery_preview_cells(page, known: dict) -> dict:
+    """Preview table shows the REAL data (≥3 known cells + count/min/max)."""
+    frame = page.frame_locator('iframe[title="Live preview"]')
+    wanted = list(known["cells"]) + [known["min"], known["max"]]
+    deadline = time.monotonic() + 60
+    text = ""
+    while time.monotonic() < deadline:
+        try:
+            text = frame.locator("body").inner_text(timeout=10_000)
+        except Exception:  # noqa: BLE001 — iframe mid-load
+            text = ""
+        if str(known["count"]) in text and all(_text_has_number(text, v) for v in wanted):
+            return {"matched": wanted, "count": known["count"]}
+        time.sleep(3)
+    raise AssertionError(f"preview never showed the data (last text: {text[:200]!r})")
+
+
+def _battery_terminal(page) -> dict:
+    """Terminal tab (BP-14): live session output present."""
+    page.get_by_role("tab", name="Terminal").click(timeout=30_000)
+    pane = page.get_by_role("tabpanel").locator("pre")
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        content = pane.inner_text(timeout=10_000) if pane.count() else ""
+        if content.strip():
+            return {"chars": len(content)}
+        time.sleep(2)
+    raise AssertionError("Terminal tab shows no live session output")
+
+
+def _battery_feed_thumbnail(page) -> dict:
+    """Feed thumbnail (BP-15): at least one real screenshot in the feed."""
+    thumbs = page.locator('img[src*="/workspace/.pmx/screenshots/"]')
+    assert thumbs.count() >= 1, "no screenshot thumbnail in the feed"
+    return {"thumbnails": thumbs.count()}
+
+
+def _battery_json_shot(cid: str, shot_prefix: str, page) -> None:
+    """Port-3000 JSON, screenshotted as the user would see it."""
+    json_page = page.context.new_page()
+    try:
+        json_page.goto(f"{API}/conversations/{cid}/port/3000/api/readings", timeout=60_000)
+        json_page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-port-3000-json.png"))
+    finally:
+        json_page.close()
+
+
 def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
     """Order step A4, reused by Phase B: the harness acts as the user and
     checks every shipped surface. Every check is recorded pass/fail in the
@@ -212,106 +296,22 @@ def deliverable_battery(page, cid: str, *, shot_prefix: str) -> dict:
             print(f"[battery] {name}: FAIL — {str(exc)[:160]}")
             return False
 
-    # Attempt-6 lesson: the pills + live iframe live INSIDE the PreviewPane,
-    # which defaults to the srcdoc "rendered" view whenever a renderable file
-    # exists. The user's path is: Preview tab → "Live server" toggle → pills.
-    def live_view():
-        page.get_by_role("tab", name="Preview").click(timeout=30_000)
-        live_iframe = page.locator('iframe[title="Live preview"]')
-        toggle = page.get_by_role("button", name=re.compile(r"Live server", re.I))
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline and not live_iframe.count():
-            try:
-                if toggle.count():
-                    toggle.click(timeout=5_000)
-            except Exception:  # noqa: BLE001 — pane may re-render mid-click
-                pass
-            time.sleep(2)
-        assert live_iframe.count(), "PreviewPane never reached the live-server view"
-
-    check("live_view", live_view)
-
-    # Port pills (BP-10): 8000 + 3000 both bound (live mode, >1 user port).
-    def port_pills():
-        pills = page.get_by_role("tablist", name="Bound ports")
-        for port in ("8000", "3000"):
-            pills.get_by_role("tab", name=re.compile(rf":{port}")).wait_for(
-                state="visible", timeout=90_000
-            )
-        return {"ports": ["8000", "3000"]}
-
-    check("port_pills", port_pills)
-
-    # API through the BP-10 proxy: real JSON, all 200 real rows.
-    def api_json():
-        r = api_get(f"/conversations/{cid}/port/3000/api/readings", timeout=60)
-        assert r.status_code == 200, f"/port/3000/api/readings → {r.status_code}"
-        data = r.json()
-        rows = data if isinstance(data, list) else data.get("readings") or data.get("data")
-        assert isinstance(rows, list), f"unexpected JSON shape: {str(data)[:200]}"
-        assert len(rows) == known["count"], f"API rows {len(rows)} != csv {known['count']}"
-        return {"rows": len(rows)}
-
-    check("api_json", api_json)
-
-    # Preview table shows the REAL data (≥3 known cells + count/min/max),
-    # matched numerically. Expected to FAIL while DEFECT-3 stands: the
-    # path-prefixed proxy 404s the app's absolute-path assets + /api fetch.
-    def preview_cells():
-        frame = page.frame_locator('iframe[title="Live preview"]')
-        wanted = list(known["cells"]) + [known["min"], known["max"]]
-        deadline = time.monotonic() + 60
-        text = ""
-        while time.monotonic() < deadline:
-            try:
-                text = frame.locator("body").inner_text(timeout=10_000)
-            except Exception:  # noqa: BLE001 — iframe mid-load
-                text = ""
-            if str(known["count"]) in text and all(_text_has_number(text, v) for v in wanted):
-                return {"matched": wanted, "count": known["count"]}
-            time.sleep(3)
-        raise AssertionError(f"preview never showed the data (last text: {text[:200]!r})")
-
-    check("preview_cells", preview_cells)
+    check("live_view", lambda: _battery_live_view(page))
+    check("port_pills", lambda: _battery_port_pills(page))
+    check("api_json", lambda: _battery_api_json(cid, known))
+    check("preview_cells", lambda: _battery_preview_cells(page, known))
     page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-final-preview-table.png"))
-
-    # Terminal tab (BP-14): live session output present.
-    def terminal():
-        page.get_by_role("tab", name="Terminal").click(timeout=30_000)
-        pane = page.get_by_role("tabpanel").locator("pre")
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            content = pane.inner_text(timeout=10_000) if pane.count() else ""
-            if content.strip():
-                return {"chars": len(content)}
-            time.sleep(2)
-        raise AssertionError("Terminal tab shows no live session output")
-
-    check("terminal", terminal)
-
-    # Feed thumbnail (BP-15): at least one real screenshot in the feed.
-    def feed_thumbnail():
-        thumbs = page.locator('img[src*="/workspace/.pmx/screenshots/"]')
-        assert thumbs.count() >= 1, "no screenshot thumbnail in the feed"
-        return {"thumbnails": thumbs.count()}
-
-    check("feed_thumbnail", feed_thumbnail)
-
-    # Port-3000 JSON, screenshotted as the user would see it.
-    def json_shot():
-        json_page = page.context.new_page()
-        try:
-            json_page.goto(f"{API}/conversations/{cid}/port/3000/api/readings", timeout=60_000)
-            json_page.screenshot(path=str(SHOT_DIR / f"{shot_prefix}-port-3000-json.png"))
-        finally:
-            json_page.close()
-
-    check("json_screenshot", json_shot)
+    check("terminal", lambda: _battery_terminal(page))
+    check("feed_thumbnail", lambda: _battery_feed_thumbnail(page))
+    check("json_screenshot", lambda: _battery_json_shot(cid, shot_prefix, page))
 
     # Late pass: the agent's verification screenshot (feed thumbnail) and a
     # late-populating preview can land right up until FINISHED reaps the
     # sandbox — keep re-trying failed checks while the run is alive.
-    retryable = {"preview_cells": preview_cells, "feed_thumbnail": feed_thumbnail}
+    retryable = {
+        "preview_cells": lambda: _battery_preview_cells(page, known),
+        "feed_thumbnail": lambda: _battery_feed_thumbnail(page),
+    }
     late_deadline = time.monotonic() + 600
     while time.monotonic() < late_deadline:
         pending = [n for n, f in retryable.items() if not witness["checks"][n]["pass"]]

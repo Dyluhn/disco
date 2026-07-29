@@ -104,13 +104,16 @@ def test_typed_ports_are_bounded_and_match_the_existing_client() -> None:
         for name, value in port.__dict__.items():
             if not name.startswith("_") and callable(value):
                 assert hasattr(DiscoApiClient, name), name
-    assert len(
-        [
-            name
-            for name, value in EvidenceSink.__dict__.items()
-            if not name.startswith("_") and callable(value)
-        ]
-    ) == 5
+    assert (
+        len(
+            [
+                name
+                for name, value in EvidenceSink.__dict__.items()
+                if not name.startswith("_") and callable(value)
+            ]
+        )
+        == 5
+    )
 
 
 @pytest.mark.asyncio
@@ -362,15 +365,15 @@ def test_new_owner_signatures_keep_the_frozen_facade_contract() -> None:
     from harness.build_soak.run_coordinator import RunCoordinator
     from harness.build_soak.scenario_driver import DefaultScenarioDriver
 
-    assert inspect.signature(DefaultScenarioDriver.drive).parameters.keys() == (
+    assert tuple(inspect.signature(DefaultScenarioDriver.drive).parameters) == (
         "self",
         *inspect.signature(old_run.drive_scenario).parameters.keys(),
     )
-    assert inspect.signature(RunCoordinator.run_once).parameters.keys() == (
+    assert tuple(inspect.signature(RunCoordinator.run_once).parameters) == (
         "self",
         *inspect.signature(old_run.run_once).parameters.keys(),
     )
-    assert inspect.signature(FilesystemEvidenceSink.assemble_dossier).parameters.keys() == (
+    assert tuple(inspect.signature(FilesystemEvidenceSink.assemble_dossier).parameters) == (
         "self",
         *inspect.signature(old_run.assemble_dossier).parameters.keys(),
     )

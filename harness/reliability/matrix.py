@@ -116,12 +116,125 @@ def _positive_float(raw: dict[str, Any], key: str, owner: str) -> float:
     return float(value)
 
 
-def load_matrix(path: str | Path) -> ReliabilityMatrix:
-    source = Path(path)
-    raw = yaml.load(source.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
-    if raw.get("schema_version") != 1:
-        raise ValueError("reliability matrix schema_version must be 1")
+def _validate_suite_provider_options(
+    item: dict,
+    suite_id: str,
+    proof: str,
+) -> tuple[bool, bool, int | None]:
+    """Validate provider_evidence / provider_conversation_manifest / count."""
+    provider_evidence = item.get("provider_evidence", False)
+    provider_conversation_manifest = item.get("provider_conversation_manifest", False)
+    provider_conversation_count = item.get("provider_conversation_count")
+    if not isinstance(provider_evidence, bool):
+        raise ValueError(f"{suite_id}.provider_evidence must be a boolean")
+    if provider_evidence and proof != "live":
+        raise ValueError(f"{suite_id}.provider_evidence is valid only for live proof")
+    if not isinstance(provider_conversation_manifest, bool):
+        raise ValueError(f"{suite_id}.provider_conversation_manifest must be a boolean")
+    if provider_conversation_manifest and not provider_evidence:
+        raise ValueError(f"{suite_id}.provider_conversation_manifest requires provider_evidence")
+    if provider_conversation_count is not None and (
+        not isinstance(provider_conversation_count, int)
+        or isinstance(provider_conversation_count, bool)
+        or provider_conversation_count <= 0
+    ):
+        raise ValueError(f"{suite_id}.provider_conversation_count must be a positive integer")
+    if provider_conversation_count is not None and not provider_conversation_manifest:
+        raise ValueError(
+            f"{suite_id}.provider_conversation_count requires provider_conversation_manifest"
+        )
+    if provider_conversation_manifest and provider_conversation_count is None:
+        raise ValueError(
+            f"{suite_id}.provider_conversation_manifest requires provider_conversation_count"
+        )
+    return provider_evidence, provider_conversation_manifest, provider_conversation_count
 
+
+def _validate_suite_env(item: dict, suite_id: str) -> tuple[list, dict]:
+    """Validate requires_env and environment fields."""
+    required_env = item.get("requires_env") or []
+    environment = item.get("environment") or {}
+    if not isinstance(required_env, list) or not all(
+        isinstance(name, str) and name for name in required_env
+    ):
+        raise ValueError(f"{suite_id}.requires_env must be a string list")
+    if not isinstance(environment, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
+    ):
+        raise ValueError(f"{suite_id}.environment must be a string mapping")
+    return required_env, environment
+
+
+def _validate_suite_claims(
+    item: dict,
+    suite_id: str,
+    proof: str,
+    claims: dict,
+) -> tuple[str, ...]:
+    """Validate suite claims and return the claim id tuple."""
+    claim_ids = item.get("claims")
+    if not isinstance(claim_ids, list) or not claim_ids:
+        raise ValueError(f"{suite_id}.claims must be a nonempty list")
+    for claim_id in claim_ids:
+        if claim_id not in claims:
+            raise ValueError(f"{suite_id} references unknown claim {claim_id!r}")
+        if claims[claim_id].proof != proof:
+            raise ValueError(
+                f"{suite_id} proof {proof!r} does not match claim {claim_id} "
+                f"proof {claims[claim_id].proof!r}"
+            )
+    return tuple(str(claim_id) for claim_id in claim_ids)
+
+
+def _parse_suite(
+    item: dict,
+    claims: dict,
+    coverage: dict[str, int],
+) -> tuple[str, Suite]:
+    """Parse and validate one suite entry; return (suite_id, Suite)."""
+    suite_id = _required_text(item, "id", "suite")
+    if suite_id in coverage:
+        raise ValueError(f"duplicate suite id: {suite_id}")
+    proof = _required_text(item, "proof", suite_id)
+    if proof not in PROOFS:
+        raise ValueError(f"{suite_id}.proof must be one of {sorted(PROOFS)}")
+    kind = _required_text(item, "kind", suite_id)
+    if kind not in KINDS:
+        raise ValueError(f"{suite_id}.kind must be one of {sorted(KINDS)}")
+    command_raw = item.get("command")
+    if (
+        not isinstance(command_raw, list)
+        or not command_raw
+        or not all(isinstance(part, str) and part for part in command_raw)
+    ):
+        raise ValueError(f"{suite_id}.command must be a nonempty string list")
+    claim_tuple = _validate_suite_claims(item, suite_id, proof, claims)
+    for claim_id in claim_tuple:
+        coverage[claim_id] += 1
+    required_env, environment = _validate_suite_env(item, suite_id)
+    provider_evidence, provider_manifest, provider_count = _validate_suite_provider_options(
+        item, suite_id, proof
+    )
+    return suite_id, Suite(
+        id=suite_id,
+        proof=proof,
+        kind=kind,
+        cwd=_required_text(item, "cwd", suite_id),
+        timeout_s=_positive_float(item, "timeout_s", suite_id),
+        memory_gib=_positive_float(item, "memory_gib", suite_id),
+        units=_positive_int(item, "units", suite_id),
+        command=tuple(command_raw),
+        claims=claim_tuple,
+        requires_env=tuple(required_env),
+        environment=dict(environment),
+        provider_evidence=provider_evidence,
+        provider_conversation_manifest=provider_manifest,
+        provider_conversation_count=provider_count,
+    )
+
+
+def _parse_claims(raw: dict) -> dict[str, Claim]:
+    """Parse and validate all claim entries from the raw matrix."""
     claims: dict[str, Claim] = {}
     for item in raw.get("claims") or []:
         if not isinstance(item, dict):
@@ -139,96 +252,24 @@ def load_matrix(path: str | Path) -> ReliabilityMatrix:
             target=_positive_int(item, "target", claim_id),
             description=_required_text(item, "description", claim_id),
         )
+    return claims
+
+
+def load_matrix(path: str | Path) -> ReliabilityMatrix:
+    source = Path(path)
+    raw = yaml.load(source.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader) or {}
+    if raw.get("schema_version") != 1:
+        raise ValueError("reliability matrix schema_version must be 1")
+
+    claims = _parse_claims(raw)
 
     suites: dict[str, Suite] = {}
     coverage: dict[str, int] = {claim_id: 0 for claim_id in claims}
     for item in raw.get("suites") or []:
         if not isinstance(item, dict):
             raise ValueError("each suite must be a mapping")
-        suite_id = _required_text(item, "id", "suite")
-        if suite_id in suites:
-            raise ValueError(f"duplicate suite id: {suite_id}")
-        proof = _required_text(item, "proof", suite_id)
-        if proof not in PROOFS:
-            raise ValueError(f"{suite_id}.proof must be one of {sorted(PROOFS)}")
-        kind = _required_text(item, "kind", suite_id)
-        if kind not in KINDS:
-            raise ValueError(f"{suite_id}.kind must be one of {sorted(KINDS)}")
-
-        command_raw = item.get("command")
-        if (
-            not isinstance(command_raw, list)
-            or not command_raw
-            or not all(isinstance(part, str) and part for part in command_raw)
-        ):
-            raise ValueError(f"{suite_id}.command must be a nonempty string list")
-        claim_ids = item.get("claims")
-        if not isinstance(claim_ids, list) or not claim_ids:
-            raise ValueError(f"{suite_id}.claims must be a nonempty list")
-        for claim_id in claim_ids:
-            if claim_id not in claims:
-                raise ValueError(f"{suite_id} references unknown claim {claim_id!r}")
-            if claims[claim_id].proof != proof:
-                raise ValueError(
-                    f"{suite_id} proof {proof!r} does not match claim {claim_id} "
-                    f"proof {claims[claim_id].proof!r}"
-                )
-            coverage[claim_id] += 1
-
-        required_env = item.get("requires_env") or []
-        environment = item.get("environment") or {}
-        provider_evidence = item.get("provider_evidence", False)
-        provider_conversation_manifest = item.get("provider_conversation_manifest", False)
-        provider_conversation_count = item.get("provider_conversation_count")
-        if not isinstance(required_env, list) or not all(
-            isinstance(name, str) and name for name in required_env
-        ):
-            raise ValueError(f"{suite_id}.requires_env must be a string list")
-        if not isinstance(environment, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
-        ):
-            raise ValueError(f"{suite_id}.environment must be a string mapping")
-        if not isinstance(provider_evidence, bool):
-            raise ValueError(f"{suite_id}.provider_evidence must be a boolean")
-        if provider_evidence and proof != "live":
-            raise ValueError(f"{suite_id}.provider_evidence is valid only for live proof")
-        if not isinstance(provider_conversation_manifest, bool):
-            raise ValueError(f"{suite_id}.provider_conversation_manifest must be a boolean")
-        if provider_conversation_manifest and not provider_evidence:
-            raise ValueError(
-                f"{suite_id}.provider_conversation_manifest requires provider_evidence"
-            )
-        if provider_conversation_count is not None and (
-            not isinstance(provider_conversation_count, int)
-            or isinstance(provider_conversation_count, bool)
-            or provider_conversation_count <= 0
-        ):
-            raise ValueError(f"{suite_id}.provider_conversation_count must be a positive integer")
-        if provider_conversation_count is not None and not provider_conversation_manifest:
-            raise ValueError(
-                f"{suite_id}.provider_conversation_count requires provider_conversation_manifest"
-            )
-        if provider_conversation_manifest and provider_conversation_count is None:
-            raise ValueError(
-                f"{suite_id}.provider_conversation_manifest requires provider_conversation_count"
-            )
-
-        suites[suite_id] = Suite(
-            id=suite_id,
-            proof=proof,
-            kind=kind,
-            cwd=_required_text(item, "cwd", suite_id),
-            timeout_s=_positive_float(item, "timeout_s", suite_id),
-            memory_gib=_positive_float(item, "memory_gib", suite_id),
-            units=_positive_int(item, "units", suite_id),
-            command=tuple(command_raw),
-            claims=tuple(str(claim_id) for claim_id in claim_ids),
-            requires_env=tuple(required_env),
-            environment=dict(environment),
-            provider_evidence=provider_evidence,
-            provider_conversation_manifest=provider_conversation_manifest,
-            provider_conversation_count=provider_conversation_count,
-        )
+        suite_id, suite = _parse_suite(item, claims, coverage)
+        suites[suite_id] = suite
 
     if not claims:
         raise ValueError("reliability matrix contains no claims")

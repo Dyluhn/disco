@@ -42,6 +42,42 @@ def join_workspace_relative(root: str, path: str) -> str:
     return path if root == "." else f"{root}/{path}"
 
 
+def _build_candidate_roots(
+    verified_artifact_paths: list[str],
+    paths: set[str],
+) -> tuple[set[str] | None, dict[str, Any] | None]:
+    """Build candidate roots from verified artifact paths. Returns (roots, error)."""
+    candidate_roots: set[str] = set()
+    for raw_path in verified_artifact_paths:
+        artifact_path = normalized_workspace_relative_path(raw_path)
+        if artifact_path is None:
+            return None, {
+                "reason": "governed artifact entry is not a normalized workspace-relative path",
+                "verified_artifact_path": raw_path,
+            }
+        ancestor = posixpath.dirname(artifact_path) or "."
+        while ancestor != ".":
+            candidate_roots.add(ancestor)
+            ancestor = posixpath.dirname(ancestor) or "."
+        if any(path.startswith(f"{artifact_path}/") for path in paths):
+            candidate_roots.add(artifact_path)
+    return candidate_roots, None
+
+
+def _select_deepest_viable_root(
+    viable: list[str],
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Select the deepest viable root, or return an error for ambiguous roots."""
+    deepest = max(len(root.split("/")) for root in viable)
+    deepest_roots = [root for root in viable if len(root.split("/")) == deepest]
+    if len(deepest_roots) == 1:
+        return deepest_roots[0], None
+    return None, {
+        "reason": "multiple governed artifact roots satisfy the declared output contract",
+        "viable_verified_roots": viable,
+    }
+
+
 def resolve_open_assertion_root(
     *,
     present_paths: Iterable[str],
@@ -65,30 +101,10 @@ def resolve_open_assertion_root(
     if verified_artifact_paths is None:
         return (".", None) if root_viable else (None, None)
 
-    candidate_roots: set[str] = set()
-    for raw_path in verified_artifact_paths:
-        artifact_path = normalized_workspace_relative_path(raw_path)
-        if artifact_path is None:
-            return None, {
-                "reason": "governed artifact entry is not a normalized workspace-relative path",
-                "verified_artifact_path": raw_path,
-            }
-        # Every enclosing directory of the verified entry below the workspace
-        # root is within the governed lineage: a compiled delivery's entry names
-        # the build OUTPUT (react-continue/dist/index.html) while the open-set
-        # contract may describe the PROJECT that produced it
-        # (react-continue/package.json — counted seed 440026). Stale scaffolds
-        # outside the verified lineage never become candidates; "." stays the
-        # separately-guarded root_viable fallback.
-        ancestor = posixpath.dirname(artifact_path) or "."
-        while ancestor != ".":
-            candidate_roots.add(ancestor)
-            ancestor = posixpath.dirname(ancestor) or "."
-        # A directory-shaped delivery is represented by members below its
-        # boundary in a file manifest. Keep both boundary vocabularies eligible;
-        # the exact declared paths determine which one is viable.
-        if any(path.startswith(f"{artifact_path}/") for path in paths):
-            candidate_roots.add(artifact_path)
+    candidate_roots, error = _build_candidate_roots(verified_artifact_paths, paths)
+    if error is not None:
+        return None, {**error, "verified_artifact_paths": sorted(set(verified_artifact_paths))}
+    assert candidate_roots is not None
 
     viable = sorted(
         root
@@ -96,18 +112,10 @@ def resolve_open_assertion_root(
         if all(join_workspace_relative(root, path) in paths for path in declared_paths)
     )
     if viable:
-        # Bind to the root closest to the verified bytes. Nested viable roots
-        # along one artifact lineage resolve to the deepest; two DISTINCT
-        # deepest roots (sibling lineages) remain a refusal, never a guess.
-        deepest = max(len(root.split("/")) for root in viable)
-        deepest_roots = [root for root in viable if len(root.split("/")) == deepest]
-        if len(deepest_roots) == 1:
-            return deepest_roots[0], None
-        return None, {
-            "reason": "multiple governed artifact roots satisfy the declared output contract",
-            "viable_verified_roots": viable,
-            "verified_artifact_paths": sorted(set(verified_artifact_paths)),
-        }
+        root, err = _select_deepest_viable_root(viable)
+        if err is not None:
+            return None, {**err, "verified_artifact_paths": sorted(set(verified_artifact_paths))}
+        return root, None
     if root_viable:
         return ".", None
     return None, {

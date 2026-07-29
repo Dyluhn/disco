@@ -48,6 +48,92 @@ def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] 
     return value if isinstance(value, dict) else None
 
 
+def _check_import_lifecycle(
+    product_evidence: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Check the import lifecycle action."""
+    evidence = _slice(product_evidence, "import")
+    ok = evidence is not None and evidence.get("accepted") is True
+    return {"import": evidence}, ok
+
+
+def _check_pause_resume_lifecycle(
+    product_evidence: dict[str, Any] | None,
+    statuses: list[tuple[int, str]],
+) -> tuple[dict[str, Any], bool]:
+    """Check the pause/resume lifecycle action."""
+    evidence = _slice(product_evidence, "pause_resume")
+    paused = [seq for seq, status in statuses if status == "PAUSED"]
+    resumed = any(status == "RUNNING" and paused and seq > paused[0] for seq, status in statuses)
+    ok = evidence is not None and evidence.get("ok") is True and bool(paused) and resumed
+    return {
+        "pause_resume": {
+            "evidence": evidence,
+            "paused_seqs": paused,
+            "resumed_after_pause": resumed,
+        }
+    }, ok
+
+
+def _check_restart_lifecycle(
+    product_evidence: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Check the restart lifecycle action."""
+    evidence = _slice(product_evidence, "restart")
+    ok = (
+        evidence is not None
+        and evidence.get("ok") is True
+        and evidence.get("before_status") == evidence.get("after_status")
+        and isinstance(evidence.get("before_digest"), str)
+        and evidence.get("before_digest") == evidence.get("after_digest")
+    )
+    return {"restart": evidence}, ok
+
+
+def _check_rollback_lifecycle(
+    product_evidence: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, Any], bool]:
+    """Check the restore/rollback lifecycle action."""
+    evidence = _slice(product_evidence, "rollback")
+    durable = any(event.get("kind") == "workspace_restored" for event in events)
+    ok = evidence is not None and evidence.get("ok") is True and durable
+    return {"rollback": {"evidence": evidence, "durable_event": durable}}, ok
+
+
+def _build_lifecycle_failure(
+    failed: list[str],
+    facts: dict[str, Any],
+) -> list[OracleResult]:
+    """Build the failure result for failed lifecycle actions."""
+    unavailable = sorted(
+        action
+        for action in failed
+        if str((facts.get(action) or {}).get("reason") or "").endswith("control_unavailable")
+    )
+    if unavailable and len(unavailable) == len(failed):
+        return [
+            failing(
+                _LIFECYCLE,
+                fc.LIFECYCLE_CONTROL_UNAVAILABLE,
+                first_broken_link="harness_control -> lifecycle_action",
+                facts={
+                    "failed_actions": failed,
+                    "unattempted_actions": unavailable,
+                    **facts,
+                },
+            )
+        ]
+    return [
+        failing(
+            _LIFECYCLE,
+            fc.LIFECYCLE_SEQUENCE_INVALID,
+            first_broken_link="scenario_action -> durable_lifecycle_evidence",
+            facts={"failed_actions": failed, **facts},
+        )
+    ]
+
+
 class ScenarioLifecycleOracle:
     """Require each scenario-directed lifecycle action to be causally observed."""
 
@@ -69,85 +155,134 @@ class ScenarioLifecycleOracle:
         statuses = [(int(event.get("seq", -1)), _status(event)) for event in events]
 
         if imported:
-            evidence = _slice(product_evidence, "import")
-            ok = evidence is not None and evidence.get("accepted") is True
-            facts["import"] = evidence
+            f, ok = _check_import_lifecycle(product_evidence)
+            facts.update(f)
             if not ok:
                 failed.append("import")
 
         if lifecycle.get("pause_resume_at"):
-            evidence = _slice(product_evidence, "pause_resume")
-            paused = [seq for seq, status in statuses if status == "PAUSED"]
-            resumed = any(
-                status == "RUNNING" and paused and seq > paused[0] for seq, status in statuses
-            )
-            ok = evidence is not None and evidence.get("ok") is True and bool(paused) and resumed
-            facts["pause_resume"] = {
-                "evidence": evidence,
-                "paused_seqs": paused,
-                "resumed_after_pause": resumed,
-            }
+            f, ok = _check_pause_resume_lifecycle(product_evidence, statuses)
+            facts.update(f)
             if not ok:
                 failed.append("pause_resume")
 
         if lifecycle.get("restart_after_terminal"):
-            evidence = _slice(product_evidence, "restart")
-            ok = (
-                evidence is not None
-                and evidence.get("ok") is True
-                and evidence.get("before_status") == evidence.get("after_status")
-                and isinstance(evidence.get("before_digest"), str)
-                and evidence.get("before_digest") == evidence.get("after_digest")
-            )
-            facts["restart"] = evidence
+            f, ok = _check_restart_lifecycle(product_evidence)
+            facts.update(f)
             if not ok:
                 failed.append("restart")
 
         if lifecycle.get("restore_version"):
-            evidence = _slice(product_evidence, "rollback")
-            durable = any(event.get("kind") == "workspace_restored" for event in events)
-            ok = evidence is not None and evidence.get("ok") is True and durable
-            facts["rollback"] = {"evidence": evidence, "durable_event": durable}
+            f, ok = _check_rollback_lifecycle(product_evidence, events)
+            facts.update(f)
             if not ok:
                 failed.append("rollback")
 
         if failed:
-            # A lifecycle action the HARNESS could not attempt is not a product
-            # sequence defect. `_restart_isolated_stack` reports exactly this
-            # when the disposable stack's private control is unbound, and the
-            # 2026-07-27 counted failure recorded it as the build platform
-            # failing a restart lifecycle while the build itself FINISHED twice.
-            # `run.py` now refuses to start such a lane; this keeps the dossier
-            # truthful if one is ever discovered mid-run.
-            unavailable = sorted(
-                action
-                for action in failed
-                if str((facts.get(action) or {}).get("reason") or "").endswith(
-                    "control_unavailable"
-                )
-            )
-            if unavailable and len(unavailable) == len(failed):
-                return [
-                    failing(
-                        _LIFECYCLE,
-                        fc.LIFECYCLE_CONTROL_UNAVAILABLE,
-                        first_broken_link="harness_control -> lifecycle_action",
-                        facts={
-                            "failed_actions": failed,
-                            "unattempted_actions": unavailable,
-                            **facts,
-                        },
-                    )
-                ]
-            return [
-                failing(
-                    _LIFECYCLE,
-                    fc.LIFECYCLE_SEQUENCE_INVALID,
-                    first_broken_link="scenario_action -> durable_lifecycle_evidence",
-                    facts={"failed_actions": failed, **facts},
-                )
-            ]
+            return _build_lifecycle_failure(failed, facts)
         return [passing(_LIFECYCLE, facts=facts)]
+
+
+def _collect_file_reads(
+    events: list[dict[str, Any]],
+    path: str,
+) -> tuple[list[tuple[int, str]], dict[str, tuple[int, str]]]:
+    """Collect file_read actions targeting ``path``. Returns (reads, action_calls)."""
+    reads: list[tuple[int, str]] = []
+    action_calls: dict[str, tuple[int, str]] = {}
+    for event in events:
+        if event.get("kind") != "action":
+            continue
+        call = event.get("tool_call") or {}
+        if call.get("tool_name") != "file_read":
+            continue
+        args = call.get("arguments") or {}
+        if not _same_workspace_file(args.get("path"), path):
+            continue
+        raw_offset = args.get("offset")
+        offset = "0" if raw_offset is None else str(raw_offset)
+        seq = int(event.get("seq", -1))
+        reads.append((seq, offset))
+        call_id = call.get("call_id")
+        if isinstance(call_id, str) and call_id:
+            action_calls[call_id] = (seq, offset)
+    return reads, action_calls
+
+
+def _count_range_hints(
+    events: list[dict[str, Any]],
+    action_calls: dict[str, tuple[int, str]],
+) -> int:
+    """Count range-hint observations for the collected file_read actions."""
+    range_hints = 0
+    for event in events:
+        if event.get("kind") != "observation":
+            continue
+        result = event.get("tool_result") or {}
+        call_id = result.get("call_id")
+        if call_id not in action_calls:
+            continue
+        content = str(result.get("content") or "")
+        if "read more with offset=" in content or "HEAD-ONLY under context pressure" in content:
+            range_hints += 1
+    return range_hints
+
+
+def _collect_context_reads(
+    events: list[dict[str, Any]],
+    path: str,
+) -> tuple[list[tuple[int, str]], int, dict[str, tuple[int, str]]]:
+    """Collect file_read actions targeting ``path`` and count range hints."""
+    reads, action_calls = _collect_file_reads(events, path)
+    range_hints = _count_range_hints(events, action_calls)
+    return reads, range_hints, action_calls
+
+
+def _check_condensation_summaries(
+    events: list[dict[str, Any]],
+    path: str,
+    compactions: int,
+) -> OracleResult | None:
+    """Check for unusable persisted condensation summaries."""
+    unusable = [
+        {"seq": event.get("seq"), "reason": reason}
+        for event in events
+        if event.get("kind") == "condensation"
+        and isinstance(event.get("summary"), str)
+        and (reason := summary_rejection_reason(event["summary"])) is not None
+    ]
+    if unusable:
+        return failing(
+            _CONTEXT,
+            fc.CONDENSATION_SUMMARY_UNUSABLE,
+            first_broken_link="condensation -> persisted_summary",
+            facts={
+                "path": path,
+                "compaction_count": compactions,
+                "unusable_summary_count": len(unusable),
+                "unusable_summaries": unusable[:10],
+            },
+        )
+    return None
+
+
+def _evaluate_context_pressure(
+    offsets: list[str],
+    offset_counts: dict[str, int],
+    range_hints: int,
+    compactions: int,
+    *,
+    min_offsets: int,
+    max_reads_per_offset: int,
+    require_compaction: bool,
+) -> bool:
+    """Evaluate whether the context-pressure requirements are met."""
+    return (
+        len(offsets) >= min_offsets
+        and range_hints >= 1
+        and all(count <= max_reads_per_offset for count in offset_counts.values())
+        and (not require_compaction or compactions >= 1)
+    )
 
 
 class ContextPressureOracle:
@@ -167,74 +302,25 @@ class ContextPressureOracle:
         max_reads_per_offset = int(config.get("max_reads_per_offset", 2))
         require_compaction = config.get("require_compaction") is True
 
-        reads: list[tuple[int, str]] = []
-        range_hints = 0
-        action_calls: dict[str, tuple[int, str]] = {}
-        for event in events:
-            if event.get("kind") != "action":
-                continue
-            call = event.get("tool_call") or {}
-            if call.get("tool_name") != "file_read":
-                continue
-            args = call.get("arguments") or {}
-            if not _same_workspace_file(args.get("path"), path):
-                continue
-            raw_offset = args.get("offset")
-            offset = "0" if raw_offset is None else str(raw_offset)
-            seq = int(event.get("seq", -1))
-            reads.append((seq, offset))
-            call_id = call.get("call_id")
-            if isinstance(call_id, str) and call_id:
-                action_calls[call_id] = (seq, offset)
-
-        for event in events:
-            if event.get("kind") != "observation":
-                continue
-            result = event.get("tool_result") or {}
-            call_id = result.get("call_id")
-            if call_id not in action_calls:
-                continue
-            content = str(result.get("content") or "")
-            if "read more with offset=" in content or "HEAD-ONLY under context pressure" in content:
-                range_hints += 1
-
+        reads, range_hints, _action_calls = _collect_context_reads(events, path)
         offsets = sorted({offset for _seq, offset in reads})
         offset_counts = {
             offset: sum(1 for _seq, seen in reads if seen == offset) for offset in offsets
         }
         compactions = sum(1 for event in events if event.get("kind") == "condensation")
-        # Counting condensations proves the mechanism RAN; it says nothing about
-        # what it stored. Seed 460000 persisted 22 summaries that were raw
-        # tool-call protocol residue -- replayed to the model as conversation --
-        # while this oracle happily reported `compaction_count: 32`. Adjudicate
-        # with the PRODUCT's own predicate so the harness cannot keep a private,
-        # staler idea of what protocol markup looks like and agree with the bug.
-        unusable = [
-            {"seq": event.get("seq"), "reason": reason}
-            for event in events
-            if event.get("kind") == "condensation"
-            and isinstance(event.get("summary"), str)
-            and (reason := summary_rejection_reason(event["summary"])) is not None
-        ]
-        if unusable:
-            return [
-                failing(
-                    _CONTEXT,
-                    fc.CONDENSATION_SUMMARY_UNUSABLE,
-                    first_broken_link="condensation -> persisted_summary",
-                    facts={
-                        "path": path,
-                        "compaction_count": compactions,
-                        "unusable_summary_count": len(unusable),
-                        "unusable_summaries": unusable[:10],
-                    },
-                )
-            ]
-        ok = (
-            len(offsets) >= min_offsets
-            and range_hints >= 1
-            and all(count <= max_reads_per_offset for count in offset_counts.values())
-            and (not require_compaction or compactions >= 1)
+
+        unusable_result = _check_condensation_summaries(events, path, compactions)
+        if unusable_result is not None:
+            return [unusable_result]
+
+        ok = _evaluate_context_pressure(
+            offsets,
+            offset_counts,
+            range_hints,
+            compactions,
+            min_offsets=min_offsets,
+            max_reads_per_offset=max_reads_per_offset,
+            require_compaction=require_compaction,
         )
         facts = {
             "path": path,

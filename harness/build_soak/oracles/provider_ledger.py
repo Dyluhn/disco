@@ -33,6 +33,105 @@ _ORACLE = "provider_ledger"
 _DEFAULT_FORBID = ("openrouter",)
 
 
+def _check_ledger_presence(
+    provider_ledger: list[dict[str, Any]] | None,
+    require_ledger: bool,
+) -> list[OracleResult] | None:
+    """Check ledger presence and emptiness. Returns results or None to continue."""
+    if provider_ledger is None:
+        if require_ledger:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.MISSING_REQUIRED_EVIDENCE,
+                    first_broken_link="soak -> provider_ledger_captured",
+                    facts={"captured": False, "reason": "no provider-call ledger file"},
+                )
+            ]
+        return [skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")]
+    if len(provider_ledger) == 0:
+        if require_ledger:
+            return [
+                failing(
+                    _ORACLE,
+                    fc.MISSING_REQUIRED_EVIDENCE,
+                    first_broken_link="soak -> provider_ledger_nonempty",
+                    facts={"captured": True, "records": 0},
+                )
+            ]
+        return [
+            skipping(
+                _ORACLE, reason="provider-call ledger captured but empty (require_ledger=false)"
+            )
+        ]
+    return None
+
+
+def _check_ledger_shape(provider_ledger: list[dict[str, Any]]) -> OracleResult | None:
+    """Validate record shape: a non-dict or hostless record is corrupt evidence."""
+    for i, rec in enumerate(provider_ledger):
+        if not isinstance(rec, dict) or not str(rec.get("host", "")).strip():
+            return failing(
+                _ORACLE,
+                fc.MISSING_REQUIRED_EVIDENCE,
+                first_broken_link="soak -> provider_ledger_wellformed",
+                facts={
+                    "bad_index": i,
+                    "record": rec if isinstance(rec, dict) else str(type(rec).__name__),
+                },
+            )
+    return None
+
+
+def _check_ledger_records(
+    provider_ledger: list[dict[str, Any]],
+    prov: dict[str, Any],
+) -> OracleResult | None:
+    """Check each record for forbidden hosts, wrong models, and post-terminal calls."""
+    forbid = [s.lower() for s in (prov.get("forbid_host_substr") or _DEFAULT_FORBID)]
+    require_host = prov.get("require_host_substr")
+    require_host = require_host.lower() if isinstance(require_host, str) else None
+    model = prov.get("model")
+
+    for rec in provider_ledger:
+        host = str(rec.get("host", "")).lower()
+        if rec.get("after_terminal"):
+            return failing(
+                _ORACLE,
+                fc.PROVIDER_CALL_AFTER_TERMINAL,
+                first_broken_link="terminal -> no_provider_calls",
+                facts={
+                    "host": host,
+                    "model": rec.get("model"),
+                    "ts": rec.get("ts"),
+                    "conversation_id": rec.get("conversation_id"),
+                },
+            )
+        for bad in forbid:
+            if bad in host:
+                return failing(
+                    _ORACLE,
+                    fc.PROVIDER_FORBIDDEN,
+                    first_broken_link="soak -> provider_allowed",
+                    facts={"host": host, "forbidden_substr": bad},
+                )
+        if require_host is not None and require_host not in host:
+            return failing(
+                _ORACLE,
+                fc.PROVIDER_FORBIDDEN,
+                first_broken_link="soak -> provider_allowed",
+                facts={"host": host, "required_substr": require_host},
+            )
+        if model and str(rec.get("model", "")) != str(model):
+            return failing(
+                _ORACLE,
+                fc.PROVIDER_WRONG_MODEL,
+                first_broken_link="soak -> model_pinned",
+                facts={"model": rec.get("model"), "expected": model, "host": host},
+            )
+    return None
+
+
 class ProviderLedgerOracle:
     def check(
         self,
@@ -46,109 +145,23 @@ class ProviderLedgerOracle:
         if not prov:
             return [skipping(_ORACLE, reason="scenario asserts no provider enforcement")]
 
-        # FAIL-CLOSED evidence posture (default). When provider enforcement is asserted
-        # the ledger is REQUIRED evidence: absent (None = no file), empty (captured zero
-        # records), or malformed (a record missing a host) is an adjudication gap, NOT a
-        # silent pass — it maps to MISSING_REQUIRED_EVIDENCE → INVALID_RUN. A scenario may
-        # opt out with `require_ledger: false` (then absent/empty → SKIP).
         require_ledger = prov.get("require_ledger", True)
+        presence_result = _check_ledger_presence(provider_ledger, require_ledger)
+        if presence_result is not None:
+            return presence_result
 
-        if provider_ledger is None:
-            if require_ledger:
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.MISSING_REQUIRED_EVIDENCE,
-                        first_broken_link="soak -> provider_ledger_captured",
-                        facts={"captured": False, "reason": "no provider-call ledger file"},
-                    )
-                ]
-            return [
-                skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")
-            ]
-
+        assert provider_ledger is not None
         provider_ledger = records_for_conversation(provider_ledger, conversation_id)
+        presence_result = _check_ledger_presence(provider_ledger, require_ledger)
+        if presence_result is not None:
+            return presence_result
 
-        if len(provider_ledger) == 0:
-            if require_ledger:
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.MISSING_REQUIRED_EVIDENCE,
-                        first_broken_link="soak -> provider_ledger_nonempty",
-                        facts={"captured": True, "records": 0},
-                    )
-                ]
-            return [
-                skipping(
-                    _ORACLE, reason="provider-call ledger captured but empty (require_ledger=false)"
-                )
-            ]
+        shape_error = _check_ledger_shape(provider_ledger)
+        if shape_error is not None:
+            return [shape_error]
 
-        # Validate record shape: a non-dict or hostless record means corrupt/under-captured
-        # evidence — fail-closed rather than under-report a possibly-forbidden call.
-        for i, rec in enumerate(provider_ledger):
-            if not isinstance(rec, dict) or not str(rec.get("host", "")).strip():
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.MISSING_REQUIRED_EVIDENCE,
-                        first_broken_link="soak -> provider_ledger_wellformed",
-                        facts={
-                            "bad_index": i,
-                            "record": rec if isinstance(rec, dict) else str(type(rec).__name__),
-                        },
-                    )
-                ]
-
-        forbid = [s.lower() for s in (prov.get("forbid_host_substr") or _DEFAULT_FORBID)]
-        require_host = prov.get("require_host_substr")
-        require_host = require_host.lower() if isinstance(require_host, str) else None
-        model = prov.get("model")
-
-        for rec in provider_ledger:
-            host = str(rec.get("host", "")).lower()
-            if rec.get("after_terminal"):
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PROVIDER_CALL_AFTER_TERMINAL,
-                        first_broken_link="terminal -> no_provider_calls",
-                        facts={
-                            "host": host,
-                            "model": rec.get("model"),
-                            "ts": rec.get("ts"),
-                            "conversation_id": rec.get("conversation_id"),
-                        },
-                    )
-                ]
-            for bad in forbid:
-                if bad in host:
-                    return [
-                        failing(
-                            _ORACLE,
-                            fc.PROVIDER_FORBIDDEN,
-                            first_broken_link="soak -> provider_allowed",
-                            facts={"host": host, "forbidden_substr": bad},
-                        )
-                    ]
-            if require_host is not None and require_host not in host:
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PROVIDER_FORBIDDEN,
-                        first_broken_link="soak -> provider_allowed",
-                        facts={"host": host, "required_substr": require_host},
-                    )
-                ]
-            if model and str(rec.get("model", "")) != str(model):
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PROVIDER_WRONG_MODEL,
-                        first_broken_link="soak -> model_pinned",
-                        facts={"model": rec.get("model"), "expected": model, "host": host},
-                    )
-                ]
+        record_error = _check_ledger_records(provider_ledger, prov)
+        if record_error is not None:
+            return [record_error]
 
         return [passing(_ORACLE, facts={"calls": len(provider_ledger)})]

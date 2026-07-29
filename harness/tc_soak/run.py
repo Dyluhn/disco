@@ -36,7 +36,7 @@ import string
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from disco.core.trusted_components.lockfile import (
     LOCKFILE_RELPATH,
@@ -50,6 +50,7 @@ from disco.core.trusted_components.verify import (
     pin,
     verify_trusted_components,
 )
+from disco.tools.anatomy import ToolContext
 from disco.tools.builtin import trusted_components as tc_mod
 from disco.tools.builtin.trusted_components import (
     AddTrustedComponentArgs,
@@ -192,34 +193,50 @@ async def _verify(state: SoakState) -> Any:
     return result
 
 
-async def cycle(state: SoakState, i: int) -> None:
-    rng = state.rng
-    add_tool = AddTrustedComponentTool()
-    eject_tool = EjectTrustedComponentTool()
-    name = rng.choice(state.names)
-    op = rng.choice(
-        [
-            "install",
-            "install",
-            "install",
-            "eject",
-            "core_edit",
-            "file_delete",
-            "config_edit",
-            "corrupt_lock",
-            "forge_lock",
-            "verify",
-            "verify",
-            "revert_and_reinstall",
-        ]
+def _op_forge_lock(state: SoakState) -> None:
+    if state.lock_corrupted:
+        return
+    try:
+        lock = parse_lock(state.sandbox.fs.get(LOCKFILE_RELPATH))
+    except LockfileCorrupt:
+        lock = None
+    if lock is None:
+        return
+    raw = json.loads(lock.model_dump_json())
+    raw["components"]["forged-kit"] = {
+        "version": "1.0.0",
+        "installed_at": NOW,
+        "installed_by": "forgery",
+        "ejected": False,
+    }
+    state.sandbox.fs[LOCKFILE_RELPATH] = json.dumps(raw).encode()
+
+
+async def _op_revert_and_reinstall(state: SoakState, name: str) -> None:
+    comp = state.registry.get(name)
+    if comp is None:
+        return
+    for rel, data in comp.install_tree().items():
+        state.sandbox.fs[install_path(name, rel)] = data
+    out = await AddTrustedComponentTool().run(
+        AddTrustedComponentArgs(name=name),
+        cast(ToolContext, state.ctx),
     )
-    state.op_counts[op] = state.op_counts.get(op, 0) + 1
+    state.last_tool_refused = not out.success
+    if not out.success and not state.lock_corrupted:
+        await _verify(state)
+
+
+async def _apply_op(state: SoakState, op: str, name: str, i: int) -> Any:
+    """Apply one soak operation; return the pre-lock raw bytes."""
     pre_lock_raw = state.sandbox.fs.get(LOCKFILE_RELPATH)
     state.last_tool_refused = False
-
     if op == "install":
-        version = rng.choice([None, "1.0.0"])
-        out = await add_tool.run(AddTrustedComponentArgs(name=name, version=version), state.ctx)
+        version = state.rng.choice([None, "1.0.0"])
+        out = await AddTrustedComponentTool().run(
+            AddTrustedComponentArgs(name=name, version=version),
+            cast(ToolContext, state.ctx),
+        )
         state.last_tool_refused = not out.success
         if not out.success and out.error not in (
             "missing_dependency",
@@ -229,8 +246,9 @@ async def cycle(state: SoakState, i: int) -> None:
         ):
             _fail(state, "I-refusal-taxonomy", f"unexpected error {out.error}", i, op)
     elif op == "eject":
-        out = await eject_tool.run(
-            EjectTrustedComponentArgs(name=name, reason=f"soak {i}"), state.ctx
+        out = await EjectTrustedComponentTool().run(
+            EjectTrustedComponentArgs(name=name, reason=f"soak {i}"),
+            cast(ToolContext, state.ctx),
         )
         state.last_tool_refused = not out.success
     elif op == "core_edit":
@@ -249,43 +267,14 @@ async def cycle(state: SoakState, i: int) -> None:
             state.sandbox.fs[LOCKFILE_RELPATH] = state.sandbox.fs[LOCKFILE_RELPATH][:10]
             state.lock_corrupted = True
     elif op == "forge_lock":
-        if not state.lock_corrupted:
-            try:
-                lock = parse_lock(state.sandbox.fs.get(LOCKFILE_RELPATH))
-            except LockfileCorrupt:
-                lock = None
-            if lock is not None:
-                raw = json.loads(lock.model_dump_json())
-                raw["components"]["forged-kit"] = {
-                    "version": "1.0.0",
-                    "installed_at": NOW,
-                    "installed_by": "forgery",
-                    "ejected": False,
-                }
-                state.sandbox.fs[LOCKFILE_RELPATH] = json.dumps(raw).encode()
+        _op_forge_lock(state)
     elif op == "revert_and_reinstall":
-        comp = state.registry.get(name)
-        if comp is not None:
-            for rel, data in comp.install_tree().items():
-                state.sandbox.fs[install_path(name, rel)] = data
-            out = await add_tool.run(AddTrustedComponentArgs(name=name), state.ctx)
-            state.last_tool_refused = not out.success
-            # Reverting from source overwrote the GUIDE (banner gone). If the
-            # reinstall refused (e.g. missing dep), the component is still ejected
-            # — the real finish-gate verify re-asserts the banner, so converge the
-            # same way here instead of leaving a transient banner-less eject.
-            if not out.success and not state.lock_corrupted:
-                await _verify(state)
+        await _op_revert_and_reinstall(state, name)
+    return pre_lock_raw
 
-    # repair corruption occasionally so the soak doesn't wedge forever —
-    # deleting the lockfile is the documented recovery and LEGITIMATELY resets
-    # eject history (all claims dropped), so the I3 baseline resets with it.
-    if state.lock_corrupted and rng.random() < 0.3:
-        state.sandbox.fs.pop(LOCKFILE_RELPATH, None)
-        state.lock_corrupted = False
-        state.ejects_seen = []
 
-    # ---- invariants ------------------------------------------------------
+def _check_lock_invariants(state: SoakState, op: str, pre_lock_raw: Any, i: int) -> Any:
+    """Check I1/I3/I7 lockfile invariants; return the parsed lock (or None)."""
     raw = state.sandbox.fs.get(LOCKFILE_RELPATH)
     lock = None
     if raw is not None:
@@ -296,7 +285,6 @@ async def cycle(state: SoakState, i: int) -> None:
                 _fail(state, "I1", "lockfile corrupt without a corruption op", i, op)
 
     if op in ("install", "eject", "revert_and_reinstall") and state.lock_corrupted:
-        # I7: mutating tools must have refused + left the corrupt bytes alone
         if not state.last_tool_refused:
             _fail(state, "I7", "tool succeeded on a corrupt lockfile", i, op)
         if (
@@ -307,21 +295,31 @@ async def cycle(state: SoakState, i: int) -> None:
             _fail(state, "I7", "corrupt lockfile bytes were rewritten", i, op)
 
     if lock is not None:
-        # I3: append-only eject history
         dumped = [json.loads(e.model_dump_json()) for e in lock.ejects]
         seen = state.ejects_seen
         if len(dumped) < len(seen) or dumped[: len(seen)] != seen:
             _fail(state, "I3", "eject history shrank or mutated", i, op)
         state.ejects_seen = dumped
+    return lock
 
-    result = await _verify(state)
-    if result == "corrupt":
-        if not state.lock_corrupted:
-            _fail(state, "I1", "verify saw corrupt lock outside corruption window", i, op)
-        return
-    # refresh lock post-verify (auto-ejects may have landed)
-    lock = parse_lock(state.sandbox.fs.get(LOCKFILE_RELPATH))
 
+def _check_component_deps(
+    state: SoakState, checks: dict, lock: Any, name2: str, comp: Any, op: str, i: int
+) -> None:
+    """I4: unsatisfied edges must be blocking failures."""
+    from disco.core.trusted_components.registry import parse_requirement
+
+    for edge in comp.manifest.requires:
+        req = parse_requirement(edge)
+        dep = lock.components.get(req.name)
+        if dep is None or not req.satisfied_by(req.name, dep.version):
+            dc = checks.get(f"component_deps:{name2}")
+            if dc is None or dc.status != "fail":
+                _fail(state, "I4", f"{name2} edge {edge} unsatisfied but no FAIL", i, op)
+
+
+def _check_component_invariants(state: SoakState, result: Any, lock: Any, op: str, i: int) -> None:
+    """Check I2/I4/I6 component invariants against the verify result."""
     checks = {c.name: c for c in result.checks}
     for name2, entry in lock.components.items():
         comp = state.registry.get(name2, entry.version)
@@ -329,7 +327,6 @@ async def cycle(state: SoakState, i: int) -> None:
         if entry.ejected:
             if integ is not None and integ.status == "pass":
                 _fail(state, "I2", f"{name2} ejected but integrity=pass", i, op)
-            # I6: banner present when a GUIDE exists
             gp = install_path(name2, "GUIDE.md")
             if gp in state.sandbox.fs and b"**Ejected" not in state.sandbox.fs[gp]:
                 _fail(state, "I6", f"{name2} ejected but GUIDE has no banner", i, op)
@@ -343,16 +340,51 @@ async def cycle(state: SoakState, i: int) -> None:
         )
         if diverged and integ is not None and integ.status == "pass":
             _fail(state, "I2", f"{name2} diverged but integrity=pass", i, op)
-        # I4: unsatisfied edges must be blocking failures
-        from disco.core.trusted_components.registry import parse_requirement
+        _check_component_deps(state, checks, lock, name2, comp, op, i)
 
-        for edge in comp.manifest.requires:
-            req = parse_requirement(edge)
-            dep = lock.components.get(req.name)
-            if dep is None or not req.satisfied_by(req.name, dep.version):
-                dc = checks.get(f"component_deps:{name2}")
-                if dc is None or dc.status != "fail":
-                    _fail(state, "I4", f"{name2} edge {edge} unsatisfied but no FAIL", i, op)
+
+async def cycle(state: SoakState, i: int) -> None:
+    rng = state.rng
+    name = rng.choice(state.names)
+    op = rng.choice(
+        [
+            "install",
+            "install",
+            "install",
+            "eject",
+            "core_edit",
+            "file_delete",
+            "config_edit",
+            "corrupt_lock",
+            "forge_lock",
+            "verify",
+            "verify",
+            "revert_and_reinstall",
+        ]
+    )
+    state.op_counts[op] = state.op_counts.get(op, 0) + 1
+    pre_lock_raw = await _apply_op(state, op, name, i)
+
+    # repair corruption occasionally so the soak doesn't wedge forever —
+    # deleting the lockfile is the documented recovery and LEGITIMATELY resets
+    # eject history (all claims dropped), so the I3 baseline resets with it.
+    if state.lock_corrupted and rng.random() < 0.3:
+        state.sandbox.fs.pop(LOCKFILE_RELPATH, None)
+        state.lock_corrupted = False
+        state.ejects_seen = []
+
+    # ---- invariants ------------------------------------------------------
+    lock = _check_lock_invariants(state, op, pre_lock_raw, i)
+
+    result = await _verify(state)
+    if result == "corrupt":
+        if not state.lock_corrupted:
+            _fail(state, "I1", "verify saw corrupt lock outside corruption window", i, op)
+        return
+    # refresh lock post-verify (auto-ejects may have landed)
+    lock = parse_lock(state.sandbox.fs.get(LOCKFILE_RELPATH))
+
+    _check_component_invariants(state, result, lock, op, i)
 
     # I5: idempotence
     result2 = await _verify(state)

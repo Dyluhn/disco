@@ -113,6 +113,115 @@ def _find_deliverable(events: list[dict]) -> dict | None:
     return found
 
 
+def _fetch_deliverable_bytes(cid: str, deliverable: dict | None) -> tuple:
+    """Fetch REAL bytes from the deliverable path, then the pinned file.
+
+    Returns (fetched_from, status, body).
+    """
+    fetched_from, status, body = None, None, b""
+    candidates = []
+    if deliverable:
+        candidates.append(deliverable["path"].lstrip("/"))
+    candidates.append(PIN)
+    for rel in candidates:
+        st, b = _get_bytes(f"/conversations/{cid}/artifacts/{rel}")
+        if st == 200 and b:
+            fetched_from, status, body = rel, st, b
+            break
+        if status is None:
+            status = st  # record the first attempt's status for the dossier
+    return fetched_from, status, body
+
+
+def _verdict_checks(
+    deliverable: dict | None,
+    download_present: bool,
+    download_bytes: int,
+    bytes_are_real: bool,
+    fetched_from: str | None,
+    all_minimax: bool,
+    openrouter: int,
+    slice_: list,
+    post_terminal: int,
+) -> dict:
+    """Assemble the checks sub-dict for the verdict."""
+    return {
+        "deliverable_event_present": deliverable is not None,
+        "deliverable_artifact_kind": (deliverable or {}).get("artifact_kind"),
+        "download_present": download_present,
+        "download_bytes": download_bytes,
+        "bytes_are_real_html_with_token": bytes_are_real,
+        "fetched_from_path": fetched_from,
+        "ledger_all_minimax_0_openrouter": all_minimax,
+        "openrouter_count": openrouter,
+        "ledger_hosts": sorted({str(ln.get("host")) for ln in slice_ if ln.get("host")}),
+        "provider_calls_after_terminal": post_terminal,
+        "provider_calls_this_run": len(slice_),
+    }
+
+
+def _all_minimax(slice_: list, openrouter: int) -> bool:
+    """True when every ledger host is minimax and none is openrouter."""
+    return (
+        bool(slice_)
+        and openrouter == 0
+        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    )
+
+
+def _build_verdict(
+    tag: str,
+    cid: str,
+    build_status: str,
+    deliverable: dict | None,
+    fetched_from: str | None,
+    status: int | None,
+    body: bytes,
+    slice_: list,
+    post_terminal: int,
+) -> dict:
+    """Assemble the verdict dict from the collected evidence."""
+    download_bytes = len(body)
+    download_present = (status == 200) and download_bytes > 0
+    text = body.decode("utf-8", "replace")
+    bytes_are_real = ("<html" in text.lower() or "<!doctype" in text.lower()) and (TOKEN in text)
+    openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
+    all_minimax = _all_minimax(slice_, openrouter)
+    checks = _verdict_checks(
+        deliverable,
+        download_present,
+        download_bytes,
+        bytes_are_real,
+        fetched_from,
+        all_minimax,
+        openrouter,
+        slice_,
+        post_terminal,
+    )
+    return {
+        "tag": tag,
+        "cid": cid,
+        "build_status": build_status,
+        "deliverable": deliverable,
+        "fetched_from": fetched_from,
+        "http_status": status,
+        "PASS": bool(
+            deliverable is not None
+            and download_present
+            and download_bytes > 0
+            and bytes_are_real
+            and all_minimax
+            and post_terminal == 0
+        ),
+        "checks": checks,
+        "export": {
+            "requested": True,
+            "download_present": download_present,
+            "download_bytes": download_bytes,
+        },
+    }
+
+
 def main() -> int:
     tag = sys.argv[sys.argv.index("--tag") + 1] if "--tag" in sys.argv else "e1"
     os.makedirs(RUN_DIR, exist_ok=True)
@@ -135,71 +244,16 @@ def main() -> int:
     events = _events(cid)
     deliverable = _find_deliverable(events)
 
-    # Fetch REAL bytes from the deliverable path, then the pinned file; record which succeeded.
-    fetched_from, status, body = None, None, b""
-    candidates = []
-    if deliverable:
-        candidates.append(deliverable["path"].lstrip("/"))
-    candidates.append(PIN)
-    for rel in candidates:
-        st, b = _get_bytes(f"/conversations/{cid}/artifacts/{rel}")
-        if st == 200 and b:
-            fetched_from, status, body = rel, st, b
-            break
-        if status is None:
-            status = st  # record the first attempt's status for the dossier
-
-    download_bytes = len(body)
-    download_present = (status == 200) and download_bytes > 0
-    text = body.decode("utf-8", "replace")
-    bytes_are_real = ("<html" in text.lower() or "<!doctype" in text.lower()) and (TOKEN in text)
-    openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
-    all_minimax = (
-        bool(slice_)
-        and openrouter == 0
-        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    fetched_from, status, body = _fetch_deliverable_bytes(cid, deliverable)
+    verdict = _build_verdict(
+        tag, cid, build_status, deliverable, fetched_from, status, body, slice_, post_terminal
     )
 
-    export = {
-        "requested": True,
-        "download_present": download_present,
-        "download_bytes": download_bytes,
-    }
-    verdict = {
-        "tag": tag,
-        "cid": cid,
-        "build_status": build_status,
-        "deliverable": deliverable,
-        "fetched_from": fetched_from,
-        "http_status": status,
-        "PASS": bool(
-            deliverable is not None
-            and download_present
-            and download_bytes > 0
-            and bytes_are_real
-            and all_minimax
-            and post_terminal == 0
-        ),
-        "checks": {
-            "deliverable_event_present": deliverable is not None,
-            "deliverable_artifact_kind": (deliverable or {}).get("artifact_kind"),
-            "download_present": download_present,
-            "download_bytes": download_bytes,
-            "bytes_are_real_html_with_token": bytes_are_real,
-            "fetched_from_path": fetched_from,
-            "ledger_all_minimax_0_openrouter": all_minimax,
-            "openrouter_count": openrouter,
-            "ledger_hosts": sorted({str(ln.get("host")) for ln in slice_ if ln.get("host")}),
-            "provider_calls_after_terminal": post_terminal,
-            "provider_calls_this_run": len(slice_),
-        },
-        "export": export,
-    }
     dossier = {
         "verdict": verdict,
         "deliverable": deliverable,
         "ledger_slice": slice_,
-        "downloaded_head": text[:2000],
+        "downloaded_head": body.decode("utf-8", "replace")[:2000],
     }
     with open(os.path.join(RUN_DIR, f"p10b_dossier_{tag}.json"), "w", encoding="utf-8") as f:
         json.dump(dossier, f, indent=2)

@@ -9,8 +9,7 @@ The generator NEVER rescans or renumbers mapping IDs. It reads the frozen 991-ID
 disposition universe and projects it into:
   - ``dispositions.json`` — all 991 immutable original IDs with state
   - ``disposition-ids.txt`` — the sorted ID universe
-  - ``debt.json`` — exactly 965 active executable rows (967 violations minus
-    the 2 PKG-02-GATE owned rows PY-0890 and PY-0891)
+  - ``debt.json`` — the exact active executable rows after accepted packages
   - ``observations.json`` — exact non-budget legacy observations
 
 Debt identity is ``(path, qualified_symbol, rule)``. The qualified symbol is
@@ -33,8 +32,43 @@ import re
 from pathlib import Path
 from typing import Any
 
-# PKG-02-GATE owns these three dispositions. Acceptance marks them resolved.
+# Accepted packages own these exact resolved dispositions. Keep the immutable ID
+# universe; only transition accepted package IDs from active to resolved.
 PKG02_RESOLVED_IDS = frozenset({"PY-0890", "PY-0891", "DM-010"})
+PKG03_HARNESS_TRANSPORT_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(1, 33)),
+        *(f"PY-{number:04d}" for number in range(91, 115)),
+        *(f"PY-{number:04d}" for number in range(117, 152)),
+        *(f"PY-{number:04d}" for number in range(154, 163)),
+        "PY-0896",
+    }
+)
+PKG03_HARNESS_ORACLES_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(33, 91)),
+        "PY-0152",
+        "PY-0153",
+        "DM-006",
+    }
+)
+PKG03_HARNESS_TESTS_RESOLVED_IDS = frozenset({"PY-0115", "PY-0116"})
+RESOLVED_IDS = (
+    PKG02_RESOLVED_IDS
+    | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
+    | PKG03_HARNESS_ORACLES_RESOLVED_IDS
+    | PKG03_HARNESS_TESTS_RESOLVED_IDS
+)
+EXPECTED_ACTIVE_DEBT_ROWS = 802
+EXPECTED_OBSERVATIONS = 22
+LOCATION_OVERRIDES = {
+    "DM-012": (
+        "packages/agent-server/src/disco/agent_server/preview_service.py:"
+        "_sealed_runtime_contract:234-253 + "
+        "harness/build_soak/adapters/_client_collection.py:"
+        "_CollectionMixin.collect_browser_evidence:409-491"
+    ),
+}
 
 # The source identity the disposition rows were sealed against.
 SOURCE_IDENTITY = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
@@ -139,8 +173,7 @@ def reconstruct_qualified_symbol_python(
         tree = ast.parse(text, filename=path)
     except (SyntaxError, UnicodeDecodeError) as exc:
         raise ValueError(
-            f"cannot reconstruct qualified symbol for {path}:{symbol}: "
-            f"file unparseable: {exc!r}"
+            f"cannot reconstruct qualified symbol for {path}:{symbol}: file unparseable: {exc!r}"
         ) from exc
 
     def walk_all(node: ast.AST, prefix: str = "") -> list[tuple[int, int, str, str]]:
@@ -196,9 +229,7 @@ def reconstruct_qualified_symbol(
     if symbol == "<module>":
         return "<module>"
     if path.endswith(".py"):
-        return reconstruct_qualified_symbol_python(
-            path, symbol, line_start, line_end, repo_root
-        )
+        return reconstruct_qualified_symbol_python(path, symbol, line_start, line_end, repo_root)
     # TypeScript: top-level symbols are unique per file in the baseline
     return symbol
 
@@ -207,7 +238,7 @@ def build_dispositions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the immutable 991-ID disposition universe."""
     dispositions = []
     for row in rows:
-        state = "resolved" if row["id"] in PKG02_RESOLVED_IDS else "active"
+        state = "resolved" if row["id"] in RESOLVED_IDS else "active"
         dispositions.append(
             {
                 "id": row["id"],
@@ -215,7 +246,7 @@ def build_dispositions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "state": state,
                 "original_type": row["disposition"],
                 "owner_package": row["owning_package"],
-                "location": row["location"],
+                "location": LOCATION_OVERRIDES.get(row["id"], row["location"]),
                 "role_category": row["role_category"],
             }
         )
@@ -223,27 +254,26 @@ def build_dispositions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return dispositions
 
 
-def build_debt_rows(
-    rows: list[dict[str, Any]], repo_root: Path
-) -> list[dict[str, Any]]:
-    """Build the 965 active executable debt rows.
+def build_debt_rows(rows: list[dict[str, Any]], repo_root: Path) -> list[dict[str, Any]]:
+    """Build the active executable debt rows.
 
-    Active executable debt = VIOLATION dispositions that are NOT resolved by
-    PKG-02-GATE (PY-0890 and PY-0891 are resolved).
+    Active executable debt = VIOLATION dispositions not resolved by an accepted
+    package.
 
     Each row is keyed by ``(path, qualified_symbol, rule)``. The qualified
     symbol is reconstructed from the AST using the frozen baseline line range.
-    All 965 keys must be unique.
+    All active keys must be unique.
     """
     debt = []
     for row in rows:
         if row["disposition"] != "VIOLATION":
             continue
-        if row["id"] in PKG02_RESOLVED_IDS:
+        if row["id"] in RESOLVED_IDS:
             continue
         loc = parse_location(row["location"])
-        rule = RULE_MAP.get(row["role_category"], row["role_category"])
-        observed = extract_observed(row["role_category"], row["metrics"])
+        role_category = str(row["role_category"])
+        rule = RULE_MAP.get(role_category, role_category)
+        observed = extract_observed(role_category, row["metrics"])
         limit = RULE_LIMITS.get(rule, 0)
         qualified_symbol = reconstruct_qualified_symbol(
             loc["path"], loc["symbol"], loc["line_start"], loc["line_end"], repo_root
@@ -266,7 +296,7 @@ def build_debt_rows(
         )
     debt.sort(key=lambda d: d["id"])
 
-    # Verify all 965 (path, qualified_symbol, rule) keys are unique
+    # Verify all active (path, qualified_symbol, rule) keys are unique.
     keys = [(d["path"], d["qualified_symbol"], d["rule"]) for d in debt]
     from collections import Counter
 
@@ -283,19 +313,19 @@ def build_observations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build the exact non-budget legacy observations.
 
     Each observation cites an existing disposition ID. Distributed concerns
-    that are NOT resolved by PKG-02-GATE remain as observations. The two typed
-    non-violations are also recorded as classification observations.
+    that are not resolved by an accepted package remain as observations. The
+    typed non-violations are also recorded as classification observations.
     """
     observations = []
     for row in rows:
-        if row["id"] in PKG02_RESOLVED_IDS:
+        if row["id"] in RESOLVED_IDS:
             continue
         if row["disposition"] == "DISTRIBUTED_CONCERN":
             observations.append(
                 {
                     "id": row["id"],
                     "kind": "distributed_concern",
-                    "location": row["location"],
+                    "location": LOCATION_OVERRIDES.get(row["id"], row["location"]),
                     "concern": row["role_category"],
                     "owner_package": row["owning_package"],
                     "source_disposition_id": row["id"],
@@ -306,7 +336,7 @@ def build_observations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 {
                     "id": row["id"],
                     "kind": "typed_non_violation",
-                    "location": row["location"],
+                    "location": LOCATION_OVERRIDES.get(row["id"], row["location"]),
                     "classification": row["role_category"],
                     "owner_package": row["owning_package"],
                     "source_disposition_id": row["id"],
@@ -349,24 +379,20 @@ def _generate_all_authorities(
         raise ValueError(f"expected 991 dispositions, got {len(dispositions)}")
 
     debt = build_debt_rows(rows, repo_root)
-    if len(debt) != 965:
-        raise ValueError(f"expected 965 active debt rows, got {len(debt)}")
+    if len(debt) != EXPECTED_ACTIVE_DEBT_ROWS:
+        raise ValueError(f"expected {EXPECTED_ACTIVE_DEBT_ROWS} active debt rows, got {len(debt)}")
 
     observations = build_observations(rows)
-    if len(observations) != 23:
-        raise ValueError(f"expected 23 observations, got {len(observations)}")
+    if len(observations) != EXPECTED_OBSERVATIONS:
+        raise ValueError(f"expected {EXPECTED_OBSERVATIONS} observations, got {len(observations)}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     (output_dir / "dispositions.json").write_text(
         json.dumps(dispositions, indent=2) + "\n", encoding="utf-8"
     )
-    (output_dir / "disposition-ids.txt").write_text(
-        "\n".join(ids) + "\n", encoding="utf-8"
-    )
-    (output_dir / "debt.json").write_text(
-        json.dumps(debt, indent=2) + "\n", encoding="utf-8"
-    )
+    (output_dir / "disposition-ids.txt").write_text("\n".join(ids) + "\n", encoding="utf-8")
+    (output_dir / "debt.json").write_text(json.dumps(debt, indent=2) + "\n", encoding="utf-8")
     (output_dir / "observations.json").write_text(
         json.dumps(observations, indent=2) + "\n", encoding="utf-8"
     )
@@ -392,23 +418,17 @@ def _check_authorities(repo_root: Path) -> dict[str, Any]:
     if not tracked_disposition_rows.is_file():
         return {
             "ok": False,
-            "problems": [
-                f"tracked frozen input authority missing: {tracked_disposition_rows}"
-            ],
+            "problems": [f"tracked frozen input authority missing: {tracked_disposition_rows}"],
         }
 
     with tempfile.TemporaryDirectory(prefix="arch-debt-check-") as tmp:
         tmp_dir = Path(tmp)
         try:
-            _generate_all_authorities(
-                tracked_disposition_rows, tmp_dir, repo_root
-            )
+            _generate_all_authorities(tracked_disposition_rows, tmp_dir, repo_root)
         except (ValueError, json.JSONDecodeError, KeyError) as exc:
             return {
                 "ok": False,
-                "problems": [
-                    f"authority regeneration failed: {exc}"
-                ],
+                "problems": [f"authority regeneration failed: {exc}"],
             }
 
         problems: list[str] = []
@@ -416,16 +436,13 @@ def _check_authorities(repo_root: Path) -> dict[str, Any]:
             tracked = arch_dir / fname
             regenerated = tmp_dir / fname
             if not tracked.is_file():
-                problems.append(
-                    f"tracked authority missing: architecture/{fname}"
-                )
+                problems.append(f"tracked authority missing: architecture/{fname}")
                 continue
             tracked_bytes = tracked.read_bytes()
             regenerated_bytes = regenerated.read_bytes()
             if tracked_bytes != regenerated_bytes:
                 problems.append(
-                    f"authority drift: architecture/{fname} "
-                    f"does not match regenerated bytes"
+                    f"authority drift: architecture/{fname} does not match regenerated bytes"
                 )
         return {"ok": len(problems) == 0, "problems": problems}
 
@@ -465,20 +482,18 @@ def main() -> int:
             for problem in result["problems"]:
                 print(f"  - {problem}")
             return 1
-        print(
-            "DEBT AUTHORITY CHECK OK — all four authorities match "
-            "regenerated bytes."
-        )
+        print("DEBT AUTHORITY CHECK OK — all four authorities match regenerated bytes.")
         return 0
 
     if args.output_dir is None:
         parser.error("--output-dir is required unless --check is used")
 
-    counts = _generate_all_authorities(
-        args.disposition_rows, args.output_dir, args.repo_root
-    )
-    counts["resolved_ids"] = sorted(PKG02_RESOLVED_IDS)
-    print(json.dumps(counts, indent=2))
+    counts = _generate_all_authorities(args.disposition_rows, args.output_dir, args.repo_root)
+    payload: dict[str, Any] = {
+        **counts,
+        "resolved_ids": sorted(RESOLVED_IDS),
+    }
+    print(json.dumps(payload, indent=2))
     return 0
 
 
