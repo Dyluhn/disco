@@ -93,6 +93,76 @@ _DEP_CLOSURE = {
 }
 
 
+async def _fuzz_corrupt_core(
+    reg: TrustedComponentRegistry,
+    rng: random.Random,
+    lock,
+    files: dict,
+    i: int,
+) -> None:
+    """Corrupt one installed core file's bytes → that component must eject."""
+    core_keys = [k for k in files if "/core/" in k]
+    if not core_keys:
+        return
+    victim_path = rng.choice(core_keys)
+    files[victim_path] = files[victim_path] + b"\n// tampered\n"
+    victim = victim_path.split("/trusted/", 1)[1].split("/", 1)[0]
+    res = await verify_trusted_components(lock, reg, files, run_probe=None, now_iso=NOW)
+    if victim not in res.newly_ejected:
+        raise SoakFailure(
+            f"[A/{i}] corrupted {victim_path} but {victim} was NOT ejected; "
+            f"ejected={res.newly_ejected}"
+        )
+
+
+async def _fuzz_drop_dep(
+    reg: TrustedComponentRegistry,
+    rng: random.Random,
+    installed: list,
+    i: int,
+) -> None:
+    """Install a kit but omit a required dep → deps check FAILS (blocks)."""
+    need_dep = [k for k in installed if _DEP_CLOSURE[k]]
+    if not need_dep:
+        return
+    kit = rng.choice(need_dep)
+    missing = rng.choice(sorted(_DEP_CLOSURE[kit]))
+    keep = [k for k in installed if k != missing]
+    lock2 = _lock_for(keep)
+    files2 = _files_for(reg, keep)
+    res = await verify_trusted_components(lock2, reg, files2, run_probe=None, now_iso=NOW)
+    deps = next((c for c in res.checks if c.name == f"component_deps:{kit}"), None)
+    if deps is None or deps.status != "fail":
+        raise SoakFailure(
+            f"[A/{i}] {kit} missing dep {missing} but deps check did not FAIL "
+            f"(got {deps.status if deps else 'absent'})"
+        )
+    if not res.failing:
+        raise SoakFailure(f"[A/{i}] missing dep {missing} for {kit} did not block")
+
+
+async def _fuzz_clean(
+    reg: TrustedComponentRegistry,
+    installed: list,
+    available: list,
+    i: int,
+) -> None:
+    """A fully-satisfied graph must show integrity pass, no eject."""
+    closure = set(installed)
+    for k in installed:
+        closure |= _DEP_CLOSURE[k]
+    installed_full = [k for k in available if k in closure]
+    files_full = _files_for(reg, installed_full)
+    lock_full = _lock_for(installed_full)
+    res = await verify_trusted_components(lock_full, reg, files_full, run_probe=None, now_iso=NOW)
+    if res.newly_ejected:
+        raise SoakFailure(f"[A/{i}] clean install ejected {res.newly_ejected}")
+    integ = [c for c in res.checks if c.name.startswith("component_integrity")]
+    if any(c.status != "pass" for c in integ):
+        bad = [(c.name, c.status) for c in integ if c.status != "pass"]
+        raise SoakFailure(f"[A/{i}] clean install had non-pass integrity: {bad}")
+
+
 async def phase_a_verify_fuzz(
     reg: TrustedComponentRegistry, rng: random.Random, iters: int
 ) -> None:
@@ -105,61 +175,12 @@ async def phase_a_verify_fuzz(
         mode = rng.choice(["clean", "corrupt_core", "drop_dep"])
 
         if mode == "corrupt_core":
-            # Corrupt one installed core file's bytes → that component must eject.
-            core_keys = [k for k in files if "/core/" in k]
-            if core_keys:
-                victim_path = rng.choice(core_keys)
-                files[victim_path] = files[victim_path] + b"\n// tampered\n"
-                victim = victim_path.split("/trusted/", 1)[1].split("/", 1)[0]
-                res = await verify_trusted_components(lock, reg, files, run_probe=None, now_iso=NOW)
-                if victim not in res.newly_ejected:
-                    raise SoakFailure(
-                        f"[A/{i}] corrupted {victim_path} but {victim} was NOT ejected; "
-                        f"ejected={res.newly_ejected}"
-                    )
-                if res.failing and all(c.status != "fail" for c in res.checks if "deps" in c.name):
-                    # an eject alone must never *block* (only a real deps/probe fail may)
-                    pass
+            await _fuzz_corrupt_core(reg, rng, lock, files, i)
             continue
-
         if mode == "drop_dep":
-            # Install a kit but omit a required dep → deps check FAILS (blocks).
-            need_dep = [k for k in installed if _DEP_CLOSURE[k]]
-            if need_dep:
-                kit = rng.choice(need_dep)
-                missing = rng.choice(sorted(_DEP_CLOSURE[kit]))
-                keep = [k for k in installed if k != missing]
-                lock2 = _lock_for(keep)
-                files2 = _files_for(reg, keep)
-                res = await verify_trusted_components(
-                    lock2, reg, files2, run_probe=None, now_iso=NOW
-                )
-                deps = next((c for c in res.checks if c.name == f"component_deps:{kit}"), None)
-                if deps is None or deps.status != "fail":
-                    raise SoakFailure(
-                        f"[A/{i}] {kit} missing dep {missing} but deps check did not FAIL "
-                        f"(got {deps.status if deps else 'absent'})"
-                    )
-                if not res.failing:
-                    raise SoakFailure(f"[A/{i}] missing dep {missing} for {kit} did not block")
+            await _fuzz_drop_dep(reg, rng, installed, i)
             continue
-
-        # clean: a fully-satisfied graph must show integrity pass, no eject.
-        closure = set(installed)
-        for k in installed:
-            closure |= _DEP_CLOSURE[k]
-        installed_full = [k for k in available if k in closure]
-        files_full = _files_for(reg, installed_full)
-        lock_full = _lock_for(installed_full)
-        res = await verify_trusted_components(
-            lock_full, reg, files_full, run_probe=None, now_iso=NOW
-        )
-        if res.newly_ejected:
-            raise SoakFailure(f"[A/{i}] clean install ejected {res.newly_ejected}")
-        integ = [c for c in res.checks if c.name.startswith("component_integrity")]
-        if any(c.status != "pass" for c in integ):
-            bad = [(c.name, c.status) for c in integ if c.status != "pass"]
-            raise SoakFailure(f"[A/{i}] clean install had non-pass integrity: {bad}")
+        await _fuzz_clean(reg, installed, available, i)
 
 
 # --------------------------------------------------------------------------- #

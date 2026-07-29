@@ -175,34 +175,36 @@ _MAX_BULLETS_SOFT = 6  # comfortable bullet count
 _MAX_BULLETS_HARD = 10  # definitely overflows
 
 
-def _overflow_score_for_slide(slide: dict) -> float:
-    """Return overflow risk score for a single slide (0=fine, 1=definitely overflows)."""
-    risk = 0.0
-
-    title = slide.get("title") or slide.get("heading") or ""
-    if len(title) > _TITLE_CHAR_HARD:
-        risk = max(risk, 0.9)
-    elif len(title) > _TITLE_CHAR_SOFT:
-        risk = max(risk, 0.4)
-
-    # Collect all text content
-    bullets = []
+def _collect_slide_bullets(slide: dict, title: str) -> list:
+    """Collect all text content (bullets + nested strings) from a slide."""
+    bullets: list = []
     bullets.extend(slide.get("bullets", []) or [])
     bullets.extend(slide.get("body", []) or [])
     bullets.extend(slide.get("left_bullets", []) or [])
     bullets.extend(slide.get("right_bullets", []) or [])
     bullets.extend(slide.get("content", []) or [])
-
-    # Also collect string values from nested dicts
     for v in slide.values():
         if isinstance(v, str) and len(v) > 30 and v not in (title,):
             bullets.append(v)
+    return bullets
 
+
+def _title_overflow_risk(title: str) -> float:
+    """Return overflow risk for a slide title."""
+    if len(title) > _TITLE_CHAR_HARD:
+        return 0.9
+    if len(title) > _TITLE_CHAR_SOFT:
+        return 0.4
+    return 0.0
+
+
+def _bullets_overflow_risk(bullets: list) -> float:
+    """Return overflow risk from bullet count and lengths."""
+    risk = 0.0
     if len(bullets) > _MAX_BULLETS_HARD:
         risk = max(risk, 1.0)
     elif len(bullets) > _MAX_BULLETS_SOFT:
         risk = max(risk, 0.6)
-
     for b in bullets:
         if not isinstance(b, str):
             continue
@@ -210,8 +212,40 @@ def _overflow_score_for_slide(slide: dict) -> float:
             risk = max(risk, 0.8)
         elif len(b) > _BULLET_CHAR_SOFT:
             risk = max(risk, 0.3)
-
     return risk
+
+
+def _overflow_score_for_slide(slide: dict) -> float:
+    """Return overflow risk score for a single slide (0=fine, 1=definitely overflows)."""
+    risk = 0.0
+    title = slide.get("title") or slide.get("heading") or ""
+    risk = max(risk, _title_overflow_risk(title))
+    bullets = _collect_slide_bullets(slide, title)
+    risk = max(risk, _bullets_overflow_risk(bullets))
+    return risk
+
+
+def _score_freeform_overflow(raw_text: str) -> OverflowResult:
+    """Estimate overflow risk from free-form text line lengths."""
+    lines = raw_text.split("\n")
+    long_lines = [line for line in lines if len(line) > 100]
+    ratio = len(long_lines) / max(len(lines), 1)
+    score = min(ratio * 2, 1.0)
+    risk = "high" if score > 0.6 else "medium" if score > 0.3 else "low"
+    return OverflowResult(
+        overflow_risk=risk,
+        score=score,
+        detail=f"{len(long_lines)}/{len(lines)} lines >100 chars",
+    )
+
+
+def _risk_label(combined: float) -> str:
+    """Map a combined overflow score to a risk label."""
+    if combined > 0.6:
+        return "high"
+    if combined > 0.3:
+        return "medium"
+    return "low"
 
 
 def score_overflow(parse_result: ParseResult) -> OverflowResult:
@@ -223,17 +257,7 @@ def score_overflow(parse_result: ParseResult) -> OverflowResult:
 
     parsed = parse_result.parsed
     if "_raw_text" in parsed:
-        # Free-form text — estimate from line lengths
-        lines = parsed["_raw_text"].split("\n")
-        long_lines = [line for line in lines if len(line) > 100]
-        ratio = len(long_lines) / max(len(lines), 1)
-        score = min(ratio * 2, 1.0)
-        risk = "high" if score > 0.6 else "medium" if score > 0.3 else "low"
-        return OverflowResult(
-            overflow_risk=risk,
-            score=score,
-            detail=f"{len(long_lines)}/{len(lines)} lines >100 chars",
-        )
+        return _score_freeform_overflow(parsed["_raw_text"])
 
     slides = parsed.get("slides", [])
     if not slides:
@@ -256,8 +280,7 @@ def score_overflow(parse_result: ParseResult) -> OverflowResult:
         f"avg={avg_score:.2f} max={max_score:.2f}"
     )
 
-    risk = "high" if combined > 0.6 else "medium" if combined > 0.3 else "low"
-    return OverflowResult(overflow_risk=risk, score=combined, detail=detail)
+    return OverflowResult(overflow_risk=_risk_label(combined), score=combined, detail=detail)
 
 
 # ---------------------------------------------------------------------------

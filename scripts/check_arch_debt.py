@@ -2,7 +2,7 @@
 """Architecture debt schema and ratchet check — stable wrapper.
 
 Verifies the sealed debt ledger schema, the immutable 991-ID universe, the
-965-row active count, and the three resolved PKG-02-GATE dispositions.
+shrink-only active count, and required accepted-package resolutions.
 
 Usage:
     uv run python scripts/check_arch_debt.py
@@ -47,15 +47,11 @@ def _check_generated_authorities(root: Path) -> list[str]:
     if result.returncode == 0:
         return []
     detail = "\n".join(
-        output.strip()
-        for output in (result.stdout, result.stderr)
-        if output.strip()
+        output.strip() for output in (result.stdout, result.stderr) if output.strip()
     )
     if not detail:
         detail = "no diagnostics"
-    return [
-        f"generate_debt.py --check exited {result.returncode}:\n{detail}"
-    ]
+    return [f"generate_debt.py --check exited {result.returncode}:\n{detail}"]
 
 
 def main() -> int:
@@ -88,7 +84,7 @@ def main() -> int:
     if not args.quiet:
         print(
             f"ARCH DEBT OK — {result['debt_count']} active debt rows; "
-            "991 immutable dispositions; 3 resolved PKG-02-GATE IDs."
+            "991 immutable dispositions; accepted resolution ratchet intact."
         )
     return 0
 

@@ -20,6 +20,14 @@ import test_api_runner as legacy
 from _eventlog import clean_smoke_log
 
 from harness.build_soak import run as old_run
+from harness.build_soak._test_support.api_runner.helpers_core import (
+    _client,
+    _seed_db,
+    _smoke_scenario,
+)
+from harness.build_soak._test_support.api_runner.helpers_transport import (
+    FakeTransport,
+)
 from harness.build_soak.adapters.disco_api import (
     CollectedRun,
     DiscoApiClient,
@@ -42,8 +50,8 @@ _FIXED_TIME = "2026-07-29T00:00:00+00:00"
 def _fresh_smoke(root: Path) -> tuple[DiscoApiClient, Any, dict[str, Any]]:
     root.mkdir(parents=True)
     db = root / "disco.db"
-    legacy._seed_db(db, _CID, clean_smoke_log())
-    transport = legacy.FakeTransport(
+    _seed_db(db, _CID, clean_smoke_log())
+    transport = FakeTransport(
         db,
         states=[
             "RUNNING",
@@ -55,7 +63,7 @@ def _fresh_smoke(root: Path) -> tuple[DiscoApiClient, Any, dict[str, Any]]:
         workspace={"index.html": "<h1>Build Smoke OK</h1>"},
         preview_html="<html><h1>Build Smoke OK</h1></html>",
     )
-    return legacy._client(transport, root), transport, legacy._smoke_scenario()
+    return _client(transport, root), transport, _smoke_scenario()
 
 
 def _normalized_tree(root: Path) -> dict[str, bytes]:
@@ -104,13 +112,16 @@ def test_typed_ports_are_bounded_and_match_the_existing_client() -> None:
         for name, value in port.__dict__.items():
             if not name.startswith("_") and callable(value):
                 assert hasattr(DiscoApiClient, name), name
-    assert len(
-        [
-            name
-            for name, value in EvidenceSink.__dict__.items()
-            if not name.startswith("_") and callable(value)
-        ]
-    ) == 5
+    assert (
+        len(
+            [
+                name
+                for name, value in EvidenceSink.__dict__.items()
+                if not name.startswith("_") and callable(value)
+            ]
+        )
+        == 5
+    )
 
 
 @pytest.mark.asyncio
@@ -362,15 +373,15 @@ def test_new_owner_signatures_keep_the_frozen_facade_contract() -> None:
     from harness.build_soak.run_coordinator import RunCoordinator
     from harness.build_soak.scenario_driver import DefaultScenarioDriver
 
-    assert inspect.signature(DefaultScenarioDriver.drive).parameters.keys() == (
+    assert tuple(inspect.signature(DefaultScenarioDriver.drive).parameters) == (
         "self",
         *inspect.signature(old_run.drive_scenario).parameters.keys(),
     )
-    assert inspect.signature(RunCoordinator.run_once).parameters.keys() == (
+    assert tuple(inspect.signature(RunCoordinator.run_once).parameters) == (
         "self",
         *inspect.signature(old_run.run_once).parameters.keys(),
     )
-    assert inspect.signature(FilesystemEvidenceSink.assemble_dossier).parameters.keys() == (
+    assert tuple(inspect.signature(FilesystemEvidenceSink.assemble_dossier).parameters) == (
         "self",
         *inspect.signature(old_run.assemble_dossier).parameters.keys(),
     )
