@@ -1,1420 +1,205 @@
+# ruff: noqa: E501, I001
+"""Exact-ID collection facade for test_governed_admission_oracle.py implementation modules."""
+
 from __future__ import annotations
 
-import hashlib
-import json
-from typing import Any
-
-import pytest
-from disco.core.loop import HostVerificationDeliverable
-from disco.core.verification import (
-    AdmittedVerificationContract,
-    HostVerificationClaim,
-    HostVerificationClaimResult,
-    HostVerificationObservedFact,
-    HostVerificationResult,
-    PreviewSelectionIdentity,
-    VerificationArtifactIdentity,
-    VerificationCheckContract,
-    VerificationClaimKind,
-    VerificationClaimStatus,
-    VerificationDeliveryContract,
-    VerificationEvidenceModality,
-    VerificationExecutionIdentity,
-    default_structured_web_claims,
-    target_verification_result,
-    with_verification_effect_receipt,
-)
-
-from harness.build_soak.failure_codes import GOVERNED_ADMISSION_BYPASSED
-from harness.build_soak.oracles.contract import ContractOracle
-from harness.build_soak.oracles.governed_admission import (
-    GovernedAdmissionOracle,
-    _preview_identity_from_pair,
-    _shared_execution_authority,
-)
-from harness.build_soak.run import load_scenarios
-
-_RUN_ID = "run:sha256:" + "b" * 64
-
-
-def _scenario(*, native: bool = False) -> dict[str, Any]:
-    return {
-        "id": "fixture",
-        "assertions": {
-            "governed_verification": {
-                "required": True,
-                "route": "platform",
-                "composition_authority": "build_platform_core",
-                "delivery_mode": "artifact" if native else "interactive",
-                "required_receipt_kinds": [
-                    "synthetic.native@1" if native else "disco.web_functional@1"
-                ],
-                "required_claim_kinds": (
-                    {"target_specific": 1}
-                    if native
-                    else {
-                        "artifact_identity": 1,
-                        "http_ready": 1,
-                        "rendered_content": 1,
-                        "console_clean": 1,
-                        "network_clean": 1,
-                    }
-                ),
-                "required_execution_modality": ("simulator" if native else "managed_preview"),
-            }
-        },
-    }
-
-
-def _contract(
-    *,
-    native: bool = False,
-    sealed_output: bool = False,
-) -> AdmittedVerificationContract:
-    claims = (
-        (
-            HostVerificationClaim(
-                claim_id="native.launch",
-                kind=VerificationClaimKind.TARGET_SPECIFIC,
-                expected="bundle launches",
-                source_authority="target.native@1",
-            ),
-        )
-        if native
-        else default_structured_web_claims()
-    )
-    return AdmittedVerificationContract(
-        target_id="synthetic.native@1" if native else "disco.legacy_web@1",
-        verifier_id=("synthetic.native_verifier@1" if native else "disco.host_web_verifier@1"),
-        delivery=VerificationDeliveryContract(
-            shape="native.bundle" if native else "web.legacy_deliverable",
-            mode="artifact" if native else "interactive",
-            entry_kind="manifest",
-            entry_reference="build/Fixture.app" if native else "active-deliverable",
-        ),
-        preview_modality="simulator" if native else "legacy_host",
-        checks=(
-            VerificationCheckContract(
-                check_id="native" if native else "web_functional",
-                receipt_kind="synthetic.native@1" if native else "disco.web_functional@1",
-                issuer_id=(
-                    "synthetic.native_verifier@1" if native else "disco.host_web_verifier@1"
-                ),
-                operation="host.verify_native" if native else "host.verify_deliverable",
-                required_execution_modality="simulator" if native else "managed_preview",
-                required_artifact_identity_scheme=(
-                    "sha256-tree-manifest-v1" if sealed_output else None
-                ),
-                accepted_claim_kinds=frozenset(claim.kind for claim in claims),
-                claims=claims,
-            ),
-        ),
-    )
-
-
-def _claim_results(
-    contract: AdmittedVerificationContract,
-    *,
-    passed: bool,
-    evidence_event_id: str | None = None,
-) -> tuple[HostVerificationClaimResult, ...]:
-    status = VerificationClaimStatus.PASS if passed else VerificationClaimStatus.FAIL
-    return tuple(
-        HostVerificationClaimResult(
-            claim_id=claim.claim_id,
-            kind=claim.kind,
-            required=claim.required,
-            expected=claim.expected,
-            source_authority=claim.source_authority,
-            status=status,
-            reason="fixture pass" if passed else "fixture fail",
-            verifier_id=contract.checks[0].issuer_id,
-            capability_basis="configured target-specific host verifier",
-            evidence_modalities=(VerificationEvidenceModality.TARGET_SPECIFIC,),
-            evidence_refs=(
-                (f"event:{evidence_event_id}",) if evidence_event_id is not None else ()
-            ),
-        )
-        for claim in contract.required_claims
-    )
-
-
-def _segment(
-    *,
-    base: int = 0,
-    passed: bool = True,
-    native: bool = False,
-    sealed_output: bool = False,
-) -> list[dict[str, Any]]:
-    contract = _contract(native=native, sealed_output=sealed_output)
-    intent_id = f"evt_intent_{base}"
-    admission_id = f"evt_admission_{base}"
-    view_id = f"evt_view_{base}"
-    write_action_id = f"evt_write_action_{base}"
-    delivery_id = f"evt_delivery_{base}"
-    started_id = f"evt_started_{base}"
-    action_id = f"evt_preview_action_{base}"
-    observation_id = f"evt_preview_observation_{base}"
-    preview_intent = {"launch_kind": "framework"}
-    preview_digest = hashlib.sha256(
-        json.dumps(
-            {
-                "command": "npm run dev",
-                "exec_dir": ".",
-                "intent": preview_intent,
-                "name": "web",
-                "port": 9134,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
-    preview = (
-        None
-        if native
-        else PreviewSelectionIdentity(
-            projection_id="pv_" + f"{base + 1:032x}"[-32:],
-            session_name="web",
-            port=9134,
-            url="http://127.0.0.1:9134/",
-            launch_kind="framework",
-            intent_digest=preview_digest,
-            sandbox_instance_id="sandbox-1",
-            sandbox_generation=1,
-            source_action_id=action_id,
-            source_action_seq=base + 6,
-            source_observation_id=observation_id,
-            source_observation_seq=base + 7,
-        )
-    )
-    execution = VerificationExecutionIdentity(
-        modality="simulator" if native else "managed_preview",
-        instance_id="sim-1" if native else preview.projection_id,  # type: ignore[union-attr]
-        generation="boot-1" if native else "sandbox-1:1",
-        locator="dev.fixture" if native else preview.url,  # type: ignore[union-attr]
-    )
-    artifact_path = "build/Fixture.app" if native else "index.html"
-    artifact_kind = "files" if native else "app"
-    output_observation_id = f"evt_verifier_output_{base}"
-    artifact_identity = (
-        VerificationArtifactIdentity(
-            scheme="sha256-tree-manifest-v1",
-            digest="sha256:" + "d" * 64,
-            entry_reference=artifact_path,
-            producer_id=contract.checks[0].issuer_id,
-        )
-        if sealed_output
-        else None
-    )
-    deliverable = HostVerificationDeliverable(
-        conversation_id="conv_fixture",
-        run_intent_id=intent_id,
-        run_identity=_RUN_ID,
-        agent_view_id="view-fixture",
-        deliverable_event_id=delivery_id,
-        artifact_path=artifact_path,
-        artifact_kind=artifact_kind,
-        workspace_revision=base + 4,
-        workspace_generation="workspace-1",
-        workspace_epoch=1,
-        observed_after_seq=base + 11 if sealed_output else base + 8,
-        required_claims=contract.required_claims,
-        verification_contract=contract,
-        verification_check=contract.checks[0],
-        execution_identity=execution,
-        artifact_identity=artifact_identity,
-        preview_selection=preview,
-    )
-    receipt = target_verification_result(
-        deliverable=deliverable,
-        claim_results=_claim_results(
-            contract,
-            passed=passed,
-            evidence_event_id=output_observation_id if sealed_output else None,
-        ),
-        verifier_id=contract.checks[0].issuer_id,
-        tool_id=contract.checks[0].operation,
-        reason="fixture pass" if passed else "fixture fail",
-        observed_url="" if native else preview.url,  # type: ignore[union-attr]
-    ).model_dump(mode="json")
-    events: list[dict[str, Any]] = [
-        {
-            "kind": "workspace_mutation",
-            "source": "system",
-            "seq": base + 1,
-            "id": intent_id,
-            "operation": "agent.run-intent.message",
-        },
-        {
-            "kind": "build_platform_admission",
-            "source": "system",
-            "seq": base + 2,
-            "id": admission_id,
-            "route": "platform",
-            "profile_id": "synthetic.profile@1",
-            "run_intent_id": intent_id,
-            "composition_authority": "build_platform_core",
-            "composition_digest": "sha256:" + "a" * 64,
-            "run_identity": _RUN_ID,
-            "verification_claims": [
-                claim.model_dump(mode="json") for claim in contract.required_claims
-            ],
-            "verification_contract": contract.model_dump(mode="json"),
-        },
-        {
-            "kind": "workspace_mutation",
-            "source": "system",
-            "seq": base + 3,
-            "id": view_id,
-            "operation": "agent.view-admitted",
-            "run_intent_id": intent_id,
-            "agent_view_id": "view-fixture",
-        },
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": base + 4,
-            "id": write_action_id,
-            "agent_view_id": "view-fixture",
-            "tool_call": {
-                "tool_name": "file_write",
-                "call_id": "call-write",
-                "arguments": {"path": artifact_path},
-            },
-        },
-        {
-            "kind": "observation",
-            "source": "environment",
-            "seq": base + 5,
-            "id": f"evt_write_observation_{base}",
-            "agent_view_id": "view-fixture",
-            "action_id": write_action_id,
-            "tool_result": {
-                "tool_name": "file_write",
-                "call_id": "call-write",
-                "success": True,
-            },
-        },
-    ]
-    if preview is not None:
-        events.extend(
-            [
-                {
-                    "kind": "action",
-                    "source": "agent",
-                    "seq": base + 6,
-                    "id": action_id,
-                    "tool_call": {
-                        "tool_name": "preview_start",
-                        "call_id": "call-preview",
-                        "arguments": {},
-                    },
-                },
-                {
-                    "kind": "observation",
-                    "source": "environment",
-                    "seq": base + 7,
-                    "id": observation_id,
-                    "action_id": action_id,
-                    "tool_result": {
-                        "tool_name": "preview_start",
-                        "call_id": "call-preview",
-                        "success": True,
-                        "structured": {
-                            "status": "running",
-                            "projection_id": preview.projection_id,
-                            "name": preview.session_name,
-                            "port": preview.port,
-                            "url": preview.url,
-                            "command": "npm run dev",
-                            "exec_dir": ".",
-                            "intent": preview_intent,
-                            "launch_kind": preview.launch_kind,
-                            "intent_digest": preview.intent_digest,
-                            "sandbox_instance_id": preview.sandbox_instance_id,
-                            "sandbox_generation": preview.sandbox_generation,
-                        },
-                    },
-                },
-            ]
-        )
-    events.append(
-        {
-            "kind": "deliverable",
-            "source": "agent",
-            "seq": base + 8,
-            "id": delivery_id,
-            "path": artifact_path,
-            "artifact_kind": artifact_kind,
-            "target_id": contract.target_id,
-            "delivery_contract": contract.delivery.model_dump(mode="json"),
-            "verification_contract_digest": contract.digest,
-            "agent_view_id": "view-fixture",
-        }
-    )
-    events.append(
-        {
-            "kind": "verifier_started",
-            "source": "system",
-            "seq": base + 9,
-            "id": started_id,
-            "agent_view_id": "view-fixture",
-            "artifact_path": artifact_path,
-            "artifact_kind": artifact_kind,
-            "target_id": contract.target_id,
-            "run_intent_id": intent_id,
-            "run_identity": _RUN_ID,
-            "delivery_shape": contract.delivery.shape,
-            "delivery_entry_reference": contract.delivery.entry_reference,
-            "check_id": contract.checks[0].check_id,
-            "receipt_kind": contract.checks[0].receipt_kind,
-            "issuer_id": contract.checks[0].issuer_id,
-            "operation": contract.checks[0].operation,
-            "delegated_issuer_ids": sorted(contract.checks[0].delegated_issuer_ids),
-            "verification_contract_digest": contract.digest,
-            "deliverable_event_id": delivery_id,
-            "execution_identity": execution.model_dump(mode="json"),
-            "preview_selection": (preview.model_dump(mode="json") if preview is not None else None),
-            "workspace_revision": base + 4,
-            "workspace_generation": "workspace-1",
-            "workspace_epoch": 1,
-            "observed_after_seq": base + 8,
-        }
-    )
-    if sealed_output:
-        events.extend(
-            [
-                {
-                    "kind": "action",
-                    "source": "system",
-                    "seq": base + 10,
-                    "id": f"evt_verifier_action_{base}",
-                    "tool_call": {
-                        "tool_name": "verify_native",
-                        "call_id": f"call-verifier-{base}",
-                        "arguments": {},
-                    },
-                },
-                {
-                    "kind": "observation",
-                    "source": "environment",
-                    "seq": base + 11,
-                    "id": output_observation_id,
-                    "action_id": f"evt_verifier_action_{base}",
-                    "tool_result": {
-                        "tool_name": "verify_native",
-                        "call_id": f"call-verifier-{base}",
-                        "success": True,
-                    },
-                },
-            ]
-        )
-    verdict_seq = base + 12 if sealed_output else base + 10
-    terminal_seq = verdict_seq + 1
-    events.extend(
-        [
-            {
-                "kind": "verifier_verdict",
-                "source": "system",
-                "seq": verdict_seq,
-                "id": f"evt_verdict_{base}",
-                "artifact_path": artifact_path,
-                "artifact_kind": artifact_kind,
-                "verified": passed,
-                "verdict": "pass" if passed else "fail",
-                "target_id": contract.target_id,
-                "check_id": contract.checks[0].check_id,
-                "receipt_kind": contract.checks[0].receipt_kind,
-                "verification_contract_digest": contract.digest,
-                "requested_by_event_id": started_id,
-                "verification_result": receipt,
-            },
-            {
-                "kind": "status",
-                "source": "system",
-                "seq": terminal_seq,
-                "id": f"evt_terminal_{base}",
-                "status": "FINISHED",
-                "agent_view_id": "view-fixture",
-            },
-        ]
-    )
-    return events
-
-
-def _result(events: list[dict[str, Any]], *, native: bool = False):
-    return GovernedAdmissionOracle().check(
-        events,
-        scenario=_scenario(native=native),
-        conversation_id="conv_fixture",
-    )[0]
-
-
-def _replace_receipt(
-    events: list[dict[str, Any]],
-    **updates: Any,
-) -> HostVerificationResult:
-    verdict = next(event for event in reversed(events) if event.get("kind") == "verifier_verdict")
-    receipt = HostVerificationResult.model_validate(verdict["verification_result"])
-    changed = receipt.model_copy(update={**updates, "effect_receipt": None})
-    anchored = with_verification_effect_receipt(changed)
-    verdict["verification_result"] = anchored.model_dump(mode="json")
-    return anchored
-
-
-def test_current_web_segment_with_exact_receipt_passes() -> None:
-    result = _result(_segment())
-
-    assert result.passed
-    claims = result.facts["verified_claim_results"]
-    assert {claim["kind"] for claim in claims} == {
-        "artifact_identity",
-        "console_clean",
-        "http_ready",
-        "network_clean",
-        "rendered_content",
-    }
-    assert result.facts["verified_artifact_paths"] == ["index.html"]
-
-
-def test_current_integrity_bound_observed_fact_is_projected() -> None:
-    events = _segment()
-    _replace_receipt(
-        events,
-        observed_facts=(
-            HostVerificationObservedFact(
-                fact_id="web.observed.visible_text",
-                kind=VerificationClaimKind.VISIBLE_TEXT,
-                value="Node Paused 403113",
-                verifier_id="disco.host_web_verifier@1",
-                capability_basis="configured target-specific host verifier",
-                evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
-            ),
-        ),
-    )
-
-    result = _result(events)
-
-    assert result.passed
-    assert result.facts["verified_observed_facts"][0]["value"] == "Node Paused 403113"
-
-
-def test_target_neutral_native_entry_path_is_projected_after_full_adjudication() -> None:
-    result = _result(_segment(native=True), native=True)
-
-    assert result.passed
-    assert result.facts["verified_artifact_paths"] == ["build/Fixture.app"]
-
-
-def test_observed_fact_from_unadmitted_issuer_is_rejected() -> None:
-    events = _segment()
-    _replace_receipt(
-        events,
-        observed_facts=(
-            HostVerificationObservedFact(
-                fact_id="web.observed.visible_text",
-                kind=VerificationClaimKind.VISIBLE_TEXT,
-                value="forged",
-                verifier_id="model_role.unadmitted@1",
-                capability_basis="model prose",
-                evidence_modalities=(VerificationEvidenceModality.DOM_ACCESSIBILITY,),
-            ),
-        ),
-    )
-
-    assert _result(events).failed
-
-
-def test_host_revision_seal_is_not_a_completed_work_terminal() -> None:
-    events = _segment()
-    terminal_seq = max(event["seq"] for event in events)
-    events.extend(
-        [
-            {
-                "kind": "status",
-                "source": "system",
-                "seq": terminal_seq + 1,
-                "id": "evt_restore_seal",
-                "status": "FINISHED",
-                "detail": "host_revision:version.restore",
-            },
-            {
-                "kind": "status",
-                "source": "system",
-                "seq": terminal_seq + 2,
-                "id": "evt_failed_recovery",
-                "status": "STUCK",
-                "detail": "verify_no_progress:fixture",
-            },
-        ]
-    )
-
-    # The governed oracle audits completed work. The later restore seal cannot
-    # manufacture an empty completed-work segment and mask the recovery failure
-    # as a missing-admission P0; output truth owns the STUCK adjudication.
-    assert _result(events).passed
-
-
-def test_preview_oracle_normalizes_only_the_sandbox_workspace_root() -> None:
-    def identity(serve_dir: str) -> dict[str, Any] | None:
-        intent = {"launch_kind": "static", "serve_dir": serve_dir}
-        payload = {
-            "command": "python3 -m http.server 8000 -d /workspace",
-            "exec_dir": "/workspace",
-            "intent": intent,
-            "name": "site",
-            "port": 8000,
-        }
-        call_id = f"call-{hashlib.sha256(serve_dir.encode()).hexdigest()[:8]}"
-        action = {
-            "kind": "action",
-            "seq": 7,
-            "id": f"evt-action-{call_id}",
-            "tool_call": {
-                "tool_name": "preview_start",
-                "call_id": call_id,
-                "arguments": {"serve_dir": serve_dir},
-            },
-        }
-        observation = {
-            "kind": "observation",
-            "seq": 8,
-            "id": f"evt-observation-{call_id}",
-            "action_id": action["id"],
-            "tool_result": {
-                "tool_name": "preview_start",
-                "call_id": call_id,
-                "success": True,
-                "structured": {
-                    **payload,
-                    "status": "running",
-                    "url": "http://preview.test",
-                    "projection_id": "pv_" + "a" * 32,
-                    "sandbox_instance_id": "sandbox-1",
-                    "sandbox_generation": 1,
-                    "launch_kind": "static",
-                    "intent_digest": hashlib.sha256(
-                        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-                    ).hexdigest(),
-                },
-            },
-        }
-        return _preview_identity_from_pair(action, observation)
-
-    root = identity("/workspace/")
-    nested = identity("/workspace/site")
-
-    assert root is not None and root["static_serve_dir"] == "."
-    assert nested is not None and nested["static_serve_dir"] == "site"
-    assert identity("/workspace/../srv/site") is None
-    assert identity("/srv/site") is None
-    assert identity("../site") is None
-    assert identity("site/../../outside") is None
-
-
-def _use_appkit_owned_preview(events: list[dict[str, Any]], *, passed: bool = True) -> None:
-    action = next(
-        event
-        for event in events
-        if event.get("kind") == "action"
-        and event.get("tool_call", {}).get("tool_name") == "preview_start"
-    )
-    observation = next(
-        event
-        for event in events
-        if event.get("kind") == "observation" and event.get("action_id") == action.get("id")
-    )
-    action["tool_call"]["tool_name"] = "verify_appkit_app"
-    result = observation["tool_result"]
-    runtime = result["structured"]
-    result["tool_name"] = "verify_appkit_app"
-    result["structured"] = {
-        "passed": passed,
-        "preview_runtime": runtime,
-    }
-
-
-def _repeat_appkit_preview(
-    events: list[dict[str, Any]],
-    *,
-    same_operational_identity: bool = True,
-) -> dict[str, Any]:
-    first_action = next(
-        event
-        for event in events
-        if event.get("kind") == "action"
-        and event.get("tool_call", {}).get("tool_name") == "verify_appkit_app"
-    )
-    first_observation = next(
-        event
-        for event in events
-        if event.get("kind") == "observation" and event.get("action_id") == first_action.get("id")
-    )
-    repeated_action = json.loads(json.dumps(first_action))
-    repeated_observation = json.loads(json.dumps(first_observation))
-    repeated_action.update(seq=10, id="evt_appkit_preview_retry")
-    repeated_action["tool_call"]["call_id"] = "call-appkit-preview-retry"
-    repeated_observation.update(
-        seq=11,
-        id="evt_appkit_preview_retry_result",
-        action_id=repeated_action["id"],
-    )
-    repeated_observation["tool_result"]["call_id"] = "call-appkit-preview-retry"
-    if not same_operational_identity:
-        repeated_observation["tool_result"]["structured"]["preview_runtime"]["projection_id"] = (
-            "pv_" + "f" * 32
-        )
-    identity = _preview_identity_from_pair(repeated_action, repeated_observation)
-    assert identity is not None
-    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
-    terminal = events[-1]
-    verdict["seq"] = 12
-    terminal["seq"] = 13
-    events[events.index(verdict) : events.index(verdict)] = [
-        repeated_action,
-        repeated_observation,
-    ]
-    return identity
-
-
-def test_current_appkit_owned_preview_with_exact_receipt_passes() -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
-
-    assert _result(events).passed
-
-
-def test_appkit_preview_reobservation_retains_same_operational_handoff() -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
-    _repeat_appkit_preview(events)
-
-    assert _result(events).passed
-
-
-@pytest.mark.parametrize("same_operational_identity", (True, False))
-def test_appkit_preview_receipt_cannot_replace_handoff_provenance(
-    same_operational_identity: bool,
-) -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
-    repeated = _repeat_appkit_preview(
-        events,
-        same_operational_identity=same_operational_identity,
-    )
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    started["preview_selection"] = repeated
-    execution = dict(started["execution_identity"])
-    execution["instance_id"] = repeated["projection_id"]
-    started["execution_identity"] = execution
-    _replace_receipt(
-        events,
-        preview_selection=PreviewSelectionIdentity.model_validate(repeated),
-        execution_identity=VerificationExecutionIdentity.model_validate(execution),
-    )
-
-    assert _result(events).failed
-
-
-def test_composed_checks_share_execution_generation_but_retain_distinct_modalities() -> None:
-    strict = {
-        "modality": "appkit_strict_runtime",
-        "instance_id": "pv_same",
-        "generation": "sandbox-1:1",
-        "locator": "http://preview.test",
-    }
-    functional = {
-        **strict,
-        "modality": "managed_preview",
-    }
-
-    assert _shared_execution_authority(strict) == _shared_execution_authority(functional)
-    for field, foreign in (
-        ("instance_id", "pv_foreign"),
-        ("generation", "sandbox-1:2"),
-        ("locator", "http://foreign.test"),
-    ):
-        changed = {**functional, field: foreign}
-        assert _shared_execution_authority(strict) != _shared_execution_authority(changed)
-
-
-@pytest.mark.parametrize(
-    "corrupt",
-    ("failed_verifier", "missing_runtime", "call_mismatch"),
-)
-def test_appkit_owned_preview_requires_exact_successful_source_pair(corrupt: str) -> None:
-    events = _segment()
-    _use_appkit_owned_preview(events)
-    action = next(
-        event
-        for event in events
-        if event.get("kind") == "action"
-        and event.get("tool_call", {}).get("tool_name") == "verify_appkit_app"
-    )
-    observation = next(
-        event
-        for event in events
-        if event.get("kind") == "observation" and event.get("action_id") == action.get("id")
-    )
-    if corrupt == "failed_verifier":
-        observation["tool_result"]["structured"]["passed"] = False
-    elif corrupt == "missing_runtime":
-        observation["tool_result"]["structured"].pop("preview_runtime")
-    else:
-        observation["tool_result"]["call_id"] = "foreign-call"
-
-    assert _result(events).failed
-
-
-def test_target_specific_nonweb_policy_needs_no_preview() -> None:
-    assert _result(_segment(native=True), native=True).passed
-
-
-def test_output_producing_nonweb_target_requires_post_start_artifact_seal() -> None:
-    assert _result(
-        _segment(native=True, sealed_output=True),
-        native=True,
-    ).passed
-
-
-def test_output_producing_target_without_artifact_identity_fails() -> None:
-    events = _segment(native=True, sealed_output=True)
-    _replace_receipt(events, artifact_identity=None)
-
-    assert _result(events, native=True).failed
-
-
-def test_output_producing_target_with_unadmitted_identity_scheme_fails() -> None:
-    events = _segment(native=True, sealed_output=True)
-    _replace_receipt(
-        events,
-        artifact_identity=VerificationArtifactIdentity(
-            scheme="opaque-unverified",
-            digest="sha256:" + "e" * 64,
-            entry_reference="build/Fixture.app",
-            producer_id="synthetic.native_verifier@1",
-        ),
-    )
-
-    assert _result(events, native=True).failed
-
-
-def test_final_continue_segment_is_authoritative() -> None:
-    events = [*_segment(base=0, passed=True), *_segment(base=20, passed=False)]
-    result = _result(events)
-    assert result.failed
-    assert result.code == GOVERNED_ADMISSION_BYPASSED
-
-
-def _continued_segment_reusing_prior_preview(*, stopped: bool = False) -> list[dict[str, Any]]:
-    events = [*_segment(base=0), *_segment(base=20)]
-    first_verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
-    first_receipt = HostVerificationResult.model_validate(first_verdict["verification_result"])
-    assert first_receipt.preview_selection is not None
-    second_preview_action = next(
-        event
-        for event in events
-        if event.get("kind") == "action"
-        and event.get("seq") == 26
-        and event.get("tool_call", {}).get("tool_name") == "preview_start"
-    )
-    second_preview_observation = next(
-        event
-        for event in events
-        if event.get("kind") == "observation"
-        and event.get("action_id") == second_preview_action["id"]
-    )
-    events.remove(second_preview_action)
-    events.remove(second_preview_observation)
-    if stopped:
-        events.extend(
-            [
-                {
-                    "kind": "action",
-                    "source": "agent",
-                    "seq": 26,
-                    "id": "evt_continue_preview_stop",
-                    "tool_call": {
-                        "tool_name": "preview_stop",
-                        "call_id": "call-continue-preview-stop",
-                        "arguments": {"name": "web"},
-                    },
-                },
-                {
-                    "kind": "observation",
-                    "source": "environment",
-                    "seq": 27,
-                    "id": "evt_continue_preview_stop_result",
-                    "action_id": "evt_continue_preview_stop",
-                    "tool_result": {
-                        "tool_name": "preview_stop",
-                        "call_id": "call-continue-preview-stop",
-                        "success": True,
-                        "structured": {"stopped": ["web"]},
-                    },
-                },
-            ]
-        )
-    started = next(event for event in reversed(events) if event.get("kind") == "verifier_started")
-    started["preview_selection"] = first_receipt.preview_selection.model_dump(mode="json")
-    started["execution_identity"] = first_receipt.execution_identity.model_dump(mode="json")  # type: ignore[union-attr]
-    _replace_receipt(
-        events,
-        preview_selection=first_receipt.preview_selection,
-        execution_identity=first_receipt.execution_identity,
-    )
-    return events
-
-
-def test_continue_segment_may_reuse_exact_still_active_prior_preview() -> None:
-    assert _result(_continued_segment_reusing_prior_preview()).passed
-
-
-def test_continue_segment_cannot_reuse_prior_preview_after_stop() -> None:
-    assert _result(_continued_segment_reusing_prior_preview(stopped=True)).failed
-
-
-def test_latest_same_segment_failure_overrides_earlier_pass() -> None:
-    events = _segment()
-    later = dict(events[-2])
-    later["seq"] = 11
-    later["id"] = "evt_later_fail"
-    later["verified"] = False
-    later["verdict"] = "fail"
-    later["verification_result"] = None
-    events[-1]["seq"] = 12
-    events.insert(-1, later)
-    assert _result(events).failed
-
-
-def test_mutation_after_observed_authority_rejects_stale_receipt() -> None:
-    events = _segment()
-    events[-2]["seq"] = 11
-    events[-1]["seq"] = 12
-    events.insert(
-        -2,
-        {
-            "kind": "action",
-            "seq": 10,
-            "id": "evt_mutation",
-            "tool_call": {"tool_name": "file_write", "call_id": "mut", "arguments": {}},
-        },
-    )
-    assert _result(events).failed
-
-
-def test_receipt_after_mutation_capable_observation_uses_observation_authority() -> None:
-    events = _segment()
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
-    terminal = events[-1]
-    started["seq"] = 11
-    started["workspace_revision"] = 9
-    started["observed_after_seq"] = 10
-    verdict["seq"] = 12
-    terminal["seq"] = 13
-    events[events.index(started) : events.index(started)] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 9,
-            "id": "evt_capability_shell",
-            "tool_call": {
-                "tool_name": "shell",
-                "call_id": "capability-shell",
-                "arguments": {"command": "inspect-artifact"},
-            },
-        },
-        {
-            "kind": "observation",
-            "source": "environment",
-            "seq": 10,
-            "id": "evt_capability_shell_result",
-            "action_id": "evt_capability_shell",
-            "tool_result": {
-                "tool_name": "shell",
-                "call_id": "capability-shell",
-                "success": True,
-                "action_profile": {"capabilities": ["workspace.mutate"]},
-                "effect_receipts": [],
-            },
-        },
-    ]
-    _replace_receipt(events, workspace_revision=9, observed_after_seq=10)
-
-    assert _result(events).passed
-
-
-def test_mutation_after_pass_rejects_stale_receipt() -> None:
-    events = _segment()
-    events[-1]["seq"] = 13
-    events[-1:-1] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 11,
-            "id": "evt_post_verdict_write",
-            "tool_call": {
-                "tool_name": "file_write",
-                "call_id": "post-write",
-                "arguments": {"path": "index.html"},
-            },
-        },
-        {
-            "kind": "observation",
-            "source": "environment",
-            "seq": 12,
-            "id": "evt_post_verdict_write_result",
-            "action_id": "evt_post_verdict_write",
-            "tool_result": {
-                "tool_name": "file_write",
-                "call_id": "post-write",
-                "success": True,
-            },
-        },
-    ]
-    assert _result(events).failed
-
-
-def test_preview_stop_after_pass_rejects_stale_receipt() -> None:
-    events = _segment()
-    events[-1]["seq"] = 13
-    events[-1:-1] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 11,
-            "id": "evt_post_verdict_stop",
-            "tool_call": {
-                "tool_name": "preview_stop",
-                "call_id": "post-stop",
-                "arguments": {"name": "web"},
-            },
-        },
-        {
-            "kind": "observation",
-            "source": "environment",
-            "seq": 12,
-            "id": "evt_post_verdict_stop_result",
-            "action_id": "evt_post_verdict_stop",
-            "tool_result": {
-                "tool_name": "preview_stop",
-                "call_id": "post-stop",
-                "success": True,
-                "structured": {"stopped": ["web"]},
-            },
-        },
-    ]
-    assert _result(events).failed
-
-
-def test_future_target_mutation_capability_after_pass_rejects_stale_receipt() -> None:
-    events = _segment(native=True)
-    events[-1]["seq"] = 13
-    events[-1:-1] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 11,
-            "id": "evt_device_patch",
-            "action_profile": {"capabilities": ["workspace.mutate"]},
-            "tool_call": {
-                "tool_name": "device_apply_patch",
-                "call_id": "device-patch",
-                "arguments": {"bundle_id": "dev.fixture"},
-            },
-        },
-        {
-            "kind": "observation",
-            "source": "environment",
-            "seq": 12,
-            "id": "evt_device_patch_result",
-            "action_id": "evt_device_patch",
-            "tool_result": {
-                "tool_name": "device_apply_patch",
-                "call_id": "device-patch",
-                "success": True,
-                "action_profile": {"capabilities": ["workspace.mutate"]},
-            },
-        },
-    ]
-    assert _result(events, native=True).failed
-
-
-def test_failed_partial_future_mutation_after_pass_rejects_stale_receipt() -> None:
-    events = _segment(native=True)
-    events[-1]["seq"] = 13
-    events[-1:-1] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 11,
-            "id": "evt_partial_device_patch",
-            "action_profile": {"capabilities": ["workspace.mutate"]},
-            "tool_call": {
-                "tool_name": "device_apply_patch",
-                "call_id": "partial-device-patch",
-                "arguments": {"bundle_id": "dev.fixture"},
-            },
-        },
-        {
-            "kind": "agent_error",
-            "source": "environment",
-            "seq": 12,
-            "id": "evt_partial_device_patch_result",
-            "action_id": "evt_partial_device_patch",
-            "error": "device update failed after applying part of the patch",
-            "action_profile": {"capabilities": ["workspace.mutate"]},
-            "effect_receipts": [
-                {
-                    "kind": "mutation",
-                    "capability": "workspace.mutate",
-                }
-            ],
-        },
-    ]
-    assert _result(events, native=True).failed
-
-
-def test_foreign_preview_pair_rejects_receipt() -> None:
-    events = _segment()
-    preview_action = next(
-        event
-        for event in events
-        if event.get("kind") == "action"
-        and event.get("tool_call", {}).get("tool_name") == "preview_start"
-    )
-    preview_action["id"] = "evt_foreign_preview"
-    assert _result(events).failed
-
-
-def test_self_anchored_receipt_from_another_conversation_is_rejected() -> None:
-    events = _segment()
-    _replace_receipt(events, conversation_id="conv_foreign")
-    assert _result(events).failed
-
-
-def test_foreign_agent_view_is_rejected_even_when_receipt_is_self_anchored() -> None:
-    events = _segment()
-    deliverable = next(event for event in events if event.get("kind") == "deliverable")
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    deliverable["agent_view_id"] = "view_foreign"
-    started["agent_view_id"] = "view_foreign"
-    _replace_receipt(events, agent_view_id="view_foreign")
-    assert _result(events).failed
-
-
-def test_same_intent_handoff_survives_a_later_verifier_view() -> None:
-    events = _segment()
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
-    terminal = next(event for event in events if event.get("kind") == "status")
-    started["seq"] = 10
-    started["agent_view_id"] = "view-later"
-    verdict["seq"] = 11
-    terminal["seq"] = 12
-    events.append(
-        {
-            "kind": "workspace_mutation",
-            "source": "system",
-            "seq": 9,
-            "id": "evt_view_later",
-            "operation": "agent.view-admitted",
-            "run_intent_id": "evt_intent_0",
-            "agent_view_id": "view-later",
-        }
-    )
-    _replace_receipt(events, agent_view_id="view-later")
-
-    assert _result(events).passed
-
-
-def test_foreign_observed_url_is_rejected_even_when_receipt_is_self_anchored() -> None:
-    events = _segment()
-    _replace_receipt(events, observed_url="http://127.0.0.1:9999/")
-    assert _result(events).failed
-
-
-def test_zero_workspace_revision_is_rejected_against_durable_start_authority() -> None:
-    events = _segment()
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    started["workspace_revision"] = 0
-    _replace_receipt(events, workspace_revision=0)
-    assert _result(events).failed
-
-
-def test_future_observation_order_is_rejected_against_durable_start_authority() -> None:
-    events = _segment()
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    started["observed_after_seq"] = 99
-    _replace_receipt(events, observed_after_seq=99)
-    assert _result(events).failed
-
-
-def test_native_policy_may_omit_workspace_epoch_when_not_required() -> None:
-    events = _segment(native=True)
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    started["workspace_epoch"] = None
-    _replace_receipt(events, workspace_epoch=None)
-    assert _result(events, native=True).passed
-
-
-def test_recognized_pre_execution_rejection_does_not_stale_receipt() -> None:
-    events = _segment()
-    started = next(event for event in events if event.get("kind") == "verifier_started")
-    verdict = next(event for event in events if event.get("kind") == "verifier_verdict")
-    terminal = events[-1]
-    started["seq"] = 11
-    verdict["seq"] = 12
-    terminal["seq"] = 13
-    events[events.index(started) : events.index(started)] = [
-        {
-            "kind": "action",
-            "source": "agent",
-            "seq": 9,
-            "id": "evt_gate_rejected_write",
-            "tool_call": {
-                "tool_name": "file_write",
-                "call_id": "gate-write",
-                "arguments": {"path": "index.html"},
-            },
-        },
-        {
-            "kind": "agent_error",
-            "source": "environment",
-            "seq": 10,
-            "id": "evt_gate_rejected_write_result",
-            "action_id": "evt_gate_rejected_write",
-            "error": (
-                "<system-reminder>\nREFUSED: `file_write` is not available in "
-                "PLANNING mode. No workspace mutation or execution is allowed "
-                "before plan approval. Call `submit_plan`.\n</system-reminder>"
-            ),
-        },
-    ]
-    assert _result(events).passed
-
-
-def test_unsuperseded_external_requirement_from_prior_segment_cannot_be_dropped() -> None:
-    events = [
-        {
-            "kind": "message",
-            "source": "user",
-            "seq": 0,
-            "id": "evt_external",
-            "message": "The installed application must launch.",
-            "verification_requirements": {
-                "supersedes_event_id": None,
-                "claims": [
-                    {
-                        "claim_id": "external.launch",
-                        "kind": "target_specific",
-                        "required": True,
-                        "expected": "installed application launches",
-                    }
-                ],
-                "reference_images": [],
-            },
-        },
-        *_segment(),
-    ]
-    assert _result(events).failed
-
-
-def test_weakened_contract_claim_floor_fails() -> None:
-    events = _segment()
-    contract = events[1]["verification_contract"]
-    contract["checks"][0]["claims"] = contract["checks"][0]["claims"][:1]
-    events[1]["verification_claims"] = events[1]["verification_claims"][:1]
-    assert _result(events).failed
-
-
-def test_relay_and_browser_flags_do_not_implicitly_activate_governance() -> None:
-    scenario = {
-        "requires_relay_ledger": True,
-        "assertions": {"browser_verification": {"required": True}},
-    }
-    result = GovernedAdmissionOracle().check([], scenario=scenario)[0]
-    assert result.skipped
-
-
-def test_appkit_also_requires_the_common_typed_receipt_oracle() -> None:
-    scenario = _scenario()
-    scenario["appkit"] = True
-    result = GovernedAdmissionOracle().check([], scenario=scenario)[0]
-    assert result.failed
-
-
-def test_governed_scenario_policy_must_be_exact_and_typed() -> None:
-    scenario = _scenario()
-    scenario["assertions"]["governed_verification"]["required_receipt_kinds"] = []
-    result = ContractOracle().check(scenario)[0]
-    assert result.failed
-
-
-@pytest.mark.parametrize(
-    "modalities",
-    [
-        [],
-        ["managed_preview", "managed_preview"],
-        ["managed_preview", ""],
-    ],
-)
-def test_multi_adapter_policy_requires_a_nonempty_unique_modality_set(
-    modalities: list[str],
-) -> None:
-    scenario = _scenario()
-    policy = scenario["assertions"]["governed_verification"]
-    del policy["required_execution_modality"]
-    policy["required_execution_modalities"] = modalities
-
-    assert ContractOracle().check(scenario)[0].failed
-
-
-def test_governed_policy_cannot_mix_singular_and_multi_adapter_modalities() -> None:
-    scenario = _scenario()
-    policy = scenario["assertions"]["governed_verification"]
-    policy["required_execution_modalities"] = ["managed_preview"]
-
-    assert ContractOracle().check(scenario)[0].failed
-
-
-def test_appkit_scenarios_replace_the_web_verification_policy_atomically() -> None:
-    scenarios = load_scenarios("harness/build_soak/scenarios_phase4.yaml")
-    appkit = [scenario for scenario in scenarios.values() if scenario.get("appkit")]
-
-    assert appkit
-    for scenario in appkit:
-        policy = scenario["assertions"]["governed_verification"]
-        assert policy["required_receipt_kinds"] == [
-            "disco.appkit_strict@1",
-            "disco.web_functional@1",
-        ]
-        assert policy["required_claim_kinds"] == {
-            "target_specific": 1,
-            "artifact_identity": 1,
-            "http_ready": 1,
-            "rendered_content": 1,
-            "console_clean": 1,
-            "network_clean": 1,
-        }
-        assert policy["required_execution_modalities"] == [
-            "appkit_strict_runtime",
-            "managed_preview",
-        ]
-        assert (
-            ContractOracle()
-            .check(
-                scenario,
-                available_evidence={
-                    "events",
-                    "product_evidence",
-                    "workspace",
-                    "preview",
-                    "tool_scope",
-                },
-            )[0]
-            .passed
-        )
-
-
-# ---- run-admission bookkeeping vs workspace authority (seed 405512) ---------
-
-
-def _shift_verdict_and_insert_mutation(events: list[dict[str, Any]], operation: str) -> None:
-    """Insert a workspace_mutation between the receipt's observed_after_seq and
-    the verdict by shifting the verdict/terminal seqs up one slot."""
-    verdict = next(event for event in reversed(events) if event.get("kind") == "verifier_verdict")
-    terminal = next(event for event in reversed(events) if event.get("kind") == "status")
-    inserted_seq = verdict["seq"]
-    verdict["seq"] += 1
-    terminal["seq"] += 1
-    events.insert(
-        events.index(verdict),
-        {
-            "kind": "workspace_mutation",
-            "source": "system",
-            "seq": inserted_seq,
-            "id": f"evt_inserted_mutation_{inserted_seq}",
-            "operation": operation,
-        },
-    )
-
-
-def test_run_reclaim_between_receipt_and_verdict_is_not_an_authority_change() -> None:
-    """Pilot seed 405512: a re-plan/approve cycle re-claims the SAME registered
-    run between the verification receipt and the finish verdict. Run-admission
-    bookkeeping (`agent.run-claimed`) moves no workspace bytes — its emitter
-    verifies the registered run intent is unchanged — so the exact receipt must
-    stay valid."""
-    events = _segment()
-    _shift_verdict_and_insert_mutation(events, "agent.run-claimed")
-
-    result = _result(events)
-
-    assert result.passed
-
-
-def test_real_mutation_between_receipt_and_verdict_still_fails_closed() -> None:
-    """Control: an operation that can move workspace bytes in the same window
-    still invalidates the receipt — the bookkeeping exclusion is exact."""
-    events = _segment()
-    _shift_verdict_and_insert_mutation(events, "agent.run-intent.host-mutation")
-
-    result = _result(events)
-
-    assert result.failed
-    assert result.code == GOVERNED_ADMISSION_BYPASSED
-
-
-# ---- terminal manifest fold vs workspace authority (Epic-4 seed 460000) -----
-
-
-def _insert_mutation_before_terminal(events: list[dict[str, Any]], operation: str) -> None:
-    """Insert a workspace_mutation between the PASS verdict and the terminal
-    status, reproducing the live terminal layout (verdict, agent message, fold,
-    FINISHED) by shifting the terminal seq up one slot."""
-    terminal = next(event for event in reversed(events) if event.get("kind") == "status")
-    inserted_seq = terminal["seq"]
-    terminal["seq"] += 1
-    events.insert(
-        events.index(terminal),
-        {
-            "kind": "workspace_mutation",
-            "source": "system",
-            "seq": inserted_seq,
-            "id": f"evt_inserted_terminal_mutation_{inserted_seq}",
-            "operation": operation,
-        },
-    )
-
-
-def test_terminal_manifest_fold_after_verdict_is_not_an_authority_change() -> None:
-    """Epic-4 seed 460000: under DISCO_ARTIFACT_MANIFEST_SHADOW=1 the terminal
-    pipeline records `agent.artifact-manifest-fold` after the PASS verdict and
-    before FINISHED. It writes only `.disco/context/artifact_manifest.json`
-    under the terminal event's own view and cannot change the verified entry —
-    the product excludes it from its own staleness fence, and so must this
-    oracle. The exemption previously matched the un-namespaced
-    `"artifact-manifest-fold"`, which the emitter never writes, so every
-    governed run that EARNED a PASS receipt false-FAILed at
-    `verifier_receipt -> terminal`."""
-    events = _segment()
-    _insert_mutation_before_terminal(events, "agent.artifact-manifest-fold")
-
-    result = _result(events)
-
-    assert result.passed
-
-
-def test_real_mutation_after_verdict_still_fails_closed() -> None:
-    """Control: a byte-moving operation in that same post-verdict window still
-    invalidates the receipt — verification must describe the delivered bytes."""
-    events = _segment()
-    _insert_mutation_before_terminal(events, "agent.run-intent.host-mutation")
-
-    result = _result(events)
-
-    assert result.failed
-    assert result.code == GOVERNED_ADMISSION_BYPASSED
+from functools import wraps
+
+# Compact one-to-one delegates are intentionally formatter-stable: each real
+# static test definition must remain in this historical collector module.
+# fmt: off
+from _support.governed_admission import cases_01_web_receipts as _c01
+from _support.governed_admission import cases_02_target_modalities as _c02
+from _support.governed_admission import cases_03_authority_continuity as _c03
+from _support.governed_admission import cases_04_policy_contracts as _c04
+from _support.governed_admission import cases_05_authority_folds as _c05
+from _support.governed_admission import helpers_01 as _helpers
+
+_scenario = _helpers._scenario
+_segment = _helpers._segment
+
+@wraps(_c01._impl_test_current_web_segment_with_exact_receipt_passes)
+def test_current_web_segment_with_exact_receipt_passes(*args, **kwargs):
+    return _c01._impl_test_current_web_segment_with_exact_receipt_passes(*args, **kwargs)
+
+@wraps(_c01._impl_test_current_integrity_bound_observed_fact_is_projected)
+def test_current_integrity_bound_observed_fact_is_projected(*args, **kwargs):
+    return _c01._impl_test_current_integrity_bound_observed_fact_is_projected(*args, **kwargs)
+
+@wraps(_c01._impl_test_target_neutral_native_entry_path_is_projected_after_full_adjudication)
+def test_target_neutral_native_entry_path_is_projected_after_full_adjudication(*args, **kwargs):
+    return _c01._impl_test_target_neutral_native_entry_path_is_projected_after_full_adjudication(*args, **kwargs)
+
+@wraps(_c01._impl_test_observed_fact_from_unadmitted_issuer_is_rejected)
+def test_observed_fact_from_unadmitted_issuer_is_rejected(*args, **kwargs):
+    return _c01._impl_test_observed_fact_from_unadmitted_issuer_is_rejected(*args, **kwargs)
+
+@wraps(_c01._impl_test_host_revision_seal_is_not_a_completed_work_terminal)
+def test_host_revision_seal_is_not_a_completed_work_terminal(*args, **kwargs):
+    return _c01._impl_test_host_revision_seal_is_not_a_completed_work_terminal(*args, **kwargs)
+
+@wraps(_c01._impl_test_preview_oracle_normalizes_only_the_sandbox_workspace_root)
+def test_preview_oracle_normalizes_only_the_sandbox_workspace_root(*args, **kwargs):
+    return _c01._impl_test_preview_oracle_normalizes_only_the_sandbox_workspace_root(*args, **kwargs)
+
+@wraps(_c02._impl_test_current_appkit_owned_preview_with_exact_receipt_passes)
+def test_current_appkit_owned_preview_with_exact_receipt_passes(*args, **kwargs):
+    return _c02._impl_test_current_appkit_owned_preview_with_exact_receipt_passes(*args, **kwargs)
+
+@wraps(_c02._impl_test_appkit_preview_reobservation_retains_same_operational_handoff)
+def test_appkit_preview_reobservation_retains_same_operational_handoff(*args, **kwargs):
+    return _c02._impl_test_appkit_preview_reobservation_retains_same_operational_handoff(*args, **kwargs)
+
+@wraps(_c02._impl_test_appkit_preview_receipt_cannot_replace_handoff_provenance)
+def test_appkit_preview_receipt_cannot_replace_handoff_provenance(*args, **kwargs):
+    return _c02._impl_test_appkit_preview_receipt_cannot_replace_handoff_provenance(*args, **kwargs)
+
+@wraps(_c02._impl_test_composed_checks_share_execution_generation_but_retain_distinct_modalities)
+def test_composed_checks_share_execution_generation_but_retain_distinct_modalities(*args, **kwargs):
+    return _c02._impl_test_composed_checks_share_execution_generation_but_retain_distinct_modalities(*args, **kwargs)
+
+@wraps(_c02._impl_test_appkit_owned_preview_requires_exact_successful_source_pair)
+def test_appkit_owned_preview_requires_exact_successful_source_pair(*args, **kwargs):
+    return _c02._impl_test_appkit_owned_preview_requires_exact_successful_source_pair(*args, **kwargs)
+
+@wraps(_c02._impl_test_target_specific_nonweb_policy_needs_no_preview)
+def test_target_specific_nonweb_policy_needs_no_preview(*args, **kwargs):
+    return _c02._impl_test_target_specific_nonweb_policy_needs_no_preview(*args, **kwargs)
+
+@wraps(_c02._impl_test_output_producing_nonweb_target_requires_post_start_artifact_seal)
+def test_output_producing_nonweb_target_requires_post_start_artifact_seal(*args, **kwargs):
+    return _c02._impl_test_output_producing_nonweb_target_requires_post_start_artifact_seal(*args, **kwargs)
+
+@wraps(_c02._impl_test_output_producing_target_without_artifact_identity_fails)
+def test_output_producing_target_without_artifact_identity_fails(*args, **kwargs):
+    return _c02._impl_test_output_producing_target_without_artifact_identity_fails(*args, **kwargs)
+
+@wraps(_c02._impl_test_output_producing_target_with_unadmitted_identity_scheme_fails)
+def test_output_producing_target_with_unadmitted_identity_scheme_fails(*args, **kwargs):
+    return _c02._impl_test_output_producing_target_with_unadmitted_identity_scheme_fails(*args, **kwargs)
+
+@wraps(_c03._impl_test_final_continue_segment_is_authoritative)
+def test_final_continue_segment_is_authoritative(*args, **kwargs):
+    return _c03._impl_test_final_continue_segment_is_authoritative(*args, **kwargs)
+
+@wraps(_c03._impl_test_continue_segment_may_reuse_exact_still_active_prior_preview)
+def test_continue_segment_may_reuse_exact_still_active_prior_preview(*args, **kwargs):
+    return _c03._impl_test_continue_segment_may_reuse_exact_still_active_prior_preview(*args, **kwargs)
+
+@wraps(_c03._impl_test_continue_segment_cannot_reuse_prior_preview_after_stop)
+def test_continue_segment_cannot_reuse_prior_preview_after_stop(*args, **kwargs):
+    return _c03._impl_test_continue_segment_cannot_reuse_prior_preview_after_stop(*args, **kwargs)
+
+@wraps(_c03._impl_test_latest_same_segment_failure_overrides_earlier_pass)
+def test_latest_same_segment_failure_overrides_earlier_pass(*args, **kwargs):
+    return _c03._impl_test_latest_same_segment_failure_overrides_earlier_pass(*args, **kwargs)
+
+@wraps(_c03._impl_test_mutation_after_observed_authority_rejects_stale_receipt)
+def test_mutation_after_observed_authority_rejects_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_mutation_after_observed_authority_rejects_stale_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_receipt_after_mutation_capable_observation_uses_observation_authority)
+def test_receipt_after_mutation_capable_observation_uses_observation_authority(*args, **kwargs):
+    return _c03._impl_test_receipt_after_mutation_capable_observation_uses_observation_authority(*args, **kwargs)
+
+@wraps(_c03._impl_test_mutation_after_pass_rejects_stale_receipt)
+def test_mutation_after_pass_rejects_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_mutation_after_pass_rejects_stale_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_preview_stop_after_pass_rejects_stale_receipt)
+def test_preview_stop_after_pass_rejects_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_preview_stop_after_pass_rejects_stale_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_future_target_mutation_capability_after_pass_rejects_stale_receipt)
+def test_future_target_mutation_capability_after_pass_rejects_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_future_target_mutation_capability_after_pass_rejects_stale_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_failed_partial_future_mutation_after_pass_rejects_stale_receipt)
+def test_failed_partial_future_mutation_after_pass_rejects_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_failed_partial_future_mutation_after_pass_rejects_stale_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_foreign_preview_pair_rejects_receipt)
+def test_foreign_preview_pair_rejects_receipt(*args, **kwargs):
+    return _c03._impl_test_foreign_preview_pair_rejects_receipt(*args, **kwargs)
+
+@wraps(_c03._impl_test_self_anchored_receipt_from_another_conversation_is_rejected)
+def test_self_anchored_receipt_from_another_conversation_is_rejected(*args, **kwargs):
+    return _c03._impl_test_self_anchored_receipt_from_another_conversation_is_rejected(*args, **kwargs)
+
+@wraps(_c03._impl_test_foreign_agent_view_is_rejected_even_when_receipt_is_self_anchored)
+def test_foreign_agent_view_is_rejected_even_when_receipt_is_self_anchored(*args, **kwargs):
+    return _c03._impl_test_foreign_agent_view_is_rejected_even_when_receipt_is_self_anchored(*args, **kwargs)
+
+@wraps(_c03._impl_test_same_intent_handoff_survives_a_later_verifier_view)
+def test_same_intent_handoff_survives_a_later_verifier_view(*args, **kwargs):
+    return _c03._impl_test_same_intent_handoff_survives_a_later_verifier_view(*args, **kwargs)
+
+@wraps(_c03._impl_test_foreign_observed_url_is_rejected_even_when_receipt_is_self_anchored)
+def test_foreign_observed_url_is_rejected_even_when_receipt_is_self_anchored(*args, **kwargs):
+    return _c03._impl_test_foreign_observed_url_is_rejected_even_when_receipt_is_self_anchored(*args, **kwargs)
+
+@wraps(_c03._impl_test_zero_workspace_revision_is_rejected_against_durable_start_authority)
+def test_zero_workspace_revision_is_rejected_against_durable_start_authority(*args, **kwargs):
+    return _c03._impl_test_zero_workspace_revision_is_rejected_against_durable_start_authority(*args, **kwargs)
+
+@wraps(_c03._impl_test_future_observation_order_is_rejected_against_durable_start_authority)
+def test_future_observation_order_is_rejected_against_durable_start_authority(*args, **kwargs):
+    return _c03._impl_test_future_observation_order_is_rejected_against_durable_start_authority(*args, **kwargs)
+
+@wraps(_c03._impl_test_native_policy_may_omit_workspace_epoch_when_not_required)
+def test_native_policy_may_omit_workspace_epoch_when_not_required(*args, **kwargs):
+    return _c03._impl_test_native_policy_may_omit_workspace_epoch_when_not_required(*args, **kwargs)
+
+@wraps(_c03._impl_test_recognized_pre_execution_rejection_does_not_stale_receipt)
+def test_recognized_pre_execution_rejection_does_not_stale_receipt(*args, **kwargs):
+    return _c03._impl_test_recognized_pre_execution_rejection_does_not_stale_receipt(*args, **kwargs)
+
+@wraps(_c04._impl_test_unsuperseded_external_requirement_from_prior_segment_cannot_be_dropped)
+def test_unsuperseded_external_requirement_from_prior_segment_cannot_be_dropped(*args, **kwargs):
+    return _c04._impl_test_unsuperseded_external_requirement_from_prior_segment_cannot_be_dropped(*args, **kwargs)
+
+@wraps(_c04._impl_test_weakened_contract_claim_floor_fails)
+def test_weakened_contract_claim_floor_fails(*args, **kwargs):
+    return _c04._impl_test_weakened_contract_claim_floor_fails(*args, **kwargs)
+
+@wraps(_c04._impl_test_relay_and_browser_flags_do_not_implicitly_activate_governance)
+def test_relay_and_browser_flags_do_not_implicitly_activate_governance(*args, **kwargs):
+    return _c04._impl_test_relay_and_browser_flags_do_not_implicitly_activate_governance(*args, **kwargs)
+
+@wraps(_c04._impl_test_appkit_also_requires_the_common_typed_receipt_oracle)
+def test_appkit_also_requires_the_common_typed_receipt_oracle(*args, **kwargs):
+    return _c04._impl_test_appkit_also_requires_the_common_typed_receipt_oracle(*args, **kwargs)
+
+@wraps(_c04._impl_test_governed_scenario_policy_must_be_exact_and_typed)
+def test_governed_scenario_policy_must_be_exact_and_typed(*args, **kwargs):
+    return _c04._impl_test_governed_scenario_policy_must_be_exact_and_typed(*args, **kwargs)
+
+@wraps(_c04._impl_test_multi_adapter_policy_requires_a_nonempty_unique_modality_set)
+def test_multi_adapter_policy_requires_a_nonempty_unique_modality_set(*args, **kwargs):
+    return _c04._impl_test_multi_adapter_policy_requires_a_nonempty_unique_modality_set(*args, **kwargs)
+
+@wraps(_c04._impl_test_governed_policy_cannot_mix_singular_and_multi_adapter_modalities)
+def test_governed_policy_cannot_mix_singular_and_multi_adapter_modalities(*args, **kwargs):
+    return _c04._impl_test_governed_policy_cannot_mix_singular_and_multi_adapter_modalities(*args, **kwargs)
+
+@wraps(_c04._impl_test_appkit_scenarios_replace_the_web_verification_policy_atomically)
+def test_appkit_scenarios_replace_the_web_verification_policy_atomically(*args, **kwargs):
+    return _c04._impl_test_appkit_scenarios_replace_the_web_verification_policy_atomically(*args, **kwargs)
+
+@wraps(_c05._impl_test_run_reclaim_between_receipt_and_verdict_is_not_an_authority_change)
+def test_run_reclaim_between_receipt_and_verdict_is_not_an_authority_change(*args, **kwargs):
+    return _c05._impl_test_run_reclaim_between_receipt_and_verdict_is_not_an_authority_change(*args, **kwargs)
+
+@wraps(_c05._impl_test_real_mutation_between_receipt_and_verdict_still_fails_closed)
+def test_real_mutation_between_receipt_and_verdict_still_fails_closed(*args, **kwargs):
+    return _c05._impl_test_real_mutation_between_receipt_and_verdict_still_fails_closed(*args, **kwargs)
+
+@wraps(_c05._impl_test_terminal_manifest_fold_after_verdict_is_not_an_authority_change)
+def test_terminal_manifest_fold_after_verdict_is_not_an_authority_change(*args, **kwargs):
+    return _c05._impl_test_terminal_manifest_fold_after_verdict_is_not_an_authority_change(*args, **kwargs)
+
+@wraps(_c05._impl_test_real_mutation_after_verdict_still_fails_closed)
+def test_real_mutation_after_verdict_still_fails_closed(*args, **kwargs):
+    return _c05._impl_test_real_mutation_after_verdict_still_fails_closed(*args, **kwargs)
+
+# fmt: on
