@@ -44,6 +44,12 @@ from harness.build_soak._test_support.api_runner import cases_32_canonical_gener
 from harness.build_soak._test_support.api_runner import cases_33_declared_stack_restart_the_outage as _c34
 from harness.build_soak._test_support.api_runner import cases_34_a_non_terminal_run_is as _c35
 from harness.build_soak._test_support.api_runner import cases_35_failure_capsules as _c36
+from harness.build_soak._test_support.api_runner import helpers_01 as _helpers
+
+FakeTransport = _helpers.FakeTransport
+_client = _helpers._client
+_seed_db = _helpers._seed_db
+_smoke_scenario = _helpers._smoke_scenario
 
 _import_uses_real_surface = _c01._impl_test_import_fixture_uses_real_import_surface_before_kick
 _import_refuses_shortcuts = _c01._impl_test_import_fixture_refuses_appkit_and_autonomous_shortcuts
