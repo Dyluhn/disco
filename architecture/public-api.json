@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "c041170f6ad0623fc5b798ec4a86ff585340b36d",
+  "source_identity": "c668315605830c4dca865e05db31d1733fca6589",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
