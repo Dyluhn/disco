@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "81df96070388a0d77a4ba3ad1e03065dbc3b3b51",
+  "source_identity": "848ae51ed272878e4bde39e5ad6d3a13910285d0",
   "collected": {
     "counts": {
       "packages": 9622,
-      "harness": 1230,
+      "harness": 1236,
       "integrations": 9,
       "tests": 327
     },
-    "total": 11188,
+    "total": 11194,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -10710,6 +10710,12 @@
         "harness/build_soak/tests/test_thrash_oracle.py::test_unproven_tee_sink_cannot_evade_pure_repeat_limit[tee]",
         "harness/build_soak/tests/test_thrash_oracle.py::test_user_turn_and_blocking_obligation_split_progress_epochs",
         "harness/build_soak/tests/test_thrash_oracle.py::test_v3_receipt_trust_matches_the_product_boundary",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_frozen_transcript_authorities_still_execute_model_free",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_new_owner_signatures_keep_the_frozen_facade_contract",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_and_new_drivers_have_the_same_fresh_smoke_transcript",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
+        "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client",
         "harness/marathon/test_phase_a.py::test_phase_a",
         "harness/marathon/test_phase_b.py::test_phase_b",
         "harness/marathon/test_phase_c.py::test_phase_c",
@@ -11209,9 +11215,9 @@
     }
   },
   "mapping_static": {
-    "identity": "81df96070388a0d77a4ba3ad1e03065dbc3b3b51",
-    "python_test_file_count": 753,
-    "python_static_test_id_count": 9186,
+    "identity": "848ae51ed272878e4bde39e5ad6d3a13910285d0",
+    "python_test_file_count": 754,
+    "python_static_test_id_count": 9192,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11249,6 +11255,7 @@
       "harness/build_soak/tests/test_scenario_self_consistency.py",
       "harness/build_soak/tests/test_targeted_edit_oracles.py",
       "harness/build_soak/tests/test_thrash_oracle.py",
+      "harness/build_soak/tests/test_transport_facade_transcript.py",
       "harness/marathon/test_phase_a.py",
       "harness/marathon/test_phase_b.py",
       "harness/marathon/test_phase_c.py",
@@ -12783,6 +12790,12 @@
       "harness/build_soak/tests/test_thrash_oracle.py::test_unproven_tee_sink_cannot_evade_pure_repeat_limit",
       "harness/build_soak/tests/test_thrash_oracle.py::test_user_turn_and_blocking_obligation_split_progress_epochs",
       "harness/build_soak/tests/test_thrash_oracle.py::test_v3_receipt_trust_matches_the_product_boundary",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_frozen_transcript_authorities_still_execute_model_free",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_new_owner_signatures_keep_the_frozen_facade_contract",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_and_new_drivers_have_the_same_fresh_smoke_transcript",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
+      "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client",
       "harness/marathon/test_phase_a.py::test_phase_a",
       "harness/marathon/test_phase_b.py::test_phase_b",
       "harness/marathon/test_phase_c.py::test_phase_c",
@@ -25921,6 +25934,42 @@
     "real_collection_distinct_from_mapping_static": true
   },
   "additive_transitions": [
+    {
+      "package": "PKG-03-HARNESS-TRANSPORT",
+      "root": "harness",
+      "source_identity_before": "81df96070388a0d77a4ba3ad1e03065dbc3b3b51",
+      "source_identity_after": "848ae51ed272878e4bde39e5ad6d3a13910285d0",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1230,
+          "after_count": 1236,
+          "added_ids": [
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_frozen_transcript_authorities_still_execute_model_free",
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_new_owner_signatures_keep_the_frozen_facade_contract",
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_and_new_drivers_have_the_same_fresh_smoke_transcript",
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
+            "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "harness/build_soak/tests/test_transport_facade_transcript.py"
+        ],
+        "python_static_test_ids": [
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_frozen_transcript_authorities_still_execute_model_free",
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_new_owner_signatures_keep_the_frozen_facade_contract",
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_and_new_drivers_have_the_same_fresh_smoke_transcript",
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
+          "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
     {
       "package": "PKG-02-GATE",
       "root": "tests",

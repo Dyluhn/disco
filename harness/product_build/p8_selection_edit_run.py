@@ -181,6 +181,113 @@ async def _send_selection_edit(cid: str, ref: dict, human_label: str) -> None:
         await asyncio.sleep(3)
 
 
+def _analyze_phase2(phase2: list) -> tuple:
+    """Extract tool usage from phase2 events."""
+
+    def calls(evs):
+        for e in evs:
+            tc = e.get("tool_call")
+            if tc:
+                yield tc.get("tool_name"), (tc.get("arguments") or {})
+
+    def results(evs):
+        for e in evs:
+            tr = e.get("tool_result")
+            if tr:
+                yield tr.get("tool_name"), tr
+
+    phase2_tools = [n for n, _ in calls(phase2)]
+    targeted_used = [n for n in phase2_tools if n in _EDIT_TOOLS]
+    full_write_used = [n for n in phase2_tools if n in ("file_write",)]
+    targeted_success = any(tr.get("success") for n, tr in results(phase2) if n in _EDIT_TOOLS)
+    return targeted_used, full_write_used, targeted_success
+
+
+def _p8_claims(
+    served_after: str,
+    h1_before: str,
+    footer_before: str,
+    para_before: str,
+    targeted_used: list,
+    targeted_success: bool,
+    full_write_used: list,
+) -> dict:
+    """Compute the P8 claim booleans."""
+    headline_changed = (HERO_NEW in served_after) and (h1_before not in served_after)
+    footer_intact = bool(footer_before) and footer_before in served_after
+    para_intact = bool(para_before) and para_before in served_after
+    scoped_not_rewrite = bool(targeted_used) and targeted_success and not full_write_used
+    return {
+        "headline_changed": headline_changed,
+        "footer_intact": footer_intact,
+        "para_intact": para_intact,
+        "scoped_not_rewrite": scoped_not_rewrite,
+    }
+
+
+def _p8_passed(h1_before: str, footer_before: str, claims: dict, openrouter: int) -> bool:
+    """Hard gate = the P8-specific claims + NO OpenRouter contamination."""
+    return (
+        bool(h1_before)
+        and bool(footer_before)
+        and claims["headline_changed"]
+        and claims["footer_intact"]
+        and claims["para_intact"]
+        and claims["scoped_not_rewrite"]
+        and openrouter == 0
+    )
+
+
+def _build_p8_verdict(
+    cid: str,
+    build_status: str,
+    edit_status: str | None,
+    ref: dict,
+    h1_before: str,
+    h1_after: str,
+    served_after: str,
+    footer_before: str,
+    para_before: str,
+    targeted_used: list,
+    full_write_used: list,
+    targeted_success: bool,
+    ledger_slice: list,
+) -> tuple:
+    """Assemble the P8 verdict dict and pass/fail flag."""
+    claims = _p8_claims(
+        served_after,
+        h1_before,
+        footer_before,
+        para_before,
+        targeted_used,
+        targeted_success,
+        full_write_used,
+    )
+    hosts = {(r.get("host") or r.get("provider") or "") for r in ledger_slice}
+    openrouter = sum(1 for r in ledger_slice if "openrouter" in json.dumps(r).lower())
+    minimax = sum(1 for r in ledger_slice if "minimax" in json.dumps(r).lower())
+    verdict = {
+        "cid": cid,
+        "build_status": build_status,
+        "edit_status": edit_status,
+        "hero_ref": ref,
+        "h1_before": h1_before,
+        "h1_after": h1_after,
+        "phase2_edit_tools": targeted_used,
+        "phase2_full_write": full_write_used,
+        "CLAIM_headline_changed": claims["headline_changed"],
+        "CLAIM_footer_intact": claims["footer_intact"],
+        "CLAIM_paragraph_intact": claims["para_intact"],
+        "CLAIM_scoped_targeted_not_rewrite": claims["scoped_not_rewrite"],
+        "ledger_minimax": minimax,
+        "ledger_openrouter": openrouter,
+        "ledger_hosts": sorted(h for h in hosts if h),
+    }
+    passed = _p8_passed(h1_before, footer_before, claims, openrouter)
+    verdict["PASS"] = passed
+    return verdict, passed
+
+
 def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger_rows())
@@ -228,67 +335,25 @@ def main() -> int:
 
     events = _events(cid)
     phase2 = [e for e in events if int(e.get("seq") or 0) > seq_build]
+    targeted_used, full_write_used, targeted_success = _analyze_phase2(phase2)
 
-    def calls(evs):
-        for e in evs:
-            tc = e.get("tool_call")
-            if tc:
-                yield tc.get("tool_name"), (tc.get("arguments") or {})
-
-    def results(evs):
-        for e in evs:
-            tr = e.get("tool_result")
-            if tr:
-                yield tr.get("tool_name"), tr
-
-    phase2_tools = [n for n, _ in calls(phase2)]
-    targeted_used = [n for n in phase2_tools if n in _EDIT_TOOLS]
-    full_write_used = [n for n in phase2_tools if n in ("file_write",)]
-    targeted_success = any(tr.get("success") for n, tr in results(phase2) if n in _EDIT_TOOLS)
-
-    # ── the P8 claims ────────────────────────────────────────────────────────
     h1_after = _inner(_H1_RE, served_after)
-    # headline changed TO the requested text, and the old wording is gone
-    headline_changed = (HERO_NEW in served_after) and (h1_before not in served_after)
-    # scoped: the footer + tagline the user did NOT select are unchanged
-    footer_intact = bool(footer_before) and footer_before in served_after
-    para_intact = bool(para_before) and para_before in served_after
-    scoped_not_rewrite = bool(targeted_used) and targeted_success and not full_write_used
-
     ledger_slice = _ledger_rows()[n0:]
-    hosts = {(r.get("host") or r.get("provider") or "") for r in ledger_slice}
-    openrouter = sum(1 for r in ledger_slice if "openrouter" in json.dumps(r).lower())
-    minimax = sum(1 for r in ledger_slice if "minimax" in json.dumps(r).lower())
-
-    verdict = {
-        "cid": cid,
-        "build_status": build_status,
-        "edit_status": edit_status,
-        "hero_ref": ref,
-        "h1_before": h1_before,
-        "h1_after": h1_after,
-        "phase2_edit_tools": targeted_used,
-        "phase2_full_write": full_write_used,
-        "CLAIM_headline_changed": headline_changed,
-        "CLAIM_footer_intact": footer_intact,
-        "CLAIM_paragraph_intact": para_intact,
-        "CLAIM_scoped_targeted_not_rewrite": scoped_not_rewrite,
-        "ledger_minimax": minimax,
-        "ledger_openrouter": openrouter,
-        "ledger_hosts": sorted(h for h in hosts if h),
-    }
-    # Hard gate = the P8-specific claims + NO OpenRouter contamination. minimax>0 is
-    # informational: it only registers if the driver routes through the relay ledger
-    # (a direct-MiniMax driver wouldn't write here), so it must not fail the proof.
-    passed = (
-        built_ok
-        and headline_changed
-        and footer_intact
-        and para_intact
-        and scoped_not_rewrite
-        and openrouter == 0
+    verdict, passed = _build_p8_verdict(
+        cid,
+        build_status,
+        edit_status,
+        ref,
+        h1_before,
+        h1_after,
+        served_after,
+        footer_before,
+        para_before,
+        targeted_used,
+        full_write_used,
+        targeted_success,
+        ledger_slice,
     )
-    verdict["PASS"] = passed
     with open(f"{RUN_DIR}/verdict.json", "w") as f:
         json.dump(verdict, f, indent=2)
     print(json.dumps(verdict, indent=2))

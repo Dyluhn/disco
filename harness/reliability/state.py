@@ -172,6 +172,32 @@ def record_campaign(
     state["campaign_ids"].append(campaign_id)
 
 
+def _count_claim_evidence(
+    revision_state: dict[str, Any] | None,
+    matrix: ReliabilityMatrix,
+) -> tuple[dict[str, int], dict[str, set[str]]]:
+    """Count PASS evidence per claim (units for count proofs, devices for fresh_device)."""
+    counts: dict[str, int] = defaultdict(int)
+    fresh_devices: dict[str, set[str]] = defaultdict(set)
+    if not revision_state:
+        return counts, fresh_devices
+    for campaign in revision_state.get("campaigns") or []:
+        for result in campaign.get("results") or []:
+            if result.get("status") != PASS:
+                continue
+            for claim_id in result.get("claims") or []:
+                claim = matrix.claims.get(str(claim_id))
+                if claim is None:
+                    continue
+                if claim.proof == "fresh_device":
+                    device_id = result.get("fresh_device_id")
+                    if isinstance(device_id, str) and device_id:
+                        fresh_devices[claim.id].add(device_id)
+                else:
+                    counts[claim.id] += int(result.get("units_passed") or 0)
+    return counts, fresh_devices
+
+
 def promotion_report(
     state: dict[str, Any],
     matrix: ReliabilityMatrix,
@@ -181,23 +207,9 @@ def promotion_report(
 ) -> dict[str, Any]:
     revision_state = state["revisions"].get(revision)
     tainted = bool(revision_state and revision_state.get("tainted"))
-    counts: dict[str, int] = defaultdict(int)
-    fresh_devices: dict[str, set[str]] = defaultdict(set)
-    if revision_state and not tainted:
-        for campaign in revision_state.get("campaigns") or []:
-            for result in campaign.get("results") or []:
-                if result.get("status") != PASS:
-                    continue
-                for claim_id in result.get("claims") or []:
-                    claim = matrix.claims.get(str(claim_id))
-                    if claim is None:
-                        continue
-                    if claim.proof == "fresh_device":
-                        device_id = result.get("fresh_device_id")
-                        if isinstance(device_id, str) and device_id:
-                            fresh_devices[claim.id].add(device_id)
-                    else:
-                        counts[claim.id] += int(result.get("units_passed") or 0)
+    counts, fresh_devices = _count_claim_evidence(
+        revision_state if revision_state and not tainted else None, matrix
+    )
 
     selected = claim_ids or set(matrix.claims)
     claims: list[dict[str, Any]] = []

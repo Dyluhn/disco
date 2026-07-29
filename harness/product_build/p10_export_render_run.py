@@ -108,32 +108,8 @@ def _poll_terminal(cid: str, timeout_s: int) -> str:
     return "TIMEOUT"
 
 
-def main() -> int:
-    os.makedirs(RUN_DIR, exist_ok=True)
-    n0 = len(_ledger_rows())
-
-    conv = _post(
-        "/conversations",
-        {
-            "owner_id": "local",
-            "surface": "build",
-            "autonomous": True,
-            "title": "p10 export_render proof",
-        },
-    )
-    cid = conv.get("conversation_id") or conv.get("id")
-    assert cid, f"no conversation id in {conv}"
-    print(f"cid={cid}")
-
-    _post(f"/conversations/{cid}/messages", {"content": BUILD_PROMPT})
-    build_status = _poll_terminal(cid, BUILD_TIMEOUT_S)
-    print(f"build_status={build_status}")
-
-    events = _events(cid)
-    with open(f"{RUN_DIR}/events.json", "w") as f:
-        json.dump(events, f, indent=2)
-
-    # Find the slides_generate observation and its stamped export_render facts.
+def _extract_export_render_facts(events: list) -> tuple:
+    """Find the slides_generate observation and its stamped export_render facts."""
     facts = None
     slide_count_declared = None
     fmt = None
@@ -145,29 +121,27 @@ def main() -> int:
                 facts = s["export_render"]
                 slide_count_declared = s.get("slide_count")
                 fmt = s.get("format")
+    return facts, slide_count_declared, fmt
 
-    # Was the good deck ever refused by the export gate? (Should be NO.)
-    gate_refusals = sum(
-        1
-        for e in events
-        if (e.get("message") or {}).get("content") and _EXPORT_GATE_TOKEN in e["message"]["content"]
-    )
 
-    ledger_slice = _ledger_rows()[n0:]
-    openrouter = sum(1 for r in ledger_slice if "openrouter" in json.dumps(r).lower())
-    minimax = sum(1 for r in ledger_slice if "minimax" in json.dumps(r).lower())
-
-    # ── the P10 claims ───────────────────────────────────────────────────────
+def _build_p10_verdict(
+    cid: str,
+    build_status: str,
+    facts: dict | None,
+    slide_count_declared: int | None,
+    fmt: str | None,
+    gate_refusals: int,
+    minimax: int,
+    openrouter: int,
+) -> tuple:
+    """Assemble the P10 verdict dict and pass/fail flag."""
     facts_present = facts is not None
     facts_ok = bool(facts and facts.get("ok"))
     facts_non_blank = bool(facts and facts.get("non_blank"))
     facts_valid_header = bool(facts and facts.get("valid_header"))
-    # the render is NOT truncated (rendered >= declared) — the gate's actual
-    # anti-false-completeness semantics (it refuses only when units < declared).
     render_not_truncated = facts_present and not (facts or {}).get("truncated")
     good_deck_finished = build_status == "FINISHED"
     good_deck_not_refused = gate_refusals == 0
-
     verdict = {
         "cid": cid,
         "build_status": build_status,
@@ -196,6 +170,49 @@ def main() -> int:
         and openrouter == 0
     )
     verdict["PASS"] = passed
+    return verdict, passed
+
+
+def main() -> int:
+    os.makedirs(RUN_DIR, exist_ok=True)
+    n0 = len(_ledger_rows())
+
+    conv = _post(
+        "/conversations",
+        {
+            "owner_id": "local",
+            "surface": "build",
+            "autonomous": True,
+            "title": "p10 export_render proof",
+        },
+    )
+    cid = conv.get("conversation_id") or conv.get("id")
+    assert cid, f"no conversation id in {conv}"
+    print(f"cid={cid}")
+
+    _post(f"/conversations/{cid}/messages", {"content": BUILD_PROMPT})
+    build_status = _poll_terminal(cid, BUILD_TIMEOUT_S)
+    print(f"build_status={build_status}")
+
+    events = _events(cid)
+    with open(f"{RUN_DIR}/events.json", "w") as f:
+        json.dump(events, f, indent=2)
+
+    facts, slide_count_declared, fmt = _extract_export_render_facts(events)
+
+    gate_refusals = sum(
+        1
+        for e in events
+        if (e.get("message") or {}).get("content") and _EXPORT_GATE_TOKEN in e["message"]["content"]
+    )
+
+    ledger_slice = _ledger_rows()[n0:]
+    openrouter = sum(1 for r in ledger_slice if "openrouter" in json.dumps(r).lower())
+    minimax = sum(1 for r in ledger_slice if "minimax" in json.dumps(r).lower())
+
+    verdict, passed = _build_p10_verdict(
+        cid, build_status, facts, slide_count_declared, fmt, gate_refusals, minimax, openrouter
+    )
     with open(f"{RUN_DIR}/verdict.json", "w") as f:
         json.dump(verdict, f, indent=2)
     print(json.dumps(verdict, indent=2))
