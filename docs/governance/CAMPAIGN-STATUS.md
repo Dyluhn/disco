@@ -16,171 +16,41 @@ handoff.
 > frequency, and the hourly hook switches to it.
 >
 > External continuation path:
-> **`/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic6/f26-fix/LEDGER.md`**
-> — assigned 2026-07-28. The commit carrying this assignment IS the frozen
-> qualification candidate; repository bytes stop moving here. Every ledger
-> update during qualification/certification continues at that external path.
+> **`/var/home/dylan/disclaude-campaigns/architecture-rework/2026-07-28/STATUS.md`**
+> — assigned 2026-07-29 and authoritative for current Architecture Rework
+> operations. Assignment alone is not a repository freeze. Repository bytes
+> remain mutable until the retained source snapshot and sibling final candidate
+> are created; post-candidate qualification continues only at that external
+> path.
 
 ---
 
 # CURRENT SNAPSHOT
 
-**Last updated (local + UTC):** 2026-07-28 03:25 CDT / 2026-07-28T08:25:00Z
-(Fable continuity cycle 1 — Review 6 reconciliation. Older snapshot detail
-below this block is historical record from its own dates; the dated log at the
-end of this file is authoritative for the interval since.)
+**Last updated (local + UTC):** 2026-07-29 11:12 CDT /
+2026-07-29T16:12:50Z.
 
-**Current branch / HEAD / source fingerprint:**
-`disclaude/build-platform-core-v1` / `02ef30c0` /
-`source sha256:68e6267c17dd8e3ffe997a29666dbd5b7afc9bc51eecddb7c1e4fe3b444dee7d`
-(tree `sha256:5c4c8786034f8016c5a3f48d33b42ad65218d37c8398b837d9a9c7a8aab4d30c`
-after the Review 6 governance writes)
+**Current campaign/package:** Architecture Rework — PKG-02-GATE
+(Architecture and Governance Gate), based on accepted campaign parent
+`1cf00dbe194a2a276ea1fd17ab74589355f2e0dc`.
 
-**Tree cleanliness and every intentional dirty path:** CLEAN. F-21/F-25 fixes
-and the F-26 diagnostic telemetry are committed; there are no dirty paths.
+**Candidate state:** Mutable and not frozen. The exact accepted `tests`-root
+transition is 25 to 327 IDs: 302 additions with no deletion, rename or
+correction drift.
 
-**Current epic and package:** Epic 6 — **F-26 CORRECTED** on this candidate
-(dated 2026-07-28 entries below carry the proof chain). The failing family was
-the PAUSED work terminal: the drive's bounded resume valve returns PAUSED by
-design, the evidence gate demanded the impossible FINISHED seal, and the
-browser-evidence check converted the designed BUILD_DID_NOT_FINISH into
-INVALID_RUN. The gate now routes a PAUSED work terminal to the immutable
-version the product's own pause end-gate sealed (`collect_paused_workspace`;
-browser evidence bound to the pause horizon). The earlier §2498
-"declared-only readiness" mechanism did not describe the live path and is
-superseded by the dossier-proven chain. `packages/` is byte-identical to the
-cert8-10 candidate `a632dde2` (harness-evidence-chain delta only). Epic 4
-closed 10/10 on the 24k lane. Next: Epic-5 recorded four-suite pass on the
-committed candidate, then re-sign the qualification manifest and qualify from
-scratch (F0 → F1 → canaries → pilot 10/10 → exact 100 at 0/100).
+**Outstanding freeze boundaries:** Public-API and test-inventory lineage
+correctly remain red until the real source snapshot and sibling final
+candidate exist. The protected path set is complete, but the manifest remains
+intentionally stale and must be rebaselined last. No seal, retained source
+snapshot, sibling final candidate or acceptance receipt exists yet.
 
-**Current operation:** none running. No agent/app servers up, no soak in
-flight. Only the host proxy (:18090) and the continuity controller are live.
+**Standing ledger:** Current operational evidence and decisions continue at
+`/var/home/dylan/disclaude-campaigns/architecture-rework/2026-07-28/STATUS.md`.
+Earlier freeze or green language below is superseded history.
 
-**Promotion count on current bytes:** **0 / 100.**
-
-**Completed epics/packages with evidence links:** Epics 0 (`32a09957`),
-1 (`579cabaf`), 2 (`90532f45`+`38605a8d`), 3 (`fad36450`+`3b1cdd29`);
-acceleration packages A (`4ec9bf30`), B (`2fc8645c`), C (`d0d70649`). Epic 5:
-all eight fitness/lint/seal gates green, whole-diff review APPROVE
-(spot-verified), test-inventory violations found and fixed, Export Track-1
-focused gates + Docker 8/8 + frozen Firefox lane green; remaining Epic-5 items
-listed in HANDOFF step E2.
-
-**Focused gates and exact results:**
-
-| Gate | Result |
-|------|--------|
-| External archive manifest `sha256sum -c MANIFEST.sha256` | **33/33 OK**, exit 0 |
-| `scripts/source_fingerprint.py` determinism (2 runs) | identical digest, exit 0 |
-| `scripts/check_governance_seal.py` — no manifest | exit **3** (seal not established) — as designed |
-| `scripts/check_governance_seal.py --rebaseline` without env | exit **1** (refused) — as designed |
-| `scripts/check_governance_seal.py --rebaseline` with env | exit **0**, 2 files sealed |
-| `scripts/check_governance_seal.py` verify | exit **0** |
-| `scripts/check_governance_seal.py` after byte mutation | exit **1** (drift named exactly) |
-| `scripts/check_governance_seal.py` after restore | exit **0** |
-| PreToolUse guard mutation matrix (hook contract) | **11/11 denied**, **5/5 legitimate allowed**, no false positives |
-| Completion sentinel — negative control (documentation mention) | not satisfied — as designed |
-| Completion sentinel — positive control (standalone assertion) | satisfied, then restored |
-| Hourly review — 60 s wall clock | not due at T-20 s; **due injection fired** at T+21 s |
-| Hourly review — bare timestamp | **rejected**, all 10 fields named, schedule did **not** advance |
-| Hourly review — complete review | **accepted (#1)**, schedule advanced atomically, source unblocked |
-| Overdue source mutation / ledger write | source **denied**; ledger **allowed** (no deadlock) |
-| Stop gate bounded refusal | block, block, block, **allow** on 4th; counter resets and re-arms |
-| GLM launcher — hijacked `baseURL` | exit **70**, **no `stream.json`** — nothing was sent |
-| GLM launcher — correct route | assertion passed; round-trip verified against ground truth |
-| `pytest harness/build_soak/tests/` (`-m "not integration"`) | **exit 0**, ~890 passed, 1 skipped |
-| `pytest packages/agent-server/tests/test_progressing_hardcap_freeze_order.py` | **exit 0**, 3 passed |
-| `pytest harness/build_soak/tests/test_freeze_before_kill.py` | **exit 0**, 11 passed |
-
-**Broad/live gates and exact results:**
-
-| Gate | Result |
-|------|--------|
-| **E2E hook wiring** — real `claude -p` session attempts `Edit`/`Write` of a sealed file | **BLOCKED by the hook.** Model reported: "The edit was blocked — a hook rejected it because `ENGINEERING-STANDARDS.md` is a change-controlled governance file requiring the rebaseline procedure; the file is unchanged." |
-| **E2E hook wiring** — real session attempts a `Bash` append to a sealed file | **BLOCKED by the hook.** Model reported: "Blocked — a pre-tool hook refused the write, citing `ARCHITECTURE-BOUNDARIES.md` as change-controlled; the file is unmodified." |
-| Seal after both e2e attempts | exit **0**; `git status` shows both sealed files untouched |
-
-This proves the wiring, not merely the hook logic: `.claude/settings.json` is
-loaded, `${CLAUDE_PROJECT_DIR}` is substituted, the guard fires, and its reason
-text reaches the model.
-
-**Open observed findings, classification, and earliest broken contract:**
-
-1. *(carried, product)* Hard-cap kill-before-freeze loses a progressing run's
-   changed artifact and PNG. Earliest broken contract: evidence must be bound to
-   exact event-bound immutable state before teardown
-   (BOUNDARIES §7; pattern P1/P2). → Epic 1.
-2. *(carried, product)* Host capability facts do not survive condensation;
-   `k460000` repeated a refused host-signal kill after the refusal span was
-   condensed away. Earliest broken contract: host authority must survive context
-   handling (BOUNDARIES §9; pattern P3). → Epic 2.
-3. *(carried, product)* The same event span can be condensed twice because the
-   returned view and its event list can describe different horizons; and raw
-   DSML/tool markup was persisted as summary text. Earliest broken contract: one
-   response, one horizon (BOUNDARIES §8) and protocol output is not prose
-   (BOUNDARIES §9; patterns P4/P5). → Epic 3.
-4. *(carried, evidence)* The existing soak matrix is stale as a counting
-   authority — it binds older source/scenario bytes and a local→Podman runtime
-   while current diagnostics force the process backend. Earliest broken
-   contract: stale authority must not override current contracts (pattern P8).
-   → must be re-authored before anything counts in Epic 6.
-
-**Decisions made autonomously and why:** see the dated log below.
-
-**GLM delegations (provider/model receipt + output + verified value):**
-
-Launcher: `/var/home/dylan/Desktop/Disclaude-Claude-GLM52/glm-run.sh`. Every call
-resolves and asserts the route before sending; receipts land in
-`/var/home/dylan/build-platform-campaign-evidence/2026-07-25/glm-delegations/`.
-
-| Label | Route receipt | Output | What I independently verified |
-|-------|---------------|--------|-------------------------------|
-| smoke | `ollama-cloud/glm-5.2`, variant max, `baseURL=https://ollama.com/v1`, key present/redacted | `10` | Counted `packages/core/src/disco/core/build_platform/*.py` myself: **10**. Matches. |
-| `badroute` | asserted OK (my negative control was invalid — `glm-run.sh` re-exports the route, overwriting the hostile value) | ran anyway, 27,793 tokens | Disclosed as a wasted call, not evidence. |
-| `hijack` | **REFUSED, exit 70** | none — no `stream.json` written | Confirmed nothing was sent. |
-| `authority-race` | `ollama-cloud/glm-5.2`, variant max | event-kind inventory with file:line | Cross-checked its `EventKind` list against `packages/core/src/disco/core/events.py`; used as leads only. **Cost 1.13M tokens for a report I largely superseded by reading the code directly — delegations must be scoped tighter.** |
-
-**Next three concrete actions:**
-1. Finish Epic 1's remaining acceptance: prove the full **real**
-   `drive_scenario` process-backend hard-cap positive (known artifact + PNG,
-   true progressing hard cap, both hashes preserved across kill, inspect
-   finalized after kill, zero owned resources, primary
-   `RUN_TIMEOUT_WHILE_PROGRESSING` retained).
-2. Add the bounded pause-timeout case proving subordinate `FREEZE_TIMEOUT` does
-   not launder the primary verdict, and the symlink / mutable-head fail-closed
-   identity checks around collection.
-3. Confirm product pause/kill APIs and kill semantics are unchanged, then commit
-   Epic 1 as one coherent package.
-
-**Known deferred post-campaign work:** everything in
-[`ARCHITECTURE-ROADMAP.md`](./ARCHITECTURE-ROADMAP.md) (Tier A/B/C and the
-carried research/owner gates). None of it may begin on this branch before
-closeout.
-
-**Completion-contract checklist:**
-
-| Epic | State |
-|------|-------|
-| 0 — context/governance reset | **COMPLETE** — committed `32a09957`; all 8 acceptance items met and e2e-proven |
-| 1 — finish freeze-before-kill | **COMPLETE** — all 7 acceptance items met; the freeze also had a production-fatal raw-row defect found and fixed |
-| 2 — durable typed runtime constraints | **COMPLETE** except the live k460000 confirmation, which Epic 4's seed 460000 provides |
-| 3 — coherent, safe condensation | **COMPLETE** — one-horizon fix + summary validation/repair/fallback, all revert-checked |
-| 4 — context diagnostics on final bytes | IN PROGRESS — staged; blocked only on HANDOFF pre-flight P1, then seeds 460000+ |
-| 5 — deterministic/integration preflight | **COMPLETE** — E2's recorded four-suite pass landed on the F-26 candidate: `10190 passed, 2 skipped (pre-existing; candidate delta adds 0 skip constructs), 104 deselected (integration marker), EXIT=0 in-body`, log with SHA+fingerprint header at `…/epic6/f26-fix/epic5-full-suite-8f249c7a.log`; all other Epic-5 items were completed earlier and not redone per E2 |
-| 6 — qualification and exact 100 | not started |
-| 7 — same-byte closeout and local integration | not started |
-
-The campaign is complete only when every Epic 0–7 acceptance item in
-[`CAMPAIGN-PLAN.md`](./CAMPAIGN-PLAN.md) is met and this file truthfully
-contains the exact line:
-
-```text
-COMPLETION CONTRACT SATISFIED: Epics 0-7 all acceptance items met.
-```
-
-It does not contain that line today, and the `Stop` hook refuses a voluntary
-stop until it does.
+**Reliability campaign:** Historical reliability material below remains
+closed history. This architecture campaign claims no 100-promotion run and
+does not reopen or supersede that history.
 
 ---
 

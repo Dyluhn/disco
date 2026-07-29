@@ -148,6 +148,26 @@ class _SandboxService:
         raise SandboxUnavailableError("connection refused")
 
 
+class _CurrentTransitionWorkspace:
+    """Minimal fake for the workspace coordinator's current-run transition seam."""
+
+    def __init__(self, store: SqliteEventStore) -> None:
+        self._store = store
+
+    async def append_current_run_transition(
+        self,
+        conversation_id: str,
+        events: list[MessageEvent],
+        status: StatusEvent,
+        *,
+        expected_statuses: frozenset[ConversationStatus],
+    ):
+        state = await self._store.get_state(conversation_id)
+        if state.execution_status not in expected_statuses:
+            return None
+        return await self._store.append_many(conversation_id, [*events, status])
+
+
 async def test_w48_gvisor_preflight_names_endpoint_and_is_bounded() -> None:
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
@@ -203,6 +223,7 @@ async def test_pc_abandoned_gate_sweeper_reaps_only_stale_unwatched_gates(monkey
 
     rt = SimpleNamespace(
         _store=store,
+        _workspace=_CurrentTransitionWorkspace(store),
         _connections={"ui_connected": 1},
         _run_generation={},
         _unpin_if_current_generation=lambda *_args: None,
@@ -252,6 +273,7 @@ async def test_pc_abandoned_gate_sweeper_logs_candidate_errors(monkeypatch, capl
 
     rt = SimpleNamespace(
         _store=store,
+        _workspace=_CurrentTransitionWorkspace(store),
         _connections={},
         _run_generation=ExplodingGeneration(),
         _unpin_if_current_generation=lambda *_args: None,

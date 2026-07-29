@@ -22,22 +22,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Sync Python deps
-        run: uv sync --all-packages
-
-      - name: Fitness gate 1 - architecture size budget
-        run: uv run python scripts/check_arch_budget.py
-
-      - name: Fitness gate 2 - package layering
-        run: uv run lint-imports
-
-      - name: Fitness gate 3 - architecture diagram freshness
-        run: uv run python scripts/gen_arch_diagram.py --check
-
-      - name: Fitness gate 4 - Python type check
-        run: uv run basedpyright
-
-      - name: Python unit suites
-        run: uv run pytest -m "not integration"
+        run: uv sync --all-packages --frozen
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -49,6 +34,45 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
+
+      - name: Soak freeze
+        run: uv run python scripts/check_soak_freeze.py
+
+      - name: Governance seal
+        run: uv run python scripts/check_governance_seal.py
+
+      - name: Architecture budget
+        run: uv run python scripts/check_arch_budget.py
+
+      - name: Architecture debt
+        run: uv run python scripts/check_arch_debt.py
+
+      - name: Architecture imports
+        run: uv run python scripts/check_arch_imports.py
+
+      - name: Architecture diagram freshness
+        run: uv run python scripts/gen_arch_diagram.py --check
+
+      - name: Public API
+        run: uv run python scripts/check_public_api.py
+
+      - name: Test inventory
+        run: uv run python scripts/check_test_inventory.py
+
+      - name: CI contract
+        run: uv run python scripts/check_ci_contract.py
+
+      - name: Tool schemas
+        run: uv run python scripts/check_tool_schemas.py
+
+      - name: Persistent non-web conformance
+        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
+
+      - name: Python type check
+        run: uv run basedpyright
+
+      - name: Python unit suites
+        run: uv run pytest -m "not integration"
 
       - name: Frontend unit suite
         working-directory: frontend

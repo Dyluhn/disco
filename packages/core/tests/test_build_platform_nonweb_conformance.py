@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 from disco.core.build_platform import (
     SYNTHETIC_CAPABILITIES,
+    SYNTHETIC_ENGINE_ID,
+    SYNTHETIC_EXPORTER_ID,
+    SYNTHETIC_PREVIEW_ID,
     SYNTHETIC_PROFILE_ID,
+    SYNTHETIC_TARGET_ID,
+    SYNTHETIC_VERIFIER_ID,
+    ComponentId,
     ComponentIntent,
     build_synthetic_registry,
     resolve_synthetic_conformance,
@@ -124,6 +130,39 @@ def test_nonweb_target_verifier_rejects_corrupted_target_output(tmp_path: Path) 
 
 def test_synthetic_registration_uses_public_registry_without_central_switch() -> None:
     registry = build_synthetic_registry()
-    assert registry.profile(SYNTHETIC_PROFILE_ID) is not None
+    profile = registry.profile(SYNTHETIC_PROFILE_ID)
+    assert profile is not None
+    assert profile.id == SYNTHETIC_PROFILE_ID
+    assert profile.engine == SYNTHETIC_ENGINE_ID
+    assert profile.target == SYNTHETIC_TARGET_ID
+    assert profile.exporter == SYNTHETIC_EXPORTER_ID
     assert [choice.id for choice in registry.profile_choices()] == [SYNTHETIC_PROFILE_ID]
-    assert registry.engine(registry.profile(SYNTHETIC_PROFILE_ID).engine) is not None  # type: ignore[union-attr]
+    engine = registry.engine(SYNTHETIC_ENGINE_ID)
+    target = registry.target(SYNTHETIC_TARGET_ID)
+    exporter = registry.exporter(SYNTHETIC_EXPORTER_ID)
+    assert engine is not None and engine.id == SYNTHETIC_ENGINE_ID
+    assert target is not None and target.id == SYNTHETIC_TARGET_ID
+    assert exporter is not None and exporter.id == SYNTHETIC_EXPORTER_ID
+    for component_id in (
+        SYNTHETIC_ENGINE_ID,
+        SYNTHETIC_TARGET_ID,
+        SYNTHETIC_EXPORTER_ID,
+        SYNTHETIC_VERIFIER_ID,
+        SYNTHETIC_PREVIEW_ID,
+    ):
+        spec = registry.spec(component_id)
+        assert spec is not None and spec.id == component_id
+
+    unknown = ComponentId(namespace="synthetic", name="unknown", version="1")
+    assert registry.profile(unknown) is None
+    assert registry.spec(unknown) is None
+    assert registry.engine(unknown) is None
+    assert registry.target(unknown) is None
+    assert registry.exporter(unknown) is None
+    assert registry.connector(unknown) is None
+    assert registry.profile(SYNTHETIC_TARGET_ID) is None
+    assert registry.spec(SYNTHETIC_PROFILE_ID) is None
+    assert registry.engine(SYNTHETIC_TARGET_ID) is None
+    assert registry.target(SYNTHETIC_ENGINE_ID) is None
+    assert registry.exporter(SYNTHETIC_TARGET_ID) is None
+    assert registry.connector(SYNTHETIC_TARGET_ID) is None
