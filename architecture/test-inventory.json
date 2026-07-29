@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "c041170f6ad0623fc5b798ec4a86ff585340b36d",
+  "source_identity": "397bcfc072a4d58455a9a3ebf4d4274be310e348",
   "collected": {
     "counts": {
       "packages": 9622,
@@ -11215,7 +11215,7 @@
     }
   },
   "mapping_static": {
-    "identity": "c041170f6ad0623fc5b798ec4a86ff585340b36d",
+    "identity": "397bcfc072a4d58455a9a3ebf4d4274be310e348",
     "python_test_file_count": 754,
     "python_static_test_id_count": 9192,
     "python_test_files": [
@@ -25938,7 +25938,7 @@
       "package": "PKG-03-HARNESS-TRANSPORT",
       "root": "harness",
       "source_identity_before": "81df96070388a0d77a4ba3ad1e03065dbc3b3b51",
-      "source_identity_after": "c041170f6ad0623fc5b798ec4a86ff585340b36d",
+      "source_identity_after": "397bcfc072a4d58455a9a3ebf4d4274be310e348",
       "collected_roots": {
         "harness": {
           "before_count": 1230,
