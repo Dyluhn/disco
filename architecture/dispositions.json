@@ -1226,7 +1226,7 @@
   {
     "id": "PY-0115",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-03-HARNESS-TESTS",
     "location": "harness/build_soak/tests/test_api_runner.py:<module>:1-11723",
@@ -1235,7 +1235,7 @@
   {
     "id": "PY-0116",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-03-HARNESS-TESTS",
     "location": "harness/build_soak/tests/test_governed_admission_oracle.py:<module>:1-1420",
