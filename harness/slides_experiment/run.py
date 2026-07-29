@@ -236,6 +236,56 @@ _DRY_RUN_OUTPUTS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+def _dry_run_cells(prompts: list[dict], strategies: list) -> list[CellScore]:
+    """Build stub cells for a dry-run experiment."""
+    cells: list[CellScore] = []
+    for p in prompts:
+        for s in strategies:
+            raw = _DRY_RUN_OUTPUTS[s.id]
+            parse = score_parse(s.id, p["id"], raw)
+            overflow = score_overflow(parse)
+            content = score_content(parse, p["goal"])
+            cell = CellScore(
+                prompt_id=p["id"],
+                strategy=s.id,
+                parse=parse,
+                overflow=overflow,
+                content=content,
+                llm_judge=0.75,
+                llm_judge_detail="dry run stub",
+            )
+            cells.append(cell)
+    return cells
+
+
+async def _run_real_cell(
+    client: httpx.AsyncClient,
+    model: str,
+    p: dict,
+    s,
+    skip_judge: bool,
+) -> CellScore:
+    """Run one real prompt×strategy cell against the live model."""
+    user_msg = s.user_template.format(goal=p["goal"])
+    raw = await _call_model(client, model, s.system, user_msg)
+    parse = score_parse(s.id, p["id"], raw)
+    overflow = score_overflow(parse)
+    content = score_content(parse, p["goal"])
+    judge_score = None
+    judge_detail = ""
+    if not skip_judge and parse.ok:
+        judge_score, judge_detail = await _judge_output(client, p["goal"], raw)
+    return CellScore(
+        prompt_id=p["id"],
+        strategy=s.id,
+        parse=parse,
+        overflow=overflow,
+        content=content,
+        llm_judge=judge_score,
+        llm_judge_detail=judge_detail,
+    )
+
+
 async def run_experiment(
     prompt_ids: list[str] | None = None,
     strategy_ids: list[str] | None = None,
@@ -264,26 +314,8 @@ async def run_experiment(
     print(f"\n=== C4 Experiment: {len(prompts)} prompts × {len(strategies)} strategies ===")
     print(f"    Model: {model}  DryRun: {dry_run}  SkipJudge: {skip_judge}\n")
 
-    cells: list[CellScore] = []
-
     if dry_run:
-        # Build stub cells
-        for p in prompts:
-            for s in strategies:
-                raw = _DRY_RUN_OUTPUTS[s.id]
-                parse = score_parse(s.id, p["id"], raw)
-                overflow = score_overflow(parse)
-                content = score_content(parse, p["goal"])
-                cell = CellScore(
-                    prompt_id=p["id"],
-                    strategy=s.id,
-                    parse=parse,
-                    overflow=overflow,
-                    content=content,
-                    llm_judge=0.75,
-                    llm_judge_detail="dry run stub",
-                )
-                cells.append(cell)
+        cells = _dry_run_cells(prompts, strategies)
         _print_table(cells, prompts, strategies)
         if out_path:
             _save_results(cells, prompts, out_path)
@@ -291,6 +323,7 @@ async def run_experiment(
 
     # Real run
     api_key = _get_api_key()
+    cells: list[CellScore] = []
     async with httpx.AsyncClient(
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -300,42 +333,15 @@ async def run_experiment(
     ) as client:
         total = len(prompts) * len(strategies)
         idx = 0
-
         for p in prompts:
             for s in strategies:
                 idx += 1
                 print(f"[{idx:3d}/{total}] {p['id']} × {s.id:12s} ...", end=" ", flush=True)
                 t0 = time.monotonic()
-
-                user_msg = s.user_template.format(goal=p["goal"])
-                raw = await _call_model(client, model, s.system, user_msg)
-
+                cell = await _run_real_cell(client, model, p, s, skip_judge)
                 elapsed = time.monotonic() - t0
-                print(f"{elapsed:.1f}s → {len(raw)} chars", flush=True)
-
-                parse = score_parse(s.id, p["id"], raw)
-                overflow = score_overflow(parse)
-                content = score_content(parse, p["goal"])
-
-                judge_score = None
-                judge_detail = ""
-                if not skip_judge and parse.ok:
-                    print("            [judge] ...", end=" ", flush=True)
-                    t1 = time.monotonic()
-                    judge_score, judge_detail = await _judge_output(client, p["goal"], raw)
-                    print(f"{time.monotonic() - t1:.1f}s → {judge_score:.2f}", flush=True)
-
-                cell = CellScore(
-                    prompt_id=p["id"],
-                    strategy=s.id,
-                    parse=parse,
-                    overflow=overflow,
-                    content=content,
-                    llm_judge=judge_score,
-                    llm_judge_detail=judge_detail,
-                )
+                print(f"{elapsed:.1f}s → {len(cell.parse.raw)} chars", flush=True)
                 cells.append(cell)
-
                 # Small pause between calls to avoid rate limits
                 await asyncio.sleep(1.0)
 
@@ -350,6 +356,48 @@ async def run_experiment(
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
+
+
+def _mean(values: list[float]) -> float:
+    """Mean of a non-empty list."""
+    return sum(values) / len(values)
+
+
+def _mean_or_zero(values: list[float]) -> float:
+    """Mean of a list, or 0.0 when empty."""
+    return _mean(values) if values else 0.0
+
+
+def _strategy_averages(cells: list[CellScore], sid: str) -> dict:
+    """Compute per-strategy aggregate averages for printing and saving."""
+    strat_cells = [c for c in cells if c.strategy == sid]
+    if not strat_cells:
+        return {}
+    return _compute_strategy_averages(strat_cells)
+
+
+def _compute_strategy_averages(strat_cells: list[CellScore]) -> dict:
+    """Compute aggregate averages from a non-empty strategy cell list."""
+    overflow_scores = [
+        overflow_result.score
+        for cell in strat_cells
+        if (overflow_result := cell.overflow) is not None
+    ]
+    content_scores = [
+        content_result.fidelity_score
+        for cell in strat_cells
+        if (content_result := cell.content) is not None
+    ]
+    judged = [c.llm_judge for c in strat_cells if c.llm_judge is not None]
+    result: dict = {
+        "avg": _mean([aggregate_score(c) for c in strat_cells]),
+        "parse_rate": sum(1 for c in strat_cells if c.parse.ok) / len(strat_cells),
+        "avg_overflow": _mean_or_zero(overflow_scores),
+        "avg_content": _mean_or_zero(content_scores),
+    }
+    if judged:
+        result["avg_llm_judge"] = _mean(judged)
+    return result
 
 
 def _print_table(cells: list[CellScore], prompts: list[dict], strategies: list) -> None:
@@ -377,24 +425,15 @@ def _print_table(cells: list[CellScore], prompts: list[dict], strategies: list) 
 
     print("\nPER-STRATEGY AVERAGES:")
     for sid in strategy_ids:
-        strat_cells = [c for c in cells if c.strategy == sid]
-        if strat_cells:
-            avg = sum(aggregate_score(c) for c in strat_cells) / len(strat_cells)
-            parse_rate = sum(1 for c in strat_cells if c.parse.ok) / len(strat_cells)
-            avg_overflow = sum(c.overflow.score for c in strat_cells if c.overflow) / max(
-                1, sum(1 for c in strat_cells if c.overflow)
-            )
-            avg_content = sum(c.content.fidelity_score for c in strat_cells if c.content) / max(
-                1, sum(1 for c in strat_cells if c.content)
-            )
-
-            print(
-                f"  {sid:<14}: avg={avg:.3f}  parse={parse_rate:.0%}"
-                f"  overflow_risk={avg_overflow:.2f}  content={avg_content:.2f}"
-            )
-            if any(c.llm_judge is not None for c in strat_cells):
-                judged = [c.llm_judge for c in strat_cells if c.llm_judge is not None]
-                print(f"               llm_judge={sum(judged) / len(judged):.2f}")
+        avgs = _strategy_averages(cells, sid)
+        if not avgs:
+            continue
+        print(
+            f"  {sid:<14}: avg={avgs['avg']:.3f}  parse={avgs['parse_rate']:.0%}"
+            f"  overflow_risk={avgs['avg_overflow']:.2f}  content={avgs['avg_content']:.2f}"
+        )
+        if "avg_llm_judge" in avgs:
+            print(f"               llm_judge={avgs['avg_llm_judge']:.2f}")
 
     print("=" * 80)
 
@@ -415,24 +454,16 @@ def _save_results(cells: list[CellScore], prompts: list[dict], out_path: Path) -
     }
 
     for sid in STRATEGY_IDS:
-        strat_cells = [c for c in cells if c.strategy == sid]
-        if strat_cells:
-            data["summary"][sid] = {
-                "avg_aggregate": sum(aggregate_score(c) for c in strat_cells) / len(strat_cells),
-                "parse_rate": sum(1 for c in strat_cells if c.parse.ok) / len(strat_cells),
-                "avg_overflow_risk": sum(c.overflow.score for c in strat_cells if c.overflow)
-                / max(1, sum(1 for c in strat_cells if c.overflow)),
-                "avg_content_fidelity": sum(
-                    c.content.fidelity_score for c in strat_cells if c.content
-                )
-                / max(1, sum(1 for c in strat_cells if c.content)),
-                "avg_llm_judge": (
-                    sum(c.llm_judge for c in strat_cells if c.llm_judge is not None)
-                    / max(1, sum(1 for c in strat_cells if c.llm_judge is not None))
-                )
-                if any(c.llm_judge is not None for c in strat_cells)
-                else None,
-            }
+        avgs = _strategy_averages(cells, sid)
+        if not avgs:
+            continue
+        data["summary"][sid] = {
+            "avg_aggregate": avgs["avg"],
+            "parse_rate": avgs["parse_rate"],
+            "avg_overflow_risk": avgs["avg_overflow"],
+            "avg_content_fidelity": avgs["avg_content"],
+            "avg_llm_judge": avgs.get("avg_llm_judge"),
+        }
 
     out_path.write_text(json.dumps(data, indent=2))
     print(f"\nResults saved to {out_path}")

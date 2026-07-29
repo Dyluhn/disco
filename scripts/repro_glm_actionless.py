@@ -55,6 +55,45 @@ def _short(text: str, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit] + "..."
 
 
+def _print_event_line(event: Any) -> None:
+    """Print one trailing persisted event in the actionless-stall evidence."""
+    if isinstance(event, MessageEvent):
+        print(
+            f"    seq={event.seq} message source={event.source.value} "
+            f"content={_short(event.message.content)!r}"
+        )
+    elif isinstance(event, ActionEvent):
+        tool = event.tool_call.tool_name if event.tool_call else None
+        print(f"    seq={event.seq} action tool={tool}")
+    elif isinstance(event, ObservationEvent):
+        print(
+            f"    seq={event.seq} observation "
+            f"tool={event.tool_result.tool_name} "
+            f"success={event.tool_result.success}"
+        )
+    elif isinstance(event, AgentErrorEvent):
+        print(f"    seq={event.seq} agent_error")
+    elif isinstance(event, StatusEvent):
+        print(f"    seq={event.seq} status status={event.status.value} detail={event.detail}")
+    else:
+        print(f"    seq={getattr(event, 'seq', None)} {type(event).__name__}")
+
+
+def _print_pause_evidence(events: list[Any], pause: StatusEvent) -> None:
+    """Print the trailing persisted events behind one actionless PAUSED pause."""
+    before = [event for event in events if (event.seq or 0) < (pause.seq or 0)]
+    persisted = signals.consecutive_noops(before)
+    inferred_invisible = ACTIONLESS_BREAK_CAP - persisted
+    print(
+        "pause_seq="
+        f"{pause.seq} persisted_consecutive_noops={persisted} "
+        f"inferred_invisible_steps_to_reach_3={inferred_invisible}"
+    )
+    print("  trailing_persisted_events:")
+    for event in before[-5:]:
+        _print_event_line(event)
+
+
 def print_db_evidence() -> None:
     events = _load_events()
     pauses = [
@@ -69,38 +108,7 @@ def print_db_evidence() -> None:
     print(f"persisted_PAUSED_actionless_seqs={[event.seq for event in pauses]}")
 
     for pause in pauses:
-        before = [event for event in events if (event.seq or 0) < (pause.seq or 0)]
-        persisted = signals.consecutive_noops(before)
-        inferred_invisible = ACTIONLESS_BREAK_CAP - persisted
-        print(
-            "pause_seq="
-            f"{pause.seq} persisted_consecutive_noops={persisted} "
-            f"inferred_invisible_steps_to_reach_3={inferred_invisible}"
-        )
-        print("  trailing_persisted_events:")
-        for event in before[-5:]:
-            if isinstance(event, MessageEvent):
-                print(
-                    f"    seq={event.seq} message source={event.source.value} "
-                    f"content={_short(event.message.content)!r}"
-                )
-            elif isinstance(event, ActionEvent):
-                tool = event.tool_call.tool_name if event.tool_call else None
-                print(f"    seq={event.seq} action tool={tool}")
-            elif isinstance(event, ObservationEvent):
-                print(
-                    f"    seq={event.seq} observation "
-                    f"tool={event.tool_result.tool_name} "
-                    f"success={event.tool_result.success}"
-                )
-            elif isinstance(event, AgentErrorEvent):
-                print(f"    seq={event.seq} agent_error")
-            elif isinstance(event, StatusEvent):
-                print(
-                    f"    seq={event.seq} status status={event.status.value} detail={event.detail}"
-                )
-            else:
-                print(f"    seq={getattr(event, 'seq', None)} {type(event).__name__}")
+        _print_pause_evidence(events, pause)
 
     agent_messages = [
         event

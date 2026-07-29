@@ -127,6 +127,207 @@ def _poll_terminal(cid: str, timeout_s: int) -> str:
     return "TIMEOUT"
 
 
+def _all_minimax(slice_: list, openrouter: int) -> bool:
+    """True when every ledger host is minimax and none is openrouter."""
+    return (
+        bool(slice_)
+        and openrouter == 0
+        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    )
+
+
+def _phase2_tool_calls(phase2: list) -> list:
+    """Yield (tool_name, arguments) for each tool_call in phase2."""
+    return [
+        (tc.get("tool_name"), (tc.get("arguments") or {}))
+        for e in phase2
+        if (tc := e.get("tool_call"))
+    ]
+
+
+def _phase2_tool_results(phase2: list) -> list:
+    """Yield (tool_name, tool_result) for each tool_result in phase2."""
+    return [(tr.get("tool_name"), tr) for e in phase2 if (tr := e.get("tool_result"))]
+
+
+def _check_fresh_read_before_edit(phase2: list, ok_edit_call_ids: set) -> bool:
+    """A file_read of index.html must come BEFORE the first successful targeted edit."""
+    rseq = _seq_first_read(phase2)
+    eseq = _seq_first_edit_ok(phase2, ok_edit_call_ids)
+    return rseq is not None and eseq is not None and rseq < eseq
+
+
+def _seq_first_read(phase2: list) -> int | None:
+    for e in phase2:
+        tc = e.get("tool_call") or {}
+        if tc.get("tool_name") == "file_read" and "index.html" in str(
+            (tc.get("arguments") or {}).get("path", "")
+        ):
+            return int(e.get("seq") or 0)
+    return None
+
+
+def _seq_first_edit_ok(phase2: list, ok_edit_call_ids: set) -> int | None:
+    for e in phase2:
+        tc = e.get("tool_call") or {}
+        if tc.get("tool_name") in _EDIT_TOOLS and tc.get("call_id") in ok_edit_call_ids:
+            return int(e.get("seq") or 0)
+    return None
+
+
+def _targets_index(name: str, a: dict) -> bool:
+    if name == "run_project_script":
+        return any(
+            "index.html" in str((o or {}).get("path", "")) for o in (a.get("operations") or [])
+        )
+    return "index.html" in str(a.get("path", ""))
+
+
+def _analyze_edit_ordering(phase2: list, ok_edit_call_ids: set) -> dict:
+    """Extract fresh-read-before-edit and edit-on-index facts."""
+    fresh_read_before_edit = _check_fresh_read_before_edit(phase2, ok_edit_call_ids)
+    edit_on_index = any(
+        (e.get("tool_call") or {}).get("call_id") in ok_edit_call_ids
+        and (e.get("tool_call") or {}).get("tool_name") in _EDIT_TOOLS
+        and _targets_index(
+            (e.get("tool_call") or {}).get("tool_name") or "",
+            (e.get("tool_call") or {}).get("arguments") or {},
+        )
+        for e in phase2
+    )
+    return {"fresh_read_before_edit": fresh_read_before_edit, "edit_on_index": edit_on_index}
+
+
+def _analyze_edit_errors(results: list) -> dict:
+    """Extract old_not_found, fresh_required, elision_rej from results."""
+    old_not_found = sum(
+        1 for _, tr in results if "old_text_not_found" in str(tr.get("error") or "")
+    )
+    fresh_required = any(
+        "FRESH_READ_REQUIRED" in str(tr.get("error") or "")
+        or (tr.get("structured") or {}).get("kind") == "fresh_read_required"
+        for _, tr in results
+    )
+    elision_rej = any(
+        ("ELISION_MARKER_REJECTED" in str(tr.get("error") or ""))
+        or ("elision" in str(tr.get("error") or "").lower())
+        for _, tr in results
+    )
+    return {
+        "old_not_found": old_not_found,
+        "fresh_required": fresh_required,
+        "elision_rej": elision_rej,
+    }
+
+
+def _analyze_targeted_edit(phase2: list) -> dict:
+    """Extract all phase2 targeted-edit analysis facts."""
+    calls = _phase2_tool_calls(phase2)
+    results = _phase2_tool_results(phase2)
+    targeted_calls = [n for n, _ in calls if n in _EDIT_TOOLS]
+    targeted_success = any(tr.get("success") for n, tr in results if n in _EDIT_TOOLS)
+    did_read = any(n == "file_read" for n, _ in calls)
+    ok_edit_call_ids = {
+        tr.get("call_id") for n, tr in results if n in _EDIT_TOOLS and tr.get("success")
+    }
+    ordering = _analyze_edit_ordering(phase2, ok_edit_call_ids)
+    errors = _analyze_edit_errors(results)
+    return {
+        "targeted_calls": targeted_calls,
+        "targeted_success": targeted_success,
+        "did_read": did_read,
+        "fresh_read_before_edit": ordering["fresh_read_before_edit"],
+        "edit_on_index": ordering["edit_on_index"],
+        "old_not_found": errors["old_not_found"],
+        "fresh_required": errors["fresh_required"],
+        "elision_rej": errors["elision_rej"],
+    }
+
+
+def _edits_applied(served_after: str) -> tuple:
+    """Compute new_present, old_absent, edits_applied from the served page."""
+    new_present = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (
+        f"© {YEAR_NEW}" in served_after
+    )
+    old_absent = (
+        (HERO_OLD not in served_after)
+        and (CTA_OLD not in served_after)
+        and (f"© {YEAR_OLD}" not in served_after)
+    )
+    return new_present, old_absent, new_present and old_absent
+
+
+def _targeted_pass(
+    built_ok: bool,
+    old_present_before: bool,
+    analysis: dict,
+    edits_applied: bool,
+    all_minimax: bool,
+    post_terminal: int,
+) -> bool:
+    """The full PASS gate for the targeted-edit proof."""
+    return bool(
+        built_ok
+        and old_present_before
+        and analysis["targeted_calls"]
+        and analysis["targeted_success"]
+        and analysis["edit_on_index"]
+        and analysis["fresh_read_before_edit"]
+        and analysis["old_not_found"] < 3
+        and not analysis["elision_rej"]
+        and edits_applied
+        and all_minimax
+        and post_terminal == 0
+    )
+
+
+def _build_targeted_verdict(
+    tag: str,
+    cid: str,
+    build_status: str,
+    edit_status: str | None,
+    built_ok: bool,
+    served_before: str,
+    served_after: str,
+    analysis: dict,
+    slice_: list,
+    post_terminal: int,
+) -> dict:
+    """Assemble the targeted-edit verdict dict."""
+    new_present, old_absent, edits_applied = _edits_applied(served_after)
+    openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
+    all_minimax = _all_minimax(slice_, openrouter)
+    old_present_before = all(t in served_before for t in (HERO_OLD, CTA_OLD, f"© {YEAR_OLD}"))
+    return {
+        "tag": tag,
+        "cid": cid,
+        "build_status": build_status,
+        "edit_status": edit_status,
+        "built_ok": built_ok,
+        "PASS": _targeted_pass(
+            built_ok, old_present_before, analysis, edits_applied, all_minimax, post_terminal
+        ),
+        "checks": {
+            "build_produced_file": built_ok,
+            "old_sentinels_present_before_edit": old_present_before,
+            "targeted_edit_tools_called": analysis["targeted_calls"],
+            "a_targeted_edit_succeeded": analysis["targeted_success"],
+            "successful_edit_on_index_html": analysis["edit_on_index"],
+            "fresh_read_before_first_edit": analysis["fresh_read_before_edit"],
+            "any_fresh_read_or_required": analysis["did_read"] or analysis["fresh_required"],
+            "old_text_not_found_count": analysis["old_not_found"],
+            "no_elision_marker_rejected": not analysis["elision_rej"],
+            "edits_applied_new_present_old_absent": edits_applied,
+            "ledger_all_minimax_0_openrouter": all_minimax,
+            "openrouter_count": openrouter,
+            "ledger_hosts": sorted({str(ln.get("host")) for ln in slice_ if ln.get("host")}),
+            "provider_calls_after_terminal": post_terminal,
+            "provider_calls_this_run": len(slice_),
+        },
+        "served_after_len": len(served_after),
+    }
+
+
 def main() -> int:
     tag = sys.argv[sys.argv.index("--tag") + 1] if "--tag" in sys.argv else "r1"
     os.makedirs(RUN_DIR, exist_ok=True)
@@ -144,7 +345,7 @@ def main() -> int:
     build_status = _poll_terminal(cid, BUILD_TIMEOUT_S)
     seq_build = _last_seq(cid)
     served_before = _get_text(f"/conversations/{cid}/preview-app/")
-    built_ok = HERO_OLD in served_before  # the seed token is in the served page → index.html exists
+    built_ok = HERO_OLD in served_before
 
     # PHASE 2 — targeted edit (only if the build produced the file)
     edit_status = None
@@ -160,138 +361,21 @@ def main() -> int:
 
     events = _events(cid)
     phase2 = [e for e in events if int(e.get("seq") or 0) > seq_build]
+    analysis = _analyze_targeted_edit(phase2)
 
-    def calls(evs):
-        for e in evs:
-            tc = e.get("tool_call")
-            if tc:
-                yield tc.get("tool_name"), (tc.get("arguments") or {})
-
-    def results(evs):
-        for e in evs:
-            tr = e.get("tool_result")
-            if tr:
-                yield tr.get("tool_name"), tr
-
-    targeted_calls = [n for n, _ in calls(phase2) if n in _EDIT_TOOLS]
-    targeted_success = any(tr.get("success") for n, tr in results(phase2) if n in _EDIT_TOOLS)
-    did_read = any(n == "file_read" for n, _ in calls(phase2))
-
-    # ORDERING (codex r3): a file_read of index.html must come BEFORE the first SUCCESSFUL targeted
-    # edit — the actual fresh-read-BEFORE-edit guarantee, not just "a read happened somewhere".
-    ok_edit_call_ids = {
-        tr.get("call_id") for n, tr in results(phase2) if n in _EDIT_TOOLS and tr.get("success")
-    }
-
-    def _seq_first_read() -> int | None:
-        for e in phase2:
-            tc = e.get("tool_call") or {}
-            if tc.get("tool_name") == "file_read" and "index.html" in str(
-                (tc.get("arguments") or {}).get("path", "")
-            ):
-                return int(e.get("seq") or 0)
-        return None
-
-    def _seq_first_edit_ok() -> int | None:
-        for e in phase2:
-            tc = e.get("tool_call") or {}
-            if tc.get("tool_name") in _EDIT_TOOLS and tc.get("call_id") in ok_edit_call_ids:
-                return int(e.get("seq") or 0)
-        return None
-
-    rseq, eseq = _seq_first_read(), _seq_first_edit_ok()
-    fresh_read_before_edit = rseq is not None and eseq is not None and rseq < eseq
-
-    # the SUCCESSFUL targeted edit must be on index.html (not a misdirected edit on another file).
-    def _targets_index(name: str, a: dict) -> bool:
-        if name == "run_project_script":
-            return any(
-                "index.html" in str((o or {}).get("path", "")) for o in (a.get("operations") or [])
-            )
-        return "index.html" in str(a.get("path", ""))
-
-    edit_on_index = any(
-        (e.get("tool_call") or {}).get("call_id") in ok_edit_call_ids
-        and (e.get("tool_call") or {}).get("tool_name") in _EDIT_TOOLS
-        and _targets_index(
-            (e.get("tool_call") or {}).get("tool_name") or "",
-            (e.get("tool_call") or {}).get("arguments") or {},
-        )
-        for e in phase2
-    )
-    old_not_found = sum(
-        1 for _, tr in results(phase2) if "old_text_not_found" in str(tr.get("error") or "")
-    )
-    fresh_required = any(
-        "FRESH_READ_REQUIRED" in str(tr.get("error") or "")
-        or (tr.get("structured") or {}).get("kind") == "fresh_read_required"
-        for _, tr in results(phase2)
-    )
-    elision_rej = any(
-        ("ELISION_MARKER_REJECTED" in str(tr.get("error") or ""))
-        or ("elision" in str(tr.get("error") or "").lower())
-        for _, tr in results(phase2)
-    )
     served_after = _get_text(f"/conversations/{cid}/preview-app/")
-    new_present = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (
-        f"© {YEAR_NEW}" in served_after
+    verdict = _build_targeted_verdict(
+        tag,
+        cid,
+        build_status,
+        edit_status,
+        built_ok,
+        served_before,
+        served_after,
+        analysis,
+        slice_,
+        post_terminal,
     )
-    # OLD tokens must be GONE (codex r3): a real IN-PLACE replace, not an append that leaves the old
-    # content alongside the new (which a partial/append edit would).
-    old_absent = (
-        (HERO_OLD not in served_after)
-        and (CTA_OLD not in served_after)
-        and (f"© {YEAR_OLD}" not in served_after)
-    )
-    edits_applied = new_present and old_absent
-    openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
-    all_minimax = (
-        bool(slice_)
-        and openrouter == 0
-        and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
-    )
-    # the BUILD must have produced ALL three old sentinels (else 'old absent' after is vacuous —
-    # a build that never wrote them would trivially pass). Proven from the served page after build.
-    old_present_before = all(t in served_before for t in (HERO_OLD, CTA_OLD, f"© {YEAR_OLD}"))
-
-    verdict = {
-        "tag": tag,
-        "cid": cid,
-        "build_status": build_status,
-        "edit_status": edit_status,
-        "built_ok": built_ok,
-        "PASS": bool(
-            built_ok
-            and old_present_before
-            and targeted_calls
-            and targeted_success
-            and edit_on_index
-            and fresh_read_before_edit
-            and old_not_found < 3
-            and not elision_rej
-            and edits_applied
-            and all_minimax
-            and post_terminal == 0
-        ),
-        "checks": {
-            "build_produced_file": built_ok,
-            "old_sentinels_present_before_edit": old_present_before,
-            "targeted_edit_tools_called": targeted_calls,
-            "a_targeted_edit_succeeded": targeted_success,
-            "successful_edit_on_index_html": edit_on_index,
-            "fresh_read_before_first_edit": fresh_read_before_edit,
-            "any_fresh_read_or_required": did_read or fresh_required,
-            "old_text_not_found_count": old_not_found,
-            "no_elision_marker_rejected": not elision_rej,
-            "edits_applied_new_present_old_absent": edits_applied,
-            "ledger_all_minimax_0_openrouter": all_minimax,
-            "openrouter_count": openrouter,
-            "ledger_hosts": sorted({str(ln.get("host")) for ln in slice_ if ln.get("host")}),
-            "provider_calls_after_terminal": post_terminal,
-            "provider_calls_this_run": len(slice_),
-        },
-        "served_after_len": len(served_after),
-    }
     dossier = {
         "verdict": verdict,
         "phase2_events": phase2,

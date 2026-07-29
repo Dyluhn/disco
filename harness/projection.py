@@ -89,6 +89,43 @@ def _llm_input(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _classify_seam(
+    tool_name: str, arguments: dict[str, Any]
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Map a tool name to its cassette seam and input payload."""
+    if tool_name in _SEARCH_TOOL_NAMES:
+        return "search", _search_input(arguments)
+    if tool_name in _EXTRACT_TOOL_NAMES:
+        return "extract", _extract_input(arguments)
+    if tool_name in _LLM_TOOL_NAMES:
+        return "llm.complete", _llm_input(arguments)
+    return None, None
+
+
+def _paired_observation(
+    action_id: Any,
+    observations_by_action: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    """Return the first matching observation for an action id."""
+    if not isinstance(action_id, str):
+        return None
+    obs_list = observations_by_action.get(action_id)
+    if obs_list:
+        return obs_list[0]
+    return None
+
+
+def _observation_output(paired_obs: dict[str, Any]) -> Any:
+    """Extract the serialized output from a paired observation."""
+    tool_result = paired_obs.get("tool_result") or {}
+    if not isinstance(tool_result, dict):
+        return None
+    output = tool_result.get("structured")
+    if output is None:
+        output = tool_result.get("content")
+    return output
+
+
 def project_cassette_rows(scrubbed_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Project a list of SCRUBBED event payloads (already through
     `redact_event_payload`) into the cassette row format.
@@ -123,44 +160,17 @@ def project_cassette_rows(scrubbed_events: list[dict[str, Any]]) -> list[dict[st
         if not isinstance(arguments, dict):
             arguments = {}
 
-        seam: str | None = None
-        input_payload: dict[str, Any] | None = None
-        if tool_name in _SEARCH_TOOL_NAMES:
-            seam, input_payload = "search", _search_input(arguments)
-        elif tool_name in _EXTRACT_TOOL_NAMES:
-            seam, input_payload = "extract", _extract_input(arguments)
-        elif tool_name in _LLM_TOOL_NAMES:
-            seam, input_payload = "llm.complete", _llm_input(arguments)
+        seam, input_payload = _classify_seam(tool_name, arguments)
         if seam is None or input_payload is None:
             continue
 
-        # Pair with the first matching observation (the success path).
-        action_id = ev.get("id")
-        paired_obs: dict[str, Any] | None = None
-        if isinstance(action_id, str):
-            obs_list = observations_by_action.get(action_id)
-            if obs_list:
-                paired_obs = obs_list[0]
-
+        paired_obs = _paired_observation(ev.get("id"), observations_by_action)
         if paired_obs is None:
             # Orphan action — skip (the live recorder requires a paired
             # observation to capture the output; we mirror that contract).
             continue
 
-        tool_result = paired_obs.get("tool_result") or {}
-        if not isinstance(tool_result, dict):
-            continue
-        # Prefer `structured` (the machine payload the tool returned — a list
-        # of SearchHits for search, an ExtractedDoc for extract, a
-        # CompletionResponse for llm.complete). The live recorder stores the
-        # structured form (`[h.model_dump() for h in hits]`); using the same
-        # shape here means a bundle's cassette is interchangeable with a
-        # recorded one. Fall back to `content` (the human-readable string)
-        # only if no structured payload is present, so tools that don't yet
-        # surface structured output still produce a row.
-        output = tool_result.get("structured")
-        if output is None:
-            output = tool_result.get("content")
+        output = _observation_output(paired_obs)
         if output is None:
             continue
 

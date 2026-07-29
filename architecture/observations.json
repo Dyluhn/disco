@@ -82,7 +82,7 @@
   {
     "id": "DM-012",
     "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:234-253 + harness/build_soak/adapters/disco_api.py:collect_browser_evidence:3010-3045",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:234-253 + harness/build_soak/adapters/_client_collection.py:_CollectionMixin.collect_browser_evidence:409-491",
     "concern": "product preview evidence binds FINISHED while harness PAUSED freeze uses a WorkspaceVersionEvent horizon",
     "owner_package": "PKG-07-PREVIEW",
     "source_disposition_id": "DM-012"

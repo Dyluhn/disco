@@ -61,7 +61,7 @@ class _Handler(BaseHTTPRequestHandler):
     def state(self) -> _FixtureState:
         return self.server.fixture_state  # type: ignore[attr-defined,no-any-return]
 
-    def log_message(self, _format: str, *_args: object) -> None:
+    def log_message(self, format: str, *_args: object) -> None:  # noqa: A002
         return
 
     def _send_json(
@@ -125,6 +125,131 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._send_empty(HTTPStatus.NOT_FOUND)
 
+    def _handle_tools_call(self, params: dict[str, Any], message_id: Any) -> None:
+        """Handle a tools/call request."""
+        name = str(params.get("name") or "")
+        raw_arguments = params.get("arguments")
+        arguments = raw_arguments if isinstance(raw_arguments, dict) else {}
+        valid = False
+        if name == TOOL_NAME:
+            token = str(arguments.get("token") or "")
+            valid = token == EXPECTED_TOKEN
+            text = (
+                f"{RESULT_MARKER}: {token}"
+                if valid
+                else f"invalid reliability echo token: {token!r}"
+            )
+        elif name == SEARCH_TOOL_NAME:
+            query = str(arguments.get("query") or "").strip()
+            valid = bool(query)
+            text = json.dumps(
+                {
+                    "results": [
+                        {
+                            "id": SOURCE_URL,
+                            "title": SOURCE_TITLE,
+                            "url": SOURCE_URL,
+                            "snippet": f"{SEARCH_MARKER}. {SOURCE_CONTENT}",
+                        }
+                    ]
+                    if valid
+                    else []
+                }
+            )
+        elif name == FETCH_TOOL_NAME:
+            source_id = str(arguments.get("id") or arguments.get("url") or "")
+            valid = source_id == SOURCE_URL
+            text = SOURCE_CONTENT if valid else f"unknown source id: {source_id!r}"
+        else:
+            text = f"unknown reliability tool: {name!r}"
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "content": [{"type": "text", "text": text}],
+                    "isError": not valid,
+                },
+            },
+            session=True,
+        )
+
+    def _handle_initialize(self, params: dict[str, Any], message_id: Any) -> None:
+        """Handle an initialize request."""
+        requested = str(params.get("protocolVersion") or "2024-11-05")
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "protocolVersion": requested,
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "serverInfo": {"name": "disco-reliability-mcp", "version": "1.0.0"},
+                },
+            },
+            session=True,
+        )
+
+    def _handle_tools_list(self, message_id: Any) -> None:
+        """Handle a tools/list request."""
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "jsonrpc": "2.0",
+                "id": message_id,
+                "result": {
+                    "tools": [
+                        {
+                            "name": TOOL_NAME,
+                            "description": (
+                                "Reliability proof tool. Call exactly once with token "
+                                f"equal to {EXPECTED_TOKEN}; write its returned text into "
+                                "the workflow output file."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "token": {
+                                        "type": "string",
+                                        "description": f"Must equal {EXPECTED_TOKEN}.",
+                                    }
+                                },
+                                "required": ["token"],
+                            },
+                        },
+                        {
+                            "name": SEARCH_TOOL_NAME,
+                            "description": (
+                                "Search the reliability source corpus. Accepts a query and "
+                                "returns public web results suitable for grounded citations."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            },
+                        },
+                        {
+                            "name": FETCH_TOOL_NAME,
+                            "description": (
+                                "Fetch a source by id or URL from the reliability corpus."
+                            ),
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {"id": {"type": "string"}, "url": {"type": "string"}},
+                            },
+                        },
+                    ]
+                },
+            },
+            session=True,
+        )
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self.path != "/mcp":
             self._send_empty(HTTPStatus.NOT_FOUND)
@@ -151,135 +276,21 @@ class _Handler(BaseHTTPRequestHandler):
 
         method = str(payload.get("method") or "")
         message_id = payload.get("id")
-        params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+        raw_params = payload.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
         self.state.record({"method": method, "params": params})
 
         if method == "notifications/initialized":
             self._send_empty(HTTPStatus.ACCEPTED)
             return
         if method == "initialize":
-            requested = str(params.get("protocolVersion") or "2024-11-05")
-            self._send_json(
-                HTTPStatus.OK,
-                {
-                    "jsonrpc": "2.0",
-                    "id": message_id,
-                    "result": {
-                        "protocolVersion": requested,
-                        "capabilities": {"tools": {"listChanged": False}},
-                        "serverInfo": {"name": "disco-reliability-mcp", "version": "1.0.0"},
-                    },
-                },
-                session=True,
-            )
+            self._handle_initialize(params, message_id)
             return
         if method == "tools/list":
-            self._send_json(
-                HTTPStatus.OK,
-                {
-                    "jsonrpc": "2.0",
-                    "id": message_id,
-                    "result": {
-                        "tools": [
-                            {
-                                "name": TOOL_NAME,
-                                "description": (
-                                    "Reliability proof tool. Call exactly once with token "
-                                    f"equal to {EXPECTED_TOKEN}; write its returned text into "
-                                    "the workflow output file."
-                                ),
-                                "inputSchema": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        "token": {
-                                            "type": "string",
-                                            "description": f"Must equal {EXPECTED_TOKEN}.",
-                                        }
-                                    },
-                                    "required": ["token"],
-                                },
-                            },
-                            {
-                                "name": SEARCH_TOOL_NAME,
-                                "description": (
-                                    "Search the reliability source corpus. Accepts a query and "
-                                    "returns public web results suitable for grounded citations."
-                                ),
-                                "inputSchema": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {"query": {"type": "string"}},
-                                    "required": ["query"],
-                                },
-                            },
-                            {
-                                "name": FETCH_TOOL_NAME,
-                                "description": (
-                                    "Fetch a source by id or URL from the reliability corpus."
-                                ),
-                                "inputSchema": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        "id": {"type": "string"},
-                                        "url": {"type": "string"},
-                                    },
-                                },
-                            },
-                        ]
-                    },
-                },
-                session=True,
-            )
+            self._handle_tools_list(message_id)
             return
         if method == "tools/call":
-            name = str(params.get("name") or "")
-            arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-            valid = False
-            if name == TOOL_NAME:
-                token = str(arguments.get("token") or "")
-                valid = token == EXPECTED_TOKEN
-                text = (
-                    f"{RESULT_MARKER}: {token}"
-                    if valid
-                    else f"invalid reliability echo token: {token!r}"
-                )
-            elif name == SEARCH_TOOL_NAME:
-                query = str(arguments.get("query") or "").strip()
-                valid = bool(query)
-                text = json.dumps(
-                    {
-                        "results": [
-                            {
-                                "id": SOURCE_URL,
-                                "title": SOURCE_TITLE,
-                                "url": SOURCE_URL,
-                                "snippet": f"{SEARCH_MARKER}. {SOURCE_CONTENT}",
-                            }
-                        ]
-                        if valid
-                        else []
-                    }
-                )
-            elif name == FETCH_TOOL_NAME:
-                source_id = str(arguments.get("id") or arguments.get("url") or "")
-                valid = source_id == SOURCE_URL
-                text = SOURCE_CONTENT if valid else f"unknown source id: {source_id!r}"
-            else:
-                text = f"unknown reliability tool: {name!r}"
-            self._send_json(
-                HTTPStatus.OK,
-                {
-                    "jsonrpc": "2.0",
-                    "id": message_id,
-                    "result": {
-                        "content": [{"type": "text", "text": text}],
-                        "isError": not valid,
-                    },
-                },
-                session=True,
-            )
+            self._handle_tools_call(params, message_id)
             return
 
         self._send_json(
@@ -287,7 +298,10 @@ class _Handler(BaseHTTPRequestHandler):
             {
                 "jsonrpc": "2.0",
                 "id": message_id,
-                "error": {"code": -32601, "message": f"unknown method: {method}"},
+                "error": {
+                    "code": -32601,
+                    "message": f"unknown method: {method}",
+                },
             },
             session=True,
         )

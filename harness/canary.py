@@ -45,6 +45,24 @@ def evaluate_health(status_code: int, payload: dict) -> CanaryResult:
     return CanaryResult("health", True, f"checks={payload.get('checks')}")
 
 
+def _answer_is_cited(answer: dict) -> bool:
+    """Grounding means the prose actually CITES the sources, not just lists them."""
+    blocks = answer.get("blocks") or []
+    cited = any(b.get("cited_passage_ids") for b in blocks) or any(
+        (c.get("claim") or {}).get("cited_passage_ids") for c in (answer.get("claims") or [])
+    )
+    return bool(cited)
+
+
+def _answer_text(answer: dict) -> str:
+    """Answer text lives in `blocks` (live stream) OR `answer_markdown` (offline)."""
+    blocks = answer.get("blocks") or []
+    text = (
+        (answer.get("answer_markdown") or "") + "".join(b.get("text", "") for b in blocks)
+    ).strip()
+    return text
+
+
 def evaluate_research_frames(frames: list[dict]) -> CanaryResult:
     """A healthy research run ends in a `final` frame whose answer cites real sources
     (non-empty `passages`). An `error` frame, no `final`, or a final with zero
@@ -60,19 +78,10 @@ def evaluate_research_frames(frames: list[dict]) -> CanaryResult:
     passages = answer.get("passages") or []
     if not passages:
         return CanaryResult("research", False, "final answer cited ZERO sources (not grounded)")
-    # Answer text lives in `blocks` (the live /ws/research stream) OR `answer_markdown`
-    # (the offline GroundingPipeline shape) — accept either.
-    blocks = answer.get("blocks") or []
-    text = (
-        (answer.get("answer_markdown") or "") + "".join(b.get("text", "") for b in blocks)
-    ).strip()
+    text = _answer_text(answer)
     if not text:
         return CanaryResult("research", False, "final answer is empty prose")
-    # Grounding means the prose actually CITES the sources, not just lists them.
-    cited = any(b.get("cited_passage_ids") for b in blocks) or any(
-        (c.get("claim") or {}).get("cited_passage_ids") for c in (answer.get("claims") or [])
-    )
-    if not cited:
+    if not _answer_is_cited(answer):
         return CanaryResult("research", False, "answer has sources but no inline citations")
     return CanaryResult("research", True, f"grounded on {len(passages)} sources")
 
