@@ -203,21 +203,8 @@ def build_capsule(dossier: Path, conversation_id: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
-def verify_capsule(capsule: dict[str, Any], dossier: Path | None = None) -> None:
-    """Refuse a capsule whose own bytes, or whose parent dossier, have moved.
-
-    Every check here runs BEFORE any replay spend.
-    """
-    if not isinstance(capsule, dict):
-        raise CapsuleError("capsule must be a JSON object")
-    if capsule.get("schema_version") != CAPSULE_SCHEMA_VERSION:
-        raise CapsuleError(f"unsupported capsule schema_version {capsule.get('schema_version')!r}")
-    for key, expected in DISCLOSURE.items():
-        if capsule.get(key) != expected:
-            raise CapsuleError(
-                f"capsule disclosure {key!r} must be {expected!r}, got {capsule.get(key)!r}"
-            )
-
+def _verify_capsule_digest(capsule: dict[str, Any]) -> None:
+    """Refuse a capsule whose own bytes have moved."""
     recorded = capsule.get("capsule_digest")
     if not isinstance(recorded, str) or not recorded:
         raise CapsuleError("capsule has no digest")
@@ -229,10 +216,9 @@ def verify_capsule(capsule: dict[str, Any], dossier: Path | None = None) -> None
             "a bound field was altered after the capsule was sealed"
         )
 
-    if dossier is None:
-        return
 
-    dossier = Path(dossier)
+def _verify_capsule_dossier_binding(capsule: dict[str, Any], dossier: Path) -> None:
+    """Refuse a capsule whose parent dossier has moved."""
     manifest = load_manifest(dossier)
     scenario = capsule.get("scenario") or {}
     if manifest.scenario_id != scenario.get("id"):
@@ -251,6 +237,29 @@ def verify_capsule(capsule: dict[str, Any], dossier: Path | None = None) -> None
     integrity = verify_evidence_unchanged(dossier, manifest)
     if not integrity.intact:
         raise CapsuleError("parent dossier evidence changed since the capsule was sealed")
+
+
+def verify_capsule(capsule: dict[str, Any], dossier: Path | None = None) -> None:
+    """Refuse a capsule whose own bytes, or whose parent dossier, have moved.
+
+    Every check here runs BEFORE any replay spend.
+    """
+    if not isinstance(capsule, dict):
+        raise CapsuleError("capsule must be a JSON object")
+    if capsule.get("schema_version") != CAPSULE_SCHEMA_VERSION:
+        raise CapsuleError(f"unsupported capsule schema_version {capsule.get('schema_version')!r}")
+    for key, expected in DISCLOSURE.items():
+        if capsule.get(key) != expected:
+            raise CapsuleError(
+                f"capsule disclosure {key!r} must be {expected!r}, got {capsule.get(key)!r}"
+            )
+
+    _verify_capsule_digest(capsule)
+
+    if dossier is None:
+        return
+
+    _verify_capsule_dossier_binding(capsule, Path(dossier))
 
 
 # --------------------------------------------------------------------------

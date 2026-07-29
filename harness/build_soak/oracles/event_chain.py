@@ -63,31 +63,20 @@ def _wants_observation_pairs(scenario: dict[str, Any] | None) -> bool:
     return ec.get("require_action_observation_pairs", True) is not False
 
 
-def _has_exact_verifier_repair_pass(events: list[dict[str, Any]], *, approval_seq: int) -> bool:
-    """Whether host truth supplies the post-approval edge for a verifier-only repair.
+def _validate_verifier_repair_approval(
+    approval: dict[str, Any] | None,
+) -> tuple[str, int, list[str]] | None:
+    """Validate the approval transition for a verifier-repair pass.
 
-    This is deliberately narrower than a generic status check. The latest approval
-    must itself declare the typed verifier-repair reason, and a later RUNNING receipt
-    must bind the exact approved plan id/revision/predicate fingerprints before the
-    first terminal. Normal plans and malformed/mismatched receipts remain actionless.
+    Returns (plan_id, revision, fingerprints) if valid, else None.
     """
-    approval = next(
-        (
-            event
-            for event in events
-            if kind_of(event) == KIND_STATUS
-            and seq_of(event) == approval_seq
-            and event.get("detail") == PLAN_APPROVED_DETAIL
-        ),
-        None,
-    )
     if approval is None:
-        return False
+        return None
     transition = approval.get("plan_verification_transition")
     if not isinstance(transition, dict) or transition.get("reason") != (
         "approved_plan_verifier_repair"
     ):
-        return False
+        return None
     plan_id = transition.get("new_plan_event_id")
     revision = transition.get("new_plan_revision")
     fingerprints = transition.get("new_predicate_fingerprints")
@@ -101,7 +90,73 @@ def _has_exact_verifier_repair_pass(events: list[dict[str, Any]], *, approval_se
         or not fingerprints
         or not all(isinstance(value, str) and value for value in fingerprints)
     ):
+        return None
+    return plan_id, revision, fingerprints
+
+
+def _match_verifier_repair_receipt(
+    receipt: dict[str, Any],
+    plan_id: str,
+    revision: int,
+    fingerprints: list[str],
+) -> bool:
+    """Whether one RUNNING receipt binds the exact approved verifier-repair plan."""
+    spec_fingerprint = receipt.get("spec_fingerprint")
+    return (
+        receipt.get("authority") == "plan"
+        and receipt.get("plan_event_id") == plan_id
+        and receipt.get("plan_revision") == revision
+        and receipt.get("predicate_fingerprints") == fingerprints
+        and isinstance(spec_fingerprint, str)
+        and spec_fingerprint.startswith("sha256:")
+        and len(spec_fingerprint) > len("sha256:")
+    )
+
+
+def _scan_verifier_repair_receipts(
+    events: list[dict[str, Any]],
+    *,
+    approval_seq: int,
+    terminal_seq: int,
+    plan_id: str,
+    revision: int,
+    fingerprints: list[str],
+) -> bool:
+    """Scan for a matching RUNNING verifier-repair receipt between approval and terminal."""
+    for event in events:
+        seq = seq_of(event)
+        if not approval_seq < seq < terminal_seq:
+            continue
+        if (
+            kind_of(event) != KIND_STATUS
+            or event.get("status") != "RUNNING"
+            or event.get("detail") != PLAN_VERIFICATION_PASSED_DETAIL
+        ):
+            continue
+        receipt = event.get("plan_verifier_pass")
+        if isinstance(receipt, dict) and _match_verifier_repair_receipt(
+            receipt, plan_id, revision, fingerprints
+        ):
+            return True
+    return False
+
+
+def _has_exact_verifier_repair_pass(events: list[dict[str, Any]], *, approval_seq: int) -> bool:
+    """Whether host truth supplies the post-approval edge for a verifier-only repair."""
+    approval = next(
+        (
+            event
+            for event in events
+            if kind_of(event) == KIND_STATUS
+            and seq_of(event) == approval_seq
+            and event.get("detail") == PLAN_APPROVED_DETAIL
+        ),
+        None,
+    )
+    validated = _validate_verifier_repair_approval(approval)
+    if validated is None:
         return False
+    plan_id, revision, fingerprints = validated
 
     terminal_seq = min(
         (
@@ -116,31 +171,86 @@ def _has_exact_verifier_repair_pass(events: list[dict[str, Any]], *, approval_se
     if terminal_seq is None:
         return False
 
-    for event in events:
-        seq = seq_of(event)
-        if not approval_seq < seq < terminal_seq:
-            continue
-        if (
-            kind_of(event) != KIND_STATUS
-            or event.get("status") != "RUNNING"
-            or event.get("detail") != PLAN_VERIFICATION_PASSED_DETAIL
-        ):
-            continue
-        receipt = event.get("plan_verifier_pass")
-        if not isinstance(receipt, dict):
-            continue
-        spec_fingerprint = receipt.get("spec_fingerprint")
-        if (
-            receipt.get("authority") == "plan"
-            and receipt.get("plan_event_id") == plan_id
-            and receipt.get("plan_revision") == revision
-            and receipt.get("predicate_fingerprints") == fingerprints
-            and isinstance(spec_fingerprint, str)
-            and spec_fingerprint.startswith("sha256:")
-            and len(spec_fingerprint) > len("sha256:")
-        ):
-            return True
-    return False
+    return _scan_verifier_repair_receipts(
+        events,
+        approval_seq=approval_seq,
+        terminal_seq=terminal_seq,
+        plan_id=plan_id,
+        revision=revision,
+        fingerprints=fingerprints,
+    )
+
+
+def _check_approval_chain(
+    events: list[dict[str, Any]],
+    *,
+    autonomous: bool,
+    term: str | None,
+) -> OracleResult | None:
+    """Check the full ordered approval chain (links A->B->C->D).
+
+    Returns a failing OracleResult if a link is broken, or None if the chain holds.
+    """
+    approvals = plan_approved_seqs(events)
+    awaiting = awaiting_approval_seqs(events)
+    plan_seqs = [seq_of(e) for e in events if kind_of(e) == KIND_PLAN]
+    if not plan_seqs or term not in EXECUTION_EXPECTED_TERMINALS:
+        return None
+    first_plan = min(plan_seqs)
+
+    # Link A->B: PlanEvent -> AWAITING_PLAN_APPROVAL (interactive only).
+    if not autonomous and not any(s > first_plan for s in awaiting):
+        return failing(
+            _ORACLE,
+            fc.PLAN_APPROVED_STATUS_MISSING,
+            first_broken_link="plan_event -> awaiting_plan_approval",
+            facts={
+                "first_plan_seq": first_plan,
+                "awaiting_plan_approval_present": False,
+                "terminal_status": term,
+            },
+        )
+
+    # Link B->C: AWAITING -> RUNNING/plan_approved.
+    if not approvals:
+        return failing(
+            _ORACLE,
+            fc.PLAN_APPROVED_STATUS_MISSING,
+            first_broken_link="awaiting_plan_approval -> plan_approved",
+            facts={"plan_approved_present": False, "terminal_status": term},
+        )
+    first_approval = approvals[0]
+
+    # Ordering A < B < C: the awaiting gate must fall BETWEEN the plan and its approval.
+    if not autonomous and not any(first_plan < s < first_approval for s in awaiting):
+        return failing(
+            _ORACLE,
+            fc.PLAN_APPROVED_STATUS_MISSING,
+            first_broken_link="plan_event -> awaiting_plan_approval",
+            facts={
+                "first_plan_seq": first_plan,
+                "awaiting_seqs": awaiting,
+                "first_plan_approved_seq": first_approval,
+                "reason": "no AWAITING_PLAN_APPROVAL between the plan and its approval",
+            },
+        )
+
+    # Link C->D: RUNNING/plan_approved -> execution action.
+    last_approval = approvals[-1]
+    if not has_action(events, after_seq=last_approval) and not (
+        _has_exact_verifier_repair_pass(events, approval_seq=last_approval)
+    ):
+        return failing(
+            _ORACLE,
+            fc.APPROVE_PLAN_NO_EXECUTION,
+            first_broken_link="approval_status -> execution_action",
+            facts={
+                "plan_approved_seq": last_approval,
+                "action_after_approval": False,
+                "terminal_status": term,
+            },
+        )
+    return None
 
 
 class EventChainOracle:
@@ -169,102 +279,12 @@ class EventChainOracle:
                 )
             ]
 
-        # 3/4. The FULL ordered approval chain (§16). For a plan-gated run that
-        # reached a FINISHED terminal the durable facts must show, IN SEQ ORDER:
-        #
-        #   PlanEvent (A) < AWAITING_PLAN_APPROVAL (B) < RUNNING/plan_approved (C)
-        #                 < execution action (D)
-        #
-        # FAIL-CLOSED + non-circular: the chain is NOT gated on `plan_approved`
-        # already existing (a plan that finished WITHOUT approval would slip past),
-        # and the human-approval gate (B) must PRECEDE the approval (C) — a
-        # `plan_approved` with no preceding AWAITING is a forged/skipped gate.
-        #
-        # AUTONOMOUS EXCEPTION: an autonomous build auto-approves INLINE (engine.py
-        # ~L855) emitting RUNNING/plan_approved with NO awaiting status — that is a
-        # LEGITIMATE chain, so the B link is required only for interactive runs.
-        #
-        # STUCK is judged too (codex #1): the loop's approve-but-never-execute exit
-        # stamps StatusEvent(STUCK/approve_plan_no_execution). That run approved a
-        # plan and emitted no action, so the C->D link below breaks and it classifies
-        # as APPROVE_PLAN_NO_EXECUTION — the FAIL it is, NOT a false PASS (which is
-        # what happened while STUCK read as non-terminal/incomplete).
-        approvals = plan_approved_seqs(events)
-        awaiting = awaiting_approval_seqs(events)
-        plan_seqs = [seq_of(e) for e in events if kind_of(e) == KIND_PLAN]
+        # 3/4. The FULL ordered approval chain (§16).
         term = terminal_status(events)
         autonomous = is_autonomous(scenario)
-        # A run still parked at AWAITING_PLAN_APPROVAL (or otherwise non-terminal) is
-        # legitimately incomplete, not a chain break — only judge a run that reached a
-        # terminal where the post-approval execution chain was expected (FINISHED or
-        # the give-up STUCK).
-        if plan_seqs and term in EXECUTION_EXPECTED_TERMINALS:
-            first_plan = min(plan_seqs)
-
-            # Link A->B: PlanEvent -> AWAITING_PLAN_APPROVAL (interactive only).
-            if not autonomous and not any(s > first_plan for s in awaiting):
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PLAN_APPROVED_STATUS_MISSING,
-                        first_broken_link="plan_event -> awaiting_plan_approval",
-                        facts={
-                            "first_plan_seq": first_plan,
-                            "awaiting_plan_approval_present": False,
-                            "terminal_status": term,
-                        },
-                    )
-                ]
-
-            # Link B->C: AWAITING -> RUNNING/plan_approved.
-            if not approvals:
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PLAN_APPROVED_STATUS_MISSING,
-                        first_broken_link="awaiting_plan_approval -> plan_approved",
-                        facts={
-                            "plan_approved_present": False,
-                            "terminal_status": term,
-                        },
-                    )
-                ]
-            first_approval = approvals[0]
-
-            # Ordering A < B < C: the awaiting gate must fall BETWEEN the plan and
-            # its approval (interactive only). Catches an out-of-order forged chain.
-            if not autonomous and not any(first_plan < s < first_approval for s in awaiting):
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.PLAN_APPROVED_STATUS_MISSING,
-                        first_broken_link="plan_event -> awaiting_plan_approval",
-                        facts={
-                            "first_plan_seq": first_plan,
-                            "awaiting_seqs": awaiting,
-                            "first_plan_approved_seq": first_approval,
-                            "reason": "no AWAITING_PLAN_APPROVAL between the plan and its approval",
-                        },
-                    )
-                ]
-
-            # Link C->D: RUNNING/plan_approved -> execution action.
-            last_approval = approvals[-1]
-            if not has_action(events, after_seq=last_approval) and not (
-                _has_exact_verifier_repair_pass(events, approval_seq=last_approval)
-            ):
-                return [
-                    failing(
-                        _ORACLE,
-                        fc.APPROVE_PLAN_NO_EXECUTION,
-                        first_broken_link="approval_status -> execution_action",
-                        facts={
-                            "plan_approved_seq": last_approval,
-                            "action_after_approval": False,
-                            "terminal_status": term,
-                        },
-                    )
-                ]
+        chain_break = _check_approval_chain(events, autonomous=autonomous, term=term)
+        if chain_break is not None:
+            return [chain_break]
 
         # 5. execution action -> observation (action/observation pairing).
         if _wants_observation_pairs(scenario):
@@ -272,6 +292,7 @@ class EventChainOracle:
             if broken is not None:
                 return [broken]
 
+        approvals = plan_approved_seqs(events)
         return [
             passing(
                 _ORACLE,
