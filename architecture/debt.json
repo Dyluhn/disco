@@ -1,33 +1,5 @@
 [
   {
-    "id": "PY-0115",
-    "path": "harness/build_soak/tests/test_api_runner.py",
-    "symbol": "<module>",
-    "qualified_symbol": "<module>",
-    "line_start": 1,
-    "line_end": 11723,
-    "rule": "test_module_logical_gt_1200",
-    "observed": 9708,
-    "limit": 1200,
-    "owner_package": "PKG-03-HARNESS-TESTS",
-    "delete_by": "PKG-03-HARNESS-TESTS",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0116",
-    "path": "harness/build_soak/tests/test_governed_admission_oracle.py",
-    "symbol": "<module>",
-    "qualified_symbol": "<module>",
-    "line_start": 1,
-    "line_end": 1420,
-    "rule": "test_module_logical_gt_1200",
-    "observed": 1265,
-    "limit": 1200,
-    "owner_package": "PKG-03-HARNESS-TESTS",
-    "delete_by": "PKG-03-HARNESS-TESTS",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
     "id": "PY-0163",
     "path": "packages/agent-server/scripts/verify_browser_injection.py",
     "symbol": "main",
