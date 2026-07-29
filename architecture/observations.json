@@ -40,14 +40,6 @@
     "source_disposition_id": "DM-005"
   },
   {
-    "id": "DM-006",
-    "kind": "distributed_concern",
-    "location": "harness/build_soak/adapters/disco_api.py:DiscoApiClient + harness/build_soak/oracles/output_truth.py",
-    "concern": "harness imports product internals; oracle independence gap",
-    "owner_package": "PKG-03-HARNESS-ORACLES",
-    "source_disposition_id": "DM-006"
-  },
-  {
     "id": "DM-007",
     "kind": "distributed_concern",
     "location": "frontend/src/components/BuildSurface.tsx + frontend/src/hooks/useBuild.ts + frontend/src/hooks/useDeepResearch.ts + frontend/src/hooks/useBuildStream.ts",

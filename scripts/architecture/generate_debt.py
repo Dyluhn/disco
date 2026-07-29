@@ -44,8 +44,19 @@ PKG03_HARNESS_TRANSPORT_RESOLVED_IDS = frozenset(
         "PY-0896",
     }
 )
-RESOLVED_IDS = PKG02_RESOLVED_IDS | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
-EXPECTED_ACTIVE_DEBT_ROWS = 864
+PKG03_HARNESS_ORACLES_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(33, 91)),
+        "PY-0152",
+        "PY-0153",
+        "DM-006",
+    }
+)
+RESOLVED_IDS = (
+    PKG02_RESOLVED_IDS | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS | PKG03_HARNESS_ORACLES_RESOLVED_IDS
+)
+EXPECTED_ACTIVE_DEBT_ROWS = 804
+EXPECTED_OBSERVATIONS = 22
 LOCATION_OVERRIDES = {
     "DM-012": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
@@ -368,8 +379,8 @@ def _generate_all_authorities(
         raise ValueError(f"expected {EXPECTED_ACTIVE_DEBT_ROWS} active debt rows, got {len(debt)}")
 
     observations = build_observations(rows)
-    if len(observations) != 23:
-        raise ValueError(f"expected 23 observations, got {len(observations)}")
+    if len(observations) != EXPECTED_OBSERVATIONS:
+        raise ValueError(f"expected {EXPECTED_OBSERVATIONS} observations, got {len(observations)}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

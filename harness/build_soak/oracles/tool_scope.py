@@ -23,7 +23,7 @@ executor, while the frozen scope check proves that the same tool was not callabl
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeGuard, cast
 
 from .. import failure_codes as fc
 from ..events import (
@@ -108,6 +108,125 @@ def _is_plan_gated(events: list[dict[str, Any]], scenario: dict[str, Any] | None
     return False
 
 
+def _check_attempted_in_planning(
+    events: list[dict[str, Any]],
+    scenario: dict[str, Any] | None,
+) -> OracleResult | None:
+    """Check WRITE_TOOL_ATTEMPTED_IN_PLANNING from the event log alone."""
+    if not _is_plan_gated(events, scenario):
+        return None
+    approvals = plan_approved_seqs(events)
+    cutoff = approvals[0] if approvals else None
+    for e in events:
+        if kind_of(e) != KIND_ACTION:
+            continue
+        if cutoff is not None and seq_of(e) >= cutoff:
+            continue
+        name = tool_name_of(e)
+        if name is not None and name not in PLANNING_SAFE_TOOLS:
+            aid = action_id_of(e)
+            if aid is not None and not action_executed(events, aid):
+                continue
+            return failing(
+                _ORACLE,
+                fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING,
+                first_broken_link="planning_mode -> mutating_action_before_approval",
+                facts={
+                    "tool_name": name,
+                    "action_seq": seq_of(e),
+                    "first_plan_approved_seq": cutoff,
+                },
+            )
+    return passing(_ORACLE, facts={"checked": "attempted_in_planning"})
+
+
+def _validate_str_list(value: Any) -> TypeGuard[list[str]]:
+    """Validate a list of non-empty unique strings."""
+    return (
+        isinstance(value, list)
+        and all(isinstance(name, str) and name for name in value)
+        and len(set(value)) == len(value)
+    )
+
+
+def _validate_turn_shape(
+    turn: dict[str, Any],
+    *,
+    required: bool,
+    index: int,
+) -> bool:
+    """Validate one turn's shape. Returns True if valid, False if malformed."""
+    malformed = turn.get("__malformed__")
+    if malformed:
+        return False
+    mode = turn.get("mode")
+    if mode not in VALID_TURN_MODES:
+        return False
+    offered = cast(list[str], turn.get("offered_tools"))
+    if not _validate_str_list(offered):
+        return False
+    allowed = turn.get("allowed_tools")
+    if not _validate_str_list(allowed):
+        return False
+    attempt = turn.get("attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+        return False
+    if turn.get("complete") is not True:
+        return False
+    offered_count = turn.get("offered_count")
+    if not isinstance(offered_count, int) or isinstance(offered_count, bool):
+        return False
+    if offered_count != len(offered):
+        return False
+    allowed_count = turn.get("allowed_count")
+    if not isinstance(allowed_count, int) or isinstance(allowed_count, bool):
+        return False
+    return allowed_count == len(allowed)
+
+
+def _check_turn_leakage(
+    turn: dict[str, Any],
+    *,
+    mode: str,
+    allowed: list[Any],
+    required: bool,
+    disallowed: set[str],
+    execution_denied: set[str],
+) -> OracleResult | None:
+    """Check one valid turn for tool-scope leakage. Returns a failure or None."""
+    offered = cast(list[str], turn.get("offered_tools"))
+    if not set(offered).issubset(allowed):
+        return failing(
+            _ORACLE,
+            fc.TOOL_SCOPE_MISMATCH,
+            first_broken_link="offered_tools -> allowed_tools",
+            facts={"offered_but_not_callable": sorted(set(offered) - set(allowed))},
+        )
+    if mode != PLANNING_MODE:
+        leaked_execution = [name for name in allowed if name in execution_denied]
+        if leaked_execution:
+            return failing(
+                _ORACLE,
+                fc.TOOL_SCOPE_MISMATCH,
+                first_broken_link="execution_tool_scope -> allowed_tools",
+                facts={"leaked_tools": leaked_execution, "mode": mode},
+            )
+        return None
+    leaked = (
+        [t for t in allowed if t in disallowed]
+        if required
+        else [t for t in allowed if t not in PLANNING_SAFE_TOOLS]
+    )
+    if leaked:
+        return failing(
+            _ORACLE,
+            fc.WRITE_TOOL_ALLOWED_IN_PLANNING,
+            first_broken_link="planning_tool_scope -> allowed_tools",
+            facts={"leaked_tools": leaked},
+        )
+    return None
+
+
 class ToolScopeOracle:
     def check(
         self,
@@ -117,50 +236,11 @@ class ToolScopeOracle:
         tool_scope: list[dict[str, Any]] | None = None,
     ) -> list[OracleResult]:
         results: list[OracleResult] = []
-        attempted_violation = False
 
-        # --- WRITE_TOOL_ATTEMPTED_IN_PLANNING (event-only) ---
-        if _is_plan_gated(events, scenario):
-            approvals = plan_approved_seqs(events)
-            # Everything before the FIRST approval is "in planning". With no
-            # approval at all, every action so far is pre-approval.
-            cutoff = approvals[0] if approvals else None
-            for e in events:
-                if kind_of(e) != KIND_ACTION:
-                    continue
-                if cutoff is not None and seq_of(e) >= cutoff:
-                    continue
-                name = tool_name_of(e)
-                if name is not None and name not in PLANNING_SAFE_TOOLS:
-                    # A write the gate REJECTED in planning BEFORE the executor ran
-                    # (an agent_error pairing with NO tool_result observation) did NOT
-                    # mutate state — that is the §11.3 tool-rejection-recovery contract
-                    # WORKING, the gate visibly refusing the call, NOT a §11.7
-                    # violation. A write that REACHED the executor (any observation,
-                    # even success=False — it may have mutated then failed) IS the
-                    # product letting a write fall through and execute in PLANNING — the
-                    # violation. The signal is gate-rejection, not the success flag.
-                    aid = action_id_of(e)
-                    if aid is not None and not action_executed(events, aid):
-                        continue
-                    results.append(
-                        failing(
-                            _ORACLE,
-                            fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING,
-                            first_broken_link="planning_mode -> mutating_action_before_approval",
-                            facts={
-                                "tool_name": name,
-                                "action_seq": seq_of(e),
-                                "first_plan_approved_seq": cutoff,
-                            },
-                        )
-                    )
-                    attempted_violation = True
-                    break  # first broken link wins
-            if not attempted_violation:
-                results.append(passing(_ORACLE, facts={"checked": "attempted_in_planning"}))
+        attempted_result = _check_attempted_in_planning(events, scenario)
+        if attempted_result is not None:
+            results.append(attempted_result)
 
-        # --- WRITE_TOOL_ALLOWED_IN_PLANNING (needs captured tool scope) ---
         if tool_scope is None:
             results.append(
                 skipping(
@@ -208,84 +288,41 @@ class ToolScopeOracle:
             set(execution_disallows) if isinstance(execution_disallows, list) else set()
         )
         for index, turn in enumerate(tool_scope):
-            malformed = turn.get("__malformed__")
-            mode = turn.get("mode")
-            offered = turn.get("offered_tools")
-            allowed = turn.get("allowed_tools")
-            attempt = turn.get("attempt")
-            complete = turn.get("complete")
-            offered_count = turn.get("offered_count")
-            allowed_count = turn.get("allowed_count")
-            if (
-                malformed
-                or mode not in VALID_TURN_MODES
-                or not isinstance(offered, list)
-                or not all(isinstance(name, str) and name for name in offered)
-                or len(set(offered)) != len(offered)
-                or not isinstance(allowed, list)
-                or not all(isinstance(name, str) and name for name in allowed)
-                or len(set(allowed)) != len(allowed)
-                or not isinstance(attempt, int)
-                or isinstance(attempt, bool)
-                or attempt < 1
-                or complete is not True
-                or not isinstance(offered_count, int)
-                or isinstance(offered_count, bool)
-                or offered_count != len(offered)
-                or not isinstance(allowed_count, int)
-                or isinstance(allowed_count, bool)
-                or allowed_count != len(allowed)
-            ):
+            if not _validate_turn_shape(turn, required=required, index=index):
                 if required:
                     return failing(
                         _ORACLE,
                         fc.SCENARIO_CONTRACT_UNSATISFIABLE,
                         first_broken_link="inspect_trace -> tool_scope_capture",
-                        facts={"reason": str(malformed or "malformed tool scope"), "index": index},
+                        facts={
+                            "reason": str(turn.get("__malformed__") or "malformed tool scope"),
+                            "index": index,
+                        },
                     )
                 continue
-            if not set(offered).issubset(allowed):
-                return failing(
-                    _ORACLE,
-                    fc.TOOL_SCOPE_MISMATCH,
-                    first_broken_link="offered_tools -> allowed_tools",
-                    facts={"offered_but_not_callable": sorted(set(offered) - set(allowed))},
-                )
+            mode = cast(str, turn.get("mode"))
+            allowed = cast(list[Any], turn.get("allowed_tools"))
+            leakage = _check_turn_leakage(
+                turn,
+                mode=mode,
+                allowed=allowed,
+                required=required,
+                disallowed=disallowed,
+                execution_denied=execution_denied,
+            )
+            if leakage is not None:
+                return leakage
             if mode != PLANNING_MODE:
                 execution_turns += 1
-                leaked_execution = [name for name in allowed if name in execution_denied]
-                if leaked_execution:
-                    return failing(
-                        _ORACLE,
-                        fc.TOOL_SCOPE_MISMATCH,
-                        first_broken_link="execution_tool_scope -> allowed_tools",
-                        facts={"leaked_tools": leaked_execution, "mode": mode},
-                    )
-                continue
-            planning_turns += 1
-            leaked = (
-                [t for t in allowed if t in disallowed]
-                if required
-                else [t for t in allowed if t not in PLANNING_SAFE_TOOLS]
-            )
-            if leaked:
-                return failing(
-                    _ORACLE,
-                    fc.WRITE_TOOL_ALLOWED_IN_PLANNING,
-                    first_broken_link="planning_tool_scope -> allowed_tools",
-                    facts={"leaked_tools": leaked},
-                )
-        if required and planning_turns == 0:
-            planning_required = isinstance(planning_disallows, list)
-            if not planning_required:
-                planning_turns = 0
             else:
-                return failing(
-                    _ORACLE,
-                    fc.SCENARIO_CONTRACT_UNSATISFIABLE,
-                    first_broken_link="inspect_trace -> planning_tool_scope_capture",
-                    facts={"reason": "no planning turn captured"},
-                )
+                planning_turns += 1
+        if required and planning_turns == 0 and isinstance(planning_disallows, list):
+            return failing(
+                _ORACLE,
+                fc.SCENARIO_CONTRACT_UNSATISFIABLE,
+                first_broken_link="inspect_trace -> planning_tool_scope_capture",
+                facts={"reason": "no planning turn captured"},
+            )
         if required and isinstance(execution_disallows, list) and execution_turns == 0:
             return failing(
                 _ORACLE,
